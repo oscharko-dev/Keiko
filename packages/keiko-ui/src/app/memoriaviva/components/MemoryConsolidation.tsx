@@ -188,8 +188,8 @@ function SettingsField({
     stepField(direction);
   };
   return (
-    <div style={{ display: "grid", gap: 6 }}>
-      <label style={{ display: "grid", gap: 6 }}>
+    <div style={{ display: "grid", gap: "var(--space-3)" }}>
+      <label style={{ display: "grid", gap: "var(--space-3)" }}>
         <span className="mc-dialog-label">{label}</span>
         <span className="number-control">
           <input
@@ -333,7 +333,10 @@ export function MemoryConsolidation({
   return (
     <>
       <header className="lk-header mc-consolidation-header">
-        <div className="mc-consolidation-heading" style={{ display: "grid", gap: 4 }}>
+        <div
+          className="mc-consolidation-heading"
+          style={{ display: "grid", gap: "var(--space-2)" }}
+        >
           <h1 className="lk-title">MemoriaViva Consolidation</h1>
           <p style={{ margin: 0, color: "var(--fg-muted)" }}>
             Start a bounded consolidation job, inspect its output, and cancel it while it is still
@@ -378,7 +381,7 @@ export function MemoryConsolidation({
             <div
               style={{
                 display: "grid",
-                gap: 12,
+                gap: "var(--space-5)",
                 gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
               }}
             >
@@ -451,7 +454,7 @@ export function MemoryConsolidation({
             {/* aria-disabled + click/submit guards instead of native disabled:
                 disabling the focused button throws keyboard focus to <body>
                 (uiux-fix F005, PR #823 pattern). */}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-5)" }}>
               <button
                 type="submit"
                 className="lk-btn lk-btn-primary"
@@ -508,7 +511,7 @@ export function MemoryConsolidation({
               <div
                 style={{
                   display: "grid",
-                  gap: 12,
+                  gap: "var(--space-5)",
                   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                 }}
               >
@@ -577,7 +580,7 @@ export function MemoryConsolidation({
               ) : null}
 
               {summary !== null ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-5)" }}>
                   <span className="mc-badge mc-badge-default">
                     {plural(summary.reviewCount, "review item")}
                   </span>
@@ -607,7 +610,7 @@ export function MemoryConsolidation({
             <article
               style={{
                 display: "grid",
-                gap: 12,
+                gap: "var(--space-5)",
                 padding: 16,
                 border: "1px solid var(--line)",
                 borderRadius: 14,
@@ -622,9 +625,17 @@ export function MemoryConsolidation({
               {activeJob.result.reviewItems.length === 0 ? (
                 <p style={{ margin: 0, color: "var(--fg-muted)" }}>No review items returned.</p>
               ) : (
-                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "grid",
+                    gap: "var(--space-5)",
+                  }}
+                >
                   {activeJob.result.reviewItems.map((item) => (
-                    <li key={item.id} style={{ display: "grid", gap: 4 }}>
+                    <li key={item.id} style={{ display: "grid", gap: "var(--space-2)" }}>
                       <strong style={{ textTransform: "capitalize" }}>
                         {item.reason.replaceAll("-", " ")}
                       </strong>
@@ -643,7 +654,7 @@ export function MemoryConsolidation({
             <article
               style={{
                 display: "grid",
-                gap: 12,
+                gap: "var(--space-5)",
                 padding: 16,
                 border: "1px solid var(--line)",
                 borderRadius: 14,
@@ -656,7 +667,15 @@ export function MemoryConsolidation({
               {activeJob.result.staleFlags.length === 0 ? (
                 <p style={{ margin: 0, color: "var(--fg-muted)" }}>No stale flags returned.</p>
               ) : (
-                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "grid",
+                    gap: "var(--space-5)",
+                  }}
+                >
                   {activeJob.result.staleFlags.map((flag) => (
                     <li key={`${flag.memoryId}:${flag.reason}`}>
                       <StaleFlagEntry flag={flag} onOpenDetail={onOpenDetail} />
@@ -669,7 +688,7 @@ export function MemoryConsolidation({
             <article
               style={{
                 display: "grid",
-                gap: 12,
+                gap: "var(--space-5)",
                 padding: 16,
                 border: "1px solid var(--line)",
                 borderRadius: 14,
@@ -682,9 +701,17 @@ export function MemoryConsolidation({
               {activeJob.result.edgesProposed.length === 0 ? (
                 <p style={{ margin: 0, color: "var(--fg-muted)" }}>No edges proposed.</p>
               ) : (
-                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "grid",
+                    gap: "var(--space-5)",
+                  }}
+                >
                   {activeJob.result.edgesProposed.map((edge) => (
-                    <li key={edge.id} style={{ display: "grid", gap: 4 }}>
+                    <li key={edge.id} style={{ display: "grid", gap: "var(--space-2)" }}>
                       <strong>{edge.kind}</strong>
                       <span>
                         <MemoryIdLink id={edge.fromMemoryId} onOpenDetail={onOpenDetail} /> →{" "}

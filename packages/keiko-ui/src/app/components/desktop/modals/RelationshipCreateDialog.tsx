@@ -401,7 +401,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           </div>
 
           {/* Source endpoint */}
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: "var(--space-3)" }}>
             <div style={{ flex: "0 0 140px" }}>
               <label
                 htmlFor="rel-src-kind"
@@ -474,7 +474,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           </div>
 
           {/* Target endpoint */}
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: "var(--space-3)" }}>
             <div style={{ flex: "0 0 140px" }}>
               <label
                 htmlFor="rel-tgt-kind"
@@ -642,7 +642,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           )}
 
           {/* Action row */}
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+          <div style={{ display: "flex", gap: "var(--space-4)", justifyContent: "flex-end", marginTop: 4 }}>
             <button
               type="button"
               className="arun-btn"

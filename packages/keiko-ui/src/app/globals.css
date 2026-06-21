@@ -79,6 +79,12 @@
   --radius-sm: 9px;
   --radius-lg: 18px;
 
+  /* Mode-aware shadow ink (#1295 Category C1). Dark = pure black (the historical
+     hardcoded shadow ink), so rgb(var(--shadow-ink-rgb) / α) is byte-identical to the
+     prior rgba(0, 0, 0, α) in dark/+HC/forced-colors. The light block re-points it to
+     the DS warm shadow ink (20 30 25) so component drop-shadows adapt in Light. */
+  --shadow-ink-rgb: 0 0 0;
+
   --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.03) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.6);
   --shadow-pop: 0 16px 50px -16px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--line);
 
@@ -607,7 +613,7 @@ button {
 .number-control:focus-within .number-control-stepper,
 .number-control-stepper-button:hover:not(:disabled),
 .number-control-stepper-button:focus-visible {
-  color: var(--text-accent);
+  color: var(--focus-ring);
   background: transparent;
 }
 
@@ -649,7 +655,7 @@ button {
   background: color-mix(in oklch, var(--popover-surface) 98%, black);
   color: var(--text-secondary);
   box-shadow:
-    0 18px 42px -26px rgba(0, 0, 0, 0.85),
+    0 18px 42px -26px rgb(var(--shadow-ink-rgb) / 0.85),
     0 0 0 1px var(--border-subtle);
 }
 
@@ -955,6 +961,16 @@ button {
 
   --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -12px rgba(20, 30, 25, 0.22);
   --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);
+
+  /* #1295 C1 — DS warm shadow ink for Light (same 20 30 25 the light --shadow-card/-pop
+     already use), so component drop-shadows routed through rgb(var(--shadow-ink-rgb) / α)
+     adapt instead of staying pure black. */
+  --shadow-ink-rgb: 20 30 25;
+
+  /* #1295 C3 — Light dialog scrim. Centralises the shared light backdrop value the
+     per-component overrides used (.dlg-overlay/.wf-dialog-overlay/.mc-dialog-backdrop),
+     so the base scrim rules routed to var(--overlay-scrim) adapt in Light. */
+  --overlay-scrim: oklch(0.3 0.01 160 / 0.34);
 }
 
 /* Single-source HC palettes — the OS media query and explicit in-app attribute
@@ -1015,6 +1031,7 @@ button {
    design-system primitive palette so surfaces, text hierarchy, focus, shadows,
    selection, and status colours inherit the governed HC values from one token
    path. */
+/* prettier-ignore */
 @media (prefers-contrast: more) {
   :root {
     color-scheme: dark;
@@ -1047,6 +1064,7 @@ button {
    when the OS has not asked. Today no in-app control sets [data-hc] on the
    document (useTheme is light|dark only), so this remains inert at runtime
    until a later issue wires the selector. */
+/* prettier-ignore */
 [data-hc="more"] {
   color-scheme: dark;
   /* Raw dark HC values: --bg: oklch(0.11 0.004 160); --line: oklch(0.62 0.006 160); --fg-faint: oklch(0.82 0.004 160); --warn: oklch(0.88 0.14 80); --grid-dot: oklch(0.52 0.006 160). */
@@ -1059,6 +1077,7 @@ button {
   --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
   --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
 }
+/* prettier-ignore */
 [data-hc="more"][data-theme="light"] {
   color-scheme: light;
   /* Raw light HC values: --bg: oklch(1 0 0); --line: oklch(0.45 0.008 160); --fg-faint: oklch(0.36 0.012 160); --warn: oklch(0.38 0.14 75); --grid-dot: oklch(0.6 0.01 160). */
@@ -1353,17 +1372,17 @@ button {
   width: 100%;
   padding: 6px 9px 6px 31px;
   border-radius: 8px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-size: 13px;
   text-align: left;
 }
 .chat-row:hover {
-  background: var(--card);
-  color: var(--fg);
+  background: var(--surface-primary);
+  color: var(--text-primary);
 }
 .chat-row[data-active="true"] {
-  background: var(--card);
-  color: var(--fg);
+  background: var(--surface-primary);
+  color: var(--text-primary);
 }
 .chat-row[data-active="true"]::before {
   content: "";
@@ -1384,11 +1403,11 @@ button {
 }
 .chat-time {
   font-size: 11px;
-  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
+  color: var(--text-secondary); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   font-family: var(--font-mono);
 }
 .chat-meta {
-  color: var(--fg-faint);
+  color: var(--text-faint);
   display: grid;
   place-items: center;
 }
@@ -1517,7 +1536,7 @@ button {
   border: 1px solid var(--border-strong);
   box-shadow:
     inset 0 1px 0 oklch(1 0 0 / 0.04),
-    0 10px 24px -18px rgba(0, 0, 0, 0.75);
+    0 10px 24px -18px rgb(var(--shadow-ink-rgb) / 0.75);
 }
 .hd-tool-cta:hover {
   border-color: var(--accent-line);
@@ -1906,7 +1925,7 @@ button {
   background: color-mix(in oklch, var(--background-secondary) 90%, transparent);
   border: 1px solid color-mix(in oklch, var(--border-strong) 78%, transparent);
   box-shadow:
-    0 18px 44px -24px rgba(0, 0, 0, 0.9),
+    0 18px 44px -24px rgb(var(--shadow-ink-rgb) / 0.9),
     inset 0 1px 0 oklch(1 0 0 / 0.04);
   backdrop-filter: blur(var(--blur-md));
 }
@@ -2783,7 +2802,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .cmp-model-menu {
   box-shadow:
-    0 18px 40px -24px rgba(0, 0, 0, 0.8),
+    0 18px 40px -24px rgb(var(--shadow-ink-rgb) / 0.8),
     0 0 0 1px var(--border-subtle);
 }
 .cmp-eff {
@@ -3166,7 +3185,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 8px;
   align-items: center;
   font-size: 12px;
-  color: var(--fg-muted); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
+  color: var(--text-secondary); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
 }
 
 .chat-memory-budget {
@@ -3174,7 +3193,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 8px;
   align-items: center;
   font-size: 12px;
-  color: var(--fg-muted); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
+  color: var(--text-secondary); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
 }
 
 .chat-memory-budget .number-control-pill {
@@ -3186,9 +3205,9 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   width: 104px;
   padding: 4px 10px;
   border-radius: 999px;
-  border: 1px solid var(--line-soft);
-  background: var(--card);
-  color: var(--fg);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+  color: var(--text-primary);
 }
 .chat-memory-disclosure-toggle {
   margin-left: auto;
@@ -3207,15 +3226,15 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .chat-memory-summary {
   margin: 0;
   font-size: 12px;
-  color: var(--fg-muted); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
+  color: var(--text-secondary); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
 }
 
 .chat-memory-item,
 .chat-memory-action {
   padding: 10px 12px;
   border-radius: 14px;
-  border: 1px solid var(--line-soft);
-  background: color-mix(in srgb, var(--card) 88%, var(--accent) 12%);
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-primary) 88%, var(--accent) 12%);
 }
 
 .chat-memory-item-head,
@@ -3239,7 +3258,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 6px 10px;
   margin: 8px 0 0;
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .chat-memory-meta div {
@@ -3256,7 +3275,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 
 .chat-memory-rationale {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .chat-memory-action-buttons {
@@ -3268,9 +3287,9 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .chat-memory-action-buttons button {
   padding: 6px 12px;
   border-radius: 999px;
-  border: 1px solid var(--line-soft);
-  background: var(--card);
-  color: var(--fg);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+  color: var(--text-primary);
 }
 
 /* ---------- COMPOSER (compact, inside chat window) ---------- */
@@ -3714,12 +3733,12 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   padding: 6px 10px;
   border-radius: 8px;
   font-size: 12px;
-  color: var(--accent-text);
+  color: var(--text-accent);
   background: var(--accent-dim);
   border: 1px solid var(--accent-line);
 }
 .chat-ctx .mono {
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 /* ---------- connector validity + agent/timeline/cmdk ---------- */
 .window[data-conn="valid"] {
@@ -3840,7 +3859,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--warn);
+  color: var(--feedback-warning);
 }
 .arun-gate-t {
   font-size: 13.5px;
@@ -4497,8 +4516,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   align-items: center;
   gap: 8px;
   padding: 7px 8px 7px 9px;
-  border-bottom: 1px solid var(--line-soft);
-  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--background-secondary);
   flex: none;
 }
 .fpv-back {
@@ -4508,15 +4527,15 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   display: grid;
   place-items: center;
   border-radius: 7px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 .fpv-back:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
 }
 .fpv-name {
   font-size: 12.5px;
-  color: var(--fg);
+  color: var(--text-primary);
   /* uiux-fix F021 C035: long unbreakable filenames pushed the lang chip, Connect and Close
      buttons past the window edge (flex min-width:auto). Truncate like the sibling .tr-name;
      the full name stays available via the title attribute. */
@@ -4528,9 +4547,9 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .fpv-lang {
   font-size: 10px;
-  color: var(--fg-muted);
-  background: var(--inset);
-  border: 1px solid var(--line-strong);
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-strong);
   border-radius: 5px;
   padding: 1px 6px;
   text-transform: uppercase;
@@ -4556,12 +4575,12 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   flex: none;
   text-align: right;
   padding-right: 16px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   user-select: none;
 }
 .fpv-src {
   white-space: pre;
-  color: #c5cdd9;
+  color: var(--ed-fg);
   padding-right: 14px;
 }
 .fpv-state {
@@ -4569,43 +4588,43 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   margin: 12px;
   font-size: 12.5px;
   line-height: 1.5;
-  color: var(--fg-muted);
-  background: var(--inset);
-  border: 1px solid var(--line-soft);
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
 }
 .fpv-error {
-  color: var(--fg);
-  background: color-mix(in oklch, var(--danger) 14%, var(--inset));
-  border-color: color-mix(in oklch, var(--danger) 55%, var(--line-soft));
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--feedback-danger) 14%, var(--surface-inset));
+  border-color: color-mix(in oklch, var(--feedback-danger) 55%, var(--border-subtle));
 }
 .hl-com {
   /* WCAG 1.4.3 — the prior hardcoded comment hex measured ~3.38:1 on the dark code well
      (FAIL); --fg-dim is the documented comment-token (4.57:1) the light override already names. */
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-style: italic;
 }
 .hl-str {
-  color: #c3e88d;
+  color: var(--ed-syn-string);
 }
 .hl-num,
 .hl-lit {
-  color: #f78c6c;
+  color: var(--ed-syn-number);
 }
 .hl-key {
-  color: #c792ea;
+  color: var(--ed-syn-keyword);
 }
 .hl-type {
-  color: #ffcb6b;
+  color: var(--ed-syn-type);
 }
 .hl-fn {
-  color: #82aaff;
+  color: var(--ed-syn-function);
 }
 .hl-key2 {
-  color: #82aaff;
+  color: var(--ed-syn-function);
 }
 .hl-punct {
-  color: #89ddff;
+  color: var(--ed-syn-punct);
 }
 .hl-head {
   color: var(--accent);
@@ -4619,10 +4638,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: oklch(0.97 0.004 160);
 }
 [data-theme="light"] .fpv-src {
-  color: #2b3440;
+  color: var(--ed-fg);
 }
 [data-theme="light"] .hl-key {
-  color: #8b2bb8;
+  color: var(--ed-syn-keyword);
 }
 [data-theme="light"] .hl-str {
   color: #2f7d32;
@@ -5403,7 +5422,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border: 1px solid color-mix(in oklch, var(--accent) 72%, white);
   box-shadow:
     0 16px 36px -12px var(--accent-glow),
-    0 9px 20px rgba(0, 0, 0, 0.55);
+    0 9px 20px rgb(var(--shadow-ink-rgb) / 0.55);
 }
 .ws-fab:hover {
   transform: translateY(-2px);
@@ -6619,11 +6638,11 @@ select.dlg-input {
 }
 .chat-msg-bubble {
   max-width: min(640px, 84%);
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 14px;
   padding: 10px 13px;
-  background: var(--card);
-  color: var(--fg);
+  background: var(--surface-primary);
+  color: var(--text-primary);
   font-size: 14px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -6638,7 +6657,7 @@ select.dlg-input {
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin-bottom: 5px;
 }
 .chat-msg-brand {
@@ -6654,7 +6673,8 @@ select.dlg-input {
   height: 22px;
   display: block;
   transform-origin: center;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 4px rgba(126, 224, 171, 0.22));
+  filter: drop-shadow(0 1px 2px rgb(var(--shadow-ink-rgb) / 0.72))
+    drop-shadow(0 0 4px rgba(126, 224, 171, 0.22));
 }
 .chat-msg-brand[data-pulsing="true"] img {
   animation: chat-keiko-logo-pulse 1.15s cubic-bezier(0.42, 0, 0.58, 1) infinite;
@@ -6663,12 +6683,13 @@ select.dlg-input {
   0%,
   100% {
     transform: scale(1);
-    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72))
+    filter: drop-shadow(0 1px 2px rgb(var(--shadow-ink-rgb) / 0.72))
       drop-shadow(0 0 4px rgba(126, 224, 171, 0.22));
   }
   50% {
     transform: scale(1.14);
-    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 8px rgba(126, 224, 171, 0.4));
+    filter: drop-shadow(0 1px 2px rgb(var(--shadow-ink-rgb) / 0.72))
+      drop-shadow(0 0 8px rgba(126, 224, 171, 0.4));
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -6678,7 +6699,7 @@ select.dlg-input {
 }
 .chat-msg-time {
   font-size: 10px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin-top: 6px;
   font-family: var(--font-mono);
 }
@@ -6691,7 +6712,7 @@ select.dlg-input {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--fg-faint);
+  background: var(--text-faint);
   animation: none;
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -6974,7 +6995,7 @@ select.dlg-input {
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.02em;
-  color: var(--fg);
+  color: var(--text-primary);
   margin: 0;
 }
 .chatw-empty-no-chat {
@@ -6996,8 +7017,8 @@ select.dlg-input {
   width: 40px;
   height: 40px;
   border-radius: 12px;
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   display: grid;
   place-items: center;
   color: var(--accent);
@@ -7006,12 +7027,12 @@ select.dlg-input {
 .chatw-empty-no-chat-label {
   font-size: 14px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
   margin: 0 0 6px;
 }
 .chatw-empty-no-chat-hint {
   font-size: 12.5px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
   max-width: 260px;
   line-height: 1.5;
@@ -7048,8 +7069,8 @@ select.dlg-input {
 }
 .rb-count {
   font-size: 11px;
-  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
-  background: var(--inset);
+  color: var(--text-secondary); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
+  background: var(--surface-inset);
   padding: 2px 8px;
   border-radius: 999px;
 }
@@ -7058,13 +7079,13 @@ select.dlg-input {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   margin: 16px 0 8px;
 }
 .rb-placeholder {
   position: relative;
   height: 116px;
-  border: 1px dashed var(--line);
+  border: 1px dashed var(--border-default);
   border-radius: 12px;
   overflow: hidden;
   display: grid;
@@ -7073,7 +7094,7 @@ select.dlg-input {
 .rb-ph-label {
   position: relative;
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -7091,16 +7112,16 @@ select.dlg-input {
   font-size: 12.5px;
 }
 .rb-row:hover {
-  background: var(--card);
+  background: var(--surface-primary);
 }
 .rb-row-k {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .rb-row-v {
   /* uiux-fix F012: .rb-row-v also carries real values outside the governance scope
      (RelationshipInspectorPanel/RelationshipHealthPanel) — extend the #527 fix below
      to the base rule; --fg-faint was 2.52:1 dark / 2.91:1 light. */
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 /* Issue #527 — WCAG 2.2 AA contrast fix (scoped to governance surface only).
    --fg-faint yields 2.52:1 dark / 2.91:1 light, both below the 4.5:1 minimum.
@@ -7110,14 +7131,14 @@ select.dlg-input {
    InspectorPanel — no other panel or row is affected. */
 .insp-governance.rb-section-label,
 .insp-governance .rb-row-v {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .rb-foot {
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   text-align: center;
   padding-top: 10px;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* ---------- WIDGET: FILES ---------- */
@@ -7772,11 +7793,11 @@ select.dlg-input {
    collapsed to accent green while light theme still showed the material palette. Scoping to
    the diff view (its only consumer) restores distinct token colours in the file preview. */
 .rv-src .hl-com {
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-style: italic;
 }
 .rv-src .hl-str {
-  color: var(--ok);
+  color: var(--feedback-success);
 }
 .rv-src .hl-num {
   color: var(--accent);
@@ -7789,23 +7810,23 @@ select.dlg-input {
   font-weight: 600;
 }
 .rv-src .hl-type {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .rv-src .hl-fn {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .rv-src .hl-key2 {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .rv-src .hl-punct {
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 .rv-src .hl-head {
-  color: var(--fg);
+  color: var(--text-primary);
   font-weight: 600;
 }
 .rv-src .hl-id {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .rv-src .hl-ws {
   white-space: pre;
@@ -8573,7 +8594,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   /* uiux-fix F012: --fg-faint = 2.34:1 dark / 3.10:1 light on --card — the same
      WCAG 1.4.3 fail fixed for score/uncertainty/meta below; weight + uppercase
      keep the hierarchy. */
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .grounded-citation {
   display: inline-flex;
@@ -8584,7 +8605,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   border: 1px solid var(--accent-line);
   border-radius: 8px;
   background: var(--accent-dim);
-  color: var(--fg);
+  color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 11px;
   cursor: default;
@@ -8596,7 +8617,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
    visual hierarchy intact. */
 .grounded-citation-score {
   margin-left: 6px;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 10px;
 }
 /* Issue #1285 — distinguishes a document-evidence citation (DOCX/XLSX/PDF extracted text) from a
@@ -8606,14 +8627,14 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   padding: 0 4px;
   border-radius: 4px;
   background: var(--accent-line);
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.04em;
 }
 .grounded-uncertainty {
   font-size: 11px;
-  color: var(--fg);
+  color: var(--text-primary);
   font-style: italic;
 }
 .grounded-uncertainty-list {
@@ -8622,7 +8643,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 .grounded-meta {
   font-size: 10px;
-  color: var(--fg);
+  color: var(--text-primary);
   font-family: var(--font-mono);
 }
 
@@ -8637,14 +8658,14 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   margin: 8px 0;
   padding: 8px 10px;
   font-size: 12px;
-  color: var(--fg);
-  background: var(--card-2);
-  border-left: 3px solid var(--warn);
+  color: var(--text-primary);
+  background: var(--surface-secondary);
+  border-left: 3px solid var(--feedback-warning);
   border-radius: 4px;
 }
 .grounded-coverage-notice-title {
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 /* Issue #187 — context inspection summary on every grounded answer. Counts/enums only;
@@ -8656,12 +8677,12 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .grounded-context-pack {
   margin-top: 8px;
   padding: 8px 10px;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--border-subtle);
   font-size: 11px;
   font-family: var(--font-mono);
 }
 .grounded-context-pack-headline {
-  color: var(--fg);
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 .grounded-context-pack-dl {
@@ -8672,11 +8693,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   margin: 0;
 }
 .grounded-context-pack-dt {
-  color: var(--fg);
+  color: var(--text-primary);
   font-weight: 500;
 }
 .grounded-context-pack-dd {
-  color: var(--fg);
+  color: var(--text-primary);
   margin: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -8744,7 +8765,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-size: 20px;
   font-weight: 650;
   letter-spacing: -0.01em;
-  color: var(--fg);
+  color: var(--text-primary);
   margin: 0;
   flex: 1;
 }
@@ -8758,7 +8779,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 12px;
   overflow: hidden;
   padding: 14px;
-  background: color-mix(in oklch, var(--surface) 74%, var(--card));
+  background: color-mix(in oklch, var(--background-secondary) 74%, var(--surface-primary));
 }
 .memoria-window .lk-header {
   display: grid;
@@ -8766,7 +8787,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   align-items: start;
   gap: 10px 12px;
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .memoria-window .lk-title {
   min-width: 0;
@@ -8788,10 +8809,10 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 7px;
   min-height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 7px;
-  background: color-mix(in oklch, var(--card) 70%, transparent);
-  color: var(--fg-muted);
+  background: color-mix(in oklch, var(--surface-primary) 70%, transparent);
+  color: var(--text-secondary);
   font-size: 12px;
   white-space: nowrap;
   min-width: 0;
@@ -8818,9 +8839,9 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .memoria-window .mc-filters {
   gap: 7px;
   padding: 10px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--inset) 72%, transparent);
+  background: color-mix(in oklch, var(--surface-inset) 72%, transparent);
 }
 .memoria-window .mc-filter-row {
   display: grid;
@@ -8842,12 +8863,12 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   padding: 0 8px;
   font-size: 10.5px;
   border-radius: 7px;
-  background: color-mix(in oklch, var(--card) 84%, transparent);
+  background: color-mix(in oklch, var(--surface-primary) 84%, transparent);
 }
 .memoria-window .mc-chip[data-active="true"],
 .memoria-window .mc-chip[aria-pressed="true"] {
   background: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--text-inverse);
   border-color: var(--accent);
 }
 .memoria-window section[aria-label="Memory records"],
@@ -8859,8 +8880,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   min-height: 142px;
   padding: 28px 18px;
   border-radius: 8px;
-  border-color: var(--line-soft);
-  background: color-mix(in oklch, var(--card) 56%, transparent);
+  border-color: var(--border-subtle);
+  background: color-mix(in oklch, var(--surface-primary) 56%, transparent);
 }
 .memoria-window .lk-empty-title {
   font-size: 13px;
@@ -8873,7 +8894,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 .memoria-window .mc-row {
   border-radius: 8px;
-  background: color-mix(in oklch, var(--card) 86%, transparent);
+  background: color-mix(in oklch, var(--surface-primary) 86%, transparent);
 }
 .memoria-window .mc-consolidation-scroll,
 .memoria-window .mc-detail {
@@ -8986,7 +9007,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 
 /* Capsule-set composition — Issue #189 Slice 4 "zusammenlegen" */
 .lk-compose-fieldset {
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   margin: 12px 0 4px;
@@ -9045,7 +9066,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0 0 10px;
 }
 
@@ -9056,8 +9077,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-card);
 }
 .lk-capsule-drag-handle {
@@ -9080,7 +9101,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   cursor: grabbing;
 }
 .lk-capsule-drag-handle:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 3px;
   border-radius: var(--radius-xs);
 }
@@ -9095,8 +9116,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   padding: 9px 11px;
   border: 1px solid var(--accent-line);
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--surface) 92%, var(--accent));
-  color: var(--fg);
+  background: color-mix(in oklch, var(--background-secondary) 92%, var(--accent));
+  color: var(--text-primary);
   box-shadow: var(--shadow-pop);
 }
 .lk-connector-drag-ghost-icon {
@@ -9105,7 +9126,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   display: grid;
   place-items: center;
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--accent) 14%, var(--card));
+  background: color-mix(in oklch, var(--accent) 14%, var(--surface-primary));
   color: var(--accent);
   flex: none;
 }
@@ -9122,7 +9143,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   white-space: nowrap;
 }
 .lk-connector-drag-ghost-copy small {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 10.5px;
   font-weight: 600;
   text-transform: uppercase;
@@ -9131,8 +9152,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: var(--inset);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
   display: grid;
   place-items: center;
   color: var(--accent);
@@ -9146,7 +9167,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .lk-capsule-name {
   font-size: 13px;
   font-weight: 500;
-  color: var(--fg);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -9272,7 +9293,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 14px;
   padding: 48px 24px;
   border-radius: var(--radius);
-  border: 1px dashed var(--line);
+  border: 1px dashed var(--border-default);
   text-align: center;
 }
 .lk-empty-icon {
@@ -9281,12 +9302,12 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .lk-empty-title {
   font-size: 15px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
   margin: 0 0 6px;
 }
 .lk-empty-body {
   font-size: 13px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -9294,7 +9315,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
    (uiux-fix F005) */
 .lk-loading {
   font-size: 13px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -9326,7 +9347,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .lkd-live-note {
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-size: 11.5px;
   font-family: var(--font-mono);
 }
@@ -9340,36 +9361,36 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .lkd-metric-card {
   min-width: 0;
   padding: 12px 14px;
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-card);
 }
 
 .lkd-metric-card[data-tone="ok"] {
-  border-color: color-mix(in oklch, var(--ok) 32%, var(--line-soft));
+  border-color: color-mix(in oklch, var(--feedback-success) 32%, var(--border-subtle));
 }
 
 .lkd-metric-card[data-tone="warn"] {
-  border-color: color-mix(in oklch, var(--warn) 38%, var(--line-soft));
+  border-color: color-mix(in oklch, var(--feedback-warning) 38%, var(--border-subtle));
 }
 
 .lkd-metric-card[data-tone="danger"] {
-  border-color: color-mix(in oklch, var(--danger) 42%, var(--line-soft));
+  border-color: color-mix(in oklch, var(--feedback-danger) 42%, var(--border-subtle));
 }
 
 .lkd-metric-label,
 .lkd-metric-meta {
   display: block;
   min-width: 0;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 11.5px;
 }
 
 .lkd-metric-value {
   display: block;
   margin: 4px 0;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 18px;
   font-weight: 700;
   line-height: 1.1;
@@ -9380,8 +9401,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
 }
 
@@ -9390,7 +9411,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   grid-template-columns: minmax(128px, 0.5fr) minmax(120px, 1fr) minmax(42px, auto);
   align-items: center;
   gap: 10px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -9398,8 +9419,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .lkd-source-coverage {
   height: 8px;
   overflow: hidden;
-  background: color-mix(in oklch, var(--fg) 8%, transparent);
-  border: 1px solid var(--line-soft);
+  background: color-mix(in oklch, var(--text-primary) 8%, transparent);
+  border: 1px solid var(--border-subtle);
   border-radius: 999px;
 }
 
@@ -9410,39 +9431,39 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .lkd-progress-fill[data-tone="ok"] {
-  background: var(--ok);
+  background: var(--feedback-success);
 }
 
 .lkd-progress-fill[data-tone="warn"] {
-  background: var(--warn);
+  background: var(--feedback-warning);
 }
 
 .lkd-progress-fill[data-tone="danger"] {
-  background: var(--danger);
+  background: var(--feedback-danger);
 }
 
 .lkd-status-callout {
   margin: 0;
   padding: 10px 12px;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 12.5px;
   line-height: 1.45;
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
 }
 
 .lkd-status-callout[data-tone="ok"] {
-  border-color: color-mix(in oklch, var(--ok) 34%, var(--line-soft));
+  border-color: color-mix(in oklch, var(--feedback-success) 34%, var(--border-subtle));
 }
 
 .lkd-status-callout[data-tone="warn"] {
-  border-color: color-mix(in oklch, var(--warn) 42%, var(--line-soft));
+  border-color: color-mix(in oklch, var(--feedback-warning) 42%, var(--border-subtle));
 }
 
 .lkd-status-callout[data-tone="danger"] {
-  border-color: color-mix(in oklch, var(--danger) 48%, var(--line-soft));
-  background: color-mix(in oklch, var(--danger) 7%, var(--card));
+  border-color: color-mix(in oklch, var(--feedback-danger) 48%, var(--border-subtle));
+  background: color-mix(in oklch, var(--feedback-danger) 7%, var(--surface-primary));
 }
 
 /* Definition list (Overview section) */
@@ -9451,8 +9472,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   flex-direction: column;
   gap: 8px;
   padding: 14px 16px;
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-card);
 }
@@ -9464,13 +9485,13 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .lkd-label {
   font-size: 12px;
   font-weight: 600;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   min-width: 140px;
   flex: none;
 }
 .lkd-value {
   font-size: 13px;
-  color: var(--fg);
+  color: var(--text-primary);
   margin: 0;
   flex: 1;
   min-width: 0;
@@ -9492,7 +9513,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   border-radius: 999px;
   background: var(--accent-dim);
   border: 1px solid var(--accent-line);
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 /* Stale reasons */
@@ -9501,7 +9522,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   padding-left: 16px;
   margin: 0;
   font-size: 13px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 /* Generic list (sources, jobs) */
@@ -9519,8 +9540,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .lkd-source-card {
   display: flex;
   min-width: 0;
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-card);
 }
@@ -9547,7 +9568,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .lkd-source-name {
   font-size: 13px;
   font-weight: 500;
-  color: var(--fg);
+  color: var(--text-primary);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -9556,7 +9577,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .lkd-source-path {
   max-width: 100%;
   overflow: hidden;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 11.5px;
   font-family: var(--font-mono);
   text-overflow: ellipsis;
@@ -9564,11 +9585,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 .lkd-source-scope {
   font-size: 11px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-family: var(--font-mono);
   flex: none;
   padding: 2px 6px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 999px;
 }
 .lkd-source-coverage {
@@ -9581,13 +9602,13 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   height: 100%;
 }
 .lkd-source-segment-ok {
-  background: var(--ok);
+  background: var(--feedback-success);
 }
 .lkd-source-segment-fail {
-  background: var(--danger);
+  background: var(--feedback-danger);
 }
 .lkd-source-segment-skip {
-  background: var(--fg-dim);
+  background: var(--text-tertiary);
 }
 .lkd-source-counts {
   display: flex;
@@ -9601,13 +9622,13 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-family: var(--font-mono);
 }
 .lkd-count-ok {
-  color: var(--ok);
+  color: var(--feedback-success);
 }
 .lkd-count-fail {
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 .lkd-count-skip {
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 
 /* Diagnostics list */
@@ -9623,8 +9644,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   align-items: baseline;
   gap: 10px;
   padding: 8px 14px;
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
 }
 .lkd-diag-group {
@@ -9632,16 +9653,16 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 .lkd-diag-row[data-severity="error"],
 .lkd-diag-group[data-severity="error"] {
-  border-color: color-mix(in oklch, var(--danger) 40%, transparent);
-  background: color-mix(in oklch, var(--danger) 6%, var(--card));
+  border-color: color-mix(in oklch, var(--feedback-danger) 40%, transparent);
+  background: color-mix(in oklch, var(--feedback-danger) 6%, var(--surface-primary));
 }
 .lkd-diag-row[data-severity="warning"],
 .lkd-diag-group[data-severity="warning"] {
-  border-color: color-mix(in oklch, var(--warn) 40%, transparent);
+  border-color: color-mix(in oklch, var(--feedback-warning) 40%, transparent);
 }
 .lkd-diag-group-count {
   min-width: 36px;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 12px;
   font-family: var(--font-mono);
   font-weight: 700;
@@ -9653,31 +9674,31 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   flex: none;
 }
 .lkd-diag-row[data-severity="error"] .lkd-diag-severity {
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 .lkd-diag-row[data-severity="warning"] .lkd-diag-severity {
-  color: var(--warn);
+  color: var(--feedback-warning);
 }
 .lkd-diag-row[data-severity="info"] .lkd-diag-severity {
-  color: var(--info);
+  color: var(--feedback-info);
 }
 .lkd-diag-code {
   font-size: 11px;
   font-family: var(--font-mono);
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   min-width: 80px;
   flex: none;
 }
 .lkd-diag-message {
   font-size: 12.5px;
-  color: var(--fg);
+  color: var(--text-primary);
   flex: 1;
   min-width: 0;
 }
 .lkd-diag-page {
   font-size: 11px;
   font-family: var(--font-mono);
-  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
+  color: var(--text-secondary); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   flex: none;
 }
 
@@ -9688,8 +9709,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-card);
 }
@@ -9700,26 +9721,26 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   flex: none;
 }
 .lkd-job-status[data-status="succeeded"] {
-  color: var(--ok);
+  color: var(--feedback-success);
 }
 .lkd-job-status[data-status="failed"] {
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 .lkd-job-status[data-status="running"] {
-  color: var(--warn);
+  color: var(--feedback-warning);
 }
 .lkd-job-status[data-status="queued"],
 .lkd-job-status[data-status="cancelled"] {
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 .lkd-job-dates {
   font-size: 11.5px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   flex: 1;
 }
 .lkd-job-duration {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 11.5px;
   font-family: var(--font-mono);
 }
@@ -9728,7 +9749,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   display: flex;
   gap: 8px;
   min-width: 0;
-  color: var(--danger);
+  color: var(--feedback-danger);
   font-size: 11.5px;
   font-family: var(--font-mono);
 }
@@ -9747,7 +9768,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 /* Empty note */
 .lkd-empty-note {
   font-size: 13px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   margin: 0;
   padding: 10px 0;
 }
@@ -9764,8 +9785,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  background: var(--card);
-  border: 1px solid color-mix(in oklch, var(--ok) 34%, var(--line-soft));
+  background: var(--surface-primary);
+  border: 1px solid color-mix(in oklch, var(--feedback-success) 34%, var(--border-subtle));
   border-radius: var(--radius-sm);
 }
 
@@ -9773,13 +9794,13 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 12px;
   font-weight: 700;
 }
 
 .lkd-action-progress-note {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -9832,7 +9853,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   min-width: 72px;
   flex-shrink: 0;
 }
@@ -9853,10 +9874,10 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-size: 11px;
   font-weight: 500;
   border-radius: 12px;
-  border: 1px solid var(--line-soft);
-  background: var(--card);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
   /* --fg on --card: contrast ≥4.5:1 (WCAG AA). --fg-muted was 4.09:1. */
-  color: var(--fg);
+  color: var(--text-primary);
   cursor: pointer;
   transition:
     background 120ms,
@@ -9866,20 +9887,20 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .mc-chip:hover:not(:disabled) {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
 }
 
 .mc-chip[data-active="true"],
 .mc-chip[aria-pressed="true"] {
   background: var(--accent);
   /* --ink-inverse on --accent = 6.94:1 (WCAG AA) */
-  color: var(--ink-inverse);
+  color: var(--text-inverse);
   border-color: var(--accent);
 }
 
 .mc-chip:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -9973,10 +9994,10 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 12px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   text-decoration: none;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 .mc-row-button {
@@ -9987,11 +10008,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .mc-row:hover {
-  background: var(--card-2);
+  background: var(--surface-secondary);
 }
 
 .mc-row:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -10005,7 +10026,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 
 .mc-row-body {
   font-size: 13px;
-  color: var(--fg);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -10024,7 +10045,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .mc-row-type,
 .mc-row-scope {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .mc-row-pinned {
@@ -10032,7 +10053,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-weight: 700;
   /* --accent-text: identical to --accent in dark; light overrides it to an
      AA tone — raw --accent was 2.41:1 on the white card (uiux-fix F033, C006). */
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 
 /* ── Detail view ─────────────────────────────────────────── */
@@ -10083,29 +10104,29 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 
 .mc-meta-label {
   font-weight: 600;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
 .mc-meta-value {
-  color: var(--fg);
+  color: var(--text-primary);
   word-break: break-word;
   margin: 0;
 }
 
 .mc-meta-empty {
   font-size: 13px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 
 .mc-body-text {
   font-size: 14px;
   line-height: 1.6;
-  color: var(--fg);
+  color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
-  background: var(--inset);
+  background: var(--surface-inset);
   border-radius: var(--radius-sm);
   padding: 12px;
 }
@@ -10113,7 +10134,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .mc-code {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   word-break: break-all;
 }
 
@@ -10130,9 +10151,9 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 10px;
-  background: var(--card);
-  border: 1px solid var(--line-soft);
-  color: var(--fg-muted);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
 }
 
 /* ── Actions ─────────────────────────────────────────────── */
@@ -10145,7 +10166,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 
 .mc-action-error {
   font-size: 12px;
-  color: var(--danger);
+  color: var(--feedback-danger);
   margin: 0;
   width: 100%;
 }
@@ -10154,7 +10175,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
    ≈ 5.5:1 (uiux-fix F005 — raw #4eba87 was 2.12:1 on the light bg) */
 .mc-action-notice {
   font-size: 12px;
-  color: var(--ok);
+  color: var(--feedback-success);
   margin: 0;
   width: 100%;
 }
@@ -10165,8 +10186,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 12px;
   padding: 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
 }
 
 .mc-review-body {
@@ -10195,7 +10216,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .mc-dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: oklch(0 0 0 / 0.55);
+  /* #1295 C3 — base dark value (oklch(0 0 0 / 0.55)) is byte-identical to
+     --overlay-scrim, so routing here centralises the scrim; the token's Light
+     redefinition (oklch(0.3 0.01 160 / 0.34)) replaces the two removed
+     [data-theme="light"] .mc-dialog-backdrop overrides below. */
+  background: var(--overlay-scrim);
   display: grid;
   place-items: center;
   z-index: 9000;
@@ -10321,7 +10346,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .sm-root {
   white-space: normal;
   word-break: break-word;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: inherit;
   line-height: inherit;
 }
@@ -10548,7 +10573,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--border-default);
   flex-shrink: 0;
 }
 
@@ -10557,14 +10582,14 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
   flex: 1;
 }
 
 .qi-col-count {
   font-size: 11px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 
 /* Column scroll body */
@@ -10597,7 +10622,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   border: none;
   border-radius: 0;
   cursor: pointer;
-  color: var(--fg);
+  color: var(--text-primary);
   font-family: var(--font-ui);
   font-size: 13px;
   min-height: 44px;
@@ -10608,39 +10633,41 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .qi-run-item:hover {
   /* --card == window-body bg since QI became a workspace window — a --card
      hover was invisible; --card-2 is the app-wide hover token (uiux-fix F036 C280) */
-  background: var(--card-2);
+  background: var(--surface-secondary);
 }
 
 .qi-run-item:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 
 .qi-run-item-selected {
-  background: var(--card-2); /* was --card == window bg, invisible (uiux-fix F036 C280) */
+  background: var(
+    --surface-secondary
+  ); /* was --card == window bg, invisible (uiux-fix F036 C280) */
   /* inset shadow, not border-left: a 2px border shifted the row content sideways
      on selection (uiux-fix F049 C340) */
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .qi-run-item-selected:hover {
-  background: var(--card-2);
+  background: var(--surface-secondary);
 }
 
 .qi-run-id {
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 .qi-run-meta {
   font-size: 11px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 
 .qi-run-totals {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 /* Status badges — AA-compliant colours on var(--card) backgrounds */
@@ -10746,10 +10773,10 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 3px;
   margin: 4px 0 2px;
   padding: 6px 8px;
-  border: 1px solid color-mix(in oklch, var(--danger) 40%, transparent);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 40%, transparent);
   /* token radius, was off-scale 6px (uiux-fix F050 C390) */
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--danger) 10%, var(--card));
+  background: color-mix(in oklch, var(--feedback-danger) 10%, var(--surface-primary));
 }
 .qi-weak-flag-badge {
   display: inline-flex;
@@ -10760,16 +10787,16 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .qi-weak-flag-icon {
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 .qi-weak-flag-reason {
   margin: 0;
   font-size: 12px;
   line-height: 1.4;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 /* Coverage / Gap-Radar panel (Epic #734 / Issue #739). The status is ALWAYS carried by a text
@@ -10790,7 +10817,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .qi-coverage-summary {
   margin: 0;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .qi-coverage-gaps {
   display: flex;
@@ -10811,14 +10838,14 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   justify-content: space-between;
   gap: 8px;
   padding: 4px 8px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   /* token radius, matches .qi-finding-item; was off-scale 6px (uiux-fix F050 C390) */
   border-radius: var(--radius-sm);
-  background: var(--card);
+  background: var(--surface-primary);
 }
 .qi-coverage-atom-id {
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10833,7 +10860,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 .qi-coverage-gap-text {
   font-size: 12px;
-  color: var(--fg);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10858,7 +10885,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 8px;
   margin-top: 12px;
   padding-top: 10px;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--border-subtle);
 }
 .qi-drift-head {
   display: flex;
@@ -10873,7 +10900,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 6px;
   margin: 0;
   font-size: 12px;
-  color: var(--warn);
+  color: var(--feedback-warning);
 }
 .qi-drift-icon-warn {
   font-size: 13px;
@@ -10885,7 +10912,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 6px;
   margin: 0;
   font-size: 12px;
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 .qi-drift-icon-ok {
   font-size: 13px;
@@ -10893,7 +10920,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .qi-drift-regenerated {
   margin: 0;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 /* Monospace strings (IDs, hashes) */
@@ -10915,8 +10942,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .qi-finding-item {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -10931,14 +10958,14 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .qi-finding-kind {
   font-size: 11px;
   font-weight: 600;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   /* no text-transform — kinds render via the KIND_LABEL map in QiRunCard (uiux-fix F030 C273);
      capitalize turned the raw machine token into "Logic-Defect". */
 }
 
 .qi-finding-summary {
   font-size: 12px;
-  color: var(--fg);
+  color: var(--text-primary);
   margin: 0;
   line-height: 1.5;
 }
@@ -10947,7 +10974,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
    --card-2 (not --card) so the blocks stay visible on the --card window
    body even when the shimmer is disabled (reduced motion). */
 .qi-skeleton {
-  background: var(--card-2);
+  background: var(--surface-secondary);
   border-radius: 4px;
   position: relative;
   overflow: hidden;
@@ -10961,7 +10988,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
     background: linear-gradient(
       90deg,
       transparent 0%,
-      color-mix(in oklch, var(--fg) 6%, transparent) 50%,
+      color-mix(in oklch, var(--text-primary) 6%, transparent) 50%,
       transparent 100%
     );
     animation: qi-shimmer 1.4s infinite;
@@ -11121,8 +11148,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 /* ─── Quality Intelligence run launcher + candidate review (Issue #280/#282) ─── */
 .qi-launcher {
   flex-shrink: 0;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  border-bottom: 1px solid var(--border-default);
+  background: var(--background-secondary);
 }
 .qi-launcher-body {
   display: flex;
@@ -11137,27 +11164,27 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   align-items: baseline;
   gap: 4px 8px;
   padding: 8px 10px;
-  border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--border-default));
   border-radius: var(--radius-sm);
   /* oklab: light --card is oklch(1 0 0) with hue 0 — oklch interpolation would rotate the
      accent hue 160 toward red/pink. oklab interpolates without a hue axis. */
-  background: color-mix(in oklab, var(--accent) 12%, var(--card));
+  background: color-mix(in oklab, var(--accent) 12%, var(--surface-primary));
 }
 .qi-connected-kind {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .qi-connected-path {
   font-size: 11px;
-  color: var(--fg);
+  color: var(--text-primary);
   word-break: break-all;
 }
 .qi-connected-hint {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   width: 100%;
 }
 /* Multi-source connected list (Epic #729 / Issue #731). */
@@ -11178,7 +11205,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .qi-connected-root-name {
   font-size: 11px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 /* Coverage notice (Epic #729 / Issue #730): sources dropped past the 16-source cap, or skipped
    because they ingested to nothing usable. Mirrors .grounded-coverage-notice — text uses --fg
@@ -11198,7 +11225,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 .qi-coverage-line {
   margin: 0;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 /* Degraded-run notice: the run succeeded with deterministic baseline tests because model generation
    failed. A warning (not an error) — distinct from .lk-alert so a recoverable degradation is not
@@ -11278,7 +11305,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .qi-source-kind-grid {
   display: grid;
@@ -11511,25 +11538,25 @@ select.qi-select {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 8px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
+  background: var(--surface-primary);
+  color: var(--text-primary);
   font-size: 12.5px;
 }
 .qi-path-value[data-empty="true"] {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .qi-browse-btn {
   min-width: 82px;
 }
 .qi-source-picker .lkd-picker-row[aria-pressed="true"] {
-  background: color-mix(in oklab, var(--accent) 18%, var(--card));
-  color: var(--fg);
+  background: color-mix(in oklab, var(--accent) 18%, var(--surface-primary));
+  color: var(--text-primary);
 }
 .qi-source-picker-selection {
   margin: 0;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -11635,7 +11662,7 @@ select.qi-select {
     border: 1px solid var(--border-strong);
     border-radius: 8px;
     background: color-mix(in oklch, var(--popover-surface) 96%, black);
-    box-shadow: 0 12px 30px -18px rgba(0, 0, 0, 0.85);
+    box-shadow: 0 12px 30px -18px rgb(var(--shadow-ink-rgb) / 0.85);
     color: var(--text-primary);
     font-size: 11.5px;
     font-weight: 650;
@@ -11706,7 +11733,7 @@ select.qi-select {
 }
 .qi-btn-reject {
   color: #f2a4a0;
-  /* was hardcoded #d9534f; var(--danger) keeps the light-theme darkening (uiux-fix F049 C338) */
+  /* was hardcoded #d9534f; var(--feedback-danger) keeps the light-theme darkening (uiux-fix F049 C338) */
   border-color: color-mix(in oklch, var(--feedback-danger) 45%, var(--button-secondary-border));
 }
 .qi-btn-reject[aria-pressed="true"] {
@@ -11721,12 +11748,12 @@ select.qi-select {
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .qi-progress-spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid var(--line-strong);
+  border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: qi-spin 0.8s linear infinite;
@@ -11750,7 +11777,7 @@ select.qi-select {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
   padding: 0;
 }
@@ -11764,8 +11791,8 @@ select.qi-select {
   align-items: start;
 }
 .qi-cand-card {
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   padding: 0;
   display: flex;
@@ -11776,7 +11803,7 @@ select.qi-select {
 .qi-cand-card-editing {
   grid-column: 1 / -1;
   padding: 0;
-  background: color-mix(in oklab, var(--accent) 6%, var(--card));
+  background: color-mix(in oklab, var(--accent) 6%, var(--surface-primary));
   border-color: var(--accent-line);
 }
 .qi-cand-header {
@@ -11795,7 +11822,7 @@ select.qi-select {
 .qi-cand-title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
   margin: 0;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -11820,8 +11847,8 @@ select.qi-select {
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 4px;
-  background: var(--card-2);
-  color: var(--fg-muted);
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
@@ -11835,13 +11862,13 @@ select.qi-select {
 .qi-cand-meta div {
   min-width: 48px;
   padding: 5px 7px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 7px;
-  background: var(--inset);
+  background: var(--surface-inset);
 }
 .qi-cand-meta dt {
   margin: 0 0 2px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -11849,17 +11876,17 @@ select.qi-select {
 }
 .qi-cand-meta dd {
   margin: 0;
-  color: var(--fg);
+  color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 11px;
 }
 .qi-cand-accordion-stack {
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--border-subtle);
 }
 .qi-cand-accordion {
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .qi-cand-accordion-summary {
   display: flex;
@@ -11867,7 +11894,7 @@ select.qi-select {
   justify-content: flex-start;
   gap: 10px;
   padding: 9px 14px;
-  color: var(--fg);
+  color: var(--text-primary);
   cursor: pointer;
   list-style: none;
   font-size: 12px;
@@ -11882,8 +11909,8 @@ select.qi-select {
   width: 7px;
   height: 7px;
   flex: none;
-  border-right: 1.5px solid var(--fg-muted);
-  border-bottom: 1.5px solid var(--fg-muted);
+  border-right: 1.5px solid var(--text-secondary);
+  border-bottom: 1.5px solid var(--text-secondary);
   transform: rotate(-45deg);
   transition: transform 0.12s ease;
 }
@@ -11891,7 +11918,7 @@ select.qi-select {
   transform: rotate(45deg);
 }
 .qi-cand-accordion-summary:hover {
-  background: var(--card-2);
+  background: var(--surface-secondary);
 }
 .qi-cand-accordion-body {
   display: flex;
@@ -11907,14 +11934,14 @@ select.qi-select {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0 0 3px;
 }
 .qi-cand-list {
   margin: 0;
   padding-left: 18px;
   font-size: 12px;
-  color: var(--fg);
+  color: var(--text-primary);
   line-height: 1.5;
   display: flex;
   flex-direction: column;
@@ -11932,8 +11959,8 @@ select.qi-select {
   font-size: 10px;
   padding: 2px 6px;
   border-radius: 4px;
-  background: var(--card-2);
-  color: var(--fg-muted);
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
 }
 .qi-cand-actions {
   display: flex;
@@ -11944,7 +11971,7 @@ select.qi-select {
 .qi-cand-governance-note {
   margin: 0 0 10px;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .qi-edit-form {
   display: flex;
@@ -11958,14 +11985,14 @@ select.qi-select {
   justify-content: space-between;
   gap: 14px;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .qi-edit-head-copy {
   min-width: 0;
 }
 .qi-edit-eyebrow {
   margin: 0 0 3px;
-  color: var(--accent-text);
+  color: var(--text-accent);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
@@ -11974,7 +12001,7 @@ select.qi-select {
 }
 .qi-edit-heading {
   margin: 0;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 14px;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -11994,9 +12021,9 @@ select.qi-select {
 }
 .qi-edit-side {
   padding: 10px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: var(--inset);
+  background: var(--surface-inset);
 }
 .qi-edit-field {
   display: flex;
@@ -12008,15 +12035,15 @@ select.qi-select {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .qi-edit-input,
 .qi-edit-textarea,
 .qi-edit-select {
   width: 100%;
-  background: var(--inset);
-  color: var(--fg);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-inset);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: 9px 10px;
   font-size: 13px;
@@ -12031,7 +12058,7 @@ select.qi-select {
 .qi-edit-input:focus-visible,
 .qi-edit-textarea:focus-visible,
 .qi-edit-select:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -12048,7 +12075,7 @@ select.qi-select {
 .qi-edit-error {
   margin: 0;
   font-size: 12px;
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 .qi-cand-more,
 .qi-show-more {
@@ -12068,26 +12095,26 @@ select.qi-select {
    Mixed in oklab, not oklch: light --card oklch(1 0 0) has hue 0, and oklch interpolation
    rotates the tint hues (approved turned tan, ~identical to changes) — oklab keeps them apart. */
 .qi-review-open {
-  background: color-mix(in oklab, var(--fg-muted) 26%, var(--card));
-  color: var(--fg);
+  background: color-mix(in oklab, var(--text-secondary) 26%, var(--surface-primary));
+  color: var(--text-primary);
 }
 .qi-review-approved {
-  background: color-mix(in oklab, var(--accent) 32%, var(--card));
-  color: var(--fg);
+  background: color-mix(in oklab, var(--accent) 32%, var(--surface-primary));
+  color: var(--text-primary);
 }
 .qi-review-changes {
   /* was hardcoded #d8a657 (uiux-fix F049 C338) */
-  background: color-mix(in oklab, var(--warn) 38%, var(--card));
-  color: var(--fg);
+  background: color-mix(in oklab, var(--feedback-warning) 38%, var(--surface-primary));
+  color: var(--text-primary);
 }
 .qi-review-rejected {
   /* was hardcoded #d9534f (uiux-fix F049 C338) */
-  background: color-mix(in oklab, var(--danger) 38%, var(--card));
-  color: var(--fg);
+  background: color-mix(in oklab, var(--feedback-danger) 38%, var(--surface-primary));
+  color: var(--text-primary);
 }
 .qi-review-withdrawn {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
 }
 /* Light theme: the small risk pill uses the strong text colour for 4.5:1 (a11y M2). */
 [data-theme="light"] .qi-cand-risk {
@@ -12126,9 +12153,9 @@ select.qi-select {
   width: min(100%, 520px);
   margin-left: auto;
   padding: 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--card) 92%, var(--inset));
+  background: color-mix(in oklch, var(--surface-primary) 92%, var(--surface-inset));
 }
 .qi-export-head {
   display: flex;
@@ -12141,7 +12168,7 @@ select.qi-select {
 }
 .qi-export-title {
   margin: 0;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 12px;
   font-weight: 700;
   line-height: 1.3;
@@ -12170,10 +12197,10 @@ select.qi-select {
   gap: 6px;
   min-height: 28px;
   padding: 4px 8px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: var(--inset);
-  color: var(--fg-muted);
+  background: var(--surface-inset);
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.2;
   white-space: nowrap;
@@ -12182,13 +12209,13 @@ select.qi-select {
   width: 100%;
   max-height: 220px;
   overflow: auto;
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   font-size: 11px;
   line-height: 1.45;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   white-space: pre-wrap;
   margin: 8px 0 0;
   font-family: var(--font-mono, monospace);
@@ -12197,17 +12224,17 @@ select.qi-select {
   margin: 2px 0 0;
   font-size: 11px;
   line-height: 1.4;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .qi-export-success {
   margin: 0;
   padding: 6px 8px;
-  border: 1px solid color-mix(in oklch, var(--accent) 36%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--accent) 36%, var(--border-default));
   border-radius: var(--radius-sm);
   background: color-mix(in oklch, var(--accent) 9%, transparent);
   font-size: 11px;
   line-height: 1.4;
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 @media (max-width: 760px) {
   .qi-export {
@@ -12237,7 +12264,7 @@ select.qi-select {
 }
 .qi-hub .qi-launcher {
   flex-shrink: 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--border-default);
 }
 .qi-hub-runs {
   display: flex;
@@ -12258,14 +12285,14 @@ select.qi-select {
   /* 12px 16px = .qi-col-header grid — hub and run card share one horizontal
      edge on the same canvas (uiux-fix F036 C282) */
   padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--border-default);
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .qi-run-card-head .qi-run-id {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -12284,13 +12311,13 @@ select.qi-select {
   flex-direction: column;
   gap: 6px;
   padding: 12px 14px;
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   position: sticky;
   top: 0;
   z-index: 3;
-  box-shadow: 0 8px 18px color-mix(in oklch, var(--bg) 72%, transparent);
+  box-shadow: 0 8px 18px color-mix(in oklch, var(--background-primary) 72%, transparent);
 }
 .qi-run-governance-input {
   max-width: 320px;
@@ -12301,10 +12328,10 @@ select.qi-select {
   font-size: 12px;
 }
 .qi-run-governance-help {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .qi-run-governance-warning {
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 
 /* Run summary strip: clean horizontal wrap, no cramped vertical stack. */
@@ -12314,8 +12341,8 @@ select.qi-select {
   gap: 10px 22px;
   margin: 0;
   padding: 12px 14px;
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
 }
 .qi-run-summary-item {
@@ -12328,13 +12355,13 @@ select.qi-select {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
 }
 .qi-run-summary-item dd {
   margin: 0;
   font-size: 12px;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .qi-run-summary-review {
   /* no text-transform — the review state renders via the shared REVIEW_LABEL map (uiux-fix
@@ -12363,7 +12390,7 @@ select.qi-select {
   padding: 12px 14px;
   border-radius: var(--radius-sm);
   /* --inset so the loading row reads as a distinct well on --card */
-  background: var(--inset);
+  background: var(--surface-inset);
 }
 
 /* ── Figma Snapshot window (Epic #750, Issue #756) ─────────────────────────────
@@ -12381,7 +12408,7 @@ select.qi-select {
   padding: 14px;
   height: 100%;
   overflow-y: auto;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 /* ── Input form ───────────────────────────────────────────────────────────── */
@@ -12395,7 +12422,7 @@ select.qi-select {
 .figma-snapshot-label {
   font-size: 12px;
   font-weight: 600;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -12454,7 +12481,7 @@ select.qi-select {
 
 .figma-snapshot-hint {
   font-size: 12px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   margin: 0;
 }
 
@@ -12489,13 +12516,13 @@ select.qi-select {
 
 .figma-snapshot-progress {
   font-size: 13px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
 }
 
 .figma-snapshot-error {
   font-size: 13px;
-  color: var(--danger);
+  color: var(--feedback-danger);
   margin: 0;
 }
 
@@ -12504,9 +12531,9 @@ select.qi-select {
   flex-direction: column;
   gap: 4px;
   padding: 10px 12px;
-  border: 1px solid color-mix(in oklch, var(--danger) 55%, transparent);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 55%, transparent);
   border-radius: var(--radius-sm, 6px);
-  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
 }
 
 .figma-snapshot-error-title,
@@ -12518,17 +12545,17 @@ select.qi-select {
 }
 
 .figma-snapshot-error-title {
-  color: var(--danger);
+  color: var(--feedback-danger);
   font-weight: 700;
 }
 
 .figma-snapshot-error-detail {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 .figma-snapshot-error-status,
 .figma-snapshot-error-remediation {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 /* ── Stored-snapshot notice ───────────────────────────────────────────────── */
@@ -12539,14 +12566,14 @@ select.qi-select {
   gap: 10px;
   padding: 8px 12px;
   border-radius: var(--radius-sm);
-  background: var(--card-2);
-  border: 1px solid var(--line);
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-default);
 }
 
 .figma-snapshot-stored-text {
   flex: 1;
   font-size: 13px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -12572,8 +12599,8 @@ select.qi-select {
   gap: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--card);
+  border: 1px solid var(--border-default);
+  background: var(--surface-primary);
 }
 
 .figma-snapshot-dashboard-header {
@@ -12587,7 +12614,7 @@ select.qi-select {
   margin: 0 0 2px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   text-transform: uppercase;
 }
 
@@ -12595,23 +12622,23 @@ select.qi-select {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 .figma-snapshot-dashboard-refresh {
   min-height: 24px;
   padding: 5px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
   font-size: 12px;
   cursor: pointer;
   outline-offset: 2px;
 }
 
 .figma-snapshot-dashboard-refresh:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 .figma-snapshot-dashboard-tabs {
@@ -12620,8 +12647,8 @@ select.qi-select {
   gap: 4px;
   padding: 4px;
   border-radius: var(--radius-sm);
-  background: var(--card-2);
-  border: 1px solid var(--line);
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-default);
   width: fit-content;
 }
 
@@ -12631,7 +12658,7 @@ select.qi-select {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -12639,9 +12666,9 @@ select.qi-select {
 }
 
 .figma-snapshot-dashboard-tab[aria-selected="true"] {
-  background: var(--card);
-  color: var(--fg);
-  box-shadow: inset 0 0 0 1px var(--line);
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--border-default);
 }
 
 .figma-snapshot-dashboard-tab:disabled {
@@ -12650,7 +12677,7 @@ select.qi-select {
 }
 
 .figma-snapshot-dashboard-tab:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 .figma-snapshot-dashboard-panel {
@@ -12661,11 +12688,11 @@ select.qi-select {
 .figma-snapshot-dashboard-status {
   margin: 0;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .figma-snapshot-dashboard-status-error {
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 
 .figma-snapshot-dashboard-empty {
@@ -12683,12 +12710,12 @@ select.qi-select {
 .figma-snapshot-dashboard-empty-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 .figma-snapshot-dashboard-empty-detail {
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .figma-snapshot-dashboard-list {
@@ -12703,20 +12730,20 @@ select.qi-select {
   align-items: flex-start;
   gap: 5px;
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
   text-align: left;
 }
 
 .figma-snapshot-dashboard-item:hover {
-  border-color: color-mix(in oklch, var(--accent) 35%, var(--line));
+  border-color: color-mix(in oklch, var(--accent) 35%, var(--border-default));
 }
 
 .figma-snapshot-dashboard-item[aria-current="true"] {
-  border-color: color-mix(in oklch, var(--accent) 50%, var(--line));
-  background: color-mix(in oklch, var(--accent) 10%, var(--card-2));
+  border-color: color-mix(in oklch, var(--accent) 50%, var(--border-default));
+  background: color-mix(in oklch, var(--accent) 10%, var(--surface-secondary));
 }
 
 .figma-snapshot-dashboard-item-head {
@@ -12739,7 +12766,7 @@ select.qi-select {
   font-size: 13px;
   line-height: 1.25;
   font-weight: 700;
-  color: var(--fg);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -12747,7 +12774,7 @@ select.qi-select {
 
 .figma-snapshot-dashboard-item-date {
   font-size: 11px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 
 .figma-snapshot-dashboard-item-badge {
@@ -12757,7 +12784,7 @@ select.qi-select {
   padding: 0 6px;
   border-radius: 999px;
   background: color-mix(in oklch, var(--accent) 15%, transparent);
-  color: var(--accent-text);
+  color: var(--text-accent);
   font-size: 11px;
   font-weight: 600;
 }
@@ -12842,14 +12869,14 @@ select.qi-select {
 .figma-snapshot-dashboard-item-hint {
   margin: 0;
   font-size: 12px;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 .figma-snapshot-dashboard-item-meta,
 .figma-snapshot-dashboard-item-scope {
   margin: 0;
   font-size: 11px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 
 .figma-snapshot-dashboard-rename {
@@ -12863,10 +12890,10 @@ select.qi-select {
 .figma-snapshot-dashboard-rename-input {
   min-width: 0;
   min-height: 26px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--inset);
-  color: var(--fg);
+  background: var(--surface-inset);
+  color: var(--text-primary);
   font-size: 12px;
   padding: 4px 8px;
   outline-offset: 2px;
@@ -12887,10 +12914,10 @@ select.qi-select {
   width: 100%;
   margin-top: 4px;
   padding: 7px 8px;
-  border: 1px solid color-mix(in oklch, var(--danger) 40%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 40%, var(--border-default));
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--danger) 10%, transparent);
-  color: var(--fg);
+  background: color-mix(in oklch, var(--feedback-danger) 10%, transparent);
+  color: var(--text-primary);
   font-size: 12px;
 }
 
@@ -12901,7 +12928,7 @@ select.qi-select {
   width: 100%;
   margin: 5px 0 0;
   padding-top: 7px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--border-default);
 }
 
 .figma-snapshot-dashboard-details div {
@@ -12915,13 +12942,13 @@ select.qi-select {
 }
 
 .figma-snapshot-dashboard-details dt {
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   text-transform: uppercase;
   font-weight: 700;
 }
 
 .figma-snapshot-dashboard-details dd {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-family: var(--font-mono, monospace);
   overflow-wrap: anywhere;
 }
@@ -12937,8 +12964,8 @@ select.qi-select {
 .figma-snapshot-reduction {
   padding: 8px 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
 }
 
 .figma-snapshot-result-head {
@@ -12954,14 +12981,14 @@ select.qi-select {
   font-size: 14px;
   line-height: 1.25;
   font-weight: 700;
-  color: var(--fg);
+  color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
 .figma-snapshot-result-run,
 .figma-snapshot-result-hash {
   margin: 2px 0 0;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-family: var(--font-mono, monospace);
   font-size: 11px;
 }
@@ -12970,14 +12997,14 @@ select.qi-select {
   flex: 0 0 auto;
   margin-top: 1px;
   padding: 2px 6px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--card-2);
+  background: var(--surface-secondary);
 }
 
 .figma-snapshot-reduction-hint {
   font-size: 13px;
-  color: var(--fg);
+  color: var(--text-primary);
   font-weight: 600;
   margin: 0;
 }
@@ -12988,7 +13015,7 @@ select.qi-select {
   gap: 5px 10px;
   margin: 8px 0 0;
   padding-top: 7px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--border-default);
 }
 
 .figma-snapshot-result-metadata div {
@@ -13002,20 +13029,20 @@ select.qi-select {
 }
 
 .figma-snapshot-result-metadata dt {
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   text-transform: uppercase;
   font-weight: 700;
 }
 
 .figma-snapshot-result-metadata dd {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-family: var(--font-mono, monospace);
   overflow-wrap: anywhere;
 }
 
 .figma-snapshot-skipped-notice {
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 4px 0 0;
 }
 
@@ -13112,13 +13139,13 @@ select.qi-select {
 .figma-snapshot-code-summary {
   margin: 0;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .figma-snapshot-code-file-path {
   cursor: pointer;
   font-family: var(--font-mono, monospace);
   font-size: 12px;
-  color: var(--fg);
+  color: var(--text-primary);
   padding: 4px 0;
   min-height: 24px;
   display: flex;
@@ -13126,7 +13153,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-code-file-path:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   border-radius: 2px;
 }
 .figma-snapshot-code-file-contents {
@@ -13134,21 +13161,21 @@ select.qi-select {
   padding: 8px;
   max-height: 260px;
   overflow: auto;
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   line-height: 1.5;
   white-space: pre;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 /* ── PAT scopes info (informational <details>) ────────────────────────────── */
 
 .figma-snapshot-scopes {
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   border-radius: var(--radius-sm);
   padding: 4px 0;
 }
@@ -13156,7 +13183,7 @@ select.qi-select {
 .figma-snapshot-scopes-summary {
   cursor: pointer;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   padding: 4px 0;
   min-height: 24px;
   display: flex;
@@ -13164,7 +13191,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-scopes-summary:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   border-radius: 2px;
 }
 
@@ -13178,7 +13205,7 @@ select.qi-select {
 
 .figma-snapshot-scopes-note {
   margin: 6px 0 0;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 
 /* WCAG 2.5.8 target size + focus ring — parity with sibling figma buttons (#756 audit) */
@@ -13227,17 +13254,17 @@ select.qi-select {
   align-self: flex-start;
   min-height: 24px;
   padding: 5px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
+  background: var(--surface-primary);
+  color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
   outline-offset: 2px;
 }
 
 .figma-snapshot-gallery-more:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 .figma-snapshot-screen-card {
@@ -13245,8 +13272,8 @@ select.qi-select {
   gap: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
   align-items: flex-start;
 }
 
@@ -13255,9 +13282,9 @@ select.qi-select {
   width: 72px;
   height: 54px;
   border-radius: var(--radius-sm);
-  background: var(--card-2);
+  background: var(--surface-secondary);
   object-fit: contain;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
 }
 
 .figma-snapshot-screen-preview-btn {
@@ -13293,7 +13320,7 @@ select.qi-select {
 .figma-snapshot-screen-name {
   font-size: 13px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
   margin: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -13302,14 +13329,14 @@ select.qi-select {
 
 .figma-snapshot-screen-summary {
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
 }
 
 .figma-snapshot-screen-size,
 .figma-snapshot-screen-id {
   font-size: 11px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   margin: 0;
 }
 
@@ -13347,7 +13374,7 @@ select.qi-select {
 
 .figma-snapshot-scope-note {
   font-size: 0.75rem;
-  color: var(--accent-text);
+  color: var(--text-accent);
   margin: 2px 0 0;
 }
 
@@ -13379,7 +13406,7 @@ select.qi-select {
   margin: 0;
   font-size: 11px;
   font-weight: 700;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -13388,7 +13415,7 @@ select.qi-select {
   margin: 2px 0 0;
   font-size: 15px;
   line-height: 1.25;
-  color: var(--fg);
+  color: var(--text-primary);
   font-weight: 700;
 }
 
@@ -13399,9 +13426,9 @@ select.qi-select {
   align-items: center;
   padding: 0 8px;
   border-radius: 999px;
-  border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--border-default));
   background: color-mix(in oklch, var(--accent) 12%, transparent);
-  color: var(--accent-text);
+  color: var(--text-accent);
   font-size: 11px;
   font-weight: 700;
 }
@@ -13443,14 +13470,14 @@ select.qi-select {
   gap: 10px;
   padding: 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
 }
 
 .figma-view-source-empty-title {
   margin: 0;
   font-size: 13px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .figma-view-source-card {
@@ -13463,8 +13490,8 @@ select.qi-select {
   width: 100%;
   aspect-ratio: 3 / 2;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
   padding: 0;
   color: inherit;
   font: inherit;
@@ -13481,7 +13508,7 @@ button.figma-view-preview {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: var(--card-2);
+  background: var(--surface-secondary);
 }
 
 .figma-view-preview-drag-surface {
@@ -13504,14 +13531,14 @@ button.figma-view-preview {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
 .figma-view-preview-icon {
   width: 30px;
   height: 30px;
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 
 .figma-view-source-meta {
@@ -13523,7 +13550,7 @@ button.figma-view-preview {
 
 .figma-view-source-title {
   margin: 0;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 14px;
   line-height: 1.25;
   font-weight: 700;
@@ -13532,7 +13559,7 @@ button.figma-view-preview {
 .figma-view-source-summary {
   margin: 0;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .figma-view-source-facts {
@@ -13556,13 +13583,13 @@ button.figma-view-preview {
 }
 
 .figma-view-source-facts dt {
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   text-transform: uppercase;
   font-weight: 700;
 }
 
 .figma-view-source-facts dd {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   min-width: 0;
   overflow-wrap: anywhere;
   font-family: var(--font-mono, monospace);
@@ -13575,9 +13602,9 @@ button.figma-view-preview {
   gap: 8px;
   min-height: 220px;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--card) 88%, black);
+  background: color-mix(in oklch, var(--surface-primary) 88%, black);
   padding: 10px;
 }
 
@@ -13601,7 +13628,7 @@ button.figma-view-preview {
 
 .figma-view-json-kicker {
   margin: 0;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -13610,7 +13637,7 @@ button.figma-view-preview {
 
 .figma-view-json-title {
   margin: 2px 0 0;
-  color: var(--fg);
+  color: var(--text-primary);
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   font-weight: 800;
@@ -13621,7 +13648,7 @@ button.figma-view-preview {
 .figma-view-json-meta,
 .figma-view-json-copy-status {
   margin: 2px 0 0;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 11px;
 }
 
@@ -13631,10 +13658,10 @@ button.figma-view-preview {
   min-height: 120px;
   max-height: none;
   overflow: auto;
-  border: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
+  border: 1px solid color-mix(in oklch, var(--border-default) 82%, transparent);
   border-radius: var(--radius-xs);
-  background: color-mix(in oklch, var(--bg) 88%, black);
-  color: var(--fg);
+  background: color-mix(in oklch, var(--background-primary) 88%, black);
+  color: var(--text-primary);
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   line-height: 1.45;
@@ -13648,7 +13675,7 @@ button.figma-view-preview {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 .figma-json-header {
@@ -13660,7 +13687,7 @@ button.figma-view-preview {
 
 .figma-json-eyebrow {
   margin: 0;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -13669,7 +13696,7 @@ button.figma-view-preview {
 
 .figma-json-heading {
   margin: 2px 0 0;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 15px;
   font-weight: 800;
   line-height: 1.25;
@@ -13679,7 +13706,7 @@ button.figma-view-preview {
 .figma-json-meta,
 .figma-json-status {
   margin: 3px 0 0;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 11px;
 }
 
@@ -13696,15 +13723,15 @@ button.figma-view-preview {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  border: 1px solid color-mix(in oklch, var(--danger) 42%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 42%, var(--border-default));
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--danger) 12%, var(--card));
+  background: color-mix(in oklch, var(--feedback-danger) 12%, var(--surface-primary));
   padding: 10px;
 }
 
 .figma-json-error p {
   margin: 0;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 12px;
 }
 
@@ -13713,10 +13740,10 @@ button.figma-view-preview {
   min-height: 280px;
   margin: 0;
   overflow: auto;
-  border: 1px solid color-mix(in oklch, var(--line) 82%, transparent);
+  border: 1px solid color-mix(in oklch, var(--border-default) 82%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--bg) 88%, black);
-  color: var(--fg);
+  background: color-mix(in oklch, var(--background-primary) 88%, black);
+  color: var(--text-primary);
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   line-height: 1.5;
@@ -13730,7 +13757,7 @@ button.figma-view-preview {
   display: grid;
   place-items: center;
   padding: 0;
-  background: color-mix(in oklch, var(--bg) 90%, black);
+  background: color-mix(in oklch, var(--background-primary) 90%, black);
   overflow: hidden;
 }
 
@@ -13738,41 +13765,41 @@ button.figma-view-preview {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: color-mix(in oklch, var(--bg) 92%, black);
+  background: color-mix(in oklch, var(--background-primary) 92%, black);
 }
 
 .figma-image-missing {
   margin: 16px;
   padding: 12px;
-  border: 1px solid color-mix(in oklch, var(--danger) 42%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 42%, var(--border-default));
   border-radius: var(--radius-sm);
-  color: var(--fg);
-  background: color-mix(in oklch, var(--danger) 12%, var(--card));
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, var(--surface-primary));
   font-size: 12px;
 }
 
 .json-token-key {
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 
 .json-token-string {
-  color: color-mix(in oklch, var(--info) 74%, var(--fg));
+  color: color-mix(in oklch, var(--feedback-info) 74%, var(--text-primary));
 }
 
 .json-token-number {
-  color: color-mix(in oklch, var(--warn) 80%, var(--fg));
+  color: color-mix(in oklch, var(--feedback-warning) 80%, var(--text-primary));
 }
 
 .json-token-boolean {
-  color: color-mix(in oklch, var(--accent-bright) 82%, var(--fg));
+  color: color-mix(in oklch, var(--accent-bright) 82%, var(--text-primary));
 }
 
 .json-token-null {
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 
 .json-token-punctuation {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 /* ==== uiux-fix F008: header status pill tones (C043/C118) ==== */
@@ -14287,13 +14314,13 @@ button.figma-view-preview {
 .qi-field-error {
   margin: 0;
   font-size: 12px;
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 /* C218/C278: muted helper microcopy in the launcher. */
 .qi-field-hint,
 .qi-generate-hint {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .qi-generate-hint {
   flex-basis: 100%;
@@ -14342,7 +14369,7 @@ button.figma-view-preview {
    focusable children, so it needs an explicit tab stop (axe scrollable-region-focusable).
    Ring pattern follows .rv-filerow:focus-visible. */
 .chatw-scroll:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 /* C089: the full composer auto-grows with its content (JS sets height up to 220px ≈ 8-9
@@ -14361,10 +14388,10 @@ button.figma-view-preview {
   gap: 10px;
   max-width: min(640px, 84%);
   margin-bottom: 14px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 14px;
   padding: 10px 13px;
-  background: var(--card);
+  background: var(--surface-primary);
 }
 
 /* ==== uiux-fix F012: grounded answer evidence + meta (C091/C137/C165) ==== */
@@ -14375,10 +14402,10 @@ button.figma-view-preview {
   align-self: flex-start;
   min-height: 24px;
   padding: 2px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: 999px;
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
   transition:
@@ -14386,11 +14413,11 @@ button.figma-view-preview {
     border-color 0.15s ease;
 }
 .grounded-citations-more:hover {
-  color: var(--fg);
-  border-color: var(--line-strong);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
 }
 .grounded-citations-more:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* C137 — a single over-long path/label chip (deep repo paths, long capsule labels)
@@ -14414,10 +14441,10 @@ button.figma-view-preview {
   margin-top: 6px;
   padding: 0 0 0 10px;
   border-top: none;
-  border-left: 2px solid var(--line-soft);
+  border-left: 2px solid var(--border-subtle);
 }
 .grounded-context-pack .grounded-context-pack-headline {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 /* ==== uiux-fix F014: rail tooltips + avatar states (C016) ==== */
@@ -14639,7 +14666,7 @@ button.figma-view-preview {
    inset ring so the outline survives the scroll container's overflow clipping. */
 .fpv-code:focus-visible,
 .ed-code:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -14860,7 +14887,7 @@ button.figma-view-preview {
   height: 100%;
   padding: 12px 14px;
   overflow-y: auto;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 12.5px;
 }
 .connector-picker-label {
@@ -14868,7 +14895,7 @@ button.figma-view-preview {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .connector-picker-select {
   min-height: 28px;
@@ -14894,7 +14921,7 @@ button.figma-view-preview {
   gap: 8px;
   padding: 12px 14px;
   font-size: 12.5px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .connector-picker-empty p {
   margin: 0;
@@ -14906,10 +14933,10 @@ button.figma-view-preview {
   gap: 8px;
   margin: 12px 14px;
   padding: 9px 11px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--danger) 12%, var(--card));
-  color: var(--fg);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, var(--surface-primary));
+  color: var(--text-primary);
   font-size: 12.5px;
 }
 .connector-picker-error p {
@@ -14918,10 +14945,10 @@ button.figma-view-preview {
 .connector-picker-retry {
   min-height: 24px;
   padding: 3px 10px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
+  background: var(--surface-primary);
+  color: var(--text-primary);
   font-size: 12px;
   cursor: pointer;
 }
@@ -14929,7 +14956,7 @@ button.figma-view-preview {
   border-color: var(--accent-line);
 }
 .connector-picker-retry:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .connector-picker-selected {
@@ -14944,7 +14971,7 @@ button.figma-view-preview {
 .connector-picker-notice {
   margin: 0;
   font-size: 11.5px;
-  color: var(--warn);
+  color: var(--feedback-warning);
 }
 .connector-picker-footer {
   margin-top: auto;
@@ -14961,7 +14988,7 @@ button.figma-view-preview {
   filter: brightness(1.06);
 }
 .connector-picker-create-link:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .connector-node {
@@ -14970,10 +14997,10 @@ button.figma-view-preview {
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 10px;
   padding: 16px;
-  color: var(--fg);
+  color: var(--text-primary);
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--accent) 10%, transparent), transparent 42%),
-    var(--surface);
+    var(--background-secondary);
 }
 .connector-node-icon {
   width: 64px;
@@ -14982,7 +15009,7 @@ button.figma-view-preview {
   place-items: center;
   border: 1px solid var(--accent-line);
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--accent) 14%, var(--card));
+  background: color-mix(in oklch, var(--accent) 14%, var(--surface-primary));
   color: var(--accent);
   box-shadow: var(--shadow-card);
 }
@@ -14996,19 +15023,19 @@ button.figma-view-preview {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 .connector-node-title {
   margin: 0;
   font-size: 18px;
   line-height: 1.2;
   font-weight: 700;
-  color: var(--fg);
+  color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 .connector-node-id {
   margin: 8px 0 0;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -15018,10 +15045,10 @@ button.figma-view-preview {
   justify-self: start;
   min-height: 28px;
   padding: 4px 10px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
+  background: var(--surface-primary);
+  color: var(--text-primary);
   font-size: 12px;
   cursor: pointer;
 }
@@ -15029,7 +15056,7 @@ button.figma-view-preview {
   border-color: var(--accent-line);
 }
 .connector-node-manage:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -15223,7 +15250,7 @@ ul.integ {
    paths) gave no hover feedback; the window's buttons got theirs in uiux-fix
    F007 (line ~9469). */
 .figma-snapshot-scopes-summary:hover {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .figma-snapshot-code-file-path:hover {
   text-decoration: underline;
@@ -15235,13 +15262,10 @@ ul.integ {
 }
 
 /* C243 — EditMemoryDialog/ForgetConfirmDialog parity with the desktop .dlg
-   pattern: light-theme scrim (same value as [data-theme="light"] .dlg-overlay),
-   max-height + scroll so the edit form survives short viewports, radius-lg,
-   and a motion-safe entry animation (the mc dialogs mount without an .in class
-   toggle, so keyframes stand in for the .dlg transition). */
-[data-theme="light"] .mc-dialog-backdrop {
-  background: oklch(0.3 0.01 160 / 0.34);
-}
+   pattern: max-height + scroll so the edit form survives short viewports,
+   radius-lg, and a motion-safe entry animation (the mc dialogs mount without an
+   .in class toggle, so keyframes stand in for the .dlg transition). The former
+   light-theme scrim override is now provided centrally by --overlay-scrim (#1295 C3). */
 .mc-dialog {
   max-height: calc(100vh - 48px);
   overflow-y: auto;
@@ -15280,8 +15304,8 @@ ul.integ {
   padding: 14px;
 }
 .fpv-image-card {
-  background: var(--inset);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
   border-radius: 9px;
   padding: 8px;
   max-width: 100%;
@@ -15306,10 +15330,10 @@ ul.integ {
   padding: 2px 0;
 }
 .fpv-meta-row span {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .fpv-meta-row strong {
-  color: var(--fg);
+  color: var(--text-primary);
   font-weight: 550;
 }
 .fpv-meta-pane {
@@ -15324,8 +15348,8 @@ ul.integ {
   flex-direction: column;
   gap: 8px;
   padding: 16px 20px;
-  background: var(--inset);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
   border-radius: 9px;
   max-width: 100%;
 }
@@ -15333,14 +15357,14 @@ ul.integ {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 .fpv-meta-card p {
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 /* C144/C087 — truncation/highlighting notices rendered as bare 16px UA text between the
    pinned header and the 12.5px code pane. Token-based warn tint covers both themes. */
@@ -15467,7 +15491,7 @@ ul.integ {
 .files-note {
   padding: 6px 8px;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .files-warning {
   color: var(--feedback-warning);
@@ -15512,9 +15536,9 @@ ul.integ {
   letter-spacing: 0;
   font-weight: 650;
   border-radius: 5px;
-  color: var(--fg-muted);
-  background: var(--inset);
-  border: 1px solid var(--line-soft);
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
 }
 .tr-meta {
   flex: none;
@@ -15612,7 +15636,7 @@ ul.integ {
   line-clamp: 3;
   overflow: hidden;
   overflow-wrap: anywhere;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: clamp(14px, 1.5vw, 17px);
   font-weight: 620;
   line-height: 1.26;
@@ -15622,7 +15646,7 @@ ul.integ {
    unlike the list). --accent-text keeps light-theme contrast >= 4.5:1. */
 .mc-row-detail-link {
   font-size: 11px;
-  color: var(--accent-text);
+  color: var(--text-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -15635,10 +15659,10 @@ ul.integ {
   cursor: pointer;
 }
 .mc-row-detail-link:hover {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .mc-row-detail-link:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -15661,7 +15685,7 @@ ul.integ {
 .fpv-retry {
   margin-left: 12px;
   font-size: 12px;
-  color: var(--danger);
+  color: var(--feedback-danger);
   text-decoration: underline;
   background: none;
   border: none;
@@ -15670,7 +15694,7 @@ ul.integ {
   padding: 2px 6px;
 }
 .fpv-retry:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -15681,7 +15705,7 @@ ul.integ {
 .figma-snapshot-link-error {
   margin: 0;
   font-size: 12px;
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 /* C108 — the read-only acknowledgement is a server-side precondition (HTTP 428 on the
    first build): mark it visibly as required. */
@@ -15725,14 +15749,14 @@ ul.integ {
   gap: 8px;
   padding: 12px 14px;
   border-radius: var(--radius-sm);
-  border: 1px dashed var(--line);
-  background: var(--card);
+  border: 1px dashed var(--border-default);
+  background: var(--surface-primary);
 }
 .figma-snapshot-empty-title {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .figma-snapshot-empty-steps {
   margin: 0;
@@ -15741,12 +15765,12 @@ ul.integ {
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .figma-snapshot-empty-note {
   margin: 0;
   font-size: 12px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 
 /* ==== uiux-fix F052: connect-mode hint chip ==== */
@@ -15782,14 +15806,11 @@ ul.integ {
 .lk-capsule-info .lk-badge {
   margin-top: 3px;
 }
-/* Visual parity with .dlg-overlay: same blur, and a light-theme scrim — the
-   Create/Combine dialogs sat behind a much darker backdrop than the confirm
-   dialogs on the same route (C036). */
+/* Visual parity with .dlg-overlay: same blur. The light-theme scrim that lived
+   here (C036) is now centralised in --overlay-scrim (#1295 C3); only the blur
+   parity declaration remains. */
 .mc-dialog-backdrop {
   backdrop-filter: blur(2px);
-}
-[data-theme="light"] .mc-dialog-backdrop {
-  background: oklch(0.3 0.01 160 / 0.34);
 }
 /* Capsule-detail source tools (C065/C104): CapsuleActions no longer renders
    into the .lk-header flex row; it lives in this block below the header. The
@@ -15812,7 +15833,7 @@ ul.integ {
 .lkd-connect-label {
   font-size: 12px;
   font-weight: 600;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .lkd-connect-row {
   display: flex;
@@ -15831,7 +15852,7 @@ ul.integ {
 .lkd-limit-note {
   max-width: 680px;
   margin: 0;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -15869,7 +15890,7 @@ ul.integ {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
   align-items: center;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 12px;
 }
 .lkd-picker-current .mono {
@@ -15888,9 +15909,9 @@ ul.integ {
   padding: 0;
   margin: 0;
   list-style: none;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: var(--inset);
+  background: var(--surface-inset);
 }
 .lkd-picker-entry {
   min-width: 0;
@@ -15904,16 +15925,16 @@ ul.integ {
   padding: 6px 8px;
   border: 0;
   background: transparent;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 12.5px;
   text-align: left;
   cursor: pointer;
 }
 .lkd-picker-row:hover:not(:disabled) {
-  background: var(--card-2);
+  background: var(--surface-secondary);
 }
 .lkd-picker-row:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 .lkd-picker-row input {
@@ -15926,21 +15947,21 @@ ul.integ {
   white-space: nowrap;
 }
 .lkd-picker-row[data-disabled="true"] {
-  color: var(--fg-faint);
+  color: var(--text-faint);
   cursor: not-allowed;
 }
 .lkd-picker-meta {
   margin-left: auto;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 11px;
   white-space: nowrap;
 }
 .lkd-picker-row[data-disabled="true"] .lkd-picker-meta {
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 .lkd-picker-empty {
   padding: 10px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 12.5px;
 }
 
@@ -16118,7 +16139,7 @@ ul.integ {
   margin: 8px 0 0;
   padding: 0 16px;
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 /* ==== uiux-fix F029: QI review controls (light contrast, actions row, discard guard) ==== */
@@ -16145,15 +16166,15 @@ ul.integ {
   gap: 8px;
   margin-top: 0;
   padding: 10px 14px 12px;
-  background: color-mix(in oklab, var(--card) 92%, var(--inset));
+  background: color-mix(in oklab, var(--surface-primary) 92%, var(--surface-inset));
 }
 .qi-cand-action-note {
   margin: 0;
   padding: 6px 8px;
-  border: 1px solid color-mix(in oklch, var(--warn) 34%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--feedback-warning) 34%, var(--border-default));
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--warn) 10%, transparent);
-  color: var(--warn);
+  background: color-mix(in oklch, var(--feedback-warning) 10%, transparent);
+  color: var(--feedback-warning);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -16173,7 +16194,7 @@ ul.integ {
 .qi-edit-discard-note {
   margin: 0;
   font-size: 12px;
-  color: var(--warn);
+  color: var(--feedback-warning);
 }
 
 /* ==== uiux-fix F032: connector-graph — retry hover ==== */
@@ -16208,10 +16229,10 @@ ul.integ {
     border-color 0.15s ease;
 }
 .rel-row:hover {
-  background: var(--card-2);
+  background: var(--surface-secondary);
 }
 .rel-row:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 .rel-row[aria-pressed="true"] {
@@ -16328,7 +16349,7 @@ ul.integ {
    tabIndex={0} makes it keyboard-reachable (WCAG 2.1.1, axe scrollable-region-focusable)
    and this ring makes that focus visible (pattern .qi-input:focus-visible). */
 .qi-export-preview:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -16340,11 +16361,11 @@ ul.integ {
 .qi-run-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .qi-run-item .qi-run-id {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 /* C210 — when a snapshot is blocked on the read-only acknowledgement (inline pre-check or
    server 428 FIGMA_CONSENT_REQUIRED), the checkbox is marked aria-invalid and focused; this
@@ -16445,16 +16466,16 @@ ul.integ {
 .mc-id-link {
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--accent-text);
+  color: var(--text-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
   word-break: break-all;
 }
 .mc-id-link:hover {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .mc-id-link:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -16505,7 +16526,7 @@ ul.integ {
    Secondary tone, same scale as the skipped-notice line. */
 .figma-snapshot-captured-at {
   font-size: 0.75rem;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -16520,13 +16541,13 @@ ul.integ {
 .figma-snapshot-screen-frame-icon {
   width: 12px;
   height: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .figma-snapshot-screen-placeholder-label {
   font-size: 10px;
   line-height: 1;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-weight: 700;
 }
 
@@ -16650,7 +16671,7 @@ ul.integ {
   flex-direction: column;
   gap: 12px;
   padding: 14px;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 .chat-history-head {
@@ -16669,7 +16690,7 @@ ul.integ {
 
 .chat-history-kicker {
   margin: 0 0 3px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
@@ -16703,9 +16724,9 @@ ul.integ {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--inset);
+  background: var(--surface-inset);
   padding: 3px;
 }
 
@@ -16717,25 +16738,25 @@ ul.integ {
   justify-content: center;
   gap: 6px;
   border-radius: 6px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
 }
 
 .chat-history-tab span {
-  color: var(--fg-faint);
+  color: var(--text-faint);
   font-size: 11px;
   font-weight: 700;
 }
 
 .chat-history-tab[aria-selected="true"] {
-  background: var(--card);
-  color: var(--fg);
-  box-shadow: inset 0 0 0 1px var(--line-soft);
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
 }
 
 .chat-history-tab[aria-selected="true"] span {
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 
 .chat-history-list {
@@ -16752,25 +16773,25 @@ ul.integ {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--card) 88%, transparent);
+  background: color-mix(in oklch, var(--surface-primary) 88%, transparent);
   padding: 10px;
 }
 
 .chat-history-row:hover {
-  border-color: var(--line-strong);
-  background: var(--card);
+  border-color: var(--border-strong);
+  background: var(--surface-primary);
 }
 
 :root[data-input-modality="keyboard"] .chat-history-row:focus-within {
-  border-color: var(--line-strong);
-  background: var(--card);
+  border-color: var(--border-strong);
+  background: var(--surface-primary);
 }
 
 :root[data-input-modality="pointer"] .chat-history-row:focus-within {
-  border-color: var(--line-soft);
-  background: color-mix(in oklch, var(--card) 88%, transparent);
+  border-color: var(--border-subtle);
+  background: color-mix(in oklch, var(--surface-primary) 88%, transparent);
 }
 
 .chat-history-row-main {
@@ -16807,7 +16828,7 @@ ul.integ {
 .chat-history-title {
   width: 100%;
   overflow: hidden;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 700;
   line-height: 1.3;
@@ -16818,7 +16839,7 @@ ul.integ {
 .chat-history-meta {
   width: 100%;
   overflow: hidden;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   font-size: 11.5px;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -16828,10 +16849,10 @@ ul.integ {
 .chat-history-title-input {
   width: 100%;
   min-height: 32px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
-  background: var(--inset);
-  color: var(--fg);
+  background: var(--surface-inset);
+  color: var(--text-primary);
   font: inherit;
   font-size: 13px;
   padding: 0 9px;
@@ -16922,5 +16943,5 @@ ul.integ {
    the field label (screen readers convey required via aria-required); WCAG 3.3.2. */
 .qi-edit-label[data-required="true"]::after {
   content: " *";
-  color: var(--accent-text);
+  color: var(--text-accent);
 }

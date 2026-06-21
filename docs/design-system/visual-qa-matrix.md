@@ -119,16 +119,16 @@ in outcome).
 | Workspace canvas + window frame (#1293)      | ✓¹             | ✓¹              | ✓¹      | ✓¹       | ✓¹     | ✓¹     | ✓¹             | ✓¹            | ◐                 |
 | Reusable controls / input atoms (#1294)      | ✓²             | ✓²              | ✓²      | ✓²       | ✓²     | ✓²     | ✓²             | ✓²            | ◐                 |
 | Modals / dialogs (#1294)                     | ✓²             | ✓²              | ✓²      | ✓²       | ✓²     | ✓²     | ✓²             | ✓²            | ◐                 |
-| Chat / conversation (#1295)                  | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
+| Chat / conversation (#1295)                  | ✓³             | ✓³              | ✓³      | ✓³       | ✓³     | ✓³     | ✓³             | ✓³            | ◐                 |
 | Grounded answer + workflow handoff (#1296)   | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
 | Agent run / gate cards (#1296)               | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
-| Quality Intelligence hub + run cards (#1295) | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
-| Prompt Enhancer (#1295)                      | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
-| Files + Editor + diff (#1295)                | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
-| Local Knowledge hub + capsule page (#1295)   | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
-| MemoriaViva (#1295)                          | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
-| Relationships (#1295)                        | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
-| Figma snapshot + source windows (#1295)      | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
+| Quality Intelligence hub + run cards (#1295) | ✓³             | ✓³              | ✓³      | ✓³       | ✓³     | ✓³     | ✓³             | ✓³            | ◐                 |
+| Prompt Enhancer (#1295)                      | ✓³             | ✓³              | ✓³      | ✓³       | ✓³     | ✓³     | ✓³             | ✓³            | ◐                 |
+| Files + Editor + diff (#1295)                | ✓³             | ✓³              | ✓³      | ✓³       | ✓³     | ✓³     | ✓³             | ✓³            | ◐                 |
+| Local Knowledge hub + capsule page (#1295)   | ✓³             | ✓³              | ✓³      | ✓³       | ✓³     | ✓³     | ✓³             | ✓³            | ◐                 |
+| MemoriaViva (#1295)                          | ✓³             | ✓³              | ✓³      | ✓³       | ✓³     | ✓³     | ✓³             | ✓³            | ◐                 |
+| Relationships (#1295)                        | ✓³             | ✓³              | ✓³      | ✓³       | ✓³     | ✓³     | ✓³             | ✓³            | ◐                 |
+| Figma snapshot + source windows (#1295)      | ✓³             | ✓³              | ✓³      | ✓³       | ✓³     | ✓³     | ✓³             | ✓³            | ◐                 |
 | Data grid / table (new, #1297)               | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
 | Input + navigation family (#1298)            | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
 
@@ -152,6 +152,12 @@ input atoms and the modal/dialog chrome now consume the Tier-3/4 semantic/compon
 mode-aware primitives — and the `required` Light shadow/scrim rows (`.dlg-overlay`, `.cmdk-overlay`,
 `.mc-dialog-backdrop`, `.ws-fab`/C415) remain owned by #1295. Designer approval (◐) stays open pending human
 sign-off (Human Review Required: Yes).
+
+³ #1295 product-surface migration: each mode cell is engineering-verified by the 7-mode computed-value-equivalence
+proof and screenshots in [evidence/1295](evidence/1295/) — 2324 `getComputedStyle` probes, **0** differing values
+in Categories A/B (dark/HC/forced-colors value-preserving), with deliberate Category-C adaptations in Light Mode
+(new `--shadow-ink-rgb` making Table A required shadow rows light-adaptive with warm ink, centralised `--overlay-scrim`
+via `.mc-dialog-backdrop`). Designer approval (◐) stays open pending human sign-off (Human Review Required: Yes).
 
 ## Acceptance criterion D — coverage statement
 
