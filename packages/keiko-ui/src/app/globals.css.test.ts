@@ -2778,3 +2778,330 @@ describe("Issue #1297 — table / data grid + dataviz foundation (Design System 
     ).toEqual([]);
   });
 });
+
+// ─── Issue #1298 — input family + navigation + breakpoint + density coverage ───
+describe("Issue #1298 — input + navigation components (Design System 0.4.0)", () => {
+  // ── 1. Value-preservation: every input/nav Tier-3 component token is a pure alias over an
+  //       existing primitive (added additively in #1292), so a consumer reading the token cannot
+  //       change its resolved value in any mode. Pin a representative span across the families so a
+  //       drift in the alias re-fails (mutation-robust).
+  it("defines the input/nav component tokens as pure aliases over the existing primitives", () => {
+    for (const decl of [
+      "--checkbox-surface: var(--inset)",
+      "--checkbox-border: var(--line)",
+      "--checkbox-surface-selected: var(--accent-solid)",
+      "--checkbox-mark: var(--accent-solid-ink)",
+      "--radio-border-selected: var(--accent)",
+      "--slider-track: var(--inset)",
+      "--slider-fill: var(--accent-solid)",
+      "--stepper-button-text: var(--fg-muted)",
+      "--combobox-list-surface: var(--surface)",
+      "--tag-surface: var(--accent-dim)",
+      "--file-progress: var(--accent)",
+      "--date-segment-text-active: var(--accent-text)",
+      "--breadcrumb-text: var(--fg-muted)",
+      "--pagination-surface-current: var(--accent-dim)",
+      "--tab-underline-indicator: var(--accent-text)",
+      "--context-item-text-danger: var(--danger)",
+      "--step-dot-surface-done: var(--accent-solid)",
+      "--step-line-done: var(--accent)",
+    ]) {
+      expect(css, `input/nav token def "${decl}" missing or drifted`).toContain(decl);
+    }
+  });
+
+  // ── 2. The canonical .c-* input primitives consume their component tokens exactly.
+  it("ships the canonical .c-* input primitives consuming the input component tokens", () => {
+    const box = cssBlock("\n.c-check .bx {");
+    expect(box).toContain("var(--checkbox-border)");
+    expect(box).toContain("var(--checkbox-surface)");
+    expect(box).toContain("var(--checkbox-mark)");
+    expect(cssBlock("\n.c-check input:checked + .bx {")).toContain(
+      "var(--checkbox-surface-selected)",
+    );
+    const rb = cssBlock("\n.c-radio .rb {");
+    expect(rb).toContain("var(--radio-border)");
+    expect(rb).toContain("var(--radio-surface)");
+    expect(cssBlock("\n.c-radio input:checked + .rb {")).toContain("var(--radio-border-selected)");
+    expect(cssBlock('\n.c-slider input[type="range"] {')).toContain("var(--slider-track)");
+    expect(cssBlock('\n.c-slider input[type="range"]::-moz-range-progress {')).toContain(
+      "var(--slider-fill)",
+    );
+    const stepper = cssBlock("\n.c-stepper {");
+    expect(stepper).toContain("var(--stepper-border)");
+    expect(stepper).toContain("var(--stepper-surface)");
+    const combo = cssBlock("\n.c-combo-input {");
+    expect(combo).toContain("var(--combobox-border)");
+    expect(combo).toContain("var(--combobox-surface)");
+    const list = cssBlock("\n.c-combo-list {");
+    expect(list).toContain("var(--combobox-list-surface)");
+    expect(list).toContain("var(--popover-shadow)");
+    expect(list).toContain("var(--z-dropdown)");
+    const tag = cssBlock("\n.c-tag {");
+    expect(tag).toContain("var(--tag-surface)");
+    expect(tag).toContain("var(--tag-border)");
+    expect(tag).toContain("var(--tag-text)");
+    const drop = cssBlock("\n.c-drop {");
+    expect(drop).toContain("var(--file-dropzone-border)");
+    expect(drop).toContain("var(--file-dropzone-surface)");
+    expect(cssBlock("\n.c-fileitem .bar i {")).toContain("var(--file-progress)");
+    const date = cssBlock("\n.c-datefield {");
+    expect(date).toContain("var(--date-border)");
+    expect(date).toContain("var(--date-surface)");
+  });
+
+  // ── 3. The canonical .c-* navigation primitives consume their component tokens exactly.
+  it("ships the canonical .c-* navigation primitives consuming the nav component tokens", () => {
+    expect(cssBlock("\n.c-crumbs a,")).toContain("var(--breadcrumb-text)");
+    expect(cssBlock("\n.c-crumbs a:hover {")).toContain("var(--breadcrumb-surface-hover)");
+    expect(cssBlock('\n.c-utab[aria-selected="true"]::after {')).toContain(
+      "var(--tab-underline-indicator)",
+    );
+    expect(cssBlock("\n.c-pager button {")).toContain("var(--pagination-text)");
+    expect(cssBlock('\n.c-pager button[aria-current="page"] {')).toContain(
+      "var(--pagination-surface-current)",
+    );
+    const ctx = cssBlock("\n.c-ctx {");
+    expect(ctx).toContain("var(--popover-surface)");
+    expect(ctx).toContain("var(--popover-border)");
+    expect(cssBlock("\n.c-ctx-item {")).toContain("var(--context-item-text)");
+    expect(cssBlock("\n.c-ctx-item.danger {")).toContain("var(--context-item-text-danger)");
+    const dot = cssBlock("\n.c-step .dot {");
+    expect(dot).toContain("var(--step-dot-border)");
+    expect(dot).toContain("var(--step-dot-surface)");
+    expect(cssBlock("\n.c-step.done .dot {")).toContain("var(--step-dot-surface-done)");
+  });
+
+  // ── 4. Completeness: every input/nav component token now has at least one consumer (the audit's
+  //       headline gap was that these 13 token families were defined but consumed 0 times).
+  it("gives every input/nav component token at least one consumer", () => {
+    const tokens = [
+      "--checkbox-surface",
+      "--checkbox-border",
+      "--checkbox-surface-selected",
+      "--checkbox-mark",
+      "--radio-surface",
+      "--radio-border",
+      "--radio-border-selected",
+      "--radio-dot",
+      "--slider-track",
+      "--slider-fill",
+      "--slider-thumb",
+      "--slider-thumb-ring",
+      "--slider-thumb-border",
+      "--stepper-surface",
+      "--stepper-border",
+      "--stepper-button-text",
+      "--stepper-button-surface-hover",
+      "--stepper-input-surface",
+      "--combobox-surface",
+      "--combobox-border",
+      "--combobox-list-surface",
+      "--combobox-list-border",
+      "--combobox-option-surface-hover",
+      "--combobox-option-selected-mark",
+      "--tag-surface",
+      "--tag-border",
+      "--tag-text",
+      "--file-dropzone-surface",
+      "--file-dropzone-border",
+      "--file-dropzone-border-active",
+      "--file-progress",
+      "--file-item-surface",
+      "--date-surface",
+      "--date-border",
+      "--date-segment-surface-active",
+      "--date-segment-text-active",
+      "--breadcrumb-text",
+      "--breadcrumb-text-current",
+      "--breadcrumb-surface-hover",
+      "--pagination-text",
+      "--pagination-surface-hover",
+      "--pagination-surface-current",
+      "--pagination-text-current",
+      "--pagination-border-current",
+      "--tab-underline-indicator",
+      "--context-item-text",
+      "--context-item-surface-hover",
+      "--context-item-text-danger",
+      "--step-dot-surface",
+      "--step-dot-border",
+      "--step-dot-surface-done",
+      "--step-dot-text-done",
+      "--step-dot-border-active",
+      "--step-line",
+      "--step-line-done",
+    ];
+    const unconsumed = tokens.filter((t) => !css.includes(`var(${t})`));
+    expect(unconsumed, `input/nav tokens with no consumer: ${unconsumed.join(", ")}`).toEqual([]);
+  });
+
+  // ── 5. Keyboard focus ring (WCAG 2.4.7): every interactive primitive carries a focus-visible ring.
+  it("gives every interactive input/nav primitive a :focus-visible ring", () => {
+    expect(cssBlock("\n.c-check input:focus-visible + .bx {")).toContain("var(--focus-ring)");
+    expect(cssBlock("\n.c-radio input:focus-visible + .rb {")).toContain("var(--focus-ring)");
+    expect(cssBlock('\n.c-slider input[type="range"]:focus-visible {')).toContain(
+      "var(--focus-ring)",
+    );
+    expect(cssBlock("\n.c-stepper button:focus-visible {")).toContain("var(--focus-ring)");
+    expect(cssBlock("\n.c-crumbs a:focus-visible {")).toContain("var(--focus-ring)");
+    expect(cssBlock("\n.c-back:focus-visible {")).toContain("var(--focus-ring)");
+    expect(cssBlock("\n.c-utab:focus-visible {")).toContain("var(--focus-ring)");
+    expect(cssBlock("\n.c-pager button:focus-visible {")).toContain("var(--focus-ring)");
+    expect(cssBlock("\n.c-ctx-item:focus-visible {")).toContain("var(--focus-ring)");
+  });
+
+  // ── 5b. Per-consumer fidelity pins for the tokens the completeness gate (test 4) only checks for
+  //        ">= 1 consumer". Several tokens have two consumers (e.g. the slider thumb's -webkit- and
+  //        -moz- pseudo-elements), so a value-swap on ONE escapes both the completeness gate (the
+  //        other consumer keeps the token present) and the purity guard (the swapped-in token may be
+  //        an allowed semantic one like --text-primary). Pin each completeness-only consumer to its
+  //        exact token so a single-line fidelity revert re-fails (mutation-robust).
+  it("pins every completeness-only input/nav token to its specific consumer", () => {
+    // slider thumb — two pseudo-element consumers, both must read the thumb tokens.
+    const thumbW = cssBlock('\n.c-slider input[type="range"]::-webkit-slider-thumb {');
+    expect(thumbW).toContain("var(--slider-thumb)");
+    expect(thumbW).toContain("var(--slider-thumb-border)");
+    expect(thumbW).toContain("var(--slider-thumb-ring)");
+    const thumbM = cssBlock('\n.c-slider input[type="range"]::-moz-range-thumb {');
+    expect(thumbM).toContain("var(--slider-thumb)");
+    expect(thumbM).toContain("var(--slider-thumb-border)");
+    expect(thumbM).toContain("var(--slider-thumb-ring)");
+    // radio dot, stepper internals.
+    expect(cssBlock("\n.c-radio .rb::after {")).toContain("var(--radio-dot)");
+    expect(cssBlock("\n.c-stepper button {")).toContain("var(--stepper-button-text)");
+    expect(cssBlock("\n.c-stepper button:hover {")).toContain(
+      "var(--stepper-button-surface-hover)",
+    );
+    expect(cssBlock("\n.c-stepper input {")).toContain("var(--stepper-input-surface)");
+    // combobox list border + option states.
+    expect(cssBlock("\n.c-combo-list {")).toContain("var(--combobox-list-border)");
+    expect(cssBlock("\n.c-combo-opt:hover,")).toContain("var(--combobox-option-surface-hover)");
+    expect(cssBlock("\n.c-combo-opt .ck {")).toContain("var(--combobox-option-selected-mark)");
+    // file dropzone-active + item, date segment active.
+    expect(cssBlock("\n.c-drop:hover,")).toContain("var(--file-dropzone-border-active)");
+    expect(cssBlock("\n.c-fileitem {")).toContain("var(--file-item-surface)");
+    const seg = cssBlock("\n.c-datefield .seg:focus {");
+    expect(seg).toContain("var(--date-segment-surface-active)");
+    expect(seg).toContain("var(--date-segment-text-active)");
+    // breadcrumb current, pagination hover/current text+border.
+    expect(cssBlock('\n.c-crumbs [aria-current="page"] {')).toContain(
+      "var(--breadcrumb-text-current)",
+    );
+    expect(cssBlock("\n.c-pager button:hover:not(:disabled) {")).toContain(
+      "var(--pagination-surface-hover)",
+    );
+    const cur = cssBlock('\n.c-pager button[aria-current="page"] {');
+    expect(cur).toContain("var(--pagination-text-current)");
+    expect(cur).toContain("var(--pagination-border-current)");
+    // context hover, step done/active/line.
+    expect(cssBlock("\n.c-ctx-item:hover,")).toContain("var(--context-item-surface-hover)");
+    expect(cssBlock("\n.c-step.done .dot {")).toContain("var(--step-dot-text-done)");
+    expect(cssBlock("\n.c-step.active .dot {")).toContain("var(--step-dot-border-active)");
+    expect(cssBlock("\n.c-step-line {")).toContain("var(--step-line)");
+    expect(cssBlock("\n.c-step.done + .c-step-line {")).toContain("var(--step-line-done)");
+  });
+
+  // ── 6. Reduced motion (WCAG 2.3.3): the simple input/nav state transitions are switched OFF inside
+  //       prefers-reduced-motion: reduce (mutation-robust — removing the guard or the .c-check entry
+  //       re-fails).
+  it("disables the input/nav state transitions under prefers-reduced-motion", () => {
+    const reduceIdx = css.indexOf("@media (prefers-reduced-motion: reduce) {\n  .c-check .bx,");
+    expect(reduceIdx, "reduced-motion guard for the .c-* layer missing").toBeGreaterThan(-1);
+    const guard = css.slice(
+      reduceIdx,
+      css.indexOf("}", css.indexOf("transition: none", reduceIdx)),
+    );
+    // Line-anchored, comma-terminated selectors so removing the standalone `.c-radio .rb,` entry is
+    // caught — a bare `.contains(".c-radio .rb")` would be satisfied by the `.c-radio .rb::after`
+    // substring even after the `.rb` border-color transition stopped being disabled.
+    expect(guard).toContain("\n  .c-check .bx,");
+    expect(guard).toContain("\n  .c-radio .rb,");
+    expect(guard).toContain("\n  .c-radio .rb::after,");
+    expect(guard).toContain("transition: none");
+  });
+
+  // ── 7. Breakpoint + density: responsiveness must use the named --bp-* scale (no one-off
+  //       breakpoint), and the input controls must track the compact-density control sizing.
+  it("uses the named --bp-sm breakpoint for the form-grid collapse (no one-off)", () => {
+    expect(css, "--bp-sm scale token missing").toContain("--bp-sm: 640px");
+    // the governed form-grid collapse is marked with the --bp-sm provenance comment; assert it
+    // collapses .c-form-grid to one column and that its enclosing @media is exactly the --bp-sm
+    // (640px) scale step — not a one-off breakpoint.
+    const bpIdx = css.indexOf("/* --bp-sm */");
+    expect(bpIdx, "governed form-grid breakpoint marker missing").toBeGreaterThan(-1);
+    const block = css.slice(bpIdx, css.indexOf("}", css.indexOf("grid-template-columns", bpIdx)));
+    expect(block).toContain(".c-form-grid");
+    expect(block).toContain("grid-template-columns: 1fr");
+    const mediaIdx = css.lastIndexOf("@media", bpIdx);
+    expect(mediaIdx, "form-grid collapse not inside a media query").toBeGreaterThan(-1);
+    const mediaHeader = css.slice(mediaIdx, css.indexOf("{", mediaIdx));
+    expect(mediaHeader).toContain("max-width: 640px");
+  });
+
+  it("drives input control sizing through the compact-density control tokens", () => {
+    // compact density tightens the control height (must stay above the accessible target floor).
+    const compact = cssBlock('[data-density="compact"]');
+    expect(compact).toContain("--control-height: 30px");
+    // the input controls read --control-height, so compact density tightens them automatically.
+    expect(cssBlock("\n.c-stepper input {")).toContain("height: var(--control-height)");
+    expect(cssBlock("\n.c-datefield {")).toContain("height: var(--control-height)");
+    expect(cssBlock("\n.c-combo-input {")).toContain("min-height: var(--control-height)");
+  });
+
+  // ── 8. Purity gate for the ported canonical layer: parse every .c-* input/nav rule and assert
+  //       none reintroduces a raw aliased primitive. The reference reads the component tokens + the
+  //       semantic tier only; the sole legitimate raw reads are the brand --accent and the semantic
+  //       --feedback-danger inside color-mix() hover tints, which are NOT in the forbidden set.
+  it("keeps the canonical .c-* input/nav layer free of raw aliased primitives (scope-wide)", () => {
+    const forbidden = [
+      "--bg",
+      "--surface",
+      "--card-2",
+      "--card",
+      "--inset",
+      "--fg-muted",
+      "--fg-dim",
+      "--fg-faint",
+      "--fg",
+      "--line-soft",
+      "--line-strong",
+      "--line",
+      "--danger",
+      "--warn",
+      "--ok",
+      "--accent-text",
+      "--accent-line",
+      "--accent-dim",
+      "--accent-solid-ink",
+      "--accent-solid",
+      "--accent-bright",
+      "--accent-on-tint",
+    ];
+    const escapeRegExp = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const bodyForbidden = (body: string): readonly string[] =>
+      forbidden.filter((tok) => new RegExp(`var\\(\\s*${escapeRegExp(tok)}\\s*[),]`).test(body));
+    const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
+    let match: RegExpExecArray | null;
+    let inputNavRulesChecked = 0;
+    const offenders: string[] = [];
+    const scope =
+      /(^|[\s,>+])\.(c-check|c-radio|c-slider|c-stepper|c-combo|c-tag|c-tagfield|c-drop|c-fileitem|c-datefield|c-form|c-crumbs|c-back|c-utab|c-pager|c-ctx|c-step)[a-z0-9-]*/u;
+    while ((match = ruleRe.exec(source)) !== null) {
+      const selector = (match[1] ?? "").trim().replace(/\s+/g, " ");
+      const body = match[2] ?? "";
+      if (selector === "" || selector.startsWith("@")) continue;
+      if (!scope.test(selector)) continue;
+      inputNavRulesChecked++;
+      for (const tok of bodyForbidden(body)) {
+        offenders.push(`${selector} { … var(${tok}) … }`);
+      }
+    }
+    expect(inputNavRulesChecked).toBeGreaterThan(60);
+    expect(
+      offenders,
+      `canonical .c-* input/nav rules must read the component/semantic tier, not raw primitives:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+});

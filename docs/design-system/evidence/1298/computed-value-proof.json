@@ -1,0 +1,159 @@
+{
+  "issue": 1298,
+  "baseRef": "origin/release/0.2.0",
+  "groupR": {
+    "description": "Reference fidelity: ported .c-* input/navigation primitives resolve identically to the DS 0.4.0 reference (keiko-tokens + keiko-semantic-tokens + keiko-inputs + keiko-nav). Gated to 0-diff (NEUTRAL/semantic surfaces) in dark + light; HC/forced-colors/reduced-motion recorded only.",
+    "totalProbes": 203,
+    "gatedDiffCount": 0,
+    "recordedDiffCount": 0,
+    "gatedDiffs": [],
+    "recordedDiffs": []
+  },
+  "accentDerived": {
+    "description": "Recorded (not gated), rendered as sRGB (r,g,b,a). Accent-derived surfaces (selected checkbox, tag, dropzone icon, current page, completed step) resolve through the brand --accent, which the product defines as hex #4eba87 vs the reference's oklch(0.72 0.124 160): a ~1.5% pre-existing primitive delta outside #1298. The token chain is identical.",
+    "byMode": {
+      "01-dark": {
+        ".c-check input:checked + .bx": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-radio input:checked + .rb": {
+          "product": {
+            "borderTopColor": "78,186,135,255"
+          },
+          "reference": {
+            "borderTopColor": "82,188,138,255"
+          }
+        },
+        ".c-step.done .dot": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-tag": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "82,188,138,255"
+          }
+        },
+        ".c-drop .ic": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "82,188,138,255"
+          }
+        },
+        ".c-pager button[aria-current=\"page\"]": {
+          "product": {
+            "backgroundColor": "78,188,133,46"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46"
+          }
+        }
+      },
+      "02-light": {
+        ".c-check input:checked + .bx": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-radio input:checked + .rb": {
+          "product": {
+            "borderTopColor": "78,186,135,255"
+          },
+          "reference": {
+            "borderTopColor": "82,188,138,255"
+          }
+        },
+        ".c-step.done .dot": {
+          "product": {
+            "backgroundColor": "0,129,73,255"
+          },
+          "reference": {
+            "backgroundColor": "0,129,73,255"
+          }
+        },
+        ".c-tag": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,100,53,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,100,53,255"
+          }
+        },
+        ".c-drop .ic": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,115,67,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,115,67,255"
+          }
+        },
+        ".c-pager button[aria-current=\"page\"]": {
+          "product": {
+            "backgroundColor": "78,188,133,46"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46"
+          }
+        }
+      }
+    }
+  },
+  "productAdopter": {
+    "description": "The workflow-handoff 'Expected checks' list adopts the .c-check primitive (presentation-only). Proved by WorkflowHandoff.a11y.test.tsx (checkbox role + accessible name preserved, glyph aria-hidden, toggle behaviour, axe-clean) — a React change not reproducible in this CSS-only harness."
+  },
+  "missingSelectors": [],
+  "byMode": {
+    "01-dark": {
+      "groupR_diffs": 0,
+      "groupR_gated": true
+    },
+    "02-light": {
+      "groupR_diffs": 0,
+      "groupR_gated": true
+    },
+    "03-dark-hc": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "04-light-hc": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "05-prefers-contrast": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "06-forced-colors": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "07-reduced-motion": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    }
+  }
+}

@@ -722,16 +722,28 @@ function GroundedWorkflowDialog({
               <legend>Expected checks</legend>
               <div className="wf-dialog-form" style={{ gap: 8 }}>
                 {GROUNDED_CHECK_CHOICES.map((check) => (
-                  <label
-                    key={check}
-                    className="wf-dialog-choice-desc"
-                    style={{ display: "flex", gap: 8 }}
-                  >
+                  // Issue #1298 — adopt the governed .c-check primitive. Presentation only:
+                  // the native <input> stays the control (role, checked state, onChange and the
+                  // accessible name from the trailing text span are unchanged); the .bx span is a
+                  // decorative, aria-hidden check glyph driven by the input's :checked state.
+                  <label key={check} className="c-check">
                     <input
                       type="checkbox"
                       checked={expectedChecks.includes(check)}
                       onChange={() => toggleCheck(check)}
                     />
+                    <span className="bx" aria-hidden="true">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={3}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M5 12.5 L10 17.5 L19 6.5" />
+                      </svg>
+                    </span>
                     <span>{check}</span>
                   </label>
                 ))}
