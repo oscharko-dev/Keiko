@@ -1303,34 +1303,34 @@ button {
   background:
     linear-gradient(
       180deg,
-      color-mix(in oklch, var(--surface) 94%, var(--card)) 0,
-      var(--surface) 72px
+      color-mix(in oklch, var(--background-secondary) 94%, var(--surface-primary)) 0,
+      var(--background-secondary) 72px
     ),
-    var(--surface);
+    var(--background-secondary);
 }
 .header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   height: 48px;
   flex: none;
-  padding: 0 12px;
-  background: color-mix(in oklch, var(--surface) 94%, transparent);
+  padding: 0 var(--space-5);
+  background: color-mix(in oklch, var(--background-secondary) 94%, transparent);
   border-bottom: 0;
 }
 .hd-brand {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 6px 0 4px;
+  gap: var(--space-4);
+  padding: 0 var(--space-3) 0 var(--space-2);
 }
 .hd-logo {
   width: 22px;
   height: 22px;
 }
 .hd-wordmark {
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--text-body-lg);
+  font-weight: var(--weight-strong);
   letter-spacing: -0.01em;
 }
 .tb-btn {
@@ -1339,49 +1339,49 @@ button {
   display: grid;
   place-items: center;
   border-radius: 8px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 .tb-btn:hover {
-  background: var(--card);
-  color: var(--fg);
+  background: var(--surface-primary);
+  color: var(--text-primary);
 }
 .tb-btn[data-on="true"] {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .tb-tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-left: 2px;
+  gap: var(--space-2);
+  margin-left: var(--space-1);
 }
 .tb-tab {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 11px;
-  border-radius: 9px;
-  font-size: 13px;
-  color: var(--fg-muted);
+  gap: var(--space-4);
+  padding: var(--space-3) 11px;
+  border-radius: var(--radius-control);
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
   border: 1px solid transparent;
 }
 .tb-tab[data-active="true"] {
-  background: var(--card);
-  color: var(--fg);
-  border-color: var(--line-soft);
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
 }
 /* .tb-newtab removed (uiux-fix F013 C059) — the "New tab" button had no handler
    and no tab model behind it; the dead control was dropped from Header.tsx. */
 .tb-status {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   font-size: 11.5px;
   /* WCAG 1.4.3 — --fg-dim measured 4.19:1 on --surface (dark) for this 11.5px text (FAIL).
      --fg-muted = 7.77:1 dark / ~7.9:1 light; same fix as the footer (#518). */
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   padding: 5px 10px;
-  border: 1px solid var(--line-soft);
-  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
   white-space: nowrap;
 }
 .hd-tools {
@@ -1395,42 +1395,42 @@ button {
   display: grid;
   place-items: center;
   border-radius: 8px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   border: 1px solid transparent;
 }
 .hd-tool:hover {
-  background: var(--card);
-  border-color: var(--line-soft);
-  color: var(--fg);
+  background: var(--surface-primary);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
 }
 .hd-tool-cta {
   width: auto;
-  gap: 6px;
+  gap: var(--space-3);
   padding: 0 13px;
   display: flex;
   align-items: center;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--fg);
+  font-size: var(--text-body-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
   background: linear-gradient(
     180deg,
-    color-mix(in oklch, var(--card) 82%, var(--accent) 8%),
-    var(--card)
+    color-mix(in oklch, var(--surface-primary) 82%, var(--accent) 8%),
+    var(--surface-primary)
   );
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--border-strong);
   box-shadow:
     inset 0 1px 0 oklch(1 0 0 / 0.04),
     0 10px 24px -18px rgba(0, 0, 0, 0.75);
 }
 .hd-tool-cta:hover {
   border-color: var(--accent-line);
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .hd-div {
   width: 1px;
   height: 22px;
-  background: var(--line-soft);
-  margin: 0 6px;
+  background: var(--border-subtle);
+  margin: 0 var(--space-3);
   flex: none;
 }
 
@@ -1617,16 +1617,16 @@ button {
   z-index: 9400;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   height: 40px;
   flex: none;
-  padding: 0 12px;
-  background: color-mix(in oklch, var(--surface) 96%, transparent);
+  padding: 0 var(--space-5);
+  background: color-mix(in oklch, var(--background-secondary) 96%, transparent);
   border-top: 0;
   font-size: 11.5px;
   /* --fg-muted meets WCAG 1.4.3 ≥4.5:1 on both themes; --fg-dim (prior value)
      measured 4.17:1 on dark (FAIL). Override rules on child segments are unaffected. */
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .ft-brand {
   position: absolute;
@@ -1636,14 +1636,14 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   pointer-events: none;
 }
 .ft-seg {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
+  gap: var(--space-3);
+  padding: var(--space-2) 9px;
   border-radius: 7px;
   white-space: nowrap;
 }
@@ -1652,7 +1652,7 @@ button {
 }
 .ft-accent {
   /* uses --accent-text so light theme gets a darkened shade that meets WCAG 1.4.3 (≥4.5:1) */
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 .ft-window-wrap {
   position: relative;
@@ -1661,7 +1661,7 @@ button {
 }
 .ft-window-trigger {
   min-height: 24px;
-  color: var(--accent-text);
+  color: var(--text-accent);
   font: inherit;
   border: 0;
   background: transparent;
@@ -1669,7 +1669,7 @@ button {
 }
 .ft-window-trigger:hover:not(:disabled),
 .ft-window-trigger[aria-expanded="true"] {
-  background: var(--card-2);
+  background: var(--surface-secondary);
 }
 .ft-window-trigger:disabled {
   cursor: default;
@@ -1681,26 +1681,26 @@ button {
   bottom: calc(100% + 8px);
   width: min(360px, calc(100vw - 32px));
   max-height: min(430px, calc(100vh - 96px));
-  padding: 8px;
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
   overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-pop);
+  border: 1px solid var(--popover-border);
+  border-radius: var(--radius-surface);
+  background: var(--popover-surface);
+  box-shadow: var(--popover-shadow);
 }
 .ft-window-palette-head {
   padding: 3px 5px 6px;
-  color: var(--fg-muted);
-  font-size: 11px;
-  font-weight: 650;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-strong);
 }
 .ft-window-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
   min-height: 0;
   overflow: auto;
 }
@@ -1711,22 +1711,22 @@ button {
   grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
   gap: 9px;
-  padding: 8px;
+  padding: var(--space-4);
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: var(--fg);
+  color: var(--text-primary);
   text-align: left;
   font: inherit;
   cursor: pointer;
 }
 .ft-window-card:hover,
 .ft-window-card:focus-visible {
-  background: var(--card-2);
-  border-color: var(--line-soft);
+  background: var(--surface-secondary);
+  border-color: var(--border-subtle);
 }
 .ft-window-card[data-minimized="true"] {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   background: color-mix(in oklch, var(--accent) 6%, transparent);
 }
 .ft-window-icon {
@@ -1735,42 +1735,42 @@ button {
   display: grid;
   place-items: center;
   border-radius: 7px;
-  background: var(--inset);
-  color: var(--fg-muted);
+  background: var(--surface-inset);
+  color: var(--text-secondary);
 }
 .ft-window-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 .ft-window-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--fg);
-  font-size: 12px;
-  font-weight: 650;
+  color: var(--text-primary);
+  font-size: var(--text-label);
+  font-weight: var(--weight-strong);
 }
 .ft-window-sub {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--fg-muted);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
 }
 .ft-window-state {
   align-self: center;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: var(--inset);
-  color: var(--fg-muted);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  color: var(--text-secondary);
   font-size: 10.5px;
 }
 .ft-dim {
-  color: var(--fg-faint);
+  color: var(--text-faint);
 }
 
 /* ---------- WORKSPACE SURFACE (the framed canvas) ---------- */
@@ -1780,7 +1780,7 @@ button {
   min-width: 0;
   display: flex;
   gap: 0;
-  padding: 8px;
+  padding: var(--space-4);
 }
 .ws-scene {
   position: absolute;
@@ -1802,16 +1802,16 @@ button {
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   padding: 3px;
   /* token outer radius; inner buttons stay concentric (14 - 3 padding = 11) (uiux-fix F037 C304) */
-  border-radius: var(--radius);
-  background: color-mix(in oklch, var(--surface) 90%, transparent);
-  border: 1px solid color-mix(in oklch, var(--line-strong) 78%, transparent);
+  border-radius: var(--radius-surface);
+  background: color-mix(in oklch, var(--background-secondary) 90%, transparent);
+  border: 1px solid color-mix(in oklch, var(--border-strong) 78%, transparent);
   box-shadow:
     0 18px 44px -24px rgba(0, 0, 0, 0.9),
     inset 0 1px 0 oklch(1 0 0 / 0.04);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(var(--blur-md));
 }
 .ws-zoom-btn {
   width: 30px;
@@ -1819,23 +1819,23 @@ button {
   display: grid;
   place-items: center;
   border-radius: 11px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 .ws-zoom-btn:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
 }
 .ws-zoom-pct {
   min-width: 48px;
   height: 28px;
   font-family: var(--font-mono);
   font-size: 11.5px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   border-radius: 8px;
 }
 .ws-zoom-pct:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
 }
 .workspace {
   position: relative;
@@ -1850,13 +1850,17 @@ button {
      maximize math reads getBoundingClientRect without scroll compensation). A clip
      box is not a scroll container per spec, so focus can never scroll it. */
   overflow: clip;
-  border-radius: 14px;
+  border-radius: var(--radius-surface);
   border: 1px solid
-    color-mix(in oklch, var(--accent) var(--frame-border-strength, 34%), var(--line));
-  background: color-mix(in oklab, var(--bg), white var(--workspace-bg-brightness, 0%));
+    color-mix(in oklch, var(--accent) var(--frame-border-strength, 34%), var(--border-default));
+  background: color-mix(
+    in oklab,
+    var(--background-primary),
+    white var(--workspace-bg-brightness, 0%)
+  );
   box-shadow:
     inset 0 1px 0 oklch(1 0 0 / 0.025),
-    inset 0 0 0 1px color-mix(in oklch, var(--line-soft) 52%, transparent);
+    inset 0 0 0 1px color-mix(in oklch, var(--border-subtle) 52%, transparent);
 }
 /* The credential dialog is portalled above the workspace. When it is open the
    background stage must be fully inert, otherwise injected browser overlays or
@@ -1893,7 +1897,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .ws-shader {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: var(--z-base);
   display: block;
   pointer-events: none;
 }
@@ -1915,7 +1919,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   z-index: 12000;
   width: 50px;
   flex: none;
-  background: var(--surface);
+  background: var(--nav-surface);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1923,10 +1927,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 5px;
 }
 .rail-left {
-  border-radius: 0 14px 14px 0;
+  border-radius: 0 var(--radius-surface) var(--radius-surface) 0;
 }
 .rail-right {
-  border-radius: 14px 0 0 14px;
+  border-radius: var(--radius-surface) 0 0 var(--radius-surface);
 }
 .rail:has(
   .rail-btn:hover,
@@ -1944,7 +1948,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   display: grid;
   place-items: center;
   border-radius: 10px;
-  color: var(--accent-text);
+  color: var(--text-accent);
   border: 1px solid var(--accent-line);
   background: var(--accent-dim);
 }
@@ -1958,14 +1962,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .rail-div {
   width: 22px;
   height: 1px;
-  background: color-mix(in oklch, var(--line-soft) 68%, transparent);
+  background: color-mix(in oklch, var(--border-subtle) 68%, transparent);
   margin: 6px 0 7px;
 }
 .rail-group {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
 }
 .rail-btn {
   position: relative;
@@ -1974,15 +1978,15 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   display: grid;
   place-items: center;
   border-radius: 10px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 .rail-btn:hover {
-  background: var(--card);
-  color: var(--fg);
+  background: var(--nav-item-surface-active);
+  color: var(--text-primary);
 }
 .rail-btn[data-active="true"] {
-  background: var(--card);
-  color: var(--accent-text);
+  background: var(--nav-item-surface-active);
+  color: var(--nav-item-indicator);
 }
 .rail-btn[data-active="true"]::before {
   content: "";
@@ -2008,10 +2012,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   margin-top: 5px;
   border-radius: 50%;
   background: var(--accent-dim);
-  color: var(--accent-text);
+  color: var(--text-accent);
   display: grid;
   place-items: center;
-  font-size: 11px;
+  font-size: var(--text-caption);
   font-weight: 700;
   border: 1px solid var(--accent-line);
 }
@@ -2104,8 +2108,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   }
 
   .ws-fab {
-    right: 12px;
-    bottom: 12px;
+    right: var(--space-5);
+    bottom: var(--space-5);
     width: 42px;
     height: 42px;
     border-radius: 13px;
@@ -2118,8 +2122,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 
   .win-head {
     height: 34px;
-    gap: 4px;
-    padding: 0 4px 0 9px;
+    gap: var(--space-2);
+    padding: 0 var(--space-2) 0 9px;
   }
 
   .win-title {
@@ -2128,14 +2132,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 13.5px;
-    font-weight: 650;
+    font-weight: var(--weight-strong);
   }
 
   .win-sub,
   .win-zoom {
     display: none;
     font-size: 11.5px;
-    font-weight: 500;
+    font-weight: var(--weight-medium);
   }
 
   .win-traffic {
@@ -3195,21 +3199,21 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   position: absolute;
   display: flex;
   flex-direction: column;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  background: var(--card-surface);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-surface);
   /* visible, not hidden (uiux-fix F031 C063): hidden clipped the outer half of
      every edge connect-port and resize strip (hit target ~6.5px, WCAG 2.5.8).
      The rounded-corner clip lives on .win-body now (rule near end of file). */
   overflow: visible;
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--card-shadow);
   transition:
     box-shadow 0.15s,
     border-color 0.15s;
 }
 .window[data-top="true"] {
-  box-shadow: var(--shadow-pop);
-  border-color: var(--line-strong);
+  box-shadow: var(--card-shadow-raised);
+  border-color: var(--border-strong);
 }
 .window[data-max="true"] {
   border-radius: 0;
@@ -3217,10 +3221,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .win-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
   height: 38px;
-  padding: 0 6px 0 11px;
-  border-bottom: 1px solid var(--line-soft);
+  padding: 0 var(--space-3) 0 11px;
+  border-bottom: 1px solid var(--border-subtle);
   flex: none;
   cursor: grab;
   user-select: none;
@@ -3235,8 +3239,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .win-title {
   font-size: 13.5px;
-  font-weight: 650;
-  color: var(--fg);
+  font-weight: var(--weight-strong);
+  color: var(--text-primary);
 }
 .win-sub {
   display: inline-flex;
@@ -3249,10 +3253,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   font-size: 11.5px;
   font-weight: 560;
   line-height: 1;
-  color: color-mix(in oklch, var(--fg-muted) 88%, var(--fg));
-  background: color-mix(in oklch, var(--card-2) 86%, white);
-  border: 1px solid var(--line-soft);
-  padding: 0 8px;
+  color: color-mix(in oklch, var(--text-secondary) 88%, var(--text-primary));
+  background: color-mix(in oklch, var(--surface-secondary) 86%, white);
+  border: 1px solid var(--border-subtle);
+  padding: 0 var(--space-4);
   border-radius: 7px;
   max-width: clamp(128px, 26vw, 260px);
   overflow: hidden;
@@ -3272,14 +3276,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   display: grid;
   place-items: center;
   border-radius: 7px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 .win-traffic {
   flex: none;
   display: flex;
   align-items: center;
   gap: 3px;
-  padding: 0 2px;
+  padding: 0 var(--space-1);
 }
 .win-traffic-btn {
   position: relative;
@@ -3302,8 +3306,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
    screen tints accent and close tints danger, and the lift "ring halo" chip fades in.
    No permanent colour, no fill. */
 .win-traffic-btn {
-  color: var(--fg-faint);
-  transition: color 0.12s;
+  color: var(--text-faint);
+  transition: color var(--dur-fast);
 }
 .win-traffic-btn > svg {
   position: relative;
@@ -3315,32 +3319,32 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   inset: 3px;
   border-radius: 50%;
   background: transparent;
-  box-shadow: 0 0 0 1px var(--line-soft) inset;
+  box-shadow: 0 0 0 1px var(--border-subtle) inset;
   opacity: 0;
   transition:
-    opacity 0.12s,
-    box-shadow 0.12s,
-    transform 0.12s;
+    opacity var(--dur-fast),
+    box-shadow var(--dur-fast),
+    transform var(--dur-fast);
 }
 .win-traffic-btn:hover {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .win-traffic-btn:hover::before {
   opacity: 1;
   box-shadow:
-    0 0 0 1px var(--line) inset,
+    0 0 0 1px var(--border-default) inset,
     0 0 0 4px var(--accent-glow);
 }
 .win-traffic-maximize:hover {
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 .win-traffic-close:hover {
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 .win-traffic-close:hover::before {
   box-shadow:
-    0 0 0 1px var(--line) inset,
-    0 0 0 4px color-mix(in oklch, var(--danger) 26%, transparent);
+    0 0 0 1px var(--border-default) inset,
+    0 0 0 4px color-mix(in oklch, var(--feedback-danger) 26%, transparent);
 }
 .win-traffic-btn:active::before {
   opacity: 1;
@@ -3364,30 +3368,30 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   display: grid;
   place-items: center;
   border-radius: 6px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
 }
 .win-zbtn:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
 }
 .win-zpct {
   font-family: var(--font-mono);
   font-size: 10.5px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   padding: 0 3px;
   min-width: 36px;
   height: 24px; /* uiux-fix F021 C123: line-height-tall (~14px) target → 24px (WCAG 2.5.8) */
   text-align: center;
 }
 .win-zpct:hover {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 /* ---------- CARD CONNECTIONS (workflow-style) ---------- */
 .conn-layer {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: var(--z-base);
   pointer-events: none;
 }
 /* SVG-Viewport-Fix: .ws-scene is 0×0 (transform-only origin). A `width:100%`
@@ -3445,23 +3449,23 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 5px;
   padding: 3px 9px;
   min-height: 24px; /* uiux-fix F021 C123: only remove affordance was ~21px tall (WCAG 2.5.8) */
-  border-radius: 999px;
-  background: var(--card);
+  border-radius: var(--radius-pill);
+  background: var(--surface-primary);
   border: 1px solid var(--accent-line);
   /* --accent-text: equals --accent in dark; darkened ≥4.5:1 green on white in light (raw --accent = 2.41:1 FAIL) */
-  color: var(--accent-text);
-  font-size: 11px;
+  color: var(--text-accent);
+  font-size: var(--text-caption);
   font-family: var(--font-mono);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--card-shadow);
   white-space: nowrap;
 }
 .conn-badge svg {
   display: block;
 }
 .conn-badge:hover {
-  border-color: var(--danger);
-  color: var(--danger);
-  background: color-mix(in oklch, var(--danger) 14%, var(--card));
+  border-color: var(--feedback-danger);
+  color: var(--feedback-danger);
+  background: color-mix(in oklch, var(--feedback-danger) 14%, var(--surface-primary));
 }
 
 /* Epic #532 — data-flow visualization on a chat↔source connector edge. While the connected chat is
@@ -3504,8 +3508,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .conn-badge[data-active="true"] {
   border-color: var(--accent);
-  color: var(--accent-text);
-  background: color-mix(in oklch, var(--accent) 16%, var(--card));
+  color: var(--text-accent);
+  background: color-mix(in oklch, var(--accent) 16%, var(--surface-primary));
 }
 .conn-flow-tag {
   margin-left: 1px;
@@ -3526,7 +3530,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
    port stays visible while the user is actually interacting with it. */
 .win-port {
   position: absolute;
-  z-index: 20;
+  z-index: var(--z-canvas-window-active);
   width: 13px;
   height: 13px;
   display: block;
@@ -3541,7 +3545,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-radius: 50%;
   -webkit-appearance: none;
   appearance: none;
-  background: var(--card);
+  background: var(--surface-primary);
   border: 2px solid var(--accent);
   box-sizing: border-box;
   line-height: 0;
@@ -3549,8 +3553,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   transform: translate(-50%, -50%);
   cursor: crosshair;
   transition:
-    opacity 0.12s,
-    box-shadow 0.12s;
+    opacity var(--dur-fast),
+    box-shadow var(--dur-fast);
   pointer-events: auto;
 }
 .window:hover .win-port,
@@ -3562,7 +3566,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   opacity: 1;
 }
 .win-port:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 3px;
   opacity: 1;
 }
@@ -3624,7 +3628,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .window[data-conn="valid"] {
   box-shadow:
     0 0 0 2px var(--accent),
-    var(--shadow-pop);
+    var(--card-shadow-raised);
 }
 .window[data-conn="invalid"] {
   /* WCAG 1.4.3 — invalid connect-targets are transient & inactive during the connect
@@ -3635,7 +3639,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .window[data-conn="source"] {
   box-shadow:
     0 0 0 2px var(--accent-line),
-    var(--shadow-pop);
+    var(--card-shadow-raised);
 }
 
 /* live agent run */
@@ -4611,11 +4615,11 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .ft-gov {
   display: flex;
   align-items: center;
-  gap: 6px;
-  border: 1px solid var(--line-soft);
-  border-radius: 999px;
+  gap: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
   padding: 3px 9px 3px 4px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .ft-gov[data-mode="autonomous"] {
   /* Intentionally inherits the theme-adaptive --fg-muted label color from
@@ -4635,9 +4639,9 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   width: 15px;
   height: 15px;
   border-radius: 50%;
-  background: var(--info);
+  background: var(--feedback-info);
   /* see .modesw-av — same theme-aware ink pairing (uiux-fix F011 C128) */
-  color: var(--ink-inverse);
+  color: var(--text-inverse);
   font-size: 9px;
   font-weight: 700;
   display: grid;
@@ -5111,11 +5115,11 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   color: var(--info);
 }
 .win-btn:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
 }
 .win-close:hover {
-  background: color-mix(in oklch, var(--danger) 24%, transparent);
+  background: color-mix(in oklch, var(--feedback-danger) 24%, transparent);
   color: #fff;
 }
 .win-body {
@@ -5296,7 +5300,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   height: 48px;
   border-radius: 15px;
   background: linear-gradient(180deg, var(--accent-bright), var(--accent));
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   display: grid;
   place-items: center;
   border: 1px solid color-mix(in oklch, var(--accent) 72%, white);
@@ -5326,7 +5330,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   padding: 0;
   border: 0;
   border-radius: 34px;
-  color: var(--fg);
+  color: var(--text-primary);
   background: transparent;
   cursor: pointer;
 }
@@ -5337,13 +5341,13 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   overflow: visible;
 }
 .empty-workspace-blob__fill {
-  fill: color-mix(in oklch, var(--accent) 76%, var(--surface));
+  fill: color-mix(in oklch, var(--accent) 76%, var(--background-secondary));
   transition: fill 0.3s;
   stroke: color-mix(in oklch, var(--accent) 58%, transparent);
   stroke-width: 1.4;
 }
 .empty-workspace-blob:hover .empty-workspace-blob__fill {
-  fill: color-mix(in oklch, var(--accent-bright) 82%, var(--surface));
+  fill: color-mix(in oklch, var(--accent-bright) 82%, var(--background-secondary));
 }
 .empty-workspace-blob__group {
   transform-box: fill-box;
@@ -5360,7 +5364,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   animation: emptyWorkspaceBlobPulse 0.55s ease;
 }
 .empty-workspace-blob:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 12px;
 }
 @keyframes emptyWorkspaceBlobPulse {
@@ -5767,12 +5771,12 @@ select.dlg-input {
   white-space: nowrap;
   padding: 5px 9px;
   border-radius: 7px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  color: var(--fg);
-  font-size: 12px;
-  font-weight: 500;
-  box-shadow: var(--shadow-pop);
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  box-shadow: var(--popover-shadow);
   opacity: 0;
   pointer-events: none;
   z-index: 13000;
@@ -7367,7 +7371,7 @@ select.dlg-input {
 .rail-btn:focus-visible,
 .rail-new:focus-visible,
 .rail-avatar:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* focus rings for header toolbar buttons (WCAG 2.4.7).
@@ -10605,11 +10609,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   transform: translateX(-50%);
   z-index: 900;
 
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
-  padding: 14px 18px;
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--card-shadow-raised);
+  padding: var(--space-6) var(--space-7);
 
   max-width: 480px;
   width: calc(100vw - 48px);
@@ -10617,7 +10621,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 
 @media (prefers-reduced-motion: no-preference) {
   .install-banner {
-    animation: install-banner-slide-in 180ms ease-out both;
+    animation: install-banner-slide-in var(--dur-base) ease-out both;
   }
 
   @keyframes install-banner-slide-in {
@@ -10642,30 +10646,30 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .install-banner-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   flex: 1;
   min-width: 0;
 }
 
 .install-banner-heading {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
   line-height: 1.4;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 
 .install-banner-desc {
-  font-size: 13px;
+  font-size: var(--text-body-sm);
   line-height: 1.5;
   /* --fg-muted: oklch(0.74 0.004 160) ≈ #b3b9b7 on --card ≈ #2e3330.
      Computed relative luminance: fg-muted ~0.19, card ~0.04 → contrast ≈ 5.0:1 (AA pass). */
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .install-banner-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   flex-shrink: 0;
 }
 
@@ -10673,14 +10677,14 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .install-banner-btn-install {
   height: 32px;
   min-width: 120px;
-  padding: 0 14px;
-  border-radius: var(--radius-sm);
+  padding: 0 var(--space-6);
+  border-radius: var(--radius-control);
   border: none;
-  background: var(--accent);
+  background: var(--button-primary-surface);
   /* ink-inverse #1a1e23 on accent #4eba87 = 6.94:1 (AA pass) */
-  color: var(--ink-inverse);
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--button-primary-text);
+  font-size: var(--text-body-sm);
+  font-weight: var(--weight-semibold);
   cursor: pointer;
   white-space: nowrap;
   /* 32px height meets WCAG 2.5.8 24×24 minimum target size */
@@ -10688,11 +10692,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .install-banner-btn-install:hover:not(:disabled) {
-  background: var(--accent-bright);
+  background: var(--button-primary-surface-hover);
 }
 
 .install-banner-btn-install:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px var(--accent-glow);
 }
@@ -10703,11 +10707,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   height: 32px;
   min-width: 60px;
   padding: 0 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-subtle);
   background: transparent;
-  color: var(--fg-muted);
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
   cursor: pointer;
   white-space: nowrap;
   /* 32px height meets WCAG 2.5.8 24×24 minimum target size */
@@ -10715,12 +10719,12 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .install-banner-btn-dismiss:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
 }
 
 .install-banner-btn-dismiss:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px var(--accent-glow);
 }
@@ -13396,13 +13400,13 @@ button.figma-view-preview {
    (pixel-identical to the previous var(--ok)) and is the >=3:1 light-theme green;
    --warn/--danger already carry light-theme AA overrides. */
 .tb-status .dot[data-tone="ok"] {
-  background: var(--accent-text);
+  background: var(--text-accent);
 }
 .tb-status .dot[data-tone="warn"] {
-  background: var(--warn);
+  background: var(--feedback-warning);
 }
 .tb-status .dot[data-tone="danger"] {
-  background: var(--danger);
+  background: var(--feedback-danger);
 }
 
 /* ==== uiux-fix F008: conn-badge label truncation (C074) ==== */
@@ -13823,7 +13827,7 @@ button.figma-view-preview {
 .ws-fab:focus-visible,
 .ws-empty-btn:focus-visible,
 .conn-badge:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -13868,11 +13872,11 @@ button.figma-view-preview {
 }
 .ws-zoom-btn:disabled:hover {
   background: transparent;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 .win-zbtn:disabled:hover {
   background: transparent;
-  color: var(--fg-faint);
+  color: var(--text-faint);
 }
 
 /* ==== uiux-fix F004: QI RunLauncher form states + connection badge focus ==== */
@@ -13921,7 +13925,7 @@ button.figma-view-preview {
   z-index: 9000;
 }
 .conn-badge:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -14245,9 +14249,9 @@ button.figma-view-preview {
    reuses the existing danger hover palette so the warning persists even when the
    pointer leaves the badge (keyboard activation never sees :hover at all). */
 .conn-badge[data-armed="true"] {
-  border-color: var(--danger);
-  color: var(--danger);
-  background: color-mix(in oklch, var(--danger) 14%, var(--card));
+  border-color: var(--feedback-danger);
+  color: var(--feedback-danger);
+  background: color-mix(in oklch, var(--feedback-danger) 14%, var(--surface-primary));
 }
 /* C194 — .fpv-code/.ed-code are overflow:auto regions now focusable (tabIndex=0) so
    keyboard users can scroll long content (WCAG 2.1.1, axe scrollable-region-focusable);
@@ -15375,13 +15379,13 @@ ul.integ {
   bottom: 18px;
   transform: translateX(-50%);
   z-index: 1;
-  padding: 6px 12px;
-  border-radius: 9px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-card);
-  font-size: 12px;
-  color: var(--fg);
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-control);
+  background: var(--popover-surface);
+  border: 1px solid var(--popover-border);
+  box-shadow: var(--card-shadow);
+  font-size: var(--text-label);
+  color: var(--text-primary);
   white-space: nowrap;
   pointer-events: none;
 }
@@ -16033,14 +16037,14 @@ ul.integ {
       background 0.15s;
   }
   .ws-fab {
-    transition: transform 0.12s;
+    transition: transform var(--dur-fast);
   }
   .rail-btn[data-tip]::after,
   .rail-new[data-tip]::after,
   .rail-avatar[data-tip]::after {
     transition:
-      opacity 0.12s,
-      transform 0.12s;
+      opacity var(--dur-fast),
+      transform var(--dur-fast);
   }
 }
 /* Firefox scrollbar parity with the ::-webkit-scrollbar theme (thumb --line on
@@ -16245,9 +16249,9 @@ ul.integ {
 }
 .hd-tool-cta {
   transition:
-    background 0.12s,
-    color 0.12s,
-    border-color 0.12s;
+    background var(--dur-fast),
+    color var(--dur-fast),
+    border-color var(--dur-fast);
 }
 /* C415 — .ws-fab keeps a hardcoded 50%-black drop shadow in light theme where the
    shadow tokens use 0.22/0.26 ink alpha; same geometry, theme-consistent density. */
@@ -16467,11 +16471,11 @@ ul.integ {
    tabIndex=-1); WC-01 — the workspace surface is keyboard-focusable for arrow-pan.
    Both need a visible focus indicator (WCAG 2.4.7). */
 .footer:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 .workspace:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -3px;
 }
 

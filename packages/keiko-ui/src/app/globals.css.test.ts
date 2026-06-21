@@ -58,14 +58,16 @@ describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
     expect(css).toContain(".rail-new:focus-visible");
   });
 
-  it(".rail-btn:focus-visible sets outline: var(--focus-width, 2px) solid var(--accent-text)", () => {
+  it(".rail-btn:focus-visible sets outline: var(--focus-width, 2px) solid var(--focus-ring)", () => {
     // Find the actual focus-ring rule, not earlier :has(...) occurrences.
+    // #1293: the shell focus rings now consume the --focus-ring semantic token
+    // (--focus-ring: var(--accent-text)), so the resolved colour is byte-identical.
     const selectorIdx = css.indexOf(
       ".rail-btn:focus-visible,\n.rail-new:focus-visible,\n.rail-avatar:focus-visible",
     );
     expect(selectorIdx).toBeGreaterThan(-1);
     const block = css.slice(selectorIdx, css.indexOf("}", selectorIdx) + 1);
-    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
     expect(block).toContain("outline-offset: 2px");
   });
 });
@@ -304,11 +306,14 @@ describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
     expect(lightness).toBeLessThanOrEqual(0.5);
   });
 
-  it(".ft-accent uses --accent-text (not raw --accent)", () => {
+  it(".ft-accent uses --text-accent (light-adapting, not raw --accent)", () => {
+    // #1293: .ft-accent now consumes the --text-accent semantic alias
+    // (--text-accent: var(--accent-text)); resolved colour is byte-identical and
+    // still light-adapting. The raw brand --accent must never appear here.
     const idx = css.indexOf(".ft-accent");
     expect(idx).toBeGreaterThan(-1);
     const block = css.slice(idx, css.indexOf("}", idx) + 1);
-    expect(block).toContain("var(--accent-text)");
+    expect(block).toContain("var(--text-accent)");
     expect(block).not.toContain("var(--accent)");
   });
 
@@ -528,9 +533,11 @@ describe("Fix 4 — dense desktop text clarity", () => {
   });
 
   it("keeps window chrome labels strong enough for daily-use desktop work", () => {
+    // #1293: window labels consume the --weight-strong type-scale token
+    // (--weight-strong: 650); the resolved weight is byte-identical.
     const titleBlock = cssBlock(".win-title");
     expect(titleBlock).toContain("font-size: 13.5px");
-    expect(titleBlock).toContain("font-weight: 650");
+    expect(titleBlock).toContain("font-weight: var(--weight-strong)");
 
     const subtitleBlock = cssBlock(".win-sub {");
     expect(subtitleBlock).toContain("display: inline-flex");
@@ -563,13 +570,16 @@ describe("Fix 4 — dense desktop text clarity", () => {
     const chipBlock = cssBlock(".win-traffic-btn::before");
     expect(chipBlock).toContain("inset: 3px");
     expect(chipBlock).toContain("opacity: 0");
-    expect(chipBlock).toContain("box-shadow: 0 0 0 1px var(--line-soft) inset");
+    // #1293: chip ring consumes --border-subtle (alias of --line-soft); identical.
+    expect(chipBlock).toContain("box-shadow: 0 0 0 1px var(--border-subtle) inset");
 
     // The meaning only whispers on hover: full screen tints accent, close tints
     // danger — always paired with the glyph + the button aria-label, never colour
     // alone.
-    expect(cssBlock(".win-traffic-maximize:hover")).toContain("color: var(--accent-text)");
-    expect(cssBlock(".win-traffic-close:hover")).toContain("color: var(--danger)");
+    // #1293: maximize tints --text-accent, close tints --feedback-danger
+    // (aliases of --accent-text / --danger); resolved colours are identical.
+    expect(cssBlock(".win-traffic-maximize:hover")).toContain("color: var(--text-accent)");
+    expect(cssBlock(".win-traffic-close:hover")).toContain("color: var(--feedback-danger)");
 
     // The old always-on Apple traffic-light dots (amber minimize fill) are gone.
     expect(css).not.toContain("oklch(0.78 0.15 82)");
@@ -714,36 +724,44 @@ describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)"
   it("keeps shell chrome seamless without hard rail cutoff lines", () => {
     expect(cssBlock(".header {")).toContain("border-bottom: 0");
     expect(cssBlock(".footer {")).toContain("border-top: 0");
+    // #1293: the rail divider consumes --border-subtle (alias of --line-soft); identical.
     expect(cssBlock(".rail-div {")).toContain(
-      "background: color-mix(in oklch, var(--line-soft) 68%, transparent)",
+      "background: color-mix(in oklch, var(--border-subtle) 68%, transparent)",
     );
   });
 
   it("molds the rails around the rounded workspace canvas", () => {
+    // #1293: shell surfaces/radii consume semantic tokens (--space-4=8px,
+    // --radius-surface=14px, --background-primary=--bg); resolved values identical.
     const stageBlock = cssBlock(".stage {");
     expect(stageBlock).toContain("gap: 0");
-    expect(stageBlock).toContain("padding: 8px");
+    expect(stageBlock).toContain("padding: var(--space-4)");
 
     const workspaceBlock = cssBlock(".workspace {");
-    expect(workspaceBlock).toContain("border-radius: 14px");
-    expect(workspaceBlock).toContain(
-      "background: color-mix(in oklab, var(--bg), white var(--workspace-bg-brightness, 0%))",
-    );
+    expect(workspaceBlock).toContain("border-radius: var(--radius-surface)");
+    // AC2: the canvas surface routes through the warm-neutral --background-primary token.
+    expect(workspaceBlock).toContain("var(--background-primary)");
+    expect(workspaceBlock).toContain("var(--workspace-bg-brightness, 0%)");
     expect(workspaceBlock).not.toContain("color-mix(in oklch, var(--accent) 8%, transparent)");
     expect(workspaceBlock).not.toContain("0 22px 60px");
 
-    expect(cssBlock(".rail-left")).toContain("border-radius: 0 14px 14px 0");
-    expect(cssBlock(".rail-right")).toContain("border-radius: 14px 0 0 14px");
+    expect(cssBlock(".rail-left")).toContain(
+      "border-radius: 0 var(--radius-surface) var(--radius-surface) 0",
+    );
+    expect(cssBlock(".rail-right")).toContain(
+      "border-radius: var(--radius-surface) 0 0 var(--radius-surface)",
+    );
   });
 
   it("adds a visible .footer:focus-visible ring (SH-02 Alt+S jump target)", () => {
+    // #1293: shell focus rings consume --focus-ring (alias of --accent-text); identical.
     const block = cssBlock(".footer:focus-visible");
-    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
   });
 
   it("adds a visible .workspace:focus-visible ring (WC-01 keyboard pan surface)", () => {
     const block = cssBlock(".workspace:focus-visible");
-    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
   });
 
   it(".tr-caret-btn:focus-visible keeps a dark separator so it contrasts on accent-dim rows (CC-01)", () => {
@@ -808,7 +826,9 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const keyboardInputBlock = cssBlock(
       ':root[data-input-modality="keyboard"] .chat-history-open:focus-visible,\n:root[data-input-modality="keyboard"] .chat-history-title-input:focus-visible',
     );
-    expect(keyboardInputBlock).toContain("outline: var(--focus-width, 2px) solid var(--accent-line)");
+    expect(keyboardInputBlock).toContain(
+      "outline: var(--focus-width, 2px) solid var(--accent-line)",
+    );
 
     const pointerInputBlock = cssBlock(
       ':root[data-input-modality="pointer"] .chat-history-open:focus,\n:root[data-input-modality="pointer"] .chat-history-title-input:focus',
@@ -1328,7 +1348,11 @@ describe("Issue #1205 — editor tab truncation", () => {
 // the test fail (mutation-robust), per the suite's contract.
 
 /** Brace-aware slice of the rule/at-rule beginning at the first `selector`. */
-function cssRuleFrom(source: string, selector: string, opts: { readonly fromIndex?: number } = {}): string {
+function cssRuleFrom(
+  source: string,
+  selector: string,
+  opts: { readonly fromIndex?: number } = {},
+): string {
   const start = source.indexOf(selector, opts.fromIndex ?? 0);
   expect(start, `selector "${selector}" not found`).toBeGreaterThan(-1);
   let depth = 0;
@@ -1494,7 +1518,9 @@ describe("Issue #1292 — focus rings consume the focus-width primitive", () => 
     expect(css).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
     expect(css).toContain("outline: var(--focus-width, 2px) solid var(--ink-inverse)");
     expect(css).toContain("outline: var(--focus-width, 2px) solid var(--danger)");
-    expect(css).not.toMatch(/outline:\s*\d+px solid var\(--(?:accent-text|accent-line|ink-inverse|danger|focus)\)/);
+    expect(css).not.toMatch(
+      /outline:\s*\d+px solid var\(--(?:accent-text|accent-line|ink-inverse|danger|focus)\)/,
+    );
   });
 });
 
@@ -1566,7 +1592,9 @@ describe("Issue #1292 — design-system token drift gate", () => {
     const referenceMedia = cssRuleFrom(reference, "@media (prefers-contrast: more) {");
     const productMedia = cssRule("@media (prefers-contrast: more) {");
 
-    expect(declarationMap(productMedia, ":root {")).toEqual(declarationMap(referenceMedia, ":root {"));
+    expect(declarationMap(productMedia, ":root {")).toEqual(
+      declarationMap(referenceMedia, ":root {"),
+    );
     expect(declarationMap(productMedia, '[data-theme="light"] {')).toEqual(
       declarationMap(referenceMedia, '[data-theme="light"] {'),
     );
@@ -1581,5 +1609,165 @@ describe("Issue #1292 — design-system token drift gate", () => {
     expect(declarationMap(css, '[data-hc="more"][data-theme="light"] {')).toEqual(
       declarationMap(reference, '[data-hc="more"][data-theme="light"] {'),
     );
+  });
+});
+
+// ─── Issue #1293 — global shell + workspace chrome token migration ─────────────
+//
+// #1293 is the first consumer migration after #1292 landed the Tier-2/3/4 tokens.
+// It routes the always-on shell — header, footer, rails, workspace canvas, window
+// chassis, traffic controls, connection chrome, and the install banner — through
+// the semantic (Tier-3) and component (Tier-4) tokens instead of raw primitives
+// and raw scale literals. Every alias resolves to the same primitive #1292 added,
+// so the migration is value-preserving in every mode (proven byte-identical by the
+// 7-mode computed-value harness in docs/design-system/evidence/1293/). Each
+// assertion is paired with a negative so reverting an alias re-fails the test.
+describe("Issue #1293 — global shell + workspace chrome token migration", () => {
+  // AC3 — window chrome matches the design-system card component anatomy.
+  it("routes the window chassis through the card component tokens (AC3)", () => {
+    // newline-anchored: ".window {" alone matches ".workspace .window {" first.
+    const win = cssBlock("\n.window {");
+    expect(win).toContain("background: var(--card-surface)");
+    expect(win).toContain("border: 1px solid var(--card-border)");
+    expect(win).toContain("box-shadow: var(--card-shadow)");
+    expect(win).toContain("border-radius: var(--radius-surface)");
+    // raw primitives must be gone (a revert re-fails).
+    expect(win).not.toContain("var(--card)");
+    expect(win).not.toContain("var(--line)");
+    expect(win).not.toContain("var(--shadow-card)");
+
+    const top = cssBlock('.window[data-top="true"] {');
+    expect(top).toContain("box-shadow: var(--card-shadow-raised)");
+    expect(top).toContain("border-color: var(--border-strong)");
+    expect(top).not.toContain("var(--shadow-pop)");
+    expect(top).not.toContain("var(--line-strong)");
+  });
+
+  // AC2 — Light Mode shell surfaces use the off-white / warm-neutral hierarchy via
+  // the adaptive surface/background tokens (not generic white/gray fallbacks).
+  it("routes shell surfaces through the semantic surface/background tokens (AC2)", () => {
+    expect(cssBlock(".rail {")).toContain("background: var(--nav-surface)");
+    expect(cssBlock(".rail {")).not.toContain("background: var(--surface)");
+
+    const ws = cssBlock(".workspace {");
+    expect(ws).toContain("border-radius: var(--radius-surface)");
+    expect(ws).toContain("var(--background-primary)");
+    expect(ws).toContain("var(--border-subtle)");
+
+    expect(cssBlock(".header {")).toContain("var(--background-secondary)");
+    expect(cssBlock(".footer {")).toContain("var(--background-secondary)");
+
+    const banner = cssBlock(".install-banner {");
+    expect(banner).toContain("background: var(--surface-primary)");
+    expect(banner).toContain("border: 1px solid var(--border-default)");
+    expect(banner).toContain("box-shadow: var(--card-shadow-raised)");
+    expect(banner).not.toContain("var(--card)");
+    expect(banner).not.toContain("var(--shadow-pop)");
+  });
+
+  // AC3 — shell focus treatment consumes the --focus-ring semantic token.
+  it("routes workspace-chrome focus rings through --focus-ring (AC3)", () => {
+    const group = cssRule(".win-btn:focus-visible,");
+    expect(group).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
+    expect(group).not.toContain("solid var(--accent-text)");
+    // primary nav rail keeps a visible, tokenised focus ring too.
+    const rail = cssRule(".rail-btn:focus-visible,\n.rail-new:focus-visible,\n.rail-avatar");
+    expect(rail).toContain("solid var(--focus-ring)");
+  });
+
+  // AC3 — the primary navigation rail consumes the nav component tokens.
+  it("routes the active rail item through the nav component tokens (AC3)", () => {
+    const active = cssBlock('.rail-btn[data-active="true"] {');
+    expect(active).toContain("background: var(--nav-item-surface-active)");
+    expect(active).toContain("color: var(--nav-item-indicator)");
+    expect(active).not.toContain("var(--card)");
+  });
+
+  // AC1 — migrated scopes no longer depend on raw scale literals (z-index, spacing,
+  // type, radius, motion) where a token exists; they consume the Tier-2 scales.
+  it("adopts the named z-index, spacing and radius scales in the shell (AC1)", () => {
+    expect(cssBlock(".ws-shader {")).toContain("z-index: var(--z-base)");
+    expect(cssBlock(".conn-layer {")).toContain("z-index: var(--z-base)");
+    expect(cssBlock(".win-port {")).toContain("z-index: var(--z-canvas-window-active)");
+    expect(cssBlock(".stage {")).toContain("padding: var(--space-4)");
+    expect(cssBlock(".ws-zoom {")).toContain("backdrop-filter: blur(var(--blur-md))");
+    expect(cssBlock(".ft-gov {")).toContain("border-radius: var(--radius-pill)");
+  });
+
+  // AC1 — positive pins for the canonical (non-responsive) window-head/title rules.
+  // The bare ".win-head {" / ".win-title {" substrings match the @media(max-width:680px)
+  // responsive copies first; newline-anchoring selects the canonical base rule so a
+  // revert of the colour/border migration there still fails.
+  it("pins the canonical window-head/title migrations (AC1, AC3)", () => {
+    expect(cssBlock("\n.win-head {")).toContain("border-bottom: 1px solid var(--border-subtle)");
+    expect(cssBlock("\n.win-title {")).toContain("color: var(--text-primary)");
+  });
+
+  // AC1 — scope-wide, mutation-robust drift guard. Instead of a hand-maintained
+  // selector allowlist (which can silently miss un-migrated rules), this parses EVERY
+  // CSS rule, keeps the ones whose every comma-separated selector is a shell/chrome
+  // selector (base rules + responsive @media copies), and asserts none carries a raw
+  // primitive that has a value-preserving semantic/component alias. The accent-family
+  // primitives (--accent / --accent-line / --accent-dim / --accent-glow / --accent-bright)
+  // are intentionally kept (no neutral alias exists) and are NOT in the forbidden list.
+  // The 8 [data-theme="light"] shell overrides are approved deviations and are excluded.
+  it("leaves no raw aliased primitives in any pure-shell rule (AC1, scope-wide)", () => {
+    const forbidden = [
+      "var(--card)",
+      "var(--card-2)",
+      "var(--inset)",
+      "var(--fg)",
+      "var(--fg-muted)",
+      "var(--fg-dim)",
+      "var(--fg-faint)",
+      "var(--line)",
+      "var(--line-soft)",
+      "var(--line-strong)",
+      "var(--shadow-card)",
+      "var(--shadow-pop)",
+      "var(--ink-inverse)",
+      "var(--surface)",
+      "var(--bg)",
+      "var(--accent-text)",
+      "var(--danger)",
+      "var(--warn)",
+      "var(--info)",
+      "var(--ok)",
+    ];
+    const shellLead =
+      /^\.(header|hd-|footer|ft-|stage|workspace|ws-|rail|win|window|tb-|conn-|install-banner|empty-workspace)/;
+    const source = css.replace(/\/\*[\s\S]*?\*\//g, ""); // strip comments
+    const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
+    let match: RegExpExecArray | null;
+    let shellRulesChecked = 0;
+    const offenders: string[] = [];
+    while ((match = ruleRe.exec(source)) !== null) {
+      const selector = (match[1] ?? "").trim().replace(/\s+/g, " ");
+      const body = match[2] ?? "";
+      if (selector === "" || /^(@|:root|html|body|\*|#)/.test(selector)) continue;
+      if (selector.includes('[data-theme="light"]')) continue; // approved deviations
+      const parts = selector
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (parts.length === 0) continue;
+      // a rule qualifies only if EVERY comma-part leads with a shell class (mixed
+      // groups that also style #1294/#1295 selectors are intentionally left untouched)
+      const pureShell = parts.every((p) => {
+        const lead = p.replace(/^[>+~\s]+/, "");
+        return shellLead.test(lead) && !lead.startsWith(".connector");
+      });
+      if (!pureShell) continue;
+      shellRulesChecked++;
+      for (const raw of forbidden) {
+        if (body.includes(raw)) offenders.push(`${selector} { … ${raw} … }`);
+      }
+    }
+    // sanity: the parser must actually find a substantial number of shell rules.
+    expect(shellRulesChecked).toBeGreaterThan(60);
+    expect(
+      offenders,
+      `pure-shell rules still carry raw aliased primitives (migrate to the semantic token):\n${offenders.join("\n")}`,
+    ).toEqual([]);
   });
 });
