@@ -613,7 +613,7 @@ button {
 .number-control:focus-within .number-control-stepper,
 .number-control-stepper-button:hover:not(:disabled),
 .number-control-stepper-button:focus-visible {
-  color: var(--text-accent);
+  color: var(--focus-ring);
   background: transparent;
 }
 
@@ -9103,7 +9103,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   cursor: grabbing;
 }
 .lk-capsule-drag-handle:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 3px;
   border-radius: var(--radius-xs);
 }
@@ -9902,7 +9902,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .mc-chip:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -10014,7 +10014,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .mc-row:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -10639,7 +10639,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .qi-run-item:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -12058,7 +12058,7 @@ select.qi-select {
 .qi-edit-input:focus-visible,
 .qi-edit-textarea:focus-visible,
 .qi-edit-select:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -12638,7 +12638,7 @@ select.qi-select {
 }
 
 .figma-snapshot-dashboard-refresh:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 .figma-snapshot-dashboard-tabs {
@@ -12677,7 +12677,7 @@ select.qi-select {
 }
 
 .figma-snapshot-dashboard-tab:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 .figma-snapshot-dashboard-panel {
@@ -13153,7 +13153,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-code-file-path:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   border-radius: 2px;
 }
 .figma-snapshot-code-file-contents {
@@ -13191,7 +13191,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-scopes-summary:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   border-radius: 2px;
 }
 
@@ -13264,7 +13264,7 @@ select.qi-select {
 }
 
 .figma-snapshot-gallery-more:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 .figma-snapshot-screen-card {
@@ -14421,7 +14421,7 @@ button.figma-view-preview {
   border-color: var(--border-strong);
 }
 .grounded-citations-more:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* C137 — a single over-long path/label chip (deep repo paths, long capsule labels)
@@ -14960,7 +14960,7 @@ button.figma-view-preview {
   border-color: var(--accent-line);
 }
 .connector-picker-retry:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .connector-picker-selected {
@@ -14992,7 +14992,7 @@ button.figma-view-preview {
   filter: brightness(1.06);
 }
 .connector-picker-create-link:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .connector-node {
@@ -15060,7 +15060,7 @@ button.figma-view-preview {
   border-color: var(--accent-line);
 }
 .connector-node-manage:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -15666,7 +15666,7 @@ ul.integ {
   color: var(--text-primary);
 }
 .mc-row-detail-link:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -15698,7 +15698,7 @@ ul.integ {
   padding: 2px 6px;
 }
 .fpv-retry:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -15938,7 +15938,7 @@ ul.integ {
   background: var(--surface-secondary);
 }
 .lkd-picker-row:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 .lkd-picker-row input {
@@ -16236,7 +16236,7 @@ ul.integ {
   background: var(--surface-secondary);
 }
 .rel-row:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 .rel-row[aria-pressed="true"] {
@@ -16479,7 +16479,7 @@ ul.integ {
   color: var(--text-primary);
 }
 .mc-id-link:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--text-accent);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 4px;
 }
