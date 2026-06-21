@@ -79,6 +79,12 @@
   --radius-sm: 9px;
   --radius-lg: 18px;
 
+  /* Mode-aware shadow ink (#1295 Category C1). Dark = pure black (the historical
+     hardcoded shadow ink), so rgb(var(--shadow-ink-rgb) / α) is byte-identical to the
+     prior rgba(0, 0, 0, α) in dark/+HC/forced-colors. The light block re-points it to
+     the DS warm shadow ink (20 30 25) so component drop-shadows adapt in Light. */
+  --shadow-ink-rgb: 0 0 0;
+
   --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.03) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.6);
   --shadow-pop: 0 16px 50px -16px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--line);
 
@@ -649,7 +655,7 @@ button {
   background: color-mix(in oklch, var(--popover-surface) 98%, black);
   color: var(--text-secondary);
   box-shadow:
-    0 18px 42px -26px rgba(0, 0, 0, 0.85),
+    0 18px 42px -26px rgb(var(--shadow-ink-rgb) / 0.85),
     0 0 0 1px var(--border-subtle);
 }
 
@@ -955,6 +961,16 @@ button {
 
   --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -12px rgba(20, 30, 25, 0.22);
   --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);
+
+  /* #1295 C1 — DS warm shadow ink for Light (same 20 30 25 the light --shadow-card/-pop
+     already use), so component drop-shadows routed through rgb(var(--shadow-ink-rgb) / α)
+     adapt instead of staying pure black. */
+  --shadow-ink-rgb: 20 30 25;
+
+  /* #1295 C3 — Light dialog scrim. Centralises the shared light backdrop value the
+     per-component overrides used (.dlg-overlay/.wf-dialog-overlay/.mc-dialog-backdrop),
+     so the base scrim rules routed to var(--overlay-scrim) adapt in Light. */
+  --overlay-scrim: oklch(0.3 0.01 160 / 0.34);
 }
 
 /* Single-source HC palettes — the OS media query and explicit in-app attribute
@@ -1015,6 +1031,7 @@ button {
    design-system primitive palette so surfaces, text hierarchy, focus, shadows,
    selection, and status colours inherit the governed HC values from one token
    path. */
+/* prettier-ignore */
 @media (prefers-contrast: more) {
   :root {
     color-scheme: dark;
@@ -1047,6 +1064,7 @@ button {
    when the OS has not asked. Today no in-app control sets [data-hc] on the
    document (useTheme is light|dark only), so this remains inert at runtime
    until a later issue wires the selector. */
+/* prettier-ignore */
 [data-hc="more"] {
   color-scheme: dark;
   /* Raw dark HC values: --bg: oklch(0.11 0.004 160); --line: oklch(0.62 0.006 160); --fg-faint: oklch(0.82 0.004 160); --warn: oklch(0.88 0.14 80); --grid-dot: oklch(0.52 0.006 160). */
@@ -1059,6 +1077,7 @@ button {
   --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
   --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
 }
+/* prettier-ignore */
 [data-hc="more"][data-theme="light"] {
   color-scheme: light;
   /* Raw light HC values: --bg: oklch(1 0 0); --line: oklch(0.45 0.008 160); --fg-faint: oklch(0.36 0.012 160); --warn: oklch(0.38 0.14 75); --grid-dot: oklch(0.6 0.01 160). */
@@ -1517,7 +1536,7 @@ button {
   border: 1px solid var(--border-strong);
   box-shadow:
     inset 0 1px 0 oklch(1 0 0 / 0.04),
-    0 10px 24px -18px rgba(0, 0, 0, 0.75);
+    0 10px 24px -18px rgb(var(--shadow-ink-rgb) / 0.75);
 }
 .hd-tool-cta:hover {
   border-color: var(--accent-line);
@@ -1906,7 +1925,7 @@ button {
   background: color-mix(in oklch, var(--background-secondary) 90%, transparent);
   border: 1px solid color-mix(in oklch, var(--border-strong) 78%, transparent);
   box-shadow:
-    0 18px 44px -24px rgba(0, 0, 0, 0.9),
+    0 18px 44px -24px rgb(var(--shadow-ink-rgb) / 0.9),
     inset 0 1px 0 oklch(1 0 0 / 0.04);
   backdrop-filter: blur(var(--blur-md));
 }
@@ -2783,7 +2802,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .cmp-model-menu {
   box-shadow:
-    0 18px 40px -24px rgba(0, 0, 0, 0.8),
+    0 18px 40px -24px rgb(var(--shadow-ink-rgb) / 0.8),
     0 0 0 1px var(--border-subtle);
 }
 .cmp-eff {
@@ -5403,7 +5422,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border: 1px solid color-mix(in oklch, var(--accent) 72%, white);
   box-shadow:
     0 16px 36px -12px var(--accent-glow),
-    0 9px 20px rgba(0, 0, 0, 0.55);
+    0 9px 20px rgb(var(--shadow-ink-rgb) / 0.55);
 }
 .ws-fab:hover {
   transform: translateY(-2px);
@@ -6654,7 +6673,8 @@ select.dlg-input {
   height: 22px;
   display: block;
   transform-origin: center;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 4px rgba(126, 224, 171, 0.22));
+  filter: drop-shadow(0 1px 2px rgb(var(--shadow-ink-rgb) / 0.72))
+    drop-shadow(0 0 4px rgba(126, 224, 171, 0.22));
 }
 .chat-msg-brand[data-pulsing="true"] img {
   animation: chat-keiko-logo-pulse 1.15s cubic-bezier(0.42, 0, 0.58, 1) infinite;
@@ -6663,12 +6683,13 @@ select.dlg-input {
   0%,
   100% {
     transform: scale(1);
-    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72))
+    filter: drop-shadow(0 1px 2px rgb(var(--shadow-ink-rgb) / 0.72))
       drop-shadow(0 0 4px rgba(126, 224, 171, 0.22));
   }
   50% {
     transform: scale(1.14);
-    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72)) drop-shadow(0 0 8px rgba(126, 224, 171, 0.4));
+    filter: drop-shadow(0 1px 2px rgb(var(--shadow-ink-rgb) / 0.72))
+      drop-shadow(0 0 8px rgba(126, 224, 171, 0.4));
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -10195,7 +10216,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .mc-dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: oklch(0 0 0 / 0.55);
+  /* #1295 C3 — base dark value (oklch(0 0 0 / 0.55)) is byte-identical to
+     --overlay-scrim, so routing here centralises the scrim; the token's Light
+     redefinition (oklch(0.3 0.01 160 / 0.34)) replaces the two removed
+     [data-theme="light"] .mc-dialog-backdrop overrides below. */
+  background: var(--overlay-scrim);
   display: grid;
   place-items: center;
   z-index: 9000;
@@ -11635,7 +11660,7 @@ select.qi-select {
     border: 1px solid var(--border-strong);
     border-radius: 8px;
     background: color-mix(in oklch, var(--popover-surface) 96%, black);
-    box-shadow: 0 12px 30px -18px rgba(0, 0, 0, 0.85);
+    box-shadow: 0 12px 30px -18px rgb(var(--shadow-ink-rgb) / 0.85);
     color: var(--text-primary);
     font-size: 11.5px;
     font-weight: 650;
@@ -13424,7 +13449,9 @@ select.qi-select {
 
 .figma-view-json-btn:focus-visible,
 .figma-view-json-copy-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--focus);
+  /* #1295 C4 — was var(--focus) (undefined → no ring rendered); the DS focus
+     token is --focus-ring (alias of --accent-text). a11y fix (WCAG 2.4.7). */
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -15235,13 +15262,10 @@ ul.integ {
 }
 
 /* C243 — EditMemoryDialog/ForgetConfirmDialog parity with the desktop .dlg
-   pattern: light-theme scrim (same value as [data-theme="light"] .dlg-overlay),
-   max-height + scroll so the edit form survives short viewports, radius-lg,
-   and a motion-safe entry animation (the mc dialogs mount without an .in class
-   toggle, so keyframes stand in for the .dlg transition). */
-[data-theme="light"] .mc-dialog-backdrop {
-  background: oklch(0.3 0.01 160 / 0.34);
-}
+   pattern: max-height + scroll so the edit form survives short viewports,
+   radius-lg, and a motion-safe entry animation (the mc dialogs mount without an
+   .in class toggle, so keyframes stand in for the .dlg transition). The former
+   light-theme scrim override is now provided centrally by --overlay-scrim (#1295 C3). */
 .mc-dialog {
   max-height: calc(100vh - 48px);
   overflow-y: auto;
@@ -15782,14 +15806,11 @@ ul.integ {
 .lk-capsule-info .lk-badge {
   margin-top: 3px;
 }
-/* Visual parity with .dlg-overlay: same blur, and a light-theme scrim — the
-   Create/Combine dialogs sat behind a much darker backdrop than the confirm
-   dialogs on the same route (C036). */
+/* Visual parity with .dlg-overlay: same blur. The light-theme scrim that lived
+   here (C036) is now centralised in --overlay-scrim (#1295 C3); only the blur
+   parity declaration remains. */
 .mc-dialog-backdrop {
   backdrop-filter: blur(2px);
-}
-[data-theme="light"] .mc-dialog-backdrop {
-  background: oklch(0.3 0.01 160 / 0.34);
 }
 /* Capsule-detail source tools (C065/C104): CapsuleActions no longer renders
    into the .lk-header flex row; it lives in this block below the header. The
