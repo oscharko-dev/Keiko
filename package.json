@@ -63,6 +63,8 @@
     "smoke:install:memory": "node scripts/installable-memory-smoke.mjs",
     "check:workspace-supply-chain": "node scripts/check-workspace-supply-chain.mjs",
     "check:qi-supply-chain": "node scripts/check-quality-intelligence-supply-chain.mjs",
+    "check:local-state": "node --experimental-sqlite --disable-warning=ExperimentalWarning scripts/check-local-state.mjs --self-test",
+    "audit:local-state": "node --experimental-sqlite --disable-warning=ExperimentalWarning scripts/check-local-state.mjs",
     "check:coverage": "node scripts/check-package-coverage.mjs --baseline docs/qa/package-coverage-baseline.json",
     "check:coverage:packages": "node scripts/check-package-coverage.mjs --baseline docs/qa/package-coverage-baseline.json --coverage coverage/packages/coverage-summary.json --exclude-package keiko-ui",
     "check:coverage:ui": "node scripts/check-package-coverage.mjs --baseline docs/qa/package-coverage-baseline.json --coverage packages/keiko-ui/coverage/coverage-summary.json --package keiko-ui",

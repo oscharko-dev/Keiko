@@ -176,6 +176,27 @@ visible capsule behavior change.
   seal-sweep plus `VACUUM`. The overhead budget and steady-state per-row seal/open cost
   are documented in `docs/local-knowledge/runtime-state-protection.md`.
 
+## Threat model and limitations
+
+Mirrors the Memory Vault threat model (ADR-0035) because this decision reuses the same
+`secretbox` primitive and key-tier model.
+
+**Defeats:** casual disk inspection, a stray or synced backup, and a stolen-at-rest `capsules.db`
+(plus `-wal`/`-shm`) — none reveal extracted text, section/heading labels, or vector bytes without
+the key; tampering or a wrong key fails GCM authentication and the store refuses to open or read.
+
+**Does not defeat (honest limitations):**
+
+- A local attacker who holds **both** the keyfile-tier key and the database can decrypt. The keyfile
+  tier is operator convenience, not a hardware boundary; the `KEIKO_LOCAL_KNOWLEDGE_KEY` env tier and
+  the OS keychain tier raise the bar. For regulated deployments prefer those (see
+  `docs/local-knowledge/runtime-state-protection.md`).
+- Content is decrypted in process memory while the store is open (retrieval and grounding require
+  plaintext). This protects data at rest, not a live memory dump of a running process, malware
+  running as the same user, or a machine where the key is already unlocked.
+- Cleartext metadata (identifiers, offsets, hashes, embedding identity, lifecycle) is retained by
+  design for deterministic retrieval; it leaks the shape of the corpus, not its content.
+
 ## Alternatives considered
 
 - **Whole-file / SQLCipher encryption.** `node:sqlite` has no SQLCipher binding, and a
