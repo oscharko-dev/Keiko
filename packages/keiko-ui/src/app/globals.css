@@ -508,7 +508,7 @@ button {
 }
 
 :root[data-input-modality="keyboard"] .number-control-stepper-button:focus-visible {
-  outline: 1px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -1px;
 }
 
@@ -850,56 +850,129 @@ button {
   --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);
 }
 
-/* prefers-contrast: more — bright rooms, glare, low vision. Step the neutral ramp
-   up at the TOKEN level (accessibility.html §01: "when the OS asks for more
-   contrast, borders, faint text … step up automatically"), so every surface that
-   uses these tokens inherits stronger separation. Lifted from design/keiko-tokens.css;
-   limited to the tokens keiko-ui actually consumes. */
+/* prefers-contrast: more — first-class High Contrast. Mirrors the full
+   design-system primitive palette so surfaces, text hierarchy, focus, shadows,
+   selection, and status colours inherit the governed HC values from one token
+   path. */
 @media (prefers-contrast: more) {
   :root {
-    --line: oklch(0.55 0.004 160);
-    --line-soft: oklch(0.46 0.004 160);
-    --line-strong: oklch(0.64 0.005 160);
-    --fg-faint: oklch(0.74 0.004 160);
-    --fg-dim: oklch(0.8 0.004 160);
+    color-scheme: dark;
+    --bg: oklch(0.11 0.004 160);
+    --surface: oklch(0.145 0.004 160);
+    --card: oklch(0.185 0.004 160);
+    --card-2: oklch(0.225 0.004 160);
+    --inset: oklch(0.09 0.004 160);
+    --line: oklch(0.62 0.006 160);
+    --line-soft: oklch(0.5 0.005 160);
+    --line-strong: oklch(0.74 0.006 160);
     --grid-dot: oklch(0.52 0.006 160);
     --focus-w: 3px;
+    --fg: oklch(1 0 0);
+    --fg-muted: oklch(0.88 0.004 160);
+    --fg-dim: oklch(0.84 0.004 160);
+    --fg-faint: oklch(0.82 0.004 160);
+    --accent-bright: oklch(0.88 0.15 160);
+    --accent-text: oklch(0.86 0.16 160);
+    --accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
+    --accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
+    --accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
+    --warn: oklch(0.88 0.14 80);
+    --danger: oklch(0.78 0.17 25);
+    --ok: oklch(0.82 0.15 160);
+    --info: oklch(0.84 0.12 240);
+    --shadow-card: 0 0 0 1px var(--line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+    --shadow-pop: 0 0 0 1px var(--line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
   }
   [data-theme="light"] {
-    --line: oklch(0.62 0.006 160);
-    --line-soft: oklch(0.72 0.005 160);
-    --line-strong: oklch(0.52 0.008 160);
-    --fg-faint: oklch(0.42 0.01 160);
-    --fg-dim: oklch(0.36 0.01 160);
+    color-scheme: light;
+    --bg: oklch(1 0 0);
+    --surface: oklch(0.99 0.002 160);
+    --card: oklch(1 0 0);
+    --card-2: oklch(0.965 0.004 160);
+    --inset: oklch(0.95 0.004 160);
+    --line: oklch(0.45 0.008 160);
+    --line-soft: oklch(0.6 0.006 160);
+    --line-strong: oklch(0.35 0.01 160);
     --grid-dot: oklch(0.6 0.01 160);
     --focus-w: 3px;
+    --fg: oklch(0.13 0.01 160);
+    --fg-muted: oklch(0.3 0.012 160);
+    --fg-dim: oklch(0.34 0.012 160);
+    --fg-faint: oklch(0.36 0.012 160);
+    --accent-text: oklch(0.42 0.14 160);
+    --accent-bright: oklch(0.42 0.14 160);
+    --accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
+    --accent-line: color-mix(in oklch, var(--accent-text) 78%, transparent);
+    --accent-glow: color-mix(in oklch, var(--accent-text) 32%, transparent);
+    --danger: oklch(0.42 0.19 25);
+    --warn: oklch(0.38 0.14 75);
+    --info: oklch(0.4 0.16 240);
+    --ok: oklch(0.4 0.14 160);
+    --shadow-card: 0 0 0 1px var(--line-strong);
+    --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--line-strong);
   }
 }
 
-/* Explicit in-app neutral high-contrast override (#1292) — mirrors the
-   prefers-contrast neutral step above at higher specificity so a future in-app
-   "High contrast" choice raises contrast even when the OS hasn't asked, exactly
-   as the design-system source does. Today no in-app control sets [data-hc] on
-   the document (useTheme is light|dark only), so this is inert at runtime until
-   a later issue wires the selector — it completes the neutral side of the
-   [data-hc] hook that previously carried only the editor (--ed-*) tokens. */
+/* Explicit in-app high-contrast override (#1292) — identical palettes, higher
+   specificity so a future in-app "High contrast" choice raises contrast even
+   when the OS has not asked. Today no in-app control sets [data-hc] on the
+   document (useTheme is light|dark only), so this remains inert at runtime
+   until a later issue wires the selector. */
 [data-hc="more"] {
-  --line: oklch(0.55 0.004 160);
-  --line-soft: oklch(0.46 0.004 160);
-  --line-strong: oklch(0.64 0.005 160);
-  --fg-faint: oklch(0.74 0.004 160);
-  --fg-dim: oklch(0.8 0.004 160);
+  color-scheme: dark;
+  --bg: oklch(0.11 0.004 160);
+  --surface: oklch(0.145 0.004 160);
+  --card: oklch(0.185 0.004 160);
+  --card-2: oklch(0.225 0.004 160);
+  --inset: oklch(0.09 0.004 160);
+  --line: oklch(0.62 0.006 160);
+  --line-soft: oklch(0.5 0.005 160);
+  --line-strong: oklch(0.74 0.006 160);
   --grid-dot: oklch(0.52 0.006 160);
   --focus-w: 3px;
+  --fg: oklch(1 0 0);
+  --fg-muted: oklch(0.88 0.004 160);
+  --fg-dim: oklch(0.84 0.004 160);
+  --fg-faint: oklch(0.82 0.004 160);
+  --accent-bright: oklch(0.88 0.15 160);
+  --accent-text: oklch(0.86 0.16 160);
+  --accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
+  --accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
+  --accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
+  --warn: oklch(0.88 0.14 80);
+  --danger: oklch(0.78 0.17 25);
+  --ok: oklch(0.82 0.15 160);
+  --info: oklch(0.84 0.12 240);
+  --shadow-card: 0 0 0 1px var(--line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  --shadow-pop: 0 0 0 1px var(--line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
 }
 [data-hc="more"][data-theme="light"] {
-  --line: oklch(0.62 0.006 160);
-  --line-soft: oklch(0.72 0.005 160);
-  --line-strong: oklch(0.52 0.008 160);
-  --fg-faint: oklch(0.42 0.01 160);
-  --fg-dim: oklch(0.36 0.01 160);
+  color-scheme: light;
+  --bg: oklch(1 0 0);
+  --surface: oklch(0.99 0.002 160);
+  --card: oklch(1 0 0);
+  --card-2: oklch(0.965 0.004 160);
+  --inset: oklch(0.95 0.004 160);
+  --line: oklch(0.45 0.008 160);
+  --line-soft: oklch(0.6 0.006 160);
+  --line-strong: oklch(0.35 0.01 160);
   --grid-dot: oklch(0.6 0.01 160);
   --focus-w: 3px;
+  --fg: oklch(0.13 0.01 160);
+  --fg-muted: oklch(0.3 0.012 160);
+  --fg-dim: oklch(0.34 0.012 160);
+  --fg-faint: oklch(0.36 0.012 160);
+  --accent-text: oklch(0.42 0.14 160);
+  --accent-bright: oklch(0.42 0.14 160);
+  --accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
+  --accent-line: color-mix(in oklch, var(--accent-text) 78%, transparent);
+  --accent-glow: color-mix(in oklch, var(--accent-text) 32%, transparent);
+  --danger: oklch(0.42 0.19 25);
+  --warn: oklch(0.38 0.14 75);
+  --info: oklch(0.4 0.16 240);
+  --ok: oklch(0.4 0.14 160);
+  --shadow-card: 0 0 0 1px var(--line-strong);
+  --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--line-strong);
 }
 
 /* ============================================================
@@ -2196,7 +2269,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   color: var(--fg-muted);
 }
 .tr-caret-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
   /* WCAG 2.4.7 — dark separator so the accent ring keeps >=3:1 even on an accent-dim
      active-row background (accent-on-accent would otherwise be low-contrast). */
@@ -2632,7 +2705,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .cmp-icon:focus-visible,
 .attach-chip-remove:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .cmp-send {
@@ -2654,7 +2727,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: var(--accent-bright);
 }
 .cmp-send:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .cmp-mode-compact {
@@ -2939,7 +3012,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   color: var(--fg);
 }
 .source-limit-alert-dismiss:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
 }
 
@@ -3489,7 +3562,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   opacity: 1;
 }
 .win-port:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 3px;
   opacity: 1;
 }
@@ -5287,7 +5360,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   animation: emptyWorkspaceBlobPulse 0.55s ease;
 }
 .empty-workspace-blob:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 12px;
 }
 @keyframes emptyWorkspaceBlobPulse {
@@ -5646,7 +5719,7 @@ select.dlg-input {
   color: var(--fg);
 }
 .dlg-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 3px;
 }
 .dlg-primary {
@@ -5848,7 +5921,7 @@ select.dlg-input {
 }
 .ed-save:focus-visible,
 .ed-reload:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .ed-reload {
@@ -5886,7 +5959,7 @@ select.dlg-input {
   cursor: default;
 }
 .ed-tab:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
 }
 /* Issue #1205: the unified, VS Code-style status bar — the single status surface for the card.
@@ -6426,7 +6499,7 @@ select.dlg-input {
   transform: none;
 }
 .skip-link:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -6460,7 +6533,7 @@ select.dlg-input {
   min-width: 24px;
 }
 .rb-edge-badge-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .rb-edge-badge-label {
@@ -6743,7 +6816,7 @@ select.dlg-input {
   color: var(--fg-faint);
 }
 .files-root-input:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
 }
 .files-root-open {
@@ -6840,7 +6913,7 @@ select.dlg-input {
   min-width: 80px;
 }
 .bw-input:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
 }
 .bw-input-url {
@@ -6869,7 +6942,7 @@ select.dlg-input {
   border-color: var(--accent-line);
 }
 .bw-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
 }
 .bw-btn:disabled {
@@ -7101,7 +7174,7 @@ select.dlg-input {
   background: var(--accent-dim);
 }
 .rv-evidence-link:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* evidence link — disabled look */
@@ -7165,7 +7238,7 @@ select.dlg-input {
 }
 /* focus-visible ring on file-row buttons */
 .rv-filerow:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
   border-radius: 4px;
 }
@@ -7222,7 +7295,7 @@ select.dlg-input {
   color: var(--accent-text);
 }
 .rv-truncated a:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* empty state */
@@ -7287,14 +7360,14 @@ select.dlg-input {
 }
 /* focus ring on .arun-btn globally (WCAG 2.4.7) — previously scoped to .rv-controls only */
 .arun-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* focus rings for nav rail icon buttons (WCAG 2.4.7) — .rail-avatar added (uiux-fix F014 C016) */
 .rail-btn:focus-visible,
 .rail-new:focus-visible,
 .rail-avatar:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* focus rings for header toolbar buttons (WCAG 2.4.7).
@@ -7305,7 +7378,7 @@ select.dlg-input {
 .tb-btn:focus-visible,
 .edm-trigger:focus-visible,
 .modesw-opt:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* Syntax token classes from syntaxHighlight.ts — REVIEW DIFF variant, scoped to .rv-src.
@@ -7437,7 +7510,7 @@ select.dlg-input {
   cursor: not-allowed;
 }
 .tm-action:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .tm-action[data-primary="true"] {
@@ -7482,7 +7555,7 @@ select.dlg-input {
   background: var(--card-2);
 }
 .tm-error-dismiss:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* B1 — tm-result: live region container */
@@ -8027,11 +8100,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
    pill's 4px padding. The connect button keeps the accent ring: it renders on card
    background where the ring is visible. */
 .scope-pill-disconnect:focus-visible {
-  outline: 2px solid var(--ink-inverse);
+  outline: var(--focus-width, 2px) solid var(--ink-inverse);
   outline-offset: 1px;
 }
 .scope-connect-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -8253,7 +8326,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   filter: brightness(1.06);
 }
 .grounded-cancel-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 3px;
 }
 .grounded-cancel-btn:disabled {
@@ -8622,7 +8695,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   cursor: grabbing;
 }
 .lk-capsule-drag-handle:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 3px;
   border-radius: var(--radius-xs);
 }
@@ -8766,7 +8839,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   cursor: not-allowed;
 }
 .lk-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 3px;
 }
 .lk-btn-primary {
@@ -9421,7 +9494,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .mc-chip:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -9533,7 +9606,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .mc-row:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -9834,7 +9907,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .mc-dialog-textarea:focus-visible,
 .mc-dialog-input:focus-visible,
 .mc-dialog-select:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
 }
 
@@ -9975,7 +10048,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   border-color: var(--line-strong);
 }
 .sm-code-copy:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -10026,7 +10099,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   color: var(--accent);
 }
 .sm-link:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
   border-radius: 2px;
 }
@@ -10154,7 +10227,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .qi-run-item:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
 }
 
@@ -10619,7 +10692,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .install-banner-btn-install:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px var(--accent-glow);
 }
@@ -10647,7 +10720,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .install-banner-btn-dismiss:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
   box-shadow: 0 0 0 4px var(--accent-glow);
 }
@@ -10906,7 +10979,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   cursor: not-allowed;
 }
 :root[data-input-modality="keyboard"] .qi-source-kind-option:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .qi-input,
@@ -10936,14 +11009,14 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .qi-input:focus-visible,
 .qi-textarea:focus-visible,
 .qi-select:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
 }
 :root[data-input-modality="keyboard"] .qi-input:focus-visible,
 :root[data-input-modality="keyboard"] .qi-textarea:focus-visible,
 :root[data-input-modality="keyboard"] .qi-select:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -11011,7 +11084,7 @@ select.qi-select {
   box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
 }
 .qi-source-kind-option:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .qi-source-kind-option[aria-checked="true"] {
@@ -11223,7 +11296,7 @@ select.qi-select {
   border-color: var(--line-strong);
 }
 .qi-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .qi-btn:disabled {
@@ -11573,7 +11646,7 @@ select.qi-select {
 .qi-edit-input:focus-visible,
 .qi-edit-textarea:focus-visible,
 .qi-edit-select:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -11960,7 +12033,7 @@ select.qi-select {
   min-width: 0;
 }
 .figma-snapshot-input:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 :root[data-input-modality="pointer"] .figma-snapshot-input:focus {
   outline: none !important;
@@ -11987,7 +12060,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-trigger-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 .figma-snapshot-trigger-btn:disabled {
   opacity: 0.5;
@@ -12020,7 +12093,7 @@ select.qi-select {
   min-height: 24px; /* WCAG 2.5.8 */
 }
 .figma-snapshot-cancel-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 
 /* ── Status / progress ────────────────────────────────────────────────────── */
@@ -12103,7 +12176,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-load-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 
 /* ── Snapshot dashboard ───────────────────────────────────────────────────── */
@@ -12153,7 +12226,7 @@ select.qi-select {
 }
 
 .figma-snapshot-dashboard-refresh:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 
 .figma-snapshot-dashboard-tabs {
@@ -12192,7 +12265,7 @@ select.qi-select {
 }
 
 .figma-snapshot-dashboard-tab:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 
 .figma-snapshot-dashboard-panel {
@@ -12368,7 +12441,7 @@ select.qi-select {
 .figma-snapshot-dashboard-rename-cancel:focus-visible,
 .figma-snapshot-dashboard-delete-confirm-btn:focus-visible,
 .figma-snapshot-dashboard-delete-cancel-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 
 .figma-snapshot-dashboard-load:disabled,
@@ -12573,7 +12646,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-resnapshot-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 .figma-snapshot-resnapshot-btn:disabled {
   opacity: 0.5;
@@ -12627,7 +12700,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-codegen-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 .figma-snapshot-codegen-btn:disabled {
   opacity: 0.5;
@@ -12644,7 +12717,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-codegen-cancel-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 .figma-snapshot-code-result {
   display: flex;
@@ -12668,7 +12741,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-code-file-path:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   border-radius: 2px;
 }
 .figma-snapshot-code-file-contents {
@@ -12706,7 +12779,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-scopes-summary:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   border-radius: 2px;
 }
 
@@ -12754,7 +12827,7 @@ select.qi-select {
 .figma-snapshot-revoke-btn:focus-visible,
 .figma-snapshot-revoke-confirm-btn:focus-visible,
 .figma-snapshot-revoke-cancel-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 
 /* ── Screen gallery ───────────────────────────────────────────────────────── */
@@ -12779,7 +12852,7 @@ select.qi-select {
 }
 
 .figma-snapshot-gallery-more:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
 }
 
 .figma-snapshot-screen-card {
@@ -12820,7 +12893,7 @@ select.qi-select {
 }
 
 .figma-snapshot-screen-preview-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -12883,7 +12956,7 @@ select.qi-select {
 }
 
 .figma-snapshot-screen-source-btn:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -12966,7 +13039,7 @@ select.qi-select {
 
 .figma-view-json-btn:focus-visible,
 .figma-view-json-copy-btn:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: var(--focus-width, 2px) solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -13036,7 +13109,7 @@ button.figma-view-preview {
 }
 
 .figma-view-preview-drag-surface:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: var(--focus-width, 2px) solid var(--focus);
 }
 
 .figma-view-preview-placeholder {
@@ -13514,7 +13587,7 @@ button.figma-view-preview {
 .wf-dialog-launch:focus-visible,
 .wf-dialog-close:focus-visible,
 .wf-dialog-input:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* Run summary card — chat-log card for workflow run system messages.
@@ -13621,7 +13694,7 @@ button.figma-view-preview {
   color: var(--fg-muted);
 }
 .run-summary-card-action:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -13716,14 +13789,14 @@ button.figma-view-preview {
 /* C305 — Retry/Dismiss in lk-alert banners had only the UA default ring; align
    with the accent focus-ring language used by .qi-btn and the other controls. */
 .lk-alert-retry:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
   border-radius: 4px;
 }
 
 /* ==== uiux-fix F006: light focus rings, chrome focus, win-close hover, code gutters ==== */
 
-/* C009/C082 — every custom focus ring is `outline: 2px solid var(--accent-text)`; in the light
+/* C009/C082 — every custom focus ring consumes `--focus-width`; in the light
    theme --accent #4eba87 is only ~2.4:1 on white/near-white surfaces (documented at the light
    token block, line ~194) — below the 3:1 of WCAG 1.4.11. --accent-text is the AA-tuned alias
    (= --accent in dark, oklch(0.5 0.13 160) ≈ 5.5:1 in light), so dark is unchanged. Blanket
@@ -13750,7 +13823,7 @@ button.figma-view-preview {
 .ws-fab:focus-visible,
 .ws-empty-btn:focus-visible,
 .conn-badge:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -13759,7 +13832,7 @@ button.figma-view-preview {
    the :focus glow stays as an extra. */
 .tm-field input:focus-visible,
 .tm-field select:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
 }
 
@@ -13848,7 +13921,7 @@ button.figma-view-preview {
   z-index: 9000;
 }
 .conn-badge:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -13884,7 +13957,7 @@ button.figma-view-preview {
    focusable children, so it needs an explicit tab stop (axe scrollable-region-focusable).
    Ring pattern follows .rv-filerow:focus-visible. */
 .chatw-scroll:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
 }
 /* C089: the full composer auto-grows with its content (JS sets height up to 220px ≈ 8-9
@@ -13932,7 +14005,7 @@ button.figma-view-preview {
   border-color: var(--line-strong);
 }
 .grounded-citations-more:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* C137 — a single over-long path/label chip (deep repo paths, long capsule labels)
@@ -14080,7 +14153,7 @@ button.figma-view-preview {
   cursor: help;
 }
 .cmp-budget-info:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .cmp-budget-info[data-tip]::after {
@@ -14130,7 +14203,7 @@ button.figma-view-preview {
   color: var(--fg);
 }
 .cmp-budget-clear:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .cmp-budget-clear:disabled {
@@ -14181,7 +14254,7 @@ button.figma-view-preview {
    inset ring so the outline survives the scroll container's overflow clipping. */
 .fpv-code:focus-visible,
 .ed-code:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
 }
 
@@ -14263,7 +14336,7 @@ button.figma-view-preview {
   color: var(--fg);
 }
 .dir-chip:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .dir-list {
@@ -14313,7 +14386,7 @@ button.figma-view-preview {
   color: var(--warn);
 }
 .dir-row:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
 }
 .dir-note {
@@ -14423,7 +14496,7 @@ button.figma-view-preview {
   font-family: var(--font-ui);
 }
 .connector-picker-select:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* status/empty/error are early-return roots WITHOUT the .connector-picker
@@ -14471,7 +14544,7 @@ button.figma-view-preview {
   border-color: var(--accent-line);
 }
 .connector-picker-retry:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .connector-picker-selected {
@@ -14503,7 +14576,7 @@ button.figma-view-preview {
   filter: brightness(1.06);
 }
 .connector-picker-create-link:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .connector-node {
@@ -14571,7 +14644,7 @@ button.figma-view-preview {
   border-color: var(--accent-line);
 }
 .connector-node-manage:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -14621,7 +14694,7 @@ button.figma-view-preview {
    was invisible on a tab-stop range input (WCAG 2.4.7). App-convention ring;
    --accent-text = --accent in dark, AA-tuned in light (see F006 block). */
 .gpref-slider:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 3px;
 }
 /* C070/C290 — Settings tabs and the gateway CTA had no hover/focus-visible at all:
@@ -14638,7 +14711,7 @@ button.figma-view-preview {
 }
 .set-tab:focus-visible,
 .set-add:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .set-add:hover {
@@ -14658,7 +14731,7 @@ button.figma-view-preview {
   padding: 2px 6px;
 }
 .gw-error-retry:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -14705,7 +14778,7 @@ ul.integ {
 .gw-cancel:focus-visible,
 .perm-toggle:focus-visible,
 .perm-opt:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* C191: machine error code as a small secondary mono line under the human
@@ -14741,7 +14814,7 @@ ul.integ {
    outline:none and had no :focus-visible rule; keyboard users could change the
    opacity without seeing focus. Same ring pattern as .arun-btn:focus-visible. */
 .gpref-slider:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 3px;
 }
 
@@ -14936,7 +15009,7 @@ ul.integ {
   border-color: var(--line);
 }
 .files-retry:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* C087 — symlink badge + size column in the tree rows were unstyled UA spans. */
@@ -14964,7 +15037,7 @@ ul.integ {
 .proj-head:focus-visible,
 .edm-item:focus-visible,
 .plg-row:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
 }
 .fpv-back:focus-visible,
@@ -14976,7 +15049,7 @@ ul.integ {
 .pal-card:focus-visible,
 .palette-x:focus-visible,
 .auto-toggle:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 /* C123 — shared Toggle (role=switch): hover feedback + a ≥24px hit area around the 30×18
@@ -15180,7 +15253,7 @@ ul.integ {
   color: var(--fg);
 }
 .mc-row-detail-link:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -15212,7 +15285,7 @@ ul.integ {
   padding: 2px 6px;
 }
 .fpv-retry:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -15455,7 +15528,7 @@ ul.integ {
   background: var(--card-2);
 }
 .lkd-picker-row:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
 }
 .lkd-picker-row input {
@@ -15598,7 +15671,7 @@ ul.integ {
   color: var(--fg-muted);
 }
 .rv-runid-input:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
 }
 /* ==== uiux-fix F039: boot placeholder (C402) ==== */
@@ -15753,7 +15826,7 @@ ul.integ {
   background: var(--card-2);
 }
 .rel-row:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
 }
 .rel-row[aria-pressed="true"] {
@@ -15850,7 +15923,7 @@ ul.integ {
   cursor: not-allowed;
 }
 .scope-grounding-select:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -15870,7 +15943,7 @@ ul.integ {
    tabIndex={0} makes it keyboard-reachable (WCAG 2.1.1, axe scrollable-region-focusable)
    and this ring makes that focus visible (pattern .qi-input:focus-visible). */
 .qi-export-preview:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -15892,7 +15965,7 @@ ul.integ {
    server 428 FIGMA_CONSENT_REQUIRED), the checkbox is marked aria-invalid and focused; this
    mirrors .figma-snapshot-input[aria-invalid="true"] so the error visibly points at it. */
 .figma-snapshot-consent-checkbox[aria-invalid="true"] {
-  outline: 2px solid var(--danger);
+  outline: var(--focus-width, 2px) solid var(--danger);
   outline-offset: 1px;
 }
 
@@ -15996,7 +16069,7 @@ ul.integ {
   color: var(--fg);
 }
 .mc-id-link:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -16121,7 +16194,7 @@ ul.integ {
   border-color: var(--line-strong);
 }
 .chat-msg-copy:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 .chat-msg-copy[data-copied="true"] {
@@ -16336,7 +16409,7 @@ ul.integ {
 
 :root[data-input-modality="keyboard"] .chat-history-open:focus-visible,
 :root[data-input-modality="keyboard"] .chat-history-title-input:focus-visible {
-  outline: 2px solid var(--accent-line);
+  outline: var(--focus-width, 2px) solid var(--accent-line);
   outline-offset: 2px;
 }
 
@@ -16394,11 +16467,11 @@ ul.integ {
    tabIndex=-1); WC-01 — the workspace surface is keyboard-focusable for arrow-pan.
    Both need a visible focus indicator (WCAG 2.4.7). */
 .footer:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -2px;
 }
 .workspace:focus-visible {
-  outline: 2px solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: -3px;
 }
 
