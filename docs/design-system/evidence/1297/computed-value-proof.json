@@ -1,6 +1,16 @@
 {
   "issue": 1297,
-  "baseRef": "origin/release/0.2.0",
+  "baseRef": "afd2c7af18f269459893363d2380fc6bccd0dd77",
+  "baseSha": "afd2c7af18f269459893363d2380fc6bccd0dd77",
+  "immutableBaseSha": "afd2c7af18f269459893363d2380fc6bccd0dd77",
+  "postSha": "4d8d787256f10095cc82d3235c40c3b47f0553580020367c4361dead6c2cd103",
+  "postCssSha256": "4d8d787256f10095cc82d3235c40c3b47f0553580020367c4361dead6c2cd103",
+  "run": {
+    "startedAt": "2026-06-21T20:58:37.376Z",
+    "generatedAt": "2026-06-21T20:58:40.470Z",
+    "repoHeadSha": "13e08d1b0270deca2f9160e8edf9fab781f99fd1",
+    "baseRefIsImmutableSha": true
+  },
   "groupA": {
     "description": "Value-preserving migration: .sm-table routed onto --table-* tokens. Computed value identical PRE vs POST in every mode (0-diff gate).",
     "totalProbes": 49,
@@ -99,6 +109,33 @@
         }
       }
     }
+  },
+  "accessibilityProof": {
+    "rowFocus": {
+      "activeElementId": "focus-row",
+      "tabIndex": "0",
+      "outlineStyle": "solid",
+      "outlineWidth": "3px",
+      "outlineColor": "rgba(26, 235, 255, 0.8)",
+      "outlineOffset": "-2px"
+    },
+    "sortAnnouncement": {
+      "activeHeader": "Runs ▾",
+      "activeSort": "descending",
+      "liveRegionRole": "status",
+      "liveRegionAriaLive": "polite",
+      "liveRegionAriaAtomic": "true",
+      "liveRegionText": "Sorted by Runs descending."
+    }
+  },
+  "boundedRowSmoke": {
+    "ok": true,
+    "rowCount": 250,
+    "durationMs": 0.10000038146972656,
+    "afterScrollTop": 8363,
+    "scrollHeight": 8783,
+    "clientHeight": 420,
+    "stickyHeaderDeltaPx": 0
   },
   "missingSelectors": [],
   "byMode": {
