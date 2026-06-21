@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
@@ -172,9 +173,7 @@ describe("AgentRunWidget", () => {
   it("renders the proposed diff from evidence when the live run report is unavailable", async () => {
     vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
     vi.mocked(fetchModels).mockResolvedValue({ models: [] });
-    vi.mocked(fetchRunReport).mockRejectedValue(
-      new ApiError("NOT_FOUND", "Unknown run.", 404),
-    );
+    vi.mocked(fetchRunReport).mockRejectedValue(new ApiError("NOT_FOUND", "Unknown run.", 404));
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({
       manifest: {
         evidenceSchemaVersion: "1",
@@ -225,8 +224,12 @@ describe("AgentRunWidget", () => {
     );
 
     expect(await screen.findByText("Proposed diff")).toBeInTheDocument();
-    expect(screen.getByText("diff --git a/tests/add.test.ts b/tests/add.test.ts")).toBeInTheDocument();
-    expect(screen.getByText("Generate unit tests evidence loaded with a reviewable diff.")).toBeInTheDocument();
+    expect(
+      screen.getByText("diff --git a/tests/add.test.ts b/tests/add.test.ts"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Generate unit tests evidence loaded with a reviewable diff."),
+    ).toBeInTheDocument();
   });
 
   it("renders explain reports and terminal failure details without a diff", async () => {
@@ -272,5 +275,62 @@ describe("AgentRunWidget", () => {
     );
 
     expect(screen.queryByText(/permissions coming soon/i)).toBeNull();
+  });
+
+  // Issue #1296 — a low/medium/high agent confidence renders as the DS 0.4.0 confidence
+  // signal (3-segment track + uppercase word), never colour alone, and stays axe-clean.
+  it("renders a level confidence as the non-colour .ai-conf signal", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "completed",
+        durationMs: 100,
+        hypothesis: {
+          rootCause: "off-by-one in the cursor",
+          confidence: "high",
+        },
+      },
+    });
+
+    const { container } = render(
+      <AgentRunWidget
+        cfg={{ workflow: "bug-investigation", model: "example-chat-model", runId: "run-conf" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Hypothesis")).toBeInTheDocument();
+    // the word carries the meaning (not colour); the track is decorative/aria-hidden.
+    const signal = container.querySelector('.ai-conf[data-level="high"]');
+    expect(signal).not.toBeNull();
+    expect(signal).toHaveTextContent("High");
+    expect(signal?.querySelector(".track")?.getAttribute("aria-hidden")).toBe("true");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("keeps a non-level confidence string as the plain key/value row (behaviour-preserving)", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "completed",
+        durationMs: 100,
+        hypothesis: { rootCause: "race condition", confidence: "0.82" },
+      },
+    });
+
+    const { container } = render(
+      <AgentRunWidget
+        cfg={{ workflow: "bug-investigation", model: "example-chat-model", runId: "run-conf2" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Hypothesis")).toBeInTheDocument();
+    expect(screen.getByText("0.82")).toBeInTheDocument();
+    expect(container.querySelector(".ai-conf")).toBeNull();
   });
 });

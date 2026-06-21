@@ -2318,3 +2318,182 @@ describe("Issue #1295 — high-traffic product-surface token migration", () => {
     ).toEqual([]);
   });
 });
+
+describe("Issue #1296 — AI/agent component set (Design System 0.4.0)", () => {
+  // ── 1. Value-preservation: every --ai-* component token aliases the exact primitive the
+  //       bespoke product surfaces already used, so routing a surface onto the token cannot
+  //       change its resolved value in any mode (mirrors the #1292 drift-gate idea).
+  it("defines the --ai-* component tokens as pure aliases over the existing primitives", () => {
+    for (const decl of [
+      "--ai-response-surface: var(--surface)",
+      "--ai-response-border: var(--line-soft)",
+      "--ai-thinking-indicator: var(--accent-text)",
+      "--ai-streaming-cursor: var(--accent)",
+      "--ai-source-border: var(--accent-line)",
+      "--ai-source-surface: var(--accent-dim)",
+      "--ai-tool-surface: var(--inset)",
+      "--ai-tool-border: var(--line)",
+      "--ai-confidence-high: var(--ok)",
+      "--ai-confidence-medium: var(--warn)",
+      "--ai-confidence-low: var(--danger)",
+      "--ai-permission-surface: var(--feedback-warning-surface)",
+      "--ai-permission-border: color-mix(in oklch, var(--warn) 40%, transparent)",
+    ]) {
+      expect(css, `token def "${decl}" missing or drifted`).toContain(decl);
+    }
+  });
+
+  // ── 2. The canonical .ai-* component primitives consume the --ai-* tokens exactly.
+  it("ships the canonical .ai-* primitives consuming the --ai-* component tokens", () => {
+    const response = cssBlock("\n.ai-response {");
+    expect(response).toContain("var(--ai-response-surface)");
+    expect(response).toContain("var(--ai-response-border)");
+    expect(cssBlock("\n.ai-thinking {")).toContain("var(--ai-thinking-indicator)");
+    expect(cssBlock("\n.ai-stream-cursor {")).toContain("var(--ai-streaming-cursor)");
+    const tool = cssBlock("\n.ai-tool {");
+    expect(tool).toContain("var(--ai-tool-border)");
+    expect(tool).toContain("var(--ai-tool-surface)");
+    const cite = cssBlock("\n.ai-cite {");
+    expect(cite).toContain("var(--ai-source-surface)");
+    expect(cite).toContain("var(--ai-source-border)");
+    expect(cssBlock('\n.ai-conf[data-level="high"] .lbl {')).toContain("var(--ai-confidence-high)");
+    expect(cssBlock('\n.ai-conf[data-level="medium"] .lbl {')).toContain(
+      "var(--ai-confidence-medium)",
+    );
+    expect(cssBlock('\n.ai-conf[data-level="low"] .lbl {')).toContain("var(--ai-confidence-low)");
+    const permit = cssBlock("\n.ai-permit {");
+    expect(permit).toContain("var(--ai-permission-surface)");
+    expect(permit).toContain("var(--ai-permission-border)");
+    // stop / sensitive-action are danger-weighted, never accent.
+    expect(cssBlock("\n.ai-stop {")).toContain("var(--feedback-danger)");
+    expect(cssBlock("\n.ai-danger {")).toContain("var(--feedback-danger)");
+  });
+
+  // ── 3. Completeness: every --ai-* token defined in :root now has at least one real consumer
+  //       (the audit's headline gap was that all 13 were defined but consumed 0 times).
+  it("gives every --ai-* component token at least one consumer", () => {
+    const tokens = [
+      "--ai-response-surface",
+      "--ai-response-border",
+      "--ai-thinking-indicator",
+      "--ai-streaming-cursor",
+      "--ai-source-border",
+      "--ai-source-surface",
+      "--ai-tool-surface",
+      "--ai-tool-border",
+      "--ai-confidence-high",
+      "--ai-confidence-medium",
+      "--ai-confidence-low",
+      "--ai-permission-surface",
+      "--ai-permission-border",
+    ];
+    const unconsumed = tokens.filter((t) => !css.includes(`var(${t})`));
+    expect(unconsumed, `--ai-* tokens with no consumer: ${unconsumed.join(", ")}`).toEqual([]);
+  });
+
+  // ── 4. Reduced-motion: all three AI animations honour prefers-reduced-motion (WCAG 2.3.3).
+  it("defines the AI keyframes and pauses them under prefers-reduced-motion", () => {
+    expect(css).toContain("@keyframes ai-blink");
+    expect(css).toContain("@keyframes ai-caret");
+    expect(css).toContain("@keyframes ai-spin");
+    const reduce = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
+    expect(reduce).toContain(".ai-thinking .dots i");
+    expect(reduce).toContain(".ai-stream-cursor");
+    expect(reduce).toContain(".ai-tool-head .st.run::before");
+  });
+
+  // ── 5. Migrated bespoke surfaces consume the --ai-* tokens (positive) and drop the raw
+  //       primitive they replaced (negative) → reverting any one alias re-fails (mutation-robust).
+  it("routes grounded citations through the --ai-source-* tokens", () => {
+    const chip = cssBlock("\n.grounded-citation {");
+    expect(chip).toContain("var(--ai-source-border)");
+    expect(chip).toContain("var(--ai-source-surface)");
+    expect(chip).not.toMatch(/var\(--accent-line\)|var\(--accent-dim\)/u);
+    expect(cssBlock("\n.grounded-citation-doc-badge {")).toContain("var(--ai-source-border)");
+  });
+
+  it("routes the chat thinking indicator through --ai-thinking-indicator", () => {
+    const dots = cssBlock("\n.chat-typing i {");
+    expect(dots).toContain("var(--ai-thinking-indicator)");
+    expect(dots).not.toContain("var(--text-faint)");
+  });
+
+  it("routes the agent-run tool/result/input/summary cards through --ai-tool-surface", () => {
+    for (const sel of [
+      "\n.arun-meter {",
+      "\n.arun-summary {",
+      "\n.arun-result-card {",
+      "\n.arun-input {",
+    ]) {
+      const block = cssBlock(sel);
+      expect(block, `${sel} must consume --ai-tool-surface`).toContain("var(--ai-tool-surface)");
+      expect(block, `${sel} must not keep the raw --inset primitive`).not.toContain("var(--inset)");
+    }
+  });
+
+  it("routes the agent-run live indicators through --ai-streaming-cursor", () => {
+    const spin = cssBlock("\n.arun-spin {");
+    expect(spin).toContain("var(--ai-streaming-cursor)");
+    expect(spin).not.toContain("color: var(--accent)");
+    expect(cssBlock('\n.arun .dot[data-live="true"] {')).toContain("var(--ai-streaming-cursor)");
+  });
+
+  it("routes the agent-run grounded/applied accents through the --ai-source-* tokens", () => {
+    const perm = cssBlock('\n.arun-perm[data-on="true"] {');
+    expect(perm).toContain("var(--ai-source-border)");
+    expect(perm).toContain("var(--ai-source-surface)");
+    const applied = cssBlock("\n.arun-applied {");
+    expect(applied).toContain("var(--ai-source-border)");
+    expect(applied).toContain("var(--ai-source-surface)");
+    expect(applied).not.toMatch(/var\(--accent-line\)|var\(--accent-dim\)/u);
+  });
+
+  // ── 6. Purity gate for the ported canonical layer: parse every .ai-* rule and assert none
+  //       reintroduces a raw aliased primitive (it must read the --ai-*/semantic tier only).
+  it("keeps the canonical .ai-* layer free of raw aliased primitives (scope-wide)", () => {
+    const forbidden = [
+      "--bg",
+      "--surface",
+      "--card-2",
+      "--card",
+      "--inset",
+      "--fg-muted",
+      "--fg-dim",
+      "--fg-faint",
+      "--fg",
+      "--line-soft",
+      "--line-strong",
+      "--line",
+      "--danger",
+      "--warn",
+      "--ok",
+      "--accent-text",
+      "--accent-line",
+      "--accent-dim",
+      "--accent",
+    ];
+    const escapeRegExp = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const bodyForbidden = (body: string): readonly string[] =>
+      forbidden.filter((tok) => new RegExp(`var\\(\\s*${escapeRegExp(tok)}\\s*[),]`).test(body));
+    const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
+    let match: RegExpExecArray | null;
+    let aiRulesChecked = 0;
+    const offenders: string[] = [];
+    while ((match = ruleRe.exec(source)) !== null) {
+      const selector = (match[1] ?? "").trim().replace(/\s+/g, " ");
+      const body = match[2] ?? "";
+      if (selector === "" || selector.startsWith("@")) continue;
+      if (!/(^|[\s,>])\.ai-[a-z]/u.test(selector)) continue; // canonical AI primitives only
+      aiRulesChecked++;
+      for (const tok of bodyForbidden(body)) {
+        offenders.push(`${selector} { … var(${tok}) … }`);
+      }
+    }
+    expect(aiRulesChecked).toBeGreaterThan(25);
+    expect(
+      offenders,
+      `canonical .ai-* rules must read the --ai-*/semantic tier, not raw primitives:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+});

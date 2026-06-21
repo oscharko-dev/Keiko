@@ -332,6 +332,35 @@ function renderListCard(title: string, values: readonly string[] | undefined): R
   );
 }
 
+// Issue #1296 — a low/medium/high agent confidence renders as the Design System
+// 0.4.0 confidence signal: a 3-segment track PLUS an uppercase word, never colour
+// alone. The track is decorative (aria-hidden); the word carries the meaning, so a
+// screen reader hears "Confidence High" / "Confidence Low — verify".
+type ConfidenceLevel = "low" | "medium" | "high";
+const CONFIDENCE_LABEL: Readonly<Record<ConfidenceLevel, string>> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low — verify",
+};
+function isConfidenceLevel(value: string): value is ConfidenceLevel {
+  return value === "low" || value === "medium" || value === "high";
+}
+function ConfidenceSignal({ level }: { readonly level: ConfidenceLevel }): ReactNode {
+  return (
+    <div className="arun-kv">
+      <span>Confidence</span>
+      <span className="ai-conf" data-level={level}>
+        <span className="track" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="lbl">{CONFIDENCE_LABEL[level]}</span>
+      </span>
+    </div>
+  );
+}
+
 function renderHypothesis(report: RunReport): ReactNode {
   const hypothesis = report.hypothesis;
   if (hypothesis === undefined) return null;
@@ -339,9 +368,16 @@ function renderHypothesis(report: RunReport): ReactNode {
     ["Root cause", hypothesis.rootCause],
     ["Regression test", hypothesis.regressionTestStrategy],
     ["Uncertainty", hypothesis.uncertainty],
-    ["Confidence", hypothesis.confidence],
   ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].length > 0);
-  if (rows.length === 0) return null;
+  // A level (low/medium/high) upgrades to the DS confidence signal; any other
+  // non-empty confidence string keeps the plain key/value row (behaviour-preserving).
+  const confidence = typeof hypothesis.confidence === "string" ? hypothesis.confidence : "";
+  const confidenceLevel = isConfidenceLevel(confidence) ? confidence : undefined;
+  const confidenceFallback =
+    confidence.length > 0 && confidenceLevel === undefined ? confidence : undefined;
+  if (rows.length === 0 && confidenceLevel === undefined && confidenceFallback === undefined) {
+    return null;
+  }
   return (
     <div className="arun-result-card">
       <div className="arun-result-title">Hypothesis</div>
@@ -351,6 +387,13 @@ function renderHypothesis(report: RunReport): ReactNode {
           <strong>{value}</strong>
         </div>
       ))}
+      {confidenceFallback !== undefined ? (
+        <div className="arun-kv">
+          <span>Confidence</span>
+          <strong>{confidenceFallback}</strong>
+        </div>
+      ) : null}
+      {confidenceLevel !== undefined ? <ConfidenceSignal level={confidenceLevel} /> : null}
     </div>
   );
 }
