@@ -115,7 +115,7 @@ export const CHROME_TOKEN_COLOR_IDS: Readonly<Record<string, readonly string[]>>
   "--ed-warn": ["editorWarning.foreground"],
   "--ed-info": ["editorInfo.foreground"],
   "--ed-hint": ["editorHint.foreground"],
-  "--ed-ghost": ["editorGhostText.foreground"],
+  "--ed-agent-ghost": ["editorGhostText.foreground"],
   "--ed-suggest-bg": ["editorSuggestWidget.background"],
   "--ed-suggest-sel": ["editorSuggestWidget.selectedBackground"],
   "--ed-suggest-match": ["editorSuggestWidget.highlightForeground"],

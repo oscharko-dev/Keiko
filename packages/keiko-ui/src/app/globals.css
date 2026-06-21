@@ -1158,6 +1158,14 @@ button {
   --ed-suggest-bg: var(--card);
   --ed-suggest-sel: var(--accent-dim);
   --ed-suggest-match: var(--accent-text);
+  /* agent-in-editor surfaces (editor-agent.html) */
+  --ed-agent-line: color-mix(in oklch, var(--accent) 12%, transparent);
+  --ed-agent-gutter: var(--accent-text);
+  --ed-agent-ghost: var(--ed-ghost);
+  --ed-agent-accept: var(--ed-diff-ins-gutter);
+  --ed-agent-reject: var(--danger);
+  --ed-agent-chip-bg: var(--accent-dim);
+  --ed-agent-chip-line: var(--accent-line);
   /* editor card: tabs, status bar, minimap */
   --ed-tab-bg: var(--surface);
   --ed-tab-active-bg: var(--ed-bg);

@@ -122,7 +122,9 @@ describe("GroundedAnswer", () => {
     // uiux-fix F012 C163: source-neutral wording — the panel also serves
     // capsule/connector-only chats where no repository is involved.
     render(<GroundedAnswer answer={undefined} busy={true} />);
-    expect(screen.getByText(/Searching connected sources/)).toBeInTheDocument();
+    const status = screen.getByRole("status");
+    expect(status).toHaveAttribute("aria-busy", "true");
+    expect(status).toHaveTextContent(/Searching connected sources/);
   });
 
   it("does not duplicate the assistant content (the persisted chat bubble is canonical)", () => {

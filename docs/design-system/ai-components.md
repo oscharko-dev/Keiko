@@ -28,6 +28,26 @@ value-preserving (proved by the 0-diff harness):
 | `--ai-confidence-high` / `-medium` / `-low`          | `--ok` / `--warn` / `--danger`          | confidence track segments         |
 | `--ai-permission-surface` / `--ai-permission-border` | `--feedback-warning-surface` / warn-mix | permission request                |
 
+## Editor-agent tokens (`--ed-agent-*`)
+
+Editor-context agent surfaces reuse the existing editor and AI palette rather than adding a parallel
+namespace. `globals.css` exposes the editor-agent aliases from `design-system/editor-agent.html`:
+
+| Token                  | Aliases / source       | Used for                               |
+| ---------------------- | ---------------------- | -------------------------------------- |
+| `--ed-agent-line`      | accent mix             | inline agent suggestion line highlight |
+| `--ed-agent-gutter`    | `--accent-text`        | editor gutter agent marker             |
+| `--ed-agent-ghost`     | `--ed-ghost`           | Monaco/editor ghost text               |
+| `--ed-agent-accept`    | `--ed-diff-ins-gutter` | accepted suggestion / positive marker  |
+| `--ed-agent-reject`    | `--danger`             | rejected or unsafe suggestion marker   |
+| `--ed-agent-chip-bg`   | `--accent-dim`         | editor-agent review chip surface       |
+| `--ed-agent-chip-line` | `--accent-line`        | editor-agent review chip border        |
+
+`packages/keiko-editor/src/monaco/theme.ts` maps Monaco `editorGhostText.foreground` through
+`--ed-agent-ghost`, which aliases `--ed-ghost` so the rendered ghost text does not drift. The
+editor-agent evidence harness captures Dark, Light, and High Contrast screenshots under
+[`docs/design-system/evidence/1296/editor/`](evidence/1296/editor/).
+
 ## Components, states, and accessibility
 
 | Component                | Class                       | States                  | Non-colour encoding                                                    | Reduced motion             |
@@ -67,6 +87,8 @@ Accessibility expectations for any surface using these primitives:
 | Agent-run tool / result / input cards | `AgentRunWidget.tsx` (`.arun-*`)                  | `--ai-tool-surface`                          |
 | Agent-run live spinner / dot          | `AgentRunWidget.tsx` (`.arun-spin`, `.arun .dot`) | `--ai-streaming-cursor`                      |
 | Agent hypothesis confidence           | `AgentRunWidget.tsx` (`.ai-conf`)                 | `--ai-confidence-*`                          |
+| Editor ghost text                     | `theme.ts` (`editorGhostText.foreground`)         | `--ed-agent-ghost`                           |
+| Editor agent primitives               | `editor-agent-1296.spec.ts` evidence scene        | `--ed-agent-*` + `.ai-permit` / `.ai-danger` |
 
 The streaming caret and the confidence signal are presentation-only additions over data the product
 already produces (`sendStatus === "streaming"`, `hypothesis.confidence`); a non-level confidence string

@@ -84,7 +84,8 @@ describe("theme token contract", () => {
     expect(CHROME_TOKEN_COLOR_IDS["--ed-error"]).toEqual(["editorError.foreground"]);
     expect(CHROME_TOKEN_COLOR_IDS["--ed-warn"]).toEqual(["editorWarning.foreground"]);
     expect(CHROME_TOKEN_COLOR_IDS["--ed-info"]).toEqual(["editorInfo.foreground"]);
-    expect(CHROME_TOKEN_COLOR_IDS["--ed-ghost"]).toEqual(["editorGhostText.foreground"]);
+    expect(CHROME_TOKEN_COLOR_IDS["--ed-agent-ghost"]).toEqual(["editorGhostText.foreground"]);
+    expect(CHROME_TOKEN_COLOR_IDS["--ed-ghost"]).toBeUndefined();
     // Finalized #1212 token (#1232): the focus ring maps to several registered Monaco ids.
     expect(CHROME_TOKEN_COLOR_IDS["--ed-focus"]).toEqual([
       "focusBorder",

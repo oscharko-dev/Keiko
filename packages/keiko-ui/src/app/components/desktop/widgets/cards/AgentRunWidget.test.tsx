@@ -150,6 +150,27 @@ describe("AgentRunWidget", () => {
     expect(screen.queryByText(/waiting for run events/i)).not.toBeInTheDocument();
   });
 
+  it("marks active run surfaces busy for assistive technology", () => {
+    vi.mocked(useSSE).mockReturnValue({
+      status: "connecting",
+      error: null,
+      events: [],
+    });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: { status: "running" } });
+
+    const { container } = render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", model: "example-chat-model", runId: "run-busy" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(container.querySelector(".arun-real")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("log", { name: "Run events" })).toHaveAttribute("aria-busy", "true");
+  });
+
   // uiux-fix F018 C259/C265: header shows a human-readable status, not the raw enum
   it("maps raw report status enums to readable labels in the header", async () => {
     vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
