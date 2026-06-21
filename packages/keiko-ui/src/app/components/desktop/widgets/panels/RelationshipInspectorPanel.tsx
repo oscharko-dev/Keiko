@@ -276,7 +276,7 @@ function ActivitySection({
         {visibleTransitions.length > 0 && (
           <div
             className="rb-row"
-            style={{ flexDirection: "column", gap: 4, alignItems: "flex-start" }}
+            style={{ flexDirection: "column", gap: "var(--space-2)", alignItems: "flex-start" }}
           >
             <span className="rb-row-k" style={{ marginBottom: 4 }}>
               Recent transitions
@@ -284,7 +284,7 @@ function ActivitySection({
             {visibleTransitions.map((t, i) => (
               <div
                 key={i}
-                style={{ fontSize: 12, color: "var(--fg-muted)", display: "flex", gap: 8 }}
+                style={{ fontSize: 12, color: "var(--fg-muted)", display: "flex", gap: "var(--space-4)" }}
               >
                 <span className="mono">
                   {t.from} → {t.to}
@@ -373,7 +373,7 @@ function AuditSection({
             <div
               className="rb-row"
               key={i}
-              style={{ flexDirection: "column", alignItems: "flex-start", gap: 2 }}
+              style={{ flexDirection: "column", alignItems: "flex-start", gap: "var(--space-1)" }}
             >
               <span className="rb-row-k mono" style={{ fontSize: 11 }}>
                 {row.from} → {row.to}
@@ -637,7 +637,7 @@ function ActionRow({
   const canViewImpact = lc === "active";
 
   return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+    <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap", marginTop: 8 }}>
       <button
         type="button"
         className={`arun-btn${canReconnect ? " primary" : ""}`}
