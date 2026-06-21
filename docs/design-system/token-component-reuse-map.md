@@ -80,7 +80,8 @@ math endpoints, and documentation comments / issue refs.
    All aliases resolve to existing primitives, so the live product is byte-identical until components are
    migrated. Extend `globals.css.test.ts` to assert each new tier exists.
 2. **#1293 / #1294** — migrate shell/chrome and reusable controls to consume the new tokens (find-and-replace
-   raw primitives → semantic/component tokens; no visual change expected).
+   raw primitives → semantic/component tokens; no visual change expected). **Both shipped** (value-preserving;
+   see the per-section status notes and [evidence/1293](evidence/1293/) / [evidence/1294](evidence/1294/)).
 3. **#1295** — migrate high-traffic product surfaces; resolve the Light Mode `required` rows (Table A/B) by
    tokenising shadows/scrims.
 4. **#1296 / #1297 / #1298** — net-new component families (AI/agent set, data grid, input/nav/breakpoints)
@@ -147,6 +148,18 @@ blocks in `globals.css`. Anchored by `WorkspaceShell.a11y.test.tsx`.
 (also fix the inline hex tiles at `EditorMenu.tsx:64,66,79,82`), `widgets/shared/Toggle.tsx`,
 `AttachmentStrip.tsx`, `ConnectedScopePill.tsx`, `ConnectorScopePill.tsx`, `ScopeConnectButton.tsx`,
 `SafeMarkdown.tsx`, `ErrorNotice.tsx`; modals `components/desktop/modals/*.tsx`; their `globals.css` class blocks.
+
+> **Status: shipped.** 346 reusable-control rules / ~533 declarations in `globals.css` were migrated to the
+> Tier-3/4 semantic/component tokens (`--button-*`, `--input-*`, `--text-*`, `--surface-*`, `--border-*`,
+> `--feedback-*`, `--card-*`, `--popover-*`, `--combobox-*`, `--focus-ring`) — value-preserving, since every
+> target token is a `:root` alias over the primitive it replaced (the EditorMenu inline hex tiles also migrated).
+> Kept verbatim as documented non-migrations: the accent-family brand primitives (`--accent`, …), the raw
+> literals with no token (`#fff`, `oklch` amber inks, green Light scrims, disabled opacities `0.45 / 0.55 / 0.6`),
+> the approved `[data-theme="light"]` deviations, and the #1295-owned Light shadow/scrim rows (`.dlg-overlay`,
+> `.cmdk-overlay`, `.mc-dialog-backdrop`, `.wf-dialog-overlay`, `.gw-setup-backdrop`, `.ws-fab`/C415). Gated by
+> the `Issue #1294` describe block in `globals.css.test.ts` (per-component routing pins + a scope-wide component
+> drift guard, 0 offenders). Browser evidence: [evidence/1294](evidence/1294/) — 994 computed-value probes,
+> 0 differences across 7 modes.
 
 ### #1295 — High-traffic product surfaces
 

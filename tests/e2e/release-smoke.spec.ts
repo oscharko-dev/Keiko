@@ -19,8 +19,10 @@ function collectPageErrors(page: Page): () => void {
   page.on("pageerror", (error) => {
     // Monaco can surface a benign cancellation as an unhandled page error when an inline-completion
     // request is superseded while the smoke test continues. Keep the guard strict for all real app
-    // errors, but do not fail the release smoke on that editor-internal cancellation noise.
-    if (error.message === "Canceled: Canceled") return;
+    // errors, but do not fail the release smoke on that editor-internal cancellation noise. The
+    // CancellationError surfaces as either "Canceled: Canceled" or the bare "Canceled" depending on
+    // which Monaco path raises it, so suppress both exact forms (and nothing else).
+    if (error.message === "Canceled: Canceled" || error.message === "Canceled") return;
     errors.push(error.message);
   });
   return () => {

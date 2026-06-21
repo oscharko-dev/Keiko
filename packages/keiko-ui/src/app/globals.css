@@ -520,7 +520,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-size: 0.92em;
 }
 
@@ -562,7 +562,7 @@ button {
   border-radius: calc(var(--radius-sm) - 5px);
   border: 0;
   background: transparent;
-  color: var(--accent-text);
+  color: var(--text-accent);
   overflow: visible;
 }
 
@@ -607,7 +607,7 @@ button {
 .number-control:focus-within .number-control-stepper,
 .number-control-stepper-button:hover:not(:disabled),
 .number-control-stepper-button:focus-visible {
-  color: var(--accent-text);
+  color: var(--text-accent);
   background: transparent;
 }
 
@@ -617,7 +617,7 @@ button {
 }
 
 .ksel-trigger-open {
-  border-color: var(--line-strong);
+  border-color: var(--border-strong);
 }
 
 .ksel-trigger-open-down {
@@ -632,7 +632,7 @@ button {
 
 .ksel-trigger-caret {
   flex: none;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   transition: transform 0.16s ease;
 }
 
@@ -644,24 +644,24 @@ button {
   position: fixed;
   z-index: 100100;
   overflow: hidden;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--surface) 98%, black);
-  color: var(--fg-muted);
+  background: color-mix(in oklch, var(--popover-surface) 98%, black);
+  color: var(--text-secondary);
   box-shadow:
     0 18px 42px -26px rgba(0, 0, 0, 0.85),
-    0 0 0 1px var(--line-soft);
+    0 0 0 1px var(--border-subtle);
 }
 
 .ksel-menu-attached {
-  border-top-color: var(--line);
+  border-top-color: var(--popover-border);
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
 
 .ksel-menu-open-up.ksel-menu-attached {
-  border-top-color: var(--line-strong);
-  border-bottom-color: var(--line);
+  border-top-color: var(--border-strong);
+  border-bottom-color: var(--popover-border);
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
@@ -672,8 +672,8 @@ button {
   gap: 6px;
   min-height: 26px;
   padding: 5px 8px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  border-bottom: 1px solid var(--popover-border);
+  background: color-mix(in oklch, var(--popover-surface) 92%, transparent);
 }
 
 .ksel-menu-title {
@@ -689,7 +689,7 @@ button {
 
 .ksel-menu-note {
   flex: none;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-size: 0.68em;
 }
 
@@ -697,7 +697,7 @@ button {
   overflow-y: auto;
   padding: 4px;
   scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
+  scrollbar-color: var(--border-default) transparent;
 }
 
 .ksel-menu-scroll::-webkit-scrollbar {
@@ -709,26 +709,26 @@ button {
 }
 
 .ksel-menu-scroll::-webkit-scrollbar-thumb {
-  background: var(--line);
+  background: var(--border-default);
   border-radius: 10px;
   border: 3px solid transparent;
   background-clip: padding-box;
 }
 
 .ksel-menu-scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--line-strong);
+  background: var(--border-strong);
   background-clip: padding-box;
 }
 
 .ksel-section + .ksel-section {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .ksel-section-label {
   padding: 0 4px 8px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-size: 0.78em;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -761,13 +761,13 @@ button {
 
 .ksel-option:hover:not([data-disabled="true"]),
 .ksel-option:focus-visible {
-  border-color: color-mix(in oklch, var(--accent) 30%, var(--line));
+  border-color: color-mix(in oklch, var(--accent) 30%, var(--border-default));
   background: color-mix(in oklch, var(--accent) 8%, transparent);
   outline: none;
 }
 
 .ksel-option-active {
-  border-color: color-mix(in oklch, var(--accent) 34%, var(--line));
+  border-color: color-mix(in oklch, var(--accent) 34%, var(--border-default));
   background: color-mix(in oklch, var(--accent) 14%, transparent);
 }
 
@@ -805,11 +805,11 @@ button {
   z-index: 100120;
   max-width: min(520px, calc(100vw - 32px));
   padding: 4px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--popover-border);
   border-radius: 7px;
-  background: var(--card);
-  box-shadow: var(--shadow-pop);
-  color: var(--fg-muted);
+  background: var(--surface-primary);
+  box-shadow: var(--popover-shadow);
+  color: var(--text-secondary);
   font-size: 11.5px;
   font-weight: 500;
   line-height: 1.3;
@@ -826,7 +826,7 @@ button {
 }
 
 .ksel-option-desc {
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   font-size: 0.82em;
   line-height: 1.35;
 }
@@ -838,9 +838,9 @@ button {
   justify-content: center;
   min-height: 24px;
   padding: 0 10px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
-  background: color-mix(in oklch, var(--surface) 85%, transparent);
+  background: color-mix(in oklch, var(--popover-surface) 85%, transparent);
   font-size: 0.84em;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1632,16 +1632,16 @@ button {
   height: 30px;
   padding: 0 10px 0 7px;
   border-radius: 9px;
-  border: 1px solid var(--line);
-  background: var(--card);
+  border: 1px solid var(--input-border);
+  background: var(--combobox-surface);
 }
 .edm-trigger:hover {
-  border-color: var(--line-strong);
+  border-color: var(--input-border-hover);
 }
 .edm-trigger-label {
   white-space: nowrap;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .ed-tile {
   display: inline-grid;
@@ -1670,15 +1670,15 @@ button {
   left: 0;
   z-index: 9700;
   width: 232px;
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--popover-surface);
+  border: 1px solid var(--popover-border);
   border-radius: var(--radius); /* was off-scale 13px (uiux-fix F037 C304) */
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--popover-shadow);
   padding: 6px;
 }
 .edm-head {
   font-size: 10.5px;
-  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
+  color: var(--text-secondary); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F012) */
   padding: 6px 8px 8px;
 }
 .edm-item {
@@ -1690,14 +1690,14 @@ button {
   border-radius: 9px;
   text-align: left;
   font-size: 13.5px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .edm-item:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-elevated);
+  color: var(--text-primary);
 }
 .edm-item[data-sel="true"] {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .edm-name {
   flex: 1;
@@ -2348,7 +2348,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-radius: 7px;
   font-size: 13.5px;
   font-weight: 450;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   text-align: left;
 }
 .tr-dir-line {
@@ -2363,18 +2363,18 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   min-height: 24px;
   place-items: center;
   border-radius: 7px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
 }
 .tr-caret-btn:hover:not(:disabled) {
-  background: var(--card-2);
-  color: var(--fg-muted);
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
 }
 .tr-caret-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
   /* WCAG 2.4.7 — dark separator so the accent ring keeps >=3:1 even on an accent-dim
      active-row background (accent-on-accent would otherwise be low-contrast). */
-  box-shadow: 0 0 0 1px var(--bg);
+  box-shadow: 0 0 0 1px var(--background-primary);
 }
 .tr-dir-enter {
   min-width: 0;
@@ -2384,17 +2384,17 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .tr-row:hover:not(:disabled) {
   /* :not(:disabled) (uiux-fix F022 C202) — dead rows must not advertise a click;
      the aria-disabled pendant lives at the end of the file. */
-  background: var(--card-2);
+  background: var(--surface-elevated);
 }
 .tr-file[data-active="true"],
 .tr-dir-enter[data-active="true"] {
   background: var(--accent-dim);
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .tr-caret {
   display: grid;
   place-items: center;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   flex: none;
 }
 .tr-caret[data-open="true"] {
@@ -2417,7 +2417,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   white-space: nowrap;
 }
 .tr-folder {
-  color: var(--fg);
+  color: var(--text-primary);
   font-weight: 600;
 }
 
@@ -2458,7 +2458,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   text-align: left;
 }
 .plg-row:hover {
-  background: var(--card-2);
+  background: var(--surface-elevated);
 }
 .plg-conn {
   border: 1px solid transparent;
@@ -2542,8 +2542,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   height: 24px;
   padding: 0;
   border-radius: 999px;
-  background: var(--inset);
-  border: 1px solid var(--line);
+  background: var(--input-surface);
+  border: 1px solid var(--input-border);
   position: relative;
   flex: none;
 }
@@ -2554,7 +2554,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--fg);
+  background: var(--text-primary);
 }
 .auto-toggle.on {
   background: var(--accent-dim);
@@ -2629,11 +2629,11 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: color-mix(in oklch, var(--card) 92%, var(--surface));
-  border: 1px solid var(--line);
+  background: color-mix(in oklch, var(--card-surface) 92%, var(--surface-overlay));
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: 12px;
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--card-shadow);
   container-type: inline-size;
 }
 :root[data-input-modality="keyboard"] .cmp-box:has(.cmp-input:focus) {
@@ -2658,7 +2658,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border: none;
   background: none;
   resize: none;
-  color: var(--fg);
+  color: var(--input-text);
   font-family: var(--font-ui);
   font-size: 15px;
   line-height: 1.5;
@@ -2667,7 +2667,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   scroll-padding-block: 8px;
 }
 .cmp-input::placeholder {
-  color: var(--fg-muted);
+  color: var(--input-placeholder);
 }
 .cmp-footer-row {
   display: flex;
@@ -2676,7 +2676,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 12px;
   min-width: 0;
   padding-top: 10px;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--border-subtle);
 }
 .cmp-bar {
   display: flex;
@@ -2700,12 +2700,12 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-radius: 9px;
   display: grid;
   place-items: center;
-  color: var(--fg-muted);
-  border: 1px solid var(--line-soft);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
 }
 .cmp-add:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
 }
 .cmp-mode {
   display: flex;
@@ -2716,14 +2716,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   padding: 7px 12px;
   border-radius: 10px;
   font-size: 13px;
-  color: var(--fg-muted);
-  border: 1px solid var(--line-soft);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
   background: transparent;
 }
 .cmp-mode:hover {
-  background: var(--card-2);
-  border-color: var(--line);
-  color: var(--fg);
+  background: var(--button-secondary-surface-hover);
+  border-color: var(--button-secondary-border);
+  color: var(--button-secondary-text);
 }
 .cmp-model {
   display: flex;
@@ -2735,7 +2735,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-radius: 0;
   font-size: 12.5px;
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .cmp-pill-standard {
   flex: 0 0 176px;
@@ -2757,15 +2757,15 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   min-width: 0;
   min-height: 34px;
   padding: 6px 12px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 10px;
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .cmp-model > .cmp-model-select:hover:not(:disabled) {
-  background: var(--card-2);
-  border-color: var(--line);
-  color: var(--fg);
+  background: var(--button-secondary-surface-hover);
+  border-color: var(--button-secondary-border);
+  color: var(--button-secondary-text);
 }
 .cmp-model-select.ksel-trigger-open-down {
   border-bottom-left-radius: 0;
@@ -2784,10 +2784,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmp-model-menu {
   box-shadow:
     0 18px 40px -24px rgba(0, 0, 0, 0.8),
-    0 0 0 1px var(--line-soft);
+    0 0 0 1px var(--border-subtle);
 }
 .cmp-eff {
-  color: var(--fg-faint);
+  color: var(--text-faint);
 }
 .cmp-icon {
   width: 34px;
@@ -2795,18 +2795,18 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-radius: 10px;
   display: grid;
   place-items: center;
-  color: var(--fg-muted);
-  border: 1px solid var(--line-soft);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
   background: transparent;
 }
 .cmp-icon:hover {
-  background: var(--card-2);
-  border-color: var(--line);
-  color: var(--fg);
+  background: var(--button-secondary-surface-hover);
+  border-color: var(--button-secondary-border);
+  color: var(--button-secondary-text);
 }
 .cmp-icon:focus-visible,
 .attach-chip-remove:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .cmp-send {
@@ -2815,8 +2815,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-radius: 10px;
   display: grid;
   place-items: center;
-  color: var(--bg);
-  background: var(--line-strong);
+  color: var(--background-primary);
+  background: var(--border-strong);
   box-shadow: none;
 }
 .cmp-send[data-on="true"] {
@@ -2828,7 +2828,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: var(--accent-bright);
 }
 .cmp-send:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .cmp-mode-compact {
@@ -2856,16 +2856,16 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   max-width: min(180px, calc(100vw - 24px));
   padding: 4px 8px;
   border-radius: 6px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  color: var(--fg);
+  background: var(--surface-primary);
+  border: 1px solid var(--popover-border);
+  color: var(--text-primary);
   font-size: 11px;
   font-weight: 500;
   line-height: 1.25;
   white-space: normal;
   text-wrap: balance;
   text-align: center;
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--popover-shadow);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease;
@@ -2899,14 +2899,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 5px;
   font-size: 12px;
   justify-content: center;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 9px;
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .cmp-model-compact:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
 }
 .cmp-model-compact,
 .cmp-mode-compact,
@@ -2935,7 +2935,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   align-items: center;
   justify-content: center;
   gap: 0;
-  color: var(--fg);
+  color: var(--button-secondary-text);
 }
 .cmp-model-compact .cmp-model-select .ksel-trigger-copy,
 .cmp-model-compact .cmp-model-select .ksel-trigger-caret {
@@ -3009,8 +3009,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 6px;
   padding: 5px 8px 5px 6px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--line-soft);
-  background: var(--card);
+  border: 1px solid var(--border-subtle);
+  background: var(--card-surface);
   max-width: 280px;
 }
 .attach-chip-thumb {
@@ -3022,7 +3022,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .attach-chip-name {
   font-size: 12.5px;
-  color: var(--fg);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3030,7 +3030,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .attach-chip-size {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   flex: none;
 }
 .attach-chip-remove {
@@ -3040,15 +3040,15 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   display: grid;
   place-items: center;
   border-radius: 6px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .attach-chip-remove:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
 }
 .attach-drop-zone {
   padding: 10px 14px;
-  border: 1px dashed var(--line);
+  border: 1px dashed var(--file-dropzone-border);
   border-radius: var(--radius-sm);
 }
 .attach-drop-zone[data-dragover="true"] {
@@ -3057,14 +3057,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .attach-drop-hint {
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .attach-rejection-alert {
   padding: 9px 11px;
   border-radius: 9px;
-  border: 1px solid color-mix(in oklch, var(--danger) 48%, transparent);
-  background: color-mix(in oklch, var(--danger) 22%, var(--card));
-  color: var(--fg);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 48%, transparent);
+  background: color-mix(in oklch, var(--feedback-danger) 22%, var(--card-surface));
+  color: var(--text-primary);
   font-size: 12.5px;
   line-height: 1.45;
 }
@@ -3085,12 +3085,12 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   max-width: min(520px, calc(100% - 28px));
   padding: 9px 11px;
   border-radius: 9px;
-  border: 1px solid color-mix(in oklch, var(--danger) 48%, transparent);
-  background: color-mix(in oklch, var(--danger) 22%, var(--card));
-  color: var(--fg);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 48%, transparent);
+  background: color-mix(in oklch, var(--feedback-danger) 22%, var(--card-surface));
+  color: var(--text-primary);
   font-size: 12.5px;
   line-height: 1.45;
-  box-shadow: 0 8px 24px color-mix(in oklch, var(--bg) 55%, transparent);
+  box-shadow: 0 8px 24px color-mix(in oklch, var(--background-primary) 55%, transparent);
 }
 .source-limit-alert-dismiss {
   flex: none;
@@ -3101,19 +3101,19 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   height: 22px;
   padding: 0;
   border-radius: 6px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
 }
 .source-limit-alert-dismiss:hover {
-  border-color: var(--line);
-  color: var(--fg);
+  border-color: var(--border-default);
+  color: var(--button-secondary-text);
 }
 .source-limit-alert-dismiss:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -3131,13 +3131,13 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   padding: 6px 10px;
   border-radius: var(--radius-sm);
   font-size: 12.5px;
-  color: var(--fg-muted);
-  background: var(--card);
-  border: 1px solid var(--line-soft);
+  color: var(--text-secondary);
+  background: var(--button-secondary-surface);
+  border: 1px solid var(--border-subtle);
 }
 .chip:hover {
-  border-color: var(--line);
-  color: var(--fg);
+  border-color: var(--border-default);
+  color: var(--button-secondary-text);
 }
 .chip-icon {
   width: 32px;
@@ -3862,31 +3862,31 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-radius: var(--radius-sm);
   font-size: 12.5px;
   font-weight: 550;
-  border: 1px solid var(--line);
-  background: var(--card);
-  color: var(--fg-muted);
+  border: 1px solid var(--button-secondary-border);
+  background: var(--button-secondary-surface);
+  color: var(--text-secondary);
 }
 .arun-btn:hover:not(:disabled) {
-  color: var(--fg);
-  background: var(--card-2);
+  color: var(--button-secondary-text);
+  background: var(--button-secondary-surface-hover);
 }
 .arun-btn.primary {
   background: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   border-color: var(--accent);
   flex: 1;
 }
 .arun-btn.primary:hover:not(:disabled) {
   filter: brightness(1.06);
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
 }
 .arun-btn.ghost {
   flex: 1;
 }
 .arun-btn.danger:hover {
   color: #fff;
-  background: color-mix(in oklch, var(--danger) 70%, transparent);
-  border-color: var(--danger);
+  background: color-mix(in oklch, var(--feedback-danger) 70%, transparent);
+  border-color: var(--feedback-danger);
 }
 .arun-current {
   display: flex;
@@ -4138,10 +4138,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmdk {
   width: 560px;
   max-width: calc(100% - 40px);
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--popover-surface);
+  border: 1px solid var(--popover-border);
   border-radius: 14px;
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--popover-shadow);
   overflow: hidden;
 }
 .cmdk-input {
@@ -4149,15 +4149,15 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   align-items: center;
   gap: 10px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--line-soft);
-  color: var(--fg-faint);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-faint);
 }
 .cmdk-input input {
   flex: 1;
   background: none;
   border: none;
   outline: none;
-  color: var(--fg);
+  color: var(--input-text);
   font-size: 15px;
   font-family: var(--font-ui);
 }
@@ -4169,7 +4169,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmdk-empty {
   padding: 24px;
   text-align: center;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   font-size: 13px;
 }
 .cmdk-row {
@@ -4180,19 +4180,19 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   padding: 9px 11px;
   border-radius: 9px;
   text-align: left;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   /* div[role=option], not <button> — the button reset's pointer cursor
      does not apply (uiux-fix F049 C343) */
   cursor: pointer;
 }
 .cmdk-row[data-sel="true"] {
   background: var(--accent-dim);
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .cmdk-ico {
   display: grid;
   place-items: center;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 .cmdk-row[data-sel="true"] .cmdk-ico {
   color: var(--accent);
@@ -4202,7 +4202,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .cmdk-group {
   font-size: 10.5px;
-  color: var(--fg-muted); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F026) */
+  color: var(--text-secondary); /* --fg-faint 2.3–3.1:1, AA fail (uiux-fix F026) */
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -4669,27 +4669,27 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   border-radius: 7px;
   font-size: 12.5px;
   font-weight: 500;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 .modesw-opt[data-on="true"] {
-  background: var(--card);
-  color: var(--fg);
-  box-shadow: var(--shadow-card);
+  background: var(--button-secondary-surface);
+  color: var(--text-primary);
+  box-shadow: var(--card-shadow);
 }
 .modesw[data-mode="autonomous"] .modesw-opt[data-on="true"] {
   background: var(--accent-dim);
-  color: var(--accent-text);
+  color: var(--text-accent);
   box-shadow: 0 0 0 1px var(--accent-line);
 }
 .modesw-av {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--info);
+  background: var(--feedback-info);
   /* dark --info is a light blue — #fff on it was 2.27:1 (WCAG 1.4.3 FAIL); dark ink
      measures ≈8.3:1. Light theme restores #fff via override at the end of this file
      (light --info is dark blue, #fff ≈5.08:1). (uiux-fix F011 C128) */
-  color: var(--ink-inverse);
+  color: var(--text-on-accent);
   font-size: 10px;
   font-weight: 700;
   display: grid;
@@ -4765,8 +4765,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 10px;
   padding: 10px 11px;
   border-radius: 10px;
-  border: 1px solid var(--line);
-  background: var(--inset);
+  border: 1px solid var(--border-default);
+  background: var(--surface-inset);
   text-align: left;
 }
 .perm-toggle[data-on="true"] {
@@ -4800,7 +4800,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   width: 34px;
   height: 20px;
   border-radius: 999px;
-  background: var(--line);
+  background: var(--border-default);
   position: relative;
   flex: none;
   /* transition gated behind prefers-reduced-motion at end of file (uiux-fix F037 C309) */
@@ -4813,7 +4813,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--fg-dim);
+  background: var(--text-tertiary);
 }
 .perm-sw.on,
 .brg-tg.on {
@@ -4822,7 +4822,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .perm-sw.on span,
 .brg-tg.on span {
   left: 16px;
-  background: var(--ink-inverse);
+  background: var(--text-on-accent);
 }
 .perm-legacy {
   display: flex;
@@ -4832,18 +4832,18 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   flex: 1;
   padding: 8px;
   border-radius: 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .perm-opt[data-on="true"] {
   border-color: var(--accent-line);
-  color: var(--accent-text);
+  color: var(--text-accent);
   background: var(--accent-dim);
 }
 .perm-note {
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   line-height: 1.45;
 }
 .dlg-agent-warning {
@@ -4851,9 +4851,9 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  border: 1px solid color-mix(in oklch, var(--warn) 55%, transparent);
-  background: color-mix(in oklch, var(--warn) 12%, transparent);
-  color: var(--warn);
+  border: 1px solid color-mix(in oklch, var(--feedback-warning) 55%, transparent);
+  background: color-mix(in oklch, var(--feedback-warning) 12%, transparent);
+  color: var(--feedback-warning);
   border-radius: 10px;
   padding: 8px 10px;
   font-size: 12px;
@@ -4869,14 +4869,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 7px;
   border: 1px solid var(--accent-line);
   background: var(--accent-dim);
-  color: var(--accent-text);
+  color: var(--text-accent);
   border-radius: 9px;
   padding: 8px 10px;
   font-size: 12px;
   text-align: left;
 }
 .dlg-current-file .mono {
-  color: var(--accent-text);
+  color: var(--text-accent);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4886,7 +4886,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   flex-direction: column;
   gap: 14px;
   padding-top: 14px;
-  border-top: 1px solid var(--line-soft);
+  border-top: 1px solid var(--border-subtle);
 }
 .dlg-agent-task-head {
   display: flex;
@@ -4896,16 +4896,16 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .dlg-agent-task-title {
   min-width: 0;
-  color: var(--fg);
+  color: var(--text-primary);
   font-size: 13.5px;
   font-weight: 650;
 }
 .dlg-agent-task-scope {
   flex: none;
   padding: 2px 8px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 11px;
   font-weight: 650;
 }
@@ -4917,7 +4917,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .dlg-note {
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
 }
 @media (max-width: 560px) {
   .dlg-agent-grid {
@@ -5582,10 +5582,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .pal-card {
   min-width: 0;
   min-height: 0;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  background: var(--card);
+  background: var(--card-surface);
 }
 .pal-card:hover {
   border-color: var(--accent-line);
@@ -5601,7 +5601,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   text-align: center;
 }
 .pal-main:hover {
-  background: var(--card-2);
+  background: var(--surface-elevated);
 }
 .pal-ico {
   flex: none;
@@ -5619,14 +5619,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   min-width: 0;
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
   line-height: 1.18;
   overflow-wrap: anywhere;
 }
 .pal-desc {
   min-width: 0;
   font-size: 11.5px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   line-height: 1.25;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -5677,10 +5677,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   max-height: calc(100% - 48px);
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--surface-overlay);
+  border: 1px solid var(--modal-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--modal-shadow);
   overflow: hidden;
   transform: translateY(10px) scale(0.985);
 }
@@ -5704,7 +5704,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   align-items: center;
   gap: 12px;
   padding: 16px 12px 16px 16px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--border-subtle);
   flex: none;
 }
 .dlg-ico {
@@ -5731,7 +5731,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .dlg-sub {
   font-size: 12px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
 }
 .dlg-body {
   padding: 18px 18px 6px;
@@ -5742,7 +5742,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .dlg-empty {
   font-size: 13px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   padding: 6px 0 14px;
 }
 .dlg-field {
@@ -5753,7 +5753,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .dlg-label {
   font-size: 12px;
   font-weight: 600;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -5761,19 +5761,19 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .dlg-opt {
   font-size: 10px;
   font-weight: 500;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 5px;
   padding: 1px 5px;
 }
 .dlg-input {
   width: 100%;
-  background: var(--inset);
-  border: 1px solid var(--line);
+  background: var(--input-surface);
+  border: 1px solid var(--input-border);
   border-radius: 9px;
-  color: var(--fg);
+  color: var(--input-text);
   font-size: 13px;
   padding: 10px 12px;
   outline: none;
@@ -5787,7 +5787,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   box-shadow: none !important;
 }
 .dlg-input::placeholder {
-  color: var(--fg-faint);
+  color: var(--text-faint);
 }
 .dlg-textarea {
   resize: vertical;
@@ -5811,27 +5811,27 @@ select.dlg-input {
   border-radius: 9px;
   font-size: 13px;
   font-weight: 550;
-  color: var(--fg-muted);
-  border: 1px solid var(--line);
-  background: var(--card);
+  color: var(--text-secondary);
+  border: 1px solid var(--button-secondary-border);
+  background: var(--button-secondary-surface);
 }
 .dlg-btn:hover:not(:disabled) {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
 }
 .dlg-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 3px;
 }
 .dlg-primary {
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   background: var(--accent);
   border-color: var(--accent);
 }
 .dlg-primary:hover:not(:disabled) {
   filter: brightness(1.06);
   background: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
 }
 .dlg-selwrap {
   position: relative;
@@ -5845,7 +5845,7 @@ select.dlg-input {
   right: 11px;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--fg-faint);
+  color: var(--text-faint);
   pointer-events: none;
   display: grid;
   place-items: center;
@@ -6203,7 +6203,7 @@ select.dlg-input {
   gap: 2px;
   align-items: center;
   padding: 6px 8px 0;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--border-subtle);
   min-width: 0;
 }
 .ed-tab {
@@ -6211,7 +6211,7 @@ select.dlg-input {
   align-items: center;
   gap: 2px;
   font-size: 11.5px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   border-radius: 8px 8px 0 0;
   min-width: 0;
   max-width: min(280px, 34vw);
@@ -6220,12 +6220,12 @@ select.dlg-input {
   text-overflow: ellipsis;
 }
 .ed-tab:hover:not(.active) {
-  background: color-mix(in oklch, var(--card) 62%, transparent);
-  color: var(--fg-muted);
+  background: color-mix(in oklch, var(--button-secondary-surface) 62%, transparent);
+  color: var(--text-secondary);
 }
 .ed-tab.active {
-  color: var(--fg);
-  background: var(--inset);
+  color: var(--text-primary);
+  background: var(--surface-inset);
 }
 .ed-tab-hit {
   display: flex;
@@ -6256,13 +6256,13 @@ select.dlg-input {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   font: inherit;
   line-height: 1;
 }
 .ed-tab-close:hover {
-  color: var(--fg);
-  background: color-mix(in oklch, var(--fg) 10%, transparent);
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--text-primary) 10%, transparent);
 }
 .ed-pane-actions {
   display: flex;
@@ -6277,15 +6277,15 @@ select.dlg-input {
   height: 26px;
   border: 1px solid transparent;
   border-radius: 7px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   background: transparent;
 }
 .ed-icon-action:hover {
-  color: var(--fg);
-  background: color-mix(in oklch, var(--fg) 10%, transparent);
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--text-primary) 10%, transparent);
 }
 .ed-icon-action:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 .ed-save {
@@ -6329,7 +6329,7 @@ select.dlg-input {
 .ed-empty {
   padding: 12px;
   font-size: 12px;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
 }
 /* Issue #1205: the document tab strip is a tablist; the tabs stay left, actions stay right. */
 .ed-tablist {
@@ -6344,7 +6344,7 @@ select.dlg-input {
 }
 .ed-tab-hit:focus-visible,
 .ed-tab-close:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 /* Issue #1205: the unified, VS Code-style status bar — the single status surface for the card.
@@ -6723,18 +6723,18 @@ select.dlg-input {
   /* Pair color with an explicit background: under color-scheme:dark Chromium
      (Win/Linux) renders the option popup dark and honors option CSS — a bare
      hard-coded #111 measured ~1.2:1 there. Tokens follow both themes. */
-  color: var(--fg);
-  background: var(--surface);
+  color: var(--input-text);
+  background: var(--combobox-list-surface);
 }
 .cmp-err {
   margin-top: 10px;
   /* token-mixed border instead of hardcoded dark-theme danger rgb, so the light
      theme danger override applies; radius on token scale (uiux-fix F037 C304/C331) */
-  border: 1px solid color-mix(in oklch, var(--danger) 35%, transparent);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 35%, transparent);
   border-radius: var(--radius-sm);
   padding: 9px 10px;
-  color: var(--danger);
-  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  color: var(--feedback-danger);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
   font-size: 12.5px;
 }
 .ui-error-notice {
@@ -6742,12 +6742,12 @@ select.dlg-input {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  border: 1px solid color-mix(in oklch, var(--danger) 38%, transparent);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 38%, transparent);
   border-left-width: 3px;
   border-radius: var(--radius-sm);
   padding: 10px 11px;
-  color: var(--fg);
-  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
   font-size: 12.5px;
   line-height: 1.4;
 }
@@ -6760,7 +6760,7 @@ select.dlg-input {
   flex: 1 1 auto;
   min-width: 0;
   font-weight: 650;
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 .ui-error-notice-close {
   flex: none;
@@ -6771,14 +6771,14 @@ select.dlg-input {
   margin: -4px -5px 0 0;
   border: 1px solid transparent;
   border-radius: 5px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   background: transparent;
   cursor: pointer;
 }
 .ui-error-notice-close:hover {
-  color: var(--fg);
-  background: color-mix(in oklch, var(--danger) 12%, transparent);
-  border-color: color-mix(in oklch, var(--danger) 28%, transparent);
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
+  border-color: color-mix(in oklch, var(--feedback-danger) 28%, transparent);
 }
 .ui-error-notice-close:focus-visible {
   outline: none;
@@ -6787,19 +6787,19 @@ select.dlg-input {
 }
 .ui-error-notice-message,
 .ui-error-notice-remediation {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .ui-error-notice-remediation {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .ui-error-notice-code {
   width: fit-content;
   max-width: 100%;
   padding: 2px 5px;
-  border: 1px solid color-mix(in oklch, var(--danger) 25%, transparent);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 25%, transparent);
   border-radius: 4px;
-  color: var(--danger);
-  background: color-mix(in oklch, var(--danger) 8%, transparent);
+  color: var(--feedback-danger);
+  background: color-mix(in oklch, var(--feedback-danger) 8%, transparent);
   overflow-wrap: anywhere;
 }
 
@@ -6817,7 +6817,7 @@ select.dlg-input {
   gap: 8px;
   padding: 8px 2px;
   font-size: 12.5px;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .cmp-loading-dot {
   width: 7px;
@@ -6918,7 +6918,7 @@ select.dlg-input {
   min-width: 24px;
 }
 .rb-edge-badge-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .rb-edge-badge-label {
@@ -6946,7 +6946,7 @@ select.dlg-input {
 @media (prefers-contrast: more) {
   .rb-edge-badge-btn,
   .rb-edge-badge-static {
-    background: var(--card) !important;
+    background: var(--button-secondary-surface) !important;
   }
   .rb-edge-badge-icon {
     transform: scale(1.1);
@@ -7193,15 +7193,15 @@ select.dlg-input {
   font-size: 12.5px;
   font-weight: 500;
   border-radius: 6px;
-  border: 1px solid var(--line-strong);
-  background: var(--inset);
-  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  background: var(--input-surface);
+  color: var(--input-text);
 }
 .files-root-input::placeholder {
-  color: var(--fg-faint);
+  color: var(--text-faint);
 }
 .files-root-input:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
 }
 .files-root-open {
@@ -7289,16 +7289,16 @@ select.dlg-input {
   letter-spacing: 0.06em;
 }
 .bw-input {
-  background: var(--inset);
-  border: 1px solid var(--line-strong);
+  background: var(--input-surface);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
-  color: var(--fg);
+  color: var(--input-text);
   min-width: 80px;
 }
 .bw-input:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
 }
 .bw-input-url {
@@ -7313,12 +7313,12 @@ select.dlg-input {
   border-bottom: 1px solid var(--line-soft);
 }
 .bw-btn {
-  background: var(--inset);
-  border: 1px solid var(--line);
+  background: var(--surface-inset);
+  border: 1px solid var(--button-secondary-border);
   border-radius: var(--radius-sm);
   padding: 5px 10px;
   font-size: 12px;
-  color: var(--fg);
+  color: var(--button-secondary-text);
   cursor: pointer;
   min-height: 28px;
   min-width: 64px;
@@ -7327,7 +7327,7 @@ select.dlg-input {
   border-color: var(--accent-line);
 }
 .bw-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
 }
 .bw-btn:disabled {
@@ -7338,13 +7338,13 @@ select.dlg-input {
   background: var(--accent);
   /* --ink-inverse is the established pairing for text on --accent (6.94:1);
      the previous var(--accent-fg, #1a1e23) referenced a token defined nowhere. */
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   border-color: var(--accent);
 }
 .bw-btn-danger {
-  background: color-mix(in oklch, var(--danger) 18%, var(--inset));
-  color: var(--fg);
-  border-color: color-mix(in oklch, var(--danger) 55%, var(--line-soft));
+  background: color-mix(in oklch, var(--feedback-danger) 18%, var(--surface-inset));
+  color: var(--button-secondary-text);
+  border-color: color-mix(in oklch, var(--feedback-danger) 55%, var(--border-subtle));
 }
 .bw-status {
   padding: 6px 10px;
@@ -7745,7 +7745,7 @@ select.dlg-input {
 }
 /* focus ring on .arun-btn globally (WCAG 2.4.7) — previously scoped to .rv-controls only */
 .arun-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* focus rings for nav rail icon buttons (WCAG 2.4.7) — .rail-avatar added (uiux-fix F014 C016) */
@@ -7763,7 +7763,7 @@ select.dlg-input {
 .tb-btn:focus-visible,
 .edm-trigger:focus-visible,
 .modesw-opt:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* Syntax token classes from syntaxHighlight.ts — REVIEW DIFF variant, scoped to .rv-src.
@@ -7878,29 +7878,29 @@ select.dlg-input {
   min-height: 28px;
   min-width: 56px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--card);
-  color: var(--fg-muted);
+  border: 1px solid var(--button-secondary-border);
+  background: var(--button-secondary-surface);
+  color: var(--text-secondary);
   font-size: 12.5px;
   font-weight: 550;
   cursor: pointer;
 }
 .tm-action:hover:not(:disabled) {
-  background: var(--card-2);
-  color: var(--fg);
-  border-color: var(--line-strong);
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
+  border-color: var(--border-strong);
 }
 .tm-action:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 .tm-action:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .tm-action[data-primary="true"] {
   background: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   border-color: var(--accent);
 }
 .tm-action[data-primary="true"]:hover:not(:disabled) {
@@ -8240,10 +8240,10 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 .gw-input {
   width: 100%;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  background: var(--inset);
-  color: var(--fg);
+  background: var(--input-surface);
+  color: var(--input-text);
   padding: 12px 13px;
   outline: none;
   font-size: 13px;
@@ -8257,7 +8257,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   box-shadow: none !important;
 }
 .gw-input::placeholder {
-  color: var(--fg-faint);
+  color: var(--text-faint);
 }
 .gw-textarea {
   min-height: 92px;
@@ -8441,7 +8441,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   background: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--text-on-accent);
   font-size: 12px;
   line-height: 1.2;
   border: 1px solid color-mix(in oklab, var(--accent) 70%, #000 30%);
@@ -8456,7 +8456,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   min-height: 24px;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--ink-inverse);
+  color: var(--text-on-accent);
   border: none;
   cursor: pointer;
   padding: 0;
@@ -8464,7 +8464,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 
 /* :not([aria-disabled="true"]) — busy state uses aria-disabled, not native disabled (F010 C169) */
 .scope-pill-disconnect:hover:not(:disabled):not([aria-disabled="true"]) {
-  background: color-mix(in oklab, var(--ink-inverse) 15%, transparent);
+  background: color-mix(in oklab, var(--text-on-accent) 15%, transparent);
 }
 
 .scope-pill-disconnect:disabled {
@@ -8475,7 +8475,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .scope-pill-detail {
   font-size: 11px;
   line-height: 1.35;
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   max-width: min(560px, 100%);
 }
 
@@ -8485,11 +8485,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
    pill's 4px padding. The connect button keeps the accent ring: it renders on card
    background where the ring is visible. */
 .scope-pill-disconnect:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--ink-inverse);
+  outline: var(--focus-width, 2px) solid var(--text-on-accent);
   outline-offset: 1px;
 }
 .scope-connect-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -8502,7 +8502,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   padding: 6px 12px;
   border-radius: var(--radius-sm);
   background: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   font-size: 12px;
   line-height: 1.2;
   border: 1px solid color-mix(in oklab, var(--accent) 70%, #000 30%);
@@ -8530,7 +8530,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .scope-connect-error {
   display: block;
   font-size: 11px;
-  color: var(--danger);
+  color: var(--feedback-danger);
   margin-top: 4px;
 }
 
@@ -8700,7 +8700,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   padding: 4px 12px;
   border-radius: var(--radius-sm);
   background: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.2;
@@ -8711,7 +8711,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   filter: brightness(1.06);
 }
 .grounded-cancel-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 3px;
 }
 .grounded-cancel-btn:disabled {
@@ -9020,15 +9020,15 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .lk-alert {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  background: color-mix(in oklch, var(--danger) 12%, transparent);
-  border: 1px solid color-mix(in oklch, var(--danger) 45%, transparent);
-  color: var(--danger);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 45%, transparent);
+  color: var(--feedback-danger);
   font-size: 13px;
 }
 .lk-alert-retry {
   margin-left: 12px;
   font-size: 12px;
-  color: var(--danger);
+  color: var(--feedback-danger);
   text-decoration: underline;
   background: none;
   border: none;
@@ -9171,7 +9171,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 .lk-badge[data-state="ready"] {
   background: var(--accent-dim);
-  color: var(--fg);
+  color: var(--text-primary);
   border: 1px solid var(--accent-line);
 }
 /* indexing — warm amber. Dark: --warn (L 0.78) on the dark 22% tint ≈ 5:1;
@@ -9179,28 +9179,28 @@ html[data-keiko-gateway-setup-open="true"] .rail {
    (uiux-fix F033, C006 — the previous hard-coded dark ink was 1.47:1 in the
    dark theme, mirroring the .mc-badge-proposed fix). */
 .lk-badge[data-state="indexing"] {
-  background: color-mix(in oklch, var(--warn) 22%, transparent);
-  color: var(--warn);
-  border: 1px solid color-mix(in oklch, var(--warn) 55%, transparent);
+  background: color-mix(in oklch, var(--feedback-warning) 22%, transparent);
+  color: var(--feedback-warning);
+  border: 1px solid color-mix(in oklch, var(--feedback-warning) 55%, transparent);
 }
 .lk-badge[data-state="stale"] {
-  background: color-mix(in oklch, var(--warn) 16%, transparent);
-  color: var(--fg-muted);
-  border: 1px solid color-mix(in oklch, var(--warn) 40%, transparent);
+  background: color-mix(in oklch, var(--feedback-warning) 16%, transparent);
+  color: var(--text-secondary);
+  border: 1px solid color-mix(in oklch, var(--feedback-warning) 40%, transparent);
 }
 /* error — danger red. Text uses --fg on the danger tint: --danger on 18%
    danger-over---card computes to ~4.17:1 (< 4.5:1 AA) in dark; --fg ≥7:1
    (uiux-fix F033, C006 — same pairing as .mc-badge-conflicted). */
 .lk-badge[data-state="error"] {
-  background: color-mix(in oklch, var(--danger) 18%, transparent);
-  color: var(--fg);
-  border: 1px solid color-mix(in oklch, var(--danger) 45%, transparent);
+  background: color-mix(in oklch, var(--feedback-danger) 18%, transparent);
+  color: var(--text-primary);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 45%, transparent);
 }
 .lk-badge[data-state="draft"],
 .lk-badge[data-state="deleting"] {
-  background: var(--inset);
-  color: var(--fg-dim);
-  border: 1px solid var(--line-soft);
+  background: var(--surface-inset);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle);
 }
 
 /* Action buttons — min 30×30 (WCAG 2.5.8 ≥ 24×24) */
@@ -9224,33 +9224,33 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   cursor: not-allowed;
 }
 .lk-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 3px;
 }
 .lk-btn-primary {
   background: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   border: 1px solid var(--accent);
 }
 .lk-btn-primary:hover:not(:disabled) {
   filter: brightness(1.06);
 }
 .lk-btn-ghost {
-  background: var(--card);
-  color: var(--fg-muted);
-  border: 1px solid var(--line-soft);
+  background: var(--button-secondary-surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
 }
 .lk-btn-ghost:hover:not(:disabled) {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
 }
 .lk-btn-danger {
-  background: var(--inset);
-  color: var(--danger);
-  border: 1px solid color-mix(in oklch, var(--danger) 40%, transparent);
+  background: var(--surface-inset);
+  color: var(--feedback-danger);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 40%, transparent);
 }
 .lk-btn-danger:hover:not(:disabled) {
-  background: color-mix(in oklch, var(--danger) 14%, var(--inset));
+  background: color-mix(in oklch, var(--feedback-danger) 14%, var(--surface-inset));
 }
 .lk-btn-lg {
   height: 34px;
@@ -9787,9 +9787,9 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 /* Destructive confirm button in modal — danger style.
    --ink-inverse on --danger = 6.07:1 (WCAG AA). --fg is near-white = ~2.84:1 (FAIL). */
 .lkd-btn-destructive {
-  color: var(--ink-inverse) !important;
-  background: var(--danger) !important;
-  border-color: var(--danger) !important;
+  color: var(--button-danger-text) !important;
+  background: var(--button-danger-surface) !important;
+  border-color: var(--feedback-danger) !important;
 }
 .lkd-btn-destructive:hover:not(:disabled) {
   filter: brightness(1.08);
@@ -9899,24 +9899,24 @@ html[data-keiko-gateway-setup-open="true"] .rail {
    light theme keeps the dark amber ink via override below (uiux-fix F005 —
    the previous hard-coded dark ink was 1.24–1.47:1 in the dark theme). */
 .mc-badge-proposed {
-  background: color-mix(in oklch, var(--warn) 22%, transparent);
-  color: var(--warn);
-  border-color: color-mix(in oklch, var(--warn) 55%, transparent);
+  background: color-mix(in oklch, var(--feedback-warning) 22%, transparent);
+  color: var(--feedback-warning);
+  border-color: color-mix(in oklch, var(--feedback-warning) 55%, transparent);
 }
 
 /* accepted — accent green */
 .mc-badge-accepted {
   background: var(--accent-dim);
-  color: var(--fg);
+  color: var(--text-primary);
   border-color: var(--accent-line);
 }
 
 /* conflicted — danger red. Text uses --fg on the danger tint: --danger on 18%
    danger-over---card computes to ~4.17:1 (< 4.5:1 AA) in dark; --fg ≥7:1. */
 .mc-badge-conflicted {
-  background: color-mix(in oklch, var(--danger) 18%, transparent);
-  color: var(--fg);
-  border-color: color-mix(in oklch, var(--danger) 45%, transparent);
+  background: color-mix(in oklch, var(--feedback-danger) 18%, transparent);
+  color: var(--text-primary);
+  border-color: color-mix(in oklch, var(--feedback-danger) 45%, transparent);
 }
 
 /* rejected / forgotten / superseded / expired — muted.
@@ -9925,28 +9925,28 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .mc-badge-forgotten,
 .mc-badge-superseded,
 .mc-badge-expired {
-  background: var(--inset);
-  color: var(--fg-muted);
-  border-color: var(--line-soft);
+  background: var(--surface-inset);
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
 }
 
 /* archived — soft blue */
 .mc-badge-archived {
-  background: color-mix(in oklch, var(--info) 16%, transparent);
-  color: var(--fg-muted);
-  border-color: color-mix(in oklch, var(--info) 40%, transparent);
+  background: color-mix(in oklch, var(--feedback-info) 16%, transparent);
+  color: var(--text-secondary);
+  border-color: color-mix(in oklch, var(--feedback-info) 40%, transparent);
 }
 
 .mc-badge-pinned {
   background: color-mix(in oklch, var(--accent) 20%, transparent);
-  color: var(--fg);
+  color: var(--text-primary);
   border-color: var(--accent-line);
 }
 
 .mc-badge-default {
-  background: var(--inset);
-  color: var(--fg-muted);
-  border-color: var(--line-soft);
+  background: var(--surface-inset);
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
 }
 
 /* count bubble (queue counter in header) */
@@ -9962,7 +9962,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   border-radius: 10px;
   background: var(--accent);
   /* --ink-inverse on --accent = 6.94:1 */
-  color: var(--ink-inverse);
+  color: var(--text-on-accent);
   margin-left: 6px;
 }
 
@@ -10203,26 +10203,26 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 
 .mc-dialog {
   width: min(480px, calc(100vw - 32px));
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--surface-overlay);
+  border: 1px solid var(--modal-border);
   border-radius: var(--radius);
   padding: 24px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--modal-shadow);
 }
 
 .mc-dialog-title {
   font-size: 16px;
   font-weight: 650;
-  color: var(--fg);
+  color: var(--text-primary);
   margin: 0;
 }
 
 .mc-dialog-body {
   font-size: 13px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   margin: 0;
   line-height: 1.5;
 }
@@ -10230,11 +10230,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .mc-dialog-quote {
   font-size: 13px;
   font-style: italic;
-  color: var(--fg-muted);
-  border-left: 3px solid var(--line);
+  color: var(--text-secondary);
+  border-left: 3px solid var(--border-default);
   padding: 8px 12px;
   margin: 0;
-  background: var(--inset);
+  background: var(--surface-inset);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
@@ -10247,22 +10247,22 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .mc-dialog-label {
   font-size: 12px;
   font-weight: 600;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 /* --fg-muted: --fg-faint was 2.5–2.9:1 on --surface (uiux-fix F005) */
 .mc-dialog-hint {
   font-weight: 400;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .mc-dialog-textarea,
 .mc-dialog-input,
 .mc-dialog-select {
-  background: var(--inset);
-  border: 1px solid var(--line);
+  background: var(--input-surface);
+  border: 1px solid var(--input-border);
   border-radius: var(--radius-sm);
-  color: var(--fg);
+  color: var(--input-text);
   font-family: var(--font-ui);
   font-size: 13px;
   padding: 8px 10px;
@@ -10292,13 +10292,13 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .mc-dialog-textarea:focus-visible,
 .mc-dialog-input:focus-visible,
 .mc-dialog-select:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
 }
 
 .mc-dialog-error {
   font-size: 12px;
-  color: var(--danger);
+  color: var(--feedback-danger);
   margin: 0;
 }
 
@@ -10419,9 +10419,9 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   padding: 2px 8px;
   font-size: 11px;
   font-family: var(--font-ui);
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   background: none;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   cursor: pointer;
   transition:
@@ -10429,11 +10429,11 @@ html[data-keiko-gateway-setup-open="true"] .rail {
     border-color 0.1s;
 }
 .sm-code-copy:hover {
-  color: var(--fg);
-  border-color: var(--line-strong);
+  color: var(--button-secondary-text);
+  border-color: var(--border-strong);
 }
 .sm-code-copy:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -10663,29 +10663,29 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 
 /* running: info blue */
 .qi-badge-running {
-  background: color-mix(in oklch, var(--info) 18%, transparent);
-  color: var(--info);
+  background: color-mix(in oklch, var(--feedback-info) 18%, transparent);
+  color: var(--feedback-info);
 }
 
 /* failed: danger — var(--fg) near-white on 18% danger/--card surface ≈ 7.5:1 (WCAG 1.4.3 AA). */
 .qi-badge-failed {
-  background: color-mix(in oklch, var(--danger) 18%, transparent);
-  color: var(--fg);
+  background: color-mix(in oklch, var(--feedback-danger) 18%, transparent);
+  color: var(--text-primary);
 }
 
 /* cancelled: muted */
 .qi-badge-cancelled {
-  background: color-mix(in oklch, var(--fg-dim) 18%, transparent);
-  color: var(--fg-muted);
+  background: color-mix(in oklch, var(--text-tertiary) 18%, transparent);
+  color: var(--text-secondary);
 }
 
 .qi-badge-default {
   /* --card-2 + hairline so the pill stays visible on --card surfaces
      (summary strip, window body); inset shadow avoids a layout shift
      vs the borderless sibling badges. */
-  background: var(--card-2);
-  color: var(--fg-muted);
-  box-shadow: inset 0 0 0 1px var(--line-soft);
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
 }
 
 /* Severity badges — inline indicators */
@@ -10702,23 +10702,23 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 
 /* danger text on 25% danger/--card surface — var(--fg) near-white ≈ 7.5:1 (WCAG 1.4.3 AA). */
 .qi-sev-critical {
-  background: color-mix(in oklch, var(--danger) 25%, transparent);
-  color: var(--fg);
+  background: color-mix(in oklch, var(--feedback-danger) 25%, transparent);
+  color: var(--text-primary);
 }
 
 .qi-sev-high {
-  background: color-mix(in oklch, var(--warn) 20%, transparent);
-  color: var(--warn);
+  background: color-mix(in oklch, var(--feedback-warning) 20%, transparent);
+  color: var(--feedback-warning);
 }
 
 .qi-sev-medium {
-  background: color-mix(in oklch, var(--info) 20%, transparent);
-  color: var(--info);
+  background: color-mix(in oklch, var(--feedback-info) 20%, transparent);
+  color: var(--feedback-info);
 }
 
 .qi-sev-low {
-  background: color-mix(in oklch, var(--fg-dim) 18%, transparent);
-  color: var(--fg-muted);
+  background: color-mix(in oklch, var(--text-tertiary) 18%, transparent);
+  color: var(--text-secondary);
 }
 
 /* Quality score badge tiers (Epic #736 / Issue #748). Each tier reuses a token pairing already
@@ -10728,15 +10728,15 @@ html[data-keiko-gateway-setup-open="true"] .rail {
    - low:  --fg on 22% danger (same pairing as .qi-badge-failed; --fg always contrasts with --card) */
 .qi-quality-high {
   background: var(--accent-dim);
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 .qi-quality-mid {
-  background: color-mix(in oklch, var(--warn) 20%, transparent);
-  color: var(--warn);
+  background: color-mix(in oklch, var(--feedback-warning) 20%, transparent);
+  color: var(--feedback-warning);
 }
 .qi-quality-low {
-  background: color-mix(in oklch, var(--danger) 22%, transparent);
-  color: var(--fg);
+  background: color-mix(in oklch, var(--feedback-danger) 22%, transparent);
+  color: var(--text-primary);
 }
 
 /* Per-candidate weak-test flag (Epic #736 / Issue #748). */
@@ -10840,15 +10840,15 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 .qi-cov-covered {
   background: var(--accent-dim);
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 .qi-cov-weak {
-  background: color-mix(in oklch, var(--warn) 20%, transparent);
-  color: var(--warn);
+  background: color-mix(in oklch, var(--feedback-warning) 20%, transparent);
+  color: var(--feedback-warning);
 }
 .qi-cov-uncovered {
-  background: color-mix(in oklch, var(--danger) 22%, transparent);
-  color: var(--fg);
+  background: color-mix(in oklch, var(--feedback-danger) 22%, transparent);
+  color: var(--text-primary);
 }
 
 /* Living Tests drift panel (Epic #735 / Issue #744). */
@@ -11207,9 +11207,9 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   margin: 8px 0 0;
   padding: 8px 10px;
   font-size: 12px;
-  color: var(--fg);
-  background: color-mix(in oklch, var(--warn) 12%, transparent);
-  border-left: 3px solid var(--warn);
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--feedback-warning) 12%, transparent);
+  border-left: 3px solid var(--feedback-warning);
   border-radius: 4px;
 }
 .qi-field {
@@ -11285,9 +11285,9 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 2px;
   padding: 3px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--card);
+  background: var(--surface-primary);
   height: 34px;
   box-sizing: border-box;
 }
@@ -11303,7 +11303,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   padding: 0 10px;
   border: 1px solid transparent;
   border-radius: 7px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   text-align: left;
   font-size: 12px;
   line-height: 1;
@@ -11349,7 +11349,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   background: transparent;
   border-color: transparent;
   box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .qi-source-kind-option[aria-checked="true"]:hover:not(:disabled) {
   background: transparent;
@@ -11371,9 +11371,9 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .qi-textarea,
 .qi-select {
   width: 100%;
-  background: var(--card);
-  color: var(--fg);
-  border: 1px solid var(--line);
+  background: var(--combobox-surface);
+  color: var(--input-text);
+  border: 1px solid var(--input-border);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   font-size: 13px;
@@ -11394,7 +11394,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .qi-input:focus-visible,
 .qi-textarea:focus-visible,
 .qi-select:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -11427,8 +11427,8 @@ select.qi-select {
   padding-right: 30px;
 }
 .qi-select option {
-  background: var(--card);
-  color: var(--fg);
+  background: var(--combobox-surface);
+  color: var(--input-text);
 }
 .qi-source-kind-grid {
   display: grid;
@@ -11437,9 +11437,9 @@ select.qi-select {
   min-width: min(100%, 440px);
   height: 34px;
   padding: 3px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--card);
+  background: var(--surface-primary);
   box-sizing: border-box;
 }
 .qi-source-kind-option {
@@ -11454,7 +11454,7 @@ select.qi-select {
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font: inherit;
   text-align: center;
   cursor: pointer;
@@ -11469,14 +11469,14 @@ select.qi-select {
   box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
 }
 .qi-source-kind-option:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .qi-source-kind-option[aria-checked="true"] {
   border-color: transparent;
   background: transparent;
   box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .qi-source-kind-option:disabled {
   opacity: 0.55;
@@ -11632,11 +11632,11 @@ select.qi-select {
     min-width: max-content;
     max-width: 180px;
     padding: 5px 8px;
-    border: 1px solid var(--line-strong);
+    border: 1px solid var(--border-strong);
     border-radius: 8px;
-    background: color-mix(in oklch, var(--surface) 96%, black);
+    background: color-mix(in oklch, var(--popover-surface) 96%, black);
     box-shadow: 0 12px 30px -18px rgba(0, 0, 0, 0.85);
-    color: var(--fg);
+    color: var(--text-primary);
     font-size: 11.5px;
     font-weight: 650;
     line-height: 1.25;
@@ -11665,9 +11665,9 @@ select.qi-select {
   min-width: 64px;
   padding: 6px 14px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--card-2);
-  color: var(--fg);
+  border: 1px solid var(--button-secondary-border);
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -11678,10 +11678,10 @@ select.qi-select {
     border-color 0.12s;
 }
 .qi-btn:hover:not(:disabled) {
-  border-color: var(--line-strong);
+  border-color: var(--border-strong);
 }
 .qi-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .qi-btn:disabled {
@@ -11691,29 +11691,29 @@ select.qi-select {
 .qi-btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--ink-inverse); /* was hardcoded #06120c (uiux-fix F049 C338) */
+  color: var(--button-primary-text); /* was hardcoded #06120c (uiux-fix F049 C338) */
 }
 .qi-btn-secondary {
   background: transparent;
 }
 .qi-btn-approve {
   color: var(--accent-bright);
-  border-color: color-mix(in oklch, var(--accent) 50%, var(--line));
+  border-color: color-mix(in oklch, var(--accent) 50%, var(--button-secondary-border));
 }
 .qi-btn-approve[aria-pressed="true"] {
   background: var(--accent);
-  color: var(--ink-inverse); /* was hardcoded #06120c (uiux-fix F049 C338) */
+  color: var(--button-primary-text); /* was hardcoded #06120c (uiux-fix F049 C338) */
 }
 .qi-btn-reject {
   color: #f2a4a0;
   /* was hardcoded #d9534f; var(--danger) keeps the light-theme darkening (uiux-fix F049 C338) */
-  border-color: color-mix(in oklch, var(--danger) 45%, var(--line));
+  border-color: color-mix(in oklch, var(--feedback-danger) 45%, var(--button-secondary-border));
 }
 .qi-btn-reject[aria-pressed="true"] {
   /* was hardcoded #b23b37; the 75% mix measures 6.11:1 (dark) / 10.93:1 (light)
      against the white ink — both AA (uiux-fix F049 C338) */
-  background: color-mix(in oklch, var(--danger) 75%, black);
-  border-color: color-mix(in oklch, var(--danger) 75%, black);
+  background: color-mix(in oklch, var(--feedback-danger) 75%, black);
+  border-color: color-mix(in oklch, var(--feedback-danger) 75%, black);
   color: #fff;
 }
 .qi-progress {
@@ -12157,7 +12157,7 @@ select.qi-select {
 }
 .qi-export-format .qi-select {
   min-height: 34px;
-  background-color: var(--inset);
+  background-color: var(--input-surface);
 }
 .qi-export-action {
   min-height: 34px;
@@ -12410,22 +12410,22 @@ select.qi-select {
   flex: 1;
   padding: 7px 10px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--card);
-  color: var(--fg);
+  border: 1px solid var(--input-border);
+  background: var(--combobox-surface);
+  color: var(--input-text);
   font-size: 13px;
   outline-offset: 2px;
   min-width: 0;
 }
 .figma-snapshot-input:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 :root[data-input-modality="pointer"] .figma-snapshot-input:focus {
   outline: none !important;
   box-shadow: none !important;
 }
 .figma-snapshot-input[aria-invalid="true"] {
-  border-color: var(--danger);
+  border-color: var(--input-border-error);
 }
 .figma-snapshot-input:disabled {
   opacity: 0.6;
@@ -12436,7 +12436,7 @@ select.qi-select {
   border-radius: var(--radius-sm);
   background: var(--accent);
   /* --ink-inverse on --accent = 6.94:1 both themes (--accent-text equals --accent in dark → 1:1 invisible) */
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
@@ -12445,7 +12445,7 @@ select.qi-select {
   outline-offset: 2px;
 }
 .figma-snapshot-trigger-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 .figma-snapshot-trigger-btn:disabled {
   opacity: 0.5;
@@ -12469,16 +12469,16 @@ select.qi-select {
 .figma-snapshot-cancel-btn {
   padding: 5px 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
-  border: 1px solid var(--line);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  border: 1px solid var(--button-secondary-border);
   font-size: 13px;
   cursor: pointer;
   outline-offset: 2px;
   min-height: 24px; /* WCAG 2.5.8 */
 }
 .figma-snapshot-cancel-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 /* ── Status / progress ────────────────────────────────────────────────────── */
@@ -12553,15 +12553,15 @@ select.qi-select {
 .figma-snapshot-load-btn {
   padding: 5px 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
-  border: 1px solid var(--line);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  border: 1px solid var(--button-secondary-border);
   font-size: 13px;
   cursor: pointer;
   outline-offset: 2px;
 }
 .figma-snapshot-load-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 /* ── Snapshot dashboard ───────────────────────────────────────────────────── */
@@ -12777,10 +12777,10 @@ select.qi-select {
 .figma-snapshot-dashboard-delete-confirm-btn,
 .figma-snapshot-dashboard-delete-cancel-btn {
   min-height: 24px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--button-secondary-border);
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
   font-size: 12px;
   font-weight: 600;
   outline-offset: 2px;
@@ -12796,7 +12796,7 @@ select.qi-select {
   display: inline-grid;
   place-items: center;
   padding: 0;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .figma-snapshot-dashboard-icon-btn svg {
@@ -12809,14 +12809,14 @@ select.qi-select {
 .figma-snapshot-dashboard-rename-save:hover,
 .figma-snapshot-dashboard-rename-cancel:hover,
 .figma-snapshot-dashboard-delete-cancel-btn:hover {
-  border-color: color-mix(in oklch, var(--accent) 38%, var(--line));
-  color: var(--fg);
+  border-color: color-mix(in oklch, var(--accent) 38%, var(--button-secondary-border));
+  color: var(--button-secondary-text);
 }
 
 .figma-snapshot-dashboard-icon-btn-danger:hover,
 .figma-snapshot-dashboard-delete-confirm-btn {
-  border-color: color-mix(in oklch, var(--danger) 50%, var(--line));
-  color: var(--danger);
+  border-color: color-mix(in oklch, var(--feedback-danger) 50%, var(--button-secondary-border));
+  color: var(--feedback-danger);
 }
 
 .figma-snapshot-dashboard-load:focus-visible,
@@ -12826,7 +12826,7 @@ select.qi-select {
 .figma-snapshot-dashboard-rename-cancel:focus-visible,
 .figma-snapshot-dashboard-delete-confirm-btn:focus-visible,
 .figma-snapshot-dashboard-delete-cancel-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 .figma-snapshot-dashboard-load:disabled,
@@ -13023,15 +13023,15 @@ select.qi-select {
   align-self: flex-start;
   padding: 5px 14px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
-  border: 1px solid var(--line);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  border: 1px solid var(--button-secondary-border);
   font-size: 13px;
   cursor: pointer;
   outline-offset: 2px;
 }
 .figma-snapshot-resnapshot-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 .figma-snapshot-resnapshot-btn:disabled {
   opacity: 0.5;
@@ -13046,7 +13046,7 @@ select.qi-select {
   gap: 8px;
   margin: 8px 0 0;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   cursor: pointer;
 }
 .figma-snapshot-consent-checkbox {
@@ -13078,14 +13078,14 @@ select.qi-select {
   border-radius: var(--radius-sm);
   background: var(--accent);
   /* --ink-inverse on --accent = 6.94:1 (--accent-fg is defined nowhere → #fff fallback = 2.41:1 FAIL) */
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   border: 1px solid var(--accent);
   font-size: 13px;
   cursor: pointer;
   outline-offset: 2px;
 }
 .figma-snapshot-codegen-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 .figma-snapshot-codegen-btn:disabled {
   opacity: 0.5;
@@ -13094,15 +13094,15 @@ select.qi-select {
 .figma-snapshot-codegen-cancel-btn {
   padding: 5px 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
-  border: 1px solid var(--line);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  border: 1px solid var(--button-secondary-border);
   font-size: 13px;
   cursor: pointer;
   outline-offset: 2px;
 }
 .figma-snapshot-codegen-cancel-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 .figma-snapshot-code-result {
   display: flex;
@@ -13201,9 +13201,9 @@ select.qi-select {
 .figma-snapshot-revoke-cancel-btn {
   padding: 5px 12px;
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
-  border: 1px solid var(--line);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  border: 1px solid var(--button-secondary-border);
   font-size: 13px;
   cursor: pointer;
   outline-offset: 2px;
@@ -13212,7 +13212,7 @@ select.qi-select {
 .figma-snapshot-revoke-btn:focus-visible,
 .figma-snapshot-revoke-confirm-btn:focus-visible,
 .figma-snapshot-revoke-cancel-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 /* ── Screen gallery ───────────────────────────────────────────────────────── */
@@ -13278,7 +13278,7 @@ select.qi-select {
 }
 
 .figma-snapshot-screen-preview-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -13326,7 +13326,7 @@ select.qi-select {
   border-radius: var(--radius-sm);
   border: 1px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent-text);
+  color: var(--text-accent);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -13335,13 +13335,13 @@ select.qi-select {
 .figma-snapshot-screen-source-btn:disabled,
 .figma-snapshot-screen-source-btn[aria-disabled="true"] {
   cursor: default;
-  border-color: var(--line);
-  background: var(--card-2);
-  color: var(--fg-muted);
+  border-color: var(--button-secondary-border);
+  background: var(--button-secondary-surface-hover);
+  color: var(--text-secondary);
 }
 
 .figma-snapshot-screen-source-btn:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -13412,10 +13412,10 @@ select.qi-select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in oklch, var(--accent) 38%, var(--line));
+  border: 1px solid color-mix(in oklch, var(--accent) 38%, var(--button-secondary-border));
   border-radius: var(--radius-xs);
-  background: color-mix(in oklch, var(--accent) 10%, var(--card));
-  color: var(--accent-text);
+  background: color-mix(in oklch, var(--accent) 10%, var(--button-secondary-surface));
+  color: var(--text-accent);
   font-size: 11px;
   font-weight: 800;
   padding: 0 8px;
@@ -13826,10 +13826,10 @@ button.figma-view-preview {
   max-width: 100%;
   max-height: calc(100% - 48px);
   overflow: auto;
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--surface-overlay);
+  border: 1px solid var(--modal-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--modal-shadow);
   padding: 16px 18px;
 }
 .wf-dialog-title {
@@ -13846,14 +13846,14 @@ button.figma-view-preview {
   display: grid;
   place-items: center;
   border-radius: 8px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   transition:
     background 0.15s ease,
     color 0.15s ease;
 }
 .wf-dialog-close:hover {
-  background: var(--card-2);
-  color: var(--fg);
+  background: var(--surface-elevated);
+  color: var(--text-primary);
 }
 .wf-dialog-list {
   list-style: none;
@@ -13871,25 +13871,25 @@ button.figma-view-preview {
   width: 100%;
   text-align: left;
   padding: 10px 12px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  background: var(--card);
+  background: var(--card-surface);
   transition:
     background 0.15s ease,
     border-color 0.15s ease;
 }
 .wf-dialog-choice:hover {
-  background: var(--card-2);
+  background: var(--surface-elevated);
   border-color: var(--accent-line);
 }
 .wf-dialog-choice-label {
   font-size: 13px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .wf-dialog-choice-desc {
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .wf-dialog-form {
   display: flex;
@@ -13899,22 +13899,22 @@ button.figma-view-preview {
 .wf-dialog-form-desc {
   margin: 0;
   font-size: 12.5px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .wf-dialog-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .wf-dialog-input {
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--input-border);
   border-radius: 9px;
-  background: var(--card);
-  color: var(--fg);
+  background: var(--combobox-surface);
+  color: var(--input-text);
   font-size: 12.5px;
   resize: vertical;
 }
@@ -13927,9 +13927,9 @@ button.figma-view-preview {
 }
 .wf-dialog-error {
   font-size: 12.5px;
-  color: var(--danger);
-  border: 1px solid color-mix(in oklch, var(--danger) 48%, transparent);
-  background: color-mix(in oklch, var(--danger) 12%, var(--card));
+  color: var(--feedback-danger);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 48%, transparent);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, var(--surface-primary));
   border-radius: 9px;
   padding: 8px 10px;
 }
@@ -13945,20 +13945,20 @@ button.figma-view-preview {
   border-radius: 9px;
   font-size: 12.5px;
   font-weight: 600;
-  border: 1px solid var(--line);
-  background: var(--card);
-  color: var(--fg);
+  border: 1px solid var(--button-secondary-border);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
   transition:
     background 0.15s ease,
     filter 0.15s ease;
 }
 .wf-dialog-cancel:hover {
-  background: var(--card-2);
+  background: var(--button-secondary-surface-hover);
 }
 .wf-dialog-launch {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
 }
 .wf-dialog-launch:hover:not(:disabled) {
   filter: brightness(1.06);
@@ -13972,7 +13972,7 @@ button.figma-view-preview {
 .wf-dialog-launch:focus-visible,
 .wf-dialog-close:focus-visible,
 .wf-dialog-input:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* Run summary card — chat-log card for workflow run system messages.
@@ -13980,11 +13980,11 @@ button.figma-view-preview {
    pill colors mirror .lkd-job-status[data-status]. */
 .run-summary-card {
   max-width: min(640px, 84%);
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 14px;
   padding: 10px 13px;
   margin-bottom: 14px;
-  background: var(--card);
+  background: var(--card-surface);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -13996,7 +13996,7 @@ button.figma-view-preview {
 }
 .run-summary-card-workflow {
   font-size: 12px;
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .run-summary-card-status {
   font-size: 11px;
@@ -14004,16 +14004,16 @@ button.figma-view-preview {
   text-transform: capitalize;
   padding: 1px 8px;
   border-radius: 999px;
-  border: 1px solid var(--line-soft);
-  color: var(--fg-dim);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
 }
 .run-summary-card-status[data-status="succeeded"] {
-  color: var(--ok);
-  border-color: color-mix(in oklch, var(--ok) 40%, transparent);
+  color: var(--feedback-success);
+  border-color: color-mix(in oklch, var(--feedback-success) 40%, transparent);
 }
 .run-summary-card-status[data-status="completed"] {
-  color: var(--ok);
-  border-color: color-mix(in oklch, var(--ok) 40%, transparent);
+  color: var(--feedback-success);
+  border-color: color-mix(in oklch, var(--feedback-success) 40%, transparent);
 }
 /* --ok #4eba87 on white fails 4.5:1 — reuse the AA accent-text green. */
 [data-theme="light"] .run-summary-card-status[data-status="succeeded"],
@@ -14021,12 +14021,12 @@ button.figma-view-preview {
   color: var(--accent-text);
 }
 .run-summary-card-status[data-status="failed"] {
-  color: var(--danger);
-  border-color: color-mix(in oklch, var(--danger) 40%, transparent);
+  color: var(--feedback-danger);
+  border-color: color-mix(in oklch, var(--feedback-danger) 40%, transparent);
 }
 .run-summary-card-status[data-status="running"] {
-  color: var(--warn);
-  border-color: color-mix(in oklch, var(--warn) 40%, transparent);
+  color: var(--feedback-warning);
+  border-color: color-mix(in oklch, var(--feedback-warning) 40%, transparent);
 }
 .run-summary-card-body p {
   margin: 0 0 4px;
@@ -14035,14 +14035,14 @@ button.figma-view-preview {
   margin-bottom: 0;
 }
 .run-summary-card-line {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .run-summary-card-result {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .run-summary-card-meta {
   font-size: 10px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   font-family: var(--font-mono);
   margin-top: 6px;
 }
@@ -14059,10 +14059,10 @@ button.figma-view-preview {
   justify-content: center;
   min-height: 30px;
   padding: 5px 10px;
-  border: 1px solid color-mix(in oklch, var(--accent) 42%, var(--line-soft));
+  border: 1px solid color-mix(in oklch, var(--accent) 42%, var(--border-subtle));
   border-radius: 8px;
   background: color-mix(in oklch, var(--accent) 14%, transparent);
-  color: var(--accent-text);
+  color: var(--text-accent);
   font: inherit;
   font-size: 12px;
   font-weight: 650;
@@ -14074,12 +14074,12 @@ button.figma-view-preview {
   background: color-mix(in oklch, var(--accent) 20%, transparent);
 }
 .run-summary-card-action-secondary {
-  border-color: var(--line-soft);
+  border-color: var(--border-subtle);
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .run-summary-card-action:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -14118,8 +14118,8 @@ button.figma-view-preview {
   border-color: var(--accent);
 }
 .bw-btn-danger:hover:not(:disabled) {
-  border-color: var(--danger);
-  background: color-mix(in oklch, var(--danger) 28%, var(--inset));
+  border-color: var(--feedback-danger);
+  background: color-mix(in oklch, var(--feedback-danger) 28%, var(--surface-inset));
 }
 
 /* C153 — align Browser/Agent buttons with the .tm-action hover transition
@@ -14147,8 +14147,8 @@ button.figma-view-preview {
 .figma-snapshot-load-btn:hover:not(:disabled),
 .figma-snapshot-resnapshot-btn:hover:not(:disabled),
 .figma-snapshot-codegen-cancel-btn:hover:not(:disabled) {
-  background: var(--card-2);
-  border-color: var(--line-strong);
+  background: var(--button-secondary-surface-hover);
+  border-color: var(--border-strong);
 }
 @media (prefers-reduced-motion: no-preference) {
   .figma-snapshot-trigger-btn,
@@ -14174,7 +14174,7 @@ button.figma-view-preview {
 /* C305 — Retry/Dismiss in lk-alert banners had only the UA default ring; align
    with the accent focus-ring language used by .qi-btn and the other controls. */
 .lk-alert-retry:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -14271,7 +14271,7 @@ button.figma-view-preview {
 /* C140: UA-default placeholder grey is 3.6:1 on --card in dark — use --fg-muted (pattern .cmp-input::placeholder). */
 .qi-input::placeholder,
 .qi-textarea::placeholder {
-  color: var(--fg-muted);
+  color: var(--input-placeholder);
 }
 /* C218: Generate uses aria-disabled (stays focusable, reason via aria-describedby) instead of native disabled. */
 .qi-btn[aria-disabled="true"] {
@@ -14467,7 +14467,7 @@ button.figma-view-preview {
   gap: 7px;
   margin-top: 0;
   font-size: 12px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -14501,17 +14501,17 @@ button.figma-view-preview {
   color: var(--accent);
 }
 .cmp-budget-badge-moderate {
-  background: color-mix(in oklch, var(--info) 18%, transparent);
-  color: var(--info);
+  background: color-mix(in oklch, var(--feedback-info) 18%, transparent);
+  color: var(--feedback-info);
 }
 .cmp-budget-badge-high {
-  background: color-mix(in oklch, var(--warn) 18%, transparent);
-  color: var(--warn);
+  background: color-mix(in oklch, var(--feedback-warning) 18%, transparent);
+  color: var(--feedback-warning);
 }
 /* exceeded: --fg on the 18% danger tint ≈7.5:1 (same rationale as .qi-badge-failed). */
 .cmp-budget-badge-exceeded {
-  background: color-mix(in oklch, var(--danger) 18%, transparent);
-  color: var(--fg);
+  background: color-mix(in oklch, var(--feedback-danger) 18%, transparent);
+  color: var(--text-primary);
 }
 /* Light theme: raw --accent #4eba87 on the 18% accent tint ≈1.97:1 FAIL — ink-inverse
    ≈15:1 (same precedent as [data-theme="light"] .qi-badge-succeeded). --info/--warn/--danger
@@ -14530,15 +14530,15 @@ button.figma-view-preview {
   width: 16px;
   height: 16px;
   flex: none;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--border-strong);
   border-radius: 50%;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 10px;
   font-style: italic;
   cursor: help;
 }
 .cmp-budget-info:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .cmp-budget-info[data-tip]::after {
@@ -14551,14 +14551,14 @@ button.figma-view-preview {
   max-width: 240px;
   padding: 5px 9px;
   border-radius: 7px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  color: var(--fg);
+  background: var(--surface-primary);
+  border: 1px solid var(--popover-border);
+  color: var(--text-primary);
   font-size: 12px;
   font-style: normal;
   font-weight: 500;
   line-height: 1.35;
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--popover-shadow);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease;
@@ -14572,10 +14572,10 @@ button.figma-view-preview {
 .cmp-budget-clear {
   min-height: 28px;
   padding: 3px 10px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 9px;
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font-size: 11.5px;
   transition:
     border-color 0.15s ease,
@@ -14583,12 +14583,12 @@ button.figma-view-preview {
     color 0.15s ease;
 }
 .cmp-budget-clear:hover:not(:disabled) {
-  background: var(--card-2);
-  border-color: var(--line-strong);
-  color: var(--fg);
+  background: var(--button-secondary-surface-hover);
+  border-color: var(--border-strong);
+  color: var(--button-secondary-text);
 }
 .cmp-budget-clear:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .cmp-budget-clear:disabled {
@@ -14602,11 +14602,11 @@ button.figma-view-preview {
   gap: 8px;
 }
 .cmp-budget-confirm-label {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .cmp-budget-cleared {
   font-size: 11.5px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .cmp-budget-alert {
   margin-top: 2px;
@@ -14621,7 +14621,7 @@ button.figma-view-preview {
    rules); a subtle info-ward tone shift inside the accent family distinguishes the source
    kind at a glance. ink-inverse stays ≥4.5:1 on the mixed fill in both themes. */
 .scope-pill--connector {
-  background: color-mix(in oklab, var(--accent) 72%, var(--info) 28%);
+  background: color-mix(in oklab, var(--accent) 72%, var(--feedback-info) 28%);
   border-color: color-mix(in oklab, var(--accent) 55%, #000 30%);
 }
 
@@ -14790,9 +14790,9 @@ button.figma-view-preview {
 .dir-error {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in oklch, var(--danger) 48%, transparent);
-  background: color-mix(in oklch, var(--danger) 22%, var(--card));
-  color: var(--fg);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 48%, transparent);
+  background: color-mix(in oklch, var(--feedback-danger) 22%, var(--card-surface));
+  color: var(--text-primary);
   font-size: 12.5px;
   line-height: 1.45;
 }
@@ -14873,15 +14873,15 @@ button.figma-view-preview {
 .connector-picker-select {
   min-height: 28px;
   padding: 6px 9px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: var(--card);
-  color: var(--fg);
+  background: var(--combobox-surface);
+  color: var(--input-text);
   font-size: 12.5px;
   font-family: var(--font-ui);
 }
 .connector-picker-select:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* status/empty/error are early-return roots WITHOUT the .connector-picker
@@ -14937,7 +14937,7 @@ button.figma-view-preview {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--accent-text);
+  color: var(--text-accent);
 }
 /* C263 — non-blocking notice when only the capsule-set fetch failed.
    --warn has an AA light-theme override (oklch 0.43). */
@@ -15070,8 +15070,8 @@ button.figma-view-preview {
 }
 /* Success cue beyond the label swap — --ok is AA-adjusted per theme. */
 .sm-code-copy[data-copied="true"] {
-  color: var(--ok);
-  border-color: var(--ok);
+  color: var(--feedback-success);
+  border-color: var(--feedback-success);
 }
 
 /* ==== uiux-fix F028: settings panel focus/hover/error states ==== */
@@ -15163,7 +15163,7 @@ ul.integ {
 .gw-cancel:focus-visible,
 .perm-toggle:focus-visible,
 .perm-opt:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* C191: machine error code as a small secondary mono line under the human
@@ -15179,7 +15179,7 @@ ul.integ {
    as the base .qi-btn:hover rule — later in file wins; the (0,4,0) primary
    exception .qi-btn-primary[aria-disabled]:hover (uiux-fix F004) still applies. */
 .qi-btn[aria-disabled="true"]:hover {
-  border-color: var(--line);
+  border-color: var(--border-default);
 }
 
 /* ==== uiux-fix F027: missing focus indicators (search box, wallpaper slider) ==== */
@@ -15209,14 +15209,14 @@ ul.integ {
    (rgb(117,117,117) = 3.60:1 on the --card input bg). Every other input class
    styles ::placeholder explicitly; --fg-muted matches the .cmp-input convention. */
 .figma-snapshot-input::placeholder {
-  color: var(--fg-muted);
+  color: var(--input-placeholder);
 }
 
 /* C283 — the reviewer-label (QiRunCard) and seed (RunLauncher) inputs set
    aria-invalid but had no visual invalid state. Mirrors
    .figma-snapshot-input[aria-invalid="true"], with the theme-calibrated token. */
 .qi-input[aria-invalid="true"] {
-  border-color: var(--danger);
+  border-color: var(--input-border-error);
 }
 
 /* C253 — figma-snapshot <summary> disclosure rows (PAT scopes, generated file
@@ -15349,9 +15349,9 @@ ul.integ {
   padding: 6px 12px;
   font-size: 11.5px;
   line-height: 1.4;
-  color: var(--fg);
-  background: color-mix(in oklch, var(--warn) 12%, var(--surface));
-  border-bottom: 1px solid color-mix(in oklch, var(--warn) 40%, var(--line-soft));
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--feedback-warning) 12%, var(--surface-overlay));
+  border-bottom: 1px solid color-mix(in oklch, var(--feedback-warning) 40%, var(--border-subtle));
 }
 /* C087 — files tree async states had no CSS: notes were unstyled, the error Retry button
    inherited the global button reset (bare text, <24px target, no affordance). */
@@ -15362,7 +15362,7 @@ ul.integ {
   color: var(--fg-muted);
 }
 .files-warning {
-  border-left: 2px solid var(--warn);
+  border-left: 2px solid var(--feedback-warning);
 }
 .files-error {
   display: flex;
@@ -15373,9 +15373,9 @@ ul.integ {
   padding: 8px 10px;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--fg);
-  background: color-mix(in oklch, var(--danger) 14%, var(--inset));
-  border: 1px solid color-mix(in oklch, var(--danger) 55%, var(--line-soft));
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--feedback-danger) 14%, var(--surface-inset));
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 55%, var(--border-subtle));
   border-radius: 9px;
 }
 .files-retry {
@@ -15422,7 +15422,7 @@ ul.integ {
 .proj-head:focus-visible,
 .edm-item:focus-visible,
 .plg-row:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: -2px;
 }
 .fpv-back:focus-visible,
@@ -15434,13 +15434,13 @@ ul.integ {
 .pal-card:focus-visible,
 .palette-x:focus-visible,
 .auto-toggle:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* C123 — shared Toggle (role=switch): hover feedback + a ≥24px hit area around the 30×18
    pill (transparent ::after, visual size unchanged; WCAG 2.5.8). */
 .auto-toggle:hover {
-  border-color: var(--line-strong);
+  border-color: var(--border-strong);
 }
 .auto-toggle::after {
   content: "";
@@ -15470,7 +15470,7 @@ ul.integ {
   color: var(--fg-muted);
 }
 .files-warning {
-  color: var(--warn);
+  color: var(--feedback-warning);
 }
 .files-error {
   display: flex;
@@ -15480,9 +15480,9 @@ ul.integ {
   padding: 8px 10px;
   border-radius: 8px;
   font-size: 12px;
-  color: var(--fg);
-  background: color-mix(in oklch, var(--danger) 14%, var(--inset));
-  border: 1px solid color-mix(in oklch, var(--danger) 55%, var(--line-soft));
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--feedback-danger) 14%, var(--surface-inset));
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 55%, var(--border-subtle));
 }
 .files-error > span {
   flex: 1;
@@ -15710,8 +15710,8 @@ ul.integ {
   cursor: default;
 }
 .figma-snapshot-load-btn[aria-disabled="true"]:hover {
-  background: var(--card);
-  border-color: var(--line);
+  background: var(--button-secondary-surface);
+  border-color: var(--button-secondary-border);
 }
 /* C247 — the board-link input is readOnly (not disabled) while busy so an Enter-submit
    does not drop focus to <body>; keep the dimmed look of the former :disabled state. */
@@ -15951,7 +15951,7 @@ ul.integ {
 .arun-btn[aria-pressed="true"],
 .arun-btn[aria-pressed="true"]:hover:not(:disabled) {
   background: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   border-color: var(--accent);
 }
 /* C124: buttons that stay focusable during async work use aria-disabled instead of
@@ -15962,21 +15962,21 @@ ul.integ {
   cursor: not-allowed;
 }
 .arun-btn[aria-disabled="true"]:hover {
-  color: var(--fg-muted);
-  background: var(--card);
+  color: var(--text-secondary);
+  background: var(--button-secondary-surface);
 }
 .tm-action[aria-disabled="true"] {
   opacity: 0.45;
   cursor: not-allowed;
 }
 .tm-action[aria-disabled="true"]:hover {
-  background: var(--card);
-  color: var(--fg-muted);
-  border-color: var(--line);
+  background: var(--button-secondary-surface);
+  color: var(--text-secondary);
+  border-color: var(--button-secondary-border);
 }
 .tm-action[data-primary="true"][aria-disabled="true"]:hover {
   background: var(--accent);
-  color: var(--ink-inverse);
+  color: var(--button-primary-text);
   border-color: var(--accent);
   filter: none;
 }
@@ -15985,12 +15985,12 @@ ul.integ {
   cursor: not-allowed;
 }
 .bw-btn[aria-disabled="true"]:hover {
-  border-color: var(--line);
+  border-color: var(--button-secondary-border);
   filter: none;
 }
 .bw-btn-danger[aria-disabled="true"]:hover {
-  border-color: color-mix(in oklch, var(--danger) 55%, var(--line-soft));
-  background: color-mix(in oklch, var(--danger) 18%, var(--inset));
+  border-color: color-mix(in oklch, var(--feedback-danger) 55%, var(--border-subtle));
+  background: color-mix(in oklch, var(--feedback-danger) 18%, var(--surface-inset));
 }
 .bw-btn-primary[aria-disabled="true"]:hover {
   border-color: var(--accent);
@@ -16000,15 +16000,15 @@ ul.integ {
    data-status; the running state keeps the accent data-live pulse (higher
    specificity rule at .arun .dot[data-live="true"]). */
 .arun-status .dot {
-  background: var(--line-strong);
+  background: var(--border-strong);
 }
 .arun-status .dot[data-status="failed"],
 .arun-status .dot[data-status="rejected"] {
-  background: var(--danger);
+  background: var(--feedback-danger);
 }
 .arun-status .dot[data-status="completed"],
 .arun-status .dot[data-status="fix-applied"] {
-  background: var(--ok);
+  background: var(--feedback-success);
 }
 /* C266: absolute paths are single unbreakable words — the chip caps at the row
    width and the inner span ellipsises (cf. .rv-filerow-path); the full path stays
@@ -16042,21 +16042,21 @@ ul.integ {
   color: var(--fg-muted);
 }
 .rv-runid-input {
-  background: var(--inset);
-  border: 1px solid var(--line);
+  background: var(--input-surface);
+  border: 1px solid var(--input-border);
   border-radius: var(--radius-sm);
   padding: 6px 9px;
   min-height: 28px;
-  color: var(--fg);
+  color: var(--input-text);
   font-size: 12px;
   width: 220px;
   max-width: 100%;
 }
 .rv-runid-input::placeholder {
-  color: var(--fg-muted);
+  color: var(--input-placeholder);
 }
 .rv-runid-input:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
 }
 /* ==== uiux-fix F039: boot placeholder (C402) ==== */
@@ -16230,7 +16230,7 @@ ul.integ {
   gap: 8px;
   padding: 8px 2px;
   font-size: 12.5px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 /* C170 — the region is permanently mounted (live regions inserted together with
    their first message are unreliably announced) and collapses to zero height
@@ -16259,13 +16259,13 @@ ul.integ {
 }
 .scope-grounding-label {
   /* WCAG 1.4.3 — 12px chat-scope label; --fg-dim is audited ≥4.5:1 on card surfaces. */
-  color: var(--fg-dim);
+  color: var(--text-tertiary);
   transition:
     color 0.18s ease,
     text-shadow 0.18s ease;
 }
 .scope-grounding[data-connected="true"] .scope-grounding-label {
-  color: var(--accent-text);
+  color: var(--text-accent);
   text-shadow: 0 0 10px color-mix(in oklch, var(--accent) 30%, transparent);
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -16288,9 +16288,9 @@ ul.integ {
    chip-styled .cmp-model-select. Pattern: .qi-select; the
    native dropdown arrow is kept so the affordance stays recognizable. */
 .scope-grounding-select {
-  background: var(--card);
-  color: var(--fg);
-  border: 1px solid var(--line-soft);
+  background: var(--combobox-surface);
+  color: var(--input-text);
+  border: 1px solid var(--border-subtle);
   border-radius: 9px;
   padding: 4px 8px;
   font-size: 12px;
@@ -16301,14 +16301,14 @@ ul.integ {
   cursor: pointer;
 }
 .scope-grounding-select:hover:not(:disabled) {
-  border-color: var(--line);
+  border-color: var(--input-border);
 }
 .scope-grounding-select:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
 .scope-grounding-select:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--accent);
 }
@@ -16319,8 +16319,8 @@ ul.integ {
 }
 .scope-grounding-select option {
   /* explicit pair — Chromium dark option popups honor option CSS (cf. .cmp-model-select option) */
-  color: var(--fg);
-  background: var(--surface);
+  color: var(--input-text);
+  background: var(--combobox-list-surface);
 }
 
 /* ==== uiux-fix F047: QI export preview keyboard scroll (C269) ==== */
@@ -16350,7 +16350,7 @@ ul.integ {
    server 428 FIGMA_CONSENT_REQUIRED), the checkbox is marked aria-invalid and focused; this
    mirrors .figma-snapshot-input[aria-invalid="true"] so the error visibly points at it. */
 .figma-snapshot-consent-checkbox[aria-invalid="true"] {
-  outline: var(--focus-width, 2px) solid var(--danger);
+  outline: var(--focus-width, 2px) solid var(--input-border-error);
   outline-offset: 1px;
 }
 
@@ -16371,8 +16371,8 @@ ul.integ {
   display: grid;
   place-items: center;
   border-radius: 5px;
-  background: var(--inset);
-  color: var(--fg-muted);
+  background: var(--surface-inset);
+  color: var(--text-secondary);
 }
 /* C177 — sent-documents disclosure (#148) had no rules at all: UA bullets,
    ~40px list indent and 16px default font inside the 12-14px chat log. */
@@ -16558,9 +16558,9 @@ ul.integ {
   margin-top: 6px;
   font-size: 11px;
   font-family: var(--font-ui);
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   background: none;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   cursor: pointer;
   opacity: 0;
@@ -16575,16 +16575,16 @@ ul.integ {
   opacity: 1;
 }
 .chat-msg-copy:hover {
-  color: var(--fg);
-  border-color: var(--line-strong);
+  color: var(--button-secondary-text);
+  border-color: var(--border-strong);
 }
 .chat-msg-copy:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .chat-msg-copy[data-copied="true"] {
-  color: var(--ok);
-  border-color: var(--ok);
+  color: var(--feedback-success);
+  border-color: var(--feedback-success);
 }
 /* C325 — the in-flight Cancel state (#152) carried the .cmp-send-cancel hook
    with zero rules and rendered in the identical accent look as Send; only the
@@ -16592,14 +16592,14 @@ ul.integ {
    --danger inside the existing palette. Specificity (0,3,0) beats the accent
    .cmp-send[data-on="true"] rule (0,2,0). */
 .cmp-send.cmp-send-cancel[data-on] {
-  background: var(--card-2);
-  color: var(--fg);
-  border: 1px solid var(--line-strong);
+  background: var(--surface-elevated);
+  color: var(--button-secondary-text);
+  border: 1px solid var(--border-strong);
 }
 .cmp-send.cmp-send-cancel[data-on]:hover {
-  color: var(--danger);
-  background: color-mix(in oklab, var(--danger) 12%, var(--card-2));
-  border-color: color-mix(in oklab, var(--danger) 60%, var(--line-strong));
+  color: var(--feedback-danger);
+  background: color-mix(in oklab, var(--feedback-danger) 12%, var(--surface-elevated));
+  border-color: color-mix(in oklab, var(--feedback-danger) 60%, var(--border-strong));
 }
 
 /* ==== uiux-fix F050: palette entry, QI empty-state inset, shell transitions, light FAB shadow ==== */
@@ -16681,11 +16681,11 @@ ul.integ {
   min-height: 34px;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--input-border);
   border-radius: 8px;
-  background: var(--inset);
+  background: var(--input-surface);
   padding: 0 10px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 
 .chat-history-search input {
@@ -16694,7 +16694,7 @@ ul.integ {
   border: 0;
   outline: none;
   background: transparent;
-  color: var(--fg);
+  color: var(--input-text);
   font: inherit;
   font-size: 13px;
 }
