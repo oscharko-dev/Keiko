@@ -2530,3 +2530,201 @@ describe("Issue #1296 — AI/agent component set (Design System 0.4.0)", () => {
     ).toEqual([]);
   });
 });
+
+describe("Issue #1297 — table / data grid + dataviz foundation (Design System 0.4.0)", () => {
+  // ── 1. Value-preservation: every --table-* component token aliases the exact primitive the
+  //       product table surfaces already used, so routing a surface onto the token cannot change
+  //       its resolved value in any mode. The --viz-* palette is pinned to its governed values.
+  it("defines the --table-* component tokens as pure aliases over the existing primitives", () => {
+    for (const decl of [
+      "--table-header-text: var(--fg-faint)",
+      "--table-header-surface: var(--card-2)",
+      "--table-row-border: var(--line-soft)",
+      "--table-row-surface-hover: var(--card)",
+      "--table-row-surface-selected: var(--accent-dim)",
+      "--table-foot-surface: var(--card-2)",
+      "--table-sort-indicator: var(--accent-text)",
+      "--table-num-text: var(--fg)",
+    ]) {
+      expect(css, `table token def "${decl}" missing or drifted`).toContain(decl);
+    }
+  });
+
+  it("defines the --viz-* categorical + sequential palette, mode-aware across dark and light", () => {
+    // structural tokens alias the semantic tier; the lead categorical hue is the orca accent.
+    for (const decl of [
+      "--viz-1: var(--accent)",
+      "--viz-grid: var(--border-subtle)",
+      "--viz-axis: var(--text-faint)",
+    ]) {
+      expect(css, `viz token def "${decl}" missing or drifted`).toContain(decl);
+    }
+    // dark palette values (in :root) and their light-mode overrides both present → mode-aware.
+    expect(css, "dark --viz-2 missing").toContain("--viz-2: oklch(0.7 0.12 240)");
+    expect(css, "light --viz-2 override missing").toContain("--viz-2: oklch(0.5 0.14 240)");
+    expect(css, "dark sequential ramp start missing").toContain("--viz-seq-1: oklch(0.3 0.05 160)");
+    expect(css, "light sequential ramp start missing").toContain(
+      "--viz-seq-1: oklch(0.9 0.04 160)",
+    );
+  });
+
+  // ── 2. The canonical .c-table* / .viz* primitives consume the tokens exactly.
+  it("ships the canonical .c-table* primitives consuming the --table-* component tokens", () => {
+    const wrap = cssBlock("\n.c-tablewrap {");
+    expect(wrap).toContain("var(--card-surface)");
+    expect(wrap).toContain("var(--card-border)");
+    const head = cssBlock("\n.c-table thead th {");
+    expect(head).toContain("var(--table-header-text)");
+    expect(head).toContain("var(--table-header-surface)");
+    expect(cssBlock('\n.c-table th[aria-sort="ascending"] .so {')).toContain(
+      "var(--table-sort-indicator)",
+    );
+    expect(cssBlock("\n.c-table tbody td {")).toContain("var(--table-row-border)");
+    expect(cssBlock("\n.c-table tbody td.num {")).toContain("var(--table-num-text)");
+    expect(cssBlock("\n.c-table tbody tr:hover {")).toContain("var(--table-row-surface-hover)");
+    expect(cssBlock('\n.c-table tbody tr[aria-selected="true"] {')).toContain(
+      "var(--table-row-surface-selected)",
+    );
+    expect(cssBlock("\n.c-table-foot {")).toContain("var(--table-foot-surface)");
+  });
+
+  it("ships the canonical .viz* primitives consuming the --viz-* palette + chart-chrome tokens", () => {
+    expect(cssBlock("\n.viz-bar {")).toContain("var(--viz-1)");
+    expect(cssBlock("\n.viz-bar.s2 {")).toContain("var(--viz-2)");
+    expect(cssBlock("\n.viz-bar.s4 {")).toContain("var(--viz-4)");
+    expect(cssBlock("\n.viz-gridlines i {")).toContain("var(--viz-grid)");
+    expect(cssBlock("\n.viz-yaxis span {")).toContain("var(--viz-axis)");
+    expect(cssBlock("\n.viz-seq i:nth-child(1) {")).toContain("var(--viz-seq-1)");
+    const tip = cssBlock("\n.viz-tip {");
+    expect(tip).toContain("var(--tooltip-surface)");
+    expect(tip).toContain("var(--tooltip-text)");
+  });
+
+  // ── 3. Completeness: every --table-* and --viz-* token now has at least one consumer (the
+  //       audit's headline gap was that the 8 --table-* tokens were defined but consumed 0 times).
+  it("gives every --table-* and --viz-* token at least one consumer", () => {
+    const tokens = [
+      "--table-header-text",
+      "--table-header-surface",
+      "--table-row-border",
+      "--table-row-surface-hover",
+      "--table-row-surface-selected",
+      "--table-foot-surface",
+      "--table-sort-indicator",
+      "--table-num-text",
+      "--viz-1",
+      "--viz-2",
+      "--viz-3",
+      "--viz-4",
+      "--viz-5",
+      "--viz-6",
+      "--viz-seq-1",
+      "--viz-seq-2",
+      "--viz-seq-3",
+      "--viz-seq-4",
+      "--viz-seq-5",
+      "--viz-grid",
+      "--viz-axis",
+    ];
+    const unconsumed = tokens.filter((t) => !css.includes(`var(${t})`));
+    expect(unconsumed, `data-display tokens with no consumer: ${unconsumed.join(", ")}`).toEqual(
+      [],
+    );
+  });
+
+  // ── 4. Reduced-motion (WCAG 2.3.3): the loading skeleton shimmers by default but is switched
+  //       OFF inside prefers-reduced-motion: reduce.
+  it("defines the skeleton shimmer keyframe and disables it under prefers-reduced-motion", () => {
+    expect(css).toContain("@keyframes c-shimmer");
+    // the reduce media query nulls the skeleton animation.
+    const reduceIdx = css.indexOf(
+      "@media (prefers-reduced-motion: reduce) {\n  .c-table.is-loading",
+    );
+    expect(reduceIdx, "reduced-motion guard for the table skeleton missing").toBeGreaterThan(-1);
+    const guard = css.slice(reduceIdx, css.indexOf("}", css.indexOf("animation: none", reduceIdx)));
+    expect(guard).toContain(".c-table.is-loading tbody td::after");
+    expect(guard).toContain("animation: none");
+  });
+
+  // ── 5. Keyboard focus ring (WCAG 2.4.7): sortable headers are interactive.
+  it("gives sortable column headers a keyboard focus ring", () => {
+    expect(cssBlock("\n.c-table th.sortable:focus-visible {")).toContain("var(--focus-ring)");
+  });
+
+  // ── 6. Product adopters consume the tokens (positive) and drop the raw primitive they replaced
+  //       (negative) → reverting any one alias re-fails (mutation-robust).
+  it("routes the markdown .sm-table onto the --table-* tokens value-preservingly", () => {
+    const wrapper = cssBlock("\n.sm-table-wrapper {");
+    expect(wrapper).toContain("var(--card-border)");
+    expect(wrapper).not.toMatch(/border:\s*1px solid var\(--line\)/u);
+    const cell = cssBlock("\n.sm-table th,");
+    expect(cell).toContain("var(--table-row-border)");
+    expect(cell).toContain("var(--table-num-text)");
+    expect(cell).not.toMatch(/var\(--line-soft\)/u);
+    expect(cell).not.toMatch(/color:\s*var\(--fg\)/u);
+    expect(cssBlock("\n.sm-table th {")).toContain("var(--table-header-surface)");
+    const even = cssBlock("\n.sm-table tr:nth-child(even) td {");
+    expect(even).toContain("var(--surface-inset)");
+    expect(even).not.toContain("var(--inset)");
+  });
+
+  it("adopts the .c-table component on the prompt-enhancer scorecards + DS winner-row emphasis", () => {
+    const winner = cssBlock("\n.pe-scorecards tbody tr.pe-winner {");
+    expect(winner).toContain("var(--table-row-surface-selected)");
+    const rowHead = cssBlock('\n.pe-scorecards tbody th[scope="row"] {');
+    expect(rowHead).toContain("var(--table-row-border)");
+    expect(rowHead).toContain("var(--text-primary)");
+  });
+
+  // ── 7. Purity gate for the ported canonical layer: parse every .c-table*/.viz* rule and assert
+  //       none reintroduces a raw aliased primitive — it must read the --table-*/--viz-*/semantic
+  //       tier only. The predicate is the same in-scope prefix the migration used (NOT an allowlist).
+  it("keeps the canonical .c-table* / .viz* layer free of raw aliased primitives (scope-wide)", () => {
+    const forbidden = [
+      "--bg",
+      "--surface",
+      "--card-2",
+      "--card",
+      "--inset",
+      "--fg-muted",
+      "--fg-dim",
+      "--fg-faint",
+      "--fg",
+      "--line-soft",
+      "--line-strong",
+      "--line",
+      "--danger",
+      "--warn",
+      "--ok",
+      "--accent-text",
+      "--accent-line",
+      "--accent-dim",
+      "--accent",
+    ];
+    const escapeRegExp = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const bodyForbidden = (body: string): readonly string[] =>
+      forbidden.filter((tok) => new RegExp(`var\\(\\s*${escapeRegExp(tok)}\\s*[),]`).test(body));
+    const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
+    let match: RegExpExecArray | null;
+    let dataRulesChecked = 0;
+    const offenders: string[] = [];
+    while ((match = ruleRe.exec(source)) !== null) {
+      const selector = (match[1] ?? "").trim().replace(/\s+/g, " ");
+      const body = match[2] ?? "";
+      if (selector === "" || selector.startsWith("@")) continue;
+      // canonical data-display primitives only: .c-table*, .c-tablewrap/scroll, .viz*.
+      if (!/(^|[\s,>])\.(c-table|c-tablewrap|c-tablescroll|viz)[a-z0-9-]*/u.test(selector))
+        continue;
+      dataRulesChecked++;
+      for (const tok of bodyForbidden(body)) {
+        offenders.push(`${selector} { … var(${tok}) … }`);
+      }
+    }
+    expect(dataRulesChecked).toBeGreaterThan(40);
+    expect(
+      offenders,
+      `canonical .c-table*/.viz* rules must read the --table-*/--viz-*/semantic tier, not raw primitives:\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+});

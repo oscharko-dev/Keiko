@@ -240,29 +240,37 @@ function CandidateScorecards({
 }): ReactNode {
   return (
     <Section title="Candidate scorecards">
-      <table className="pe-scorecards" data-testid="pe-scorecards">
-        <thead>
-          <tr>
-            <th scope="col">Profile</th>
-            <th scope="col">Score</th>
-            <th scope="col">Tokens</th>
-            <th scope="col">Winner</th>
-          </tr>
-        </thead>
-        <tbody>
-          {candidates.scorecards.map((scorecard) => {
-            const winner = scorecard.candidateId === candidates.winnerCandidateId;
-            return (
-              <tr key={scorecard.candidateId} className={winner ? "pe-winner" : undefined}>
-                <th scope="row">{scorecard.profile}</th>
-                <td>{scorecard.aggregateScore.toFixed(3)}</td>
-                <td>{scorecard.estimatedTokens}</td>
-                <td>{winner ? "★" : ""}</td>
+      <div className="c-tablewrap">
+        <div className="c-tablescroll">
+          <table className="c-table pe-scorecards" data-testid="pe-scorecards">
+            <thead>
+              <tr>
+                <th scope="col">Profile</th>
+                <th scope="col" className="num">
+                  Score
+                </th>
+                <th scope="col" className="num">
+                  Tokens
+                </th>
+                <th scope="col">Winner</th>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {candidates.scorecards.map((scorecard) => {
+                const winner = scorecard.candidateId === candidates.winnerCandidateId;
+                return (
+                  <tr key={scorecard.candidateId} className={winner ? "pe-winner" : undefined}>
+                    <th scope="row">{scorecard.profile}</th>
+                    <td className="num">{scorecard.aggregateScore.toFixed(3)}</td>
+                    <td className="num">{scorecard.estimatedTokens}</td>
+                    <td>{winner ? "★" : ""}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </Section>
   );
 }

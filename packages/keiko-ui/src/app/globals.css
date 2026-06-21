@@ -406,6 +406,24 @@
   --viz-axis-text: var(--fg-faint);
   --viz-tooltip-surface: var(--card-2);
   --viz-tooltip-value: var(--fg);
+
+  /* Issue #1297 — Design System 0.4.0 data-visualisation palette (design-system/keiko-dataviz.css).
+     Categorical hues at a matched chroma so no single series shouts (order = legend order), a
+     single-hue green sequential ramp for magnitude, plus grid/axis tokens. Dark values live here;
+     the light-theme block overrides --viz-2..6 and --viz-seq-1..5 for light backgrounds. */
+  --viz-1: var(--accent);
+  --viz-2: oklch(0.7 0.12 240);
+  --viz-3: oklch(0.78 0.13 75);
+  --viz-4: oklch(0.68 0.15 330);
+  --viz-5: oklch(0.7 0.13 25);
+  --viz-6: oklch(0.72 0.07 200);
+  --viz-seq-1: oklch(0.3 0.05 160);
+  --viz-seq-2: oklch(0.42 0.08 160);
+  --viz-seq-3: oklch(0.54 0.1 160);
+  --viz-seq-4: oklch(0.66 0.12 160);
+  --viz-seq-5: oklch(0.78 0.13 160);
+  --viz-grid: var(--border-subtle);
+  --viz-axis: var(--text-faint);
 }
 
 [data-density="compact"] {
@@ -971,6 +989,20 @@ button {
      per-component overrides used (.dlg-overlay/.wf-dialog-overlay/.mc-dialog-backdrop),
      so the base scrim rules routed to var(--overlay-scrim) adapt in Light. */
   --overlay-scrim: oklch(0.3 0.01 160 / 0.34);
+
+  /* Issue #1297 — DS 0.4.0 dataviz light-mode palette overrides (design-system/keiko-dataviz.css):
+     same categorical hues re-tuned to a higher chroma / lower lightness so they stay distinct on
+     the light --bg, and the sequential ramp inverts dark→light to remain a magnitude scale. */
+  --viz-2: oklch(0.5 0.14 240);
+  --viz-3: oklch(0.55 0.13 75);
+  --viz-4: oklch(0.52 0.16 330);
+  --viz-5: oklch(0.52 0.17 25);
+  --viz-6: oklch(0.5 0.08 200);
+  --viz-seq-1: oklch(0.9 0.04 160);
+  --viz-seq-2: oklch(0.8 0.08 160);
+  --viz-seq-3: oklch(0.68 0.11 160);
+  --viz-seq-4: oklch(0.56 0.12 160);
+  --viz-seq-5: oklch(0.46 0.13 160);
 }
 
 /* Single-source HC palettes — the OS media query and explicit in-app attribute
@@ -9196,6 +9228,573 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 /* ============================================================
+   Issue #1297 — Table / Data Grid + Data Visualisation (Design System 0.4.0).
+   The data-display foundation the Design System audit flagged as missing.
+   Ported verbatim from design-system/keiko-data.css and
+   design-system/keiko-dataviz.css so the component primitives resolve
+   byte-identically to the DS 0.4.0 reference (data-grid.html / dataviz.html)
+   and exist as reusable system primitives.
+
+   These are the FIRST consumers of the --table-* component tokens (defined
+   additively in #1292, consumed 0 times until now) and of the --viz-* palette
+   (defined in :root / the light-theme block above). Every surface reads a
+   component/semantic token, so the grid and charts track Dark, Light and High
+   Contrast for free; row density is driven by [data-density]. No raw colour is
+   introduced — the remaining literals are structural sizing carried over from
+   the governed reference.
+
+   Product adopters: .sm-table (markdown tables) routes onto --table-* value-
+   preservingly; .pe-scorecards (prompt-enhancer) adopts the .c-table component.
+   Deferred adopters: see docs/design-system/data-display-migration.md.
+   ============================================================ */
+
+/* ── table & data grid (design-system/keiko-data.css) ─────── */
+.c-tablewrap {
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-surface);
+  background: var(--card-surface);
+  overflow: hidden;
+}
+.c-tablescroll {
+  overflow: auto;
+  max-height: 420px;
+}
+
+.c-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--text-body-sm);
+}
+
+/* head */
+.c-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  font: var(--weight-semibold) var(--text-caption) / 1 var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--table-header-text);
+  background: var(--table-header-surface);
+  padding: 11px var(--row-pad-x);
+  border-bottom: 1px solid var(--border-default);
+  white-space: nowrap;
+}
+.c-table thead th.num {
+  text-align: right;
+}
+.c-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.c-table th.sortable:hover {
+  color: var(--text-secondary);
+}
+.c-table th.sortable:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.c-table th .so {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 6px;
+  color: var(--text-faint);
+  transition:
+    color 0.12s,
+    transform 0.12s;
+}
+.c-table th[aria-sort="ascending"] .so {
+  color: var(--table-sort-indicator);
+  transform: rotate(180deg);
+}
+.c-table th[aria-sort="descending"] .so {
+  color: var(--table-sort-indicator);
+}
+.c-table th[aria-sort="none"] .so {
+  opacity: 0.5;
+}
+
+/* body */
+.c-table tbody td {
+  padding: var(--row-pad-y) var(--row-pad-x);
+  border-bottom: 1px solid var(--table-row-border);
+  color: var(--text-secondary);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.c-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.c-table tbody td.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--table-num-text);
+  font-variant-numeric: tabular-nums;
+}
+.c-table td .pri {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+.c-table tbody tr {
+  transition: background 0.1s;
+}
+.c-table tbody tr:hover {
+  background: var(--table-row-surface-hover);
+}
+.c-table tbody tr[aria-selected="true"] {
+  background: var(--table-row-surface-selected);
+}
+.c-table tbody tr[aria-selected="true"] td {
+  color: var(--text-primary);
+}
+.c-table.zebra tbody tr:nth-child(even) {
+  background: color-mix(in oklch, var(--surface-secondary) 45%, transparent);
+}
+.c-table.zebra tbody tr:hover {
+  background: var(--table-row-surface-hover);
+}
+
+/* selection cell + checkbox sizing handled by the .c-check input primitive */
+.c-table .selcell {
+  width: 36px;
+  padding-right: 0;
+}
+.c-table .c-cell-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.c-table .c-cell-user .av {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--surface-accent-subtle);
+  color: var(--text-accent);
+  border: 1px solid var(--border-accent);
+  display: grid;
+  place-items: center;
+  font: 700 10.5px var(--font-ui);
+  flex: none;
+}
+
+/* loading skeleton rows */
+.c-table.is-loading tbody td {
+  color: transparent !important;
+}
+.c-table.is-loading tbody td * {
+  visibility: hidden;
+}
+.c-table.is-loading tbody td::after {
+  content: "";
+  display: block;
+  height: 9px;
+  border-radius: 5px;
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-base),
+    var(--skeleton-highlight),
+    var(--skeleton-base)
+  );
+  background-size: 200% 100%;
+  animation: c-shimmer 1.3s linear infinite;
+  width: 70%;
+}
+.c-table.is-loading tbody td.num::after {
+  margin-left: auto;
+  width: 44px;
+}
+@keyframes c-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .c-table.is-loading tbody td::after {
+    animation: none;
+  }
+}
+
+/* empty state */
+.c-table-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 54px 20px;
+  text-align: center;
+}
+.c-table-empty .ic {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-control);
+  display: grid;
+  place-items: center;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-faint);
+}
+.c-table-empty .tt {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+.c-table-empty .ts {
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
+  max-width: 38ch;
+  line-height: 1.5;
+}
+
+/* footer */
+.c-table-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px var(--row-pad-x);
+  border-top: 1px solid var(--border-default);
+  background: var(--table-foot-surface);
+  font-size: var(--text-label);
+  color: var(--text-secondary);
+}
+.c-table-foot .grow {
+  flex: 1;
+}
+.c-table-foot .rc {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* ── responsive: collapse to stacked cards on narrow viewports ──────────
+   Each <td> carries data-label; below the small breakpoint the table becomes
+   a list of labelled rows. Add class .responsive to opt in. */
+@media (max-width: 640px) {
+  .c-table.responsive thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .c-table.responsive,
+  .c-table.responsive tbody,
+  .c-table.responsive tr,
+  .c-table.responsive td {
+    display: block;
+    width: 100%;
+  }
+  .c-table.responsive tr {
+    border-bottom: 1px solid var(--border-default);
+    padding: 6px 4px;
+  }
+  .c-table.responsive tbody td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    border: 0;
+    padding: 7px var(--row-pad-x);
+    white-space: normal;
+    text-align: right;
+  }
+  .c-table.responsive tbody td.num {
+    text-align: right;
+  }
+  .c-table.responsive tbody td::before {
+    content: attr(data-label);
+    font: var(--weight-semibold) var(--text-caption) var(--font-mono);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--table-header-text);
+    text-align: left;
+  }
+  .c-table.responsive tbody td.selcell {
+    justify-content: flex-start;
+  }
+  .c-table.responsive tbody td.selcell::before {
+    content: none;
+  }
+}
+
+/* ── data visualisation (design-system/keiko-dataviz.css) ───
+   CSS/flex charts so they inherit every theme; an accessible categorical +
+   sequential palette, axis / legend / tooltip rules, and an uncertainty
+   encoding that never relies on colour alone. */
+.viz {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.viz-plot {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  height: 200px;
+  padding-left: 34px;
+}
+.viz-yaxis {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 22px;
+  width: 30px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.viz-yaxis span {
+  font: 10px var(--font-mono);
+  color: var(--viz-axis);
+  text-align: right;
+  transform: translateY(-50%);
+}
+.viz-gridlines {
+  position: absolute;
+  left: 34px;
+  right: 0;
+  top: 0;
+  bottom: 22px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.viz-gridlines i {
+  height: 1px;
+  background: var(--viz-grid);
+}
+
+/* bar chart */
+.viz-bars {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-around;
+  gap: 12px;
+  height: 100%;
+  padding-bottom: 22px;
+}
+.viz-bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  height: 100%;
+  justify-content: flex-end;
+  position: relative;
+}
+.viz-bar {
+  width: 100%;
+  max-width: 46px;
+  border-radius: 5px 5px 0 0;
+  background: var(--viz-1);
+  transition: filter 0.12s;
+  position: relative;
+}
+.viz-bar:hover {
+  filter: brightness(1.12);
+}
+.viz-bar-col .xl {
+  position: absolute;
+  bottom: -20px;
+  font: 10.5px var(--font-mono);
+  color: var(--viz-axis);
+  white-space: nowrap;
+}
+
+/* stacked / grouped helpers */
+.viz-bar.s2 {
+  background: var(--viz-2);
+}
+.viz-bar.s3 {
+  background: var(--viz-3);
+}
+
+/* line / area (SVG-driven, colours from tokens) */
+.viz-line-wrap {
+  position: relative;
+  height: 200px;
+  padding-left: 34px;
+}
+.viz-line-wrap svg {
+  position: absolute;
+  inset: 0 0 22px 34px;
+  width: calc(100% - 34px);
+  height: calc(100% - 22px);
+  overflow: visible;
+}
+
+/* legend */
+.viz-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.viz-legend .it {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
+}
+.viz-legend .sw {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  flex: none;
+}
+
+/* tooltip */
+.viz-tip {
+  display: inline-block;
+  background: var(--tooltip-surface);
+  color: var(--tooltip-text);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  box-shadow: var(--popover-shadow);
+  padding: 8px 11px;
+  font-size: var(--text-label);
+}
+.viz-tip .vk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.viz-tip .vk .sw {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+.viz-tip .vv {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+  margin-left: auto;
+  padding-left: 14px;
+}
+.viz-tip .vl {
+  font-size: var(--text-caption);
+  color: var(--text-faint);
+  margin-bottom: 4px;
+}
+
+/* uncertainty — hatched fill, never colour alone */
+.viz-bar.uncertain {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 4px,
+    color-mix(in oklch, var(--background-primary) 45%, transparent) 4px 7px
+  );
+}
+.viz-uncert-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-label);
+  color: var(--text-secondary);
+}
+.viz-uncert-note .pat {
+  width: 22px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--viz-1);
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 4px,
+    color-mix(in oklch, var(--background-primary) 45%, transparent) 4px 7px
+  );
+}
+
+/* sequential swatch strip */
+.viz-seq {
+  display: flex;
+  border-radius: var(--radius-control);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+}
+.viz-seq i {
+  flex: 1;
+  height: 40px;
+}
+
+/* donut (conic) */
+.viz-donut {
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  position: relative;
+}
+.viz-donut::after {
+  content: "";
+  position: absolute;
+  inset: 26px;
+  border-radius: 50%;
+  background: var(--card-surface);
+}
+
+/* Issue #1297 — palette-completeness helpers. The reference applies the extended
+   categorical hues (--viz-4..6) and the sequential ramp (--viz-seq-*) per series
+   via inline style; these class-addressable helpers make the full governed palette
+   usable from markup and ensure no palette token ships defined-but-unconsumed. */
+.viz-bar.s4 {
+  background: var(--viz-4);
+}
+.viz-bar.s5 {
+  background: var(--viz-5);
+}
+.viz-bar.s6 {
+  background: var(--viz-6);
+}
+.viz-seq i:nth-child(1) {
+  background: var(--viz-seq-1);
+}
+.viz-seq i:nth-child(2) {
+  background: var(--viz-seq-2);
+}
+.viz-seq i:nth-child(3) {
+  background: var(--viz-seq-3);
+}
+.viz-seq i:nth-child(4) {
+  background: var(--viz-seq-4);
+}
+.viz-seq i:nth-child(5) {
+  background: var(--viz-seq-5);
+}
+
+/* ── product adopter: prompt-enhancer candidate scorecards (Issue #1297).
+   The one genuinely-tabular product surface adopting the .c-table component.
+   The <table> carries .c-table so it inherits header/row/cell/num treatment;
+   these rules only style the row-header cell (<th scope="row">) to match the
+   data cells and give the winning candidate the DS selected-row emphasis. */
+.pe-scorecards tbody th[scope="row"] {
+  padding: var(--row-pad-y) var(--row-pad-x);
+  border-bottom: 1px solid var(--table-row-border);
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  white-space: nowrap;
+}
+.pe-scorecards tbody tr:last-child th[scope="row"] {
+  border-bottom: 0;
+}
+.pe-scorecards tbody tr.pe-winner {
+  background: var(--table-row-surface-selected);
+}
+.pe-scorecards tbody tr.pe-winner th[scope="row"],
+.pe-scorecards tbody tr.pe-winner td {
+  color: var(--text-primary);
+}
+.pe-scorecards tbody tr.pe-winner td:last-child {
+  color: var(--text-accent);
+}
+
+/* ============================================================
    Issue #197 — Local Knowledge connector graph
    ============================================================ */
 
@@ -10982,12 +11581,15 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   outline-color: oklch(0.5 0.13 160); /* >=3:1 focus indicator on white --card */
 }
 
-/* Table */
+/* Table — Issue #1297: routed onto the DS 0.4.0 --table-* component tokens. Each
+   token aliases the exact primitive this surface already used, so the swap is
+   value-preserving in every mode (Dark/Light/HC); it gives the table tokens a
+   real product consumer without changing a single resolved colour. */
 .sm-table-wrapper {
   overflow-x: auto;
   margin: 10px 0;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
+  border: 1px solid var(--card-border);
 }
 .sm-table {
   border-collapse: collapse;
@@ -10997,16 +11599,16 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .sm-table th,
 .sm-table td {
   padding: 6px 12px;
-  border: 1px solid var(--line-soft);
-  color: var(--fg);
+  border: 1px solid var(--table-row-border);
+  color: var(--table-num-text);
   text-align: left;
 }
 .sm-table th {
-  background: var(--card-2);
+  background: var(--table-header-surface);
   font-weight: 600;
 }
 .sm-table tr:nth-child(even) td {
-  background: var(--inset);
+  background: var(--surface-inset);
 }
 
 /* AC #3 — chat-msg-bubble override: assistant bubbles must not clip
