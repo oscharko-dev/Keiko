@@ -3859,7 +3859,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--warn);
+  color: var(--feedback-warning);
 }
 .arun-gate-t {
   font-size: 13.5px;
@@ -4872,7 +4872,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 10px;
   border: 1px solid color-mix(in oklch, var(--feedback-warning) 55%, transparent);
   background: color-mix(in oklch, var(--feedback-warning) 12%, transparent);
-  color: var(--feedback-warning);
+  color: var(--warn);
   border-radius: 10px;
   padding: 8px 10px;
   font-size: 12px;
@@ -10644,7 +10644,9 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 .qi-run-item-selected {
-  background: var(--surface-secondary); /* was --card == window bg, invisible (uiux-fix F036 C280) */
+  background: var(
+    --surface-secondary
+  ); /* was --card == window bg, invisible (uiux-fix F036 C280) */
   /* inset shadow, not border-left: a 2px border shifted the row content sideways
      on selection (uiux-fix F049 C340) */
   box-shadow: inset 2px 0 0 var(--accent);
@@ -10900,7 +10902,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   gap: 6px;
   margin: 0;
   font-size: 12px;
-  color: var(--warn);
+  color: var(--feedback-warning);
 }
 .qi-drift-icon-warn {
   font-size: 13px;
@@ -15689,7 +15691,7 @@ ul.integ {
 .fpv-retry {
   margin-left: 12px;
   font-size: 12px;
-  color: var(--danger);
+  color: var(--feedback-danger);
   text-decoration: underline;
   background: none;
   border: none;
@@ -16353,7 +16355,7 @@ ul.integ {
    tabIndex={0} makes it keyboard-reachable (WCAG 2.1.1, axe scrollable-region-focusable)
    and this ring makes that focus visible (pattern .qi-input:focus-visible). */
 .qi-export-preview:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--accent);
 }

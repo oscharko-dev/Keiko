@@ -2098,3 +2098,207 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
     ).toEqual([]);
   });
 });
+
+// ─── Issue #1295 — high-traffic product-surface token migration ────────────────
+//
+// #1295 is the product-CONTENT consumer migration after #1293 (shell) and #1294
+// (reusable controls). It routes the raw neutral Tier-1 primitives in the chat,
+// grounded-answer, workflow-handoff, Quality-Intelligence, MemoriaViva, Relationships,
+// Local-Knowledge, Figma and file-preview surfaces through the Tier-3 semantic tokens —
+// every target is a pure :root alias of the source primitive, so the migration is
+// value-preserving in every mode (proven byte-identical by the 2324-probe, 7-mode
+// computed-value harness in docs/design-system/evidence/1295/). Category C is a
+// deliberate Light-Mode fix: the dark-biased shadow inks adapt via --shadow-ink-rgb
+// (dark-preserving) and the dialog scrim is centralised via a light --overlay-scrim
+// redefinition. Each positive pin is paired with a negative so reverting an alias re-fails.
+describe("Issue #1295 — high-traffic product-surface token migration", () => {
+  it("routes chat message bubbles through the semantic surface/border/text tokens", () => {
+    const block = cssBlock("\n.chat-msg-bubble {");
+    expect(block).toContain("background: var(--surface-primary)");
+    expect(block).toContain("var(--border-subtle)");
+    expect(block).toContain("color: var(--text-primary)");
+    expect(block).not.toMatch(/var\(--card\)|var\(--line-soft\)|var\(--fg\)/u);
+  });
+
+  it("routes Quality-Intelligence candidate cards through --surface-primary / --border-default", () => {
+    const block = cssBlock("\n.qi-cand-card {");
+    expect(block).toContain("background: var(--surface-primary)");
+    expect(block).toContain("var(--border-default)");
+    expect(block).not.toMatch(/var\(--card\)|var\(--line\)/u);
+  });
+
+  it("routes the QI weak-test flag (danger-tinted card) through the feedback + surface tokens", () => {
+    const block = cssBlock("\n.qi-weak-flag {");
+    expect(block).toContain("var(--feedback-danger)");
+    expect(block).toContain("var(--surface-primary)");
+    expect(block).not.toMatch(/var\(--danger\)|var\(--card\)/u);
+  });
+
+  it("routes MemoriaViva rows through the semantic tokens", () => {
+    const block = cssBlock("\n.mc-row {");
+    expect(block).toContain("background: var(--surface-primary)");
+    expect(block).toContain("var(--border-subtle)");
+    expect(block).toContain("color: var(--text-primary)");
+    expect(block).not.toMatch(/var\(--card\)|var\(--line-soft\)|var\(--fg\)/u);
+  });
+
+  it("routes Local-Knowledge metric cards through the semantic tokens", () => {
+    const block = cssBlock("\n.lkd-metric-card {");
+    expect(block).toContain("var(--surface-primary)");
+    expect(block).toContain("var(--border-subtle)");
+    expect(block).not.toMatch(/var\(--card\)|var\(--line-soft\)/u);
+  });
+
+  it("routes connector-graph nodes through the text token", () => {
+    const block = cssBlock("\n.connector-node {");
+    expect(block).toContain("color: var(--text-primary)");
+    expect(block).not.toContain("var(--fg)");
+  });
+
+  it("routes the Figma JSON window through the text token", () => {
+    const block = cssBlock("\n.figma-json-window {");
+    expect(block).toContain("color: var(--text-primary)");
+    expect(block).not.toContain("var(--fg)");
+  });
+
+  it("routes Figma snapshot error chrome through --feedback-danger / --text-primary", () => {
+    const card = cssBlock("\n.figma-snapshot-error-card {");
+    expect(card).toContain("var(--feedback-danger)");
+    expect(card).not.toContain("var(--danger)");
+  });
+
+  // Category B — the file-preview syntax palette now consumes the editor tokens.
+  it("routes the file-preview highlighter through the --ed-syn-* tokens", () => {
+    expect(cssBlock("\n.hl-key {")).toContain("color: var(--ed-syn-keyword)");
+    expect(cssBlock("\n.hl-str {")).toContain("color: var(--ed-syn-string)");
+    expect(cssBlock("\n.fpv-src {")).toContain("color: var(--ed-fg)");
+    expect(cssBlock("\n.hl-com {")).toContain("color: var(--text-tertiary)");
+  });
+
+  // Category C — mode-aware shadow ink (dark-preserving, light-adaptive).
+  it("defines the mode-aware shadow-ink primitive (dark 0 0 0, light 20 30 25)", () => {
+    expect(css).toContain("--shadow-ink-rgb: 0 0 0;");
+    expect(css).toContain("--shadow-ink-rgb: 20 30 25;");
+  });
+
+  it("routes the Table-A required shadow inks through rgb(var(--shadow-ink-rgb) / α), no hardcoded black", () => {
+    for (const sel of [
+      "\n.ksel-menu {",
+      "\n.hd-tool-cta {",
+      "\n.ws-zoom {",
+      "\n.cmp-model-menu {",
+      "\n.ws-fab {",
+    ]) {
+      const block = cssBlock(sel);
+      expect(block, `${sel} must use the mode-aware shadow ink`).toContain(
+        "rgb(var(--shadow-ink-rgb)",
+      );
+      expect(block, `${sel} must not keep a hardcoded black shadow`).not.toContain("rgba(0, 0, 0,");
+    }
+    const brand = cssBlock("\n.chat-msg-brand img {");
+    expect(brand).toContain("rgb(var(--shadow-ink-rgb)");
+    expect(brand).not.toContain("rgba(0, 0, 0,");
+  });
+
+  it("centralises the dialog scrim via a light --overlay-scrim redefinition", () => {
+    expect(css).toContain("--overlay-scrim: oklch(0.3 0.01 160 / 0.34);");
+    expect(cssBlock("\n.mc-dialog-backdrop {")).toContain("background: var(--overlay-scrim)");
+  });
+
+  it("fixes the undefined var(--focus) focus rings (WCAG 2.4.7)", () => {
+    const figma = cssRule(".figma-view-json-btn:focus-visible");
+    expect(figma).toContain("var(--focus-ring)");
+    const notice = cssBlock("\n.ui-error-notice-close:focus-visible {");
+    expect(notice).toContain("var(--focus-ring)");
+    // no live var(--focus) declaration survives (the remaining matches are explanatory comments)
+    const noComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(noComments).not.toMatch(/var\(--focus\)/u);
+  });
+
+  // Completeness gate — scope-wide product-surface drift guard. Parses EVERY rule and, for
+  // those whose selector matches a #1295 product-surface class prefix (productLead — a
+  // semantic prefix set, NOT a per-selector allowlist, which the #1293 review mutation-proved
+  // tautological), asserts none still carries a raw aliased neutral primitive. It mirrors the
+  // migration's own in-scope predicate (worklist == guard): skip @-rules, the approved
+  // [data-theme="light"] deviations, the #1294-owned reusable-control classes (controlExclude),
+  // and the Category-C scrim/shadow rows. Mutation-robust: reverting one migrated declaration
+  // yields exactly one offender.
+  it("leaves no raw aliased neutral primitive in any #1295 product-surface rule (scope-wide)", () => {
+    const forbidden = [
+      "--bg",
+      "--surface",
+      "--card-2",
+      "--card",
+      "--inset",
+      "--fg-muted",
+      "--fg-dim",
+      "--fg-faint",
+      "--fg",
+      "--ink-inverse",
+      "--line-soft",
+      "--line-strong",
+      "--line",
+      "--danger",
+      "--warn",
+      "--info",
+      "--ok",
+      "--accent-text",
+    ];
+    const escapeRegExp = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const bodyForbidden = (body: string): readonly string[] =>
+      forbidden.filter((tok) => new RegExp(`var\\(\\s*${escapeRegExp(tok)}\\s*[),]`).test(body));
+    // #1295 product-surface class prefixes (the migration's productLead set).
+    const productLead =
+      /\.(chat-|chatw-|grounded-|wf-|qi-|mc-|memoria-|rel-|rb-|lk-|lkd-|connector-|figma-|json-token-|fpv-|hl-)/;
+    // #1294-owned reusable controls kept out of #1295 (the migration's CONTROL_EXCLUDE list).
+    const controlExclude = [
+      ".qi-btn",
+      ".qi-input",
+      ".qi-textarea",
+      ".qi-select",
+      ".qi-badge",
+      ".qi-sev",
+      ".qi-cov",
+      ".qi-quality",
+      ".qi-source-kind",
+      ".qi-export-action",
+      ".wf-dialog",
+      ".mc-dialog",
+      ".mc-badge",
+      ".lk-btn",
+      ".lk-badge",
+      ".lk-alert",
+      ".rb-edge-badge",
+      ".figma-snapshot-input",
+      ".figma-snapshot-consent",
+      ".figma-view-json-btn",
+      ".figma-snapshot-rename",
+      ".figma-snapshot-refresh",
+    ];
+    const scrim = /(overlay|backdrop|scrim|shadow-ink)/iu;
+    const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
+    let match: RegExpExecArray | null;
+    let productRulesChecked = 0;
+    const offenders: string[] = [];
+    while ((match = ruleRe.exec(source)) !== null) {
+      const selector = (match[1] ?? "").trim().replace(/\s+/g, " ");
+      const body = match[2] ?? "";
+      if (selector === "" || selector.startsWith("@")) continue;
+      if (selector.includes('[data-theme="light"]')) continue; // approved deviations
+      if (controlExclude.some((ex) => selector.includes(ex))) continue; // #1294 controls
+      if (scrim.test(selector)) continue; // Category-C scrim/shadow rows
+      if (!productLead.test(selector)) continue; // not a #1295 product surface
+      productRulesChecked++;
+      for (const tok of bodyForbidden(body)) {
+        offenders.push(`${selector} { … var(${tok}) … }`);
+      }
+    }
+    // the parser must match a substantial body of product rules (never silently zero).
+    expect(productRulesChecked).toBeGreaterThan(60);
+    expect(
+      offenders,
+      `#1295 product-surface rules still carry raw aliased primitives (migrate to the semantic token):\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+});
