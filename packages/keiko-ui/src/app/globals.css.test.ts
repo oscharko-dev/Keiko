@@ -58,14 +58,14 @@ describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
     expect(css).toContain(".rail-new:focus-visible");
   });
 
-  it(".rail-btn:focus-visible sets outline: 2px solid var(--accent-text)", () => {
+  it(".rail-btn:focus-visible sets outline: var(--focus-width, 2px) solid var(--accent-text)", () => {
     // Find the actual focus-ring rule, not earlier :has(...) occurrences.
     const selectorIdx = css.indexOf(
       ".rail-btn:focus-visible,\n.rail-new:focus-visible,\n.rail-avatar:focus-visible",
     );
     expect(selectorIdx).toBeGreaterThan(-1);
     const block = css.slice(selectorIdx, css.indexOf("}", selectorIdx) + 1);
-    expect(block).toContain("outline: 2px solid var(--accent-text)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
     expect(block).toContain("outline-offset: 2px");
   });
 });
@@ -320,20 +320,17 @@ describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
 });
 
 describe("design a11y — prefers-contrast token step-up (accessibility.html §01)", () => {
-  it("steps up neutral borders + faint/dim text at the token level, not just components", () => {
-    // accessibility.html promises: "when the OS asks for more contrast, borders,
-    // faint text … step up automatically". That requires a token-level override,
-    // not only the component-scoped .rb-edge-badge block.
-    const marker = css.indexOf("Step the neutral ramp");
-    expect(marker, "token-level prefers-contrast step-up not found").toBeGreaterThan(-1);
-    const open = css.indexOf("@media (prefers-contrast: more)", marker);
-    expect(open).toBeGreaterThan(-1);
-    const block = css.slice(open, open + 900);
-    // dark: brighter borders + faint/dim text
-    expect(block).toContain("--line: oklch(0.55 0.004 160)");
-    expect(block).toContain("--fg-faint: oklch(0.74 0.004 160)");
-    // light: darker borders + faint/dim text
-    expect(block).toContain("--fg-faint: oklch(0.42 0.01 160)");
+  it("applies the full high-contrast primitive palette at the token level", () => {
+    // accessibility.html treats High Contrast as a first-class palette, not only
+    // a component-scoped border tweak. The detailed #1292 drift gate below pins
+    // exact reference parity; this smoke assertion keeps the older regression
+    // focused on the most user-visible primitives.
+    const block = cssRule("@media (prefers-contrast: more) {");
+    expect(block).toContain("--bg: oklch(0.11 0.004 160)");
+    expect(block).toContain("--fg: oklch(1 0 0)");
+    expect(block).toContain("--accent-text: oklch(0.86 0.16 160)");
+    expect(block).toContain("--shadow-card: 0 0 0 1px var(--line)");
+    expect(block).toContain("--fg-faint: oklch(0.36 0.012 160)");
   });
 });
 
@@ -668,8 +665,8 @@ describe("uiux-fix F010 — cmp-budget styling and scope-pill focus visibility",
     expect(idx).toBeGreaterThan(-1);
     const block = css.slice(idx, css.indexOf("}", idx) + 1);
     // The × sits inside the accent-filled pill: its ring must use ink-inverse, not accent.
-    expect(block).toContain("outline: 2px solid var(--ink-inverse)");
-    expect(block).not.toContain("outline: 2px solid var(--accent)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--ink-inverse)");
+    expect(block).not.toContain("outline: var(--focus-width, 2px) solid var(--accent)");
     // The shared selector (which gave both buttons the accent ring) must be gone.
     expect(css).not.toMatch(
       /\.scope-pill-disconnect:focus-visible,\s*\.scope-connect-btn:focus-visible/,
@@ -741,12 +738,12 @@ describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)"
 
   it("adds a visible .footer:focus-visible ring (SH-02 Alt+S jump target)", () => {
     const block = cssBlock(".footer:focus-visible");
-    expect(block).toContain("outline: 2px solid var(--accent-text)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
   });
 
   it("adds a visible .workspace:focus-visible ring (WC-01 keyboard pan surface)", () => {
     const block = cssBlock(".workspace:focus-visible");
-    expect(block).toContain("outline: 2px solid var(--accent-text)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
   });
 
   it(".tr-caret-btn:focus-visible keeps a dark separator so it contrasts on accent-dim rows (CC-01)", () => {
@@ -811,7 +808,7 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const keyboardInputBlock = cssBlock(
       ':root[data-input-modality="keyboard"] .chat-history-open:focus-visible,\n:root[data-input-modality="keyboard"] .chat-history-title-input:focus-visible',
     );
-    expect(keyboardInputBlock).toContain("outline: 2px solid var(--accent-line)");
+    expect(keyboardInputBlock).toContain("outline: var(--focus-width, 2px) solid var(--accent-line)");
 
     const pointerInputBlock = cssBlock(
       ':root[data-input-modality="pointer"] .chat-history-open:focus,\n:root[data-input-modality="pointer"] .chat-history-title-input:focus',
@@ -860,7 +857,7 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const block = cssBlock(
       ':root[data-input-modality="keyboard"] .qi-input:focus-visible,\n:root[data-input-modality="keyboard"] .qi-textarea:focus-visible,\n:root[data-input-modality="keyboard"] .qi-select:focus-visible',
     );
-    expect(block).toContain("outline: 2px solid var(--accent-text)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
     expect(block).toContain("border-color: var(--accent)");
   });
 
@@ -1093,12 +1090,12 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
 
   it(".figma-snapshot-cancel-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
     const block = cssBlock(".figma-snapshot-cancel-btn:focus-visible");
-    expect(block).toContain("outline: 2px solid var(--accent-text)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
   });
 
   it(".figma-snapshot-input suppresses mouse-click focus paint while keeping keyboard focus-visible", () => {
     const keyboardBlock = cssBlock(".figma-snapshot-input:focus-visible");
-    expect(keyboardBlock).toContain("outline: 2px solid var(--accent-text)");
+    expect(keyboardBlock).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
 
     const pointerBlock = cssBlock(
       ':root[data-input-modality="pointer"] .figma-snapshot-input:focus',
@@ -1114,7 +1111,7 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
 
   it(".figma-snapshot-revoke-confirm-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
     const block = cssBlock(".figma-snapshot-revoke-btn:focus-visible,");
-    expect(block).toContain("outline: 2px solid var(--accent-text)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
   });
 
   it(".figma-snapshot-revoke-confirm-btn is covered by the shared revoke block (WCAG 2.5.8)", () => {
@@ -1134,7 +1131,7 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     );
     const block = css.slice(idx, css.indexOf("}", idx) + 1);
     expect(block).toContain(".figma-snapshot-revoke-cancel-btn:focus-visible");
-    expect(block).toContain("outline: 2px solid var(--accent-text)");
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
   });
 
   it(".figma-snapshot-code-file-path meets the 24px minimum height (WCAG 2.5.8)", () => {
@@ -1331,21 +1328,25 @@ describe("Issue #1205 — editor tab truncation", () => {
 // the test fail (mutation-robust), per the suite's contract.
 
 /** Brace-aware slice of the rule/at-rule beginning at the first `selector`. */
-function cssRule(selector: string, opts: { readonly fromIndex?: number } = {}): string {
-  const start = css.indexOf(selector, opts.fromIndex ?? 0);
+function cssRuleFrom(source: string, selector: string, opts: { readonly fromIndex?: number } = {}): string {
+  const start = source.indexOf(selector, opts.fromIndex ?? 0);
   expect(start, `selector "${selector}" not found`).toBeGreaterThan(-1);
   let depth = 0;
   let started = false;
-  for (let i = css.indexOf("{", start); i < css.length; i++) {
-    if (css[i] === "{") {
+  for (let i = source.indexOf("{", start); i < source.length; i++) {
+    if (source[i] === "{") {
       depth++;
       started = true;
-    } else if (css[i] === "}") {
+    } else if (source[i] === "}") {
       depth--;
     }
-    if (started && depth === 0) return css.slice(start, i + 1);
+    if (started && depth === 0) return source.slice(start, i + 1);
   }
   throw new Error(`unterminated rule for "${selector}"`);
+}
+
+function cssRule(selector: string, opts: { readonly fromIndex?: number } = {}): string {
+  return cssRuleFrom(css, selector, opts);
 }
 
 describe("Issue #1292 — Tier-2 scale tokens consolidated into the product", () => {
@@ -1461,25 +1462,39 @@ describe("Issue #1292 — new Tier-1 primitives across every mode", () => {
   });
 });
 
-describe("Issue #1292 — neutral [data-hc] hook (previously editor-only)", () => {
-  it("steps the neutral ramp on the in-app [data-hc] override, not just --ed-* tokens", () => {
-    // The first [data-hc="more"] block in the file is the new neutral one; the
-    // editor block (which sets --ed-* tokens) comes later. Asserting --line +
-    // --focus-w proves the neutral side of the hook now exists.
+describe("Issue #1292 — full [data-hc] hook (previously editor-only)", () => {
+  it("steps the product palette on the in-app [data-hc] override, not just --ed-* tokens", () => {
+    // The first [data-hc="more"] block in the file is the product palette; the
+    // editor block (which sets --ed-* tokens) comes later. Asserting surface,
+    // text, status and focus declarations proves the non-editor hook now exists.
     const block = cssRule('[data-hc="more"] {');
-    expect(block).toContain("--line: oklch(0.55 0.004 160)");
-    expect(block).toContain("--fg-faint: oklch(0.74 0.004 160)");
+    expect(block).toContain("--bg: oklch(0.11 0.004 160)");
+    expect(block).toContain("--line: oklch(0.62 0.006 160)");
+    expect(block).toContain("--fg-faint: oklch(0.82 0.004 160)");
+    expect(block).toContain("--warn: oklch(0.88 0.14 80)");
     expect(block).toContain("--grid-dot: oklch(0.52 0.006 160)");
     expect(block).toContain("--focus-w: 3px");
     expect(block, "neutral block must not be the editor block").not.toContain("--ed-");
   });
 
-  it("steps the neutral ramp for the light + in-app high-contrast pairing", () => {
+  it("steps the product palette for the light + in-app high-contrast pairing", () => {
     const block = cssRule('[data-hc="more"][data-theme="light"] {');
-    expect(block).toContain("--line: oklch(0.62 0.006 160)");
+    expect(block).toContain("--bg: oklch(1 0 0)");
+    expect(block).toContain("--line: oklch(0.45 0.008 160)");
+    expect(block).toContain("--fg-faint: oklch(0.36 0.012 160)");
+    expect(block).toContain("--warn: oklch(0.38 0.14 75)");
     expect(block).toContain("--grid-dot: oklch(0.6 0.01 160)");
     expect(block).toContain("--focus-w: 3px");
     expect(block).not.toContain("--ed-");
+  });
+});
+
+describe("Issue #1292 — focus rings consume the focus-width primitive", () => {
+  it("routes normal focus-visible outlines through --focus-width while preserving colour tokens", () => {
+    expect(css).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
+    expect(css).toContain("outline: var(--focus-width, 2px) solid var(--ink-inverse)");
+    expect(css).toContain("outline: var(--focus-width, 2px) solid var(--danger)");
+    expect(css).not.toMatch(/outline:\s*\d+px solid var\(--(?:accent-text|accent-line|ink-inverse|danger|focus)\)/);
   });
 });
 
@@ -1495,9 +1510,13 @@ describe("Issue #1292 — forced-colors fallback (WCAG 1.4.3 / Windows High Cont
 });
 
 describe("Issue #1292 — design-system token drift gate", () => {
+  function referenceCss(relativePath: string): string {
+    return readFileSync(resolve(here, relativePath), "utf8");
+  }
+
   /** Collect every custom-property *declaration* name from a design-system file. */
   function referenceTokenNames(relativePath: string): Set<string> {
-    const refCss = readFileSync(resolve(here, relativePath), "utf8");
+    const refCss = referenceCss(relativePath);
     // Strip block comments so prose like "--background-primary" cannot register.
     const declarations = refCss.replace(/\/\*[\s\S]*?\*\//g, "");
     const names = new Set<string>();
@@ -1506,6 +1525,18 @@ describe("Issue #1292 — design-system token drift gate", () => {
       if (name !== undefined) names.add(name);
     }
     return names;
+  }
+
+  /** Collect direct token declarations from one concrete rule. */
+  function declarationMap(source: string, selector: string): Record<string, string> {
+    const rule = cssRuleFrom(source, selector).replace(/\/\*[\s\S]*?\*\//g, "");
+    const entries: Array<[string, string]> = [];
+    for (const match of rule.matchAll(/^\s*(--[a-z0-9-]+|color-scheme)\s*:\s*([^;]+);/gm)) {
+      const name = match[1];
+      const value = match[2];
+      if (name !== undefined && value !== undefined) entries.push([name, value.trim()]);
+    }
+    return Object.fromEntries(entries);
   }
 
   it("defines every Tier-2/3/4 token the design-system reference declares (no drift)", () => {
@@ -1528,5 +1559,27 @@ describe("Issue #1292 — design-system token drift gate", () => {
       missing,
       `globals.css is missing design-system primitives (drift): ${missing.join(", ")}`,
     ).toEqual([]);
+  });
+
+  it("matches the design-system high-contrast primitive values for OS prefers-contrast", () => {
+    const reference = referenceCss("../../../../design-system/keiko-tokens.css");
+    const referenceMedia = cssRuleFrom(reference, "@media (prefers-contrast: more) {");
+    const productMedia = cssRule("@media (prefers-contrast: more) {");
+
+    expect(declarationMap(productMedia, ":root {")).toEqual(declarationMap(referenceMedia, ":root {"));
+    expect(declarationMap(productMedia, '[data-theme="light"] {')).toEqual(
+      declarationMap(referenceMedia, '[data-theme="light"] {'),
+    );
+  });
+
+  it("matches the design-system high-contrast primitive values for the in-app [data-hc] hook", () => {
+    const reference = referenceCss("../../../../design-system/keiko-tokens.css");
+
+    expect(declarationMap(css, '[data-hc="more"] {')).toEqual(
+      declarationMap(reference, '[data-hc="more"] {'),
+    );
+    expect(declarationMap(css, '[data-hc="more"][data-theme="light"] {')).toEqual(
+      declarationMap(reference, '[data-hc="more"][data-theme="light"] {'),
+    );
   });
 });
