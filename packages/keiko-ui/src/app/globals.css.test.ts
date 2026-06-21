@@ -2932,6 +2932,57 @@ describe("Issue #1298 — input + navigation components (Design System 0.4.0)", 
     expect(cssBlock("\n.c-ctx-item:focus-visible {")).toContain("var(--focus-ring)");
   });
 
+  // ── 5b. Per-consumer fidelity pins for the tokens the completeness gate (test 4) only checks for
+  //        ">= 1 consumer". Several tokens have two consumers (e.g. the slider thumb's -webkit- and
+  //        -moz- pseudo-elements), so a value-swap on ONE escapes both the completeness gate (the
+  //        other consumer keeps the token present) and the purity guard (the swapped-in token may be
+  //        an allowed semantic one like --text-primary). Pin each completeness-only consumer to its
+  //        exact token so a single-line fidelity revert re-fails (mutation-robust).
+  it("pins every completeness-only input/nav token to its specific consumer", () => {
+    // slider thumb — two pseudo-element consumers, both must read the thumb tokens.
+    const thumbW = cssBlock('\n.c-slider input[type="range"]::-webkit-slider-thumb {');
+    expect(thumbW).toContain("var(--slider-thumb)");
+    expect(thumbW).toContain("var(--slider-thumb-border)");
+    expect(thumbW).toContain("var(--slider-thumb-ring)");
+    const thumbM = cssBlock('\n.c-slider input[type="range"]::-moz-range-thumb {');
+    expect(thumbM).toContain("var(--slider-thumb)");
+    expect(thumbM).toContain("var(--slider-thumb-border)");
+    expect(thumbM).toContain("var(--slider-thumb-ring)");
+    // radio dot, stepper internals.
+    expect(cssBlock("\n.c-radio .rb::after {")).toContain("var(--radio-dot)");
+    expect(cssBlock("\n.c-stepper button {")).toContain("var(--stepper-button-text)");
+    expect(cssBlock("\n.c-stepper button:hover {")).toContain(
+      "var(--stepper-button-surface-hover)",
+    );
+    expect(cssBlock("\n.c-stepper input {")).toContain("var(--stepper-input-surface)");
+    // combobox list border + option states.
+    expect(cssBlock("\n.c-combo-list {")).toContain("var(--combobox-list-border)");
+    expect(cssBlock("\n.c-combo-opt:hover,")).toContain("var(--combobox-option-surface-hover)");
+    expect(cssBlock("\n.c-combo-opt .ck {")).toContain("var(--combobox-option-selected-mark)");
+    // file dropzone-active + item, date segment active.
+    expect(cssBlock("\n.c-drop:hover,")).toContain("var(--file-dropzone-border-active)");
+    expect(cssBlock("\n.c-fileitem {")).toContain("var(--file-item-surface)");
+    const seg = cssBlock("\n.c-datefield .seg:focus {");
+    expect(seg).toContain("var(--date-segment-surface-active)");
+    expect(seg).toContain("var(--date-segment-text-active)");
+    // breadcrumb current, pagination hover/current text+border.
+    expect(cssBlock('\n.c-crumbs [aria-current="page"] {')).toContain(
+      "var(--breadcrumb-text-current)",
+    );
+    expect(cssBlock("\n.c-pager button:hover:not(:disabled) {")).toContain(
+      "var(--pagination-surface-hover)",
+    );
+    const cur = cssBlock('\n.c-pager button[aria-current="page"] {');
+    expect(cur).toContain("var(--pagination-text-current)");
+    expect(cur).toContain("var(--pagination-border-current)");
+    // context hover, step done/active/line.
+    expect(cssBlock("\n.c-ctx-item:hover,")).toContain("var(--context-item-surface-hover)");
+    expect(cssBlock("\n.c-step.done .dot {")).toContain("var(--step-dot-text-done)");
+    expect(cssBlock("\n.c-step.active .dot {")).toContain("var(--step-dot-border-active)");
+    expect(cssBlock("\n.c-step-line {")).toContain("var(--step-line)");
+    expect(cssBlock("\n.c-step.done + .c-step-line {")).toContain("var(--step-line-done)");
+  });
+
   // ── 6. Reduced motion (WCAG 2.3.3): the simple input/nav state transitions are switched OFF inside
   //       prefers-reduced-motion: reduce (mutation-robust — removing the guard or the .c-check entry
   //       re-fails).
@@ -2942,8 +2993,12 @@ describe("Issue #1298 — input + navigation components (Design System 0.4.0)", 
       reduceIdx,
       css.indexOf("}", css.indexOf("transition: none", reduceIdx)),
     );
-    expect(guard).toContain(".c-check .bx");
-    expect(guard).toContain(".c-radio .rb");
+    // Line-anchored, comma-terminated selectors so removing the standalone `.c-radio .rb,` entry is
+    // caught — a bare `.contains(".c-radio .rb")` would be satisfied by the `.c-radio .rb::after`
+    // substring even after the `.rb` border-color transition stopped being disabled.
+    expect(guard).toContain("\n  .c-check .bx,");
+    expect(guard).toContain("\n  .c-radio .rb,");
+    expect(guard).toContain("\n  .c-radio .rb::after,");
     expect(guard).toContain("transition: none");
   });
 

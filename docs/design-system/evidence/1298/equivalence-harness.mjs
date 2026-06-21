@@ -26,7 +26,6 @@
 // Writes computed-value-proof.json + 01-dark.png … 09-responsive.png and exits non-zero if any
 // Group-R (dark/light) computed value differs.
 import { chromium } from "playwright";
-import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,10 +33,12 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
+// BASE_REF is recorded as provenance only (this harness compares the working-tree globals.css against
+// the design-system reference files — it shells out to nothing). Constrain it to a git-ref charset so
+// the recorded value stays well-formed.
 const BASE_REF = process.env.BASE_REF ?? "origin/release/0.2.0";
-// Defensive: BASE_REF is interpolated into a git command — confine it to a git-ref charset.
 if (!/^[\w./-]+$/.test(BASE_REF)) {
-  throw new Error(`refusing unsafe BASE_REF: ${BASE_REF}`);
+  throw new Error(`refusing malformed BASE_REF: ${BASE_REF}`);
 }
 
 const POST = readFileSync(resolve(REPO, CSS_PATH), "utf8");

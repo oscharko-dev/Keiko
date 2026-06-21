@@ -10612,8 +10612,10 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   }
 }
 
-/* Reduced motion (WCAG 2.3.3): the input/nav state transitions are switched
-   off for users who opt out, matching the product's reduce-override convention. */
+/* Reduced motion (WCAG 2.3.3): these are finite state transitions (0.1-0.14s), not looping
+   animations, so nulling them inside prefers-reduced-motion: reduce leaves the correct static
+   end-state — the reduce-override form used by other transition rules in this file. (The product's
+   no-preference-wrap convention is for keyframe animations, which this layer has none of.) */
 @media (prefers-reduced-motion: reduce) {
   .c-check .bx,
   .c-check .bx svg,

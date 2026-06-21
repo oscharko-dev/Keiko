@@ -29,10 +29,12 @@ The new canonical `.c-*` input / navigation primitives are rendered with (a) the
 through a canvas so a hex-authored token and the perceptually-identical `oklch()` the reference uses
 compare equal; ±1 LSB tolerance for rounding).
 
-**Result: 203 probes, 0 differences in all 7 modes** — every neutral / semantic-tier input and
-navigation surface (checkbox / radio / stepper / combobox / date borders and fills, breadcrumb /
-pagination / context text, underline-tab and step chrome, popover surfaces) resolves pixel-identically
-to `inputs.html` / `nav-components.html`.
+**Result: 203 probes, 0 differences. The 58 neutral/semantic dark + light probes are the gated 0-diff
+result (the run fails on any difference); the same surfaces are also recorded — and likewise measure
+0-diff this run — in the five HC / `prefers-contrast` / forced-colors / reduced-motion modes.** Every
+neutral / semantic-tier input and navigation surface (checkbox / radio / stepper / combobox / date
+borders and fills, breadcrumb / pagination / context text, underline-tab and step chrome, popover
+surfaces) resolves pixel-identically to `inputs.html` / `nav-components.html`.
 
 Recorded (not gated), with explanation, in `computed-value-proof.json → accentDerived`:
 
