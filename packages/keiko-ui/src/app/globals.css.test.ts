@@ -1495,21 +1495,38 @@ describe("Issue #1292 — forced-colors fallback (WCAG 1.4.3 / Windows High Cont
 });
 
 describe("Issue #1292 — design-system token drift gate", () => {
-  it("defines every Tier-2/3/4 token the design-system reference declares (no drift)", () => {
-    const semanticPath = resolve(here, "../../../../design-system/keiko-semantic-tokens.css");
-    const semanticCss = readFileSync(semanticPath, "utf8");
-    // Strip block comments, then collect every custom-property *declaration*.
-    const declarations = semanticCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  /** Collect every custom-property *declaration* name from a design-system file. */
+  function referenceTokenNames(relativePath: string): Set<string> {
+    const refCss = readFileSync(resolve(here, relativePath), "utf8");
+    // Strip block comments so prose like "--background-primary" cannot register.
+    const declarations = refCss.replace(/\/\*[\s\S]*?\*\//g, "");
     const names = new Set<string>();
     for (const match of declarations.matchAll(/(--[a-z0-9-]+)\s*:/g)) {
       const name = match[1];
       if (name !== undefined) names.add(name);
     }
+    return names;
+  }
+
+  it("defines every Tier-2/3/4 token the design-system reference declares (no drift)", () => {
+    const names = referenceTokenNames("../../../../design-system/keiko-semantic-tokens.css");
     expect(names.size, "expected the reference to declare the full token set").toBeGreaterThan(150);
     const missing = [...names].filter((name) => !css.includes(`${name}:`));
     expect(
       missing,
       `globals.css is missing design-system tokens (drift): ${missing.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("defines every Tier-1 primitive the design-system reference declares (AC1, no drift)", () => {
+    // AC1 names design-system/keiko-tokens.css explicitly: every primitive the
+    // reference carries must exist in the live product source.
+    const names = referenceTokenNames("../../../../design-system/keiko-tokens.css");
+    expect(names.size, "expected the reference to declare the primitive set").toBeGreaterThan(25);
+    const missing = [...names].filter((name) => !css.includes(`${name}:`));
+    expect(
+      missing,
+      `globals.css is missing design-system primitives (drift): ${missing.join(", ")}`,
     ).toEqual([]);
   });
 });
