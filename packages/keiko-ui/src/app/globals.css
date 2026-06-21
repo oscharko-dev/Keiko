@@ -4872,7 +4872,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 10px;
   border: 1px solid color-mix(in oklch, var(--feedback-warning) 55%, transparent);
   background: color-mix(in oklch, var(--feedback-warning) 12%, transparent);
-  color: var(--warn);
+  color: var(--feedback-warning);
   border-radius: 10px;
   padding: 8px 10px;
   font-size: 12px;
