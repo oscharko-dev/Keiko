@@ -22,6 +22,11 @@ export default tseslint.config(
       // example code with uninstalled deps (React, Testing Library, Playwright), held as data — not
       // product code subject to the repo's strict typed rules. Excluded from build and test collection.
       "tests/fixtures/frontend-test-generation/**",
+      // Design-system evidence reproduction harnesses (e.g. the #1293 computed-value equivalence
+      // harness): standalone Node + Playwright scripts that mix Node and in-browser (page.evaluate)
+      // globals and live outside any TypeScript program. They are committed evidence/repro artifacts,
+      // not product code, so they are excluded from the strict typed lint (like the fixtures above).
+      "docs/design-system/evidence/**/*.mjs",
     ],
   },
   js.configs.recommended,

@@ -26,6 +26,15 @@ new `--overlay-scrim`/`--shadow-*`) so light values flow automatically. This wor
 [#1292](https://github.com/oscharko-dev/Keiko/issues/1292) (token foundations) and
 [#1293](https://github.com/oscharko-dev/Keiko/issues/1293)/[#1295](https://github.com/oscharko-dev/Keiko/issues/1295) (surface migration).
 
+> **#1293 disposition (shipped).** The #1293 shell/chrome migration is a value-preserving consumer migration
+> (no Light-Mode visual change — proven by the 826-probe, 0-diff computed-value harness in
+> [evidence/1293](evidence/1293/)). It therefore **kept all eight `[data-theme="light"]` shell overrides
+> verbatim** — they are genuine per-mode WCAG corrections (rows A7, B "Link/focus/control ink", "Status-badge
+> ink flips", "Connection-edge colours"), approved deviations that ADR-0049 gate 4 forbids removing. The three
+> shell `required` Light shadow rows below — **A2 `.hd-tool-cta`, A3 `.ws-zoom`, A7 `.ws-fab` (C415)** — are a
+> Light-Mode _visual change_ (tokenising a dark-biased shadow so Light adapts) and remain owned by **#1295**
+> ("resolve the Light Mode `required` rows by tokenising shadows/scrims"), not #1293.
+
 ## Classification scheme
 
 - **blocking** — breaks mode-correctness or token governance for an interactive/overlay surface; must be fixed

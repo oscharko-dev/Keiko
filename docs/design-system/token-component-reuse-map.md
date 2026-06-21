@@ -131,6 +131,16 @@ No child issue body lists files; this section is the authoritative edit map. All
 `windows/WindowsRegistry.ts`, `windows/ConnectionsLayer.tsx`, `install/InstallBanner.tsx`; plus the shell class
 blocks in `globals.css`. Anchored by `WorkspaceShell.a11y.test.tsx`.
 
+> **Status: shipped.** The shell class blocks in `globals.css` were migrated to the semantic/component tokens
+> (value-preserving — the TSX files carry only documented exceptions: WebGL shader uniforms, SVG mask endpoints,
+> window-type metadata). Gated by the `Issue #1293` describe block in `globals.css.test.ts` (window-card tokens,
+> surface tokens, `--focus-ring`, named z/space/radius scales, raw-primitive drift guard) + the extended
+> Dark/Light `WorkspaceShell.a11y.test.tsx`. Browser evidence: [evidence/1293](evidence/1293/) — 826
+> computed-value probes, 0 differences across 7 modes. The three `required` Light-Mode shell shadow rows
+> (Table A: `.hd-tool-cta`, `.ws-zoom`, `.ws-fab`/C415) stay with **#1295** (shadow/scrim tokenisation is a
+> Light visual change, out of scope for this no-visual-change migration); the eight `[data-theme="light"]` shell
+> overrides are kept verbatim as approved deviations (ADR-0049 gate 4).
+
 ### #1294 — Reusable controls + component primitives
 
 `components/desktop/KeikoSelect.tsx`, `NumberControlStepper.tsx`, `ModeSwitch.tsx`, `EditorMenu.tsx`
