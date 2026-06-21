@@ -2458,7 +2458,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   text-align: left;
 }
 .plg-row:hover {
-  background: var(--card-2);
+  background: var(--surface-elevated);
 }
 .plg-conn {
   border: 1px solid transparent;
@@ -4843,7 +4843,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .perm-note {
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--text-faint);
   line-height: 1.45;
 }
 .dlg-agent-warning {
@@ -6742,12 +6742,12 @@ select.dlg-input {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  border: 1px solid color-mix(in oklch, var(--danger) 38%, transparent);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 38%, transparent);
   border-left-width: 3px;
   border-radius: var(--radius-sm);
   padding: 10px 11px;
-  color: var(--fg);
-  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
   font-size: 12.5px;
   line-height: 1.4;
 }
@@ -6760,7 +6760,7 @@ select.dlg-input {
   flex: 1 1 auto;
   min-width: 0;
   font-weight: 650;
-  color: var(--danger);
+  color: var(--feedback-danger);
 }
 .ui-error-notice-close {
   flex: none;
@@ -6771,14 +6771,14 @@ select.dlg-input {
   margin: -4px -5px 0 0;
   border: 1px solid transparent;
   border-radius: 5px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   background: transparent;
   cursor: pointer;
 }
 .ui-error-notice-close:hover {
-  color: var(--fg);
-  background: color-mix(in oklch, var(--danger) 12%, transparent);
-  border-color: color-mix(in oklch, var(--danger) 28%, transparent);
+  color: var(--text-primary);
+  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
+  border-color: color-mix(in oklch, var(--feedback-danger) 28%, transparent);
 }
 .ui-error-notice-close:focus-visible {
   outline: none;
@@ -6787,19 +6787,19 @@ select.dlg-input {
 }
 .ui-error-notice-message,
 .ui-error-notice-remediation {
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .ui-error-notice-remediation {
-  color: var(--fg-muted);
+  color: var(--text-secondary);
 }
 .ui-error-notice-code {
   width: fit-content;
   max-width: 100%;
   padding: 2px 5px;
-  border: 1px solid color-mix(in oklch, var(--danger) 25%, transparent);
+  border: 1px solid color-mix(in oklch, var(--feedback-danger) 25%, transparent);
   border-radius: 4px;
-  color: var(--danger);
-  background: color-mix(in oklch, var(--danger) 8%, transparent);
+  color: var(--feedback-danger);
+  background: color-mix(in oklch, var(--feedback-danger) 8%, transparent);
   overflow-wrap: anywhere;
 }
 
@@ -11285,9 +11285,9 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 2px;
   padding: 3px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--card);
+  background: var(--surface-primary);
   height: 34px;
   box-sizing: border-box;
 }
@@ -11303,7 +11303,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   padding: 0 10px;
   border: 1px solid transparent;
   border-radius: 7px;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   text-align: left;
   font-size: 12px;
   line-height: 1;
@@ -11349,7 +11349,7 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   background: transparent;
   border-color: transparent;
   box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .qi-source-kind-option[aria-checked="true"]:hover:not(:disabled) {
   background: transparent;
@@ -11437,9 +11437,9 @@ select.qi-select {
   min-width: min(100%, 440px);
   height: 34px;
   padding: 3px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--card);
+  background: var(--surface-primary);
   box-sizing: border-box;
 }
 .qi-source-kind-option {
@@ -11454,7 +11454,7 @@ select.qi-select {
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
-  color: var(--fg-muted);
+  color: var(--text-secondary);
   font: inherit;
   text-align: center;
   cursor: pointer;
@@ -11469,14 +11469,14 @@ select.qi-select {
   box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
 }
 .qi-source-kind-option:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 .qi-source-kind-option[aria-checked="true"] {
   border-color: transparent;
   background: transparent;
   box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 36%, transparent);
-  color: var(--fg);
+  color: var(--text-primary);
 }
 .qi-source-kind-option:disabled {
   opacity: 0.55;
@@ -11632,11 +11632,11 @@ select.qi-select {
     min-width: max-content;
     max-width: 180px;
     padding: 5px 8px;
-    border: 1px solid var(--line-strong);
+    border: 1px solid var(--border-strong);
     border-radius: 8px;
-    background: color-mix(in oklch, var(--surface) 96%, black);
+    background: color-mix(in oklch, var(--popover-surface) 96%, black);
     box-shadow: 0 12px 30px -18px rgba(0, 0, 0, 0.85);
-    color: var(--fg);
+    color: var(--text-primary);
     font-size: 11.5px;
     font-weight: 650;
     line-height: 1.25;

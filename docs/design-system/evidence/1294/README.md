@@ -9,7 +9,7 @@ tier-2/3/4 semantic/component tokens, instead of raw primitives.
 
 ## What changed
 
-- **346 component-primitive CSS rules / ~533 declarations** migrated from raw primitives
+- **363 component-primitive CSS rules / ~550 declarations** (346 in the initial pass + 17 reusable-control rules added in the PR #1400 review follow-up) migrated from raw primitives
   (`var(--card)`, `var(--fg)`, `var(--line)`, `var(--danger)`, `var(--accent-text)`, …) to
   the 0.4.0 semantic/component tokens (`--button-*`, `--input-*`, `--text-*`, `--surface-*`,
   `--border-*`, `--feedback-*`, `--card-*`, `--popover-*`, `--combobox-*`, `--focus-ring`, …).
@@ -51,7 +51,7 @@ the PRE (`origin/release/0.2.0`) and POST (this branch) `globals.css`, reads `ge
 for the migrated properties on each primitive across **7 modes** (dark, light, dark-HC, light-HC,
 prefers-contrast, forced-colors, reduced-motion), and asserts the resolved values are identical.
 
-**Result: 994 computed-value probes × 7 modes = 0 differences** (`computed-value-proof.json`).
+**Result: 1106 computed-value probes × 7 modes = 0 differences** (`computed-value-proof.json`).
 Screenshots `01-dark.png` … `07-reduced-motion.png` are the rendered POST evidence per mode.
 
 A wrong-token-by-value trap was caught and fixed by this harness during development: the

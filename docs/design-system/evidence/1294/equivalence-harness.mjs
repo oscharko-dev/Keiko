@@ -201,6 +201,21 @@ const BODY = `
   <input class="mc-dialog-input" />
   <div class="mc-dialog-error">err</div>
 </div>
+
+<div class="ui-error-notice">
+  <div class="ui-error-notice-title-row"><div class="ui-error-notice-title">title</div><button class="ui-error-notice-close">x</button></div>
+  <div class="ui-error-notice-message">message</div>
+  <div class="ui-error-notice-remediation">remediation</div>
+  <code class="ui-error-notice-code">code</code>
+</div>
+
+<div class="qi-source-kind-grid">
+  <button class="qi-source-kind-option"><span class="qi-source-kind-label">opt</span></button>
+  <button class="qi-source-kind-option" aria-checked="true"><span class="qi-source-kind-label">sel</span></button>
+</div>
+
+<div class="perm-row"><button class="perm-toggle">perm</button><div class="perm-note">note</div></div>
+<div class="plg"><button class="plg-row">plugin row</button></div>
 `;
 
 const PROBES = [
@@ -293,6 +308,19 @@ const PROBES = [
   [".mc-dialog", ["backgroundColor", "borderTopColor"]],
   [".wf-dialog", ["backgroundColor", "borderTopColor"]],
   [".wf-dialog-choice-label", ["color"]],
+  // PR #1400 review follow-up — reusable-control rules whose prefixes were missing from
+  // the classifier and were migrated as part of the same follow-up.
+  [".ui-error-notice", ["color", "backgroundColor", "borderTopColor"]],
+  [".ui-error-notice-title", ["color"]],
+  [".ui-error-notice-close", ["color"]],
+  [".ui-error-notice-message", ["color"]],
+  [".ui-error-notice-remediation", ["color"]],
+  [".ui-error-notice-code", ["color", "backgroundColor", "borderTopColor"]],
+  [".qi-source-kind-grid", ["backgroundColor", "borderTopColor"]],
+  [".qi-source-kind-option", ["color"]],
+  ['.qi-source-kind-option[aria-checked="true"]', ["color"]],
+  [".perm-note", ["color"]],
+  [".plg-row", ["color"]],
 ];
 
 const MODES = [

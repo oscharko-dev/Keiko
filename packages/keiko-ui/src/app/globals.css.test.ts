@@ -454,7 +454,8 @@ describe("Quality Intelligence source-type picker", () => {
     expect(gridBlock).toContain("grid-template-columns: repeat(5, minmax(0, 1fr))");
     expect(gridBlock).toContain("gap: 2px");
     expect(gridBlock).toContain("height: 34px");
-    expect(gridBlock).toContain("background: var(--card)");
+    // #1294: --card → --surface-primary (value-preserving alias)
+    expect(gridBlock).toContain("background: var(--surface-primary)");
 
     const optionBlock = cssBlock(".qi-source-kind-option {");
     expect(optionBlock).toContain("display: flex");
@@ -462,7 +463,7 @@ describe("Quality Intelligence source-type picker", () => {
     expect(optionBlock).toContain("height: 100%");
     expect(optionBlock).toContain("border: 1px solid transparent");
     expect(optionBlock).toContain("align-items: center");
-    expect(optionBlock).toContain("color: var(--fg-muted)");
+    expect(optionBlock).toContain("color: var(--text-secondary)");
     expect(optionBlock).toContain("line-height: 1");
   });
 
@@ -485,7 +486,7 @@ describe("Quality Intelligence source-type picker", () => {
     const selectedBlock = cssBlock('.qi-source-kind-option[aria-checked="true"] {');
     expect(selectedBlock).toContain("border-color: transparent");
     expect(selectedBlock).toContain("background: transparent");
-    expect(selectedBlock).toContain("color: var(--fg)");
+    expect(selectedBlock).toContain("color: var(--text-primary)");
     expect(selectedBlock).toContain("inset 0 0 0 1.5px");
   });
 
@@ -1906,10 +1907,12 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
       "--info",
       "--ok",
     ];
+    // Escape every regex metacharacter (incl. backslash) before interpolating the token
+    // into the pattern — addresses CodeQL "incomplete string escaping" (the prior
+    // `replace(/-/g, "\\-")` escaped only the hyphen).
+    const escapeRegExp = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const bodyForbidden = (body: string): readonly string[] =>
-      forbidden.filter((tok) =>
-        new RegExp(`var\\(\\s*${tok.replace(/-/g, "\\-")}\\s*[),]`).test(body),
-      );
+      forbidden.filter((tok) => new RegExp(`var\\(\\s*${escapeRegExp(tok)}\\s*[),]`).test(body));
     const shellLead =
       /^\.(header|hd-|footer|ft-|stage|workspace|ws-|rail|win|window|tb-|conn-|install-banner|empty-workspace)/;
     // semantic prefixes of reusable controls / component primitives (NOT route layout)
@@ -2028,6 +2031,21 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
           "cmp-",
           "attach-",
           "scope-grounding",
+          // PR #1400 review follow-up — reusable-control selectors whose prefixes were
+          // missing from the classifier (their rules carried raw primitives and were
+          // migrated as part of the same follow-up). Kept byte-identical to the mirror
+          // enumerator's CONTROL list.
+          "ed-tile",
+          "tr-dir-line",
+          "perm-legacy",
+          "perm-note",
+          "pal-ico",
+          "ed-pane-actions",
+          "ui-error-notice",
+          "rb-edge-badge",
+          "qi-source-kind",
+          "qi-export-action",
+          "plg-row",
         ].join("|") +
         ")",
     );
