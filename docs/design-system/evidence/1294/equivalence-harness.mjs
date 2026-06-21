@@ -12,7 +12,7 @@
 //
 // Self-contained reproduction (from the repo root, after `npm ci` +
 // `npx playwright install chromium`):
-//   node docs/design-system/evidence/1294/equivalence-harness.mjs
+//   BASE_REF=ba113ac373ebf1114af7de217b07935036adba08 node docs/design-system/evidence/1294/equivalence-harness.mjs
 // Writes computed-value-proof.json + 01-dark.png … 07-reduced-motion.png next to
 // itself and exits non-zero if any computed value differs between the two stylesheets.
 import { chromium } from "playwright";
@@ -24,7 +24,8 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
-const BASE_REF = process.env.BASE_REF ?? "origin/release/0.2.0";
+const PRE_MIGRATION_BASE_REF = "ba113ac373ebf1114af7de217b07935036adba08";
+const BASE_REF = process.env.BASE_REF ?? PRE_MIGRATION_BASE_REF;
 
 const PRE = execSync(`git -C "${REPO}" show ${BASE_REF}:${CSS_PATH}`, {
   encoding: "utf8",

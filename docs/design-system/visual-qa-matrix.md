@@ -143,7 +143,7 @@ visual change; the three `required` Light shadow rows (Table A: `.hd-tool-cta`, 
 owned by #1295. Designer approval (◐) stays open pending human sign-off (Human Review Required: Yes).
 
 ² #1294 reusable-control / component-primitive migration: each mode cell is engineering-verified by the 7-mode
-computed-value-equivalence proof and screenshots in [evidence/1294](evidence/1294/) — 994 `getComputedStyle`
+computed-value-equivalence proof and screenshots in [evidence/1294](evidence/1294/) — 1106 `getComputedStyle`
 probes, **0** differing values between the pre- and post-migration stylesheet (the migration is value-preserving,
 so it carries the #1292 mode-aware foundation forward unchanged across every viewport). The reusable controls /
 input atoms and the modal/dialog chrome now consume the Tier-3/4 semantic/component tokens (`--button-*`,
