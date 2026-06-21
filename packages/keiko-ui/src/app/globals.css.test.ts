@@ -383,15 +383,22 @@ describe("Issue #748 — QI quality badge and weak-test contrast hooks", () => {
   it("quality score tiers use the state tokens that are contrast-pinned in both themes", () => {
     const highBlock = cssBlock(".qi-quality-high {");
     expect(highBlock).toContain("background: var(--accent-dim)");
-    expect(highBlock).toContain("color: var(--accent-text)");
+    // #1294: --accent-text → --text-accent (value-preserving alias)
+    expect(highBlock).toContain("color: var(--text-accent)");
 
     const midBlock = cssBlock(".qi-quality-mid {");
-    expect(midBlock).toContain("background: color-mix(in oklch, var(--warn) 20%, transparent)");
-    expect(midBlock).toContain("color: var(--warn)");
+    // #1294: --warn → --feedback-warning (value-preserving alias)
+    expect(midBlock).toContain(
+      "background: color-mix(in oklch, var(--feedback-warning) 20%, transparent)",
+    );
+    expect(midBlock).toContain("color: var(--feedback-warning)");
 
     const lowBlock = cssBlock(".qi-quality-low {");
-    expect(lowBlock).toContain("background: color-mix(in oklch, var(--danger) 22%, transparent)");
-    expect(lowBlock).toContain("color: var(--fg)");
+    // #1294: --danger → --feedback-danger, --fg → --text-primary (value-preserving aliases)
+    expect(lowBlock).toContain(
+      "background: color-mix(in oklch, var(--feedback-danger) 22%, transparent)",
+    );
+    expect(lowBlock).toContain("color: var(--text-primary)");
   });
 
   it("weak-test flag text stays on primary or muted foreground tokens over a card-tinted surface", () => {
@@ -675,7 +682,8 @@ describe("uiux-fix F010 — cmp-budget styling and scope-pill focus visibility",
     expect(idx).toBeGreaterThan(-1);
     const block = css.slice(idx, css.indexOf("}", idx) + 1);
     // The × sits inside the accent-filled pill: its ring must use ink-inverse, not accent.
-    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--ink-inverse)");
+    // #1294: scope-pill ink routes through --text-on-accent (pure --ink-inverse alias)
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--text-on-accent)");
     expect(block).not.toContain("outline: var(--focus-width, 2px) solid var(--accent)");
     // The shared selector (which gave both buttons the accent ring) must be gone.
     expect(css).not.toMatch(
@@ -766,7 +774,8 @@ describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)"
 
   it(".tr-caret-btn:focus-visible keeps a dark separator so it contrasts on accent-dim rows (CC-01)", () => {
     const block = cssBlock(".tr-caret-btn:focus-visible");
-    expect(block).toContain("box-shadow: 0 0 0 1px var(--bg)");
+    // #1294: --bg → --background-primary (value-preserving alias)
+    expect(block).toContain("box-shadow: 0 0 0 1px var(--background-primary)");
   });
 });
 
@@ -1110,12 +1119,14 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
 
   it(".figma-snapshot-cancel-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
     const block = cssBlock(".figma-snapshot-cancel-btn:focus-visible");
-    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
+    // #1294: control focus ring → --focus-ring (value-preserving alias of --accent-text)
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
   });
 
   it(".figma-snapshot-input suppresses mouse-click focus paint while keeping keyboard focus-visible", () => {
     const keyboardBlock = cssBlock(".figma-snapshot-input:focus-visible");
-    expect(keyboardBlock).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
+    // #1294: control focus ring → --focus-ring (value-preserving alias of --accent-text)
+    expect(keyboardBlock).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
 
     const pointerBlock = cssBlock(
       ':root[data-input-modality="pointer"] .figma-snapshot-input:focus',
@@ -1131,7 +1142,8 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
 
   it(".figma-snapshot-revoke-confirm-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
     const block = cssBlock(".figma-snapshot-revoke-btn:focus-visible,");
-    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
+    // #1294: control focus ring → --focus-ring (value-preserving alias of --accent-text)
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
   });
 
   it(".figma-snapshot-revoke-confirm-btn is covered by the shared revoke block (WCAG 2.5.8)", () => {
@@ -1151,7 +1163,8 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     );
     const block = css.slice(idx, css.indexOf("}", idx) + 1);
     expect(block).toContain(".figma-snapshot-revoke-cancel-btn:focus-visible");
-    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
+    // #1294: control focus ring → --focus-ring (value-preserving alias of --accent-text)
+    expect(block).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
   });
 
   it(".figma-snapshot-code-file-path meets the 24px minimum height (WCAG 2.5.8)", () => {
@@ -1516,8 +1529,11 @@ describe("Issue #1292 — full [data-hc] hook (previously editor-only)", () => {
 describe("Issue #1292 — focus rings consume the focus-width primitive", () => {
   it("routes normal focus-visible outlines through --focus-width while preserving colour tokens", () => {
     expect(css).toContain("outline: var(--focus-width, 2px) solid var(--accent-text)");
-    expect(css).toContain("outline: var(--focus-width, 2px) solid var(--ink-inverse)");
-    expect(css).toContain("outline: var(--focus-width, 2px) solid var(--danger)");
+    // #1294: control focus rings now route the colour through --focus-ring /
+    // --input-border-error (value-preserving aliases of the ink-inverse / danger
+    // primitives pinned here at #1292 time; --accent-text survives on non-control rings).
+    expect(css).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
+    expect(css).toContain("outline: var(--focus-width, 2px) solid var(--input-border-error)");
     expect(css).not.toMatch(
       /outline:\s*\d+px solid var\(--(?:accent-text|accent-line|ink-inverse|danger|focus)\)/,
     );
@@ -1768,6 +1784,282 @@ describe("Issue #1293 — global shell + workspace chrome token migration", () =
     expect(
       offenders,
       `pure-shell rules still carry raw aliased primitives (migrate to the semantic token):\n${offenders.join("\n")}`,
+    ).toEqual([]);
+  });
+});
+
+// ─── Issue #1294 — reusable controls + component primitives token migration ────
+//
+// #1294 is the component-primitive consumer migration (after #1293's shell/chrome).
+// It routes the reusable controls — buttons, icon buttons, fields, selects, toggles,
+// steppers, tabs, menus, badges, chips, pills, toasts, alerts, composer controls,
+// cards, dialogs, popovers, tooltips, tree/command rows — through the 0.4.0
+// semantic/component tokens instead of raw primitives. Value-preserving: every target
+// token aliases the primitive it replaced (proven byte-identical by the 7-mode
+// computed-value harness in docs/design-system/evidence/1294). Each assertion is
+// crafted so that reverting the specific change fails the test (mutation-robust); the
+// negative pins guard the wrong-token-by-value traps the scope-wide guard cannot see.
+describe("Issue #1294 — reusable controls + component primitives token migration", () => {
+  // AC: primary/accent buttons route their ink to the component token; the accent FILL
+  // is a brand primitive and is intentionally kept.
+  it("routes primary buttons through --button-primary-text (keeps the accent fill)", () => {
+    const block = cssBlock("\n.dlg-primary {");
+    expect(block).toContain("color: var(--button-primary-text)");
+    expect(block).not.toContain("var(--ink-inverse)");
+  });
+
+  // AC: secondary/bordered buttons consume the full secondary token set.
+  it("routes secondary buttons through --button-secondary-* / --text-secondary", () => {
+    const block = cssBlock("\n.dlg-btn {");
+    expect(block).toContain("background: var(--button-secondary-surface)");
+    expect(block).toContain("var(--button-secondary-border)");
+    expect(block).toContain("color: var(--text-secondary)");
+    expect(block).not.toMatch(/var\(--card\)|var\(--line\)|var\(--fg-muted\)/);
+  });
+
+  // AC: danger affordances consume --feedback-danger; never the bare primitive.
+  it("routes danger affordances through --feedback-danger", () => {
+    const block = cssBlock("\n.bw-btn-danger {");
+    expect(block).toContain("var(--feedback-danger)");
+    expect(block).not.toMatch(/var\(--danger\)/);
+  });
+
+  // AC + R1 trap (d): input chrome consumes --input-*, but the placeholder is the
+  // fg-faint→--text-faint case, NOT --input-placeholder (=fg-muted, a different value).
+  it("routes inputs through --input-* and the placeholder through --text-faint (trap d)", () => {
+    const field = cssBlock("\n.dlg-input {");
+    expect(field).toContain("var(--input-surface)");
+    expect(field).toContain("var(--input-border)");
+    const ph = cssBlock(".dlg-input::placeholder");
+    expect(ph).toContain("color: var(--text-faint)");
+    expect(ph).not.toContain("--input-placeholder");
+  });
+
+  // AC: command palette / popover surfaces consume the popover token chain.
+  it("routes the command palette through the --popover-* chain", () => {
+    const block = cssBlock("\n.cmdk {");
+    expect(block).toContain("var(--popover-surface)");
+    expect(block).toContain("var(--popover-border)");
+    expect(block).toContain("var(--popover-shadow)");
+  });
+
+  // R1 trap (b): dialog/modal panels consume --surface-overlay, NOT --modal-surface
+  // (=card, a different value); tooltips consume --surface-primary, NOT --tooltip-surface.
+  it("uses --surface-overlay for dialogs and --surface-primary for tooltips (trap b)", () => {
+    const dlg = cssBlock("\n.dlg {");
+    expect(dlg).toContain("background: var(--surface-overlay)");
+    expect(dlg).not.toContain("--modal-surface");
+    const tip = cssBlock("\n.ksel-overflow-tooltip {");
+    expect(tip).toContain("background: var(--surface-primary)");
+    expect(tip).not.toContain("--tooltip-surface");
+  });
+
+  // R1 trap (c): menu-item/option hover surfaces consume --surface-elevated, NOT
+  // --menu-item-surface-hover (=card, a different value).
+  it("uses --surface-elevated for menu-item hover (trap c)", () => {
+    const block = cssBlock("\n.edm-item:hover {");
+    expect(block).toContain("background: var(--surface-elevated)");
+    expect(block).not.toContain("--menu-item-surface-hover");
+  });
+
+  // AC: focus rings on controls consume the --focus-ring semantic token. The scope-pill
+  // ink uses --text-on-accent (a pure --ink-inverse alias), NEVER --accent-solid-ink
+  // (which carries its own Light override → would diverge in Light; harness-proven trap).
+  it("routes control focus rings through --focus-ring and keeps scope-pill ink value-preserving", () => {
+    const focus = cssRule(".dlg-btn:focus-visible");
+    expect(focus).toContain("solid var(--focus-ring)");
+    const pill = cssBlock("\n.scope-pill {");
+    expect(pill).toContain("color: var(--text-on-accent)");
+    expect(pill).not.toContain("--accent-solid-ink");
+  });
+
+  // AC (ds-040) — the real completeness gate: scope-wide component drift guard. Parses
+  // EVERY control rule (built by exclusion, not a hand allowlist — the #1293 review
+  // mutation-proved an allowlist tautological) and asserts none still carries a raw
+  // aliased primitive. Mirrors the enumerator that drove the migration (worklist == guard).
+  it("leaves no raw aliased primitives in any reusable-control rule (ds-040, scope-wide)", () => {
+    const forbidden = [
+      "--card",
+      "--card-2",
+      "--inset",
+      "--fg",
+      "--fg-muted",
+      "--fg-dim",
+      "--fg-faint",
+      "--line",
+      "--line-soft",
+      "--line-strong",
+      "--shadow-card",
+      "--shadow-pop",
+      "--ink-inverse",
+      "--surface",
+      "--bg",
+      "--accent-text",
+      "--danger",
+      "--warn",
+      "--info",
+      "--ok",
+    ];
+    const bodyForbidden = (body: string): readonly string[] =>
+      forbidden.filter((tok) =>
+        new RegExp(`var\\(\\s*${tok.replace(/-/g, "\\-")}\\s*[),]`).test(body),
+      );
+    const shellLead =
+      /^\.(header|hd-|footer|ft-|stage|workspace|ws-|rail|win|window|tb-|conn-|install-banner|empty-workspace)/;
+    // semantic prefixes of reusable controls / component primitives (NOT route layout)
+    const controlLead = new RegExp(
+      "(^|[ >+~])\\.(" +
+        [
+          "dlg-btn",
+          "dlg-primary",
+          "dlg-ghost",
+          "dlg-danger",
+          "bw-btn",
+          "qi-btn",
+          "lk-btn",
+          "lkd-btn",
+          "tm-action",
+          "arun-btn",
+          "scope-connect-btn",
+          "grounded-cancel-btn",
+          "grounded-[a-z-]*btn",
+          "run-summary-card-action",
+          "figma-snapshot-[a-z-]*btn",
+          "figma-view-json-btn",
+          "cmp-send",
+          "cmp-icon",
+          "cmp-add",
+          "tr-caret-btn",
+          "ed-icon-action",
+          "rb-edge-badge-btn",
+          "sm-code-copy",
+          "chat-msg-copy",
+          "attach-chip-remove",
+          "code-copy",
+          "number-control",
+          "dlg-input",
+          "dlg-textarea",
+          "dlg-sel",
+          "qi-input",
+          "qi-textarea",
+          "qi-select",
+          "bw-input",
+          "gw-input",
+          "gw-textarea",
+          "mc-dialog-input",
+          "mc-dialog-textarea",
+          "mc-dialog-select",
+          "figma-snapshot-input",
+          "cmp-input",
+          "files-root-input",
+          "rv-runid-input",
+          "chat-history-search",
+          "chat-title-input",
+          "cmdk-input",
+          "wf-dialog-input",
+          "connector-picker-select",
+          "scope-grounding-select",
+          "ksel-",
+          "cmp-model",
+          "modesw-",
+          "auto-toggle",
+          "perm-sw",
+          "brg-tg",
+          "perm-toggle",
+          "perm-opt",
+          "figma-snapshot-consent",
+          "ed-tab",
+          "ed-tabs",
+          "ed-empty",
+          "edm-",
+          "chip",
+          "qi-badge",
+          "mc-badge",
+          "lk-badge",
+          "cmp-budget-badge",
+          "qi-sev",
+          "qi-quality",
+          "qi-cov-",
+          "scope-pill",
+          "dot",
+          "tag",
+          "attach-rejection-alert",
+          "source-limit-alert",
+          "lk-alert",
+          "cmp-err",
+          "files-error",
+          "files-warning",
+          "fpv-banner",
+          "qi-degraded-notice",
+          "scope-connect-error",
+          "dlg-agent-warning",
+          "wf-dialog-error",
+          "mc-dialog-error",
+          "dlg-error",
+          "dir-error",
+          "pal-card",
+          "pal-main",
+          "pal-name",
+          "pal-desc",
+          "run-summary-card",
+          "cmp-box",
+          "attach-chip",
+          "dlg",
+          "mc-dialog",
+          "wf-dialog",
+          "cmdk",
+          "tr-row",
+          "tr-caret",
+          "tr-folder",
+          "tr-file",
+          "tr-dir-enter",
+          "cmdk-list",
+          "cmdk-row",
+          "cmdk-ico",
+          "cmdk-label",
+          "cmdk-group",
+          "cmdk-empty",
+          "cmp-",
+          "attach-",
+          "scope-grounding",
+        ].join("|") +
+        ")",
+    );
+    // #1295-owned Light shadow/scrim rows + hand-built popover drop-shadows (new-no-token)
+    const scrim = /(overlay|backdrop|scrim)/i;
+    const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
+    let match: RegExpExecArray | null;
+    let controlRulesChecked = 0;
+    const offenders: string[] = [];
+    while ((match = ruleRe.exec(source)) !== null) {
+      const selector = (match[1] ?? "").trim().replace(/\s+/g, " ");
+      const body = match[2] ?? "";
+      if (selector === "" || /^(@|:root|html|body|\*|#)/.test(selector)) continue;
+      if (selector.includes('[data-theme="light"]')) continue; // approved deviations
+      const parts = selector
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (parts.length === 0) continue;
+      const pureShell = parts.every((p) => {
+        const lead = p.replace(/^[>+~\s]+/, "");
+        return shellLead.test(lead) && !lead.startsWith(".connector");
+      });
+      if (pureShell) continue; // #1293 territory
+      if (!parts.some((p) => controlLead.test(p))) continue; // not a reusable control
+      if (scrim.test(selector)) continue; // #1295 Light shadow/scrim, new-no-token
+      controlRulesChecked++;
+      for (const tok of bodyForbidden(body)) {
+        offenders.push(`${selector} { … var(${tok}) … }`);
+      }
+    }
+    // the parser must find a substantial body of control rules (it cannot silently
+    // match zero — the proven failure mode of a broken classifier).
+    expect(controlRulesChecked).toBeGreaterThan(120);
+    expect(
+      offenders,
+      `reusable-control rules still carry raw aliased primitives (migrate to the semantic token):\n${offenders.join("\n")}`,
     ).toEqual([]);
   });
 });
