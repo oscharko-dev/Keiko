@@ -117,8 +117,8 @@ in outcome).
 | -------------------------------------------- | -------------- | --------------- | ------- | -------- | ------ | ------ | -------------- | ------------- | ----------------- |
 | App shell — Header/Rails/Footer (#1293)      | ✓¹             | ✓¹              | ✓¹      | ✓¹       | ✓¹     | ✓¹     | ✓¹             | ✓¹            | ◐                 |
 | Workspace canvas + window frame (#1293)      | ✓¹             | ✓¹              | ✓¹      | ✓¹       | ✓¹     | ✓¹     | ✓¹             | ✓¹            | ◐                 |
-| Reusable controls / input atoms (#1294)      | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
-| Modals / dialogs (#1294)                     | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
+| Reusable controls / input atoms (#1294)      | ✓²             | ✓²              | ✓²      | ✓²       | ✓²     | ✓²     | ✓²             | ✓²            | ◐                 |
+| Modals / dialogs (#1294)                     | ✓²             | ✓²              | ✓²      | ✓²       | ✓²     | ✓²     | ✓²             | ✓²            | ◐                 |
 | Chat / conversation (#1295)                  | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
 | Grounded answer + workflow handoff (#1296)   | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
 | Agent run / gate cards (#1296)               | ☐              | ☐               | ☐       | ☐        | ☐      | ☐      | ☐              | ☐             | ☐                 |
@@ -141,6 +141,17 @@ between the pre- and post-migration stylesheet (the migration is value-preservin
 designer-reviewed foundation forward unchanged across every viewport). The migration introduces no Light-Mode
 visual change; the three `required` Light shadow rows (Table A: `.hd-tool-cta`, `.ws-zoom`, `.ws-fab`) remain
 owned by #1295. Designer approval (◐) stays open pending human sign-off (Human Review Required: Yes).
+
+² #1294 reusable-control / component-primitive migration: each mode cell is engineering-verified by the 7-mode
+computed-value-equivalence proof and screenshots in [evidence/1294](evidence/1294/) — 994 `getComputedStyle`
+probes, **0** differing values between the pre- and post-migration stylesheet (the migration is value-preserving,
+so it carries the #1292 mode-aware foundation forward unchanged across every viewport). The reusable controls /
+input atoms and the modal/dialog chrome now consume the Tier-3/4 semantic/component tokens (`--button-*`,
+`--input-*`, `--text-*`, `--surface-*`, `--border-*`, `--feedback-*`, `--card-*`, `--popover-*`, `--combobox-*`,
+`--focus-ring`). No Light-Mode visual change is introduced — Light fidelity was already delivered by #1292's
+mode-aware primitives — and the `required` Light shadow/scrim rows (`.dlg-overlay`, `.cmdk-overlay`,
+`.mc-dialog-backdrop`, `.ws-fab`/C415) remain owned by #1295. Designer approval (◐) stays open pending human
+sign-off (Human Review Required: Yes).
 
 ## Acceptance criterion D — coverage statement
 

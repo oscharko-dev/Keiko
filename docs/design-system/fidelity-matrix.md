@@ -65,7 +65,15 @@ global class names. The matrix is therefore a **class-name ⇄ component ⇄ des
 | Figma snapshot + scoped source windows (`figma`, `figmaView`, `figmaJson`, `figmaImage`)                                                                    | `widgets/figma/{FigmaSnapshotWindow,FigmaJsonSourceWindow,FigmaImageSourceWindow,JsonSyntaxBlock}.tsx`                                                                                                                     | paste-link / building / snapshot grid / screen-selected / JSON-IR / image-render / auto-grow / loading·error·empty                                                                                             | #1295                             |
 | Secondary tool panels (`settings`, `project`, `search`, `plugins`, `automations`, `mobile`, `inspector`, `notifications`, `resources`, `timeline`, `keiko`) | `widgets/panels/*.tsx`                                                                                                                                                                                                     | Settings(17 markers), ChatHistory(14) state-rich; Search/Plugins/Automations/Mobile/Notifications/Resources show **0 explicit state markers** — see Deferral D4                                                | #1295 / D4                        |
 
-## 4. Modals / dialogs (portal layer) — owner #1294 (migrate with owning surface)
+## 4. Modals / dialogs (portal layer) — owner #1294 (migrate with owning surface) · **shipped**
+
+> **#1294 status: shipped (value-preserving).** The modal/dialog chrome class blocks in `globals.css` now consume
+> the Tier-3/4 semantic/component tokens (`--surface-*`, `--border-*`, `--text-*`, `--popover-*`, `--focus-ring`,
+> …) — part of the 346-rule / ~533-declaration control migration, proven byte-identical by the 994-probe, 0-diff
+> 7-mode computed-value harness in [evidence/1294](evidence/1294/) and gated by the `Issue #1294` describe block
+> in `globals.css.test.ts`. The `required` Light scrim rows (`.dlg-overlay`, `.cmdk-overlay`,
+> `.mc-dialog-backdrop`, `.wf-dialog-overlay`, `.gw-setup-backdrop`) stay with **#1295** (shadow/scrim
+> tokenisation is a Light visual change).
 
 | Surface                                          | Key files                                                   | Primary states                                           |
 | ------------------------------------------------ | ----------------------------------------------------------- | -------------------------------------------------------- |
@@ -76,7 +84,18 @@ global class names. The matrix is therefore a **class-name ⇄ component ⇄ des
 | Permission control                               | `modals/PermControl.tsx`                                    | permission grant states                                  |
 | Local file browser                               | `components/desktop/local-files/LocalFileBrowserDialog.tsx` | loading / error / list / dialog                          |
 
-## 5. Shared controls / input atoms — owner #1294
+## 5. Shared controls / input atoms — owner #1294 · **shipped**
+
+> **#1294 status: shipped (value-preserving).** These reusable control / input-atom class blocks in `globals.css`
+> were routed from raw primitives (`var(--card)`, `var(--fg)`, `var(--line)`, `var(--danger)`,
+> `var(--accent-text)`, …) to the Tier-3/4 semantic/component tokens (`--button-*`, `--input-*`, `--text-*`,
+> `--surface-*`, `--border-*`, `--feedback-*`, `--combobox-*`, `--focus-ring`), and the `EditorMenu` inline hex
+> tiles migrated too. Kept verbatim as documented non-migrations: the accent-family brand primitives, the
+> no-token raw literals (`#fff`, `oklch` amber inks, green Light scrims, disabled opacities `0.45 / 0.55 / 0.6`),
+> and the approved `[data-theme="light"]` deviations. No Light-Mode visual change — that fidelity was delivered by
+> #1292's mode-aware primitives, which these controls now consume. Evidence: [evidence/1294](evidence/1294/) —
+> 994 computed-value probes, 0 differences across 7 modes; gated by the `Issue #1294` describe block in
+> `globals.css.test.ts`.
 
 `KeikoSelect`, `NumberControlStepper`, `widgets/shared/Toggle.tsx`, `ModeSwitch`, `EditorMenu`,
 `AttachmentStrip` (+ `AttachButton`/`AttachDropZone`/`AttachRejectionAlert`), `ConnectedScopePill`,
@@ -115,4 +134,7 @@ These satisfy acceptance criterion A by explicit deferral rather than an owner c
 Every visible product surface above is assigned an owner child issue (#1293–#1298) **or** an explicit deferral
 (D1–D6). The route reality (single route + 31 windows + standalone capsule page) is fully enumerated; the
 cross-cutting axes (theme, contrast, motion, density, breakpoints) are owned by #1292/#1298/#1293/#1300. No
-visible surface is left unassigned.
+visible surface is left unassigned. The foundation and first two consumer migrations have shipped:
+#1292 (token layer), #1293 (app-shell chrome, §2), and #1294 (modals/dialogs §4 + shared controls / input atoms
+§5) — all value-preserving, with the per-section status notes and browser evidence under
+[evidence/1294](evidence/1294/).

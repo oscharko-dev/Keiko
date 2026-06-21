@@ -35,6 +35,25 @@ new `--overlay-scrim`/`--shadow-*`) so light values flow automatically. This wor
 > Light-Mode _visual change_ (tokenising a dark-biased shadow so Light adapts) and remain owned by **#1295**
 > ("resolve the Light Mode `required` rows by tokenising shadows/scrims"), not #1293.
 
+> **#1294 disposition (shipped).** The #1294 reusable-control / component-primitive migration is the same
+> value-preserving consumer migration applied to the reusable controls and the modal/dialog chrome (no Light-Mode
+> visual change — proven by the 994-probe, 0-diff computed-value harness across 7 modes in
+> [evidence/1294](evidence/1294/)). It routed 346 control rules / ~533 declarations from raw primitives to the
+> Tier-3/4 semantic/component tokens (`--button-*`, `--input-*`, `--text-*`, `--surface-*`, `--border-*`,
+> `--feedback-*`, `--card-*`, `--popover-*`, `--combobox-*`, `--focus-ring`), so **zero `[data-theme="light"]`
+> rows changed** — Table A and Table B below are unchanged. The migration **kept all approved
+> `[data-theme="light"]` deviations verbatim** (Table B "Status-badge ink flips", "Link/focus/control ink",
+> e.g. `.modesw-av`, `.cmp-budget-badge-low`, the blanket Light focus-ring rule — ADR-0049 gate 4 forbids
+> removing them), kept the accent-family brand primitives and the no-token raw literals (`#fff`, `oklch` amber
+> inks, green Light scrims, disabled opacities `0.45 / 0.55 / 0.6`) as documented non-migrations, and left the
+> `required` Light shadow/scrim rows — **A1 `.ksel-menu`, A4 `.cmp-model-menu`, A5 `.qi-source-kind-option`,
+> A7 `.ws-fab` (C415)** and the Table B overlay-scrim group (`.dlg-overlay`, `.cmdk-overlay`,
+> `.mc-dialog-backdrop`, `.wf-dialog-overlay`, `.gw-setup-backdrop`) — owned by **#1295** (shadow/scrim
+> tokenisation is a Light visual change, out of scope for this no-visual-change migration). Out-of-scope
+> follow-ups noted by the migration: the duplicate `[data-theme="light"] .mc-dialog-backdrop` (lines 15242 and
+> 15791, dead duplicate) and a shared `--dialog-scrim` token _definition_ both belong to #1295; the undefined
+> `var(--focus)` on the figma-view-json focus rings is a pre-existing bug left verbatim.
+
 ## Classification scheme
 
 - **blocking** — breaks mode-correctness or token governance for an interactive/overlay surface; must be fixed
