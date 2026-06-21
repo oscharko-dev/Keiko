@@ -5,9 +5,12 @@ Design System 0.4.0 reference: `design-system/ai-components.html` + `design-syst
 
 ## What this proves
 
-`equivalence-harness.mjs` renders the **real product `globals.css`** (PRE = `origin/release/0.2.0`,
-POST = working tree) in a headless Chromium across all 7 theme / contrast / motion modes via
-`page.setContent` (no file server — CodeQL-safe), and probes computed values with `getComputedStyle`.
+`equivalence-harness.mjs` renders the **real product `globals.css`** (PRE = immutable PR base
+`ee245ce8972c906f3eb9e0bff9d060f98be224f7`, POST = working tree) in a headless Chromium across all
+7 theme / contrast / motion modes via `page.setContent` (no file server — CodeQL-safe), and probes
+computed values with `getComputedStyle`. The proof records the symbolic `baseRef`, resolved
+`baseRefResolved`, `postRef: "working-tree"`, and the current `postHeadRefResolved` used for the
+baseline-collapsing guard. The harness exits non-zero if PRE resolves to the current POST head.
 
 ### Group A — value-preserving migrations (0-diff gate)
 
@@ -55,6 +58,22 @@ confidence are encoded by **word + shape, never colour alone** (HIGH/MEDIUM/LOW,
 ring vs filled-dot tool glyphs). `07-reduced-motion.png` confirms the thinking/streaming/spinner
 animations freeze under `prefers-reduced-motion`.
 
+## Editor-agent context evidence
+
+`npm run test:e2e:editor-fidelity-1296` starts the packaged CLI UI path, renders a focused editor-agent
+context scene with the real product `globals.css`, and captures:
+
+- `editor/dark-editor-agent.png`
+- `editor/light-editor-agent.png`
+- `editor/high-contrast-editor-agent.png`
+- `editor/manifest.json`
+
+The manifest records the Design System reference (`design-system/editor-agent.html`), the product CSS
+source, the three captured modes, and computed evidence that Monaco/editor ghost text resolves through
+`--ed-agent-ghost` while matching the legacy `--ed-ghost` colour. The editor permission and
+sensitive-action prompts are included as token-backed primitives only; live authority wiring remains
+deferred to #1405.
+
 ## Accessibility
 
 - Structural a11y is gated by jest-axe in CI: `GroundedAnswer.a11y.test.tsx` (Dark **and** Light
@@ -79,7 +98,11 @@ primitives.
 
 ```sh
 npm ci && npx playwright install chromium
-BASE_REF=origin/release/0.2.0 node docs/design-system/evidence/1296/equivalence-harness.mjs
+BASE_REF=ee245ce8972c906f3eb9e0bff9d060f98be224f7 node docs/design-system/evidence/1296/equivalence-harness.mjs
+npm run test:e2e:editor-fidelity-1296
 ```
 
-Exits non-zero if any Group-A computed value differs or any Group-D assertion regresses.
+The computed-value harness exits non-zero if PRE resolves to POST, any Group-A computed value differs,
+or any Group-D assertion regresses. The editor-agent Playwright gate exits non-zero if the packaged UI
+path cannot start, screenshots cannot be written safely, or the editor-agent ghost token drifts from
+the editor ghost colour.

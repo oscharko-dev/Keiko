@@ -1,6 +1,11 @@
 {
   "issue": 1296,
-  "baseRef": "origin/release/0.2.0",
+  "baseRef": "ee245ce8972c906f3eb9e0bff9d060f98be224f7",
+  "defaultBaseRef": "ee245ce8972c906f3eb9e0bff9d060f98be224f7",
+  "baseRefResolved": "ee245ce8972c906f3eb9e0bff9d060f98be224f7",
+  "postRef": "working-tree",
+  "postHeadRefResolved": "6dd6c425ad3f3dd61b8b172567cecad560d95c97",
+  "postIncludesWorkingTree": true,
   "totalProbes": 98,
   "diffCount": 0,
   "missingSelectors": [],

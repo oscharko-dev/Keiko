@@ -481,6 +481,11 @@ export function AgentRunWidget({
   const showApply = canApply(workflow, report);
   const showCancel = !terminal && report?.status === "running";
   const applyFileCount = diffFileCount(report?.proposedDiff);
+  const runBusy =
+    applying ||
+    sse.status === "connecting" ||
+    report?.status === "running" ||
+    (report === null && evidence === null && error === null);
 
   // uiux-fix F018 C124: the Cancel button unmounts the moment the run turns
   // terminal; if it held keyboard focus the browser silently drops focus to
@@ -557,7 +562,7 @@ export function AgentRunWidget({
   }
 
   return (
-    <div className="arun arun-real">
+    <div className="arun arun-real" aria-busy={runBusy ? "true" : undefined}>
       <div className="arun-head">
         <span className="arun-role">{WORKFLOW_LABELS[workflow]}</span>
         {/* uiux-fix F054 C385: cfg.model is optional — skip the pill entirely so no
@@ -640,7 +645,13 @@ export function AgentRunWidget({
       {/* uiux-fix F018 C109: role=log announces appended entries (TerminalWidget
           pattern). The C026 disconnect row below lives inside this live region, so
           it needs no role of its own. */}
-      <div className="arun-log" role="log" aria-live="polite" aria-label="Run events">
+      <div
+        className="arun-log"
+        role="log"
+        aria-live="polite"
+        aria-label="Run events"
+        aria-busy={runBusy ? "true" : undefined}
+      >
         {sse.status === "error" && sse.error !== null ? (
           // uiux-fix F018 C026: a dropped stream froze the log without any hint;
           // useSSE clears the error again once the auto-reconnect succeeds.
