@@ -1885,6 +1885,22 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
     expect(pill).not.toContain("--accent-solid-ink");
   });
 
+  it("does not leave undefined --focus references in reusable-control focus states", () => {
+    expect(css).not.toContain("var(--focus)");
+
+    const jsonButtonFocus = cssBlock(".figma-view-json-btn:focus-visible,");
+    expect(jsonButtonFocus).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
+
+    const previewDragFocus = cssBlock(".figma-view-preview-drag-surface:focus-visible");
+    expect(previewDragFocus).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
+
+    const errorNoticeCloseFocus = cssBlock(".ui-error-notice-close:focus-visible");
+    expect(errorNoticeCloseFocus).toContain("border-color: var(--focus-ring)");
+    expect(errorNoticeCloseFocus).toContain(
+      "box-shadow: 0 0 0 2px color-mix(in oklch, var(--focus-ring) 24%, transparent)",
+    );
+  });
+
   // AC (ds-040) — completeness gate for #1294's scope: scope-wide component drift guard.
   // Parses EVERY CSS rule and, for those whose selector matches a reusable-control class
   // PREFIX (the controlLead classifier below — a semantic prefix set, NOT a hardcoded

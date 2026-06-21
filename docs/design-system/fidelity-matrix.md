@@ -69,7 +69,7 @@ global class names. The matrix is therefore a **class-name ⇄ component ⇄ des
 
 > **#1294 status: shipped (value-preserving).** The modal/dialog chrome class blocks in `globals.css` now consume
 > the Tier-3/4 semantic/component tokens (`--surface-*`, `--border-*`, `--text-*`, `--popover-*`, `--focus-ring`,
-> …) — part of the 346-rule / ~533-declaration control migration, proven byte-identical by the 994-probe, 0-diff
+> …) — part of the 363-rule / ~550-declaration control migration, proven byte-identical by the 1106-probe, 0-diff
 > 7-mode computed-value harness in [evidence/1294](evidence/1294/) and gated by the `Issue #1294` describe block
 > in `globals.css.test.ts`. The `required` Light scrim rows (`.dlg-overlay`, `.cmdk-overlay`,
 > `.mc-dialog-backdrop`, `.wf-dialog-overlay`, `.gw-setup-backdrop`) stay with **#1295** (shadow/scrim
@@ -94,7 +94,7 @@ global class names. The matrix is therefore a **class-name ⇄ component ⇄ des
 > no-token raw literals (`#fff`, `oklch` amber inks, green Light scrims, disabled opacities `0.45 / 0.55 / 0.6`),
 > and the approved `[data-theme="light"]` deviations. No Light-Mode visual change — that fidelity was delivered by
 > #1292's mode-aware primitives, which these controls now consume. Evidence: [evidence/1294](evidence/1294/) —
-> 994 computed-value probes, 0 differences across 7 modes; gated by the `Issue #1294` describe block in
+> 1106 computed-value probes, 0 differences across 7 modes; gated by the `Issue #1294` describe block in
 > `globals.css.test.ts`.
 
 `KeikoSelect`, `NumberControlStepper`, `widgets/shared/Toggle.tsx`, `ModeSwitch`, `EditorMenu`,

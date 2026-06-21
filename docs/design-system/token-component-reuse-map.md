@@ -149,7 +149,7 @@ blocks in `globals.css`. Anchored by `WorkspaceShell.a11y.test.tsx`.
 `AttachmentStrip.tsx`, `ConnectedScopePill.tsx`, `ConnectorScopePill.tsx`, `ScopeConnectButton.tsx`,
 `SafeMarkdown.tsx`, `ErrorNotice.tsx`; modals `components/desktop/modals/*.tsx`; their `globals.css` class blocks.
 
-> **Status: shipped.** 346 reusable-control rules / ~533 declarations in `globals.css` were migrated to the
+> **Status: shipped.** 363 reusable-control rules / ~550 declarations in `globals.css` were migrated to the
 > Tier-3/4 semantic/component tokens (`--button-*`, `--input-*`, `--text-*`, `--surface-*`, `--border-*`,
 > `--feedback-*`, `--card-*`, `--popover-*`, `--combobox-*`, `--focus-ring`) — value-preserving, since every
 > target token is a `:root` alias over the primitive it replaced (the EditorMenu inline hex tiles also migrated).
@@ -158,7 +158,7 @@ blocks in `globals.css`. Anchored by `WorkspaceShell.a11y.test.tsx`.
 > the approved `[data-theme="light"]` deviations, and the #1295-owned Light shadow/scrim rows (`.dlg-overlay`,
 > `.cmdk-overlay`, `.mc-dialog-backdrop`, `.wf-dialog-overlay`, `.gw-setup-backdrop`, `.ws-fab`/C415). Gated by
 > the `Issue #1294` describe block in `globals.css.test.ts` (per-component routing pins + a scope-wide component
-> drift guard, 0 offenders). Browser evidence: [evidence/1294](evidence/1294/) — 994 computed-value probes,
+> drift guard, 0 offenders). Browser evidence: [evidence/1294](evidence/1294/) — 1106 computed-value probes,
 > 0 differences across 7 modes.
 
 ### #1295 — High-traffic product surfaces

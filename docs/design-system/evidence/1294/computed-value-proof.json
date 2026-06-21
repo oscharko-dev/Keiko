@@ -1,6 +1,6 @@
 {
   "issue": 1294,
-  "baseRef": "origin/release/0.2.0",
+  "baseRef": "ba113ac373ebf1114af7de217b07935036adba08",
   "totalProbes": 1106,
   "diffCount": 0,
   "missingSelectors": [],
