@@ -83,7 +83,7 @@ real `.keiko` tree.
 | Evidence run manifests (`<runId>.json`)                          | yes              | yes                | deferred                         | n/a           | n/a                           | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
 | QI manifests (`<runId>.qi.json`)                                 | yes              | yes                | deferred                         | yes           | yes (SHA-256)                 | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
 | QI candidates (`<runId>.candidates.json`)                        | yes              | yes                | deferred                         | yes           | n/a                           | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
-| Figma snapshots (JSON / PNG side-files)                          | yes              | yes                | deferred                         | yes (cap 500) | n/a                           | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| Figma snapshots (JSON / PNG side-files)                          | yes              | yes                | deferred                         | yes (cap 500) | PNG side-file SHA-256         | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
 | Lifecycle / launcher (`ui.pid`, `ui.log`, `launcher-state.json`) | yes              | n/a                | n/a (content-free)               | n/a           | yes (launcher content hash)   | this contract                                                                                           |
 
 `deferred` is a documented, bounded decision — not an oversight. Customer-reconstructive evidence
@@ -166,16 +166,20 @@ tree.
 
 - `npm run audit:local-state -- --state-dir <path>` — audit an existing `.keiko` tree (default
   `<cwd>/.keiko`). Maintainer-facing; exit `0` when the posture is healthy, `1` on any finding.
-- `npm run check:local-state` — the CI gate. It generates a genuinely-encrypted healthy fixture and a
-  deliberately drifted one, then asserts the auditor passes the former and detects the drift in the
-  latter. A `vitest` regression (`scripts/__tests__/check-local-state.test.mjs`) runs the same proof
-  under the required `ci` check, alongside a `keiko repair --dry-run` healthy/drifted comparison.
+- `npm run check:local-state` — maintainer self-test. It generates a genuinely-encrypted healthy
+  fixture and a deliberately drifted one, then asserts the auditor passes the former and detects the
+  drift in the latter. The required GitHub `ci` check runs the regression coverage through
+  `test:coverage:quality`; that path includes `scripts/__tests__/check-local-state.test.mjs`, which
+  covers the same proof plus crafted negative cases and a `keiko repair --dry-run`
+  healthy/drifted comparison.
 
 The audit covers five classes: no plaintext credentials in the gateway config; owner-only file and
 directory modes for Keiko-owned artifacts; sealed Memory Vault content (`kv1.` text envelopes, binary
 embedding envelopes); sealed Local Knowledge content (the `content_encryption=aes-256-gcm/v1` marker
 plus a sealed key-verification probe, and any populated content columns); and protected Evidence/QI
-artifacts (owner-only, redacted, integrity-hashed).
+artifacts (owner-only modes, redaction checks on text-bearing artifacts, recomputed QI/Prompt
+Enhancement manifest hashes, Figma snapshot side-file hash checks, and symlink refusal before
+artifact reads).
 
 ## Limitations (honest threat model)
 

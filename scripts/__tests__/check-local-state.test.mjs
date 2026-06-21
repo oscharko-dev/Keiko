@@ -8,7 +8,16 @@
 // implementation it verifies.
 
 import { Buffer } from "node:buffer";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -41,6 +50,33 @@ function freshStateDir(name) {
 }
 
 const SEALED_PROBE = sealString(Buffer.alloc(32, 1), "content_encryption_probe");
+const SEALED_SECRET = sealString(Buffer.alloc(32, 2), "provider-secret");
+
+function sha256OfJson(value) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function writeConfigWithRef(stateDir, ref = "cred:m") {
+  writeFileSync(
+    join(stateDir, "keiko.config.json"),
+    JSON.stringify({ providers: [{ modelId: "m", apiKeySecretRef: ref }] }),
+    { mode: 0o600 },
+  );
+}
+
+function writeProviderVault(stateDir, content) {
+  const dir = join(stateDir, "credentials");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const payload =
+    typeof content === "string"
+      ? content
+      : JSON.stringify(Object.hasOwn(content, "version") ? content : { version: 1, ...content });
+  writeFileSync(
+    join(dir, "provider-credentials.vault"),
+    payload,
+    { mode: 0o600 },
+  );
+}
 
 // Assembles a provider-shaped secret string at runtime from fragments. No contiguous secret literal
 // is committed (so GitHub push protection does not flag the test fixtures), yet the joined value
@@ -102,6 +138,13 @@ describe("auditLocalState — genuinely-encrypted fixture (#1325 AC3)", () => {
     expect(classById(result, "evidence-qi").status).toBe("pass");
     expect(classById(result, "credentials").status).toBe("pass");
     expect(classById(result, "file-modes").status).toBe("pass");
+    expect(classById(result, "evidence-qi").findings.join(" ")).toContain(
+      "1 Figma snapshot record(s)",
+    );
+    expect(classById(result, "evidence-qi").findings.join(" ")).toContain("1 PE manifest(s)");
+    expect(classById(result, "evidence-qi").findings.join(" ")).toContain(
+      "1 candidate artifact(s)",
+    );
   });
 
   it("detects a plaintext credential and a loosened file mode on a drifted fixture", () => {
@@ -186,14 +229,124 @@ describe("auditLocalState — per-class failure detection", () => {
 
   it("credentials: detects a referenced secret with no vault", () => {
     const stateDir = freshStateDir("orphan-ref");
-    writeFileSync(
-      join(stateDir, "keiko.config.json"),
-      JSON.stringify({ providers: [{ modelId: "m", apiKeySecretRef: "cred:m" }] }),
-      { mode: 0o600 },
-    );
+    writeConfigWithRef(stateDir);
     const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
     expect(cls.status).toBe("fail");
     expect(cls.findings.join(" ")).toContain("missing");
+  });
+
+  it("credentials: detects a malformed provider credential vault", () => {
+    const stateDir = freshStateDir("malformed-vault");
+    writeConfigWithRef(stateDir);
+    writeProviderVault(stateDir, "{not-json");
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("not valid JSON");
+  });
+
+  it("credentials: validates an existing provider vault even when config has no refs", () => {
+    const stateDir = freshStateDir("malformed-unreferenced-vault");
+    writeFileSync(join(stateDir, "keiko.config.json"), JSON.stringify({ providers: [] }), {
+      mode: 0o600,
+    });
+    writeProviderVault(stateDir, "{not-json");
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("not valid JSON");
+  });
+
+  it("credentials: rejects a provider credential vault with the wrong schema version", () => {
+    const stateDir = freshStateDir("wrong-vault-version");
+    writeConfigWithRef(stateDir);
+    writeProviderVault(stateDir, { version: 2, entries: { "cred:m": SEALED_SECRET } });
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("schema version");
+  });
+
+  it("credentials: detects a vault without entries", () => {
+    const stateDir = freshStateDir("missing-entries-vault");
+    writeConfigWithRef(stateDir);
+    writeProviderVault(stateDir, {});
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("entries object");
+  });
+
+  it("credentials: detects an empty vault missing the referenced entry", () => {
+    const stateDir = freshStateDir("empty-vault");
+    writeConfigWithRef(stateDir);
+    writeProviderVault(stateDir, { entries: {} });
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("missing from the provider vault");
+  });
+
+  it("credentials: detects an unsealed referenced provider credential", () => {
+    const stateDir = freshStateDir("unsealed-ref");
+    writeConfigWithRef(stateDir);
+    writeProviderVault(stateDir, { entries: { "cred:m": "plaintext-provider-value" } });
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("not sealed");
+  });
+
+  it("credentials: rejects an empty provider credential reference", () => {
+    const stateDir = freshStateDir("empty-ref");
+    writeConfigWithRef(stateDir, "");
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("non-empty provider credential reference");
+  });
+
+  it("credentials: accepts a referenced sealed provider credential", () => {
+    const stateDir = freshStateDir("sealed-ref");
+    writeConfigWithRef(stateDir);
+    writeProviderVault(stateDir, { entries: { "cred:m": SEALED_SECRET } });
+    expect(auditLocalState(stateDir).classes.find((c) => c.id === "credentials").status).toBe(
+      "pass",
+    );
+  });
+
+  it("credentials: refuses symlinked credential directories without reporting targets", () => {
+    if (process.platform === "win32") return;
+    const stateDir = freshStateDir("credentials-symlink");
+    const outsideDir = join(root, "outside-credentials");
+    mkdirSync(outsideDir, { recursive: true, mode: 0o700 });
+    writeConfigWithRef(stateDir);
+    writeFileSync(
+      join(outsideDir, "provider-credentials.vault"),
+      JSON.stringify({ version: 1, entries: { "cred:m": SEALED_SECRET } }),
+      { mode: 0o600 },
+    );
+    symlinkSync(outsideDir, join(stateDir, "credentials"));
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("symbolic link");
+    expect(cls.findings.join(" ")).not.toContain(outsideDir);
+  });
+
+  it("credentials: does not echo malformed secret-shaped refs in findings", () => {
+    const stateDir = freshStateDir("secret-shaped-ref");
+    const ref = fake("sk-", "abcdefghijklmnop0123456789");
+    writeConfigWithRef(stateDir, ref);
+    writeProviderVault(stateDir, { entries: {} });
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("credential reference #1");
+    expect(cls.findings.join(" ")).not.toContain(ref);
+    expect(cls.findings.join(" ")).not.toContain("sk-");
+  });
+
+  it("credentials: rejects a sealed vault entry under a secret-shaped ref name", () => {
+    const stateDir = freshStateDir("sealed-secret-shaped-ref");
+    const ref = fake("sk-", "abcdefghijklmnop0123456789");
+    writeConfigWithRef(stateDir, ref);
+    writeProviderVault(stateDir, { entries: { [ref]: SEALED_SECRET } });
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("credential reference #1");
+    expect(cls.findings.join(" ")).not.toContain(ref);
   });
 
   it("file-modes: detects a group/world-readable state directory", () => {
@@ -227,6 +380,22 @@ describe("auditLocalState — per-class failure detection", () => {
     );
   });
 
+  it.each([
+    ["memories", "capture_rationale"],
+    ["memories", "stale_reason"],
+    ["memory_edges", "provenance_summary"],
+    ["memory_tombstones", "reason"],
+  ])("memory-encryption: detects plaintext %s.%s", (table, column) => {
+    const stateDir = freshStateDir(`memory-${table}-${column}`);
+    craftDb(join(stateDir, "memory", "keiko-memory.db"), [
+      `CREATE TABLE ${table} (${column} TEXT)`,
+      `INSERT INTO ${table} (${column}) VALUES ('plaintext-new-memory-target')`,
+    ]);
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "memory-encryption");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain(`${table}.${column}`);
+  });
+
   it("local-knowledge-encryption: detects a store with no encryption marker", () => {
     const stateDir = freshStateDir("lk-unmarked");
     craftDb(join(stateDir, "local-knowledge", "default", "capsules.db"), [
@@ -252,6 +421,27 @@ describe("auditLocalState — per-class failure detection", () => {
     );
     expect(cls.status).toBe("fail");
     expect(cls.findings.join(" ")).toContain("normalized_text");
+  });
+
+  it.each([
+    ["document_text_windows", "normalized_text"],
+    ["sections", "section_path_json"],
+    ["parsed_units", "section_path_json"],
+    ["parsed_units", "heading_path_json"],
+  ])("local-knowledge-encryption: detects plaintext %s.%s", (table, column) => {
+    const stateDir = freshStateDir(`lk-${table}-${column}`);
+    craftDb(join(stateDir, "local-knowledge", "default", "capsules.db"), [
+      "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT)",
+      "INSERT INTO schema_meta VALUES ('content_encryption', 'aes-256-gcm/v1')",
+      `INSERT INTO schema_meta VALUES ('content_encryption_probe', '${SEALED_PROBE}')`,
+      `CREATE TABLE ${table} (${column} TEXT)`,
+      `INSERT INTO ${table} (${column}) VALUES ('plaintext-new-lk-target')`,
+    ]);
+    const cls = auditLocalState(stateDir).classes.find(
+      (c) => c.id === "local-knowledge-encryption",
+    );
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain(`${table}.${column}`);
   });
 
   it("evidence-qi: detects an unredacted secret in an evidence manifest", () => {
@@ -280,6 +470,135 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).toContain("integrity");
   });
 
+  it("evidence-qi: detects a QI integrity hash mismatch", () => {
+    const stateDir = freshStateDir("qi-bad-hash");
+    const qiDir = join(stateDir, "evidence", "qi");
+    mkdirSync(qiDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(qiDir, "run-1.qi.json"),
+      JSON.stringify({
+        runId: "run-1",
+        findings: [{ id: "f-1" }],
+        exports: [],
+        evidenceRefs: [],
+        integrityHashes: {
+          findings: "0".repeat(64),
+          exports: sha256OfJson([]),
+          evidenceRefs: sha256OfJson([]),
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("integrity hash mismatch");
+  });
+
+  it("evidence-qi: includes Figma snapshot side-files and detects hash drift", () => {
+    const stateDir = freshStateDir("figma-sidefile-drift");
+    const qiDir = join(stateDir, "evidence", "qi");
+    const sideDir = join(qiDir, "figma-snapshots", "figma-run-1");
+    mkdirSync(sideDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(sideDir, "screen.png"), "actual bytes", { mode: 0o600 });
+    writeFileSync(
+      join(qiDir, "figma-run-1.figma-snapshot.json"),
+      JSON.stringify({
+        figmaSnapshotSchemaVersion: 1,
+        runId: "figma-run-1",
+        provenance: { fileKey: "f", nodeId: "0:1", fetchedAt: "2026-06-21T00:00:00.000Z" },
+        integrityHash: "snapshot-hash",
+        screens: [
+          {
+            screenId: "s1",
+            irJson: { root: { id: "s1", children: [] } },
+            integrityHash: "screen-hash",
+            image: {
+              path: "screen.png",
+              mimeType: "image/png",
+              sha256: "f".repeat(64),
+              byteLength: 12,
+            },
+          },
+        ],
+        skippedScreens: [],
+        redactionSummary: { totalStringsScanned: 0, stringsRedacted: 0, patternsMatched: {} },
+      }),
+      { mode: 0o600 },
+    );
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("sha256 does not match");
+  });
+
+  it("evidence-qi: refuses symlinked artifacts without reporting their targets", () => {
+    if (process.platform === "win32") return;
+    const stateDir = freshStateDir("evidence-symlink");
+    const evidenceDir = join(stateDir, "evidence");
+    const outsideDir = join(root, "outside-evidence");
+    mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
+    mkdirSync(outsideDir, { recursive: true, mode: 0o700 });
+    const outsideTarget = join(outsideDir, "outside.json");
+    writeFileSync(outsideTarget, JSON.stringify({ note: "outside" }), { mode: 0o600 });
+    symlinkSync(outsideTarget, join(evidenceDir, "linked.json"));
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("symbolic link");
+    expect(cls.findings.join(" ")).not.toContain(outsideTarget);
+  });
+
+  it("evidence-qi: refuses a symlinked evidence root without reporting its target", () => {
+    if (process.platform === "win32") return;
+    const stateDir = freshStateDir("evidence-root-symlink");
+    const outsideDir = join(root, "outside-evidence-root");
+    mkdirSync(outsideDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(outsideDir, "run-1.json"), JSON.stringify({ runId: "outside" }), {
+      mode: 0o600,
+    });
+    symlinkSync(outsideDir, join(stateDir, "evidence"));
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("symbolic link");
+    expect(cls.findings.join(" ")).not.toContain(outsideDir);
+  });
+
+  it("evidence-qi: refuses Figma image side-files through symlinked parent directories", () => {
+    if (process.platform === "win32") return;
+    const stateDir = freshStateDir("figma-sidefile-parent-symlink");
+    const qiDir = join(stateDir, "evidence", "qi");
+    const snapshotRoot = join(qiDir, "figma-snapshots");
+    const outsideRunDir = join(root, "outside-figma-run");
+    const image = Buffer.from("png-bytes");
+    mkdirSync(snapshotRoot, { recursive: true, mode: 0o700 });
+    mkdirSync(outsideRunDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(outsideRunDir, "screen.png"), image, { mode: 0o600 });
+    symlinkSync(outsideRunDir, join(snapshotRoot, "run-symlink"));
+    writeFileSync(
+      join(qiDir, "run-symlink.figma-snapshot.json"),
+      JSON.stringify({
+        runId: "run-symlink",
+        integrityHash: "present",
+        artifactHashes: {},
+        screens: [
+          {
+            screenId: "screen",
+            integrityHash: "present",
+            image: {
+              relativePath: "screen.png",
+              byteLength: image.byteLength,
+              sha256: createHash("sha256").update(image).digest("hex"),
+            },
+          },
+        ],
+        redactionSummary: { totalStringsScanned: 0, stringsRedacted: 0, patternsMatched: {} },
+      }),
+      { mode: 0o600 },
+    );
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("symbolic link");
+    expect(cls.findings.join(" ")).not.toContain(outsideRunDir);
+  });
+
   it("evidence-qi: detects an unsealed Figma token vault", () => {
     const stateDir = freshStateDir("figma-unsealed");
     const figmaDir = join(stateDir, "evidence", "figma");
@@ -299,6 +618,12 @@ describe("auditLocalState — secret-shape detection", () => {
     ["github-oauth", fake("gho", "_abcdefghijklmnopqrstuvwxyz0123456789")],
     ["google", fake("AIza", "SyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456")],
     ["stripe", fake("sk", "_live_", "abcdefghijklmnop0123456789")],
+    ["bearer", `Bearer ${fake("tok.", "abcdefghijklmnop0123456789")}`],
+    ["basic", `Basic ${fake("YWJj", "ZGVmZ2hpamtsbW5vcA==")}`],
+    ["x-api-key-header", `x-api-key: ${fake("secret", "abcdefghijklmnop")}`],
+    ["api-key-assignment", `api_key=${fake("secret", "abcdefghijklmnop")}`],
+    ["secret-key-assignment", `refresh_token=${fake("secret", "abcdefghijklmnop")}`],
+    ["url-credentials", `https://${fake("user", "name")}:${fake("pass", "word123")}@example.com`],
   ])("flags a leaked %s key in an evidence artifact", (_label, secret) => {
     const stateDir = freshStateDir(`secret-${_label}`);
     const evidenceDir = join(stateDir, "evidence");
@@ -323,5 +648,17 @@ describe("auditLocalState — secret-shape detection", () => {
     expect(auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi").status).toBe(
       "pass",
     );
+  });
+
+  it("flags a partially redacted secret assignment", () => {
+    const stateDir = freshStateDir("partial-redaction");
+    const evidenceDir = join(stateDir, "evidence");
+    mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(evidenceDir, "run-1.json"), JSON.stringify({ token: "[REDACTED]tail" }), {
+      mode: 0o600,
+    });
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("secret key assignment");
   });
 });
