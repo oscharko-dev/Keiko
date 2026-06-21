@@ -34,6 +34,11 @@
   --line: oklch(0.3 0.004 160);
   --line-soft: oklch(0.26 0.004 160);
   --line-strong: oklch(0.38 0.005 160);
+  /* canvas dot-grid pitch tone + focus-ring width (#1292) — the two Tier-1
+     primitives the design-system reference carries that product CSS lacked.
+     Stepped in the high-contrast + forced-colors blocks below. */
+  --grid-dot: oklch(0.34 0.005 160);
+  --focus-w: 2px;
 
   /* text */
   --fg: oklch(0.97 0.003 160);
@@ -77,6 +82,229 @@
   --font-ui:
     -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* ============================================================
+   DESIGN-SYSTEM TOKEN TIERS 2–4 (#1292) — scales · semantic · component
+   ------------------------------------------------------------
+   SOURCE OF TRUTH: this file (globals.css) is the single emitted stylesheet
+   the product ships (imported once at app/layout.tsx). The standalone
+   design-system/keiko-*.css files are the human-readable REFERENCE mirror,
+   not a build input — nothing imports them. This block consolidates the
+   middle + top of the four-tier token architecture into the product so the
+   reference and the runtime stop diverging (epic #1290, blueprint #1291,
+   docs/design-system/token-component-reuse-map.md §1).
+
+   Strategy = EXTEND, never fork: every alias below resolves to a Tier-1
+   primitive already defined in the :root above, so the rendered product is
+   byte-identical until components are migrated to consume these names (the
+   migrations are scoped to #1293–#1298). Because the primitives already
+   redefine themselves for the light theme, prefers-contrast / in-app
+   high-contrast, and forced-colors, these aliases inherit all modes
+   automatically — there is no per-mode duplication to keep in sync. The
+   globals.css.test.ts suite pins this set
+   against design-system/keiko-semantic-tokens.css as a drift gate; adding a
+   second :root token source (a parallel namespace) is forbidden by the epic
+   reuse gate. ============================================================ */
+:root {
+  /* ── SCALE · SPACING — 2-based rhythm, mode-independent ── */
+  --space-0: 0;
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 14px;
+  --space-7: 18px;
+  --space-8: 24px;
+  --space-9: 32px;
+  --space-10: 48px;
+  --space-12: 64px;
+  --space-16: 96px;
+
+  /* ── SCALE · RADIUS (alias — primitives own the values) ── */
+  --radius-pill: 999px;
+  --radius-control: var(--radius-sm);
+  --radius-surface: var(--radius);
+  --radius-floating: var(--radius-lg);
+
+  /* ── SCALE · TYPE WEIGHT ── */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-strong: 650;
+
+  /* ── SCALE · LINE-HEIGHT ── */
+  --leading-tight: 1.1;
+  --leading-snug: 1.3;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  /* ── SCALE · TYPE SIZE — role-named ramp, 11px floor ── */
+  --text-caption: 11px;
+  --text-label: 12px;
+  --text-body-sm: 13px;
+  --text-body: 14px;
+  --text-body-lg: 15px;
+  --text-heading: 17px;
+  --text-title: 22px;
+  --text-title-lg: 28px;
+  --text-display: 50px;
+
+  /* ── SCALE · OPACITY ── */
+  --opacity-disabled: 0.42;
+  --opacity-muted: 0.64;
+  --opacity-hover-veil: 0.06;
+  --opacity-scrim: 0.55;
+  --opacity-scrim-strong: 0.72;
+
+  /* ── SCALE · BLUR ── */
+  --blur-sm: 4px;
+  --blur-md: 12px;
+  --blur-lg: 28px;
+
+  /* ── SCALE · MOTION (reduced-motion handled globally below) ── */
+  --dur-instant: 80ms;
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+  --dur-flow: 1100ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* ── SCALE · Z-INDEX — named layers, closes the raw-z-index gap ── */
+  --z-base: 0;
+  --z-canvas-window: 10;
+  --z-canvas-window-active: 20;
+  --z-rail: 40;
+  --z-nav: 50;
+  --z-sticky: 80;
+  --z-dropdown: 100;
+  --z-overlay: 200;
+  --z-modal: 300;
+  --z-popover: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
+
+  /* ── SEMANTIC — the layer product code should consume. All resolve to
+        mode-aware primitives, so correct in dark · light · +HC · forced-colors ── */
+  --background-primary: var(--bg);
+  --background-secondary: var(--surface);
+
+  --surface-primary: var(--card);
+  --surface-secondary: var(--card-2);
+  --surface-elevated: var(--card-2);
+  --surface-inset: var(--inset);
+  --surface-overlay: var(--surface);
+
+  --text-primary: var(--fg);
+  --text-secondary: var(--fg-muted);
+  --text-tertiary: var(--fg-dim);
+  --text-faint: var(--fg-faint);
+  --text-disabled: var(--fg-faint);
+  --text-inverse: var(--ink-inverse);
+  --text-accent: var(--accent-text);
+  --text-on-accent: var(--ink-inverse);
+
+  --border-subtle: var(--line-soft);
+  --border-default: var(--line);
+  --border-strong: var(--line-strong);
+
+  --action-primary: var(--accent);
+  --action-primary-text: var(--accent-text);
+  --action-secondary-surface: var(--card);
+  --action-secondary-border: var(--line);
+  --action-tertiary-text: var(--fg-muted);
+
+  --feedback-success: var(--ok);
+  --feedback-warning: var(--warn);
+  --feedback-danger: var(--danger);
+  --feedback-info: var(--info);
+  --feedback-success-surface: color-mix(in oklch, var(--ok) 12%, transparent);
+  --feedback-warning-surface: color-mix(in oklch, var(--warn) 12%, transparent);
+  --feedback-danger-surface: color-mix(in oklch, var(--danger) 12%, transparent);
+  --feedback-info-surface: color-mix(in oklch, var(--info) 12%, transparent);
+
+  --focus-ring: var(--accent-text);
+  --focus-width: var(--focus-w);
+  --selection-surface: var(--accent-glow);
+
+  --overlay-scrim: oklch(0 0 0 / var(--opacity-scrim));
+  --overlay-scrim-strong: oklch(0 0 0 / var(--opacity-scrim-strong));
+
+  --skeleton-base: var(--inset);
+  --skeleton-highlight: var(--card-2);
+
+  /* ── COMPONENT — one resolved name per component decision ── */
+  --button-primary-surface: var(--accent);
+  --button-primary-surface-hover: var(--accent-bright);
+  --button-primary-text: var(--ink-inverse);
+  --button-primary-disabled-surface: var(--card-2);
+  --button-primary-disabled-text: var(--fg-faint);
+  --button-secondary-surface: var(--card);
+  --button-secondary-surface-hover: var(--card-2);
+  --button-secondary-border: var(--line);
+  --button-secondary-text: var(--fg);
+  --button-ghost-surface-hover: var(--inset);
+  --button-danger-surface: var(--danger);
+  --button-danger-text: var(--ink-inverse);
+
+  --input-surface: var(--inset);
+  --input-border: var(--line);
+  --input-border-hover: var(--line-strong);
+  --input-border-focus: var(--accent-line);
+  --input-border-error: var(--danger);
+  --input-text: var(--fg);
+  --input-placeholder: var(--fg-muted);
+  --input-ring-focus: var(--accent-glow);
+
+  --card-surface: var(--card);
+  --card-border: var(--line);
+  --card-shadow: var(--shadow-card);
+  --card-shadow-raised: var(--shadow-pop);
+
+  --modal-surface: var(--card);
+  --modal-border: var(--line);
+  --modal-backdrop: var(--overlay-scrim);
+  --modal-shadow: var(--shadow-pop);
+
+  --popover-surface: var(--surface);
+  --popover-border: var(--line);
+  --popover-shadow: var(--shadow-pop);
+  --tooltip-surface: var(--card-2);
+  --tooltip-text: var(--fg);
+  --menu-item-surface-hover: var(--card);
+
+  --toast-surface: var(--card);
+  --toast-border: var(--line);
+  --toast-shadow: var(--shadow-pop);
+
+  --ai-response-surface: var(--surface);
+  --ai-response-border: var(--line-soft);
+  --ai-thinking-indicator: var(--accent-text);
+  --ai-streaming-cursor: var(--accent);
+  --ai-source-border: var(--accent-line);
+  --ai-source-surface: var(--accent-dim);
+  --ai-tool-surface: var(--inset);
+  --ai-tool-border: var(--line);
+  --ai-confidence-high: var(--ok);
+  --ai-confidence-medium: var(--warn);
+  --ai-confidence-low: var(--danger);
+  --ai-permission-surface: var(--feedback-warning-surface);
+  --ai-permission-border: color-mix(in oklch, var(--warn) 40%, transparent);
+
+  --table-header-text: var(--fg-faint);
+  --table-row-border: var(--line-soft);
+  --table-row-surface-hover: var(--card);
+  --table-row-surface-selected: var(--accent-dim);
+
+  --nav-surface: var(--surface);
+  --nav-item-text: var(--fg-muted);
+  --nav-item-text-active: var(--fg);
+  --nav-item-surface-active: var(--card);
+  --nav-item-indicator: var(--accent-text);
 }
 
 * {
@@ -590,6 +818,7 @@ button {
   --line: oklch(0.88 0.006 160);
   --line-soft: oklch(0.915 0.005 160);
   --line-strong: oklch(0.8 0.008 160);
+  --grid-dot: oklch(0.78 0.012 160);
 
   --fg: oklch(0.26 0.012 160);
   --fg-muted: oklch(0.42 0.011 160);
@@ -633,6 +862,8 @@ button {
     --line-strong: oklch(0.64 0.005 160);
     --fg-faint: oklch(0.74 0.004 160);
     --fg-dim: oklch(0.8 0.004 160);
+    --grid-dot: oklch(0.52 0.006 160);
+    --focus-w: 3px;
   }
   [data-theme="light"] {
     --line: oklch(0.62 0.006 160);
@@ -640,7 +871,35 @@ button {
     --line-strong: oklch(0.52 0.008 160);
     --fg-faint: oklch(0.42 0.01 160);
     --fg-dim: oklch(0.36 0.01 160);
+    --grid-dot: oklch(0.6 0.01 160);
+    --focus-w: 3px;
   }
+}
+
+/* Explicit in-app neutral high-contrast override (#1292) — mirrors the
+   prefers-contrast neutral step above at higher specificity so a future in-app
+   "High contrast" choice raises contrast even when the OS hasn't asked, exactly
+   as the design-system source does. Today no in-app control sets [data-hc] on
+   the document (useTheme is light|dark only), so this is inert at runtime until
+   a later issue wires the selector — it completes the neutral side of the
+   [data-hc] hook that previously carried only the editor (--ed-*) tokens. */
+[data-hc="more"] {
+  --line: oklch(0.55 0.004 160);
+  --line-soft: oklch(0.46 0.004 160);
+  --line-strong: oklch(0.64 0.005 160);
+  --fg-faint: oklch(0.74 0.004 160);
+  --fg-dim: oklch(0.8 0.004 160);
+  --grid-dot: oklch(0.52 0.006 160);
+  --focus-w: 3px;
+}
+[data-hc="more"][data-theme="light"] {
+  --line: oklch(0.62 0.006 160);
+  --line-soft: oklch(0.72 0.005 160);
+  --line-strong: oklch(0.52 0.008 160);
+  --fg-faint: oklch(0.42 0.01 160);
+  --fg-dim: oklch(0.36 0.01 160);
+  --grid-dot: oklch(0.6 0.01 160);
+  --focus-w: 3px;
 }
 
 /* ============================================================
@@ -829,6 +1088,24 @@ button {
   --ed-syn-regexp: #8a2020;
   --ed-ghost: oklch(0.42 0.01 160);
 }
+
+/* Windows / forced-colors High Contrast (#1292) — when the OS forces its own
+   palette, defer to system colours so the focus ring and the card/window/dialog
+   edges survive the override. Mirrors design-system/keiko-tokens.css; the
+   container selectors are the product's real surfaces (.window/.dlg) in place of
+   the reference site's .kx-win/.card. Inert outside forced-colors mode. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+  .window,
+  .dlg {
+    border: 1px solid CanvasText;
+  }
+}
+
 [data-theme="light"] .dlg-overlay {
   background: oklch(0.3 0.01 160 / 0.34);
 }
