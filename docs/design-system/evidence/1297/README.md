@@ -13,11 +13,13 @@ CodeQL-safe) across all seven theme / contrast / motion modes.
 ```bash
 npm ci
 npx playwright install chromium
-BASE_REF=origin/release/0.2.0 node docs/design-system/evidence/1297/equivalence-harness.mjs
+BASE_REF=afd2c7af18f269459893363d2380fc6bccd0dd77 node docs/design-system/evidence/1297/equivalence-harness.mjs
 ```
 
 Exits non-zero if any Group-A value-preservation probe differs, or if any Group-R reference-fidelity
-probe differs in dark or light. Writes `computed-value-proof.json` + `01-dark.png … 09-responsive.png`.
+probe differs in dark or light, if the row-focus/sort-announcement proof fails, or if the bounded-row
+sticky-header smoke exceeds its generous threshold. Writes `computed-value-proof.json` +
+`01-dark.png … 11-bounded-rows.png`.
 
 ## What is proved
 
@@ -60,6 +62,17 @@ Recorded (not gated), with explanation, in `computed-value-proof.json → additi
 `.pe-scorecards` (prompt-enhancer candidate comparison) was UA-default-unstyled PRE and adopts the
 `.c-table` component POST, so its computed value is expected to differ. Recorded per mode.
 
+### Accessibility and bounded-row smoke
+
+The harness also proves the reusable grid conventions that are not visible in static computed-token
+diffs:
+
+- row focus: a focusable `tr[tabindex="0"]` receives the tokenized focus ring in `10-row-focus.png`;
+- sort announcements: the sorted header exposes `aria-sort="descending"` and an `.sr-only`
+  `role="status" aria-live="polite" aria-atomic="true"` region announces the current sort;
+- performance smoke: a 250-row bounded table scrolls inside `.c-tablescroll`, keeps the sticky header
+  pinned, and records duration / sticky-offset metrics in `computed-value-proof.json`.
+
 ## Screenshots (real product `globals.css`)
 
 | File                      | Mode                                                                    |
@@ -73,6 +86,8 @@ Recorded (not gated), with explanation, in `computed-value-proof.json → additi
 | `07-reduced-motion.png`   | `prefers-reduced-motion: reduce` (skeleton shimmer off)                 |
 | `08-compact-density.png`  | `[data-density="compact"]`                                              |
 | `09-responsive.png`       | 560px viewport — `.c-table.responsive` collapses rows to labelled cards |
+| `10-row-focus.png`        | Focusable data-grid row with visible focus ring                         |
+| `11-bounded-rows.png`     | 250-row bounded sticky-header smoke                                     |
 
 Each screenshot renders the canonical `data-grid.html` (full grid: sortable sticky header, selected
 row, numeric alignment, loading skeleton, empty state, footer) and `dataviz.html` markup (categorical
