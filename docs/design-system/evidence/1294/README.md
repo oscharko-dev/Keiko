@@ -71,5 +71,9 @@ BASE_REF=origin/release/0.2.0 node docs/design-system/evidence/1294/equivalence-
 
 `packages/keiko-ui/src/app/globals.css.test.ts` carries the **Issue #1294** describe block:
 per-component routing pins (positive + negative, mutation-robust) plus a **scope-wide component
-drift guard** that parses every control rule and fails if any still carries a raw aliased
-primitive — the real completeness gate (built by exclusion, not a hand allowlist).
+drift guard** that classifies rules by reusable-control class prefix (a semantic prefix set,
+not a hardcoded per-selector allowlist — the form the #1293 review mutation-proved tautological)
+and fails if any matched rule still carries a raw aliased primitive. It is the completeness gate
+**for #1294's reusable-control scope** and is mutation-robust for every rule it covers; route /
+layout / window chrome outside that scope still carries raw primitives by design and belongs to
+later epic children.

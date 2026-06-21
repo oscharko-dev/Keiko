@@ -1873,10 +1873,16 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
     expect(pill).not.toContain("--accent-solid-ink");
   });
 
-  // AC (ds-040) — the real completeness gate: scope-wide component drift guard. Parses
-  // EVERY control rule (built by exclusion, not a hand allowlist — the #1293 review
-  // mutation-proved an allowlist tautological) and asserts none still carries a raw
-  // aliased primitive. Mirrors the enumerator that drove the migration (worklist == guard).
+  // AC (ds-040) — completeness gate for #1294's scope: scope-wide component drift guard.
+  // Parses EVERY CSS rule and, for those whose selector matches a reusable-control class
+  // PREFIX (the controlLead classifier below — a semantic prefix set, NOT a hardcoded
+  // per-selector allowlist, which is the form the #1293 review mutation-proved tautological),
+  // asserts none still carries a raw aliased primitive. Same prefix-classifier shape as the
+  // enumerator that drove the migration (worklist == guard). It is mutation-robust for every
+  // reusable-control rule it covers (reverting one migrated declaration yields exactly one
+  // offender). It does NOT police rules outside the reusable-control scope — route/layout/
+  // window chrome (e.g. .memoria-window, .lkd-* panels, .rv-* run-viewer) still carry raw
+  // primitives by design; those belong to later epic children, not #1294.
   it("leaves no raw aliased primitives in any reusable-control rule (ds-040, scope-wide)", () => {
     const forbidden = [
       "--card",
