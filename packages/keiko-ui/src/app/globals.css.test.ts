@@ -2602,6 +2602,20 @@ describe("Issue #1297 — table / data grid + dataviz foundation (Design System 
     expect(cssBlock("\n.c-table-foot {")).toContain("var(--table-foot-surface)");
   });
 
+  // The sticky header and empty state are distinct data-grid states (AC: "sticky … states are
+  // visibly and accessibly distinct" / "Component tests cover … empty"); pin them so a single-line
+  // removal of the sticky positioning or the empty-state token wiring re-fails (mutation-robust).
+  it("pins the sticky header positioning and the empty-state token wiring", () => {
+    const head = cssBlock("\n.c-table thead th {");
+    expect(head).toContain("position: sticky");
+    expect(head).toContain("top: 0");
+    expect(head).toContain("z-index: 1");
+    expect(cssBlock("\n.c-table-empty .ic {")).toContain("var(--surface-inset)");
+    expect(cssBlock("\n.c-table-empty .ic {")).toContain("var(--border-subtle)");
+    expect(cssBlock("\n.c-table-empty .tt {")).toContain("var(--text-primary)");
+    expect(cssBlock("\n.c-table-empty .ts {")).toContain("var(--text-secondary)");
+  });
+
   it("ships the canonical .viz* primitives consuming the --viz-* palette + chart-chrome tokens", () => {
     expect(cssBlock("\n.viz-bar {")).toContain("var(--viz-1)");
     expect(cssBlock("\n.viz-bar.s2 {")).toContain("var(--viz-2)");
