@@ -403,13 +403,17 @@ describe("Issue #748 — QI quality badge and weak-test contrast hooks", () => {
 
   it("weak-test flag text stays on primary or muted foreground tokens over a card-tinted surface", () => {
     const flagBlock = cssBlock(".qi-weak-flag {");
-    expect(flagBlock).toContain("background: color-mix(in oklch, var(--danger) 10%, var(--card))");
+    // #1295 value-preserving migration: --danger→--feedback-danger, --card→--surface-primary
+    // (pure :root aliases, identical resolved value — the danger-tinted card surface is unchanged).
+    expect(flagBlock).toContain(
+      "background: color-mix(in oklch, var(--feedback-danger) 10%, var(--surface-primary))",
+    );
 
     const badgeBlock = cssBlock(".qi-weak-flag-badge {");
-    expect(badgeBlock).toContain("color: var(--fg)");
+    expect(badgeBlock).toContain("color: var(--text-primary)");
 
     const reasonBlock = cssBlock(".qi-weak-flag-reason {");
-    expect(reasonBlock).toContain("color: var(--fg-muted)");
+    expect(reasonBlock).toContain("color: var(--text-secondary)");
   });
 });
 
@@ -849,10 +853,13 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const pointerRowBlock = cssBlock(
       ':root[data-input-modality="pointer"] .chat-history-row:focus-within',
     );
-    expect(pointerRowBlock).toContain("border-color: var(--line-soft)");
-    expect(pointerRowBlock).toContain("var(--card) 88%");
+    // #1295 value-preserving migration (pure :root aliases): --line-soft→--border-subtle,
+    // --card→--surface-primary, --line→--border-default. The neutral pointer-focus treatment
+    // is unchanged (same resolved values).
+    expect(pointerRowBlock).toContain("border-color: var(--border-subtle)");
+    expect(pointerRowBlock).toContain("var(--surface-primary) 88%");
     expect(cssBlock(".chat-history-title-input", { fromLast: true })).toContain(
-      "border: 1px solid var(--line)",
+      "border: 1px solid var(--border-default)",
     );
   });
 
@@ -1021,9 +1028,11 @@ describe("uiux-fix A11Y — reduced-motion transition gating (WCAG 2.3.3, MO-ALL
 });
 
 describe("uiux-fix A11Y — contrast fixes (WCAG 1.4.3)", () => {
-  it("dark .hl-com uses --fg-dim, not the sub-AA #6b7787 (CC-04)", () => {
+  it("dark .hl-com uses --text-tertiary (=--fg-dim alias), not the sub-AA #6b7787 (CC-04)", () => {
     const block = cssBlock(".hl-com {");
-    expect(block).toContain("var(--fg-dim)");
+    // #1295 routed .hl-com to --text-tertiary, a pure :root alias of --fg-dim (the documented
+    // 4.57:1 comment token) — same resolved value, so the contrast guarantee is preserved.
+    expect(block).toContain("var(--text-tertiary)");
     expect(block).not.toContain("#6b7787");
   });
 
@@ -1209,10 +1218,12 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     const card = cssBlock(".figma-snapshot-error-card {");
     const title = cssBlock(".figma-snapshot-error-title {");
     const detail = cssBlock(".figma-snapshot-error-detail {");
-    expect(card).toContain("var(--danger)");
+    // #1295 value-preserving migration: --danger→--feedback-danger, --fg→--text-primary
+    // (pure :root aliases — the contrast-pinned danger ink is unchanged).
+    expect(card).toContain("var(--feedback-danger)");
     expect(card).not.toMatch(/hsl\(/u);
-    expect(title).toContain("color: var(--danger)");
-    expect(detail).toContain("color: var(--fg)");
+    expect(title).toContain("color: var(--feedback-danger)");
+    expect(detail).toContain("color: var(--text-primary)");
   });
 });
 
