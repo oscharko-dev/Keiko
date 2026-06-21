@@ -205,6 +205,30 @@ describe("PromptEnhancerPanel", () => {
     expect(winnerRow).toHaveTextContent("★");
   });
 
+  // Issue #1297 — the scorecards adopt the shared DS 0.4.0 .c-table data-grid component,
+  // with numeric columns right-aligned via the .num modifier. Preserves table semantics.
+  it("adopts the DS .c-table component for the candidate scorecards (Issue #1297)", async () => {
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(makeResponse())}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("x");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    const table = await screen.findByTestId("pe-scorecards");
+    expect(table.tagName).toBe("TABLE");
+    expect(table).toHaveClass("c-table");
+    expect(table.closest(".c-tablewrap")).not.toBeNull();
+    // Score + Tokens are numeric → right-aligned mono cells via the DS .num modifier.
+    const scoreHeader = screen.getByRole("columnheader", { name: "Score" });
+    const tokensHeader = screen.getByRole("columnheader", { name: "Tokens" });
+    expect(scoreHeader).toHaveClass("num");
+    expect(tokensHeader).toHaveClass("num");
+    // Table semantics preserved: 4 column headers + a row header per candidate.
+    expect(screen.getAllByRole("columnheader")).toHaveLength(4);
+  });
+
   it("reflects an available model routing decision (AC3)", async () => {
     const response = makeResponse({
       modelRouting: {
