@@ -48,6 +48,7 @@
     "test:e2e:local-knowledge": "playwright test --config playwright.local-knowledge-regression.config.ts",
     "test:e2e:editor-perf": "playwright test --config playwright.editor-performance.config.ts --project=chromium --grep @release-evidence",
     "test:e2e:editor-fidelity-1295": "playwright test --config playwright.issue-1295-editor-fidelity.config.ts --project=chromium",
+    "test:e2e:editor-fidelity-1296": "playwright test --config playwright.issue-1296-editor-agent.config.ts --project=chromium",
     "test:release:smoke": "npm run test:e2e:smoke",
     "eval:prompt-enhancer": "npm run build:packages && vitest run packages/keiko-evaluations/src/promptEnhancer",
     "dev:start": "node scripts/dev-start.mjs",

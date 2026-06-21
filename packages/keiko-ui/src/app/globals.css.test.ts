@@ -2364,6 +2364,20 @@ describe("Issue #1296 — AI/agent component set (Design System 0.4.0)", () => {
     }
   });
 
+  it("surfaces editor-agent tokens as pure runtime aliases over the editor and AI palette", () => {
+    for (const decl of [
+      "--ed-agent-line: color-mix(in oklch, var(--accent) 12%, transparent)",
+      "--ed-agent-gutter: var(--accent-text)",
+      "--ed-agent-ghost: var(--ed-ghost)",
+      "--ed-agent-accept: var(--ed-diff-ins-gutter)",
+      "--ed-agent-reject: var(--danger)",
+      "--ed-agent-chip-bg: var(--accent-dim)",
+      "--ed-agent-chip-line: var(--accent-line)",
+    ]) {
+      expect(css, `editor-agent token def "${decl}" missing or drifted`).toContain(decl);
+    }
+  });
+
   // ── 2. The canonical .ai-* component primitives consume the --ai-* tokens exactly.
   it("ships the canonical .ai-* primitives consuming the --ai-* component tokens", () => {
     const response = cssBlock("\n.ai-response {");

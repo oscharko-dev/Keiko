@@ -1,6 +1,6 @@
 // Issue #1296 — computed-value proof + browser evidence for the AI/agent component set.
 //
-// Two claims are proved against the real product globals.css (PRE = origin/release/0.2.0,
+// Two claims are proved against the real product globals.css (PRE = immutable PR base,
 // POST = working tree), rendered in a headless Chromium across all 7 theme/contrast/motion
 // modes via page.setContent (no file server — CodeQL-safe):
 //
@@ -19,11 +19,11 @@
 // carry no PRE baseline and are captured only in the screenshots, which mirror ai-components.html.
 //
 // Self-contained reproduction (from repo root, after `npm ci` + `npx playwright install chromium`):
-//   BASE_REF=origin/release/0.2.0 node docs/design-system/evidence/1296/equivalence-harness.mjs
+//   BASE_REF=ee245ce8972c906f3eb9e0bff9d060f98be224f7 node docs/design-system/evidence/1296/equivalence-harness.mjs
 // Writes computed-value-proof.json + 01-dark.png … 07-reduced-motion.png and exits non-zero
-// if any Group-A computed value differs or any Group-D assertion fails.
+// if PRE resolves to POST, any Group-A computed value differs, or any Group-D assertion fails.
 import { chromium } from "playwright";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,13 +31,38 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
-const BASE_REF = process.env.BASE_REF ?? "origin/release/0.2.0";
-// Defensive: BASE_REF is interpolated into a git command — confine it to a git-ref charset.
+const DEFAULT_BASE_REF = "ee245ce8972c906f3eb9e0bff9d060f98be224f7";
+const BASE_REF = process.env.BASE_REF ?? DEFAULT_BASE_REF;
+const POST_REF = "working-tree";
+// Defensive: keep caller-provided refs to ordinary git-ref characters for readable fail-fast errors.
 if (!/^[\w./-]+$/.test(BASE_REF)) {
   throw new Error(`refusing unsafe BASE_REF: ${BASE_REF}`);
 }
 
-const PRE = execSync(`git -C "${REPO}" show ${BASE_REF}:${CSS_PATH}`, {
+const BASE_REF_RESOLVED = execFileSync(
+  "git",
+  ["-C", REPO, "rev-parse", "--verify", `${BASE_REF}^{commit}`],
+  {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  },
+).trim();
+const POST_HEAD_REF_RESOLVED = execFileSync(
+  "git",
+  ["-C", REPO, "rev-parse", "--verify", "HEAD^{commit}"],
+  {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  },
+).trim();
+if (BASE_REF_RESOLVED === POST_HEAD_REF_RESOLVED) {
+  throw new Error(
+    `Issue #1296 evidence baseline is not immutable: BASE_REF ${BASE_REF} resolves to POST ${POST_HEAD_REF_RESOLVED}. ` +
+      `Use the original PR base ${DEFAULT_BASE_REF} or another pre-change commit.`,
+  );
+}
+
+const PRE = execFileSync("git", ["-C", REPO, "show", `${BASE_REF}:${CSS_PATH}`], {
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
 });
@@ -273,6 +298,11 @@ writeFileSync(
     {
       issue: 1296,
       baseRef: BASE_REF,
+      defaultBaseRef: DEFAULT_BASE_REF,
+      baseRefResolved: BASE_REF_RESOLVED,
+      postRef: POST_REF,
+      postHeadRefResolved: POST_HEAD_REF_RESOLVED,
+      postIncludesWorkingTree: true,
       totalProbes,
       diffCount: diffs.length,
       missingSelectors: [...missing],

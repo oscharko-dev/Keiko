@@ -493,7 +493,9 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
     // uiux-fix F012 C163 — the panel also serves capsule/connector-only chats where no
     // repository is involved; keep the loading text source-neutral.
     return busy ? (
-      <div className="grounded-meta">Searching connected sources and asking Keiko…</div>
+      <div className="grounded-meta" role="status" aria-live="polite" aria-busy="true">
+        Searching connected sources and asking Keiko…
+      </div>
     ) : null;
   }
   if (answer.groundingKind === "local-knowledge") {
