@@ -9803,6 +9803,830 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 }
 
 /* ============================================================
+   Issue #1298 — Input family + Navigation components (Design System 0.4.0).
+   The input / navigation / breakpoint / density breadth gap the Design System
+   audit flagged as missing. Ported verbatim from design-system/keiko-inputs.css
+   and design-system/keiko-nav.css so the component primitives resolve byte-
+   identically to the DS 0.4.0 reference (inputs.html / nav-components.html) and
+   exist as reusable system primitives.
+
+   These are the FIRST consumers of the input/nav Tier-3 component tokens
+   (--checkbox-*, --radio-*, --slider-*, --stepper-*, --combobox-*, --tag-*,
+   --file-*, --date-*, --breadcrumb-*, --pagination-*, --tab-underline-indicator,
+   --context-*, --step-*) — defined additively in #1292, consumed 0 times until
+   now. Every surface reads a component/semantic token, so each control tracks
+   Dark, Light and High Contrast for free; the input control sizing is driven by
+   --control-height / --control-pad-x, which [data-density="compact"] tightens.
+   No raw colour is introduced — the remaining literals are structural sizing
+   carried over from the governed reference. Each interactive primitive carries a
+   visible :focus-visible ring for full keyboard operation; the simple state
+   transitions are switched off under prefers-reduced-motion (WCAG 2.3.3).
+
+   Responsiveness is intrinsic (flex-wrap, min-width, flex:1 — no one-off
+   breakpoints); the one governed media query collapses .c-form-grid to a single
+   column at --bp-sm (640px). Product adopter: the workflow-handoff expected-
+   checks list adopts the .c-check primitive (presentation-only — the native
+   <input> stays the control). Deferred bespoke adopters (sliders, editor tabs,
+   KeikoSelect, stepper) are kept as-is: see
+   docs/design-system/input-nav-migration.md.
+   ============================================================ */
+
+/* ── checkbox (design-system/keiko-inputs.css) ───────────── */
+.c-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-size: var(--text-body-sm);
+  color: var(--text-primary);
+  user-select: none;
+}
+.c-check input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.c-check .bx {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 5px;
+  border: 1px solid var(--checkbox-border);
+  background: var(--checkbox-surface);
+  display: grid;
+  place-items: center;
+  color: var(--checkbox-mark);
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.c-check .bx svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0;
+  transform: scale(0.6);
+  transition:
+    opacity 0.12s,
+    transform 0.12s;
+}
+.c-check input:checked + .bx {
+  background: var(--checkbox-surface-selected);
+  border-color: transparent;
+}
+.c-check input:checked + .bx svg {
+  opacity: 1;
+  transform: none;
+}
+.c-check input:indeterminate + .bx {
+  background: var(--checkbox-surface-selected);
+  border-color: transparent;
+}
+.c-check input:indeterminate + .bx::after {
+  content: "";
+  width: 9px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--checkbox-mark);
+}
+.c-check input:indeterminate + .bx svg {
+  opacity: 0;
+}
+.c-check input:focus-visible + .bx {
+  outline: 2px solid transparent;
+  box-shadow:
+    0 0 0 2px var(--background-primary),
+    0 0 0 4px var(--focus-ring);
+}
+.c-check input:disabled + .bx {
+  opacity: var(--opacity-disabled);
+}
+.c-check.is-disabled {
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+/* ── radio (design-system/keiko-inputs.css) ──────────────── */
+.c-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-size: var(--text-body-sm);
+  color: var(--text-primary);
+  user-select: none;
+}
+.c-radio input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.c-radio .rb {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 50%;
+  border: 1px solid var(--radio-border);
+  background: var(--radio-surface);
+  display: grid;
+  place-items: center;
+  transition: border-color 0.12s;
+}
+.c-radio .rb::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--radio-dot);
+  transform: scale(0);
+  transition: transform 0.12s;
+}
+.c-radio input:checked + .rb {
+  border-color: var(--radio-border-selected);
+}
+.c-radio input:checked + .rb::after {
+  transform: none;
+}
+.c-radio input:focus-visible + .rb {
+  box-shadow:
+    0 0 0 2px var(--background-primary),
+    0 0 0 4px var(--focus-ring);
+}
+
+/* ── slider (design-system/keiko-inputs.css) ─────────────── */
+.c-slider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.c-slider input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--slider-track);
+  outline: none;
+}
+.c-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+}
+.c-slider input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--slider-track);
+}
+.c-slider input[type="range"]::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--slider-fill);
+}
+.c-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -7px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--slider-thumb);
+  border: 3px solid var(--slider-thumb-border);
+  box-shadow: 0 0 0 1px var(--slider-thumb-ring);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.c-slider input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--slider-thumb);
+  border: 3px solid var(--slider-thumb-border);
+  box-shadow: 0 0 0 1px var(--slider-thumb-ring);
+  cursor: pointer;
+}
+.c-slider input[type="range"]:active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.c-slider input[type="range"]:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--background-primary),
+    0 0 0 4px var(--focus-ring);
+}
+.c-slider .val {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  min-width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── stepper / number (design-system/keiko-inputs.css) ───── */
+.c-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--stepper-border);
+  border-radius: var(--radius-control);
+  background: var(--stepper-surface);
+  overflow: hidden;
+}
+.c-stepper button {
+  width: 32px;
+  height: var(--control-height);
+  border: 0;
+  background: transparent;
+  color: var(--stepper-button-text);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+.c-stepper button:hover {
+  background: var(--stepper-button-surface-hover);
+  color: var(--text-primary);
+}
+.c-stepper button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.c-stepper input {
+  width: 52px;
+  height: var(--control-height);
+  border: 0;
+  border-left: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  background: var(--stepper-input-surface);
+  color: var(--input-text);
+  text-align: center;
+  font: 13px var(--font-mono);
+  outline: none;
+}
+.c-stepper:focus-within {
+  border-color: var(--input-border-focus);
+  box-shadow: 0 0 0 3px var(--input-ring-focus);
+}
+
+/* ── combobox (design-system/keiko-inputs.css) ───────────── */
+.c-combo {
+  position: relative;
+  width: 280px;
+}
+.c-combo-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--control-height);
+  padding: 0 10px 0 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--combobox-border);
+  background: var(--combobox-surface);
+}
+.c-combo-input:focus-within {
+  border-color: var(--input-border-focus);
+  box-shadow: 0 0 0 3px var(--input-ring-focus);
+}
+.c-combo-input input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  color: var(--input-text);
+  font: 13px var(--font-ui);
+}
+.c-combo-input .chev {
+  color: var(--text-faint);
+  flex: none;
+}
+.c-combo-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: var(--z-dropdown);
+  background: var(--combobox-list-surface);
+  border: 1px solid var(--combobox-list-border);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--popover-shadow);
+  padding: 6px;
+  max-height: 240px;
+  overflow: auto;
+}
+.c-combo-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.c-combo-opt:hover,
+.c-combo-opt[aria-selected="true"],
+.c-combo-opt.active {
+  background: var(--combobox-option-surface-hover);
+  color: var(--text-primary);
+}
+.c-combo-opt .ck {
+  margin-left: auto;
+  color: var(--combobox-option-selected-mark);
+  opacity: 0;
+}
+.c-combo-opt[aria-selected="true"] .ck {
+  opacity: 1;
+}
+.c-combo-empty {
+  padding: 14px 10px;
+  font-size: var(--text-body-sm);
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* ── tag input (design-system/keiko-inputs.css) ──────────── */
+.c-tagfield {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--input-border);
+  background: var(--input-surface);
+}
+.c-tagfield:focus-within {
+  border-color: var(--input-border-focus);
+  box-shadow: 0 0 0 3px var(--input-ring-focus);
+}
+.c-tagfield input {
+  flex: 1;
+  min-width: 80px;
+  border: 0;
+  background: none;
+  outline: none;
+  color: var(--input-text);
+  font: 13px var(--font-ui);
+  padding: 3px 2px;
+}
+.c-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 9px;
+  border-radius: var(--radius-control);
+  font-size: 12px;
+  color: var(--tag-text);
+  background: var(--tag-surface);
+  border: 1px solid var(--tag-border);
+}
+.c-tag button {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  background: transparent;
+  color: var(--tag-text);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  opacity: 0.7;
+}
+.c-tag button:hover {
+  opacity: 1;
+  background: color-mix(in oklch, var(--accent) 18%, transparent);
+}
+.c-tag button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  opacity: 1;
+}
+
+/* ── file upload / dropzone (design-system/keiko-inputs.css) ── */
+.c-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 30px 24px;
+  border-radius: var(--radius-surface);
+  border: 1.5px dashed var(--file-dropzone-border);
+  background: var(--file-dropzone-surface);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color 0.14s,
+    background 0.14s;
+}
+.c-drop:hover,
+.c-drop.is-over {
+  border-color: var(--file-dropzone-border-active);
+  background: color-mix(in oklch, var(--accent) 6%, var(--file-dropzone-surface));
+}
+.c-drop:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.c-drop .ic {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-control);
+  display: grid;
+  place-items: center;
+  background: var(--surface-accent-subtle);
+  color: var(--text-accent);
+  border: 1px solid var(--border-accent);
+}
+.c-drop .tt {
+  font-size: var(--text-body-sm);
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+.c-drop .tt b {
+  color: var(--text-accent);
+}
+.c-drop .ts {
+  font-size: var(--text-label);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+.c-fileitem {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-subtle);
+  background: var(--file-item-surface);
+}
+.c-fileitem .fi {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-inset);
+  color: var(--text-secondary);
+  flex: none;
+}
+.c-fileitem .nm {
+  font-size: var(--text-body-sm);
+  color: var(--text-primary);
+}
+.c-fileitem .mt {
+  font-size: var(--text-caption);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+.c-fileitem .bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-inset);
+  overflow: hidden;
+  margin-top: 6px;
+}
+.c-fileitem .bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--file-progress);
+}
+
+/* ── date field, segmented (design-system/keiko-inputs.css) ── */
+.c-datefield {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 12px;
+  height: var(--control-height);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--date-border);
+  background: var(--date-surface);
+  font: 13px var(--font-mono);
+  color: var(--input-text);
+}
+.c-datefield:focus-within {
+  border-color: var(--input-border-focus);
+  box-shadow: 0 0 0 3px var(--input-ring-focus);
+}
+.c-datefield .seg {
+  padding: 2px 3px;
+  border-radius: 4px;
+  outline: none;
+}
+.c-datefield .seg:focus {
+  background: var(--date-segment-surface-active);
+  color: var(--date-segment-text-active);
+}
+.c-datefield .sep {
+  color: var(--text-faint);
+}
+.c-datefield .cal {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.c-datefield .cal:hover {
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+}
+.c-datefield .cal:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* form layout helpers (design-system/keiko-inputs.css) */
+.c-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.c-form-grid {
+  display: grid;
+  gap: 18px;
+}
+
+/* ── breadcrumbs (design-system/keiko-nav.css) ───────────── */
+.c-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  font-size: var(--text-body-sm);
+}
+.c-crumbs a,
+.c-crumbs span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: var(--breadcrumb-text);
+  text-decoration: none;
+}
+.c-crumbs a:hover {
+  background: var(--breadcrumb-surface-hover);
+  color: var(--breadcrumb-text-current);
+}
+.c-crumbs a:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.c-crumbs .sep {
+  color: var(--text-faint);
+  padding: 0;
+}
+.c-crumbs [aria-current="page"] {
+  color: var(--breadcrumb-text-current);
+  font-weight: var(--weight-medium);
+}
+
+/* ── back (design-system/keiko-nav.css) ──────────────────── */
+.c-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px 0 8px;
+  border-radius: var(--radius-control);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: var(--weight-medium) 13px var(--font-ui);
+  cursor: pointer;
+}
+.c-back:hover {
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+}
+.c-back:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ── underline tabs, formalised (design-system/keiko-nav.css) ── */
+.c-utabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-default);
+}
+.c-utab {
+  position: relative;
+  padding: 10px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--nav-item-text);
+  font: var(--weight-medium) var(--text-body-sm) var(--font-ui);
+  cursor: pointer;
+}
+.c-utab:hover {
+  color: var(--nav-item-text-active);
+}
+.c-utab[aria-selected="true"] {
+  color: var(--text-primary);
+}
+.c-utab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+.c-utab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--tab-underline-indicator);
+}
+.c-utab .ct {
+  margin-left: 7px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* ── pagination (design-system/keiko-nav.css) ────────────── */
+.c-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.c-pager button {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: var(--radius-control);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--pagination-text);
+  font: var(--weight-medium) 13px var(--font-ui);
+  cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+}
+.c-pager button:hover:not(:disabled) {
+  background: var(--pagination-surface-hover);
+  color: var(--text-primary);
+}
+.c-pager button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.c-pager button[aria-current="page"] {
+  background: var(--pagination-surface-current);
+  color: var(--pagination-text-current);
+  border-color: var(--pagination-border-current);
+}
+.c-pager button:disabled {
+  color: var(--text-disabled);
+  opacity: var(--opacity-disabled);
+  cursor: not-allowed;
+}
+.c-pager .gap {
+  color: var(--text-faint);
+  padding: 0 2px;
+}
+
+/* ── context menu (design-system/keiko-nav.css) ──────────── */
+.c-ctx {
+  width: 230px;
+  background: var(--popover-surface);
+  border: 1px solid var(--popover-border);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--popover-shadow);
+  padding: 6px;
+}
+.c-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 8px 9px;
+  border-radius: var(--radius-control);
+  text-align: left;
+  font: var(--text-body-sm) var(--font-ui);
+  color: var(--context-item-text);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.c-ctx-item:hover,
+.c-ctx-item.active {
+  background: var(--context-item-surface-hover);
+  color: var(--text-primary);
+}
+.c-ctx-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.c-ctx-item .k {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.c-ctx-item.danger {
+  color: var(--context-item-text-danger);
+}
+.c-ctx-item.danger:hover,
+.c-ctx-item.danger.active {
+  background: color-mix(in oklch, var(--feedback-danger) 12%, transparent);
+}
+.c-ctx-sep {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 2px;
+}
+
+/* ── steps / wizard progress (design-system/keiko-nav.css) ── */
+.c-steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.c-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+.c-step .dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font: var(--weight-semibold) 11px var(--font-mono);
+  border: 1px solid var(--step-dot-border);
+  color: var(--text-faint);
+  background: var(--step-dot-surface);
+  flex: none;
+}
+.c-step .lb {
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
+}
+.c-step.done .dot {
+  background: var(--step-dot-surface-done);
+  border-color: transparent;
+  color: var(--step-dot-text-done);
+}
+.c-step.active .dot {
+  border-color: var(--step-dot-border-active);
+  color: var(--text-accent);
+}
+.c-step.active .lb {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+.c-step-line {
+  width: 40px;
+  height: 1px;
+  background: var(--step-line);
+  margin: 0 12px;
+}
+.c-step.done + .c-step-line {
+  background: var(--step-line-done);
+}
+
+/* Responsive: the input/nav primitives are intrinsically fluid (flex-wrap,
+   min-width, flex:1). The one governed breakpoint collapses multi-column form
+   grids to a single column on small viewports; 640px is the named --bp-sm
+   token value (CSS media queries cannot read a custom property), so the
+   breakpoint is the design-system scale step, not a one-off. */
+@media (max-width: 640px) {
+  /* --bp-sm */
+  .c-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Reduced motion (WCAG 2.3.3): the input/nav state transitions are switched
+   off for users who opt out, matching the product's reduce-override convention. */
+@media (prefers-reduced-motion: reduce) {
+  .c-check .bx,
+  .c-check .bx svg,
+  .c-radio .rb,
+  .c-radio .rb::after,
+  .c-slider input[type="range"]::-webkit-slider-thumb,
+  .c-stepper button,
+  .c-drop {
+    transition: none;
+  }
+}
+
+/* ============================================================
    Issue #197 — Local Knowledge connector graph
    ============================================================ */
 
