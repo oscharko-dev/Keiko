@@ -4580,7 +4580,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .fpv-src {
   white-space: pre;
-  color: #c5cdd9;
+  color: var(--ed-fg);
   padding-right: 14px;
 }
 .fpv-state {
@@ -4605,26 +4605,26 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   font-style: italic;
 }
 .hl-str {
-  color: #c3e88d;
+  color: var(--ed-syn-string);
 }
 .hl-num,
 .hl-lit {
-  color: #f78c6c;
+  color: var(--ed-syn-number);
 }
 .hl-key {
-  color: #c792ea;
+  color: var(--ed-syn-keyword);
 }
 .hl-type {
-  color: #ffcb6b;
+  color: var(--ed-syn-type);
 }
 .hl-fn {
-  color: #82aaff;
+  color: var(--ed-syn-function);
 }
 .hl-key2 {
-  color: #82aaff;
+  color: var(--ed-syn-function);
 }
 .hl-punct {
-  color: #89ddff;
+  color: var(--ed-syn-punct);
 }
 .hl-head {
   color: var(--accent);
@@ -4638,10 +4638,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: oklch(0.97 0.004 160);
 }
 [data-theme="light"] .fpv-src {
-  color: #2b3440;
+  color: var(--ed-fg);
 }
 [data-theme="light"] .hl-key {
-  color: #8b2bb8;
+  color: var(--ed-syn-keyword);
 }
 [data-theme="light"] .hl-str {
   color: #2f7d32;
@@ -6803,8 +6803,10 @@ select.dlg-input {
 }
 .ui-error-notice-close:focus-visible {
   outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--focus) 24%, transparent);
+  /* #1295 — was var(--focus) (undefined → no ring rendered); the DS focus
+     token is --focus-ring (alias of --accent-text). a11y fix (WCAG 2.4.7). */
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--focus-ring) 24%, transparent);
 }
 .ui-error-notice-message,
 .ui-error-notice-remediation {
@@ -13521,7 +13523,9 @@ button.figma-view-preview {
 }
 
 .figma-view-preview-drag-surface:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--focus);
+  /* #1295 — was var(--focus) (undefined → no ring rendered); the DS focus
+     token is --focus-ring. a11y fix (WCAG 2.4.7). */
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 .figma-view-preview-placeholder {
