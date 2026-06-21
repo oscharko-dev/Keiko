@@ -9349,6 +9349,10 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 .c-table tbody tr {
   transition: background 0.1s;
 }
+.c-table tbody tr[tabindex]:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: -2px;
+}
 .c-table tbody tr:hover {
   background: var(--table-row-surface-hover);
 }

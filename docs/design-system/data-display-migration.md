@@ -67,8 +67,11 @@ Two other real `<table>`s are intentionally left for a follow-up:
    otherwise keep native table semantics.
 3. Numeric columns: add `.num` to the `<th>` and `<td>` (right-aligned tabular mono).
 4. Sortable headers: `class="sortable" tabindex="0"` + `aria-sort="ascending|descending|none"`; the
-   `.so` indicator and focus ring come for free.
-5. Selection: set `aria-selected="true"` on the `<tr>`.
+   `.so` indicator and focus ring come for free. Pair interactive sorting with one nearby
+   `.sr-only` live region (`role="status" aria-live="polite" aria-atomic="true"`) that announces the
+   active sort, for example "Sorted by Runs descending."
+5. Selection: set `aria-selected="true"` on the `<tr>`. If the row itself is keyboard-focusable, add
+   `tabindex="0"` so the shared row focus ring applies; otherwise keep focus on the row controls.
 6. Loading: add `.is-loading` to the `<table>` (skeleton respects reduced-motion). Empty: render a
    `.c-table-empty` block instead of `<tbody>` rows.
 7. Density: set `[data-density="compact"]` on an ancestor.

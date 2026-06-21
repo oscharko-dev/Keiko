@@ -19,6 +19,10 @@ import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(resolve(here, "globals.css"), "utf8");
+const evidenceHarness1297 = readFileSync(
+  resolve(here, "../../../..", "docs/design-system/evidence/1297/equivalence-harness.mjs"),
+  "utf8",
+);
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -2674,9 +2678,24 @@ describe("Issue #1297 — table / data grid + dataviz foundation (Design System 
     expect(guard).toContain("animation: none");
   });
 
-  // ── 5. Keyboard focus ring (WCAG 2.4.7): sortable headers are interactive.
-  it("gives sortable column headers a keyboard focus ring", () => {
+  // ── 5. Keyboard focus rings (WCAG 2.4.7): sortable headers and explicitly
+  //       focusable data-grid rows are interactive.
+  it("gives sortable column headers and focusable rows keyboard focus rings", () => {
     expect(cssBlock("\n.c-table th.sortable:focus-visible {")).toContain("var(--focus-ring)");
+    const row = cssBlock("\n.c-table tbody tr[tabindex]:focus-visible {");
+    expect(row).toContain("var(--focus-width, 2px) solid var(--focus-ring)");
+    expect(row).toContain("outline-offset: -2px");
+  });
+
+  it("keeps browser evidence for row focus, sort announcements, and bounded rows", () => {
+    expect(evidenceHarness1297).toContain('id="focus-row"');
+    expect(evidenceHarness1297).toContain('tabindex="0"');
+    expect(evidenceHarness1297).toContain('id="sort-status"');
+    expect(evidenceHarness1297).toContain('role="status"');
+    expect(evidenceHarness1297).toContain('aria-live="polite"');
+    expect(evidenceHarness1297).toContain('aria-atomic="true"');
+    expect(evidenceHarness1297).toContain("PERF_ROWS = Array.from({ length: 250 }");
+    expect(evidenceHarness1297).toContain("stickyHeaderDeltaPx");
   });
 
   // ── 6. Product adopters consume the tokens (positive) and drop the raw primitive they replaced
