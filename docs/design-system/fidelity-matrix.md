@@ -65,6 +65,17 @@ global class names. The matrix is therefore a **class-name ⇄ component ⇄ des
 | Figma snapshot + scoped source windows (`figma`, `figmaView`, `figmaJson`, `figmaImage`)                                                                    | `widgets/figma/{FigmaSnapshotWindow,FigmaJsonSourceWindow,FigmaImageSourceWindow,JsonSyntaxBlock}.tsx`                                                                                                                     | paste-link / building / snapshot grid / screen-selected / JSON-IR / image-render / auto-grow / loading·error·empty                                                                                             | #1295                             |
 | Secondary tool panels (`settings`, `project`, `search`, `plugins`, `automations`, `mobile`, `inspector`, `notifications`, `resources`, `timeline`, `keiko`) | `widgets/panels/*.tsx`                                                                                                                                                                                                     | Settings(17 markers), ChatHistory(14) state-rich; Search/Plugins/Automations/Mobile/Notifications/Resources show **0 explicit state markers** — see Deferral D4                                                | #1295 / D4                        |
 
+> **#1295 status: shipped (value-preserving + light adaptation).** The #1295 high-traffic product-surface class
+> blocks in `globals.css` were migrated to consume Tier-3 semantic tokens (chat-, chatw-, grounded-, wf-, qi-\*,
+> mc-/memoria-, rel-/rb-, lk-/lkd-/connector-, figma-, fpv-/hl- prefixes; ~330 rules / ~466+30 declarations).
+> Categories A/B are value-preserving across dark/HC/forced-colors modes (proven by the 2324-probe, 0-diff
+> computed-value harness in [evidence/1295](evidence/1295/) and gated by the `Issue #1295` describe block in
+> `globals.css.test.ts`). Category C introduces deliberate Light Mode adaptations: new `--shadow-ink-rgb` primitive
+> making Table A required shadow rows light-adaptive with warm ink (20 30 25), centralised `--overlay-scrim` via
+> `.mc-dialog-backdrop`. Deferred: AI/agent patterns (#1296), data-grid/lists (#1297), systematic
+> spacing/typography/density/breakpoint (#1298), deeper running-Monaco editor visual-regression (#1300). Designer
+> approval (◐) stays open pending human sign-off (Human Review Required: Yes).
+
 ## 4. Modals / dialogs (portal layer) — owner #1294 (migrate with owning surface) · **shipped**
 
 > **#1294 status: shipped (value-preserving).** The modal/dialog chrome class blocks in `globals.css` now consume
