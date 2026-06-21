@@ -16,7 +16,10 @@ import { join } from "node:path";
 import { createMemoryVault } from "@oscharko-dev/keiko-memory-vault";
 import { openKnowledgeStore, resolveKnowledgeStorePath } from "@oscharko-dev/keiko-local-knowledge";
 import {
+  createNodeFigmaSnapshotStore,
   createNodeEvidenceStore,
+  recordPromptEnhancementRun,
+  recordQualityIntelligenceCandidates,
   recordQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
 import { openProviderCredentialVault } from "@oscharko-dev/keiko-server/credential-vault";
@@ -28,6 +31,87 @@ const FIXTURE_KEY = Buffer.alloc(32, 7);
 const FIXTURE_KEY_B64 = FIXTURE_KEY.toString("base64");
 const FIXTURE_TS = 1_700_000_000_000;
 
+function memoryRecord({ provenance, ...overrides }) {
+  return {
+    schemaVersion: "1",
+    scope: { kind: "user", userId: "u-fixture" },
+    type: "semantic-fact",
+    payload: { kind: "string-list", items: ["confidential-item"] },
+    provenance: {
+      sourceKind: "workflow-outcome",
+      capturedAt: FIXTURE_TS,
+      confidence: 0.8,
+      sensitivity: "confidential",
+      captureRationale: "fixture",
+      ...(provenance ?? {}),
+    },
+    validity: { validFrom: FIXTURE_TS },
+    status: "accepted",
+    pinned: false,
+    tags: ["fixture"],
+    createdAt: FIXTURE_TS,
+    updatedAt: FIXTURE_TS,
+    ...overrides,
+  };
+}
+
+function seedMemoryRecords(vault) {
+  vault.insertMemory(
+    memoryRecord({
+      id: "m-fixture-1",
+      type: "preference",
+      body: "STRENG-VERTRAULICH regulated customer memory body",
+      provenance: { sourceKind: "explicit-user-instruction", confidence: 0.9 },
+    }),
+  );
+  vault.insertMemory(
+    memoryRecord({
+      id: "m-fixture-2",
+      body: "STRENG-VERTRAULICH related customer memory body",
+      payload: { kind: "string-list", items: ["related-confidential-item"] },
+      provenance: { captureRationale: "fixture edge endpoint" },
+      tags: ["fixture", "related"],
+      staleReason: "fixture stale reason marker",
+    }),
+  );
+  vault.insertMemory(
+    memoryRecord({
+      id: "m-fixture-3",
+      body: "STRENG-VERTRAULICH tombstoned customer memory body",
+      provenance: { confidence: 0.7, captureRationale: "fixture tombstone endpoint" },
+      tags: ["fixture", "tombstone"],
+    }),
+  );
+}
+
+function seedMemoryRelationships(vault) {
+  vault.insertEdge({
+    id: "edge-fixture-1",
+    schemaVersion: "1",
+    fromMemoryId: "m-fixture-1",
+    toMemoryId: "m-fixture-2",
+    kind: "related",
+    createdAt: FIXTURE_TS,
+    confidence: 0.75,
+    provenanceSummary: "fixture relationship provenance summary",
+  });
+  vault.deleteMemory("m-fixture-3", {
+    tombstone: true,
+    forgetterSurface: "local-state-fixture",
+    reason: "fixture tombstone reason",
+    nowMs: FIXTURE_TS + 1,
+  });
+}
+
+function seedMemoryEmbedding(vault) {
+  vault.upsertEmbedding("m-fixture-1", {
+    provider: "openai",
+    modelId: "text-embedding-3-small",
+    metric: "cosine",
+    vector: new Float32Array([0.1, 0.2, 0.3, 0.4]),
+  });
+}
+
 function seedMemoryVault(stateDir) {
   const vault = createMemoryVault({
     memoryDir: join(stateDir, "memory"),
@@ -36,33 +120,9 @@ function seedMemoryVault(stateDir) {
     now: () => FIXTURE_TS,
   });
   try {
-    vault.insertMemory({
-      id: "m-fixture-1",
-      schemaVersion: "1",
-      scope: { kind: "user", userId: "u-fixture" },
-      type: "preference",
-      body: "STRENG-VERTRAULICH regulated customer memory body",
-      payload: { kind: "string-list", items: ["confidential-item"] },
-      provenance: {
-        sourceKind: "explicit-user-instruction",
-        capturedAt: FIXTURE_TS,
-        confidence: 0.9,
-        sensitivity: "confidential",
-        captureRationale: "fixture",
-      },
-      validity: { validFrom: FIXTURE_TS },
-      status: "accepted",
-      pinned: false,
-      tags: ["fixture"],
-      createdAt: FIXTURE_TS,
-      updatedAt: FIXTURE_TS,
-    });
-    vault.upsertEmbedding("m-fixture-1", {
-      provider: "openai",
-      modelId: "text-embedding-3-small",
-      metric: "cosine",
-      vector: new Float32Array([0.1, 0.2, 0.3, 0.4]),
-    });
+    seedMemoryRecords(vault);
+    seedMemoryRelationships(vault);
+    seedMemoryEmbedding(vault);
   } finally {
     vault.close();
   }
@@ -135,6 +195,7 @@ function seedEvidence(stateDir) {
 }
 
 function seedQualityIntelligence(stateDir) {
+  const evidenceDir = join(stateDir, "evidence");
   recordQualityIntelligenceRun(
     {
       runId: "fixture-qi-001",
@@ -150,8 +211,105 @@ function seedQualityIntelligence(stateDir) {
       evidenceRefs: [],
       provenanceRefs: { envelopeIds: [], auditSummaryId: "audit-fixture-1" },
     },
+    { evidenceDir },
+  );
+  recordQualityIntelligenceCandidates({
+    runId: "fixture-qi-001",
+    generatedAt: "2026-06-21T10:05:00.000Z",
+    evidenceDir,
+    redact: (value) => value,
+    candidates: [
+      {
+        id: "fixture-tc-1",
+        runId: "fixture-qi-001",
+        derivedFromAtomIds: [],
+        title: "Fixture candidate",
+        preconditions: ["owner-only local state exists"],
+        steps: ["run the local-state auditor"],
+        expectedResults: ["the audit passes"],
+        priority: "P2",
+        riskClass: "functional",
+        tags: ["fixture"],
+        status: "proposed",
+      },
+    ],
+  });
+}
+
+function seedPromptEnhancement(stateDir) {
+  recordPromptEnhancementRun(
+    {
+      runId: "fixture-pe-001",
+      recordedAt: "2026-06-21T10:10:00.000Z",
+      requestId: "fixture-request-001",
+      status: "validated",
+      originalInput: "Improve the local-state verification prompt.",
+      enhancedPromptId: "fixture-enhanced-001",
+      enhancedPromptText: "Verify the local runtime-state contract precisely.",
+      appliedSafetyRules: [
+        "Do not expose secrets, private source dumps, or token-bearing runtime logs.",
+      ],
+      appliedGroundingDirectives: ["disclose-uncertainty"],
+      assumptions: ["The fixture is local and synthetic."],
+      candidateScores: [
+        {
+          candidateId: "fixture-enhanced-001",
+          profile: "precise",
+          aggregateScore: 0.9,
+          estimatedTokens: 80,
+          selected: true,
+        },
+      ],
+      safety: {
+        decision: "accepted",
+        verificationStatus: "passed",
+        requiresHumanReview: false,
+        findingCodes: [],
+        leastPrivilege: ["no-secret-access", "no-network-egress"],
+      },
+      modelMetadata: { deterministic: true },
+    },
     { evidenceDir: join(stateDir, "evidence") },
   );
+}
+
+function seedFigmaSnapshot(stateDir) {
+  const store = createNodeFigmaSnapshotStore(join(stateDir, "evidence"), {
+    randomSuffix: () => "fixture",
+    retention: { maxRecords: 500 },
+  });
+  store.record({
+    runId: "fixture-figma-001",
+    provenance: {
+      fileKey: "fixture-file",
+      nodeId: "0:1",
+      version: "1",
+      fetchedAt: "2026-06-21T10:15:00.000Z",
+    },
+    integrityHash: "fixture-input-hash",
+    screens: [
+      {
+        screenId: "screen-1",
+        irJson: { root: { id: "screen-1", type: "FRAME", children: [] } },
+        integrityHash: "fixture-screen-input-hash",
+        image: {
+          mimeType: "image/png",
+          bytes: Buffer.from("fixture-png-bytes"),
+        },
+      },
+    ],
+    skippedScreens: [],
+    links: [{ sourceScreenId: "screen-1", targetNodeId: "0:2", trigger: "click" }],
+    tokens: { colors: { primary: "#123456" } },
+    metrics: {
+      augmentation: {
+        attempted: false,
+        modelGatewayCallCount: 0,
+        successfulScreenCount: 0,
+        failedScreenCount: 0,
+      },
+    },
+  });
 }
 
 function seedFigmaTokenVault(stateDir) {
@@ -188,6 +346,8 @@ export function createHealthyFixture(stateDir) {
   seedCredentialVault(stateDir);
   seedEvidence(stateDir);
   seedQualityIntelligence(stateDir);
+  seedPromptEnhancement(stateDir);
+  seedFigmaSnapshot(stateDir);
   seedFigmaTokenVault(stateDir);
   if (process.platform !== "win32") applyOwnerOnlyModes(stateDir);
   return stateDir;
