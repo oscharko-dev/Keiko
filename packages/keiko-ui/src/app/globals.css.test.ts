@@ -498,7 +498,9 @@ describe("Quality Intelligence source-type picker", () => {
 
 describe("Fix 4 — dense desktop text clarity", () => {
   it("keeps native font rasterization instead of forcing thin grayscale antialiasing", () => {
-    const bodyBlock = cssBlock("body");
+    // "body {" pins the element rule; bare "body" now also matches the
+    // --text-body* scale tokens consolidated in :root by #1292.
+    const bodyBlock = cssBlock("body {");
     expect(bodyBlock).toContain("-webkit-font-smoothing: auto");
     expect(bodyBlock).toContain("-moz-osx-font-smoothing: auto");
     expect(bodyBlock).toContain("text-rendering: auto");
@@ -898,7 +900,6 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     expect(block).toContain("padding: 0 18px");
     expect(block).toContain("border-radius: 10px");
     expect(block).toContain("font-weight: 650");
-
   });
 
   it("keeps the bottom-right new-window affordance and palette above workspace windows", () => {
@@ -1316,5 +1317,216 @@ describe("Issue #1205 — editor tab truncation", () => {
       expect(block).toContain("white-space: nowrap");
       expect(block).toContain("text-overflow: ellipsis");
     }
+  });
+});
+
+// ─── Issue #1292 — runtime token consolidation + Light Mode foundations ───────
+//
+// #1292 is the foundation gate of the Design System epic (#1290, blueprint
+// #1291). It lands the design-system's middle + top token tiers into the live
+// product stylesheet (the single emitted globals.css) as aliases over the
+// existing Tier-1 primitives, adds the two missing primitives (--grid-dot,
+// --focus-w), and completes the neutral high-contrast + forced-colors mode
+// blocks. Every assertion is crafted so that reverting the specific change makes
+// the test fail (mutation-robust), per the suite's contract.
+
+/** Brace-aware slice of the rule/at-rule beginning at the first `selector`. */
+function cssRule(selector: string, opts: { readonly fromIndex?: number } = {}): string {
+  const start = css.indexOf(selector, opts.fromIndex ?? 0);
+  expect(start, `selector "${selector}" not found`).toBeGreaterThan(-1);
+  let depth = 0;
+  let started = false;
+  for (let i = css.indexOf("{", start); i < css.length; i++) {
+    if (css[i] === "{") {
+      depth++;
+      started = true;
+    } else if (css[i] === "}") {
+      depth--;
+    }
+    if (started && depth === 0) return css.slice(start, i + 1);
+  }
+  throw new Error(`unterminated rule for "${selector}"`);
+}
+
+describe("Issue #1292 — Tier-2 scale tokens consolidated into the product", () => {
+  it("adds the spacing, radius, weight, leading and type-size scales", () => {
+    for (const decl of [
+      "--space-0: 0",
+      "--space-4: 8px",
+      "--space-8: 24px",
+      "--space-16: 96px",
+      "--radius-pill: 999px",
+      "--radius-control: var(--radius-sm)",
+      "--radius-surface: var(--radius)",
+      "--radius-floating: var(--radius-lg)",
+      "--weight-regular: 400",
+      "--weight-strong: 650",
+      "--leading-normal: 1.5",
+      "--text-caption: 11px",
+      "--text-body: 14px",
+      "--text-display: 50px",
+    ]) {
+      expect(css, `${decl} must be consolidated into globals.css`).toContain(decl);
+    }
+  });
+
+  it("adds the opacity, blur, motion and named z-index scales (closing the raw-z gap)", () => {
+    for (const decl of [
+      "--opacity-disabled: 0.42",
+      "--opacity-scrim: 0.55",
+      "--blur-md: 12px",
+      "--dur-base: 180ms",
+      "--ease-standard: cubic-bezier(0.2, 0, 0.2, 1)",
+      "--ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1)",
+      "--z-base: 0",
+      "--z-modal: 300",
+      "--z-tooltip: 600",
+    ]) {
+      expect(css, `${decl} must be consolidated into globals.css`).toContain(decl);
+    }
+  });
+});
+
+describe("Issue #1292 — Tier-3 semantic aliases resolve to primitives", () => {
+  it("maps every semantic family onto an existing Tier-1 primitive (extend, not fork)", () => {
+    for (const decl of [
+      "--background-primary: var(--bg)",
+      "--surface-primary: var(--card)",
+      "--surface-inset: var(--inset)",
+      "--text-primary: var(--fg)",
+      "--text-secondary: var(--fg-muted)",
+      "--text-inverse: var(--ink-inverse)",
+      "--text-accent: var(--accent-text)",
+      "--border-default: var(--line)",
+      "--action-primary: var(--accent)",
+      "--feedback-success: var(--ok)",
+      "--feedback-danger: var(--danger)",
+      "--focus-ring: var(--accent-text)",
+      "--focus-width: var(--focus-w)",
+      "--selection-surface: var(--accent-glow)",
+    ]) {
+      expect(css, `${decl} must resolve to a primitive`).toContain(decl);
+    }
+  });
+
+  it("derives the feedback + overlay surfaces from primitives via color-mix/opacity", () => {
+    expect(css).toContain(
+      "--feedback-warning-surface: color-mix(in oklch, var(--warn) 12%, transparent)",
+    );
+    expect(css).toContain("--overlay-scrim: oklch(0 0 0 / var(--opacity-scrim))");
+  });
+});
+
+describe("Issue #1292 — Tier-4 component aliases resolve to primitives", () => {
+  it("maps representative component tokens across button/input/card/modal/ai/table/nav", () => {
+    for (const decl of [
+      "--button-primary-surface: var(--accent)",
+      "--button-primary-text: var(--ink-inverse)",
+      "--input-surface: var(--inset)",
+      "--input-border-focus: var(--accent-line)",
+      "--card-surface: var(--card)",
+      "--card-shadow: var(--shadow-card)",
+      "--modal-backdrop: var(--overlay-scrim)",
+      "--popover-shadow: var(--shadow-pop)",
+      "--ai-thinking-indicator: var(--accent-text)",
+      "--ai-permission-surface: var(--feedback-warning-surface)",
+      "--table-row-surface-selected: var(--accent-dim)",
+      "--nav-item-indicator: var(--accent-text)",
+    ]) {
+      expect(css, `${decl} must resolve to a primitive`).toContain(decl);
+    }
+  });
+});
+
+describe("Issue #1292 — new Tier-1 primitives across every mode", () => {
+  it("defines --grid-dot and --focus-w in the dark default :root", () => {
+    const root = cssRule(":root {");
+    expect(root).toContain("--grid-dot: oklch(0.34 0.005 160)");
+    expect(root).toContain("--focus-w: 2px");
+  });
+
+  it("retones --grid-dot for Light Mode", () => {
+    const light = cssRule('[data-theme="light"] {');
+    expect(light).toContain("--grid-dot: oklch(0.78 0.012 160)");
+  });
+
+  it("thickens --focus-w and brightens --grid-dot under prefers-contrast (dark + light)", () => {
+    const block = cssRule("@media (prefers-contrast: more) {");
+    // dark branch
+    expect(block).toContain("--grid-dot: oklch(0.52 0.006 160)");
+    // both dark and light branches bump the ring to 3px
+    expect((block.match(/--focus-w: 3px/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    // light branch
+    expect(block).toContain("--grid-dot: oklch(0.6 0.01 160)");
+  });
+});
+
+describe("Issue #1292 — neutral [data-hc] hook (previously editor-only)", () => {
+  it("steps the neutral ramp on the in-app [data-hc] override, not just --ed-* tokens", () => {
+    // The first [data-hc="more"] block in the file is the new neutral one; the
+    // editor block (which sets --ed-* tokens) comes later. Asserting --line +
+    // --focus-w proves the neutral side of the hook now exists.
+    const block = cssRule('[data-hc="more"] {');
+    expect(block).toContain("--line: oklch(0.55 0.004 160)");
+    expect(block).toContain("--fg-faint: oklch(0.74 0.004 160)");
+    expect(block).toContain("--grid-dot: oklch(0.52 0.006 160)");
+    expect(block).toContain("--focus-w: 3px");
+    expect(block, "neutral block must not be the editor block").not.toContain("--ed-");
+  });
+
+  it("steps the neutral ramp for the light + in-app high-contrast pairing", () => {
+    const block = cssRule('[data-hc="more"][data-theme="light"] {');
+    expect(block).toContain("--line: oklch(0.62 0.006 160)");
+    expect(block).toContain("--grid-dot: oklch(0.6 0.01 160)");
+    expect(block).toContain("--focus-w: 3px");
+    expect(block).not.toContain("--ed-");
+  });
+});
+
+describe("Issue #1292 — forced-colors fallback (WCAG 1.4.3 / Windows High Contrast)", () => {
+  it("surfaces the focus ring and card/window/dialog edges in the system palette", () => {
+    const block = cssRule("@media (forced-colors: active) {");
+    expect(block).toContain("outline: 3px solid Highlight");
+    expect(block).toContain("border: 1px solid CanvasText");
+    // targets the product's real container surfaces, not the reference site's classes
+    expect(block).toContain(".window");
+    expect(block).toContain(".dlg");
+  });
+});
+
+describe("Issue #1292 — design-system token drift gate", () => {
+  /** Collect every custom-property *declaration* name from a design-system file. */
+  function referenceTokenNames(relativePath: string): Set<string> {
+    const refCss = readFileSync(resolve(here, relativePath), "utf8");
+    // Strip block comments so prose like "--background-primary" cannot register.
+    const declarations = refCss.replace(/\/\*[\s\S]*?\*\//g, "");
+    const names = new Set<string>();
+    for (const match of declarations.matchAll(/(--[a-z0-9-]+)\s*:/g)) {
+      const name = match[1];
+      if (name !== undefined) names.add(name);
+    }
+    return names;
+  }
+
+  it("defines every Tier-2/3/4 token the design-system reference declares (no drift)", () => {
+    const names = referenceTokenNames("../../../../design-system/keiko-semantic-tokens.css");
+    expect(names.size, "expected the reference to declare the full token set").toBeGreaterThan(150);
+    const missing = [...names].filter((name) => !css.includes(`${name}:`));
+    expect(
+      missing,
+      `globals.css is missing design-system tokens (drift): ${missing.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("defines every Tier-1 primitive the design-system reference declares (AC1, no drift)", () => {
+    // AC1 names design-system/keiko-tokens.css explicitly: every primitive the
+    // reference carries must exist in the live product source.
+    const names = referenceTokenNames("../../../../design-system/keiko-tokens.css");
+    expect(names.size, "expected the reference to declare the primitive set").toBeGreaterThan(25);
+    const missing = [...names].filter((name) => !css.includes(`${name}:`));
+    expect(
+      missing,
+      `globals.css is missing design-system primitives (drift): ${missing.join(", ")}`,
+    ).toEqual([]);
   });
 });
