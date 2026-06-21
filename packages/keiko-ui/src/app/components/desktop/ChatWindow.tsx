@@ -189,9 +189,13 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
 function ChatBubble({
   message,
   onOpenRunResult,
+  streaming = false,
 }: {
   readonly message: ChatMessage;
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  // Issue #1296 — true only for the live assistant turn while tokens are arriving,
+  // so the DS 0.4.0 streaming caret blinks at the growing edge of the text.
+  readonly streaming?: boolean;
 }): ReactNode {
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
   // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat
@@ -214,6 +218,10 @@ function ChatBubble({
           // degrades this one bubble to plain text instead of crashing the view.
           <SafeMarkdownBoundary source={message.content} />
         )}
+        {/* Issue #1296 — DS 0.4.0 streaming caret at the live edge of the growing
+            assistant turn. Decorative (the lifecycle status announces "Receiving
+            response…" politely), so it is hidden from assistive tech. */}
+        {streaming && !isUser ? <span className="ai-stream-cursor" aria-hidden="true" /> : null}
         {/* uiux-fix F041 (C176) — full date+time stays reachable via title.
             uiux-fix F042 (C208) — footer row: timestamp left, assistant-only
             copy action right (revealed on bubble hover / keyboard focus). */}
@@ -1631,11 +1639,16 @@ export function ChatWindow({
           )
         ) : (
           <div className="chatw-log">
-            {visible.map((message) => (
+            {visible.map((message, index) => (
               <ChatBubble
                 key={message.id}
                 message={message}
                 onOpenRunResult={onOpenRunResult}
+                streaming={
+                  sendStatus === "streaming" &&
+                  index === visible.length - 1 &&
+                  message.role === "assistant"
+                }
               />
             ))}
             {sending && sendStatus !== "streaming" ? (

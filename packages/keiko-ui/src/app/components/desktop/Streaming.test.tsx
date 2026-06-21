@@ -313,6 +313,42 @@ describe("ChatWindow streaming typing indicator (Issue #152)", () => {
     expect(screen.queryByLabelText("Keiko is responding")).toBeNull();
   });
 
+  // Issue #1296 — the DS 0.4.0 streaming caret marks the live edge of the growing
+  // assistant turn while tokens arrive. It is decorative (aria-hidden); the polite
+  // role="status" region carries the announcement.
+  it("renders the DS streaming caret on the live assistant turn while tokens stream", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi"), assistantMessage("a-stream", "The TCP/IP stack")],
+        sendStatus: "streaming",
+        sending: true,
+      }),
+    );
+    const caret = document.querySelector(".ai-stream-cursor");
+    expect(caret).not.toBeNull();
+    expect(caret?.getAttribute("aria-hidden")).toBe("true");
+    // It sits inside the (last) assistant turn, not the user message.
+    const lastAssistant = document.querySelectorAll('article[data-role="assistant"]');
+    expect(
+      lastAssistant[lastAssistant.length - 1]?.querySelector(".ai-stream-cursor"),
+    ).not.toBeNull();
+  });
+
+  it("does not render the streaming caret on a settled (non-streaming) turn", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi"), assistantMessage("a-done", "Final answer.")],
+        sendStatus: "idle",
+        sending: false,
+      }),
+    );
+    // Mutation guard: dropping the `sendStatus === "streaming"` condition renders the
+    // caret on every settled assistant turn, failing this.
+    expect(document.querySelector(".ai-stream-cursor")).toBeNull();
+  });
+
   it("hides the empty pre-token assistant bubble, keeping only non-empty turns", () => {
     renderWindow(
       makeSession({

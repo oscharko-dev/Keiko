@@ -1,0 +1,53 @@
+{
+  "issue": 1296,
+  "baseRef": "origin/release/0.2.0",
+  "totalProbes": 98,
+  "diffCount": 0,
+  "missingSelectors": [],
+  "byMode": {
+    "01-dark": {
+      "probes": 14,
+      "diffs": 0
+    },
+    "02-light": {
+      "probes": 14,
+      "diffs": 0
+    },
+    "03-dark-hc": {
+      "probes": 14,
+      "diffs": 0
+    },
+    "04-light-hc": {
+      "probes": 14,
+      "diffs": 0
+    },
+    "05-prefers-contrast": {
+      "probes": 14,
+      "diffs": 0
+    },
+    "06-forced-colors": {
+      "probes": 14,
+      "diffs": 0
+    },
+    "07-reduced-motion": {
+      "probes": 14,
+      "diffs": 0
+    }
+  },
+  "diffs": [],
+  "groupD": {
+    "description": "Deliberate DS 0.4.0 alignment (separate from the 0-diff gate). The chat thinking dots adopt --ai-thinking-indicator (= --accent-text) in place of --text-faint, so the computed value is EXPECTED to differ PRE vs POST in dark and light.",
+    "probes": {
+      ".chat-typing i::backgroundColor": {
+        "label": "chat thinking dots: --text-faint (PRE) → --ai-thinking-indicator/--accent-text (POST)",
+        "darkPre": "oklch(0.64 0.004 160)",
+        "darkPost": "rgb(78, 186, 135)",
+        "darkDiffers": true,
+        "lightPre": "oklch(0.52 0.01 160)",
+        "lightPost": "oklch(0.48 0.13 160)",
+        "lightDiffers": true
+      }
+    },
+    "failures": []
+  }
+}
