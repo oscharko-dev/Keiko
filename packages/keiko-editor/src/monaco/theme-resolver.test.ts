@@ -36,6 +36,12 @@ describe("hexFromColorString", () => {
     expect(hexFromColorString("oklch(98.5% 0.003 160)")).toBe("#f8fbf9");
   });
 
+  it("converts browser-normalised lab() colours to hex", () => {
+    expect(hexFromColorString("lab(3.73244% -.759594 .301895)")).toBe("#0c0e0d");
+    expect(hexFromColorString("lab(54.2917% 80.8128 69.8851 / 0.5)")).toBe("#ff000080");
+    expect(hexFromColorString("lab(100% 0 0)")).toBe("#ffffff");
+  });
+
   it("converts percentage channels", () => {
     expect(hexFromColorString("rgb(100% 50% 0%)")).toBe("#ff8000");
   });
@@ -63,6 +69,9 @@ describe("hexFromColorString", () => {
     );
     expect(() => hexFromColorString("oklch(0.16 0.004)")).toThrow(/unparseable oklch/);
     expect(() => hexFromColorString("oklch(nope 0.004 160)")).toThrow(/unparseable oklch/);
+    expect(() => hexFromColorString("lab(3.7% -.7 .3")).toThrow(/unparseable lab/);
+    expect(() => hexFromColorString("lab(3.7% -.7)")).toThrow(/unparseable lab/);
+    expect(() => hexFromColorString("lab(nope -.7 .3)")).toThrow(/unparseable lab/);
   });
 });
 
@@ -132,6 +141,10 @@ describe("DOM editor token resolver", () => {
         }
         if (value.startsWith("oklch")) {
           fill = value;
+          return;
+        }
+        if (value.startsWith("lab")) {
+          fill = value;
         }
       },
       get fillStyle(): string {
@@ -182,6 +195,16 @@ describe("DOM editor token resolver", () => {
     const deps = createDomEditorTokenResolverDeps(root, view);
     expect(deps.readResolvedColor("--ed-bg")).toBe("oklch(0.16 0.004 160)");
     expect(deps.toHex("oklch(0.16 0.004 160)")).toBe("#0c0e0d");
+    deps.dispose();
+  });
+
+  it("normalises browser-computed lab colours", () => {
+    const { root, view } = fakeView({
+      computedProbeColor: "lab(3.73244% -.759594 .301895)",
+    });
+    const deps = createDomEditorTokenResolverDeps(root, view);
+    expect(deps.readResolvedColor("--ed-bg")).toBe("lab(3.73244% -.759594 .301895)");
+    expect(deps.toHex("lab(3.73244% -.759594 .301895)")).toBe("#0c0e0d");
     deps.dispose();
   });
 

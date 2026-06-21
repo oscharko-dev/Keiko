@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
-const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32183");
-const stateId = process.env.GITHUB_RUN_ID ?? `editor-perf-${String(process.pid)}`;
+const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32195");
+const stateId = process.env.GITHUB_RUN_ID ?? `issue-1295-editor-${String(process.pid)}`;
 const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
@@ -16,17 +16,19 @@ const prepareRuntimeConfig = [
 
 export default defineConfig({
   testDir: "tests/e2e",
-  testMatch: "editor-performance.spec.ts",
+  testMatch: "editor-fidelity-1295.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: 120_000,
+  timeout: 180_000,
   expect: {
-    timeout: 15_000,
+    timeout: 20_000,
   },
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
   use: {
     baseURL: `http://127.0.0.1:${String(publicPort)}`,
-    trace: "retain-on-failure",
+    trace: "off",
+    video: "off",
+    screenshot: "off",
   },
   projects: [
     {
