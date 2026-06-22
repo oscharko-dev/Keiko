@@ -113,9 +113,19 @@ describe("Issue #12 docs drift", () => {
 
   it("prunes publisher-native optional dependencies before manual package-surface gates", () => {
     expectPruneBeforePackageSurface(readWorkflowJobBlock(".github/workflows/ci.yml", "ui"));
-    expectPruneBeforePackageSurface(
-      readWorkflowJobBlock(".github/workflows/release.yml", "release-verify"),
-    );
+
+    const releaseVerify = readWorkflowJobBlock(".github/workflows/release.yml", "release-verify");
+    expect(releaseVerify).toContain("Verify required checks for tagged SHA");
+    expect(releaseVerify).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
+    expect(releaseVerify).toContain("npm run release:plan -- --tag beta");
+    expect(releaseVerify).not.toContain("npm run test:coverage:quality");
+    expect(releaseVerify).not.toContain("npm run check:package-surface");
+    expect(releaseVerify).not.toContain("npm run prune:package-native-optionals");
+
+    const publish = readWorkflowJobBlock(".github/workflows/release.yml", "publish");
+    expect(publish).toContain("Verify required checks for release SHA");
+    expect(publish).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
+    expect(publish).toContain('run: npm run release:publish -- --tag "$NPM_DIST_TAG"');
   });
 
   it("states that gen-tests and investigate do not persist evidence manifests", () => {
