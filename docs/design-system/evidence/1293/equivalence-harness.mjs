@@ -11,7 +11,7 @@
 // Writes computed-value-proof.json + 01-dark.png … 07-reduced-motion.png next to itself and
 // exits non-zero if any computed value differs between the two stylesheets.
 import { chromium } from "playwright";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,7 +21,22 @@ const REPO = resolve(HERE, "../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const BASE_REF = process.env.BASE_REF ?? "origin/release/0.2.0";
 
-const PRE = execSync(`git -C "${REPO}" show ${BASE_REF}:${CSS_PATH}`, {
+const REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+if (
+  !REF_RE.test(BASE_REF) ||
+  BASE_REF.includes("..") ||
+  BASE_REF.includes("@{") ||
+  BASE_REF.endsWith(".lock") ||
+  BASE_REF.endsWith("/")
+) {
+  throw new Error(`refusing unsafe BASE_REF: ${BASE_REF}`);
+}
+
+const BASE_SHA = execFileSync("git", ["-C", REPO, "rev-parse", "--verify", `${BASE_REF}^{commit}`], {
+  encoding: "utf8",
+}).trim();
+
+const PRE = execFileSync("git", ["-C", REPO, "show", `${BASE_SHA}:${CSS_PATH}`], {
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
 });
