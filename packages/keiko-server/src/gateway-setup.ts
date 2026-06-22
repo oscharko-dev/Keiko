@@ -56,6 +56,8 @@ const SETUP_SMOKE_CONCURRENCY = 4;
 const CHAT_COMPATIBLE_MODES = new Set(["chat", "completion", "responses"]);
 const EMBEDDING_ID_PATTERN =
   /(?:^|[-_/. ])(?:text-)?embed(?:ding)?s?(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
+const IMAGE_INPUT_ID_PATTERN =
+  /(?:^|[-_/. ])(?:vision|multimodal|multi-modal|llava|pixtral|omni|gpt-4o)(?:$|[-_/. ])|(?:^|[-_/. ])vl(?:$|[-_/. ])|qwen(?:2(?:\.5)?|3)?[-_/. ]?vl(?:$|[-_/. ])/i;
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
@@ -182,6 +184,72 @@ function providerRaw(
 
 function isLikelyEmbeddingModelId(modelId: string): boolean {
   return EMBEDDING_ID_PATTERN.test(modelId);
+}
+
+function isLikelyImageInputModelId(modelId: string): boolean {
+  return IMAGE_INPUT_ID_PATTERN.test(modelId);
+}
+
+function discoveryRecords(item: Record<string, unknown>): readonly Record<string, unknown>[] {
+  return [
+    item,
+    nestedRecord(item, "model_info"),
+    nestedRecord(item, "litellm_params"),
+    nestedRecord(item, "capabilities"),
+  ].filter((record): record is Record<string, unknown> => record !== undefined);
+}
+
+function booleanFieldFromRecords(
+  records: readonly Record<string, unknown>[],
+  fields: readonly string[],
+): boolean {
+  return records.some((record) => fields.some((field) => record[field] === true));
+}
+
+function stringsFromValue(value: unknown): readonly string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string");
+  }
+  return [];
+}
+
+function stringListFieldFromRecords(
+  records: readonly Record<string, unknown>[],
+  fields: readonly string[],
+): readonly string[] {
+  return records.flatMap((record) =>
+    fields.flatMap((field) => stringsFromValue(record[field]).map((value) => value.toLowerCase())),
+  );
+}
+
+function supportsImageInputFromDiscoveryItem(
+  item: Record<string, unknown>,
+  modelId: string,
+): boolean {
+  const records = discoveryRecords(item);
+  if (
+    booleanFieldFromRecords(records, [
+      "supports_vision",
+      "supportsVision",
+      "vision",
+      "image_input",
+      "imageInput",
+      "supports_image_input",
+      "supportsImageInput",
+    ])
+  ) {
+    return true;
+  }
+  const modalities = stringListFieldFromRecords(records, [
+    "input_modalities",
+    "inputModalities",
+    "modalities",
+  ]);
+  if (modalities.some((entry) => entry === "image" || entry === "vision")) {
+    return true;
+  }
+  return isLikelyImageInputModelId(modelId);
 }
 
 function createDefaultEmbeddingCapabilityForSetup(modelId: string): ModelCapability {
@@ -363,6 +431,7 @@ type DiscoveryModelKind = "chat" | "embedding";
 interface ClassifiedDiscoveryModel {
   readonly id: string;
   readonly kind: DiscoveryModelKind;
+  readonly supportsImageInput: boolean;
 }
 
 function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefined {
@@ -374,12 +443,16 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
     return undefined;
   }
   if (isExplicitlyEmbeddingModel(item)) {
-    return { id, kind: "embedding" };
+    return { id, kind: "embedding", supportsImageInput: false };
   }
   if (isExplicitlyNonChatModel(item)) {
-    return isLikelyEmbeddingModelId(id) ? { id, kind: "embedding" } : undefined;
+    return isLikelyEmbeddingModelId(id)
+      ? { id, kind: "embedding", supportsImageInput: false }
+      : undefined;
   }
-  return isLikelyEmbeddingModelId(id) ? { id, kind: "embedding" } : { id, kind: "chat" };
+  return isLikelyEmbeddingModelId(id)
+    ? { id, kind: "embedding", supportsImageInput: false }
+    : { id, kind: "chat", supportsImageInput: supportsImageInputFromDiscoveryItem(item, id) };
 }
 
 // Issue #144: exported as part of the discovery-normalization seam. Gateway setup now returns
@@ -416,6 +489,9 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
     chatModelIds: limited.filter((entry) => entry.kind === "chat").map((entry) => entry.id),
     embeddingModelIds: limited
       .filter((entry) => entry.kind === "embedding")
+      .map((entry) => entry.id),
+    imageInputModelIds: limited
+      .filter((entry) => entry.kind === "chat" && entry.supportsImageInput)
       .map((entry) => entry.id),
   };
 }
@@ -950,6 +1026,7 @@ interface SetupCandidateModels {
   readonly modelIds: readonly string[];
   readonly chatModelIds: readonly string[];
   readonly embeddingModelIds: readonly string[];
+  readonly imageInputModelIds: readonly string[];
 }
 
 function assertImageInputModelsWereTested(
@@ -961,6 +1038,24 @@ function assertImageInputModelsWereTested(
   if (imageInputModelIds.some((modelId) => !tested.has(modelId))) {
     throw new Error("imageInputModelIds must match tested chat-callable model ids.");
   }
+}
+
+function testedImageInputModelIds(
+  manualModelIds: readonly string[],
+  discoveredModelIds: readonly string[],
+  testedModelIds: readonly string[],
+): readonly string[] {
+  const tested = new Set(testedModelIds);
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const modelId of [...manualModelIds, ...discoveredModelIds]) {
+    if (!tested.has(modelId) || seen.has(modelId)) {
+      continue;
+    }
+    seen.add(modelId);
+    merged.push(modelId);
+  }
+  return merged;
 }
 
 function validationConfigForSetup(input: SetupVerificationInput): GatewayConfig {
@@ -979,6 +1074,7 @@ function normalizeLegacyDiscoveryResult(modelIds: readonly string[]): SetupCandi
     modelIds,
     chatModelIds: modelIds.filter((modelId) => !embeddingSet.has(modelId)),
     embeddingModelIds,
+    imageInputModelIds: [],
   };
 }
 
@@ -1002,6 +1098,7 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
       modelIds: result.modelIds,
       chatModelIds: result.chatModelIds,
       embeddingModelIds: result.embeddingModelIds,
+      imageInputModelIds: result.imageInputModelIds ?? [],
     };
   }
   return normalizeLegacyDiscoveryResult(result);
@@ -1016,6 +1113,7 @@ function candidateModelsFromDeploymentNames(
     modelIds: deploymentNames,
     chatModelIds: deploymentNames.filter((modelId) => !embeddingSet.has(modelId)),
     embeddingModelIds,
+    imageInputModelIds: [],
   };
 }
 
@@ -1040,11 +1138,12 @@ function finalRawConfigForSetup(
   input: SetupVerificationInput,
   testedModelIds: readonly string[],
   embeddingModelIds: readonly string[],
+  imageInputModelIds: readonly string[],
 ): Record<string, unknown> {
   const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, embeddingModelIds);
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
     apiKeyHeaderName: input.apiKeyHeaderName,
-    imageInputModelIds: input.imageInputModelIds,
+    imageInputModelIds,
     embeddingModelIds,
     timeoutMs: input.timeoutMs,
   });
@@ -1064,6 +1163,24 @@ function skippedModelIdsForSetup(
 ): readonly string[] {
   const acceptedModelIds = new Set([...testedModelIds, ...embeddingModelIds]);
   return candidateModelIds.filter((modelId) => !acceptedModelIds.has(modelId));
+}
+
+function finalRawConfigForTestedSetup(
+  input: SetupVerificationInput,
+  testedModelIds: readonly string[],
+  candidateModels: SetupCandidateModels,
+): Record<string, unknown> {
+  const imageInputModelIds = testedImageInputModelIds(
+    input.imageInputModelIds,
+    candidateModels.imageInputModelIds,
+    testedModelIds,
+  );
+  return finalRawConfigForSetup(
+    input,
+    testedModelIds,
+    candidateModels.embeddingModelIds,
+    imageInputModelIds,
+  );
 }
 
 async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
@@ -1096,10 +1213,10 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   );
   const testedModelIds = await input.tester(candidateConfig, candidateModels.chatModelIds);
   assertImageInputModelsWereTested(input.imageInputModelIds, testedModelIds);
-  const rawConfigWithOptionalBlocks = finalRawConfigForSetup(
+  const rawConfigWithOptionalBlocks = finalRawConfigForTestedSetup(
     input,
     testedModelIds,
-    candidateModels.embeddingModelIds,
+    candidateModels,
   );
   const config = parseGatewayConfig(
     withInheritedEgress(rawConfigWithOptionalBlocks, input.egress),

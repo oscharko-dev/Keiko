@@ -130,12 +130,14 @@ function buildIdentity(
   detectedDimensions: number,
   modelRevision: string | undefined,
 ): EmbeddingModelIdentity {
+  const revision =
+    modelRevision ?? (detectedModelId === options.modelId ? undefined : detectedModelId);
   return {
     provider: options.provider,
-    modelId: detectedModelId,
+    modelId: options.modelId,
     vectorDimensions: detectedDimensions,
     vectorMetric: options.vectorMetric,
-    ...(modelRevision !== undefined ? { modelRevision } : {}),
+    ...(revision !== undefined ? { modelRevision: revision } : {}),
   };
 }
 
