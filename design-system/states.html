@@ -20,9 +20,28 @@
       .matrix tr:last-child td { border-bottom: 0; }
       .matrix .y { color: var(--accent-text); }
       .matrix .y svg { width: 15px; height: 15px; }
-      .state-strip { display: flex; flex-wrap: wrap; gap: 18px; }
+      .state-proof { display: grid; gap: 0; }
+      .family-proof { display: grid; grid-template-columns: minmax(130px, 180px) 1fr; gap: 16px; align-items: start; padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
+      .family-proof:last-child { border-bottom: 0; }
+      .state-strip { display: flex; flex-wrap: wrap; gap: 9px; }
       .state-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 9px; }
       .state-cell .sc-l { font: 600 10px var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-faint); }
+      .state-proof-chip { min-height: 34px; display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--card); color: var(--fg); font: 600 12px var(--font-ui); white-space: nowrap; }
+      .state-proof-chip[data-state="h"] { background: var(--surface-secondary); color: var(--text-primary); }
+      .state-proof-chip[data-state="f"] { border-color: var(--accent-line); box-shadow: 0 0 0 2px var(--bg), 0 0 0 calc(var(--focus-w, 2px) + 2px) var(--accent-text); }
+      .state-proof-chip[data-state="a"] { transform: translateY(0.5px); filter: brightness(.92); }
+      .state-proof-chip[data-state="s"] { border-color: var(--accent-line); background: var(--accent-dim); color: var(--accent-text); }
+      .state-proof-chip[data-state="x"] { opacity: .58; cursor: not-allowed; }
+      .state-proof-chip[data-state="l"] { border-color: var(--line); background: linear-gradient(90deg, var(--skeleton-base), var(--skeleton-highlight), var(--skeleton-base)); color: var(--fg); }
+      .state-proof-chip[data-state="e"] { border-color: color-mix(in oklch, var(--feedback-danger) 42%, transparent); background: var(--feedback-danger-surface); color: var(--feedback-danger); }
+      .state-proof-chip[data-state="m"] { border-style: dashed; color: var(--fg-muted); }
+      .state-proof-chip[data-state="y"] { border-color: color-mix(in oklch, var(--feedback-info) 42%, transparent); background: var(--feedback-info-surface); color: var(--feedback-info); }
+      .state-proof-chip[data-state="c"] { border-color: color-mix(in oklch, var(--feedback-warning) 42%, transparent); background: var(--feedback-warning-surface); color: var(--feedback-warning); }
+      .state-proof-icon { width: 18px; height: 18px; flex: none; display: inline-grid; place-items: center; border: 1px solid currentColor; border-radius: 999px; font: 700 10px var(--font-mono); }
+      .state-proof-chip[data-state="l"] .state-proof-icon { border-style: dotted; }
+      @media (max-width: 720px) {
+        .family-proof { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body class="ds">
@@ -34,7 +53,7 @@
       <header class="phero">
         <div class="ey">Components · States</div>
         <h1>Every state, <span class="dim">named.</span></h1>
-        <p class="lead">A component isn't done until its states are. Keiko standardises eleven — from rest to conflict — defines which apply to what, and proves the interactive ones live in all three modes. Toggle appearance &amp; contrast in the sidebar; this page is the proof.</p>
+        <p class="lead">A component isn't done until its states are. Keiko standardises eleven — from rest to conflict — defines which apply to what, and proves every applicable state across the seven canonical appearance modes. Toggle appearance &amp; contrast in the sidebar; this page is the proof.</p>
       </header>
 
       <!-- VOCAB -->
@@ -57,38 +76,10 @@
 
       <!-- LIVE -->
       <section class="sec" id="live">
-        <div class="sec-head"><div class="num">02 — PROOF</div><h2>States, live</h2><p>Forced into each state so they're all visible at once — and all driven by the same tokens, so they're correct in dark, light and high-contrast.</p></div>
+        <div class="sec-head"><div class="num">02 — PROOF</div><h2>States, live</h2><p>Forced into each applicable state so they're all visible at once — and all driven by the same tokens, so they're correct in dark, light, high-contrast, forced-colors, and reduced-motion evidence.</p></div>
 
         <div class="card demo-card stack">
-          <div class="state-cell" style="width:100%">
-            <div class="sc-l">Button</div>
-            <div class="state-strip">
-              <button class="c-btn c-btn--primary">Default</button>
-              <button class="c-btn c-btn--primary" style="background:var(--button-primary-surface-hover)">Hover</button>
-              <button class="c-btn c-btn--primary" style="box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--accent-text)">Focus</button>
-              <button class="c-btn c-btn--primary" style="transform:translateY(0.5px);filter:brightness(.92)">Active</button>
-              <button class="c-btn c-btn--primary" disabled style="background:var(--button-primary-disabled-surface);color:var(--button-primary-disabled-text)">Disabled</button>
-            </div>
-          </div>
-
-          <div class="state-cell" style="width:100%">
-            <div class="sc-l">Input</div>
-            <div class="state-strip">
-              <div style="width:150px"><input class="c-field" value="Default" /></div>
-              <div style="width:150px"><input class="c-field" value="Focus" style="border-color:var(--input-border-focus);box-shadow:0 0 0 3px var(--input-ring-focus)" /></div>
-              <div style="width:150px"><input class="c-field c-field--invalid" value="Error" /></div>
-              <div style="width:150px"><input class="c-field" value="Disabled" disabled style="opacity:.5" /></div>
-            </div>
-          </div>
-
-          <div class="state-cell" style="width:100%">
-            <div class="sc-l">List row</div>
-            <div class="state-strip" style="flex-direction:column;gap:0;width:300px">
-              <button class="c-tree-row">Default row</button>
-              <button class="c-tree-row" style="background:var(--surface-secondary);color:var(--text-primary)">Hover row</button>
-              <button class="c-tree-row" aria-current="true">Selected row</button>
-            </div>
-          </div>
+          <div class="state-proof" id="state-proof" aria-label="Rendered state proof for every applicable component state"></div>
         </div>
       </section>
 
@@ -103,12 +94,25 @@
             <tbody><!-- filled by JS --></tbody>
           </table>
         </div>
-        <div class="note" style="margin-top:18px"><span class="tag" style="color:var(--accent-text)">Rule</span><div>Ship a component only when every checked cell is implemented and screenshotted in all three modes. Loading uses the skeleton tokens; error uses <code>--feedback-danger</code>; syncing uses <code>--feedback-info</code>; conflict uses <code>--feedback-warning</code> — always paired with an icon and a word.</div></div>
+        <div class="note" style="margin-top:18px"><span class="tag" style="color:var(--accent-text)">Rule</span><div>Ship a component only when every checked cell is implemented and screenshotted in the seven canonical modes. Loading uses the skeleton tokens; error uses <code>--feedback-danger</code>; syncing uses <code>--feedback-info</code>; conflict uses <code>--feedback-warning</code> — always paired with an icon and a word.</div></div>
       </section>
     </main>
 
     <script>
       var STATES = ["d","h","f","a","s","x","l","e","m","y","c"];
+      var STATE_META = [
+        { key: "d", label: "Default", group: "interaction", icon: "" },
+        { key: "h", label: "Hover", group: "interaction", icon: "" },
+        { key: "f", label: "Focus", group: "interaction", icon: "" },
+        { key: "a", label: "Active", group: "interaction", icon: "" },
+        { key: "s", label: "Selected", group: "interaction", icon: "" },
+        { key: "x", label: "Disabled", group: "interaction", icon: "" },
+        { key: "l", label: "Loading", group: "data-sync", icon: "..." },
+        { key: "e", label: "Error", group: "data-sync", icon: "!" },
+        { key: "m", label: "Empty", group: "data-sync", icon: "0" },
+        { key: "y", label: "Syncing", group: "data-sync", icon: "~" },
+        { key: "c", label: "Conflict", group: "data-sync", icon: "!" }
+      ];
       var ROWS = [
         ["Button",       "11110100000"],
         ["Input / field","11111110000"],
@@ -122,6 +126,31 @@
         ["AI response",  "10000111011"],
         ["File / sync item","10000110111"]
       ];
+      var metaByKey = STATE_META.reduce(function (acc, meta) {
+        acc[meta.key] = meta;
+        return acc;
+      }, {});
+      function stateChip(family, stateKey) {
+        var meta = metaByKey[stateKey];
+        var isDataSync = meta.group === "data-sync";
+        var marker = isDataSync
+          ? '<span class="state-proof-icon" data-state-icon aria-hidden="true">' + meta.icon + '</span>'
+          : "";
+        return '<span class="state-proof-chip" data-family="' + family + '" data-state="' + stateKey + '"' +
+          (isDataSync ? ' data-noncolor="true"' : "") + '>' +
+          marker +
+          '<span data-state-label>' + meta.label + '</span>' +
+          '</span>';
+      }
+      document.querySelector("#state-proof").innerHTML = ROWS.map(function (r) {
+        var chips = r[1].split("").map(function (on, index) {
+          return on === "1" ? stateChip(r[0], STATES[index]) : "";
+        }).join("");
+        return '<div class="family-proof" data-family-row="' + r[0] + '">' +
+          '<div class="state-cell"><div class="sc-l">' + r[0] + '</div></div>' +
+          '<div class="state-strip">' + chips + '</div>' +
+          '</div>';
+      }).join("");
       document.querySelector("#mx tbody").innerHTML = ROWS.map(function (r) {
         var cells = r[1].split("").map(function (on) {
           return '<td>' + (on === "1"

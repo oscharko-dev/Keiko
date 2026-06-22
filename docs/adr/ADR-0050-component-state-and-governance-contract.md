@@ -69,9 +69,12 @@ accessibility, evidence, and CI gates established by ADR-0049 and the upstream a
 3. **Per-component documentation follows the ten-section template.** The template defined in
    `design-system/governance.html` (sections: Overview, When (not) to use, Anatomy, Variants & sizes,
    States, Accessibility, Tokens, Do / Don't, Status & owner, Changelog) is the required structure for
-   every component page. Status cannot move to Ready in the component register until the full template
-   — including States (proven in three modes) and Accessibility (roles, focus order, keyboard,
-   contrast) — is shipped. The canonical template document is [component-template.md](../design-system/component-template.md).
+   every component page. For new component promotions after #1299, status cannot move to Ready in the
+   component register until the full template — including States (proven across the colour /
+   contrast / motion evidence set) and Accessibility (roles, focus order, keyboard, contrast) — is
+   shipped. Families already shipped as Ready under #1292-#1298 keep their implementation status, while
+   their documentation-spine coverage is tracked separately as full, partial, or worked-example coverage.
+   The canonical template document is [component-template.md](../design-system/component-template.md).
 
 4. **Status and ownership are governed by the component register.** Every component family has a
    declared status (Draft / Ready / Deprecated) and an owning area in the register maintained at
@@ -119,8 +122,9 @@ accessibility, evidence, and CI gates established by ADR-0049 and the upstream a
 - Future contributors have a single place to look up what states apply to a component, what the
   documentation structure must be, and what the contribution rules are. Ambiguity about whether a
   missing state is intentional is eliminated by the explicit `·` (non-applicable) column.
-- The ten-section documentation requirement adds measurable overhead before a component moves to
-  Ready, which is an honest cost of durable governance.
+- The ten-section documentation requirement adds measurable overhead before a future component moves to
+  Ready. Existing Ready families that only have migration-note coverage carry explicit documentation
+  coverage labels until a spine-complete page exists.
 - The token-proposal gate prevents silent visual proliferation in `globals.css`, but it adds a step
   for contributors who need a new visual value and must open a token proposal before their change can
   land.

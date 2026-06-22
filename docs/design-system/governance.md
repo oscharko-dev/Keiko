@@ -38,6 +38,9 @@ changelog prose and the register disagree, the register wins, and Data Visualisa
 Every component carries a status and an owning area. **Ready** ships and is safe to depend on; **Deprecated**
 has a named replacement and a migration path; **Draft** means in-progress and not yet safe to depend on. The
 register maps each row to the epic child that shipped it and to its Keiko Product Delivery board state.
+Implementation status is distinct from documentation-spine coverage: the shipped #1292-#1298 families remain
+Ready because their migrations landed and were accepted, while [component-template.md](component-template.md)
+records whether each family has full, partial, or worked-example coverage against the ten-section spine.
 
 | Component                      | Status     | Owner     | Since                           | Shipped by  | Board status |
 | ------------------------------ | ---------- | --------- | ------------------------------- | ----------- | ------------ |
@@ -60,10 +63,12 @@ reconcile before treating either as authoritative (the data-viz reconciliation a
 
 The canonical ten-section template — Overview, When (not) to use, Anatomy, Variants & sizes, States,
 Accessibility, Tokens, Do / Don't, Status & owner, Changelog — lives in
-[component-template.md](component-template.md). A component's register status cannot move to **Ready** until
-the full template is shipped for it, with the **States** section proven across the three colour modes and the
-**Accessibility** section completed (roles, focus order, keyboard, contrast). An incomplete template is, by
-definition, a Draft.
+[component-template.md](component-template.md). For new component promotions after #1299, a component's register
+status cannot move to **Ready** until the full template is shipped for it, with the **States** section proven
+across the colour / contrast / motion evidence set and the **Accessibility** section completed (roles, focus
+order, keyboard, contrast). Existing shipped families that have only migration-note coverage remain
+implementation Ready, but their documentation coverage must be labelled as partial until a spine-complete page
+exists.
 
 ## Contribution rules
 
@@ -73,9 +78,11 @@ A change enters the system through three rules, each enforced by a real gate in 
    proposal first**, not a component change. Enforcement: the scope-wide drift guards in
    `packages/keiko-ui/src/app/globals.css.test.ts` parse every in-scope rule and fail when a migrated surface
    carries a raw, unreviewed value instead of a `--*` token — a new literal cannot land silently.
-2. **Ship the full template before Ready.** States and accessibility are included; status cannot move to Ready
-   until the [component-template.md](component-template.md) spine is complete (see above). Enforcement: the
-   per-component pins in `globals.css.test.ts` and the `*.a11y.test.tsx` (jest-axe) suites gate the States and
+2. **Ship the full template before future Ready promotions.** States and accessibility are included; a new or
+   promoted component cannot move to Ready until the [component-template.md](component-template.md) spine is
+   complete (see above). Existing Ready families with partial migration-note coverage must stay labelled as
+   partial documentation coverage until a spine-complete page exists. Enforcement: the per-component pins in
+   `globals.css.test.ts`, the `*.a11y.test.tsx` (jest-axe) suites, and PR review gate the States and
    Accessibility sections.
 3. **An owner reviews; the changelog is part of the change.** The area owner named in the register reviews the
    contribution, and the changelog entry ships with it, not as an afterthought. Enforcement: PR review plus
