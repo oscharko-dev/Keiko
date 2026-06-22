@@ -21,20 +21,26 @@ node docs/design-system/evidence/1300/browser/capture.mjs
 # 3. Editor matrix: token-tier fidelity (0-diff gate) + the seven editor reference pages
 node docs/design-system/evidence/1300/editor/capture.mjs
 
-# 4. Accessibility: axe-core WCAG 2.1 A/AA across the seven modes (zero serious/critical)
+# 4. Accessibility: axe-core WCAG 2.1 A/AA across the seven modes (zero serious/critical,
+#    with unresolved incomplete findings requiring a checked-in disposition)
 node docs/design-system/evidence/1300/a11y/axe-proof.mjs
 ```
 
-Each script exits non-zero on a gate failure. The running editor (Monaco registration, tabs/splits,
-diagnostics, find/replace, ghost text, agent prompts) is proven by `npm run test:e2e:editor-fidelity-1295`
-and `-1296`, whose captures are committed under [`../1295/editor/`](../1295/editor/) and
-[`../1296/editor/`](../1296/editor/).
+Each script exits non-zero on a gate failure. The component harness also fails on missing selector probes,
+stale CSS hashes, a non-scrollable bounded-row smoke, scroll-position failure, or sticky-header drift. The
+browser harness serves the static export through a realpath-confined loopback server, blocks non-loopback
+outbound requests, and fails on page errors or missing required selectors in any scenario. The editor harness
+fails unless all 14 expected reference-page captures are present and error-free. The running editor (Monaco
+registration, tabs/splits, diagnostics, find/replace, ghost text, agent prompts) is proven by
+`npm run test:e2e:editor-fidelity-1295` and `-1296`, whose captures are committed under
+[`../1295/editor/`](../1295/editor/) and [`../1296/editor/`](../1296/editor/).
 
 ## Environment
 
 - Headless Chromium via Playwright (`chromium`), node 22.
 - Fidelity gates use `page.setContent` / `file://` (no server — CodeQL-safe); the running-app capture serves
-  `packages/keiko-ui/out` over a path-confined loopback server.
+  `packages/keiko-ui/out` over a realpath-confined loopback server and stubs same-origin API responses with
+  deterministic `keiko.workspace.v4` workspace-window state.
 - axe-core is injected from the workspace dependency (`node_modules/axe-core/axe.min.js`); no network.
 
 ## Tolerance & retention
@@ -46,20 +52,23 @@ and `-1296`, whose captures are committed under [`../1295/editor/`](../1295/edit
 
 ## Artifact index
 
-| File                                                                                         | What                                                                                            |
-| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `consolidated-fidelity-proof.json`                                                           | component reference fidelity (427 probes, 0 gated diffs), a11y smoke, perf smoke, accent record |
-| `01-dark.png` … `07-reduced-motion.png`                                                      | component union rendered in the 7 modes                                                         |
-| `08-compact-density.png`, `09-responsive.png`, `10-focus-visible.png`, `11-bounded-rows.png` | density / responsive / focus / perf-smoke renders                                               |
-| `browser/manifest.json` + `browser/{desktop,tablet,mobile}__home__*.png`                     | running-app shell, 6 modes × 3 viewports (18 shots)                                             |
-| `editor/editor-fidelity-proof.json`                                                          | editor token fidelity (160 gated probes, 0 diffs) + accent + reference-only buckets             |
-| `editor/ref-editor-*-{dark,light}.png`                                                       | the 7 editor reference pages (14 shots)                                                         |
-| `a11y/a11y-proof.json`                                                                       | axe-core results per mode (0 serious/critical, 40 passes/mode)                                  |
+| File                                                                                         | What                                                                                             |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `consolidated-fidelity-proof.json`                                                           | component reference fidelity (427 probes, 0 gated diffs), a11y smoke, perf smoke, accent record  |
+| `01-dark.png` … `07-reduced-motion.png`                                                      | component union rendered in the 7 modes                                                          |
+| `08-compact-density.png`, `09-responsive.png`, `10-focus-visible.png`, `11-bounded-rows.png` | density / responsive / focus / perf-smoke renders                                                |
+| `browser/manifest.json` + `browser/{desktop,tablet,mobile}__{shell,workspace-*}__*.png`      | running-app shell + seeded high-traffic surfaces, 4 scenarios × 6 modes × 3 viewports (72 shots) |
+| `editor/editor-fidelity-proof.json`                                                          | editor token fidelity (160 gated probes, 0 diffs) + accent + reference-only buckets              |
+| `editor/ref-editor-*-{dark,light}.png`                                                       | the 7 editor reference pages (14 shots)                                                          |
+| `a11y/a11y-proof.json`                                                                       | axe-core results per mode (0 serious/critical, 40 passes/mode)                                   |
 
 ## Results (committed run)
 
 - Component reference fidelity: **427 probes, 0 gated diffs** (Dark + Light); 0 recorded diffs in HC/forced/reduced. `PASS`.
 - Editor token fidelity: **160 gated probes, 0 gated diffs**; 10 accent-derived recorded; 3 reference-only recorded (→ #1373/#1390). `PASS`.
-- Accessibility: axe-core 4.12.0, **0 serious/critical** in all 7 modes (40 passes/mode). `PASS`.
+- Accessibility: axe-core 4.12.0, **0 serious/critical** in all 7 modes (40 passes/mode); unresolved
+  incomplete findings are 0 after the checked-in `color-contrast` disposition. `PASS`.
 - Performance smoke: 250-row bounded table, ~0.1 ms, sticky-header delta 0 px. `PASS`.
-- Running-app bundle: 18 shots, shell present in every mode/viewport, 0 page errors.
+- Running-app bundle: **72 shots** (shell plus chat/Quality Intelligence/Local Knowledge,
+  MemoriaViva/Relationships, and Files/Editor seeded workspaces), shell present in every mode/viewport,
+  required selectors present, 0 page errors.

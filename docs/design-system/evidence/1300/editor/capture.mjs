@@ -193,6 +193,7 @@ const REF_MODES = [
   { id: "dark", theme: "dark", hc: null },
   { id: "light", theme: "light", hc: null },
 ];
+const EXPECTED_REF_CAPTURE_COUNT = REF_PAGES.length * REF_MODES.length;
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({
@@ -267,6 +268,7 @@ for (const mode of MODES) {
 
 // Reference-page captures for visual inspection.
 const refCaptures = [];
+const refCaptureErrors = [];
 for (const file of REF_PAGES) {
   const url = pathToFileURL(resolve(DS_DIR, file)).href;
   for (const mode of REF_MODES) {
@@ -290,8 +292,10 @@ for (const file of REF_PAGES) {
       refCaptures.push({ file: name, page: file, mode: mode.id, ...info });
       console.log(`captured ${name} (theme=${info.theme}, text=${info.textLen})`);
     } catch (e) {
-      refCaptures.push({ file, mode: mode.id, error: String(e).slice(0, 120) });
-      console.log(`FAILED ${file} ${mode.id}: ${String(e).slice(0, 120)}`);
+      const error = { page: file, mode: mode.id, error: String(e).slice(0, 240) };
+      refCaptureErrors.push(error);
+      refCaptures.push(error);
+      console.log(`FAILED ${file} ${mode.id}: ${error.error}`);
     }
   }
 }
@@ -300,8 +304,12 @@ await browser.close();
 
 // A reference-page capture failure (e.g. a missing editor-*.html) must FAIL the gate, not record a
 // silent error field alongside a PASS verdict.
-const captureFailed = refCaptures.some((c) => "error" in c);
-const failed = gatedDiffs.length > 0 || captureFailed;
+const missingReferenceTokens = [...missing].sort();
+const captureFailed =
+  refCaptures.some((c) => "error" in c) ||
+  refCaptures.length !== EXPECTED_REF_CAPTURE_COUNT ||
+  refCaptureErrors.length > 0;
+const failed = gatedDiffs.length > 0 || missingReferenceTokens.length > 0 || captureFailed;
 writeFileSync(
   resolve(HERE, "editor-fidelity-proof.json"),
   JSON.stringify(
@@ -311,6 +319,14 @@ writeFileSync(
       surface: "editor",
       postCssSha256: POST_CSS_SHA256,
       referenceFiles: REFERENCE_FILES,
+      referenceFileSha256: Object.fromEntries(
+        REFERENCE_FILES.map((file) => [
+          file,
+          createHash("sha256")
+            .update(readFileSync(resolve(DS_DIR, file), "utf8"))
+            .digest("hex"),
+        ]),
+      ),
       run: { generatedAt: new Date().toISOString(), repoHeadSha: git(["rev-parse", "HEAD"]) },
       tolerance: "≤1 LSB per sRGB channel (canvas-normalised)",
       tokenFidelity: {
@@ -344,6 +360,12 @@ writeFileSync(
         tokens: [...referenceOnlyTokens],
       },
       tokenRecord,
+      referenceCaptureSummary: {
+        expectedCount: EXPECTED_REF_CAPTURE_COUNT,
+        actualCount: refCaptures.length,
+        errorCount: refCaptureErrors.length,
+        errors: refCaptureErrors,
+      },
       referenceCaptures: refCaptures,
       runningEditorEvidence: {
         note: "Real Monaco / tabs / diagnostics / find / ghost-text / agent-prompt captures are produced by the executable e2e suites and committed under the #1295/#1296 evidence dirs.",
@@ -353,7 +375,8 @@ writeFileSync(
           "docs/design-system/evidence/1296/editor/",
         ],
       },
-      missing: [...missing],
+      missingReferenceTokenCount: missingReferenceTokens.length,
+      missing: missingReferenceTokens,
       verdict: failed ? "FAIL" : "PASS",
     },
     null,
@@ -368,8 +391,13 @@ for (const d of gatedDiffs.slice(0, 60)) console.log("  GATED " + d);
 for (const d of accentDiffs.slice(0, 20)) console.log("  accent " + d);
 if (referenceOnlyTokens.size)
   console.log(`  reference-only (pending #1373/#1390): ${[...referenceOnlyTokens].join(", ")}`);
-if (missing.size) console.log(`MISSING: ${[...missing].join(", ")}`);
+if (missing.size) console.log(`MISSING (failure): ${missingReferenceTokens.join(", ")}`);
+if (refCaptureErrors.length) {
+  console.log(`REFERENCE CAPTURE ERRORS: ${refCaptureErrors.length}`);
+  for (const error of refCaptureErrors)
+    console.log(`  ${error.page} ${error.mode}: ${error.error}`);
+}
 console.log(
-  `\n${failed ? "FAIL" : "PASS"} — editor neutral-token dark/light 0-diff: ${gatedDiffs.length === 0}`,
+  `\n${failed ? "FAIL" : "PASS"} — editor neutral-token dark/light 0-diff: ${gatedDiffs.length === 0}; reference captures ${refCaptures.length}/${EXPECTED_REF_CAPTURE_COUNT}; capture errors ${refCaptureErrors.length}`,
 );
 process.exit(failed ? 1 : 0);

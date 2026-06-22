@@ -13,6 +13,7 @@
 // Run (from repo root): node docs/design-system/evidence/1300/a11y/axe-proof.mjs
 import { chromium } from "playwright";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +22,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const POST = readFileSync(resolve(REPO, CSS_PATH), "utf8");
+const POST_CSS_SHA256 = createHash("sha256").update(POST).digest("hex");
 const AXE_SRC = readFileSync(resolve(REPO, "node_modules/axe-core/axe.min.js"), "utf8");
 
 function git(args) {
@@ -84,6 +86,23 @@ const MODES = [
   { id: "06-forced-colors", theme: null, hc: null, media: { forcedColors: "active" } },
   { id: "07-reduced-motion", theme: null, hc: null, media: { reducedMotion: "reduce" } },
 ];
+const INCOMPLETE_DISPOSITIONS = {
+  "color-contrast": {
+    disposition:
+      "axe cannot fully resolve every CSS variable/color-mix/forced-colors pair in headless Chromium; computed contrast-sensitive selectors are covered by the rendered token parity gate and manual visual inspection notes.",
+    owner: "#1300 evidence gate",
+  },
+};
+
+function compactRules(rules) {
+  return rules.map((rule) => ({
+    id: rule.id,
+    impact: rule.impact ?? null,
+    tags: rule.tags,
+    nodes: rule.nodes.length,
+    targets: rule.nodes.slice(0, 4).map((node) => node.target.join(" ")),
+  }));
+}
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 1400 } });
@@ -91,9 +110,17 @@ const page = await ctx.newPage();
 
 const byMode = {};
 const allSeriousCritical = [];
+const unresolvedIncomplete = [];
+const deterministicChecksByMode = {};
 
 for (const mode of MODES) {
-  await page.emulateMedia({ colorScheme: "dark", ...mode.media });
+  await page.emulateMedia({
+    colorScheme: mode.theme === "light" ? "light" : "dark",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+    ...mode.media,
+  });
   await page.setContent(pageHtml(POST), { waitUntil: "load" });
   await page.evaluate(
     ({ theme, hc }) => {
@@ -119,32 +146,193 @@ for (const mode of MODES) {
         id: v.id,
         impact: v.impact,
         help: v.help,
+        tags: v.tags,
         nodes: v.nodes.length,
         targets: v.nodes.slice(0, 4).map((n) => n.target.join(" ")),
       })),
+      passes: r.passes,
+      incomplete: r.incomplete,
       passCount: r.passes.length,
       incompleteCount: r.incomplete.length,
+    };
+  });
+  const deterministicChecks = await page.evaluate(() => {
+    const visibleFocus = (node) => {
+      const candidates = [
+        node,
+        node.closest(".c-combo-input"),
+        node.closest(".c-tagfield"),
+        node.closest(".c-slider"),
+        node.closest(".c-check"),
+        node.closest(".c-radio"),
+      ].filter((candidate) => candidate instanceof HTMLElement);
+      return candidates.some((candidate) => {
+        const cs = getComputedStyle(candidate);
+        return (
+          cs.outlineStyle !== "none" ||
+          (cs.boxShadow !== "none" && cs.boxShadow !== "") ||
+          cs.borderColor === "Highlight" ||
+          cs.borderTopColor === "Highlight"
+        );
+      });
+    };
+    const accessibleName = (node) => {
+      const explicit = node.getAttribute("aria-label");
+      if (explicit !== null && explicit.trim().length > 0) return explicit.trim();
+      const labelledBy = node.getAttribute("aria-labelledby");
+      if (labelledBy !== null) {
+        const labelled = labelledBy
+          .split(/\s+/u)
+          .map((id) => document.getElementById(id)?.textContent ?? "")
+          .join(" ")
+          .replace(/\s+/gu, " ")
+          .trim();
+        if (labelled.length > 0) return labelled;
+      }
+      const label = node.closest("label")?.textContent?.replace(/\s+/gu, " ").trim();
+      if (label !== undefined && label.length > 0) return label;
+      return node.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+    };
+    const visibleFocusTargets = [
+      document.querySelector('input[aria-label="Opacity"]'),
+      document.querySelector('input[role="combobox"]'),
+      document.querySelector('.c-utab[role="tab"]'),
+      document.querySelector('.c-pager button[aria-current="page"]'),
+    ].filter((node) => node instanceof HTMLElement);
+    const focusResults = visibleFocusTargets.map((node) => {
+      node.focus();
+      const cs = getComputedStyle(node);
+      return {
+        tag: node.tagName.toLowerCase(),
+        role: node.getAttribute("role"),
+        ariaLabel: node.getAttribute("aria-label"),
+        outlineStyle: cs.outlineStyle,
+        boxShadow: cs.boxShadow,
+        wrapperFocus: visibleFocus(node),
+        hasVisibleFocus: visibleFocus(node),
+      };
+    });
+    const namedControls = [
+      ...document.querySelectorAll("button,input,a,[role='tab'],[role='option']"),
+    ]
+      .filter((node) => node instanceof HTMLElement)
+      .map((node) => ({
+        tag: node.tagName.toLowerCase(),
+        role: node.getAttribute("role"),
+        name: accessibleName(node),
+      }));
+    const animated = [
+      ...document.querySelectorAll(".c-check,.c-radio,.c-slider,.c-combo,.c-utab,.c-pager button"),
+    ]
+      .filter((node) => node instanceof HTMLElement)
+      .map((node) => {
+        const cs = getComputedStyle(node);
+        return {
+          selector: node.className || node.tagName.toLowerCase(),
+          transitionDuration: cs.transitionDuration,
+          animationDuration: cs.animationDuration,
+        };
+      });
+    const forcedColorProbe = getComputedStyle(
+      document.querySelector(".c-pager button") ?? document.body,
+    );
+    return {
+      mediaProbe: {
+        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        forcedColors: matchMedia("(forced-colors: active)").matches,
+        prefersContrast: matchMedia("(prefers-contrast: more)").matches,
+      },
+      noPositiveTabIndex: [...document.querySelectorAll("[tabindex]")].every((node) => {
+        const value = Number(node.getAttribute("tabindex"));
+        return !Number.isFinite(value) || value <= 0;
+      }),
+      namedControlCount: namedControls.filter((entry) => entry.name.length > 0).length,
+      unnamedControls: namedControls.filter((entry) => entry.name.length === 0),
+      focusResults,
+      allFocusTargetsVisible: focusResults.every((entry) => entry.hasVisibleFocus),
+      reducedMotionDurations: animated,
+      forcedColorProbe: {
+        color: forcedColorProbe.color,
+        backgroundColor: forcedColorProbe.backgroundColor,
+        borderTopColor: forcedColorProbe.borderTopColor,
+      },
     };
   });
   const seriousCritical = results.violations.filter(
     (v) => v.impact === "serious" || v.impact === "critical",
   );
   for (const v of seriousCritical) allSeriousCritical.push({ mode: mode.id, ...v });
+  const incomplete = compactRules(results.incomplete);
+  for (const item of incomplete) {
+    if (!(item.id in INCOMPLETE_DISPOSITIONS))
+      unresolvedIncomplete.push({ mode: mode.id, ...item });
+  }
+  deterministicChecksByMode[mode.id] = deterministicChecks;
   byMode[mode.id] = {
     seriousCriticalCount: seriousCritical.length,
     violationCount: results.violations.length,
     passCount: results.passCount,
     incompleteCount: results.incompleteCount,
+    passRules: compactRules(results.passes),
+    incomplete,
     violations: results.violations,
   };
   console.log(
-    `${mode.id}: ${results.violations.length} violations (${seriousCritical.length} serious/critical), ${results.passCount} passes`,
+    `${mode.id}: ${results.violations.length} violations (${seriousCritical.length} serious/critical), ${results.passCount} passes, ${results.incompleteCount} incomplete`,
   );
 }
 
 await browser.close();
 
-const failed = allSeriousCritical.length > 0;
+function durationSeconds(value) {
+  const trimmed = String(value).trim();
+  if (trimmed.endsWith("ms")) return Number.parseFloat(trimmed) / 1000;
+  if (trimmed.endsWith("s")) return Number.parseFloat(trimmed);
+  return Number(trimmed);
+}
+
+function maxDurationSeconds(durations) {
+  return Math.max(
+    0,
+    ...durations.flatMap((entry) =>
+      [entry.transitionDuration, entry.animationDuration].flatMap((value) =>
+        String(value)
+          .split(",")
+          .map(durationSeconds)
+          .filter((duration) => Number.isFinite(duration)),
+      ),
+    ),
+  );
+}
+
+function deterministicFailedForMode(modeId, checks) {
+  const expectedReducedMotion = modeId === "07-reduced-motion";
+  const expectedForcedColors = modeId === "06-forced-colors";
+  const expectedPrefersContrast = modeId === "05-prefers-contrast";
+  const reducedMotionOk =
+    checks.mediaProbe.reducedMotion === expectedReducedMotion &&
+    (!expectedReducedMotion || maxDurationSeconds(checks.reducedMotionDurations) <= 0.01);
+  const forcedColorsOk =
+    checks.mediaProbe.forcedColors === expectedForcedColors &&
+    (expectedForcedColors
+      ? checks.forcedColorProbe.borderTopColor !== "rgba(0, 0, 0, 0)"
+      : checks.forcedColorProbe.borderTopColor === "rgba(0, 0, 0, 0)");
+  return (
+    checks.noPositiveTabIndex !== true ||
+    checks.namedControlCount < 10 ||
+    checks.unnamedControls.length > 0 ||
+    checks.allFocusTargetsVisible !== true ||
+    !reducedMotionOk ||
+    !forcedColorsOk ||
+    checks.mediaProbe.prefersContrast !== expectedPrefersContrast
+  );
+}
+
+const deterministicFailed = Object.entries(deterministicChecksByMode).some(([modeId, checks]) =>
+  deterministicFailedForMode(modeId, checks),
+);
+const failed =
+  allSeriousCritical.length > 0 || unresolvedIncomplete.length > 0 || deterministicFailed;
 writeFileSync(
   resolve(HERE, "a11y-proof.json"),
   JSON.stringify(
@@ -152,11 +340,15 @@ writeFileSync(
       issue: 1300,
       epic: 1290,
       tool: `axe-core ${JSON.parse(readFileSync(resolve(REPO, "node_modules/axe-core/package.json"), "utf8")).version}`,
+      postCssSha256: POST_CSS_SHA256,
       run: { generatedAt: new Date().toISOString(), repoHeadSha: git(["rev-parse", "HEAD"]) },
-      gate: "zero serious/critical violations in every theme/contrast/motion mode",
+      gate: "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
       coverage:
         "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), " +
         "keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",
+      incompleteDispositions: INCOMPLETE_DISPOSITIONS,
+      unresolvedIncomplete,
+      deterministicChecksByMode,
       seriousCriticalTotal: allSeriousCritical.length,
       seriousCritical: allSeriousCritical,
       byMode,
@@ -168,8 +360,10 @@ writeFileSync(
 );
 
 console.log(
-  `\n${failed ? "FAIL" : "PASS"} — serious/critical violations: ${allSeriousCritical.length}`,
+  `\n${failed ? "FAIL" : "PASS"} — serious/critical violations: ${allSeriousCritical.length}; unresolved incomplete: ${unresolvedIncomplete.length}; deterministic checks: ${deterministicFailed ? "FAIL" : "PASS"}`,
 );
 for (const v of allSeriousCritical.slice(0, 40))
   console.log(`  [${v.mode}] ${v.id} (${v.impact}) ${v.help} — ${v.targets.join(", ")}`);
+for (const v of unresolvedIncomplete.slice(0, 40))
+  console.log(`  [${v.mode}] unresolved incomplete ${v.id} — ${v.targets.join(", ")}`);
 process.exit(failed ? 1 : 0);

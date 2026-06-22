@@ -12,13 +12,15 @@
  * Each assertion is crafted so that reverting the specific fix causes the test
  * to fail (mutation-robustness).
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(resolve(here, "globals.css"), "utf8");
+const currentCssSha256 = createHash("sha256").update(css).digest("hex");
 const evidenceHarness1297 = readFileSync(
   resolve(here, "../../../..", "docs/design-system/evidence/1297/equivalence-harness.mjs"),
   "utf8",
@@ -3447,6 +3449,7 @@ describe("Issue #1299 — component state matrix", () => {
 
 interface Issue1300ConsolidatedProof {
   readonly verdict: string;
+  readonly postCssSha256: string;
   readonly referenceFiles: readonly string[];
   readonly groupR: { readonly totalProbes: number; readonly gatedDiffCount: number };
   readonly missingSelectors: readonly string[];
@@ -3455,21 +3458,112 @@ interface Issue1300ConsolidatedProof {
     readonly focusProof: { readonly activeIsBack: boolean; readonly hasFocusRing: boolean };
     readonly nameRoleValue: { readonly comboRole: string; readonly gridSort: string };
   };
-  readonly boundedRowSmoke: { readonly ok: boolean; readonly rowCount: number };
+  readonly boundedRowSmoke: {
+    readonly ok: boolean;
+    readonly rowCount: number;
+    readonly durationMs: number;
+    readonly afterScrollTop: number;
+    readonly scrollHeight: number;
+    readonly clientHeight: number;
+    readonly stickyHeaderDeltaPx: number;
+  };
+  readonly missingSelectorCount: number;
+  readonly missingSelectors: readonly string[];
 }
 interface Issue1300EditorProof {
   readonly verdict: string;
+  readonly postCssSha256: string;
   readonly tokenFidelity: { readonly totalProbes: number; readonly gatedDiffCount: number };
   readonly accentDerived: { readonly tokens: readonly string[] };
   readonly referenceOnly: {
     readonly tokens: readonly string[];
     readonly ownerEpics: readonly string[];
   };
+  readonly referenceCaptureSummary: {
+    readonly expectedCount: number;
+    readonly actualCount: number;
+    readonly errorCount: number;
+  };
+  readonly missingReferenceTokenCount: number;
 }
 interface Issue1300A11yProof {
   readonly verdict: string;
+  readonly postCssSha256: string;
   readonly seriousCriticalTotal: number;
-  readonly byMode: Record<string, { readonly seriousCriticalCount: number }>;
+  readonly unresolvedIncomplete: readonly unknown[];
+  readonly deterministicChecksByMode: Record<
+    string,
+    {
+      readonly mediaProbe: {
+        readonly reducedMotion: boolean;
+        readonly forcedColors: boolean;
+        readonly prefersContrast: boolean;
+      };
+      readonly noPositiveTabIndex: boolean;
+      readonly namedControlCount: number;
+      readonly unnamedControls: readonly unknown[];
+      readonly allFocusTargetsVisible: boolean;
+      readonly reducedMotionDurations: readonly {
+        readonly transitionDuration: string;
+        readonly animationDuration: string;
+      }[];
+      readonly forcedColorProbe: {
+        readonly borderTopColor: string;
+      };
+    }
+  >;
+  readonly byMode: Record<
+    string,
+    {
+      readonly seriousCriticalCount: number;
+      readonly incompleteCount: number;
+      readonly passRules: readonly unknown[];
+      readonly incomplete: readonly unknown[];
+    }
+  >;
+}
+interface Issue1300BrowserManifest {
+  readonly shotCount: number;
+  readonly modes: readonly string[];
+  readonly viewports: readonly string[];
+  readonly scenarios: readonly {
+    readonly id: string;
+    readonly requiredSelectors: readonly string[];
+  }[];
+  readonly manifest: readonly {
+    readonly file: string;
+    readonly scenario: string;
+    readonly viewport: string;
+    readonly mode: string;
+    readonly requiredSelectors: readonly string[];
+    readonly hasShell: boolean;
+    readonly windowCount: number;
+    readonly missingRequiredSelectors: readonly string[];
+    readonly pageErrors: readonly string[];
+  }[];
+}
+
+function cssDurationSeconds(value: string): number {
+  const trimmed = value.trim();
+  if (trimmed.endsWith("ms")) return Number.parseFloat(trimmed) / 1000;
+  if (trimmed.endsWith("s")) return Number.parseFloat(trimmed);
+  return Number(trimmed);
+}
+
+function maxCssDurationSeconds(
+  durations: readonly { readonly transitionDuration: string; readonly animationDuration: string }[],
+): number {
+  return Math.max(
+    0,
+    ...durations.flatMap((entry) =>
+      [entry.transitionDuration, entry.animationDuration].flatMap((value) =>
+        value
+          .split(",")
+          .map(cssDurationSeconds)
+          .filter((duration) => Number.isFinite(duration)),
+      ),
+    ),
+  );
 }
 
 describe("Issue #1300 — consolidated visual-regression + designer-acceptance gate", () => {
@@ -3483,6 +3577,9 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
   const a11yProof = JSON.parse(
     readFileSync(resolve(evidenceDir, "a11y/a11y-proof.json"), "utf8"),
   ) as unknown as Issue1300A11yProof;
+  const browserManifest = JSON.parse(
+    readFileSync(resolve(evidenceDir, "browser/manifest.json"), "utf8"),
+  ) as unknown as Issue1300BrowserManifest;
   const visualRegressionMd = readFileSync(
     resolve(here, "../../../..", "docs/design-system/visual-regression.md"),
     "utf8",
@@ -3500,9 +3597,15 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
   it("the consolidated component fidelity proof passes with zero gated diffs", () => {
     expect(consolidatedProof.verdict, "consolidated harness must record PASS").toBe("PASS");
     expect(
+      consolidatedProof.postCssSha256,
+      "committed consolidated proof must be generated from the current globals.css",
+    ).toBe(currentCssSha256);
+    expect(
       consolidatedProof.groupR.gatedDiffCount,
       "every neutral migrated surface must resolve identically to the DS reference (dark+light)",
     ).toBe(0);
+    expect(consolidatedProof.missingSelectorCount, "missing selectors must fail the proof").toBe(0);
+    expect(consolidatedProof.missingSelectors).toEqual([]);
     expect(
       consolidatedProof.groupR.totalProbes,
       "the consolidated gate must cover the full migrated-surface union, not a token sample",
@@ -3534,7 +3637,11 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
   // ── 2. Accessibility + performance smokes are green ───────────────────────────
   it("the accessibility proof records zero serious/critical violations in every mode", () => {
     expect(a11yProof.verdict).toBe("PASS");
+    expect(a11yProof.postCssSha256, "committed a11y proof must pin current globals.css").toBe(
+      currentCssSha256,
+    );
     expect(a11yProof.seriousCriticalTotal).toBe(0);
+    expect(a11yProof.unresolvedIncomplete).toEqual([]);
     const modes = Object.keys(a11yProof.byMode);
     expect(modes.length, "axe must run across the full 7-mode matrix").toBe(7);
     for (const [mode, r] of Object.entries(a11yProof.byMode)) {
@@ -3542,6 +3649,56 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
         r.seriousCriticalCount,
         `mode ${mode} must have no serious/critical a11y violation`,
       ).toBe(0);
+      expect(
+        r.passRules.length,
+        `mode ${mode} must serialize rule-level pass evidence`,
+      ).toBeGreaterThan(20);
+    }
+    for (const [mode, checks] of Object.entries(a11yProof.deterministicChecksByMode)) {
+      const expectedReducedMotion = mode === "07-reduced-motion";
+      const expectedForcedColors = mode === "06-forced-colors";
+      const expectedPrefersContrast = mode === "05-prefers-contrast";
+      expect(
+        checks.mediaProbe.reducedMotion,
+        `mode ${mode} must explicitly set/reset prefers-reduced-motion`,
+      ).toBe(expectedReducedMotion);
+      expect(
+        checks.mediaProbe.forcedColors,
+        `mode ${mode} must explicitly set/reset forced-colors`,
+      ).toBe(expectedForcedColors);
+      expect(
+        checks.mediaProbe.prefersContrast,
+        `mode ${mode} must explicitly set/reset prefers-contrast`,
+      ).toBe(expectedPrefersContrast);
+      expect(checks.noPositiveTabIndex, `mode ${mode} must not contain positive tabindex`).toBe(
+        true,
+      );
+      expect(
+        checks.namedControlCount,
+        `mode ${mode} must expose named controls`,
+      ).toBeGreaterThanOrEqual(10);
+      expect(checks.unnamedControls, `mode ${mode} must not expose unnamed controls`).toEqual([]);
+      expect(
+        checks.allFocusTargetsVisible,
+        `mode ${mode} must keep visible focus indicators on representative controls`,
+      ).toBe(true);
+      if (expectedReducedMotion) {
+        expect(
+          maxCssDurationSeconds(checks.reducedMotionDurations),
+          `mode ${mode} must prove representative transitions/animations are reduced`,
+        ).toBeLessThanOrEqual(0.01);
+      }
+      if (expectedForcedColors) {
+        expect(
+          checks.forcedColorProbe.borderTopColor,
+          `mode ${mode} must activate forced-colors styling`,
+        ).not.toBe("rgba(0, 0, 0, 0)");
+      } else {
+        expect(
+          checks.forcedColorProbe.borderTopColor,
+          `mode ${mode} must reset forced-colors styling`,
+        ).toBe("rgba(0, 0, 0, 0)");
+      }
     }
   });
 
@@ -3552,15 +3709,96 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     expect(consolidatedProof.accessibilityProof.nameRoleValue.gridSort).toBe("descending");
     expect(consolidatedProof.boundedRowSmoke.ok).toBe(true);
     expect(consolidatedProof.boundedRowSmoke.rowCount).toBe(250);
+    expect(consolidatedProof.boundedRowSmoke.durationMs).toBeLessThanOrEqual(250);
+    expect(consolidatedProof.boundedRowSmoke.afterScrollTop).toBeGreaterThan(0);
+    expect(consolidatedProof.boundedRowSmoke.scrollHeight).toBeGreaterThan(
+      consolidatedProof.boundedRowSmoke.clientHeight,
+    );
+    expect(consolidatedProof.boundedRowSmoke.stickyHeaderDeltaPx).toBeLessThanOrEqual(4);
+  });
+
+  it("the running-app browser bundle covers shell plus seeded high-traffic workspace windows", () => {
+    expect(browserManifest.modes).toEqual([
+      "dark",
+      "light",
+      "dark-hc",
+      "light-hc",
+      "reduced-motion",
+      "forced-colors",
+    ]);
+    expect(browserManifest.viewports).toEqual(["desktop", "tablet", "mobile"]);
+    const expectedScenarios = [
+      "shell",
+      "workspace-chat-quality",
+      "workspace-files-editor",
+      "workspace-memory-relationships",
+    ];
+    expect(browserManifest.scenarios.map((scenario) => scenario.id).sort()).toEqual(
+      expectedScenarios,
+    );
+    expect(browserManifest.shotCount).toBe(72);
+    expect(browserManifest.manifest.length).toBe(72);
+    const expectedCells = new Set(
+      browserManifest.viewports.flatMap((viewport) =>
+        browserManifest.modes.flatMap((mode) =>
+          browserManifest.scenarios.map((scenario) => `${viewport}/${mode}/${scenario.id}`),
+        ),
+      ),
+    );
+    const seenCells = new Set<string>();
+    for (const shot of browserManifest.manifest) {
+      const cell = `${shot.viewport}/${shot.mode}/${shot.scenario}`;
+      expect(expectedCells.has(cell), `${cell} must be a declared viewport/mode/scenario`).toBe(
+        true,
+      );
+      expect(seenCells.has(cell), `${cell} must be unique in the screenshot manifest`).toBe(false);
+      seenCells.add(cell);
+      expect(shot.file, `${cell} must use the deterministic screenshot filename`).toBe(
+        `${shot.viewport}__${shot.scenario}__${shot.mode}.png`,
+      );
+      const screenshotPath = resolve(evidenceDir, "browser", shot.file);
+      expect(existsSync(screenshotPath), `${shot.file} must be committed with the manifest`).toBe(
+        true,
+      );
+      expect(readFileSync(screenshotPath).length, `${shot.file} must not be empty`).toBeGreaterThan(
+        0,
+      );
+      expect(
+        shot.hasShell,
+        `${shot.viewport}/${shot.mode}/${shot.scenario} must render shell`,
+      ).toBe(true);
+      expect(
+        shot.pageErrors,
+        `${shot.viewport}/${shot.mode}/${shot.scenario} must have no page errors`,
+      ).toEqual([]);
+      expect(
+        shot.missingRequiredSelectors,
+        `${shot.viewport}/${shot.mode}/${shot.scenario} must render every required selector`,
+      ).toEqual([]);
+      if (shot.scenario !== "shell") {
+        expect(
+          shot.windowCount,
+          `${shot.viewport}/${shot.mode} high-traffic shot must render seeded windows`,
+        ).toBeGreaterThanOrEqual(shot.requiredSelectors.length);
+      }
+    }
+    expect([...seenCells].sort()).toEqual([...expectedCells].sort());
   });
 
   // ── 3. Editor matrix gate + carried-forward variance ──────────────────────────
   it("the editor token-fidelity proof passes with zero gated diffs", () => {
     expect(editorProof.verdict, "editor harness must record PASS").toBe("PASS");
+    expect(editorProof.postCssSha256, "committed editor proof must pin current globals.css").toBe(
+      currentCssSha256,
+    );
     expect(
       editorProof.tokenFidelity.gatedDiffCount,
       "every product-defined editor token must resolve identically to the DS editor reference",
     ).toBe(0);
+    expect(editorProof.missingReferenceTokenCount).toBe(0);
+    expect(editorProof.referenceCaptureSummary.expectedCount).toBe(14);
+    expect(editorProof.referenceCaptureSummary.actualCount).toBe(14);
+    expect(editorProof.referenceCaptureSummary.errorCount).toBe(0);
     expect(editorProof.tokenFidelity.totalProbes).toBeGreaterThanOrEqual(150);
   });
 

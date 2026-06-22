@@ -47,8 +47,10 @@ evidence, and CI gates established by ADR-0049, ADR-0050, and the upstream archi
 
 2. **The screenshot bundle must cover the full matrix and always include Light Mode.** Running-app captures
    (`evidence/1300/browser/`) span Dark, Light, High Contrast, reduced-motion, and forced-colors at desktop,
-   tablet, and mobile widths. Light Mode is mandatory in every screenshot matrix and acceptance checklist;
-   evidence that omits Light Mode is rejected.
+   tablet, and mobile widths. They cover both the empty shell and deterministic seeded `keiko.workspace.v4`
+   high-traffic workspaces (chat / Quality Intelligence / Local Knowledge, MemoriaViva / Relationships, and
+   Files / Editor). Light Mode is mandatory in every screenshot matrix and acceptance checklist; evidence that
+   omits Light Mode, records page errors, or misses required selectors is rejected.
 
 3. **A dedicated editor matrix is required.** Editor token-tier fidelity
    (`evidence/1300/editor/capture.mjs`) gates the `--ed-*` tokens the product defines to **0-diff in Dark and
@@ -60,7 +62,8 @@ evidence, and CI gates established by ADR-0049, ADR-0050, and the upstream archi
 4. **Accessibility is proven across every mode.** An axe-core run (`evidence/1300/a11y/axe-proof.mjs`) over the
    component union asserts **zero serious or critical WCAG 2.1 A/AA violations** in each of the seven
    theme/contrast/motion modes, covering contrast, name/role/value, keyboard semantics, reduced-motion, and
-   forced-colors. Any serious/critical violation fails the run.
+   forced-colors. Any serious/critical violation fails the run; any incomplete axe result also fails unless it
+   has a checked-in owner/disposition.
 
 5. **Visual automation carries a performance smoke.** Any rendering/visual-automation change must keep a
    bounded interaction proof green (the harness scrolls a bounded 250-row sticky table and asserts the sticky
@@ -90,7 +93,8 @@ evidence, and CI gates established by ADR-0049, ADR-0050, and the upstream archi
 
 - Epic #1290 can be closed on objective, reproducible evidence: 427 component probes and 160 editor-token
   probes at 0 gated diffs, 0 serious/critical accessibility violations across seven modes, a bounded
-  performance smoke, and a Light-inclusive screenshot bundle, all re-runnable by future contributors.
+  performance smoke, and a Light-inclusive shell plus high-traffic screenshot bundle, all re-runnable by future
+  contributors.
 - The consolidated harness is a superset of the per-child harnesses, so a future change that drifts any one
   migrated layer fails a single gate rather than slipping between per-surface proofs.
 - The variance register makes the only two real gaps explicit: the approved accent primitive delta (no action)
