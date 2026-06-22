@@ -515,11 +515,13 @@ const perfFailed =
   boundedRowSmoke.ok !== true ||
   boundedRowSmoke.rowCount !== 250 ||
   boundedRowSmoke.afterScrollTop <= 0 ||
+  boundedRowSmoke.scrollHeight <= boundedRowSmoke.clientHeight ||
   boundedRowSmoke.durationMs > 250 ||
   boundedRowSmoke.stickyHeaderDeltaPx > 4;
 // A missing probe selector (e.g. a migrated surface was renamed away) must FAIL the gate, not pass
 // silently — otherwise a dropped surface would still record PASS with fewer probes.
-const failed = rDiffsGated.length > 0 || focusFailed || perfFailed || missing.size > 0;
+const missingSelectors = [...missing].sort();
+const failed = rDiffsGated.length > 0 || missingSelectors.length > 0 || focusFailed || perfFailed;
 
 writeFileSync(
   resolve(HERE, "consolidated-fidelity-proof.json"),
@@ -529,6 +531,14 @@ writeFileSync(
       epic: 1290,
       postCssSha256: POST_CSS_SHA256,
       referenceFiles: REFERENCE_FILES,
+      referenceFileSha256: Object.fromEntries(
+        REFERENCE_FILES.map((file) => [
+          file,
+          createHash("sha256")
+            .update(readFileSync(resolve(DS_DIR, file), "utf8"))
+            .digest("hex"),
+        ]),
+      ),
       run: {
         startedAt: RUN_STARTED_AT,
         generatedAt: new Date().toISOString(),
@@ -555,7 +565,8 @@ writeFileSync(
       },
       accessibilityProof,
       boundedRowSmoke,
-      missingSelectors: [...missing],
+      missingSelectorCount: missingSelectors.length,
+      missingSelectors,
       byMode,
       verdict: failed ? "FAIL" : "PASS",
     },
@@ -570,8 +581,8 @@ console.log(
 for (const d of rDiffsGated.slice(0, 60)) console.log("  GATED " + d);
 for (const d of rDiffsRecorded.slice(0, 20)) console.log("  recorded " + d);
 if (missing.size) {
-  console.log(`MISSING (skipped): ${missing.size}`);
-  for (const m of missing) console.log("  " + m);
+  console.log(`MISSING (failure): ${missing.size}`);
+  for (const m of missingSelectors) console.log("  " + m);
 }
 console.log(
   `ACCESSIBILITY: back-button focus=${accessibilityProof.focusProof.activeIsBack} ring=${accessibilityProof.focusProof.hasFocusRing}; combo role=${accessibilityProof.nameRoleValue.comboRole}; grid sort=${accessibilityProof.nameRoleValue.gridSort}`,
@@ -580,6 +591,6 @@ console.log(
   `BOUNDED ROW SMOKE: ${boundedRowSmoke.rowCount} rows, ${boundedRowSmoke.durationMs.toFixed(2)}ms, sticky delta ${boundedRowSmoke.stickyHeaderDeltaPx.toFixed(2)}px`,
 );
 console.log(
-  `\n${failed ? "FAIL" : "PASS"} — Group R dark/light 0-diff: ${rDiffsGated.length === 0}; a11y proof: ${!focusFailed}; bounded-row smoke: ${!perfFailed}`,
+  `\n${failed ? "FAIL" : "PASS"} — Group R dark/light 0-diff: ${rDiffsGated.length === 0}; missing selectors: ${missingSelectors.length}; a11y proof: ${!focusFailed}; bounded-row smoke: ${!perfFailed}`,
 );
 process.exit(failed ? 1 : 0);
