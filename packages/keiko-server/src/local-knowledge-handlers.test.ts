@@ -99,6 +99,26 @@ function chatCapability(modelId: string): NonNullable<GatewayConfig["capabilitie
   };
 }
 
+function embeddingCapability(modelId: string): NonNullable<GatewayConfig["capabilities"]>[number] {
+  return {
+    id: modelId,
+    kind: "embedding",
+    contextWindow: 8_191,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "runtime-configured embedding endpoint",
+    preferredUseCases: ["Embeddings"],
+    knownLimitations: ["None"],
+  };
+}
+
 function depsFor(tmp: string, override?: string | GatewayConfig): UiHandlerDeps {
   const config =
     typeof override === "string" || override === undefined
@@ -1606,6 +1626,84 @@ describe("local-knowledge handlers", () => {
       };
     };
     expect(body.capsule.embeddingModelIdentity.modelId).toBe("text-embedding-3-small");
+    expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
+  });
+
+  it("falls back to a later healthy embedding provider when the first LiteLLM embedding is unhealthy", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seenModelIds: string[] = [];
+    const unhealthyModelId = "multilingual-e5-large";
+    const healthyModelId = "Qwen3-Embedding-8B";
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp, healthyModelId),
+      config: {
+        providers: [
+          {
+            modelId: "gpt-oss-120b",
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "redacted",
+            timeoutMs: 30_000,
+            maxRetries: 1,
+            retryBaseDelayMs: 100,
+          },
+          {
+            modelId: unhealthyModelId,
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "redacted",
+            timeoutMs: 30_000,
+            maxRetries: 1,
+            retryBaseDelayMs: 100,
+          },
+          {
+            modelId: healthyModelId,
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "redacted",
+            timeoutMs: 30_000,
+            maxRetries: 1,
+            retryBaseDelayMs: 100,
+          },
+        ],
+        capabilities: [
+          chatCapability("gpt-oss-120b"),
+          embeddingCapability(unhealthyModelId),
+          embeddingCapability(healthyModelId),
+        ],
+        circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      },
+      localKnowledgeEmbeddingRequest: vi.fn(
+        (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+          seenModelIds.push(request.modelId);
+          if (request.modelId === unhealthyModelId) {
+            return Promise.resolve({ ok: false as const, kind: "unsupported-model" as const });
+          }
+          return Promise.resolve({
+            ok: true as const,
+            value: {
+              vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
+              modelId: request.modelId,
+            },
+          });
+        },
+      ),
+    };
+
+    const result = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "LiteLLM Fallback Capsule" }),
+      deps,
+    );
+
+    expect(result.status).toBe(201);
+    expect(seenModelIds).toEqual([unhealthyModelId, healthyModelId]);
+    const body = result.body as {
+      readonly capsule: {
+        readonly embeddingModelIdentity: {
+          readonly modelId: string;
+          readonly vectorDimensions: number;
+        };
+      };
+    };
+    expect(body.capsule.embeddingModelIdentity.modelId).toBe(healthyModelId);
     expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
   });
 

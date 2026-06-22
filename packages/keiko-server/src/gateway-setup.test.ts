@@ -23,6 +23,7 @@ import {
   isExplicitlyNonChatModel,
   modelIdFromDiscoveryItem,
   normalizeDiscoveryPayload,
+  normalizeDiscoveryPayloadForSetup,
   smokeTestCandidates,
 } from "./gateway-setup.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
@@ -128,6 +129,69 @@ describe("handleGatewaySetup", () => {
       expect(statSync(savedPath ?? "").mode & 0o777).toBe(0o600);
       expect(statSync(savedPath ?? "").ino).not.toBe(initialStat.ino);
     }
+    deps.store.close();
+  });
+
+  it("persists an optional gateway request timeout for slow OpenAI-compatible deployments", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-timeout-");
+    const evidenceDir = await tempDir("keiko-gw-ev-timeout-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "example-secret-token",
+        timeoutMs: 120_000,
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.providers[0]?.timeoutMs).toBe(120_000);
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    expect(saved).toContain('"timeoutMs": 120000');
+    deps.store.close();
+  });
+
+  it("updates only the gateway request timeout without re-running setup smoke tests", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-timeout-update-");
+    const evidenceDir = await tempDir("keiko-gw-ev-timeout-update-");
+    let smokeCalls = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => {
+        smokeCalls += 1;
+        return Promise.resolve([modelIds[0] ?? "example-chat-model"]);
+      },
+    });
+
+    const first = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+    expect(smokeCalls).toBe(1);
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, timeoutMs: 120_000 }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    expect(smokeCalls).toBe(1);
+    expect(currentGatewayConfig(deps)?.providers[0]?.timeoutMs).toBe(120_000);
     deps.store.close();
   });
 
@@ -676,7 +740,7 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
-      expect(seenModels).toEqual(["phi-4", "text-embedding-3-large", "gpt-oss-120b"]);
+      expect(seenModels).toEqual(["phi-4", "gpt-oss-120b"]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "phi-4",
         "gpt-oss-120b",
@@ -756,11 +820,7 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
-      expect(seen.map((call) => call.model)).toEqual([
-        "Mistral-Large-3",
-        "gpt-5.4",
-        "text-embedding-3-large",
-      ]);
+      expect(seen.map((call) => call.model)).toEqual(["Mistral-Large-3", "gpt-5.4"]);
       expect(seen.every((call) => call.firstRole === "system")).toBe(true);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "gpt-5.4",
@@ -791,7 +851,7 @@ describe("handleGatewaySetup", () => {
     }
   });
 
-  it("uses LiteLLM model info to filter non-chat models before smoke testing", async () => {
+  it("uses LiteLLM model info to persist embeddings while smoke-testing only chat models", async () => {
     const uiDir = await tempDir("keiko-gw-ui-litellm-");
     const evidenceDir = await tempDir("keiko-gw-ev-litellm-");
     const originalFetch = globalThis.fetch;
@@ -872,10 +932,18 @@ describe("handleGatewaySetup", () => {
       ).toBe(true);
       expect(
         currentGatewayConfig(deps)?.providers.map((provider) => provider.apiKeyHeaderName),
-      ).toEqual(["x-litellm-key", "x-litellm-key"]);
+      ).toEqual(["x-litellm-key", "x-litellm-key", "x-litellm-key"]);
+      const config = currentGatewayConfig(deps);
+      expect(config?.providers.map((provider) => provider.modelId)).toEqual([
+        "litellm-chat-large",
+        "litellm-unknown-mode",
+        "litellm-embedding",
+      ]);
+      expect(selectEmbeddingModelId(config)).toBe("litellm-embedding");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
-      expect(saved).not.toContain("litellm-embedding");
+      expect(saved).toContain("litellm-embedding");
+      expect(saved).toContain('"kind": "embedding"');
       expect(saved).not.toContain("litellm-image");
     } finally {
       globalThis.fetch = originalFetch;
@@ -1057,7 +1125,7 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("production setup discovers models and stores only chat-callable models", async () => {
+  it("production setup discovers models and stores chat plus embedding-capable models", async () => {
     const uiDir = await tempDir("keiko-gw-ui-all-");
     const evidenceDir = await tempDir("keiko-gw-ev-all-");
     const originalFetch = globalThis.fetch;
@@ -1119,11 +1187,7 @@ describe("handleGatewaySetup", () => {
         deps,
       );
       expect(result.status).toBe(200);
-      expect(seenModels).toEqual([
-        "example-chat-model-large",
-        "example-chat-model-fast",
-        "example-embedding-model",
-      ]);
+      expect(seenModels).toEqual(["example-chat-model-large", "example-chat-model-fast"]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "example-chat-model-large",
         "example-chat-model-fast",
@@ -1131,7 +1195,9 @@ describe("handleGatewaySetup", () => {
       expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
         "example-chat-model-large",
         "example-chat-model-fast",
+        "example-embedding-model",
       ]);
+      expect(selectEmbeddingModelId(currentGatewayConfig(deps))).toBe("example-embedding-model");
       expect(deps.gatewayConfig?.present()).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
@@ -1150,17 +1216,21 @@ describe("normalizeDiscoveryPayload", () => {
     expect(normalizeDiscoveryPayload(payload)).toEqual(["test-chat-1", "test-chat-2"]);
   });
 
-  it("drops LiteLLM model_info.mode === 'embedding'", () => {
+  it("keeps LiteLLM model_info.mode === 'embedding' for Local Knowledge", () => {
     const payload = {
       data: [
         { model_name: "x", model_info: { mode: "chat" } },
         { model_name: "y", model_info: { mode: "embedding" } },
       ],
     };
-    expect(normalizeDiscoveryPayload(payload)).toEqual(["x"]);
+    expect(normalizeDiscoveryPayload(payload)).toEqual(["x", "y"]);
+    expect(normalizeDiscoveryPayloadForSetup(payload)).toMatchObject({
+      chatModelIds: ["x"],
+      embeddingModelIds: ["y"],
+    });
   });
 
-  it("drops LiteLLM litellm_params.mode that is not chat-compatible", () => {
+  it("keeps LiteLLM embedding params but drops unsupported non-chat modes", () => {
     const payload = {
       data: [
         { model_name: "chat-via-params", litellm_params: { mode: "chat" } },
@@ -1168,7 +1238,11 @@ describe("normalizeDiscoveryPayload", () => {
         { model_name: "audio-via-params", litellm_params: { mode: "audio_transcription" } },
       ],
     };
-    expect(normalizeDiscoveryPayload(payload)).toEqual(["chat-via-params"]);
+    expect(normalizeDiscoveryPayload(payload)).toEqual(["chat-via-params", "embedding-via-params"]);
+    expect(normalizeDiscoveryPayloadForSetup(payload)).toMatchObject({
+      chatModelIds: ["chat-via-params"],
+      embeddingModelIds: ["embedding-via-params"],
+    });
   });
 
   it("drops entries with capabilities.chat_completion === false", () => {
@@ -1232,10 +1306,10 @@ describe("modelIdFromDiscoveryItem", () => {
     expect(modelIdFromDiscoveryItem({ id: "test-chat-1" })).toBe("test-chat-1");
   });
 
-  it("returns undefined for an explicitly non-chat record", () => {
+  it("returns the id for an explicitly embedding record", () => {
     expect(
       modelIdFromDiscoveryItem({ id: "test-embed-1", model_info: { mode: "embedding" } }),
-    ).toBeUndefined();
+    ).toBe("test-embed-1");
   });
 
   it("returns undefined for non-record input", () => {

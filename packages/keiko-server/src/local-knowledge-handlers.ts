@@ -969,9 +969,23 @@ function storedProviderMatchesConfiguredProvider(
 export function selectEmbeddingModelId(
   config: EmbeddingSelectionConfig | null | undefined,
 ): string | undefined {
-  if (config === undefined || config === null || config.providers.length === 0) return undefined;
-  return config.providers.find((provider) => isConfiguredEmbeddingModel(config, provider.modelId))
-    ?.modelId;
+  return configuredEmbeddingModelIds(config)[0];
+}
+
+export function configuredEmbeddingModelIds(
+  config: EmbeddingSelectionConfig | null | undefined,
+): readonly string[] {
+  if (config === undefined || config === null || config.providers.length === 0) return [];
+  return config.providers
+    .filter((provider) => isConfiguredEmbeddingModel(config, provider.modelId))
+    .map((provider) => provider.modelId);
+}
+
+export function configuredEmbeddingProviders(
+  config: GatewayConfig | undefined,
+): readonly ModelProviderConfig[] {
+  if (config === undefined || config.providers.length === 0) return [];
+  return config.providers.filter((provider) => isConfiguredEmbeddingModel(config, provider.modelId));
 }
 
 function createCapsuleStorageReference(capsuleId: string): string {
@@ -1016,8 +1030,8 @@ async function resolveNewCapsuleEmbeddingIdentity(
   | { readonly ok: false; readonly result: RouteResult }
 > {
   const config = currentGatewayConfig(deps);
-  const configuredModelId = selectEmbeddingModelId(config);
-  if (configuredModelId === undefined) {
+  const providers = configuredEmbeddingProviders(config);
+  if (providers.length === 0) {
     return {
       ok: false,
       result: conflict(
@@ -1025,16 +1039,23 @@ async function resolveNewCapsuleEmbeddingIdentity(
       ),
     };
   }
-  const provider = configuredEmbeddingProvider(config, configuredModelId);
-  if (provider === undefined) {
-    return {
-      ok: false,
-      result: conflict(
-        "No configured embedding-capable model is available for new capsules. Configure the Model Gateway first.",
-      ),
-    };
+  let lastFailure: RouteResult | undefined;
+  for (const provider of providers) {
+    const verified = await verifiedNewCapsuleEmbeddingIdentity(deps, provider);
+    if (verified.ok) {
+      return verified;
+    }
+    lastFailure = verified.result;
   }
-  return verifiedNewCapsuleEmbeddingIdentity(deps, provider);
+  if (lastFailure !== undefined) {
+    return { ok: false, result: lastFailure };
+  }
+  return {
+    ok: false,
+    result: conflict(
+      "No configured embedding-capable model is available for new capsules. Configure the Model Gateway first.",
+    ),
+  };
 }
 
 function latestRunningJobId(

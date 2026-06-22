@@ -88,6 +88,14 @@ export interface RuntimeGatewayConfig {
   set(config: GatewayConfig | undefined, present: boolean): void;
 }
 
+export interface GatewayDiscoveredModels {
+  readonly modelIds: readonly string[];
+  readonly chatModelIds: readonly string[];
+  readonly embeddingModelIds: readonly string[];
+}
+
+export type GatewayModelDiscoveryOutput = readonly string[] | GatewayDiscoveredModels;
+
 export interface UiHandlerDeps {
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
   readonly config: GatewayConfig | undefined;
@@ -141,7 +149,7 @@ export interface UiHandlerDeps {
         apiKey: string,
         apiKeyHeaderName?: string,
         egress?: GatewayEgressConfig,
-      ) => Promise<readonly string[]>)
+      ) => Promise<GatewayModelDiscoveryOutput>)
     | undefined;
   // Test seam for Figma PAT setup. Production performs a bounded Figma /v1/me request.
   readonly figmaCredentialTester?:
@@ -205,7 +213,7 @@ export interface BuildHandlerDepsOptions {
         apiKey: string,
         apiKeyHeaderName?: string,
         egress?: GatewayEgressConfig,
-      ) => Promise<readonly string[]>)
+      ) => Promise<GatewayModelDiscoveryOutput>)
     | undefined;
   // Optional Figma credential-test seam (tests); production calls Figma /v1/me.
   readonly figmaCredentialTester?:
