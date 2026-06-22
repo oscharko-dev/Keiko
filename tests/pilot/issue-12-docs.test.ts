@@ -61,8 +61,10 @@ function expectPruneBeforePackageSurface(jobBlock: string): void {
 // added `arch:check:negative` immediately after `arch:check` so rule deletions are caught in
 // the publish path, not only in CI. Release fix #895 adds native optional dependency pruning
 // before architecture/package-surface checks so publisher-machine canvas payloads cannot leak
-// into the bundled artifact. The pin stays "exact" against the live `package.json`; it does
-// not lock the chain to a particular historical length.
+// into the bundled artifact. Release hardening for 0.2.0 adds `check:publish-manifests` so
+// workspace packages cannot reach npm with private runtime packages or wildcard internal
+// dependency specs. The pin stays "exact" against the live `package.json`; it does not lock the
+// chain to a particular historical length.
 const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
@@ -73,6 +75,7 @@ const PACKAGE_SURFACE_CHAIN = [
   "npm run arch:check:negative",
   "npm run check:package-surface",
   "npm run check:version-consistency",
+  "npm run check:publish-manifests",
   "npm run check:qi-supply-chain",
 ].join(" && ");
 
