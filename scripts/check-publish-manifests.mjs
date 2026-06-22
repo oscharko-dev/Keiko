@@ -1,19 +1,14 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import {
+  explicitPrivateWorkspaceExclusions,
+  internalDependencyEntries,
+  scope,
+} from "./release-workspace-policy.mjs";
+
 const repoRoot = resolve(import.meta.dirname, "..");
-const scope = "@oscharko-dev/";
 const failures = [];
-const explicitPrivateWorkspaceExclusions = new Map([
-  [
-    "@oscharko-dev/keiko-ui",
-    "build-time UI workspace; the root package ships the static UI artifact under dist/ui",
-  ],
-  [
-    "@oscharko-dev/keiko-editor",
-    "build-time editor workspace; not part of the root runtime dependency closure",
-  ],
-]);
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(join(repoRoot, relativePath), "utf8"));
@@ -21,24 +16,6 @@ function readJson(relativePath) {
 
 function fail(message) {
   failures.push(message);
-}
-
-function internalDependencyEntries(manifest) {
-  const entries = [];
-  for (const field of ["dependencies", "peerDependencies", "optionalDependencies"]) {
-    const deps = manifest[field];
-    if (deps === undefined) continue;
-    if (deps === null || typeof deps !== "object" || Array.isArray(deps)) {
-      fail(`${manifest.name ?? "<unnamed>"}: ${field} must be an object when present.`);
-      continue;
-    }
-    for (const [name, specifier] of Object.entries(deps)) {
-      if (name.startsWith(scope)) {
-        entries.push({ field, name, specifier });
-      }
-    }
-  }
-  return entries;
 }
 
 const rootManifest = readJson("package.json");
@@ -62,6 +39,11 @@ for (const dir of readdirSync(join(repoRoot, "packages"), { withFileTypes: true 
 }
 
 const workspaceNames = new Set(workspaceManifests.map(({ manifest }) => manifest.name));
+const publishableWorkspaceNames = new Set(
+  workspaceManifests
+    .filter(({ manifest }) => manifest.private !== true)
+    .map(({ manifest }) => manifest.name),
+);
 
 for (const { relativePath, manifest } of workspaceManifests) {
   if (manifest.version !== expectedVersion) {
@@ -75,8 +57,15 @@ for (const { relativePath, manifest } of workspaceManifests) {
     fail(`${relativePath}: ${manifest.name} must stay private (${privateExclusion}).`);
   }
   for (const { field, name, specifier } of internalDependencyEntries(manifest)) {
+    if (name === undefined) {
+      fail(`${manifest.name ?? "<unnamed>"}: ${field} must be an object when present.`);
+      continue;
+    }
     if (!workspaceNames.has(name)) {
       fail(`${relativePath}: ${field}.${name} does not refer to a local workspace package.`);
+    }
+    if (manifest.private !== true && !publishableWorkspaceNames.has(name)) {
+      fail(`${relativePath}: publishable workspace must not depend on private workspace ${name}.`);
     }
     if (specifier !== expectedVersion) {
       fail(
@@ -92,6 +81,10 @@ const bundled = new Set(
 );
 
 for (const { field, name, specifier } of rootInternalDependencies) {
+  if (name === undefined) {
+    fail(`package.json: ${field} must be an object when present.`);
+    continue;
+  }
   if (field !== "dependencies") {
     fail(`package.json: root published package must list ${name} under dependencies only.`);
   }
@@ -102,7 +95,9 @@ for (const { field, name, specifier } of rootInternalDependencies) {
     fail(`package.json: dependency ${name} is a private build-time workspace exclusion.`);
   }
   if (specifier !== expectedVersion) {
-    fail(`package.json: dependency ${name} must be pinned to ${expectedVersion}, got ${specifier}.`);
+    fail(
+      `package.json: dependency ${name} must be pinned to ${expectedVersion}, got ${specifier}.`,
+    );
   }
   if (!bundled.has(name)) {
     fail(`package.json: dependency ${name} must also be listed in bundleDependencies.`);
@@ -115,7 +110,9 @@ for (const name of bundled) {
     fail(`package.json: bundleDependencies entry ${name} is not a local workspace package.`);
   }
   if (explicitPrivateWorkspaceExclusions.has(name)) {
-    fail(`package.json: bundleDependencies entry ${name} is a private build-time workspace exclusion.`);
+    fail(
+      `package.json: bundleDependencies entry ${name} is a private build-time workspace exclusion.`,
+    );
   }
   if (!rootInternalDependencies.some((entry) => entry.name === name)) {
     fail(`package.json: bundleDependencies entry ${name} is missing from dependencies.`);

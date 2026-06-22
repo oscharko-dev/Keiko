@@ -50,6 +50,8 @@
     "test:e2e:editor-fidelity-1295": "playwright test --config playwright.issue-1295-editor-fidelity.config.ts --project=chromium",
     "test:e2e:editor-fidelity-1296": "playwright test --config playwright.issue-1296-editor-agent.config.ts --project=chromium",
     "test:release:smoke": "npm run test:e2e:smoke",
+    "release:plan": "node scripts/release-publish.mjs --plan-only",
+    "release:publish": "node scripts/release-publish.mjs",
     "eval:prompt-enhancer": "npm run build:packages && vitest run packages/keiko-evaluations/src/promptEnhancer",
     "dev:start": "node scripts/dev-start.mjs",
     "dev:stop": "node scripts/dev-stop.mjs",
