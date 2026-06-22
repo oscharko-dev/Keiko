@@ -79,6 +79,13 @@ From the repository root, start the development UI:
 npm run dev:start
 ```
 
+On Windows PowerShell, if `npm` is blocked by the local execution policy, run the
+native command shim explicitly:
+
+```powershell
+npm.cmd run dev:start
+```
+
 This checks whether dependencies are installed, runs the root build needed by the Node BFF, starts
 the UI through `next dev`, and exposes the app through one loopback URL. If the default port
 `1983` is already in use and no port was explicitly configured, the script chooses the next free
@@ -456,6 +463,7 @@ Read the full contracts and decisions:
 | ---------------------- | -------------------------------------------------------------------------------------------------------- |
 | UI does not open       | Run `npx keiko status`, then inspect `.keiko/ui.log`.                                                    |
 | Port is busy           | Start with `KEIKO_UI_PORT=1984 npm run keiko:start` or stop the process using the port.                  |
+| PowerShell blocks npm  | Run `npm.cmd run dev:start` when `npm.ps1` is blocked by the local execution policy.                     |
 | No model appears       | Reopen Settings, verify the base URL and token, then run the credential test again.                      |
 | Credential test fails  | Confirm the gateway accepts OpenAI-compatible chat-completions requests at the configured base URL.      |
 | Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header such as `X-Litellm-Key`. |
