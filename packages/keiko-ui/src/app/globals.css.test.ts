@@ -3373,3 +3373,209 @@ describe("Issue #1299 — component state matrix", () => {
     ).toContain("skeleton");
   });
 });
+
+// ─── Issue #1300 — consolidated visual-regression + designer-acceptance gate ─────
+//
+// Epic #1290 closure capstone. The browser harnesses under docs/design-system/evidence/1300 are the
+// live re-runnable proofs; this block is the CI-enforced contract that pins their committed verdicts,
+// the variance register, and the migrated-surface inventory against the product globals.css so the
+// epic acceptance evidence cannot silently drift. A single revert (a dropped surface, a flipped
+// verdict, a deleted variance disposition, a missing child-evidence link) re-fails a named assertion.
+
+interface Issue1300ConsolidatedProof {
+  readonly verdict: string;
+  readonly referenceFiles: readonly string[];
+  readonly groupR: { readonly totalProbes: number; readonly gatedDiffCount: number };
+  readonly accentDerived: { readonly byMode: Record<string, unknown> };
+  readonly accessibilityProof: {
+    readonly focusProof: { readonly activeIsBack: boolean; readonly hasFocusRing: boolean };
+    readonly nameRoleValue: { readonly comboRole: string; readonly gridSort: string };
+  };
+  readonly boundedRowSmoke: { readonly ok: boolean; readonly rowCount: number };
+}
+interface Issue1300EditorProof {
+  readonly verdict: string;
+  readonly tokenFidelity: { readonly totalProbes: number; readonly gatedDiffCount: number };
+  readonly accentDerived: { readonly tokens: readonly string[] };
+  readonly referenceOnly: {
+    readonly tokens: readonly string[];
+    readonly ownerEpics: readonly string[];
+  };
+}
+interface Issue1300A11yProof {
+  readonly verdict: string;
+  readonly seriousCriticalTotal: number;
+  readonly byMode: Record<string, { readonly seriousCriticalCount: number }>;
+}
+
+describe("Issue #1300 — consolidated visual-regression + designer-acceptance gate", () => {
+  const evidenceDir = resolve(here, "../../../..", "docs/design-system/evidence/1300");
+  const consolidatedProof = JSON.parse(
+    readFileSync(resolve(evidenceDir, "consolidated-fidelity-proof.json"), "utf8"),
+  ) as unknown as Issue1300ConsolidatedProof;
+  const editorProof = JSON.parse(
+    readFileSync(resolve(evidenceDir, "editor/editor-fidelity-proof.json"), "utf8"),
+  ) as unknown as Issue1300EditorProof;
+  const a11yProof = JSON.parse(
+    readFileSync(resolve(evidenceDir, "a11y/a11y-proof.json"), "utf8"),
+  ) as unknown as Issue1300A11yProof;
+  const visualRegressionMd = readFileSync(
+    resolve(here, "../../../..", "docs/design-system/visual-regression.md"),
+    "utf8",
+  );
+  const adr0051 = readFileSync(
+    resolve(
+      here,
+      "../../../..",
+      "docs/adr/ADR-0051-design-system-visual-regression-and-acceptance-gate.md",
+    ),
+    "utf8",
+  );
+
+  // ── 1. Component reference fidelity gate is green and broad ───────────────────
+  it("the consolidated component fidelity proof passes with zero gated diffs", () => {
+    expect(consolidatedProof.verdict, "consolidated harness must record PASS").toBe("PASS");
+    expect(
+      consolidatedProof.groupR.gatedDiffCount,
+      "every neutral migrated surface must resolve identically to the DS reference (dark+light)",
+    ).toBe(0);
+    expect(
+      consolidatedProof.groupR.totalProbes,
+      "the consolidated gate must cover the full migrated-surface union, not a token sample",
+    ).toBeGreaterThanOrEqual(400);
+  });
+
+  it("the consolidated proof concatenates every migrated 0.4.0 component layer", () => {
+    for (const file of [
+      "keiko-tokens.css",
+      "keiko-semantic-tokens.css",
+      "keiko-ai.css",
+      "keiko-data.css",
+      "keiko-dataviz.css",
+      "keiko-inputs.css",
+      "keiko-nav.css",
+    ]) {
+      expect(
+        consolidatedProof.referenceFiles,
+        `reference chain must include ${file} so its surfaces are gated`,
+      ).toContain(file);
+    }
+  });
+
+  // ── 2. Accessibility + performance smokes are green ───────────────────────────
+  it("the accessibility proof records zero serious/critical violations in every mode", () => {
+    expect(a11yProof.verdict).toBe("PASS");
+    expect(a11yProof.seriousCriticalTotal).toBe(0);
+    const modes = Object.keys(a11yProof.byMode);
+    expect(modes.length, "axe must run across the full 7-mode matrix").toBe(7);
+    for (const [mode, r] of Object.entries(a11yProof.byMode)) {
+      expect(
+        r.seriousCriticalCount,
+        `mode ${mode} must have no serious/critical a11y violation`,
+      ).toBe(0);
+    }
+  });
+
+  it("the consolidated proof carries the a11y + performance smokes", () => {
+    expect(consolidatedProof.accessibilityProof.focusProof.activeIsBack).toBe(true);
+    expect(consolidatedProof.accessibilityProof.focusProof.hasFocusRing).toBe(true);
+    expect(consolidatedProof.accessibilityProof.nameRoleValue.comboRole).toBe("combobox");
+    expect(consolidatedProof.accessibilityProof.nameRoleValue.gridSort).toBe("descending");
+    expect(consolidatedProof.boundedRowSmoke.ok).toBe(true);
+    expect(consolidatedProof.boundedRowSmoke.rowCount).toBe(250);
+  });
+
+  // ── 3. Editor matrix gate + carried-forward variance ──────────────────────────
+  it("the editor token-fidelity proof passes with zero gated diffs", () => {
+    expect(editorProof.verdict, "editor harness must record PASS").toBe("PASS");
+    expect(
+      editorProof.tokenFidelity.gatedDiffCount,
+      "every product-defined editor token must resolve identically to the DS editor reference",
+    ).toBe(0);
+    expect(editorProof.tokenFidelity.totalProbes).toBeGreaterThanOrEqual(150);
+  });
+
+  it("the editor reference-only variance is exactly the three unadopted tokens owned by #1373/#1390", () => {
+    expect([...editorProof.referenceOnly.tokens].sort()).toEqual([
+      "--ed-blame-fg",
+      "--ed-fold-placeholder",
+      "--ed-inlay-fg",
+    ]);
+    expect(editorProof.referenceOnly.ownerEpics).toContain("#1373");
+    expect(editorProof.referenceOnly.ownerEpics).toContain("#1390");
+    // These tokens must remain unadopted in the product (otherwise the variance is resolved, not carried).
+    for (const t of editorProof.referenceOnly.tokens) {
+      expect(css.includes(`${t}:`), `${t} is reference-only; product must not declare it yet`).toBe(
+        false,
+      );
+    }
+  });
+
+  it("the editor accent-derived bucket records the four accent tokens (not gated)", () => {
+    for (const t of ["--ed-statusbar-accent", "--ed-selection", "--ed-agent-line", "--ed-focus"]) {
+      expect(editorProof.accentDerived.tokens, `${t} must be recorded as accent-derived`).toContain(
+        t,
+      );
+    }
+  });
+
+  // ── 4. Variance register + tolerance + retention are documented ───────────────
+  it("visual-regression.md records the tolerance, the approved accent delta, and Light Mode", () => {
+    expect(visualRegressionMd).toContain("≤ 1 LSB");
+    expect(
+      visualRegressionMd,
+      "the pre-existing ~1.5% accent delta must be the approved deviation",
+    ).toContain("1.5%");
+    expect(visualRegressionMd).toContain("#4eba87");
+    expect(visualRegressionMd, "Light Mode must be a mandatory acceptance surface").toContain(
+      "Light Mode",
+    );
+    expect(visualRegressionMd).toContain("Human Review Required");
+  });
+
+  it("the final evidence links back to every child issue affected by the 0.4.0 update", () => {
+    for (const child of ["1292", "1293", "1294", "1295", "1296", "1297", "1298", "1299"]) {
+      expect(visualRegressionMd, `final evidence must link child #${child}`).toContain(
+        `evidence/${child}/`,
+      );
+    }
+  });
+
+  it("the variance register dispositions the carried-forward editor tokens to #1373/#1390", () => {
+    expect(visualRegressionMd).toContain("--ed-inlay-fg");
+    expect(visualRegressionMd).toContain("#1373");
+    expect(visualRegressionMd).toContain("#1390");
+  });
+
+  it("ADR-0051 records the gate as additive and never weakening prior gates", () => {
+    expect(adr0051).toContain("never weaken");
+    expect(adr0051).toContain("ADR-0049");
+    expect(adr0051).toContain("ADR-0050");
+  });
+
+  // ── 5. Migrated surfaces still exist in the product (drift guard) ──────────────
+  it("every surface the consolidated proof covers is still defined in the product CSS", () => {
+    for (const selector of [
+      ".ai-tool {",
+      ".ai-response {",
+      ".c-table {",
+      ".viz-bar {",
+      ".c-check {",
+      ".c-combo-input {",
+      ".c-crumbs {",
+      ".c-steps {",
+    ]) {
+      expect(
+        css.includes(selector),
+        `migrated surface "${selector}" must remain in globals.css`,
+      ).toBe(true);
+    }
+    expect(
+      css.includes("--ed-syn-keyword:"),
+      "editor syntax token must remain in globals.css",
+    ).toBe(true);
+    expect(css.includes("--accent:"), "brand accent primitive must remain in globals.css").toBe(
+      true,
+    );
+  });
+});

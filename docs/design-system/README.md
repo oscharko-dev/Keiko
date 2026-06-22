@@ -126,6 +126,19 @@ Browser evidence cross-checking the state matrix against the live `states.html` 
 `design-system/states.html` by the `Issue #1299` drift gate in
 `packages/keiko-ui/src/app/globals.css.test.ts`.
 
+## Visual regression and epic acceptance ([#1300](https://github.com/oscharko-dev/Keiko/issues/1300))
+
+The epic closure gate — a single re-runnable consolidated proof that the migrated surfaces resolve to the
+0.4.0 reference across the full theme/contrast/motion/viewport matrix, pass accessibility, and have been
+visually accepted — is governed by [ADR-0051](../adr/ADR-0051-design-system-visual-regression-and-acceptance-gate.md)
+and recorded in [visual-regression.md](visual-regression.md) (surface matrix, selected tolerance, retention,
+designer-acceptance notes, and the final variance register). The executable proofs and screenshot bundle live
+in [`evidence/1300/`](evidence/1300/README.md): the consolidated component fidelity harness (427 probes, 0
+gated diffs), the running-app screenshot bundle (Dark/Light/HC/reduced-motion/forced-colors × desktop/tablet/
+mobile), the dedicated editor matrix (160 editor-token probes + the seven `editor-*.html` reference captures),
+and the axe-core accessibility proof (0 serious/critical across 7 modes). The committed verdicts and variance
+register are pinned by the `Issue #1300` gate in `packages/keiko-ui/src/app/globals.css.test.ts`.
+
 ## Reuse and no-duplication posture (epic gate)
 
 The design-system tokens were **lifted 1:1 from the product `globals.css`** (the primitive provenance runs

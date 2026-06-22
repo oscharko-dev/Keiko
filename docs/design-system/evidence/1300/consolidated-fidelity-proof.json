@@ -1,0 +1,308 @@
+{
+  "issue": 1300,
+  "epic": 1290,
+  "postCssSha256": "f6c7c4e56f268460573292f919291ebb2fd890204f65ce7eaf37a3e7a7947c8d",
+  "referenceFiles": [
+    "keiko-tokens.css",
+    "keiko-semantic-tokens.css",
+    "keiko-ai.css",
+    "keiko-data.css",
+    "keiko-dataviz.css",
+    "keiko-inputs.css",
+    "keiko-nav.css"
+  ],
+  "run": {
+    "startedAt": "2026-06-22T04:01:18.924Z",
+    "generatedAt": "2026-06-22T04:01:21.608Z",
+    "repoHeadSha": "4a812fb0ae3211beca4b8c904983780931bbe3cf"
+  },
+  "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
+  "groupR": {
+    "description": "Reference fidelity: every migrated NEUTRAL surface (AI, data grid, dataviz, inputs, navigation) resolves identically under the product globals.css and the concatenated DS 0.4.0 reference. Gated to 0-diff in dark + light; HC/forced-colors/reduced-motion recorded.",
+    "totalProbes": 427,
+    "gatedDiffCount": 0,
+    "recordedDiffCount": 0,
+    "gatedDiffs": [],
+    "recordedDiffs": []
+  },
+  "accentDerived": {
+    "description": "Recorded (not gated), rendered as sRGB (r,g,b,a). Accent/feedback/color-mix surfaces resolve through the brand --accent (product hex #4eba87 vs reference oklch(0.72 0.124 160) — ~1.5% pre-existing primitive delta outside the 0.4.0 migration). Token chain identical.",
+    "byMode": {
+      "01-dark": {
+        ".ai-avatar": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "78,186,135,255",
+            "borderTopColor": "77,185,135,102"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "82,188,138,255",
+            "borderTopColor": "77,185,135,102"
+          }
+        },
+        ".ai-cite": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "82,188,138,255"
+          }
+        },
+        ".ai-conf[data-level=\"high\"] .track i:nth-child(1)": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "113,193,120,255"
+          }
+        },
+        ".ai-danger": {
+          "product": {
+            "backgroundColor": "32,40,34,255",
+            "borderTopColor": "235,106,100,115"
+          },
+          "reference": {
+            "backgroundColor": "32,40,34,255",
+            "borderTopColor": "235,106,100,115"
+          }
+        },
+        ".viz-bar": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".viz-bar.s2": {
+          "product": {
+            "backgroundColor": "78,168,225,255"
+          },
+          "reference": {
+            "backgroundColor": "78,168,225,255"
+          }
+        },
+        ".c-table tbody tr[aria-selected=\"true\"]": {
+          "product": {
+            "backgroundColor": "78,188,133,46"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46"
+          }
+        },
+        ".c-check input:checked + .bx": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-radio input:checked + .rb": {
+          "product": {
+            "borderTopColor": "78,186,135,255"
+          },
+          "reference": {
+            "borderTopColor": "82,188,138,255"
+          }
+        },
+        ".c-step.done .dot": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-tag": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "82,188,138,255"
+          }
+        },
+        ".c-pager button[aria-current=\"page\"]": {
+          "product": {
+            "backgroundColor": "78,188,133,46"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46"
+          }
+        }
+      },
+      "02-light": {
+        ".ai-avatar": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,100,53,255",
+            "borderTopColor": "77,185,135,102"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,100,53,255",
+            "borderTopColor": "77,185,135,102"
+          }
+        },
+        ".ai-cite": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,100,53,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,100,53,255"
+          }
+        },
+        ".ai-conf[data-level=\"high\"] .track i:nth-child(1)": {
+          "product": {
+            "backgroundColor": "0,121,72,255"
+          },
+          "reference": {
+            "backgroundColor": "36,118,49,255"
+          }
+        },
+        ".ai-danger": {
+          "product": {
+            "backgroundColor": "251,240,243,255",
+            "borderTopColor": "180,33,40,115"
+          },
+          "reference": {
+            "backgroundColor": "251,240,243,255",
+            "borderTopColor": "180,33,40,115"
+          }
+        },
+        ".viz-bar": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".viz-bar.s2": {
+          "product": {
+            "backgroundColor": "0,106,170,255"
+          },
+          "reference": {
+            "backgroundColor": "0,106,170,255"
+          }
+        },
+        ".c-table tbody tr[aria-selected=\"true\"]": {
+          "product": {
+            "backgroundColor": "78,188,133,46"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46"
+          }
+        },
+        ".c-check input:checked + .bx": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-radio input:checked + .rb": {
+          "product": {
+            "borderTopColor": "78,186,135,255"
+          },
+          "reference": {
+            "borderTopColor": "82,188,138,255"
+          }
+        },
+        ".c-step.done .dot": {
+          "product": {
+            "backgroundColor": "0,129,73,255"
+          },
+          "reference": {
+            "backgroundColor": "0,129,73,255"
+          }
+        },
+        ".c-tag": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,100,53,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,100,53,255"
+          }
+        },
+        ".c-pager button[aria-current=\"page\"]": {
+          "product": {
+            "backgroundColor": "78,188,133,46"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46"
+          }
+        }
+      }
+    }
+  },
+  "accessibilityProof": {
+    "focusProof": {
+      "activeIsBack": true,
+      "outlineStyle": "solid",
+      "outlineWidth": "2px",
+      "hasFocusRing": true
+    },
+    "nameRoleValue": {
+      "comboRole": "combobox",
+      "comboExpanded": "true",
+      "comboControls": "ev-combo-list",
+      "comboLabel": "combo",
+      "optionSelected": "true",
+      "gridSort": "descending",
+      "liveRole": "status",
+      "liveAriaLive": "polite"
+    }
+  },
+  "boundedRowSmoke": {
+    "ok": true,
+    "rowCount": 250,
+    "durationMs": 0.09999990463256836,
+    "afterScrollTop": 8363,
+    "scrollHeight": 8783,
+    "clientHeight": 420,
+    "stickyHeaderDeltaPx": 0
+  },
+  "missingSelectors": [],
+  "byMode": {
+    "01-dark": {
+      "groupR_diffs": 0,
+      "groupR_gated": true
+    },
+    "02-light": {
+      "groupR_diffs": 0,
+      "groupR_gated": true
+    },
+    "03-dark-hc": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "04-light-hc": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "05-prefers-contrast": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "06-forced-colors": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "07-reduced-motion": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    }
+  },
+  "verdict": "PASS"
+}
