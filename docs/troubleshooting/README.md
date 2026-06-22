@@ -492,6 +492,68 @@ rejected.
 
 ---
 
+### 8. Windows PowerShell blocks `npm run dev:start`
+
+| Field             | Value                                        |
+| ----------------- | -------------------------------------------- |
+| Severity          | Blocker                                      |
+| Surface           | Development startup, npm command wrapper     |
+| Stable identifier | `PSSecurityException` / `UnauthorizedAccess` |
+
+**Symptom**
+
+From Windows PowerShell, `npm run dev:start` exits before the Keiko
+development launcher starts. PowerShell reports that `npm.ps1` cannot be
+loaded because script execution is disabled on the system, and the
+exception includes `PSSecurityException` or `UnauthorizedAccess`.
+
+**Root Cause**
+
+PowerShell resolves `npm` to the script shim `npm.ps1` before the native
+`npm.cmd` shim. On hosts with a restrictive execution policy, PowerShell
+blocks that `.ps1` file before npm can execute Keiko's `dev:start`
+script. This failure happens in the shell command wrapper, not in the
+Keiko development server, package graph, or local UI runtime.
+
+**Diagnostic Steps**
+
+```powershell
+# Confirm PowerShell is resolving npm to the script shim.
+Get-Command npm
+
+# Confirm the native command shim is available.
+Get-Command npm.cmd
+
+# Re-run the development start through the native shim.
+npm.cmd run dev:start
+```
+
+If `Get-Command npm` points at `npm.ps1` and the original failure names
+`PSSecurityException`, this entry applies. If `npm.cmd run dev:start`
+starts npm but fails later during dependency install, build, port bind,
+or UI health checks, continue with the entry that matches that later
+error.
+
+**Resolution**
+
+- Use the native npm command shim from PowerShell:
+
+  ```powershell
+  npm.cmd run dev:start
+  ```
+
+- Stop the development UI the same way when working from PowerShell:
+
+  ```powershell
+  npm.cmd run dev:stop
+  ```
+
+- Do not weaken the machine-wide PowerShell execution policy just to
+  start Keiko. The `.cmd` shim preserves the existing host policy and
+  still runs the same npm lifecycle script.
+
+---
+
 ## Related documentation
 
 - [README](../../README.md) — installation, daily use, and configuration.
