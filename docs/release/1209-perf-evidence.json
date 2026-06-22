@@ -1,0 +1,64 @@
+{
+  "measuredAtIso": "2026-06-20T06:24:18.554Z",
+  "harness": "packaged CLI serving the production static UI via playwright.editor-performance.config.ts",
+  "b4ColdStartMs": {
+    "budgetP50": 1500,
+    "budgetP95": 2500,
+    "samples": [
+      940,
+      845,
+      848
+    ],
+    "p50": 848,
+    "p95": 940
+  },
+  "b5KeystrokeMs": {
+    "budgetMax": 50,
+    "captured": true,
+    "activeElement": "div.native-edit-context",
+    "longTaskCount": 0,
+    "maxLongTaskMs": 0
+  },
+  "b6InteractionMs": {
+    "budgetP75": 200,
+    "captured": true,
+    "source": "event-timing",
+    "eventCount": 25,
+    "interactionCount": 25,
+    "p75": 16,
+    "max": 16
+  },
+  "b11Memory": {
+    "supported": true,
+    "baselineBytes": 27600000,
+    "peakBytes": 27600000,
+    "residualBytes": 27600000,
+    "cycles": 2
+  },
+  "workerLoadCapture": {
+    "totalWorkerRequests": 3,
+    "editorWorkerLoaded": true,
+    "tsLanguageWorkerLoaded": false,
+    "languageWorkerLoaded": false,
+    "requests": [
+      {
+        "url": "http://127.0.0.1:32183/_next/static/chunks/43ils02xq1hm1.js",
+        "resourceType": "script",
+        "workerLabel": "editor",
+        "captureReason": "classified-response"
+      },
+      {
+        "url": "http://127.0.0.1:32183/_next/static/chunks/turbopack-worker-2gqdcwp7k90ea.js",
+        "resourceType": "script",
+        "workerLabel": "unknown",
+        "captureReason": "request-resource-or-url"
+      },
+      {
+        "url": "http://127.0.0.1:32183/_next/static/chunks/0oj6iz8mnbx8s.js",
+        "resourceType": "other",
+        "workerLabel": "editor",
+        "captureReason": "classified-response"
+      }
+    ]
+  }
+}

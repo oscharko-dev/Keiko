@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
 import {
+  CancelledError,
   CircuitOpenError,
+  ERROR_CODES,
+  GatewayEgressError,
   TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -207,6 +210,23 @@ describe("Gateway.chat", () => {
     expect(calls).toBe(2);
   });
 
+  it("does not retry hard outbound egress failures", async () => {
+    let calls = 0;
+    const gateway = new Gateway(config([provider({ maxRetries: 3 })]), {
+      adapter: fakeAdapter(() => {
+        calls += 1;
+        return Promise.reject(
+          new GatewayEgressError(ERROR_CODES.PROXY_BLOCKED_BY_POLICY, "proxy blocked egress"),
+        );
+      }),
+      clock: stubClock(),
+    });
+    await expect(gateway.chat(REQUEST)).rejects.toMatchObject({
+      code: ERROR_CODES.PROXY_BLOCKED_BY_POLICY,
+    });
+    expect(calls).toBe(1);
+  });
+
   it("passes the remaining end-to-end timeout budget to retry attempts", async () => {
     const seenTimeouts: number[] = [];
     let current = 0;
@@ -334,6 +354,26 @@ describe("Gateway.chatStream", () => {
     });
     await expect(collectStream(gateway.chatStream(REQUEST))).rejects.toBeInstanceOf(TransportError);
     expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(1);
+  });
+
+  it("does not count a CancelledError as a breaker fault — consecutiveFailures stays 0 and state stays closed", async () => {
+    // RED reasoning: before the fix both catch blocks called recordFailure() unconditionally,
+    // so a cancel mid-stream incremented consecutiveFailures and could eventually trip the breaker.
+    const cancelling: ProviderAdapter = {
+      call: () => Promise.resolve(okResponse("example-chat-model")),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "delta", token: "x" };
+        throw new CancelledError("client cancelled");
+      },
+    };
+    const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
+      adapter: cancelling,
+      clock: stubClock(),
+    });
+    await expect(collectStream(gateway.chatStream(REQUEST))).rejects.toBeInstanceOf(CancelledError);
+    expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
+    expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
   });
 
   it("throws UnknownModelError for an unconfigured model without touching the breaker", async () => {

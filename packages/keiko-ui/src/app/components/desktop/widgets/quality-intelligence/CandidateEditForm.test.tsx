@@ -144,4 +144,17 @@ describe("CandidateEditForm", () => {
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+
+  // QI-01: title is required — must carry aria-required and a visible indicator
+  // so both AT users and sighted users know the field cannot be blank (WCAG 3.3.2).
+  it("title field has aria-required and a visible required indicator", () => {
+    render(<CandidateEditForm candidate={makeCandidate()} onSave={vi.fn()} onCancel={vi.fn()} />);
+    const titleInput = screen.getByRole("textbox", { name: /^title/i });
+    expect(titleInput).toHaveAttribute("aria-required", "true");
+    expect(titleInput).toBeRequired();
+    // The required marker is a CSS ::after glyph keyed off data-required, so the input's
+    // accessible name stays exactly "Title" (no "star" announced); assert the marker hook.
+    const titleLabel = screen.getByText("Title", { selector: ".qi-edit-label" });
+    expect(titleLabel).toHaveAttribute("data-required", "true");
+  });
 });

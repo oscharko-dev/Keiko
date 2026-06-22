@@ -5,9 +5,24 @@ This repository now has a dedicated automated release workflow at [`.github/work
 ## Triggering
 
 - Tag pushes matching `v*` run the full release verification job.
-- Manual `workflow_dispatch` runs the same verification job.
-- Manual `workflow_dispatch` with `publish: true` enables the publish job, but only when the selected ref is a tag that starts with `v`.
+- Manual `workflow_dispatch` with `publish: false` runs the same verification job.
+- Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v` and the same tag/SHA already has a successful tag-push release verification run.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
+
+## Release-branch workflow
+
+The release stabilization flow uses a dedicated branch for release-only hardening:
+
+- Freeze features for `0.2` on `dev` and cut `release/0.2.0` from that point.
+- Keep feature development open on `dev`.
+- Land all beta/RC fixes through pull requests targeting `release/0.2.0`; direct commits to the
+  release branch are blocked by branch protection.
+- Require the same protected-branch quality gates as `dev` before release PRs can merge: strict
+  status checks, CodeQL, dependency review, pinned-action verification, UI/build/smoke gates, signed
+  commits, conversation resolution, and linear history.
+- Run beta and RC validation from that branch and tag prereleases as `v0.2.0-beta.N`.
+- When final verification is complete, merge `release/0.2.0` to `main` and tag `v0.2.0`.
+- Immediately back-merge `release/0.2.0` into `dev` so next-cycle work can continue with stable fixes included.
 
 ## Gates
 
@@ -45,4 +60,4 @@ Publish is intentionally off by default. To publish, a maintainer must:
 - keep `npm_dist_tag` at `beta` for prereleases such as `0.2.0-beta.0`,
 - provide `NPM_TOKEN` in repository secrets.
 
-The publish job uses `npm publish --access public --tag "$NPM_DIST_TAG"` after the verification job has completed successfully. Prerelease package versions are blocked from publishing with the `latest` dist-tag.
+The publish job uses `npm publish --access public --tag "$NPM_DIST_TAG"` after confirming that the tag-push release verification already completed successfully for the same commit. This avoids re-running the expensive installable and memory smokes during the manual publish dispatch while preserving the same evidence gate. Prerelease package versions are blocked from publishing with the `latest` dist-tag, and the selected tag must exactly match `v<package.json version>`.

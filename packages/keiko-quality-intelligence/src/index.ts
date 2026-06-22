@@ -11,7 +11,10 @@ export type { StalenessReason, StalenessResult } from "./domain/staleness.js";
 export { deriveIntent } from "./domain/intentDerivation.js";
 export type { IntentSummary } from "./domain/intentDerivation.js";
 
-export { designTestCaseCandidates } from "./domain/testDesignModel.js";
+export {
+  designTestCaseCandidates,
+  DETERMINISTIC_BASELINE_PROVENANCE_TAG,
+} from "./domain/testDesignModel.js";
 export type { DesignTestCaseCandidatesInput } from "./domain/testDesignModel.js";
 
 export {
@@ -52,12 +55,16 @@ export {
   canonicaliseFragmentList,
   isKnownPriority,
   isMeaningfulText,
+  isUnsafeFormatCodePoint,
+  normaliseCandidateText,
   normaliseText,
+  stripUnsafeFormatChars,
 } from "./domain/assertions.js";
 
 export {
   TEST_QUALITY_WEAK_THRESHOLD,
   scoreFromDimensions,
+  verdictFromDimensions,
   verdictFromScore,
 } from "./domain/testQualityRubric.js";
 

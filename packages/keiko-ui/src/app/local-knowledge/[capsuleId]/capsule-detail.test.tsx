@@ -6,13 +6,20 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CapsuleDetail } from "./capsule-detail";
 import type { CapsuleDetail as CapsuleDetailData } from "@/lib/local-knowledge-api";
 import type {
+  CapsuleLargeDocumentHealth,
+  DocumentId,
   KnowledgeCapsuleId,
   KnowledgeCapsule,
   CapsuleHealth,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -20,6 +27,19 @@ import type {
 // ---------------------------------------------------------------------------
 
 let mockSearchParams = new URLSearchParams("capsuleId=cap-test-1");
+
+type MockLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
+  readonly href: string;
+  readonly children: ReactNode;
+};
+
+vi.mock("next/link", () => ({
+  default: ({ href, children, ...props }: MockLinkProps) => (
+    <a href={href} onClick={(event) => event.preventDefault()} {...props}>
+      {children}
+    </a>
+  ),
+}));
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => mockSearchParams,
@@ -367,6 +387,34 @@ describe("CapsuleDetail — health diagnostics section", () => {
     expect(screen.getByText("p.3")).toBeInTheDocument();
   });
 
+  it("LK-01: renders severity label text in each diagnostic group row (non-color cue)", async () => {
+    const withDiag: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      parserDiagnostics: [
+        { severity: "error", code: "ERR_001", message: "Fatal parse error" },
+        { severity: "warning", code: "WARN_001", message: "Minor layout issue" },
+        { severity: "info", code: "INFO_001", message: "Extra metadata ignored" },
+      ],
+    };
+
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(withDiag)} />);
+
+    // Wait for the grouped list to render
+    const groupList = await screen.findByRole("list", { name: /grouped parser diagnostics/i });
+
+    // Each group row must carry its severity as visible text — not only as a
+    // CSS color class — so it is perceivable without color (WCAG 1.4.1 LK-01).
+    const items = groupList.querySelectorAll("li");
+    expect(items).toHaveLength(3);
+
+    const labels = Array.from(items).map(
+      (li) => li.querySelector(".lkd-diag-severity")?.textContent ?? "",
+    );
+    expect(labels).toContain("Error");
+    expect(labels).toContain("Warning");
+    expect(labels).toContain("Info");
+  });
+
   it("caps parser diagnostics by default and expands on demand", async () => {
     const user = userEvent.setup();
     const diagnostics = Array.from({ length: 30 }, (_, index) => ({
@@ -568,6 +616,99 @@ describe("CapsuleDetail — a11y", () => {
       expect(screen.getByTestId("diag-empty")).toBeInTheDocument();
     });
 
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Large-document progress + resume (Issue #1286)
+// ---------------------------------------------------------------------------
+
+function largeDocumentHealth(
+  overrides: Partial<CapsuleLargeDocumentHealth> = {},
+): CapsuleLargeDocumentHealth {
+  return {
+    resourcePolicy: DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+    capabilities: DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+    progress: [
+      {
+        documentId: "doc-1" as DocumentId,
+        safeDisplayName: "annual-report.pdf",
+        strategy: "progressive-pdf",
+        phase: "embedding",
+        processedPages: 124,
+        extractedTextBytes: 540_000,
+        chunkCount: 80,
+        embeddedChunkCount: 32,
+        retryCount: 0,
+        coverage: "partial",
+        resumable: true,
+      },
+    ],
+    resumableDocuments: ["doc-1" as DocumentId],
+    partialCoverageDocuments: 1,
+    qualityWarnings: ["page has no extractable text layer; indexed with partial coverage"],
+    ...overrides,
+  };
+}
+
+function detailWithLargeDocs(health: CapsuleLargeDocumentHealth): CapsuleDetailData {
+  return { ...FULL_DETAIL, largeDocumentHealth: health };
+}
+
+describe("CapsuleDetail — large-document progress", () => {
+  it("renders per-document phase progress, partial-coverage badge, and quality warnings", async () => {
+    render(
+      <CapsuleDetail fetchDetailImpl={resolveDetail(detailWithLargeDocs(largeDocumentHealth()))} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Large documents" })).toBeInTheDocument();
+    });
+    expect(screen.getByText("annual-report.pdf")).toBeInTheDocument();
+    expect(screen.getByText("Embedding")).toBeInTheDocument();
+    // The distinct quality-warning line (the partial-coverage badge shares the phrase).
+    expect(
+      screen.getByText("page has no extractable text layer; indexed with partial coverage"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/32\/80 chunks embedded/u)).toBeInTheDocument();
+  });
+
+  it("does not render the section when there is no large-document progress", async () => {
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(FULL_DETAIL)} />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("heading", { name: "Large documents" })).not.toBeInTheDocument();
+  });
+
+  it("invokes the resume seam when the Resume control is clicked", async () => {
+    const resumeImpl = vi.fn((id: KnowledgeCapsuleId) =>
+      Promise.resolve({ ok: true as const, capsuleId: id }),
+    );
+    render(
+      <CapsuleDetail
+        fetchDetailImpl={resolveDetail(detailWithLargeDocs(largeDocumentHealth()))}
+        resumeImpl={resumeImpl}
+      />,
+    );
+    const button = await screen.findByRole("button", {
+      name: "Resume interrupted large-document indexing",
+    });
+    await userEvent.click(button);
+    await waitFor(() => {
+      expect(resumeImpl).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("has no accessibility violations with the large-document section", async () => {
+    const { container } = render(
+      <CapsuleDetail fetchDetailImpl={resolveDetail(detailWithLargeDocs(largeDocumentHealth()))} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Large documents" })).toBeInTheDocument();
+    });
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });

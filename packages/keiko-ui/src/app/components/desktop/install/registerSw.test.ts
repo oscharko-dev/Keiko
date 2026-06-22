@@ -5,13 +5,20 @@ import { registerSw } from "./registerSw";
 // shape and behaviour of `register()` is fully controlled.
 interface FakeServiceWorkerContainer {
   register: ReturnType<typeof vi.fn>;
+  addEventListener?: ReturnType<typeof vi.fn>;
   getRegistrations?: ReturnType<typeof vi.fn>;
   controller?: ServiceWorker | null;
 }
 
+const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
+
 function installServiceWorker(container: FakeServiceWorkerContainer): void {
   Object.defineProperty(navigator, "serviceWorker", {
-    value: container,
+    value: {
+      addEventListener: vi.fn(),
+      controller: null,
+      ...container,
+    },
     configurable: true,
     writable: true,
   });
@@ -24,13 +31,38 @@ function removeServiceWorker(): void {
   }
 }
 
+function installCaches(caches: Pick<CacheStorage, "keys" | "delete">): void {
+  Object.defineProperty(globalThis, "caches", {
+    value: caches,
+    configurable: true,
+  });
+}
+
+function restoreCaches(): void {
+  if (originalCaches === undefined) {
+    Reflect.deleteProperty(globalThis, "caches");
+    return;
+  }
+  Object.defineProperty(globalThis, "caches", originalCaches);
+}
+
+async function flushMicrotasks(times = 4): Promise<void> {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("registerSw (issue #126)", () => {
   beforeEach(() => {
     removeServiceWorker();
+    restoreCaches();
+    window.sessionStorage.clear();
   });
 
   afterEach(() => {
     removeServiceWorker();
+    restoreCaches();
+    window.sessionStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -89,6 +121,133 @@ describe("registerSw (issue #126)", () => {
     }).not.toThrow();
   });
 
+  it("asks an already waiting update to activate when the page has an active controller", async () => {
+    const postMessage = vi.fn();
+    const waiting = { postMessage } as unknown as ServiceWorker;
+    const registrationAddEventListener = vi.fn();
+    const registration = {
+      waiting,
+      installing: null,
+      addEventListener: registrationAddEventListener,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    installServiceWorker({ controller: {} as ServiceWorker, register });
+
+    registerSw();
+
+    await flushMicrotasks();
+
+    expect(postMessage).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER",
+    });
+    expect(window.sessionStorage.getItem("keiko.service-worker-update-reload-pending")).toBe(
+      "true",
+    );
+  });
+
+  it("does not ask a waiting worker to activate on first install without a controller", async () => {
+    const postMessage = vi.fn();
+    const registrationAddEventListener = vi.fn();
+    const registration = {
+      waiting: { postMessage } as unknown as ServiceWorker,
+      installing: null,
+      addEventListener: registrationAddEventListener,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    installServiceWorker({ controller: null, register });
+
+    registerSw();
+
+    await flushMicrotasks();
+
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
+  it("clears the pending reload marker when update activation cannot be messaged", async () => {
+    const postMessage = vi.fn().mockImplementation(() => {
+      throw new Error("worker is no longer available");
+    });
+    const registrationAddEventListener = vi.fn();
+    const registration = {
+      waiting: { postMessage } as unknown as ServiceWorker,
+      installing: null,
+      addEventListener: registrationAddEventListener,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    installServiceWorker({ controller: {} as ServiceWorker, register });
+
+    registerSw();
+
+    await flushMicrotasks();
+
+    expect(postMessage).toHaveBeenCalledOnce();
+    expect(window.sessionStorage.getItem("keiko.service-worker-update-reload-pending")).toBeNull();
+  });
+
+  it("asks a newly installed update to activate when an old controller is active", async () => {
+    const postMessage = vi.fn();
+    const waiting = { postMessage } as unknown as ServiceWorker;
+    const installingAddEventListener = vi.fn();
+    const installing = {
+      state: "installing",
+      addEventListener: installingAddEventListener,
+    } as unknown as ServiceWorker;
+    const registrationAddEventListener = vi.fn();
+    const registration = {
+      waiting,
+      installing,
+      addEventListener: registrationAddEventListener,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    installServiceWorker({ controller: {} as ServiceWorker, register });
+
+    registerSw();
+
+    await flushMicrotasks();
+    const updateFoundHandler = registrationAddEventListener.mock.calls.find(
+      ([event]) => event === "updatefound",
+    )?.[1] as (() => void) | undefined;
+
+    postMessage.mockClear();
+    updateFoundHandler?.();
+    const stateChangeHandler = installingAddEventListener.mock.calls.find(
+      ([event]) => event === "statechange",
+    )?.[1] as (() => void) | undefined;
+    Object.defineProperty(installing, "state", { value: "installed" });
+    stateChangeHandler?.();
+
+    expect(postMessage).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER",
+    });
+  });
+
+  it("reloads at most once when the activated update becomes the controller", async () => {
+    const registrationAddEventListener = vi.fn();
+    const registration = {
+      waiting: null,
+      installing: null,
+      addEventListener: registrationAddEventListener,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    const addEventListener = vi.fn();
+    installServiceWorker({ addEventListener, controller: {} as ServiceWorker, register });
+
+    registerSw();
+
+    await flushMicrotasks();
+    window.sessionStorage.setItem("keiko.service-worker-update-reload-pending", "true");
+    const controllerChangeHandler = addEventListener.mock.calls.find(
+      ([event]) => event === "controllerchange",
+    )?.[1] as (() => void) | undefined;
+
+    controllerChangeHandler?.();
+    controllerChangeHandler?.();
+
+    expect(window.sessionStorage.getItem("keiko.service-worker-update-reload-pending")).toBeNull();
+  });
+
   it("unregisters service workers instead of registering them in development", async () => {
     vi.stubEnv("NODE_ENV", "development");
     const unregister = vi.fn().mockResolvedValue(true);
@@ -98,11 +257,42 @@ describe("registerSw (issue #126)", () => {
 
     registerSw();
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushMicrotasks();
 
     expect(register).not.toHaveBeenCalled();
     expect(getRegistrations).toHaveBeenCalledOnce();
     expect(unregister).toHaveBeenCalledOnce();
+  });
+
+  it("removes only Keiko shell caches during development cleanup", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const getRegistrations = vi.fn().mockResolvedValue([]);
+    const register = vi.fn().mockResolvedValue({});
+    const keys = vi.fn().mockResolvedValue(["keiko-shell-v1", "images", "keiko-shell-v2"]);
+    const deleteCache = vi.fn().mockResolvedValue(true);
+    installServiceWorker({ controller: null, getRegistrations, register });
+    installCaches({ keys, delete: deleteCache });
+
+    registerSw();
+
+    await flushMicrotasks();
+
+    expect(register).not.toHaveBeenCalled();
+    expect(keys).toHaveBeenCalledOnce();
+    expect(deleteCache.mock.calls).toEqual([["keiko-shell-v1"], ["keiko-shell-v2"]]);
+  });
+
+  it("does not throw when development cleanup cannot enumerate registrations", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const getRegistrations = vi.fn().mockImplementation(() => {
+      throw new Error("blocked by browser policy");
+    });
+    const register = vi.fn().mockResolvedValue({});
+    installServiceWorker({ controller: null, getRegistrations, register });
+
+    expect(() => {
+      registerSw();
+    }).not.toThrow();
+    expect(register).not.toHaveBeenCalled();
   });
 });

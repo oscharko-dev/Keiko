@@ -2,7 +2,7 @@
 //
 // Tests cover:
 //   - Empty state: no candidates → "No test cases" message.
-//   - Card rendering: one card per candidate with title, priority, riskClass, review badge,
+//   - Card rendering: one card per candidate with title, riskClass, review badge,
 //     preconditions, steps, expectedResults lists, and tags.
 //   - onReview present: Approve/Reject/Request-changes buttons render.
 //   - onReview present: clicking Approve calls onReview(id, "approve").
@@ -18,6 +18,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { CandidatesPane } from "./CandidatesPane";
 import type { QualityIntelligenceUiCandidate } from "@oscharko-dev/keiko-contracts";
+import type { CandidateQualityVerdict } from "./qiShared";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -30,9 +31,11 @@ import type { QualityIntelligenceUiCandidate } from "@oscharko-dev/keiko-contrac
 
 let candidateCounter = 0;
 
-function makeCandidate(
-  overrides: Partial<QualityIntelligenceUiCandidate> = {},
-): QualityIntelligenceUiCandidate {
+type TestCandidate = QualityIntelligenceUiCandidate & {
+  readonly qualityVerdict?: CandidateQualityVerdict;
+};
+
+function makeCandidate(overrides: Partial<TestCandidate> = {}): TestCandidate {
   candidateCounter += 1;
   const id = `tc-${String(candidateCounter).padStart(3, "0")}`;
   return {
@@ -51,7 +54,7 @@ function makeCandidate(
   };
 }
 
-function makeCandidates(count: number): QualityIntelligenceUiCandidate[] {
+function makeCandidates(count: number): TestCandidate[] {
   return Array.from({ length: count }, () => makeCandidate());
 }
 
@@ -92,10 +95,10 @@ describe("CandidatesPane — card rendering", () => {
     expect(screen.getByText("Login with valid credentials succeeds")).toBeInTheDocument();
   });
 
-  it("renders the candidate priority in each card", () => {
+  it("does not render candidate priority in the compact card header", () => {
     const c = makeCandidate({ priority: "P0" });
     render(<CandidatesPane candidates={[c]} />);
-    expect(screen.getByText(/P0/)).toBeInTheDocument();
+    expect(screen.queryByText(/P0/)).not.toBeInTheDocument();
   });
 
   it("renders the candidate riskClass in each card", () => {
@@ -280,6 +283,109 @@ describe("CandidatesPane — aria-pressed on review buttons", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — terminal-state controls + Reopen (Issue #282 FIX A-UI / A11y-4)
+// ---------------------------------------------------------------------------
+//
+// When a candidate is in a terminal state (approved | rejected | withdrawn), the server will reject
+// any Approve / Reject / Request-changes action with 409 QI_REVIEW_TRANSITION_NOT_ALLOWED. The UI
+// pre-empts the error by aria-disabling those three buttons and surfacing a Reopen button instead.
+// Non-terminal states (open | changes-requested) keep the original behaviour: three actions enabled,
+// no Reopen button.
+
+describe("CandidatesPane — terminal-state controls (Issue #282)", () => {
+  it.each(["approved", "rejected", "withdrawn"] as const)(
+    "aria-disables Approve when reviewState is '%s' (terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      const approveBtn = screen.getByRole("button", { name: /^approve$/i });
+      expect(approveBtn).toHaveAttribute("aria-disabled", "true");
+    },
+  );
+
+  it.each(["approved", "rejected", "withdrawn"] as const)(
+    "aria-disables Reject when reviewState is '%s' (terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      // Reject and Request-changes may share the same accessible name pattern; target by exact name.
+      const rejectBtn = screen.getByRole("button", { name: /^reject$/i });
+      expect(rejectBtn).toHaveAttribute("aria-disabled", "true");
+    },
+  );
+
+  it.each(["approved", "rejected", "withdrawn"] as const)(
+    "renders a Reopen button when reviewState is '%s' (terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      expect(screen.getByRole("button", { name: /^reopen$/i })).toBeInTheDocument();
+    },
+  );
+
+  it("calls onReview(id, 'reopen') when the Reopen button is clicked", async () => {
+    const user = userEvent.setup();
+    const c = makeCandidate({ reviewState: "approved" });
+    const onReview = vi.fn();
+    render(<CandidatesPane candidates={[c]} onReview={onReview} />);
+    await user.click(screen.getByRole("button", { name: /^reopen$/i }));
+    expect(onReview).toHaveBeenCalledWith(c.id, "reopen");
+  });
+
+  it("Approve/Reject/Request-changes have an aria-describedby pointing to the final-note in terminal state", () => {
+    const c = makeCandidate({ reviewState: "approved" });
+    render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+    const approveBtn = screen.getByRole("button", { name: /^approve$/i });
+    const describedById = approveBtn.getAttribute("aria-describedby");
+    expect(describedById).not.toBeNull();
+    // The referenced element must exist in the DOM and contain the final-note text.
+    const note = document.getElementById(describedById!);
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toMatch(/reopen to change it/i);
+  });
+
+  it.each(["open", "changes-requested"] as const)(
+    "does NOT render a Reopen button when reviewState is '%s' (non-terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: /^reopen$/i })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["open", "changes-requested"] as const)(
+    "Approve is NOT aria-disabled when reviewState is '%s' (non-terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      expect(screen.getByRole("button", { name: /^approve$/i })).not.toHaveAttribute(
+        "aria-disabled",
+      );
+    },
+  );
+
+  it("Reopen is aria-disabled while a review is in flight (busy lock)", async () => {
+    const user = userEvent.setup();
+    const c = makeCandidate({ reviewState: "approved" });
+    let resolveReopen: (() => void) | undefined;
+    const onReview = vi.fn();
+    // Render with a pending review for a *different* action to simulate in-flight state.
+    render(
+      <CandidatesPane
+        candidates={[c]}
+        onReview={onReview}
+        pendingReview={{ candidateId: c.id, action: "reopen" }}
+      />,
+    );
+    const reopenBtn = screen.getByRole("button", { name: /saving…/i });
+    expect(reopenBtn).toHaveAttribute("aria-disabled", "true");
+    void resolveReopen;
+    await user.click(reopenBtn); // must no-op (aria-disabled guard)
+    expect(onReview).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — progressive rendering (>25 candidates)
 // ---------------------------------------------------------------------------
 
@@ -347,6 +453,57 @@ describe("CandidatesPane — progressive rendering", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — deterministic-baseline render ordering
+// ---------------------------------------------------------------------------
+//
+// The persisted QI run lists candidates as [...deterministic-baseline, ...model-delta] — the
+// determinism floor leads the manifest (pinned by #763). The pane surfaces the judged model
+// candidates first and trails the generic baseline stubs (tagged `source:deterministic-baseline`)
+// WITHOUT mutating the caller's array.
+
+const BASELINE_TAG = "source:deterministic-baseline";
+
+describe("CandidatesPane — deterministic-baseline render ordering", () => {
+  it("renders baseline-tagged candidates after non-baseline candidates that precede them", () => {
+    const baseline = makeCandidate({
+      title: "Baseline stub",
+      tags: [BASELINE_TAG, "risk-class:regression"],
+    });
+    const judged = makeCandidate({ title: "Judged model candidate", tags: ["smoke"] });
+    // Persisted order puts the baseline FIRST (as the real manifest does).
+    render(<CandidatesPane candidates={[baseline, judged]} />);
+
+    const items = screen.getAllByRole("listitem");
+    const order = items.map((li) => li.textContent ?? "");
+    const judgedIndex = order.findIndex((t) => t.includes("Judged model candidate"));
+    const baselineIndex = order.findIndex((t) => t.includes("Baseline stub"));
+    expect(judgedIndex).toBeGreaterThanOrEqual(0);
+    expect(baselineIndex).toBeGreaterThanOrEqual(0);
+    expect(judgedIndex).toBeLessThan(baselineIndex);
+  });
+
+  it("preserves the relative order of two non-baseline candidates (stable sort)", () => {
+    const first = makeCandidate({ title: "First judged", tags: ["smoke"] });
+    const second = makeCandidate({ title: "Second judged", tags: ["regression"] });
+    render(<CandidatesPane candidates={[first, second]} />);
+
+    const order = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    const firstIndex = order.findIndex((t) => t.includes("First judged"));
+    const secondIndex = order.findIndex((t) => t.includes("Second judged"));
+    expect(firstIndex).toBeLessThan(secondIndex);
+  });
+
+  it("does not mutate the caller's candidates array", () => {
+    const baseline = makeCandidate({ title: "Baseline stub", tags: [BASELINE_TAG] });
+    const judged = makeCandidate({ title: "Judged model candidate", tags: ["smoke"] });
+    const input = [baseline, judged];
+    const snapshotIds = input.map((c) => c.id);
+    render(<CandidatesPane candidates={input} />);
+    expect(input.map((c) => c.id)).toEqual(snapshotIds);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — weak-test flag (Epic #736 / Issue #748)
 // ---------------------------------------------------------------------------
 
@@ -392,6 +549,64 @@ describe("CandidatesPane — weak-test flag", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — candidate quality verdict (Epic #736 audit)
+// ---------------------------------------------------------------------------
+
+describe("CandidatesPane — candidate quality verdict", () => {
+  it("renders the judge verdict score and dimension rationales", () => {
+    const c = makeCandidate({
+      qualityVerdict: {
+        verdict: "strong",
+        score: 87.5,
+        overallRationale: "Strong enough for audit.",
+        dimensions: [
+          { name: "verifiability", score: 90, rationale: "Expected result is measurable." },
+          { name: "atomicity", score: 85, rationale: "Covers one behavior." },
+          { name: "determinism", score: 95, rationale: "No timing dependency." },
+          { name: "ac-fidelity", score: 80, rationale: "Matches the acceptance criteria." },
+        ],
+      },
+    });
+
+    render(<CandidatesPane candidates={[c]} />);
+
+    expect(screen.getByTestId("qi-quality-verdict")).toBeInTheDocument();
+    expect(screen.getByText("Quality verdict")).toBeInTheDocument();
+    expect(screen.getByText("Strong - 88/100")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Verifiability 90: Expected result is measurable\./),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/AC fidelity 80: Matches the acceptance criteria\./),
+    ).toBeInTheDocument();
+  });
+
+  it("names the judge verdict note for assistive tech", () => {
+    const c = makeCandidate({
+      qualityVerdict: {
+        verdict: "weak",
+        score: 40,
+        overallRationale: "Too broad to audit.",
+        dimensions: [
+          { name: "verifiability", score: 40, rationale: "Vague result." },
+          { name: "atomicity", score: 40, rationale: "Too many concerns." },
+          { name: "determinism", score: 40, rationale: "Depends on timing." },
+          { name: "ac-fidelity", score: 40, rationale: "Partial match only." },
+        ],
+      },
+    });
+
+    render(<CandidatesPane candidates={[c]} />);
+
+    expect(
+      screen.getByRole("note", {
+        name: /Quality judge verdict: Weak, 40 out of 100\. Too broad to audit\./i,
+      }),
+    ).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — boundary and edge cases
 // ---------------------------------------------------------------------------
 
@@ -424,10 +639,10 @@ describe("CandidatesPane — edge cases", () => {
     expect(onReview).not.toHaveBeenCalledWith(c2.id, expect.anything());
   });
 
-  it("renders the 'Open' review badge on a newly generated candidate", () => {
+  it("does not render the default 'Open' review badge on a newly generated candidate", () => {
     const c = makeCandidate({ reviewState: "open" });
     render(<CandidatesPane candidates={[c]} />);
-    expect(screen.getByText(/^open$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^open$/i)).not.toBeInTheDocument();
   });
 
   it("renders review buttons for all visible candidates when onReview is provided and count > 25", () => {
@@ -524,6 +739,24 @@ describe("CandidatesPane — inline editing", () => {
     expect(screen.getByRole("button", { name: /^edit$/i })).toHaveFocus();
   });
 
+  it("returns focus to the Edit button after a successful save (no keyboard dead-end)", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn().mockResolvedValue(undefined);
+    render(<CandidatesPane candidates={[makeCandidate({ title: "Old title" })]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    const titleInput = screen.getByRole("textbox", { name: /^title$/i });
+    expect(titleInput).toHaveFocus();
+    await user.clear(titleInput);
+    await user.type(titleInput, "New title");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    // After the save resolves the form unmounts; focus must return to the Edit trigger rather than
+    // dropping to <body>. This exercises the Save-close path — distinct from the Cancel-close path
+    // above, which restores focus synchronously rather than after an awaited save.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^edit$/i })).toHaveFocus();
+    });
+  });
+
   it("renders the governance note and disables actions when governance is blocked", () => {
     render(
       <CandidatesPane
@@ -534,17 +767,24 @@ describe("CandidatesPane — inline editing", () => {
         actionsDisabledReason="Set a reviewer label to review or edit candidates."
       />,
     );
-    const note = screen.getByText(/set a reviewer label to review or edit candidates/i);
-    expect(note).toBeInTheDocument();
+    const notes = screen.getAllByText(/set a reviewer label to review or edit candidates/i);
+    const paneNote = notes.find((node) => node.classList.contains("qi-cand-governance-note"));
+    const localNote = notes.find((node) => node.classList.contains("qi-cand-action-note"));
+    if (paneNote === undefined || localNote === undefined) {
+      throw new Error("Expected both the pane-level and local action-row governance notes.");
+    }
     // Governance-gated controls use aria-disabled (NOT native disabled) so they stay focusable and
-    // a screen reader announces the reason via aria-describedby pointing at the governance note.
+    // a screen reader announces both the pane-level and local action-row reasons.
     const editButton = screen.getByRole("button", { name: /^edit$/i });
     const approveButton = screen.getByRole("button", { name: /approve/i });
     expect(editButton).toHaveAttribute("aria-disabled", "true");
     expect(approveButton).toHaveAttribute("aria-disabled", "true");
-    expect(note.id).toBeTruthy();
-    expect(editButton).toHaveAttribute("aria-describedby", note.id);
-    expect(approveButton).toHaveAttribute("aria-describedby", note.id);
+    expect(paneNote.id).toBeTruthy();
+    expect(localNote.id).toBeTruthy();
+    expect(editButton.getAttribute("aria-describedby")).toContain(paneNote.id);
+    expect(editButton.getAttribute("aria-describedby")).toContain(localNote.id);
+    expect(approveButton.getAttribute("aria-describedby")).toContain(paneNote.id);
+    expect(approveButton.getAttribute("aria-describedby")).toContain(localNote.id);
   });
 
   it("does not start editing when the Edit button is governance-disabled (aria-disabled guard)", async () => {
@@ -579,6 +819,28 @@ describe("CandidatesPane — inline editing", () => {
       await screen.findByText("QI_BAD_EDIT: A valid candidate edit is required."),
     ).toBeInTheDocument();
     expect(screen.getByRole("form", { name: /edit editable/i })).toBeInTheDocument();
+  });
+
+  it("surfaces the validation error when a required field is cleared (submits an empty list)", async () => {
+    const user = userEvent.setup();
+    const candidate = makeCandidate({
+      title: "Has steps",
+      steps: ["Navigate to the page", "Click submit"],
+    });
+    const onEdit = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('QI_BAD_EDIT: The "steps" field is empty or invalid.'));
+    render(<CandidatesPane candidates={[candidate]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    await user.clear(screen.getByRole("textbox", { name: /steps/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    // Clearing a required list field submits an empty list; the server's minItems:1 gate rejects it
+    // and the UI surfaces the coded error while keeping the form open with the reviewer's edits.
+    expect(onEdit).toHaveBeenCalledWith(candidate.id, { steps: [] });
+    expect(
+      await screen.findByText('QI_BAD_EDIT: The "steps" field is empty or invalid.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("form")).toBeInTheDocument();
   });
 
   it("clears the save error when the reviewer edits the form again", async () => {

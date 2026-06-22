@@ -34,14 +34,6 @@ export const DEFAULT_POLICY: readonly PolicyRow[] = [
   { id: "mail", action: "Mail / calendar", scope: "any", decision: "ask" },
 ];
 
-export const DEFAULT_MEMORY: readonly string[] = [
-  "Prefers TypeScript + functional React",
-  "Writes Conventional Commits",
-  "Always reviews diffs before merge",
-  "Never touches infra without explicit ok",
-  "Deep-work mornings (CET), async afternoons",
-];
-
 export const DEFAULT_BRIDGES: Bridges = {
   calendar: true,
   mail: false,
@@ -52,8 +44,8 @@ export const DEFAULT_BRIDGES: Bridges = {
 const KEY_MODE = "keiko.twin.mode";
 const KEY_PERSONA = "keiko.twin.persona";
 const KEY_POLICY = "keiko.twin.policy";
-const KEY_MEMORY = "keiko.twin.memory";
 const KEY_BRIDGES = "keiko.twin.bridges";
+const LEGACY_KEY_MEMORY = "keiko.twin.memory";
 
 export interface TwinContextValue {
   readonly mode: TwinMode;
@@ -63,10 +55,6 @@ export interface TwinContextValue {
   readonly policy: readonly PolicyRow[];
   readonly setPolicy: (
     next: readonly PolicyRow[] | ((prev: readonly PolicyRow[]) => readonly PolicyRow[]),
-  ) => void;
-  readonly memory: readonly string[];
-  readonly setMemory: (
-    next: readonly string[] | ((prev: readonly string[]) => readonly string[]),
   ) => void;
   readonly bridges: Bridges;
   readonly setBridges: (next: Bridges | ((prev: Bridges) => Bridges)) => void;
@@ -140,6 +128,15 @@ function writeJson(key: string, value: unknown): void {
   }
 }
 
+function removeLegacyKey(key: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    /* localStorage may be unavailable; ignore. */
+  }
+}
+
 export function TwinProvider({ children }: { children: ReactNode }): ReactNode {
   // Start from static defaults so the build-time prerender and the client's first
   // render agree; adopt persisted values right after mount. Reading localStorage in
@@ -148,7 +145,6 @@ export function TwinProvider({ children }: { children: ReactNode }): ReactNode {
   const [mode, setMode] = useState<TwinMode>("manual");
   const [persona, setPersona] = useState<Persona>("Developer");
   const [policy, setPolicy] = useState<readonly PolicyRow[]>(DEFAULT_POLICY);
-  const [memory, setMemory] = useState<readonly string[]>(DEFAULT_MEMORY);
   const [bridges, setBridges] = useState<Bridges>(DEFAULT_BRIDGES);
   const [hydrated, setHydrated] = useState(false);
 
@@ -156,8 +152,8 @@ export function TwinProvider({ children }: { children: ReactNode }): ReactNode {
     setMode(readMode());
     setPersona(readPersona());
     setPolicy(readJson<readonly PolicyRow[]>(KEY_POLICY, DEFAULT_POLICY));
-    setMemory(readJson<readonly string[]>(KEY_MEMORY, DEFAULT_MEMORY));
     setBridges(readJson<Bridges>(KEY_BRIDGES, DEFAULT_BRIDGES));
+    removeLegacyKey(LEGACY_KEY_MEMORY);
     setHydrated(true);
   }, []);
 
@@ -172,9 +168,6 @@ export function TwinProvider({ children }: { children: ReactNode }): ReactNode {
   useEffect(() => {
     if (hydrated) writeJson(KEY_POLICY, policy);
   }, [policy, hydrated]);
-  useEffect(() => {
-    if (hydrated) writeJson(KEY_MEMORY, memory);
-  }, [memory, hydrated]);
   useEffect(() => {
     if (hydrated) writeJson(KEY_BRIDGES, bridges);
   }, [bridges, hydrated]);
@@ -192,13 +185,11 @@ export function TwinProvider({ children }: { children: ReactNode }): ReactNode {
       setPersona,
       policy,
       setPolicy,
-      memory,
-      setMemory,
       bridges,
       setBridges,
       decide,
     }),
-    [mode, persona, policy, memory, bridges, decide],
+    [mode, persona, policy, bridges, decide],
   );
 
   return <TwinContext.Provider value={value}>{children}</TwinContext.Provider>;

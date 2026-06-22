@@ -41,6 +41,13 @@ export class OutboundHttpEgressError extends Error {
   }
 }
 
+const FORWARDED_CREDENTIAL_HEADERS = new Set([
+  "authorization",
+  "x-litellm-key",
+  "x-api-key",
+  "api-key",
+]);
+
 function headersFromNode(headers: Record<string, string | string[] | undefined>): Headers {
   const out = new Headers();
   for (const [name, value] of Object.entries(headers)) {
@@ -60,6 +67,10 @@ function headersToRecord(headers: HeadersInit | undefined): Record<string, strin
     out[key] = value;
   });
   return out;
+}
+
+function hasForwardedCredentialHeader(headers: Record<string, string>): boolean {
+  return Object.keys(headers).some((name) => FORWARDED_CREDENTIAL_HEADERS.has(name.toLowerCase()));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -292,7 +303,7 @@ function noProxyRuleMatches(rule: string, host: string, hostPort: string): boole
   if (rule.includes(":") && normalizeHost(rule) === hostPort) return true;
   const domain = rule.startsWith(".") ? rule.slice(1) : rule;
   if (host === domain) return true;
-  return rule.startsWith(".") && host.endsWith(`.${domain}`);
+  return host.endsWith(`.${domain}`);
 }
 
 function noProxyMatches(url: URL, rules: readonly string[] | undefined): boolean {
@@ -357,10 +368,7 @@ const ABORT_ERROR_NAMES = new Set(["AbortError", "TimeoutError"]);
 function mapProxyError(error: unknown): Error {
   if (error instanceof OutboundHttpEgressError) return error;
   if (isRecoverableTlsTrustError(error)) {
-    return new OutboundHttpEgressError(
-      "TLS_CA_FAILURE",
-      "TLS certificate verification failed for outbound egress.",
-    );
+    return tlsCaFailureError();
   }
   if (error instanceof Error) {
     const code = isRecord(error) ? (error as Record<string, unknown>).code : undefined;
@@ -373,6 +381,13 @@ function mapProxyError(error: unknown): Error {
     return error;
   }
   return new OutboundHttpEgressError("PROXY_EGRESS_FAILED", "Outbound egress failed.");
+}
+
+function tlsCaFailureError(): OutboundHttpEgressError {
+  return new OutboundHttpEgressError(
+    "TLS_CA_FAILURE",
+    "TLS certificate verification failed for outbound egress.",
+  );
 }
 
 const PROXY_UNREACHABLE_ERROR = new OutboundHttpEgressError(
@@ -580,6 +595,12 @@ function fetchHttpViaProxy(
 ): Promise<Response> {
   const body = bodyToString(init.body);
   const headers = headersToRecord(init.headers);
+  if (hasForwardedCredentialHeader(headers)) {
+    throw new OutboundHttpEgressError(
+      "PROXY_BLOCKED_BY_POLICY",
+      "Refusing to forward credential headers to a plaintext HTTP target through the configured proxy.",
+    );
+  }
   // Ensure Host header omits the default port (fixes SigV4 pre-signed S3 URLs).
   if (!Object.prototype.hasOwnProperty.call(headers, "host")) {
     headers.host = hostHeader(target);
@@ -693,7 +714,17 @@ async function fetchDirectWithCaFallback(
     return await doFetch(url, init);
   } catch (error) {
     if (useCaFallback && usesHttps(url) && isRecoverableTlsTrustError(error)) {
-      return fetchWithCaBundle(url, init, egress, maxResponseBytes);
+      try {
+        return await fetchWithCaBundle(url, init, egress, maxResponseBytes);
+      } catch (fallbackError) {
+        if (isRecoverableTlsTrustError(fallbackError)) {
+          throw tlsCaFailureError();
+        }
+        throw fallbackError;
+      }
+    }
+    if (usesHttps(url) && isRecoverableTlsTrustError(error)) {
+      throw tlsCaFailureError();
     }
     throw error;
   }

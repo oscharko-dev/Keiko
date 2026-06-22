@@ -104,3 +104,96 @@ describe("adaptToPlainText", () => {
     expect(out).not.toMatch(/system prompt|you are an? /iu);
   });
 });
+
+// ─── GAP-1: skip-unmatched-entry branch ──────────────────────────────────────
+
+describe("adaptToPlainText — skip-unmatched-entry", () => {
+  it("silently omits a dangling entry and keeps candidate numbering contiguous", () => {
+    // Mutation (a): removing `if (candidate === undefined) continue;` renders `undefined`.
+    // Mutation (b): moving `index += 1` BEFORE the skip-guard would make the surviving
+    // candidate "CANDIDATE 2" — the dangling id is sorted FIRST (tc-0… < tc-1) to expose it.
+    const present = candidate("tc-1", "Present Candidate");
+    const b: QualityIntelligenceExportBundle = {
+      ...bundle([present]),
+      contents: [
+        {
+          candidateId: Q.asQualityIntelligenceTestCaseId("tc-0-missing"),
+          coverageMapRefs: [],
+          findingRefs: [],
+        },
+        { candidateId: present.id, coverageMapRefs: [], findingRefs: [] },
+      ],
+    };
+    const out = adaptToPlainText(b, [present]);
+    // The surviving candidate keeps index 1 — the skipped entry did not advance the counter.
+    expect(out).toContain("CANDIDATE 1: Present Candidate");
+    expect(out).not.toContain("CANDIDATE 2");
+    // The dangling entry leaves no trace.
+    expect(out).not.toContain("tc-0-missing");
+    expect(out).not.toContain("undefined");
+    // Deterministic.
+    expect(out).toBe(adaptToPlainText(b, [present]));
+  });
+});
+
+// ─── GAP-2: large case list — all-render + deterministic ordering ─────────────
+
+describe("adaptToPlainText — large case list", () => {
+  it("renders ALL 50 candidates with contiguous numbering matching ascending id order", () => {
+    // Mutation (a): an early break/slice drops trailing candidates → count < 50.
+    // Mutation (b): a partial comparator correct for 2 ids but wrong at scale.
+    // Zero-padded ids (tc-001..tc-050) ensure lexical order == intended order.
+    const cs = Array.from({ length: 50 }, (_v, i) => {
+      const n = String(i + 1).padStart(3, "0");
+      return candidate(`tc-${n}`, `Title ${n}`);
+    });
+    const reversed = [...cs].reverse(); // deterministic non-sorted input, no RNG
+    const out = adaptToPlainText(bundle(reversed), reversed);
+
+    const headers = out.match(/^CANDIDATE \d+: Title \d{3}$/gmu) ?? [];
+    expect(headers.length).toBe(50);
+    // Candidate N must render the Nth title in ascending id order (pins ordering at scale).
+    headers.forEach((header, i) => {
+      const pad = String(i + 1).padStart(3, "0");
+      expect(header).toBe(`CANDIDATE ${String(i + 1)}: Title ${pad}`);
+    });
+  });
+});
+
+// ─── GAP-5: empty bundle — valid header-only output ──────────────────────────
+
+describe("adaptToPlainText — empty bundle", () => {
+  it("renders a valid header/footer-only document with no candidate sections", () => {
+    // Mutation: a guard that drops the header/footer block on empty contents, or that
+    // skips the unconditional closing RULE, would produce malformed output.
+    const out = adaptToPlainText(bundle([]), []);
+    expect(out).toContain("QUALITY INTELLIGENCE EXPORT");
+    expect(out).toContain("Bundle:");
+    expect(out).toContain(RUN);
+    // No candidate block was emitted.
+    expect(out).not.toContain("CANDIDATE");
+    // The opening pair + the unconditional closing rule → at least three full RULE lines.
+    expect((out.match(/^={60}$/gmu) ?? []).length).toBeGreaterThanOrEqual(3);
+    // Well-formed: ends with a newline. Deterministic.
+    expect(out.endsWith("\n")).toBe(true);
+    expect(out).toBe(adaptToPlainText(bundle([]), []));
+  });
+});
+
+// ─── GAP-8: determinism under adversarial / control-char-laden input ──────────
+
+describe("adaptToPlainText — adversarial determinism", () => {
+  it("stays byte-identical across calls with control-char-laden multi-candidate input", () => {
+    const a: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-a", "T\u2028itle"),
+      steps: ["s\t1", "s\r\n2"],
+      tags: ["x\fy"],
+    };
+    const z: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-z", "Z\u000bitle"),
+      steps: ["only"],
+    };
+    const b = bundle([z, a]);
+    expect(adaptToPlainText(b, [z, a])).toBe(adaptToPlainText(b, [z, a]));
+  });
+});

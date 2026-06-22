@@ -14,11 +14,12 @@ function localMarkdownTargets(markdown: string): readonly string[] {
   for (const match of matches) {
     const raw = match[1];
     if (raw === undefined) continue;
-    const unwrapped =
-      raw.startsWith("<") && raw.endsWith(">")
-        ? raw.slice(1, -1)
-        : raw;
-    if (unwrapped.startsWith("https://") || unwrapped.startsWith("http://") || unwrapped.startsWith("#")) {
+    const unwrapped = raw.startsWith("<") && raw.endsWith(">") ? raw.slice(1, -1) : raw;
+    if (
+      unwrapped.startsWith("https://") ||
+      unwrapped.startsWith("http://") ||
+      unwrapped.startsWith("#")
+    ) {
       continue;
     }
     const withoutAnchor = unwrapped.split("#")[0] ?? unwrapped;

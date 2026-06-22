@@ -13,7 +13,6 @@ import {
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
-  loadConfigFromFile,
   redact,
   type EnvSource,
   type GatewayConfig,
@@ -33,6 +32,7 @@ import {
   type EvaluationFixture,
 } from "@oscharko-dev/keiko-evaluations";
 import { runGenTestsCli } from "./gen-tests.js";
+import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import { runInvestigateCli } from "./investigate.js";
 import type { CliIo } from "./runner.js";
 
@@ -169,14 +169,17 @@ function writeScorecard(path: string, output: unknown): void {
 
 function emit(scorecard: EvalScorecard, parsed: EvaluateArgs, io: CliIo, env: EnvSource): void {
   const output = redactedScorecard(scorecard, parsed.live, env);
+  // Emit --json to stdout BEFORE attempting the file write so that a file-already-exists
+  // error (EEXIST from writeScorecard) does not silently suppress the JSON output.
+  if (parsed.json) {
+    io.out(`${JSON.stringify(output, null, 2)}\n`);
+  }
   if (parsed.output !== undefined) {
     writeScorecard(parsed.output, output);
   }
-  if (parsed.json) {
-    io.out(`${JSON.stringify(output, null, 2)}\n`);
-    return;
+  if (!parsed.json) {
+    io.out(`${renderEvalSummary(scorecard)}\n`);
   }
-  io.out(`${renderEvalSummary(scorecard)}\n`);
 }
 
 // Exit 0 only when every scored dimension passed (zero failures) AND surface parity passed.
@@ -239,6 +242,7 @@ async function runSuite(
       {
         env,
         now: Date.now,
+        configLoader: loadGatewayConfigFromFile,
         surfaceParity: {
           runGenTestsCli,
           runInvestigateCli,
@@ -271,7 +275,7 @@ function resolveLiveModelId(
     if (path === undefined) {
       throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
     }
-    const config = loadConfigFromFile(path, env);
+    const config = loadGatewayConfigFromFile(path, env);
     if (parsed.model !== undefined) {
       assertLiveEvaluationModel(config, parsed.model);
       return parsed.model;

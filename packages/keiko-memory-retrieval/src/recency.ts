@@ -8,15 +8,13 @@
 // facts whose recency continues to refresh on every update. The constant is exported so
 // callers (e.g. an audit dashboard) can reproduce the score deterministically.
 
+import { exponentialDecay } from "./decay.js";
+
 const MS_PER_DAY = 86_400_000;
 export const RECENCY_HALF_LIFE_MS = 7 * MS_PER_DAY;
-const LN_2 = Math.LN2;
 
 export function recencyScore(updatedAt: number, nowMs: number): number {
-  const ageMs = nowMs - updatedAt;
-  if (ageMs <= 0) return 1;
-  const decay = Math.exp(-(LN_2 * ageMs) / RECENCY_HALF_LIFE_MS);
-  if (decay < 0) return 0;
-  if (decay > 1) return 1;
-  return decay;
+  // Edit-recency: decays since the record was last UPDATED. (Reuse-recency, which decays since last
+  // ACCESS at a different half-life, lives in strength.ts — both share the kernel in decay.ts.)
+  return exponentialDecay(nowMs - updatedAt, RECENCY_HALF_LIFE_MS);
 }

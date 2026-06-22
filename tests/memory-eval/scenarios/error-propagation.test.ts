@@ -31,7 +31,13 @@ import {
 } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 
-import { FIXED_NOW_MS, counterIdSource, makeRecord, userScope } from "../_support.js";
+import {
+  FIXED_NOW_MS,
+  TEST_VAULT_KEY,
+  counterIdSource,
+  makeRecord,
+  userScope,
+} from "../_support.js";
 import type { Scorecard } from "../scorecard.js";
 
 const SCENARIO_NAME = "error-propagation";
@@ -53,6 +59,7 @@ function openVault(dir: string): MemoryVaultStore {
     env: { KEIKO_MEMORY_DIR: dir },
     now: () => FIXED_NOW_MS,
     newTombstoneId: counterIdSource("tomb"),
+    vaultKey: TEST_VAULT_KEY,
   });
 }
 

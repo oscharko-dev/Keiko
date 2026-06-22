@@ -184,6 +184,7 @@ function safeRealPath(fs: WorkspaceFs, absolutePath: string): string | undefined
 interface WalkContext {
   readonly fs: WorkspaceFs;
   readonly bounds: ScopeBounds;
+  readonly realRootPath: string;
   readonly options: DiscoveryOptions;
   filesYielded: number;
 }
@@ -236,7 +237,7 @@ function* yieldFileIfAllowed(
   if (real === undefined) {
     return;
   }
-  if (!isContained(ctx.bounds.rootPath, real)) {
+  if (!isContained(ctx.realRootPath, real)) {
     yield {
       kind: "error",
       error: {
@@ -247,7 +248,7 @@ function* yieldFileIfAllowed(
     };
     return;
   }
-  const realRel = toPosixRelative(ctx.bounds.rootPath, real);
+  const realRel = toPosixRelative(ctx.realRootPath, real);
   if (isDeniedRelativePath(realRel)) {
     return;
   }
@@ -354,7 +355,15 @@ export function* walkSource(
     yield { kind: "error", error: bounds };
     return;
   }
-  const ctx: WalkContext = { fs, bounds, options, filesYielded: 0 };
+  const realRootPath = safeRealPath(fs, bounds.rootPath);
+  if (realRootPath === undefined) {
+    yield {
+      kind: "error",
+      error: { code: "READ_FAILED", message: "realPath failed for selected source root" },
+    };
+    return;
+  }
+  const ctx: WalkContext = { fs, bounds, realRootPath, options, filesYielded: 0 };
   if (scope.kind === "files") {
     yield* walkFilesScope(ctx, scope.files);
     return;

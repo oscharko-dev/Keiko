@@ -39,6 +39,12 @@ import {
   type RunState,
   type SearchTextRunner,
 } from "./repoSearchScan.js";
+import {
+  policyOmissionReason,
+  resolveSearchPolicy,
+  type SearchDiagnostics,
+  type SearchHints,
+} from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -78,6 +84,7 @@ export interface SearchResult {
   readonly filesScanned: number;
   readonly elapsedMs: number;
   readonly truncated: boolean;
+  readonly diagnostics: SearchDiagnostics | undefined;
 }
 
 export interface ReadExcerptRequest {
@@ -96,6 +103,8 @@ export interface ReadExcerptResult {
 interface FacadeDeps {
   readonly fs?: WorkspaceFs;
   readonly nowMs?: () => number;
+  readonly searchHints?: SearchHints | undefined;
+  readonly signal?: AbortSignal;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -126,6 +135,21 @@ function assertWorkspaceRoot(workspace: WorkspaceInfo): void {
   }
 }
 
+function isAborted(signal?: AbortSignal): boolean {
+  return signal?.aborted === true;
+}
+
+function abortedSearchResult(elapsedMs: number): SearchResult {
+  return {
+    atoms: [],
+    candidates: [],
+    filesScanned: 0,
+    elapsedMs,
+    truncated: true,
+    diagnostics: undefined,
+  };
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 // Yields to the event loop every SCAN_YIELD_INTERVAL files so a large cold NFS/SMB workspace
@@ -133,6 +157,29 @@ function assertWorkspaceRoot(workspace: WorkspaceInfo): void {
 // (sync walk is load-bearing for importGraph/testSourcePairing callers); the yield here covers
 // the already-async per-file scan pass where the loop overhead is measurable.
 const SCAN_YIELD_INTERVAL = 64;
+
+function buildSearchTextRunner(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  deps: Required<Pick<FacadeDeps, "fs" | "nowMs">> & Pick<FacadeDeps, "searchHints" | "signal">,
+): SearchTextRunner {
+  return {
+    scope,
+    limits: {
+      ...limits,
+      maxMatchesReturned: Math.min(limits.maxMatchesReturned, query.maxResults),
+    },
+    fs: deps.fs,
+    nowMs: deps.nowMs,
+    startMs: deps.nowMs(),
+    signal: deps.signal,
+    matcher: buildMatcher(query),
+    fingerprint: fingerprintFor(query),
+    policy: resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints),
+    query,
+  };
+}
 
 async function runScanLoop(
   runner: SearchTextRunner,
@@ -151,6 +198,9 @@ async function runScanLoop(
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
+      if (hitLimit(runner, state)) {
+        break;
+      }
     }
     await scanFile(runner, file, state, atoms, candidates);
   }
@@ -169,21 +219,19 @@ export async function searchText(
   }
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
-  // Honor the per-query cap alongside the global limit (Finding 1).
-  const effectiveLimits: SearchLimits = {
-    ...limits,
-    maxMatchesReturned: Math.min(limits.maxMatchesReturned, query.maxResults),
-  };
-  const runner: SearchTextRunner = {
-    scope,
-    limits: effectiveLimits,
+  const runner = buildSearchTextRunner(scope, query, limits, {
     fs,
     nowMs,
-    startMs: nowMs(),
-    matcher: buildMatcher(query),
-    fingerprint: fingerprintFor(query),
-  };
-  const candidateSet: CandidateSet = gatherCandidates(scope, limits, fs);
+    ...(deps.searchHints !== undefined ? { searchHints: deps.searchHints } : {}),
+    ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+  });
+  if (isAborted(deps.signal)) {
+    return abortedSearchResult(elapsed(runner));
+  }
+  const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, runner.policy);
+  if (isAborted(deps.signal)) {
+    return { ...abortedSearchResult(elapsed(runner)), diagnostics: candidateSet.diagnostics };
+  }
   const atoms: EvidenceAtom[] = [];
   const candidates: CandidateFile[] = [];
   // Seed truncated from candidate gathering so a scope.relativePaths cap is preserved.
@@ -199,6 +247,7 @@ export async function searchText(
     filesScanned: state.filesScanned,
     elapsedMs: elapsed(runner),
     truncated: state.truncated,
+    diagnostics: candidateSet.diagnostics,
   };
 }
 
@@ -207,6 +256,13 @@ interface FindFilesContext {
   readonly regex: RegExp;
   readonly fingerprint: string;
   readonly nowMs: () => number;
+}
+
+interface FindFilesState {
+  readonly atoms: EvidenceAtom[];
+  readonly candidates: CandidateFile[];
+  filesScanned: number;
+  truncated: boolean;
 }
 
 function emitFileListing(ctx: FindFilesContext, relativePath: string, atoms: EvidenceAtom[]): void {
@@ -224,43 +280,100 @@ function emitFileListing(ctx: FindFilesContext, relativePath: string, atoms: Evi
   );
 }
 
+function hitFileListingLimit(
+  state: FindFilesState,
+  maxMatches: number,
+  startMs: number,
+  nowMs: () => number,
+  limits: SearchLimits,
+  signal?: AbortSignal,
+): boolean {
+  return (
+    isAborted(signal) ||
+    state.atoms.length >= maxMatches ||
+    nowMs() - startMs > limits.elapsedMsMax
+  );
+}
+
+function collectFileListings(
+  ctx: FindFilesContext,
+  candidateSet: CandidateSet,
+  policy: ReturnType<typeof resolveSearchPolicy>,
+  inputs: {
+    readonly limits: SearchLimits;
+    readonly maxMatches: number;
+    readonly startMs: number;
+    readonly signal?: AbortSignal;
+  },
+): FindFilesState {
+  const state: FindFilesState = {
+    atoms: [],
+    candidates: [],
+    filesScanned: 0,
+    truncated: candidateSet.truncated,
+  };
+  for (const file of candidateSet.files) {
+    if (hitFileListingLimit(state, inputs.maxMatches, inputs.startMs, ctx.nowMs, inputs.limits, inputs.signal)) {
+      state.truncated = true;
+      break;
+    }
+    if (isDenied(file.relativePath)) {
+      state.candidates.push(buildCandidate(file.relativePath, "ignored"));
+      continue;
+    }
+    const omitted = policyOmissionReason(file.relativePath, policy);
+    if (omitted !== undefined) {
+      state.candidates.push(buildCandidate(file.relativePath, omitted));
+      continue;
+    }
+    state.filesScanned += 1;
+    if (ctx.regex.test(file.relativePath)) {
+      emitFileListing(ctx, file.relativePath, state.atoms);
+    }
+  }
+  return state;
+}
+
 function findFilesSync(
   scope: SearchScope,
   query: RetrievalQuery,
   limits: SearchLimits,
   fs: WorkspaceFs,
   nowMs: () => number,
+  hints: SearchHints | undefined,
+  signal?: AbortSignal,
 ): SearchResult {
   const startMs = nowMs();
+  if (isAborted(signal)) {
+    return abortedSearchResult(0);
+  }
   // Honor the per-query cap alongside the global limit (Finding 2).
   const effectiveMaxMatches = Math.min(limits.maxMatchesReturned, query.maxResults);
   const ctx: FindFilesContext = {
     scope,
-    regex: compileGlob(query.text),
+    regex: compileGlob(query.text, query.caseSensitive),
     fingerprint: fingerprintFor(query),
     nowMs,
   };
-  const candidateSet: CandidateSet = gatherCandidates(scope, limits, fs);
-  const atoms: EvidenceAtom[] = [];
-  const candidates: CandidateFile[] = [];
-  // Seed truncated from candidate gathering so a scope.relativePaths cap is preserved.
-  let truncated = candidateSet.truncated;
-  let filesScanned = 0;
-  for (const file of candidateSet.files) {
-    if (atoms.length >= effectiveMaxMatches || nowMs() - startMs > limits.elapsedMsMax) {
-      truncated = true;
-      break;
-    }
-    if (isDenied(file.relativePath)) {
-      candidates.push(buildCandidate(file.relativePath, "ignored"));
-      continue;
-    }
-    filesScanned += 1;
-    if (ctx.regex.test(file.relativePath)) {
-      emitFileListing(ctx, file.relativePath, atoms);
-    }
+  const policy = resolveSearchPolicy(scope.relativePaths.length > 0, hints);
+  const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, policy);
+  if (isAborted(signal)) {
+    return { ...abortedSearchResult(nowMs() - startMs), diagnostics: candidateSet.diagnostics };
   }
-  return { atoms, candidates, filesScanned, elapsedMs: nowMs() - startMs, truncated };
+  const state = collectFileListings(ctx, candidateSet, policy, {
+    limits,
+    maxMatches: effectiveMaxMatches,
+    startMs,
+    ...(signal !== undefined ? { signal } : {}),
+  });
+  return {
+    atoms: state.atoms,
+    candidates: state.candidates,
+    filesScanned: state.filesScanned,
+    elapsedMs: nowMs() - startMs,
+    truncated: state.truncated,
+    diagnostics: candidateSet.diagnostics,
+  };
 }
 
 export async function findFiles(
@@ -276,7 +389,9 @@ export async function findFiles(
   }
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
-  return await Promise.resolve(findFilesSync(scope, query, limits, fs, nowMs));
+  return await Promise.resolve(
+    findFilesSync(scope, query, limits, fs, nowMs, deps.searchHints, deps.signal),
+  );
 }
 
 function buildExcerptFingerprint(request: ReadExcerptRequest): string {
@@ -397,6 +512,9 @@ export async function readExcerpt(
   request: ReadExcerptRequest,
   deps: FacadeDeps = {},
 ): Promise<ReadExcerptResult> {
+  if (isAborted(deps.signal)) {
+    throw new RepoSearchUnsupportedFileError("repo-search operation aborted", "aborted");
+  }
   assertExcerptRange(request);
   assertWorkspaceRoot(scope.workspace);
   assertExcerptWithinSelectedScope(scope, request.scopePath);
@@ -413,6 +531,9 @@ export async function readExcerpt(
   assertExcerptWithinSelectedScope(scope, target.realScopePath);
   const stat = fs.stat(target.path);
   await assertExcerptNotBinary(fs, target.path, stat.size, request.scopePath);
+  if (isAborted(deps.signal)) {
+    throw new RepoSearchUnsupportedFileError("repo-search operation aborted", "aborted");
+  }
   // Read enough of the file to reach the requested line window (bounded by MAX_EXCERPT_FILE_BYTES),
   // then clamp the returned content to the caller's request.maxBytes budget. The read cap is
   // intentionally larger than request.maxBytes so a window deep in a multi-kibibyte file is still

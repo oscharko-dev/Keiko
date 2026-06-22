@@ -11,8 +11,15 @@ import {
   listCapsules,
   openKnowledgeStore,
   resolveKnowledgeStorePath,
+  upsertExtractionCheckpoint,
 } from "@oscharko-dev/keiko-local-knowledge";
-import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
+import type {
+  CapsuleHealth,
+  CapsuleLargeDocumentHealth,
+  DocumentId,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
   OpenAIEmbeddingOutcome,
@@ -1641,5 +1648,95 @@ describe("local-knowledge handlers", () => {
       indexingJobsTotal: 1,
       indexingJobsTruncated: false,
     });
+  });
+});
+
+describe("local-knowledge large-document health (Issue #1286)", () => {
+  function seedLargeDocumentCheckpoint(
+    store: ReturnType<typeof openKnowledgeStore>,
+    capId: KnowledgeCapsuleId,
+  ): void {
+    upsertExtractionCheckpoint(store._internal.db, {
+      capsuleId: capId,
+      documentId: "doc-1" as DocumentId,
+      jobId: "job-1",
+      strategy: "progressive-pdf",
+      phase: "embedding",
+      pageCursor: 12,
+      sectionCursor: 0,
+      objectCursor: 100,
+      extractedTextBytes: 5000,
+      chunkCursor: 20,
+      embeddedChunkCursor: 8,
+      retryCount: 0,
+      coverage: "partial",
+      fingerprint: {
+        sourceContentHash: "abcd",
+        parserVersion: "progressive-pdf@1",
+        policyFingerprint: "ldp1",
+        chunkingStrategyVersion: "chunker@2",
+        embeddingIdentity: {
+          provider: "openai",
+          modelId: "text-embedding-3-small",
+          vectorDimensions: 1536,
+          vectorMetric: "cosine",
+        },
+      },
+      terminalDiagnostics: [],
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO parser_diagnostics (id, capsule_id, document_id, severity, code, message, page_number, created_at) VALUES (:id, :c, NULL, 'warning', 'PARTIAL_COVERAGE', :m, NULL, 1)",
+      )
+      .run({
+        id: "diag-1",
+        c: capId,
+        m: "page has no extractable text layer; indexed with partial coverage",
+      });
+  }
+
+  it("surfaces resource policy, progress, partial coverage, quality warnings, and resumable docs", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    seedLargeDocumentCheckpoint(seeded.store, seeded.capId);
+    seeded.store.close();
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as Record<string, unknown>;
+    const largeDoc = body.largeDocumentHealth as CapsuleLargeDocumentHealth;
+    expect(largeDoc.resourcePolicy.largeFileThresholdBytes).toBeGreaterThan(0);
+    expect(largeDoc.progress).toHaveLength(1);
+    expect(largeDoc.progress[0]?.phase).toBe("embedding");
+    expect(largeDoc.progress[0]?.resumable).toBe(true);
+    expect(largeDoc.resumableDocuments).toContain("doc-1");
+    expect(largeDoc.partialCoverageDocuments).toBe(1);
+    expect(largeDoc.qualityWarnings).toHaveLength(1);
+
+    const health = body.health as CapsuleHealth;
+    expect(health.partialCoverageDocuments).toBe(1);
+    expect(health.resumableDocuments).toBe(1);
+    expect(health.qualityWarnings).toHaveLength(1);
+    // Redaction: the surfaced warning carries no absolute path.
+    expect(health.qualityWarnings?.[0]).not.toContain("/");
+  });
+
+  it("accepts the resume reindex mode without a validation error", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const result = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "resume" }), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+    // The capsule has no sources, so the handler returns a conflict rather than indexing — but the
+    // `resume` mode passes validation (a rejected mode would be a 400 invalid-request).
+    expect(result.status).not.toBe(400);
   });
 });

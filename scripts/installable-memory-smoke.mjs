@@ -376,7 +376,7 @@ async function forgetMemory(baseUrl, memoryId) {
 async function deleteMemory(baseUrl, memoryId) {
   return api(baseUrl, `/api/memory/${encodeURIComponent(memoryId)}`, {
     method: "DELETE",
-    body: "{}",
+    body: JSON.stringify({ acknowledged: true, reason: "installable memory smoke" }),
   });
 }
 
@@ -438,8 +438,6 @@ async function main() {
     ui = await startInstalledUi(installRoot, configPath, uiDbPath, evidenceDir, memoryDir);
     const homeHtml = await fetchText(`${ui.baseUrl}/`);
     assert(homeHtml.includes("Keiko"), "home page did not contain the Keiko shell marker");
-    const memoryHtml = await fetchText(`${ui.baseUrl}/memoriaviva`);
-    assert(memoryHtml.includes("MemoriaViva"), "/memoriaviva did not render the MemoriaViva route");
     await assertFreshMemoryState(ui.baseUrl);
 
     const rememberChatId = await createChat(ui.baseUrl, projectA);
@@ -610,10 +608,13 @@ async function main() {
     await acceptProposal(ui.baseUrl, deleteId);
     await deleteMemory(ui.baseUrl, deleteId);
     const deleted = await fetchMemory(ui.baseUrl, deleteId);
-    assert(deleted.status === 404, "hard-deleted memory still resolved from the Memory Center API");
+    assert(
+      deleted.status === 404,
+      "deleted and tombstoned memory still resolved from the Memory Center API",
+    );
 
     console.log(
-      "installable-memory-smoke ok: tarball-installed UI/BFF served pages and exercised create, use, correct, forget, delete, scope isolation, restart persistence, and memory-off mode.",
+      "installable-memory-smoke ok: tarball-installed UI/BFF served the workspace shell and exercised create, use, correct, forget, delete, scope isolation, restart persistence, and memory-off mode.",
     );
   } finally {
     if (ui !== null) {

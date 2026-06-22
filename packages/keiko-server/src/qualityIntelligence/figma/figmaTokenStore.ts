@@ -19,10 +19,18 @@
 //   3. Keyfile          — <vaultDir>/figma-vault.key, mode 0600. Weakest tier (key next to store).
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, resolve } from "node:path";
 import { isSealed, openString, sealString } from "@oscharko-dev/keiko-security";
 import { FigmaConnectorError } from "./figmaConnectorErrors.js";
 
@@ -78,6 +86,27 @@ function ensureDirHardened(dir: string): void {
   }
 }
 
+function assertNoSymlinkedPathSegments(resolvedPath: string): void {
+  let current = resolvedPath;
+  while (current !== dirname(current)) {
+    if (isSymlink(current)) {
+      throw new FigmaConnectorError("FIGMA_INTERNAL");
+    }
+    current = dirname(current);
+  }
+}
+
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 function keyFromKeychain(): Buffer | undefined {
   if (process.platform !== "darwin") return undefined;
   const account = userInfo().username;
@@ -108,8 +137,10 @@ function generateKeychainKey(account: string): Buffer | undefined {
 }
 
 function keyFromKeyfile(vaultDir: string): Buffer {
-  ensureDirHardened(vaultDir);
-  const keyfile = join(vaultDir, KEYFILE_NAME);
+  const keyfile = resolve(vaultDir, KEYFILE_NAME);
+  assertNoSymlinkedPathSegments(keyfile);
+  ensureDirHardened(dirname(keyfile));
+  assertNoSymlinkedPathSegments(keyfile);
   if (existsSync(keyfile)) {
     return decodeKeyOrThrow(readFileSync(keyfile, "utf8").trim());
   }
@@ -143,15 +174,19 @@ export function resolveFigmaVaultKey(
 }
 
 export function createFigmaTokenStore(deps: FigmaTokenStoreDeps): FigmaTokenStore {
-  const { key, storePath } = deps;
+  const { key } = deps;
+  const storePath = resolve(deps.storePath);
 
   const store = (token: string): void => {
+    assertNoSymlinkedPathSegments(storePath);
     ensureDirHardened(dirname(storePath));
+    assertNoSymlinkedPathSegments(storePath);
     writeFileSync(storePath, sealString(key, token), { mode: 0o600 });
     chmodIfPresent(storePath, 0o600);
   };
 
   const read = (): string | undefined => {
+    assertNoSymlinkedPathSegments(storePath);
     if (!existsSync(storePath)) return undefined;
     const envelope = readFileSync(storePath, "utf8").trim();
     if (envelope.length === 0 || !isSealed(envelope)) return undefined;
@@ -159,6 +194,7 @@ export function createFigmaTokenStore(deps: FigmaTokenStoreDeps): FigmaTokenStor
   };
 
   const revoke = (): void => {
+    assertNoSymlinkedPathSegments(storePath);
     rmSync(storePath, { force: true });
   };
 

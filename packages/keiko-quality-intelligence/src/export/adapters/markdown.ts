@@ -11,28 +11,60 @@ import type {
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
 import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
-import { inlineField, inlineFields } from "../textSafety.js";
+import { inlineField } from "../textSafety.js";
+import { startsWithFormulaLead } from "./spreadsheetSafeCsv.js";
 
 const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number =>
   a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0;
 
+// Untrusted candidate free-text rendered into the EXPORTED Markdown artifact must not inject active
+// Markdown structure into an external viewer, nor evaluate as a formula if the .md is pasted into a
+// spreadsheet (Issue #284 AC2 — "Generated artifacts are sanitized before preview or export").
+// `mdText` composes content-preserving (escape-not-strip) steps on top of inlineField:
+//   1. inlineField — fold line breaks so the value stays one logical unit (Epic #711);
+//   2. neutralise a leading spreadsheet formula lead (=,+,-,@, incl. a trimmed leading-whitespace
+//      run) with a single-quote prefix — parity with the CSV adapters / traceability.mdCell;
+//   3. escape the Markdown-active vectors a single-line value can still smuggle — a link or image
+//      (incl. javascript:/data: hrefs) and a fenced-code run — the link/image/fenced subset of the
+//      accepted #278 untrusted-markdown escape set (ingestion/untrustedContentNormalisation). The
+//      literal text is preserved so an auditor still reads the original content.
+// The #278 set's fourth vector — a line-leading `#` heading — is intentionally NOT escaped here: it
+// is already mitigated structurally, not by escaping. Step 1 folds every internal line break to a
+// space, and every field value is rendered behind a fixed prefix (`## ` for the title, `- `/`N. `
+// for list items, `**Tags:** ` etc.), so a leading `#` in untrusted text can never reach a true
+// line-start and open a heading.
+const FENCED_CODE = /```/gu;
+const IMAGE_OPEN = /!\[/gu;
+const LINK_OPEN = /(?<!!)\[([^\]]*)\]\(/gu;
+
+function mdText(value: string): string {
+  const oneLine = inlineField(value);
+  const formulaSafe = startsWithFormulaLead(oneLine) ? `'${oneLine}` : oneLine;
+  return formulaSafe
+    .replace(FENCED_CODE, "\\`\\`\\`")
+    .replace(IMAGE_OPEN, "\\!\\[")
+    .replace(LINK_OPEN, (_match: string, inner: string): string => `\\[${inner}\\](`);
+}
+
+const mdTextList = (items: readonly string[]): string[] => items.map(mdText);
+
 const mdList = (items: readonly string[]): string =>
   items.length === 0
     ? "_none_\n"
-    : inlineFields(items)
+    : mdTextList(items)
         .map((item) => `- ${item}`)
         .join("\n") + "\n";
 
 function renderCandidate(candidate: QualityIntelligenceTestCaseCandidate, runId: string): string {
   const lines: string[] = [];
-  lines.push(`## ${inlineField(candidate.title)}\n`);
+  lines.push(`## ${mdText(candidate.title)}\n`);
   lines.push(`**ID:** ${candidate.id}  `);
   lines.push(`**Run:** ${runId}  `);
   lines.push(`**Priority:** ${candidate.priority}  `);
   lines.push(`**Risk class:** ${candidate.riskClass}  `);
   lines.push(`**Status:** ${candidate.status}  `);
   lines.push(
-    `**Tags:** ${candidate.tags.length > 0 ? inlineFields(candidate.tags).join(", ") : "_none_"}  `,
+    `**Tags:** ${candidate.tags.length > 0 ? mdTextList(candidate.tags).join(", ") : "_none_"}  `,
   );
   lines.push("");
   lines.push("### Preconditions\n");
@@ -41,7 +73,7 @@ function renderCandidate(candidate: QualityIntelligenceTestCaseCandidate, runId:
   lines.push(
     candidate.steps.length === 0
       ? "_none_\n"
-      : inlineFields(candidate.steps)
+      : mdTextList(candidate.steps)
           .map((s, i) => `${String(i + 1)}. ${s}`)
           .join("\n") + "\n",
   );

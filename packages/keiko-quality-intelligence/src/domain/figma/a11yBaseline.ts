@@ -22,13 +22,16 @@
 // a byte-identical result. The baseline is model-free and stands alone; vision augmentation (#810) is
 // layered separately and never replaces these items.
 
-import { parseHexRgb, type Rgb } from "./color.js";
+import { parseHexRgba, type Rgb, type Rgba } from "./color.js";
 import type { BoundingBox, IrNode, ScreenIr } from "./irTypes.js";
 import type { StructuralTestItem } from "./screenIrTestBaseline.js";
 
 const MIN_TARGET_SIZE = 24;
 const AA_NORMAL = 4.5;
 const AA_LARGE = 3.0;
+const LARGE_TEXT_MIN_PX = 24;
+const LARGE_BOLD_TEXT_MIN_PX = 18.6667;
+const LARGE_TEXT_MIN_WEIGHT = 700;
 
 // Generous per-screen item cap so a pathologically dense real screen (thousands of TEXT nodes →
 // thousands of contrast checks) cannot make the a11y baseline unbounded in memory/output. Small
@@ -44,7 +47,7 @@ const INTERACTIVE = new Set<IrNode["interactionHint"]>(["button", "input", "link
 // sRGB → linear-light channel (WCAG 2.x): c/12.92 below the knee, else ((c+0.055)/1.055)^2.4.
 const linearizeChannel = (channel255: number): number => {
   const c = channel255 / 255;
-  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
 };
 
 /** WCAG relative luminance of an sRGB colour: 0 for black, 1 for white. */
@@ -88,9 +91,11 @@ const a11yItem = (
   nodeId: string,
   kind: string,
   title: string,
+  outcome: StructuralTestItem["outcome"],
 ): StructuralTestItem => ({
   id: a11yItemId("fa11y", `${ctx.screenId}|${kind}|${nodeId}`),
   category: "a11y",
+  ...(outcome !== undefined ? { outcome } : {}),
   screenId: ctx.screenId,
   screenName: ctx.screenName,
   sourceNodeId: nodeId,
@@ -116,21 +121,60 @@ const noticeItem = (
 const nodeLabel = (node: IrNode): string =>
   node.text !== undefined && node.text.length > 0 ? node.text : node.name;
 
-// A node's name is "descriptive" only when it is not an opaque Figma node id (e.g. "123:45"). This is
-// structural, not board-specific: it rejects the id syntax, never any particular screen's vocabulary.
-const hasDescriptiveName = (node: IrNode): boolean =>
-  node.name.trim().length > 0 && !/^[0-9]+:[0-9]+$/u.test(node.name.trim());
+const GENERIC_LAYER_NAME =
+  /^(?:frame|rectangle|group|button|instance|component|text|vector|ellipse|line|image|icon)(?:\s+\d+)?$/iu;
+
+// A node's name is descriptive only when it is neither an opaque Figma node id nor a generic default
+// layer name. This stays structural: it rejects provider-default vocabulary, not board-specific copy.
+const hasDescriptiveName = (node: IrNode): boolean => {
+  const trimmed = node.name.trim();
+  return (
+    trimmed.length > 0 && !/^[0-9]+:[0-9]+$/u.test(trimmed) && !GENERIC_LAYER_NAME.test(trimmed)
+  );
+};
 
 const hasAccessibleName = (node: IrNode): boolean =>
   (node.text !== undefined && node.text.trim().length > 0) || hasDescriptiveName(node);
 
+const isLargeText = (node: IrNode): boolean => {
+  const typography = node.typography;
+  if (typography === undefined) return false;
+  if (typography.fontSize >= LARGE_TEXT_MIN_PX) return true;
+  return (
+    typography.fontSize >= LARGE_BOLD_TEXT_MIN_PX && typography.fontWeight >= LARGE_TEXT_MIN_WEIGHT
+  );
+};
+
+const compositeChannel = (foreground: number, background: number, alpha: number): number =>
+  Math.round(foreground * alpha + background * (1 - alpha));
+
+const compositeOver = (foreground: Rgba, background: Rgb): Rgb => {
+  if (foreground.a >= 1) return { r: foreground.r, g: foreground.g, b: foreground.b };
+  return {
+    r: compositeChannel(foreground.r, background.r, foreground.a),
+    g: compositeChannel(foreground.g, background.g, foreground.a),
+    b: compositeChannel(foreground.b, background.b, foreground.a),
+  };
+};
+
+const resolveBackground = (
+  backgroundColor: string | undefined,
+  inheritedBackground: Rgb | undefined,
+): Rgb | undefined => {
+  if (backgroundColor === undefined) return inheritedBackground;
+  const ownBackground = parseHexRgba(backgroundColor);
+  if (ownBackground === undefined) return undefined;
+  if (inheritedBackground === undefined && ownBackground.a < 1) return undefined;
+  return compositeOver(ownBackground, inheritedBackground ?? { r: 255, g: 255, b: 255 });
+};
+
 const contrastItem = (
   ctx: ScreenContext,
   node: IrNode,
-  background: string | undefined,
+  background: Rgb | undefined,
 ): StructuralTestItem => {
-  const fg = node.textColor === undefined ? undefined : parseHexRgb(node.textColor);
-  const bg = background === undefined ? undefined : parseHexRgb(background);
+  const fg = node.textColor === undefined ? undefined : parseHexRgba(node.textColor);
+  const bg = background;
   if (fg === undefined || bg === undefined) {
     return noticeItem(
       ctx,
@@ -139,12 +183,23 @@ const contrastItem = (
       `Text "${nodeLabel(node)}" needs a verifiable colour contrast: text/background colour could not be resolved from the design tokens`,
     );
   }
-  const ratio = contrastRatio(fg, bg);
+  const renderedFg = compositeOver(fg, bg);
+  const ratio = contrastRatio(renderedFg, bg);
   const rounded = Math.round(ratio * 100) / 100;
-  const verdict = meetsContrastAa(ratio, false)
-    ? `meets WCAG AA (${String(rounded)}:1 ≥ ${String(AA_NORMAL)}:1)`
-    : `is below WCAG AA (${String(rounded)}:1 < ${String(AA_NORMAL)}:1)`;
-  return a11yItem(ctx, node.id, "contrast", `Text "${nodeLabel(node)}" colour contrast ${verdict}`);
+  const largeText = isLargeText(node);
+  const threshold = largeText ? AA_LARGE : AA_NORMAL;
+  const label = largeText ? "WCAG AA large text" : "WCAG AA";
+  const passes = meetsContrastAa(ratio, largeText);
+  const verdict = passes
+    ? `meets ${label} (${String(rounded)}:1 ≥ ${String(threshold)}:1)`
+    : `is below ${label} (${String(rounded)}:1 < ${String(threshold)}:1)`;
+  return a11yItem(
+    ctx,
+    node.id,
+    "contrast",
+    `Text "${nodeLabel(node)}" colour contrast ${verdict}`,
+    passes ? "pass" : "fail",
+  );
 };
 
 const isTooSmall = (box: BoundingBox): boolean =>
@@ -170,16 +225,26 @@ interface WalkAccumulator {
 // its cyclomatic complexity stays within budget. Rules read only structural shape — never copy.
 const nameRule = (ctx: ScreenContext, node: IrNode): StructuralTestItem | undefined =>
   INTERACTIVE.has(node.interactionHint) && !hasAccessibleName(node)
-    ? a11yItem(ctx, node.id, "name", `Interactive "${node.name}" exposes an accessible name`)
+    ? a11yItem(ctx, node.id, "name", `Interactive "${node.name}" needs an accessible name`, "fail")
     : undefined;
 
 const contrastRule = (
   ctx: ScreenContext,
   node: IrNode,
-  background: string | undefined,
+  background: Rgb | undefined,
 ): StructuralTestItem | undefined =>
-  node.interactionHint === "text" && node.textColor !== undefined
+  node.interactionHint === "text" && node.text !== undefined && node.text.trim().length > 0
     ? contrastItem(ctx, node, background)
+    : undefined;
+
+const layoutCoverageRule = (ctx: ScreenContext, node: IrNode): StructuralTestItem | undefined =>
+  INTERACTIVE.has(node.interactionHint) && node.boundingBox === undefined
+    ? noticeItem(
+        ctx,
+        node.id,
+        "bounds",
+        `Control "${nodeLabel(node)}" needs verifiable layout bounds: target size and focus order could not be resolved from the Screen-IR`,
+      )
     : undefined;
 
 const targetSizeRule = (ctx: ScreenContext, node: IrNode): StructuralTestItem | undefined =>
@@ -190,13 +255,20 @@ const targetSizeRule = (ctx: ScreenContext, node: IrNode): StructuralTestItem | 
         ctx,
         node.id,
         "target",
-        `Control "${nodeLabel(node)}" meets the 24×24 minimum target size`,
+        `Control "${nodeLabel(node)}" does not meet the 24×24 minimum target size`,
+        "fail",
       )
     : undefined;
 
 const altTextRule = (ctx: ScreenContext, node: IrNode): StructuralTestItem | undefined =>
   node.imageFills.length > 0
-    ? a11yItem(ctx, node.id, "alt", `Image "${node.name}" exposes descriptive alt text`)
+    ? a11yItem(
+        ctx,
+        node.id,
+        "alt",
+        `Image "${node.name}" needs descriptive alt text verification`,
+        "expectation",
+      )
     : undefined;
 
 // Shared constant — see prune.ts for rationale. Must stay in sync with every other recursive walk.
@@ -205,15 +277,16 @@ const MAX_TREE_DEPTH = 512;
 function visitAt(
   node: IrNode,
   ctx: ScreenContext,
-  inheritedBackground: string | undefined,
+  inheritedBackground: Rgb | undefined,
   acc: WalkAccumulator,
   depth: number,
 ): void {
   if (depth > MAX_TREE_DEPTH) return;
-  const background = node.backgroundColor ?? inheritedBackground;
+  const background = resolveBackground(node.backgroundColor, inheritedBackground);
   for (const item of [
     nameRule(ctx, node),
     contrastRule(ctx, node, background),
+    layoutCoverageRule(ctx, node),
     targetSizeRule(ctx, node),
     altTextRule(ctx, node),
   ]) {
@@ -228,7 +301,7 @@ function visitAt(
 function visit(
   node: IrNode,
   ctx: ScreenContext,
-  inheritedBackground: string | undefined,
+  inheritedBackground: Rgb | undefined,
   acc: WalkAccumulator,
 ): void {
   visitAt(node, ctx, inheritedBackground, acc, 0);
@@ -245,6 +318,7 @@ const focusOrderItem = (
     ordered[0]?.nodeId ?? "",
     "focus-order",
     `Focus order follows the visual reading order: ${sequence}`,
+    "expectation",
   );
 };
 

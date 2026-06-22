@@ -13,6 +13,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -80,6 +81,64 @@ function captureRes(): CapturedRes {
     },
   };
   return { ...captured, res: res as unknown as ServerResponse, writes };
+}
+
+interface CapturedResWithEvents {
+  res: ServerResponse;
+  readonly writes: string[];
+  status?: number | undefined;
+  ended: boolean;
+  destroyed: boolean;
+  // Emits "close" on the response so abortOnDisconnect fires — simulates a client disconnect.
+  emitClose: () => void;
+  // Controls what res.write() returns (default true; set false to simulate backpressure).
+  writeReturns: boolean;
+}
+
+// Like captureRes but backed by an EventEmitter so res.on("close") listeners actually fire.
+// Used for the cancel (disconnect) test and the backpressure test.
+// NOTE: this function returns the mutable state object directly (no spread) so that mutations to
+// `writeReturns` made by the test after construction are visible inside res.write().
+function captureResWithEvents(): CapturedResWithEvents {
+  const writes: string[] = [];
+  const emitter = new EventEmitter();
+  const result: CapturedResWithEvents = {
+    res: undefined as unknown as ServerResponse,
+    writes,
+    status: undefined,
+    ended: false,
+    destroyed: false,
+    writeReturns: true,
+    emitClose: (): void => {
+      emitter.emit("close");
+    },
+  };
+  const res = {
+    writeHead(status: number): ServerResponse {
+      result.status = status;
+      return res as unknown as ServerResponse;
+    },
+    write(chunk: string): boolean {
+      writes.push(chunk);
+      return result.writeReturns;
+    },
+    end(): ServerResponse {
+      result.ended = true;
+      return res as unknown as ServerResponse;
+    },
+    destroy(): void {
+      result.destroyed = true;
+    },
+    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.on(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    emit(event: string): boolean {
+      return emitter.emit(event);
+    },
+  };
+  result.res = res as unknown as ServerResponse;
+  return result;
 }
 
 // A request double: a Readable that streams the JSON body (so readBody resolves) and also serves as
@@ -368,30 +427,79 @@ describe("desktop chat SSE streaming handler", () => {
     expect(payload.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
   });
 
+  it("emits an error and does not persist a fake assistant when done content is empty", async () => {
+    const chatId = seedChat();
+    const { model } = streamingModel("");
+    const res = captureRes();
+
+    await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        res.res,
+      ),
+      deps(model),
+    );
+
+    const records = parseSse(res.writes);
+    expect(records.some((record) => record.event === "done")).toBe(false);
+    const error = records.find((record) => record.event === "error");
+    expect(error).toBeDefined();
+    expect((error?.data as { code?: string }).code).toBe("GATEWAY_PROVIDER_ERROR");
+    const persisted = store.listMessages(chatId);
+    expect(persisted.map((message) => message.role)).toEqual(["user"]);
+    expect(JSON.stringify(persisted)).not.toContain("The model returned an empty response.");
+  });
+
   it("persists the user message but NO assistant message when the stream is cancelled", async () => {
     const chatId = seedChat();
-    const res = captureRes();
-    // Build the request first so we can abort it from the model's onFirstDelta callback. The
-    // generator yields one delta, fires the abort (emitting req "aborted" → controller.abort), then
-    // streamConversation sees signal.aborted at the next loop iteration and returns undefined.
+    // captureResWithEvents is required here so the res.on("close") listener registered by
+    // abortOnDisconnect actually fires when emitClose() is called. The deprecated req "aborted"
+    // path was removed; res "close" is now the canonical abort trigger.
+    const captured = captureResWithEvents();
     const req = makeReq({
       chatId,
       projectPath: projectDir,
       modelId: CHAT_MODEL,
       content: "cancel me",
     });
+    // The generator yields one delta, fires emitClose() (res "close" → controller.abort), then
+    // streamConversation sees signal.aborted at the next loop iteration and returns undefined.
     const { model } = streamingModel("never persisted", () => {
-      req.emit("aborted");
+      captured.emitClose();
     });
-    await handleSendDesktopChatStream(routeContext(req, res.res), deps(model));
+    await handleSendDesktopChatStream(routeContext(req, captured.res), deps(model));
 
-    const events = parseSse(res.writes).map((record) => record.event);
+    const events = parseSse(captured.writes).map((record) => record.event);
     expect(events).toContain("cancelled");
     expect(events).not.toContain("done");
 
     const persisted = store.listMessages(chatId);
     expect(persisted.map((message) => message.role)).toEqual(["user"]);
     expect(persisted.some((message) => message.role === "assistant")).toBe(false);
+  });
+
+  it("destroys the socket and aborts the controller when res.write() returns false (backpressure)", async () => {
+    // RED reason: before this fix the token write called ctx.res.write() directly and discarded the
+    // return value, so a slow client's backpressure signal was silently ignored.
+    // GREEN reason: writeOrDestroy checks the return value and calls controller.abort() + res.destroy().
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    // Signal backpressure on the first write so the very first token triggers abort+destroy.
+    captured.writeReturns = false;
+    const req = makeReq({
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "hello slow client",
+    });
+    const { model } = streamingModel("answer");
+    await handleSendDesktopChatStream(routeContext(req, captured.res), deps(model));
+
+    // The socket must have been destroyed.
+    expect(captured.destroyed).toBe(true);
+    // After backpressure the controller was aborted, so no "done" event is written.
+    const events = parseSse(captured.writes).map((record) => record.event);
+    expect(events).not.toContain("done");
   });
 
   it("injects retrieved memory text into the streamed prompt's latest user turn", async () => {

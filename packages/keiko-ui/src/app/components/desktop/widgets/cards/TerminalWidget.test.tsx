@@ -82,12 +82,13 @@ describe("TerminalWidget", () => {
   });
 
   it("populates the command dropdown from the policy", async () => {
+    const user = userEvent.setup();
     render(<TerminalWidget />);
     const select = await screen.findByRole("combobox", { name: /command/i });
-    await waitFor(() => {
-      expect(select.querySelectorAll("option")).toHaveLength(3);
-    });
+    await user.click(select);
+    expect(await screen.findByRole("option", { name: "ls" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "git" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "grep" })).toBeInTheDocument();
   });
 
   it("submits the run, displays exit code + stdout, result has role=status (B2)", async () => {

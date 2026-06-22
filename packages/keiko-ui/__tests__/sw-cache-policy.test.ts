@@ -57,8 +57,11 @@ describe("sw.js cache policy — static source analysis (issue #126, ADR-0024 D6
     expect(apiCheck).toBeLessThan(firstRespondWith);
   });
 
-  it("does not call skipWaiting() or clients.claim() (safe-default update strategy)", () => {
-    expect(SW_SOURCE).not.toMatch(/skipWaiting\s*\(/);
+  it("only calls skipWaiting() from the explicit update-activation message path", () => {
+    expect(SW_SOURCE).toContain("KEIKO_ACTIVATE_WAITING_SERVICE_WORKER");
+    expect(SW_SOURCE).toMatch(/addEventListener\s*\(\s*"message"/);
+    expect(SW_SOURCE).toMatch(/isActivateWaitingMessage\s*\(\s*event\s*\)/);
+    expect(SW_SOURCE).toMatch(/event\.waitUntil\s*\(\s*self\.skipWaiting\s*\(\s*\)\s*\)/);
     expect(SW_SOURCE).not.toMatch(/clients\.claim\s*\(/);
   });
 
@@ -89,6 +92,20 @@ describe("sw.js cache policy — static source analysis (issue #126, ADR-0024 D6
   it("keeps content-hashed static assets cache-first", () => {
     expect(SW_SOURCE).toMatch(/function\s+cacheFirst\s*\(/);
   });
+
+  it("pre-caches the self-hosted JetBrains Mono webfont for offline use", () => {
+    const match = SW_SOURCE.match(/PRECACHE_URLS\s*=\s*\[([\s\S]*?)\]/);
+    expect(match).not.toBeNull();
+    const body = match === null ? "" : (match[1] ?? "");
+    expect(body).toContain("/fonts/jetbrains-mono-latin-wght-normal.woff2");
+  });
+
+  it("allows /fonts/ to be served from the runtime cache so the mono renders offline", () => {
+    const match = SW_SOURCE.match(/CACHEABLE_PREFIXES\s*=\s*\[([\s\S]*?)\]/);
+    expect(match).not.toBeNull();
+    const body = match === null ? "" : (match[1] ?? "");
+    expect(body).toContain("/fonts/");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -109,6 +126,7 @@ interface SwSandbox {
 interface SyntheticEvent {
   readonly type: string;
   readonly request: { readonly method: string; readonly url: string; readonly mode?: string };
+  readonly data?: unknown;
   respondWith(value: Response | Promise<Response>): void;
   waitUntil(value: Promise<unknown>): void;
 }
@@ -190,6 +208,20 @@ function makeEvent(type: string, url: string, sandbox: SwSandbox, mode?: string)
     },
     waitUntil(_value: Promise<unknown>): void {
       // no-op in tests
+    },
+  };
+}
+
+function makeMessageEvent(data: unknown, sandbox: SwSandbox): SyntheticEvent {
+  return {
+    type: "message",
+    request: { method: "GET", url: "http://localhost:3000/" },
+    data,
+    respondWith(value: Response | Promise<Response>): void {
+      sandbox.respondWithCalls.push(value);
+    },
+    waitUntil(value: Promise<unknown>): void {
+      sandbox.respondWithCalls.push(value as Promise<Response>);
     },
   };
 }
@@ -313,5 +345,25 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
 
     expect(sandbox.respondWithCalls).toHaveLength(1);
     expect(sandbox.fetchCalls).not.toContain(url); // served from cache, network not touched
+  });
+
+  it("activates a waiting update only for the explicit activation message", () => {
+    const { context, sandbox } = makeSandbox();
+    const skipWaiting = vi.fn().mockResolvedValue(undefined);
+    context.self = { ...(context.self as object), skipWaiting };
+    vm.runInContext(SW_SOURCE, context);
+
+    const messageHandler = sandbox.handlers.get("message");
+    expect(messageHandler).toBeDefined();
+
+    messageHandler?.(makeMessageEvent({ type: "IGNORED" }, sandbox));
+    expect(skipWaiting).not.toHaveBeenCalled();
+
+    messageHandler?.(
+      makeMessageEvent({ type: "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER" }, sandbox),
+    );
+
+    expect(skipWaiting).toHaveBeenCalledOnce();
+    expect(sandbox.respondWithCalls).toHaveLength(1);
   });
 });

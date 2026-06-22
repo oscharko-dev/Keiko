@@ -4,7 +4,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
+  figmaSnapshotScreenImageUrl,
   generateFigmaCode,
+  listFigmaSnapshots,
   loadFigmaSnapshotSummary,
   revokeFigmaToken,
   triggerFigmaSnapshot,
@@ -84,6 +86,34 @@ describe("generateFigmaCode — HTTP request shape (#755)", () => {
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.signal).toBe(controller.signal);
+  });
+
+  it("sends a pinned Figma version when supplied", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        runId: "r",
+        fileKey: "k",
+        nodeId: "1:2",
+        version: "ver-123",
+        fetchedAt: "now",
+        screenCount: 0,
+        skippedCount: 0,
+        reductionHint: "",
+        integrityHash: "",
+        screens: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await triggerFigmaSnapshot("https://www.figma.com/design/K/N?node-id=1:2", {
+      version: "ver-123",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      boardLink: "https://www.figma.com/design/K/N?node-id=1:2",
+      version: "ver-123",
+    });
   });
 });
 
@@ -207,6 +237,52 @@ describe("loadFigmaSnapshotSummary — abort signal", () => {
   });
 });
 
+describe("listFigmaSnapshots — HTTP request shape", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests the recent snapshot list when no filter is supplied", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ snapshots: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listFigmaSnapshots();
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/figma/snapshots");
+    expect(init.method).toBeUndefined();
+  });
+
+  it("encodes board scope and limit in the query string", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ snapshots: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listFigmaSnapshots({ fileKey: "KEY/123", nodeId: "1:2", limit: 8 });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/figma/snapshots?fileKey=KEY%2F123&nodeId=1%3A2&limit=8");
+  });
+
+  it("threads the abort signal into the fetch init", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ snapshots: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const controller = new AbortController();
+    await listFigmaSnapshots({ signal: controller.signal });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBe(controller.signal);
+  });
+});
+
+describe("figmaSnapshotScreenImageUrl — token-free PNG route", () => {
+  it("encodes run ids and screen indexes into the BFF image route", () => {
+    expect(figmaSnapshotScreenImageUrl("fs/x y", 12)).toBe(
+      "/api/figma/snapshots/fs%2Fx%20y/screens/12/image",
+    );
+  });
+});
+
 describe("revokeFigmaToken — HTTP request shape (#758)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -227,7 +303,9 @@ describe("revokeFigmaToken — HTTP request shape (#758)", () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/figma/token");
     expect(init.method).toBe("DELETE");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
     expect((init.headers as Record<string, string>)["X-Keiko-CSRF"]).toBe("1");
+    expect(init.body).toBe("{}");
   });
 
   it("rejects with ApiError on a BFF error response", async () => {

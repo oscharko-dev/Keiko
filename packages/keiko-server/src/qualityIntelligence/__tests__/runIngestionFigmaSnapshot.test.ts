@@ -6,8 +6,15 @@
 // Deterministic — no network, no filesystem: the snapshot LOADER is injected as a pure stub so the
 // tests synthesise a FigmaSnapshotRecord directly (synthetic fixtures only, never a real board).
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ingestInlineSources, QiIngestionError } from "../runIngestion.js";
+import {
+  ingestInlineSources,
+  ingestInlineSourcesAsync,
+  QiIngestionError,
+} from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
 import type { FigmaSnapshotLoader, FigmaVisionHintProvider } from "../figmaSnapshotAdapter.js";
 import type { FigmaSnapshotRecord } from "@oscharko-dev/keiko-evidence";
@@ -53,15 +60,30 @@ const screenRow = (screenId: string, irJson: unknown): FigmaSnapshotRecord["scre
   integrityHash: "hash-".concat(screenId),
 });
 
+const structuralRow = (
+  screenId: string,
+  irJson: unknown,
+  reason: NonNullable<
+    FigmaSnapshotRecord["structuralScreens"]
+  >[number]["reason"] = "render-screen-cap-exceeded",
+): NonNullable<FigmaSnapshotRecord["structuralScreens"]>[number] => ({
+  screenId,
+  irJson,
+  reason,
+  integrityHash: "structural-hash-".concat(screenId),
+});
+
 const record = (
   screens: readonly FigmaSnapshotRecord["screens"][number][],
   links?: FigmaSnapshotRecord["links"],
+  structuralScreens: readonly NonNullable<FigmaSnapshotRecord["structuralScreens"]>[number][] = [],
 ): FigmaSnapshotRecord => ({
   figmaSnapshotSchemaVersion: 1,
   runId: "snap-1",
   provenance: { fileKey: "fk", nodeId: "1:2", version: undefined, fetchedAt: TS },
   screens,
   skippedScreens: [],
+  ...(structuralScreens.length > 0 ? { structuralScreens } : {}),
   ...(links !== undefined ? { links } : {}),
   integrityHash: "root-hash",
   redactionSummary: { totalStringsScanned: 0, stringsRedacted: 0, patternsMatched: {} },
@@ -93,6 +115,21 @@ const loginScreen = (): unknown =>
         irNode("submit", "button", { text: "Sign in" }),
         irNode("forgot", "link", { text: "Forgot password" }),
         irNode("btn", "button", { name: "CTA, state=disabled", text: "Pay" }),
+      ],
+    }),
+  );
+
+const visualOnlyScreen = (): unknown =>
+  screenIr(
+    "screen-visual",
+    "Visual hero",
+    irNode("root", "container", {
+      children: [
+        irNode("hero", "image", {
+          name: "Hero artwork",
+          type: "RECTANGLE",
+          imageFills: [{ imageRef: "img-1" }],
+        }),
       ],
     }),
   );
@@ -145,6 +182,97 @@ describe("figma-snapshot ingestion — deterministic structural baseline", () =>
     expect(result.ingestedAtoms[0]?.canonicalText).toContain("[s-a]");
     expect(result.ingestedAtoms[1]?.canonicalText).toContain("[s-b]");
     expect(result.envelopes[0]?.provenance.origin).toBe("figma-snapshot:snap-1");
+  });
+
+  it("scopes ingestion to the selected rendered screen ids from a large snapshot", () => {
+    const rec = record([
+      screenRow(
+        "s-a",
+        screenIr("s-a", "Home", irNode("r", "container", { children: [irNode("b", "button")] })),
+      ),
+      screenRow(
+        "s-b",
+        screenIr(
+          "s-b",
+          "Settings",
+          irNode("r2", "container", { children: [irNode("i", "input")] }),
+        ),
+      ),
+    ]);
+
+    const result = ingestInlineSources(
+      input(
+        [
+          {
+            kind: "figma-snapshot",
+            label: "Settings screen",
+            snapshotRunId: "snap-1",
+            screenIds: ["s-b"],
+          },
+        ],
+        { figmaSnapshotLoader: loaderFor(rec) },
+      ),
+    );
+
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.ingestedAtoms[0]?.canonicalText).toContain("Screen: Settings [s-b]");
+    expect(result.ingestedAtoms[0]?.canonicalText).not.toContain("[s-a]");
+    expect(result.envelopes[0]?.provenance.origin).toBe("figma-snapshot:snap-1#s-b");
+  });
+
+  it("ingests structural-only screen IR even when the snapshot has no rendered images", () => {
+    const rec = record([], undefined, [structuralRow("screen-login", loginScreen())]);
+
+    const result = ingestInlineSources(
+      input([figmaSource()], { figmaSnapshotLoader: loaderFor(rec) }),
+    );
+
+    expect(result.ingestedAtoms).toHaveLength(1);
+    const text = result.ingestedAtoms[0]?.canonicalText ?? "";
+    expect(text).toContain("Screen: Login [screen-login]");
+    expect(text).toContain("(field-presence)");
+    expect(text).toContain("(control-action)");
+    expect(result.envelopes[0]?.kind).toBe("figma-evidence");
+  });
+
+  it("scopes ingestion to a structural-only screen without requiring a rendered image", () => {
+    const rec = record(
+      [
+        screenRow(
+          "rendered",
+          screenIr(
+            "rendered",
+            "Rendered",
+            irNode("root", "container", { children: [irNode("next", "button")] }),
+          ),
+        ),
+      ],
+      undefined,
+      [structuralRow("structural-only", loginScreen())],
+    );
+
+    const result = ingestInlineSources(
+      input(
+        [
+          {
+            kind: "figma-snapshot",
+            label: "Collapsed mask",
+            snapshotRunId: "snap-1",
+            screenIds: ["structural-only"],
+          },
+        ],
+        {
+          figmaSnapshotLoader: loaderFor(rec),
+          figmaVision: () => ["vision must not run without a PNG"],
+        },
+      ),
+    );
+
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.ingestedAtoms[0]?.canonicalText).toContain("Screen: Login [screen-login]");
+    expect(result.ingestedAtoms[0]?.canonicalText).not.toContain("Rendered [rendered]");
+    expect(result.ingestedAtoms[0]?.canonicalText).not.toContain("vision must not run");
+    expect(result.envelopes[0]?.provenance.origin).toBe("figma-snapshot:snap-1#structural-only");
   });
 
   it("skips a screen whose irJson is unparseable but ingests the parseable ones", () => {
@@ -207,10 +335,91 @@ describe("figma-snapshot ingestion — coded errors", () => {
   });
 });
 
+// ─── Image-only source ingestion ────────────────────────────────────────────────
+
+describe("image source ingestion — textual description via image-capable model", () => {
+  const imageSource = {
+    kind: "image",
+    label: "Image · Visual hero",
+    sourceKind: "figma-snapshot-screen",
+    snapshotRunId: "snap-1",
+    screenId: "screen-visual",
+  } as const;
+
+  it("creates one evidence atom from a model-derived image description", () => {
+    const vision: FigmaVisionHintProvider = (request) => {
+      expect(request.screenId).toBe("screen-visual");
+      expect(request.baselineText).toContain("No structural JSON is attached to this source");
+      return ["A visible hero screen with a primary CTA and a supporting illustration."];
+    };
+
+    const result = ingestInlineSources(
+      input([imageSource], {
+        figmaSnapshotLoader: loaderFor(record([screenRow("screen-visual", visualOnlyScreen())])),
+        figmaVision: vision,
+      }),
+    );
+
+    expect(result.envelopes[0]?.kind).toBe("figma-evidence");
+    expect(result.envelopes[0]?.provenance.origin).toBe(
+      "image:figma-snapshot-screen:snap-1#screen-visual",
+    );
+    expect(result.ingestedAtoms).toHaveLength(1);
+    const text = result.ingestedAtoms[0]?.canonicalText ?? "";
+    expect(text).toContain("Image description for Visual hero (screen-visual)");
+    expect(text).toContain("A visible hero screen with a primary CTA");
+  });
+
+  it("supports async image description providers", async () => {
+    const result = await ingestInlineSourcesAsync(
+      input([imageSource], {
+        figmaSnapshotLoader: loaderFor(record([screenRow("screen-visual", visualOnlyScreen())])),
+        figmaVision: async () => {
+          await Promise.resolve();
+          return ["Async description of the visible screenshot."];
+        },
+      }),
+    );
+
+    expect(result.ingestedAtoms[0]?.canonicalText).toContain("Async description");
+  });
+
+  it("throws QI_IMAGE_DESCRIPTION_UNAVAILABLE when no image-capable provider is configured", () => {
+    try {
+      ingestInlineSources(
+        input([imageSource], {
+          figmaSnapshotLoader: loaderFor(record([screenRow("screen-visual", visualOnlyScreen())])),
+        }),
+      );
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiIngestionError);
+      expect((err as QiIngestionError).code).toBe("QI_IMAGE_DESCRIPTION_UNAVAILABLE");
+    }
+  });
+
+  it("throws QI_IMAGE_UNAVAILABLE when the referenced screen has no rendered PNG", () => {
+    try {
+      ingestInlineSources(
+        input([imageSource], {
+          figmaSnapshotLoader: loaderFor(
+            record([], undefined, [structuralRow("screen-visual", visualOnlyScreen())]),
+          ),
+          figmaVision: () => ["should not be used"],
+        }),
+      );
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiIngestionError);
+      expect((err as QiIngestionError).code).toBe("QI_IMAGE_UNAVAILABLE");
+    }
+  });
+});
+
 // ─── Vision augmentation (additive, never overrides IR) + graceful degradation ─────
 
 describe("figma-snapshot ingestion — vision augmentation", () => {
-  const rec = (): FigmaSnapshotRecord => record([screenRow("screen-login", loginScreen())]);
+  const rec = (): FigmaSnapshotRecord => record([screenRow("screen-visual", visualOnlyScreen())]);
 
   it("appends vision hints additively while preserving the structural baseline", () => {
     const vision: FigmaVisionHintProvider = () => [
@@ -223,13 +432,31 @@ describe("figma-snapshot ingestion — vision augmentation", () => {
     const text = result.ingestedAtoms[0]?.canonicalText ?? "";
 
     // Structural baseline lines are STILL present (vision never overrides the IR) ...
-    expect(text).toContain("(field-presence)");
-    expect(text).toContain("(control-action)");
+    expect(text).toContain("(screen-render)");
+    expect(text).toContain("Structural test baseline");
     // ... and the additive hint appears below them.
     expect(text).toContain("The CTA is visually de-emphasised when disabled");
-    expect(text.indexOf("(field-presence)")).toBeLessThan(
+    expect(text.indexOf("Structural test baseline")).toBeLessThan(
       text.indexOf("The CTA is visually de-emphasised when disabled"),
     );
+  });
+
+  it("does not invoke vision when the structural IR is already sufficient", () => {
+    let calls = 0;
+    const vision: FigmaVisionHintProvider = () => {
+      calls += 1;
+      return ["should not be used"];
+    };
+
+    const result = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(record([screenRow("screen-login", loginScreen())])),
+        figmaVision: vision,
+      }),
+    );
+
+    expect(calls).toBe(0);
+    expect(result.ingestedAtoms[0]?.canonicalText ?? "").not.toContain("should not be used");
   });
 
   it("degrades to IR-only when no vision provider is supplied", () => {
@@ -242,6 +469,27 @@ describe("figma-snapshot ingestion — vision augmentation", () => {
     expect(text).not.toContain("Vision-derived");
   });
 
+  it("does not invoke vision for structural-only screens because no PNG side-file exists", () => {
+    let calls = 0;
+    const vision: FigmaVisionHintProvider = () => {
+      calls += 1;
+      return ["should not be used without an image"];
+    };
+
+    const result = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(
+          record([], undefined, [structuralRow("screen-visual", visualOnlyScreen())]),
+        ),
+        figmaVision: vision,
+      }),
+    );
+
+    expect(calls).toBe(0);
+    expect(result.ingestedAtoms[0]?.canonicalText ?? "").toContain("(screen-render)");
+    expect(result.ingestedAtoms[0]?.canonicalText ?? "").not.toContain("should not be used");
+  });
+
   it("ignores a vision provider that returns garbage (still ships the baseline)", () => {
     const garbage: FigmaVisionHintProvider = () => ["", "   "];
 
@@ -252,6 +500,112 @@ describe("figma-snapshot ingestion — vision augmentation", () => {
 
     expect(text).toContain("(screen-render)");
     expect(text).not.toContain("Vision-derived");
+  });
+
+  it("keeps atom and envelope fingerprints deterministic when vision output changes", () => {
+    const first = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(rec()),
+        figmaVision: () => ["first visual hint"],
+      }),
+    );
+    const second = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(rec()),
+        figmaVision: () => ["second visual hint"],
+      }),
+    );
+
+    expect(first.ingestedAtoms[0]?.canonicalText).not.toBe(second.ingestedAtoms[0]?.canonicalText);
+    expect(first.ingestedAtoms[0]?.atom.canonicalHashSha256Hex).toBe(
+      second.ingestedAtoms[0]?.atom.canonicalHashSha256Hex,
+    );
+    expect(first.envelopes[0]?.provenance.integrityHashSha256Hex).toBe(
+      second.envelopes[0]?.provenance.integrityHashSha256Hex,
+    );
+  });
+
+  it("caps vision augmentation to the first twelve eligible screens", () => {
+    const screens = Array.from({ length: 15 }, (_value, index) =>
+      screenRow(
+        `screen-visual-${String(index)}`,
+        screenIr(
+          `screen-visual-${String(index)}`,
+          `Visual ${String(index)}`,
+          irNode("root", "container", {
+            children: [
+              irNode("hero", "image", {
+                name: "Hero artwork",
+                type: "RECTANGLE",
+                imageFills: [{ imageRef: `img-${String(index)}` }],
+              }),
+            ],
+          }),
+        ),
+      ),
+    );
+    const calls: string[] = [];
+    const vision: FigmaVisionHintProvider = (request) => {
+      calls.push(request.screenId);
+      return [`vision hint for ${request.screenId}`];
+    };
+
+    const result = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(record(screens)),
+        figmaVision: vision,
+      }),
+    );
+
+    expect(calls).toHaveLength(12);
+    expect(calls).toEqual(
+      Array.from({ length: 12 }, (_value, index) => `screen-visual-${String(index)}`),
+    );
+    const text = result.ingestedAtoms.map((atom) => atom.canonicalText).join("\n");
+    expect(text).toContain("vision hint for screen-visual-11");
+    expect(text).not.toContain("vision hint for screen-visual-12");
+  });
+
+  it("caps async vision augmentation to the first twelve eligible screens", async () => {
+    const screens = Array.from({ length: 15 }, (_value, index) =>
+      screenRow(
+        `screen-async-${String(index)}`,
+        screenIr(
+          `screen-async-${String(index)}`,
+          `Async ${String(index)}`,
+          irNode("root", "container", {
+            children: [
+              irNode("hero", "image", {
+                name: "Hero artwork",
+                type: "RECTANGLE",
+                imageFills: [{ imageRef: `async-img-${String(index)}` }],
+              }),
+            ],
+          }),
+        ),
+      ),
+    );
+    const calls: string[] = [];
+    const vision: FigmaVisionHintProvider = async (request) => {
+      await Promise.resolve();
+      calls.push(request.screenId);
+      return [`async vision hint for ${request.screenId}`];
+    };
+
+    const result = await ingestInlineSourcesAsync(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(record(screens)),
+        figmaVision: vision,
+      }),
+    );
+
+    expect(calls).toHaveLength(12);
+    expect(calls).toEqual(
+      Array.from({ length: 12 }, (_value, index) => `screen-async-${String(index)}`),
+    );
+    const text = result.ingestedAtoms.map((atom) => atom.canonicalText).join("\n");
+    expect(text).toContain("async vision hint for screen-async-11");
+    expect(text).not.toContain("async vision hint for screen-async-12");
   });
 });
 
@@ -279,6 +633,28 @@ describe("figma-snapshot ingestion — redaction", () => {
     );
 
     expect(result.ingestedAtoms[0]?.canonicalText ?? "").not.toContain(accessKeyId);
+  });
+
+  it("redacts and bounds the screen name before it enters the document id", () => {
+    const accessKeyId = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const ir = screenIr(
+      "s-secret-name",
+      `Config ${accessKeyId}\nSecond line`,
+      irNode("root", "container", {
+        children: [irNode("submit", "button", { text: "Save" })],
+      }),
+    );
+
+    const result = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(record([screenRow("s-secret-name", ir)])),
+      }),
+    );
+
+    const text = result.ingestedAtoms[0]?.canonicalText ?? "";
+    expect(text).not.toContain(accessKeyId);
+    expect(text.split("\n")[0]).toContain("Second line");
+    expect(text.split("\n")[0]).toContain("[REDACTED]");
   });
 });
 
@@ -434,6 +810,9 @@ describe("figma-snapshot ingestion — navigation/flow composition (#811)", () =
     expect(loginText).toContain("(navigation)");
     expect(loginText).toContain("Login");
     expect(loginText).toContain("Home");
+    // The trigger is the load-bearing discriminator between two transitions sharing a screen pair —
+    // pin its propagation through the full renderBaselineText path, not just the navGraph unit (GAP6).
+    expect(loginText).toContain("ON_CLICK");
     // The deterministic structural baseline is still present (composition is additive).
     expect(loginText).toContain("(screen-render)");
   });
@@ -447,6 +826,36 @@ describe("figma-snapshot ingestion — navigation/flow composition (#811)", () =
 
     expect(homeText).toContain("(coverage-notice)");
     expect(homeText.toLowerCase()).toContain("dead end");
+  });
+
+  it("adds an unreachable coverage notice to an orphan screen's atom text", () => {
+    const unreachableRecord = record(
+      [
+        screenRow(
+          "s-login",
+          screenIr(
+            "s-login",
+            "Login",
+            irNode("login-root", "container", { children: [irNode("login-btn", "button")] }),
+          ),
+        ),
+        screenRow("s-home", screenIr("s-home", "Home", irNode("home-root", "container"))),
+        screenRow("s-orphan", screenIr("s-orphan", "Orphan", irNode("orphan-root", "container"))),
+      ],
+      [
+        { sourceNodeId: "canvas", trigger: "FLOW_START", targetNodeId: "login-root" },
+        { sourceNodeId: "login-btn", trigger: "ON_CLICK", targetNodeId: "home-root" },
+      ],
+    );
+
+    const result = ingestInlineSources(
+      input([figmaSource()], { figmaSnapshotLoader: loaderFor(unreachableRecord) }),
+    );
+    const orphanText =
+      result.ingestedAtoms.find((a) => a.canonicalText.includes("[s-orphan]"))?.canonicalText ?? "";
+
+    expect(orphanText).toContain("(coverage-notice)");
+    expect(orphanText.toLowerCase()).toContain("unreachable");
   });
 
   it("degrades to zero nav items when the snapshot carries no links (older record)", () => {
@@ -550,5 +959,284 @@ describe("figma-snapshot ingestion — accessibility composition (#812)", () => 
     expect(loginText).toContain("(navigation)");
     expect(loginText).toContain("(a11y)");
     expect(loginText).toContain("(screen-render)");
+  });
+});
+
+// ─── Four-kind composition including figma-snapshot (Issue #732) ─────────────────
+//
+// Both capsule and figma-snapshot build atoms through capsuleDocAtom; this test guards against
+// cross-wiring — figma atoms stamped with the capsule envelopeId (or vice versa) — which the
+// existing per-kind tests cannot detect in isolation. It also ensures all four kinds produce
+// attributable envelopes in a single composed run (mutation: drop any kind → size ≠ 4).
+
+describe("figma-snapshot ingestion — four-kind cross-source composition (Issue #732)", () => {
+  // Mutation caught: cross-wiring figma atoms to the capsule envelopeId (or vice versa), since
+  // both kinds use the shared capsuleDocAtom path — a permutation invisible to per-kind tests
+  // in isolation. Also catches dropping any kind (envelopes.length would be ≠ 4).
+  it("attributes atoms to their correct envelope across all four source kinds (cross-wire guard)", () => {
+    const wsDir = mkdtempSync(join(tmpdir(), "qi-732-figma-ws-"));
+    const fileDir = mkdtempSync(join(tmpdir(), "qi-732-figma-file-"));
+    try {
+      // Single-sentence .md → exactly 1 atom each (split.length <= 1 → workspaceAtom fallback).
+      writeFileSync(
+        join(wsDir, "login.md"),
+        "The WORKSPACEONLYMARKER login screen shall validate credentials.",
+        "utf8",
+      );
+      const filePath = join(fileDir, "transfer.md");
+      writeFileSync(filePath, "The FILEONLYMARKER transfer shall enforce the daily limit.", "utf8");
+
+      const capsuleDoc = {
+        documentId: "cap-doc-732",
+        text: "The CAPSULEONLYMARKER rule requires session expiry enforcement.",
+      } as const;
+
+      const figmaRec = record([screenRow("screen-login", loginScreen())]);
+
+      const result = ingestInlineSources(
+        input(
+          [
+            { kind: "workspace", label: "LoginFolder", path: wsDir },
+            { kind: "file", label: "TransferDoc", path: filePath },
+            { kind: "capsule", label: "PolicyCap", capsuleId: "cap-732" },
+            figmaSource("FigmaSnap", "snap-1"),
+          ],
+          {
+            figmaSnapshotLoader: loaderFor(figmaRec),
+            capsuleResolver: {
+              capsule: () => [capsuleDoc],
+              capsuleSet: () => [],
+              close: (): void => undefined,
+            },
+          },
+        ),
+      );
+
+      // (1) All four source kinds produce their own envelope.
+      expect(result.envelopes.length).toBe(4);
+
+      // (2) sourceSummaries lists all four kinds in source order.
+      expect(result.sourceSummaries.map((s) => s.kind)).toEqual([
+        "workspace",
+        "file",
+        "capsule",
+        "figma-snapshot",
+      ]);
+
+      // (3) Envelope kinds and origins are correctly stamped per kind.
+      expect(result.envelopes.map((e) => e.kind)).toEqual([
+        "repository-context",
+        "repository-context",
+        "local-knowledge-capsule",
+        "figma-evidence",
+      ]);
+      expect(result.envelopes[2]?.provenance.origin).toBe("local-knowledge-capsule:cap-732");
+      expect(result.envelopes[3]?.provenance.origin).toBe("figma-snapshot:snap-1");
+
+      // (4) Every atom maps back to one of the four envelopes, and all four are cited.
+      const envelopeIds = new Set(result.envelopes.map((e) => String(e.id)));
+      for (const a of result.ingestedAtoms) {
+        expect(envelopeIds.has(String(a.atom.sourceEnvelopeId))).toBe(true);
+      }
+      const cited = new Set(result.ingestedAtoms.map((a) => String(a.atom.sourceEnvelopeId)));
+      expect(cited.size).toBe(4);
+
+      // (5) CROSS-WIRE GUARD: capsule and figma both flow through capsuleDocAtom; verify their
+      // atoms carry only their own content and never the other kind's content.
+      const capEnv = result.envelopes[2];
+      const figmaEnv = result.envelopes[3];
+      expect(capEnv).toBeDefined();
+      expect(figmaEnv).toBeDefined();
+
+      const capTexts = result.ingestedAtoms
+        .filter((a) => String(a.atom.sourceEnvelopeId) === String(capEnv?.id))
+        .map((a) => a.canonicalText);
+      expect(capTexts.length).toBeGreaterThanOrEqual(1);
+      expect(capTexts.every((t) => t.includes("CAPSULEONLYMARKER"))).toBe(true);
+      expect(capTexts.some((t) => t.includes("Screen: Login [screen-login]"))).toBe(false);
+
+      const figmaTexts = result.ingestedAtoms
+        .filter((a) => String(a.atom.sourceEnvelopeId) === String(figmaEnv?.id))
+        .map((a) => a.canonicalText);
+      expect(figmaTexts.length).toBeGreaterThanOrEqual(1);
+      expect(figmaTexts.every((t) => t.includes("Screen: Login [screen-login]"))).toBe(true);
+      expect(figmaTexts.some((t) => t.includes("CAPSULEONLYMARKER"))).toBe(false);
+    } finally {
+      rmSync(wsDir, { recursive: true, force: true });
+      rmSync(fileDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Unsafe format-char hardening (#752/#753/#754) ────────────────────────────────
+//
+// A Figma file is untrusted external input. Bidi-override / zero-width / C1 spoofing code points in a
+// screen NAME or prototype TRIGGER would otherwise ride verbatim into the QI atom text and every
+// downstream export (the secret/PII redactor does not strip them). figmaScreenDocs now strips them
+// BEFORE redaction (strip-before-redact), symmetric with the candidate-text and source-label paths.
+
+describe("figma-snapshot ingestion — unsafe format-char hardening (#752/#753/#754)", () => {
+  const RLO = String.fromCodePoint(0x202e); // bidi override
+  const ZWSP = String.fromCodePoint(0x200b); // zero-width space
+  const C1 = String.fromCodePoint(0x0085); // C1 control (NEL)
+
+  const recordWith = (loginName: string, trigger: string): FigmaSnapshotRecord =>
+    record(
+      [
+        screenRow(
+          "s-login",
+          screenIr(
+            "s-login",
+            loginName,
+            irNode("login-root", "container", { children: [irNode("login-btn", "button")] }),
+          ),
+        ),
+        screenRow("s-home", screenIr("s-home", "Home", irNode("home-root", "container"))),
+      ],
+      [{ sourceNodeId: "login-btn", trigger, targetNodeId: "home-root" }],
+    );
+
+  const atomTextFor = (rec: FigmaSnapshotRecord): string =>
+    ingestInlineSources(input([figmaSource()], { figmaSnapshotLoader: loaderFor(rec) }))
+      .ingestedAtoms.map((a) => a.canonicalText)
+      .join("\n");
+
+  it("strips bidi/zero-width/C1 spoofing chars from the screen name and trigger in the atom text", () => {
+    const dirty = atomTextFor(recordWith(`Log${RLO}in${ZWSP}${C1}`, `ON_${RLO}CLICK${ZWSP}`));
+    expect(dirty).not.toContain(RLO);
+    expect(dirty).not.toContain(ZWSP);
+    expect(dirty).not.toContain(C1);
+    // The legitimate text survives — only the spoofing code points are removed.
+    expect(dirty).toContain("Login");
+    expect(dirty).toContain("ON_CLICK");
+  });
+
+  it("is byte-identical to the clean input once the format chars are stripped", () => {
+    const clean = atomTextFor(recordWith("Login", "ON_CLICK"));
+    const dirty = atomTextFor(recordWith(`Log${RLO}in${ZWSP}${C1}`, `ON_${RLO}CLICK${ZWSP}`));
+    expect(dirty).toBe(clean);
+  });
+});
+
+// ─── Scoped screenIds hardening — the no-leak invariant (Issue #754) ───────────────
+//
+// These tests pin the ingestion-layer guarantee that a SCOPED figma-snapshot source can never widen
+// to the whole board, that a not-found scope yields a precise error, and that the scope is canonical
+// (order/duplicate-independent envelope id). Mutation-proof: the pre-fix code treated an empty scope
+// as "all screens" (the leak) and joined raw, unsorted ids into the provenance ref.
+
+describe("figma-snapshot ingestion — scoped screenIds hardening (no-leak)", () => {
+  const twoScreenRecord = (): FigmaSnapshotRecord =>
+    record([
+      screenRow(
+        "s-a",
+        screenIr("s-a", "Home", irNode("r", "container", { children: [irNode("b", "button")] })),
+      ),
+      screenRow(
+        "s-b",
+        screenIr(
+          "s-b",
+          "Settings",
+          irNode("r2", "container", { children: [irNode("i", "input")] }),
+        ),
+      ),
+    ]);
+
+  it("treats an explicitly EMPTY screenIds scope as 'no screens' — never the whole snapshot", () => {
+    // Defense-in-depth: the route layer rejects an empty array, but the ingestion layer must ALSO
+    // refuse to fall back to every screen. Pre-fix this returned all screens (the scope leak).
+    try {
+      ingestInlineSources(
+        input(
+          [
+            {
+              kind: "figma-snapshot",
+              label: "Empty scope",
+              snapshotRunId: "snap-1",
+              screenIds: [],
+            },
+          ],
+          { figmaSnapshotLoader: loaderFor(twoScreenRecord()) },
+        ),
+      );
+      expect.fail("should have thrown QI_SOURCE_EMPTY (never ingested the whole board)");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
+    }
+  });
+
+  it("gives a precise screen-not-found error naming the missing ids", () => {
+    try {
+      ingestInlineSources(
+        input(
+          [
+            {
+              kind: "figma-snapshot",
+              label: "Missing",
+              snapshotRunId: "snap-1",
+              screenIds: ["s-zzz"],
+            },
+          ],
+          { figmaSnapshotLoader: loaderFor(twoScreenRecord()) },
+        ),
+      );
+      expect.fail("should have thrown QI_SOURCE_EMPTY");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
+      expect((err as QiIngestionError).message).toContain("s-zzz");
+      expect((err as QiIngestionError).message.toLowerCase()).toContain("exist in this snapshot");
+    }
+  });
+
+  it("scopes to the matching screens when some requested ids are absent (partial match still scopes)", () => {
+    const result = ingestInlineSources(
+      input(
+        [
+          {
+            kind: "figma-snapshot",
+            label: "Partial",
+            snapshotRunId: "snap-1",
+            screenIds: ["s-b", "s-missing"],
+          },
+        ],
+        { figmaSnapshotLoader: loaderFor(twoScreenRecord()) },
+      ),
+    );
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.ingestedAtoms[0]?.canonicalText).toContain("[s-b]");
+    expect(result.ingestedAtoms[0]?.canonicalText).not.toContain("[s-a]");
+  });
+
+  it("canonicalises the scope (dedupe + sort) so the envelope ref is order/duplicate-stable", () => {
+    const unordered = ingestInlineSources(
+      input(
+        [
+          {
+            kind: "figma-snapshot",
+            label: "x",
+            snapshotRunId: "snap-1",
+            screenIds: ["s-b", "s-a", "s-a"],
+          },
+        ],
+        { figmaSnapshotLoader: loaderFor(twoScreenRecord()) },
+      ),
+    );
+    const ordered = ingestInlineSources(
+      input(
+        [
+          {
+            kind: "figma-snapshot",
+            label: "x",
+            snapshotRunId: "snap-1",
+            screenIds: ["s-a", "s-b"],
+          },
+        ],
+        { figmaSnapshotLoader: loaderFor(twoScreenRecord()) },
+      ),
+    );
+    expect(unordered.envelopes[0]?.provenance.origin).toBe("figma-snapshot:snap-1#s-a,s-b");
+    expect(ordered.envelopes[0]?.provenance.origin).toBe("figma-snapshot:snap-1#s-a,s-b");
+    // Identical scope ⇒ identical envelope id regardless of the order / duplicates the caller passed.
+    expect(String(unordered.envelopes[0]?.id)).toBe(String(ordered.envelopes[0]?.id));
   });
 });

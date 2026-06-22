@@ -478,6 +478,14 @@ describe("validateEvidenceAtom", () => {
     expect(validateEvidenceAtom(atom)).toEqual({ ok: true });
   });
 
+  it("accepts the document-extract provenance kind (Issue #1285)", () => {
+    const atom: EvidenceAtom = {
+      ...happyAtom(),
+      provenance: { ...happyAtom().provenance, kind: "document-extract" },
+    };
+    expect(validateEvidenceAtom(atom)).toEqual({ ok: true });
+  });
+
   it("rejects schemaVersion mismatch", () => {
     const atom = { ...happyAtom(), schemaVersion: "2" as unknown as "1" };
     expectInvalidWithReason(validateEvidenceAtom(atom), "schemaVersion");
@@ -724,6 +732,22 @@ describe("validateConnectedContextPack", () => {
       ],
     };
     expectInvalidWithReason(validateConnectedContextPack(pack), "omitted");
+  });
+
+  it("accepts the document-extraction omission reasons (Issue #1285)", () => {
+    const reasons: readonly CandidateOmissionReason[] = [
+      "unsupported-format",
+      "no-text-layer",
+      "malformed-document",
+      "encrypted-document",
+    ];
+    for (const reason of reasons) {
+      const pack: ConnectedContextPack = {
+        ...happyPack(),
+        omitted: [{ scopePath: "docs/report.docx", reason, omittedAtMs: 1 }],
+      };
+      expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+    }
   });
 
   it("rejects a pack with an invalid uncertainty kind", () => {
@@ -1103,7 +1127,9 @@ describe("validateConnectedContextPack", () => {
   it("rejects a pack with an uncertainty marker carrying an empty impactedAtomId", () => {
     const pack: ConnectedContextPack = {
       ...happyPack(),
-      uncertainty: [{ kind: "no-evidence", claim: "missing proof", impactedAtomIds: [""], emittedAtMs: 1 }],
+      uncertainty: [
+        { kind: "no-evidence", claim: "missing proof", impactedAtomIds: [""], emittedAtMs: 1 },
+      ],
     };
     expectInvalidWithReason(validateConnectedContextPack(pack), "impactedAtomIds invalid");
   });
@@ -1197,8 +1223,29 @@ describe("frozen-constant arrays", () => {
       "structural",
       "git-history",
       "model-rerank",
+      "document-extract",
     ];
     expect([...EVIDENCE_ATOM_PROVENANCE_KINDS]).toEqual([...expected]);
+  });
+
+  it("every CandidateOmissionReason appears in CANDIDATE_OMISSION_REASONS", () => {
+    const expected: readonly CandidateOmissionReason[] = [
+      "outside-scope",
+      "binary",
+      "generated",
+      "ignored",
+      "size-exceeded",
+      "near-duplicate",
+      "low-relevance",
+      "redacted-only",
+      "budget-exhausted",
+      "tool-unavailable",
+      "unsupported-format",
+      "no-text-layer",
+      "malformed-document",
+      "encrypted-document",
+    ];
+    expect([...CANDIDATE_OMISSION_REASONS]).toEqual([...expected]);
   });
 
   it("CONNECTED_FILE_ROLES contains both roles", () => {

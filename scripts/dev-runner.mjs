@@ -1,14 +1,17 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { connect } from "node:net";
 import { createRequire } from "node:module";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { setTimeout } from "node:timers";
+import { clearTimeout, setTimeout } from "node:timers";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const uiDir = join(repoRoot, "packages", "keiko-ui");
+const requireFromRepo = createRequire(join(repoRoot, "package.json"));
 const requireFromUi = createRequire(join(uiDir, "package.json"));
 
 const host = "127.0.0.1";
@@ -18,6 +21,7 @@ const nextPort = Number(process.env.KEIKO_DEV_NEXT_PORT ?? "3000");
 const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko", "dev"));
 const pidFile = resolve(process.env.KEIKO_DEV_PID_FILE ?? join(stateDir, "dev-ui.pid.json"));
 const bffScript = join(repoRoot, "scripts", "dev-bff.mjs");
+const tscBin = requireFromRepo.resolve("typescript/bin/tsc");
 const nextBin = requireFromUi.resolve("next/dist/bin/next");
 const children = new Map();
 const restartCounts = new Map();
@@ -26,6 +30,8 @@ const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "webpack";
 let nextBundler = nextBundlerPreference === "turbopack" ? "turbopack" : "webpack";
 let server;
 let shuttingDown = false;
+let publicReady = false;
+let readinessCheckRunning = false;
 
 const devServiceWorker = `
 self.addEventListener("install", (event) => {
@@ -59,6 +65,54 @@ if (!["auto", "turbopack", "webpack"].includes(nextBundlerPreference)) {
 if (!Number.isInteger(maxRestarts) || maxRestarts < 0) {
   console.error(`Invalid KEIKO_DEV_MAX_RESTARTS: ${String(process.env.KEIKO_DEV_MAX_RESTARTS)}`);
   process.exit(2);
+}
+
+/**
+ * Checks whether the given TCP port is free by attempting a connection.
+ * Resolves to `true` when the port is free, `false` when something is already listening.
+ * Exported for testing.
+ */
+export function checkNextPortFree(checkHost, checkPort, timeoutMs = 500) {
+  return new Promise((resolvePortFree) => {
+    const socket = connect({ host: checkHost, port: checkPort });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolvePortFree(true);
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolvePortFree(false);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      resolvePortFree(true);
+    });
+  });
+}
+
+/**
+ * Reads the Next.js dev-server lock file written by the bundler.
+ * The file lives at `<uiDir>/.next/lock` and contains `{pid, port, appUrl}`.
+ * Resolves to the parsed object, or `undefined` if absent or unreadable.
+ * Exported for testing.
+ */
+export async function readNextLockInfo(lockPath) {
+  try {
+    const content = await readFile(lockPath, "utf8");
+    const parsed = JSON.parse(content);
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      typeof parsed["pid"] === "number" &&
+      typeof parsed["port"] === "number"
+    ) {
+      return /** @type {{ pid: number; port: number; appUrl: string }} */ (parsed);
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function writeState(extra = {}) {
@@ -101,7 +155,9 @@ function restartChild(label) {
   setTimeout(() => {
     if (shuttingDown) return;
     if (label === "bff") startBff();
+    else if (label === "packages") startPackageBuildWatch();
     else startNext();
+    void waitForPublicReadiness();
   }, delayMs).unref();
 }
 
@@ -119,7 +175,8 @@ function spawnChild(label, command, args, options) {
   child.on("exit", (code, signal) => {
     if (children.get(label) !== child) return;
     children.delete(label);
-    writeState({ lastExit: { label, code, signal } });
+    publicReady = false;
+    writeState({ ready: false, lastExit: { label, code, signal } });
     if (shuttingDown) return;
     console.error(`[dev] ${label} exited unexpectedly.`);
     if (label === "next" && nextBundler === "turbopack" && nextBundlerPreference === "auto") {
@@ -136,13 +193,74 @@ function spawnChild(label, command, args, options) {
   return child;
 }
 
+async function fetchOk(url, validate = () => true) {
+  const response = await globalThis.fetch(url, { cache: "no-store" });
+  if (!response.ok) return `HTTP ${String(response.status)}`;
+  return (await validate(response)) ? "ok" : "unexpected response";
+}
+
+async function readinessProbe() {
+  try {
+    const api = await fetchOk(`http://${host}:${String(bffPort)}/api/health`, async (response) => {
+      const body = await response.json();
+      return body?.status === "ok";
+    });
+    if (api !== "ok") return `api: ${api}`;
+
+    const ui = await fetchOk(`http://${host}:${String(nextPort)}/`, async (response) => {
+      const contentType = response.headers.get("content-type") ?? "";
+      const body = await response.text();
+      return contentType.includes("text/html") && body.includes("Keiko");
+    });
+    if (ui !== "ok") return `ui: ${ui}`;
+
+    return "ok";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function waitForPublicReadiness() {
+  if (readinessCheckRunning) return;
+  readinessCheckRunning = true;
+  publicReady = false;
+  writeState({ ready: false });
+  try {
+    let lastError = "not started";
+    while (!shuttingDown) {
+      lastError = await readinessProbe();
+      if (lastError === "ok") {
+        publicReady = true;
+        writeState({ ready: true });
+        console.log(`[dev] ready on http://${host}:${String(publicPort)}`);
+        return;
+      }
+      writeState({ ready: false, starting: lastError });
+      await sleep(500);
+    }
+  } finally {
+    readinessCheckRunning = false;
+  }
+}
+
 function startBff() {
-  spawnChild("bff", process.execPath, [bffScript], {
+  spawnChild("bff", process.execPath, ["--watch", "--watch-preserve-output", bffScript], {
     cwd: repoRoot,
     env: {
       KEIKO_DEV_BFF_PORT: String(bffPort),
       KEIKO_STATE_DIR: stateDir,
     },
+  });
+}
+
+function packageBuildWatchArgs() {
+  return [tscBin, "-b", "tsconfig.packages.json", "--watch", "--preserveWatchOutput"];
+}
+
+function startPackageBuildWatch() {
+  spawnChild("packages", process.execPath, packageBuildWatchArgs(), {
+    cwd: repoRoot,
+    env: {},
   });
 }
 
@@ -250,6 +368,15 @@ function serveDevServiceWorker(res) {
   res.end(devServiceWorker);
 }
 
+function serveStarting(res) {
+  res.writeHead(503, {
+    "cache-control": "no-store",
+    "content-type": "text/plain; charset=utf-8",
+    "retry-after": "1",
+  });
+  res.end("Keiko development server is starting.");
+}
+
 function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -267,27 +394,68 @@ function shutdown(code = 0) {
   if (children.size === 0) process.exit(code);
 }
 
-startBff();
-startNext();
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]).endsWith("dev-runner.mjs");
 
-server = createServer((req, res) => {
-  const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
-  if (url.pathname === "/sw.js") {
-    serveDevServiceWorker(res);
-    return;
+if (invokedDirectly) {
+  // PREFLIGHT: fail fast if next dev is already running on the configured port.
+  const nextLockPath = join(uiDir, ".next", "lock");
+  const [portFree, lockInfo] = await Promise.all([
+    checkNextPortFree(host, nextPort),
+    readNextLockInfo(nextLockPath),
+  ]);
+  if (!portFree) {
+    const pidHint =
+      lockInfo !== undefined ? ` (PID ${String(lockInfo.pid)}, ${lockInfo.appUrl})` : "";
+    const stopHint =
+      lockInfo !== undefined
+        ? `kill ${String(lockInfo.pid)}`
+        : `lsof -ti tcp:${String(nextPort)} | xargs kill`;
+    console.error(`[dev] PREFLIGHT FAILED: port ${String(nextPort)} is already in use${pidHint}.`);
+    console.error(`[dev] A next dev server is already running for this project.`);
+    console.error(`[dev] To stop it, run: ${stopHint}`);
+    console.error(
+      `[dev] Or start on a different port: KEIKO_DEV_NEXT_PORT=3001 node scripts/dev-runner.mjs`,
+    );
+    process.exit(1);
   }
-  proxyHttp(req, res, targetPortFor(url.pathname));
-});
 
-server.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
-  proxyUpgrade(req, socket, head, targetPortFor(url.pathname));
-});
+  startPackageBuildWatch();
+  startBff();
+  startNext();
 
-server.listen(publicPort, host, () => {
-  writeState({ ready: true });
-  console.log(`[dev] listening on http://${host}:${String(publicPort)}`);
-});
+  server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
+    if (url.pathname === "/sw.js") {
+      serveDevServiceWorker(res);
+      return;
+    }
+    if (!publicReady) {
+      serveStarting(res);
+      return;
+    }
+    proxyHttp(req, res, targetPortFor(url.pathname));
+  });
 
-process.once("SIGINT", () => shutdown(0));
-process.once("SIGTERM", () => shutdown(0));
+  server.on("upgrade", (req, socket, head) => {
+    if (!publicReady) {
+      socket.end(
+        "HTTP/1.1 503 Service Unavailable\r\n" +
+          "Connection: close\r\n" +
+          "Retry-After: 1\r\n" +
+          "\r\n",
+      );
+      return;
+    }
+    const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
+    proxyUpgrade(req, socket, head, targetPortFor(url.pathname));
+  });
+
+  server.listen(publicPort, host, () => {
+    writeState({ ready: false, starting: "waiting for API and UI" });
+    console.log(`[dev] listening on http://${host}:${String(publicPort)} (warming up)`);
+    void waitForPublicReadiness();
+  });
+
+  process.once("SIGINT", () => shutdown(0));
+  process.once("SIGTERM", () => shutdown(0));
+}

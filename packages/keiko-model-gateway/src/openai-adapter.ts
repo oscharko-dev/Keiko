@@ -7,17 +7,27 @@ import {
   AuthenticationError,
   CancelledError,
   ContextOverflowError,
+  ERROR_CODES,
+  GatewayEgressError,
   ModelRefusalError,
   ProviderError,
   RateLimitError,
   TimeoutError,
   TransportError,
+  type GatewayEgressErrorCode,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME } from "./config.js";
-import { gatewayFetch, readJsonCapped, readSseStream } from "./http.js";
-import { normalizeChatResponse } from "./normalize.js";
+import {
+  gatewayFetch,
+  OutboundHttpEgressError,
+  readJsonCapped,
+  readSseStream,
+  type OutboundHttpEgressErrorCode,
+} from "./http.js";
+import { normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type {
+  ChatMessageContentPart,
   CostClass,
   FinishReason,
   GatewayRequest,
@@ -28,6 +38,23 @@ import type {
   ProviderAdapter,
   UsageMetadata,
 } from "./types.js";
+
+const PROVIDER_EMPTY_ASSISTANT_STATUS = 200;
+const GATEWAY_EGRESS_CODES: Record<OutboundHttpEgressErrorCode, GatewayEgressErrorCode> = {
+  PROXY_UNREACHABLE: ERROR_CODES.PROXY_UNREACHABLE,
+  PROXY_AUTH_REQUIRED: ERROR_CODES.PROXY_AUTH_REQUIRED,
+  PROXY_EGRESS_FAILED: ERROR_CODES.PROXY_EGRESS_FAILED,
+  PROXY_BLOCKED_BY_POLICY: ERROR_CODES.PROXY_BLOCKED_BY_POLICY,
+  TLS_CA_FAILURE: ERROR_CODES.TLS_CA_FAILURE,
+};
+
+const GATEWAY_EGRESS_MESSAGES: Record<OutboundHttpEgressErrorCode, string> = {
+  PROXY_UNREACHABLE: "configured proxy is unreachable",
+  PROXY_AUTH_REQUIRED: "configured proxy requires authentication",
+  PROXY_EGRESS_FAILED: "configured proxy failed outbound egress",
+  PROXY_BLOCKED_BY_POLICY: "configured proxy blocked outbound egress",
+  TLS_CA_FAILURE: "TLS certificate verification failed for outbound egress",
+};
 
 export interface AdapterDeps {
   readonly fetchImpl?: typeof fetch | undefined;
@@ -40,7 +67,7 @@ interface ChatRequestBody {
   readonly model: string;
   readonly messages: readonly {
     readonly role: string;
-    readonly content: string | null;
+    readonly content: ChatRequestMessageContent | null;
     readonly tool_call_id?: string | undefined;
     readonly tool_calls?:
       | readonly {
@@ -57,6 +84,25 @@ interface ChatRequestBody {
   readonly stream_options?: { readonly include_usage: boolean };
 }
 
+type ChatRequestMessageContent =
+  | string
+  | readonly (
+      | { readonly type: "text"; readonly text: string }
+      | { readonly type: "image_url"; readonly image_url: { readonly url: string } }
+    )[];
+
+function buildMessageContent(
+  content: string,
+  parts: readonly ChatMessageContentPart[] | undefined,
+): ChatRequestMessageContent {
+  if (parts === undefined) return content;
+  return parts.map((part) =>
+    part.type === "text"
+      ? { type: "text" as const, text: part.text }
+      : { type: "image_url" as const, image_url: { url: part.image_url.url } },
+  );
+}
+
 function buildMessage(
   message: GatewayRequest["messages"][number],
 ): ChatRequestBody["messages"][number] {
@@ -70,7 +116,7 @@ function buildMessage(
     content:
       message.role === "assistant" && toolCalls !== undefined && toolCalls.length > 0
         ? null
-        : message.content,
+        : buildMessageContent(message.content, message.contentParts),
     ...(message.role === "tool" && message.toolCallId !== undefined
       ? { tool_call_id: message.toolCallId }
       : {}),
@@ -132,7 +178,11 @@ function firstStreamChoice(chunk: unknown): Record<string, unknown> | undefined 
 function deltaFromChunk(chunk: unknown): string | undefined {
   const choice = firstStreamChoice(chunk);
   const delta = choice !== undefined && isRecord(choice.delta) ? choice.delta : undefined;
-  return delta !== undefined && typeof delta.content === "string" ? delta.content : undefined;
+  if (delta === undefined || !("content" in delta)) {
+    return undefined;
+  }
+  const content = textFromContent(delta.content);
+  return content.length > 0 ? content : undefined;
 }
 
 function finishReasonFromChunk(chunk: unknown): FinishReason | undefined {
@@ -213,6 +263,21 @@ function redactResponse(
   };
 }
 
+function assertUsableAssistantResponse(
+  response: NormalizedResponse,
+  modelId: string,
+  secrets: readonly string[],
+): void {
+  if (response.content.trim().length > 0 || response.toolCalls.length > 0) {
+    return;
+  }
+  throw new ProviderError(
+    `provider returned an empty assistant response for '${modelId}'`,
+    PROVIDER_EMPTY_ASSISTANT_STATUS,
+    secrets,
+  );
+}
+
 function errorSignal(payload: unknown): string {
   const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
   if (!isRecord(error)) {
@@ -267,6 +332,18 @@ function apiKeyHeaders(config: ModelProviderConfig): Record<string, string> {
   return { [headerName]: apiKeyHeaderValue(headerName, config.apiKey) };
 }
 
+function mapOutboundEgressError(
+  error: unknown,
+  secrets: readonly string[],
+): GatewayEgressError | undefined {
+  if (!(error instanceof OutboundHttpEgressError)) return undefined;
+  return new GatewayEgressError(
+    GATEWAY_EGRESS_CODES[error.code],
+    GATEWAY_EGRESS_MESSAGES[error.code],
+    secrets,
+  );
+}
+
 export class OpenAiAdapter implements ProviderAdapter {
   private readonly now: () => number;
 
@@ -292,19 +369,18 @@ export class OpenAiAdapter implements ProviderAdapter {
       mapHttpError(response, config.modelId, secrets, errorPayload);
     }
     const payload = await this.readBody(response, config, secrets);
-    return redactResponse(
-      normalizeChatResponse(
-        payload,
-        config.modelId,
-        {
-          requestId: this.deps.requestId,
-          latencyMs: this.now() - start,
-          costClass: this.deps.costClass,
-        },
-        request.responseFormat?.type === "json_schema",
-      ),
-      secrets,
+    const normalized = normalizeChatResponse(
+      payload,
+      config.modelId,
+      {
+        requestId: this.deps.requestId,
+        latencyMs: this.now() - start,
+        costClass: this.deps.costClass,
+      },
+      request.responseFormat?.type === "json_schema",
     );
+    assertUsableAssistantResponse(normalized, config.modelId, secrets);
+    return redactResponse(normalized, secrets);
   };
 
   // Streaming chat path (Layer 1): yields redacted content-delta tokens as they
@@ -333,23 +409,35 @@ export class OpenAiAdapter implements ProviderAdapter {
       yield { type: "delta", token };
     }
     const assembled = this.assembleResponse(config, start, acc);
+    assertUsableAssistantResponse(assembled, config.modelId, secrets);
     yield { type: "done", response: redactResponse(assembled, secrets) };
   };
 
-  // Iterates the SSE stream, yielding each redacted content token while mutating
-  // `acc` with the raw accumulated content, finish reason, and final usage counts.
+  // Iterates the SSE stream, yielding redacted content tokens while mutating `acc`.
+  // Redaction is applied to the full accumulated buffer on every delta so that a
+  // configured secret straddling two SSE chunk boundaries is still caught.  We track
+  // how many characters of the REDACTED output we have already emitted and yield only
+  // the new suffix each time.  When a cross-delta match shrinks the redacted string
+  // relative to what was emitted, the cursor overshoots and the tail (containing the
+  // secret or its replacement) is deferred to the terminal `done` chunk, which always
+  // redacts the full `acc.content` independently via redactResponse().
   private async *streamDeltas(
     response: Response,
     config: ModelProviderConfig,
     secrets: readonly string[],
     acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
   ): AsyncGenerator<string> {
+    let emittedRedactedLength = 0;
     try {
       for await (const chunk of readSseStream(response)) {
         const content = deltaFromChunk(chunk);
         if (content !== undefined) {
           acc.content += content;
-          yield redact(content, secrets);
+          const redacted = redact(acc.content, secrets);
+          if (redacted.length > emittedRedactedLength) {
+            yield redacted.slice(emittedRedactedLength);
+            emittedRedactedLength = redacted.length;
+          }
         }
         const finish = finishReasonFromChunk(chunk);
         if (finish !== undefined) acc.finishReason = finish;
@@ -396,6 +484,10 @@ export class OpenAiAdapter implements ProviderAdapter {
     if (error instanceof CancelledError || error instanceof TimeoutError) {
       return error;
     }
+    const egressError = mapOutboundEgressError(error, secrets);
+    if (egressError !== undefined) {
+      return egressError;
+    }
     return new TransportError(`stream read failed for '${config.modelId}'`, secrets);
   }
 
@@ -437,6 +529,10 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): Error {
     if (cancel?.aborted === true) {
       return new CancelledError(`request for '${config.modelId}' cancelled`, secrets);
+    }
+    const egressError = mapOutboundEgressError(error, secrets);
+    if (egressError !== undefined) {
+      return egressError;
     }
     if (timeout.aborted) {
       return new TimeoutError(`request for '${config.modelId}' timed out`, secrets);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Chat } from "@/lib/types";
 import { updateChat } from "@/lib/api";
 import { Icons } from "../../Icons";
@@ -45,7 +45,12 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const tabActiveId = useId();
+  const tabDeletedId = useId();
+  const panelId = useId();
+  const renameErrorId = useId();
 
   const activeCount = useMemo(
     () => session.chats.filter((chat) => chat.status !== "closed").length,
@@ -78,16 +83,26 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     setEditingTitle(chat.title);
     setDeleteConfirmId(null);
     setError(null);
+    setRenameError(null);
   };
 
   const commitRename = async (chat: Chat): Promise<void> => {
     const title = editingTitle.trim();
-    if (title.length === 0 || title === chat.title) {
+    // Empty input: keep edit mode open and surface an accessible error (PA-05).
+    if (title.length === 0) {
+      setRenameError("Title cannot be empty.");
+      renameInputRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    // Unchanged title: revert silently — no error, nothing to save.
+    if (title === chat.title) {
       setEditingId(null);
+      setRenameError(null);
       return;
     }
     setBusyId(chat.id);
     setError(null);
+    setRenameError(null);
     try {
       const response = await updateChat(chat.id, { title });
       session.replaceChat(response.chat);
@@ -106,7 +121,6 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       const response = await updateChat(chat.id, { status: "closed" });
       session.replaceChat(response.chat);
       setDeleteConfirmId(null);
-      setView("deleted");
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : "Request failed.";
       setError(`Delete failed: ${detail}`);
@@ -122,7 +136,6 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       const response = await updateChat(chat.id, { status: "open" });
       session.replaceChat(response.chat);
       setDeleteConfirmId(null);
-      setView("active");
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : "Request failed.";
       setError(`Restore failed: ${detail}`);
@@ -155,8 +168,10 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       <div className="chat-history-tabs" role="tablist" aria-label="Conversation state">
         <button
           type="button"
+          id={tabActiveId}
           role="tab"
           aria-selected={view === "active"}
+          aria-controls={panelId}
           className="chat-history-tab"
           onClick={() => {
             setView("active");
@@ -167,8 +182,10 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         </button>
         <button
           type="button"
+          id={tabDeletedId}
           role="tab"
           aria-selected={view === "deleted"}
+          aria-controls={panelId}
           className="chat-history-tab"
           onClick={() => {
             setView("deleted");
@@ -183,7 +200,12 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           {error}
         </div>
       ) : null}
-      <div className="chat-history-list">
+      <div
+        id={panelId}
+        className="chat-history-list"
+        role="tabpanel"
+        aria-labelledby={view === "active" ? tabActiveId : tabDeletedId}
+      >
         {chats.length === 0 ? (
           <div className="lk-empty">
             <p className="lk-empty-title">No conversations</p>
@@ -204,16 +226,31 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
               >
                 <div className="chat-history-row-main">
                   {editing ? (
-                    <input
-                      ref={renameInputRef}
-                      className="chat-history-title-input"
-                      value={editingTitle}
-                      onChange={(event) => setEditingTitle(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void commitRename(chat);
-                        if (event.key === "Escape") setEditingId(null);
-                      }}
-                    />
+                    <>
+                      <input
+                        ref={renameInputRef}
+                        className="chat-history-title-input"
+                        value={editingTitle}
+                        aria-invalid={renameError !== null}
+                        aria-describedby={renameError !== null ? renameErrorId : undefined}
+                        onChange={(event) => {
+                          setEditingTitle(event.target.value);
+                          if (renameError !== null) setRenameError(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") void commitRename(chat);
+                          if (event.key === "Escape") {
+                            setEditingId(null);
+                            setRenameError(null);
+                          }
+                        }}
+                      />
+                      {renameError !== null ? (
+                        <span id={renameErrorId} className="chat-history-rename-error" role="alert">
+                          {renameError}
+                        </span>
+                      ) : null}
+                    </>
                   ) : (
                     <button
                       type="button"
@@ -244,7 +281,10 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
                         type="button"
                         className="lk-btn lk-btn-ghost"
                         disabled={busy}
-                        onClick={() => setEditingId(null)}
+                        onClick={() => {
+                          setEditingId(null);
+                          setRenameError(null);
+                        }}
                       >
                         Cancel
                       </button>

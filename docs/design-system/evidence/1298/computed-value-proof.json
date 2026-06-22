@@ -1,0 +1,367 @@
+{
+  "issue": 1298,
+  "baseRef": "origin/release/0.2.0",
+  "groupR": {
+    "description": "Reference fidelity: ported .c-* input/navigation primitives resolve identically to the DS 0.4.0 reference (keiko-tokens + keiko-semantic-tokens + keiko-inputs + keiko-nav). Gated to 0-diff (NEUTRAL/semantic surfaces) in dark + light; HC/forced-colors/reduced-motion recorded only.",
+    "totalProbes": 203,
+    "gatedDiffCount": 0,
+    "recordedDiffCount": 0,
+    "gatedDiffs": [],
+    "recordedDiffs": []
+  },
+  "accentDerived": {
+    "description": "Recorded (not gated), rendered as sRGB (r,g,b,a). Accent-derived surfaces (selected checkbox, tag, dropzone icon, current page, completed step) resolve through the brand --accent, which the product defines as hex #4eba87 vs the reference's oklch(0.72 0.124 160): a ~1.5% pre-existing primitive delta outside #1298. The token chain is identical.",
+    "byMode": {
+      "01-dark": {
+        ".c-check input:checked + .bx": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-radio input:checked + .rb": {
+          "product": {
+            "borderTopColor": "78,186,135,255"
+          },
+          "reference": {
+            "borderTopColor": "82,188,138,255"
+          }
+        },
+        ".c-step.done .dot": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-tag": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "82,188,138,255"
+          }
+        },
+        ".c-drop .ic": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "82,188,138,255"
+          }
+        },
+        ".c-pager button[aria-current=\"page\"]": {
+          "product": {
+            "backgroundColor": "78,188,133,46"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46"
+          }
+        }
+      },
+      "02-light": {
+        ".c-check input:checked + .bx": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-radio input:checked + .rb": {
+          "product": {
+            "borderTopColor": "78,186,135,255"
+          },
+          "reference": {
+            "borderTopColor": "82,188,138,255"
+          }
+        },
+        ".c-step.done .dot": {
+          "product": {
+            "backgroundColor": "0,129,73,255"
+          },
+          "reference": {
+            "backgroundColor": "0,129,73,255"
+          }
+        },
+        ".c-tag": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,100,53,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,100,53,255"
+          }
+        },
+        ".c-drop .ic": {
+          "product": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,115,67,255"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46",
+            "color": "0,115,67,255"
+          }
+        },
+        ".c-pager button[aria-current=\"page\"]": {
+          "product": {
+            "backgroundColor": "78,188,133,46"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46"
+          }
+        }
+      }
+    }
+  },
+  "productAdopter": {
+    "description": "The workflow-handoff 'Expected checks' list adopts the .c-check primitive (presentation-only). Proved by WorkflowHandoff.a11y.test.tsx (checkbox role + accessible name preserved, glyph aria-hidden, toggle behaviour, axe-clean) — a React change not reproducible in this CSS-only harness."
+  },
+  "keyboardFocus": {
+    "description": "Keyboard Tab proof that representative input/navigation primitives enter :focus-visible or :focus-within states and expose a visible ring in the real product globals.css.",
+    "targetCount": 13,
+    "targets": {
+      "checkbox": {
+        "id": "checkbox",
+        "ok": true,
+        "activeSelector": ".c-check input[aria-label=\"on\"]",
+        "ringSelector": ".c-check input[aria-label=\"on\"]:focus-visible + .bx",
+        "styles": {
+          "boxShadow": "oklch(0.17 0.004 160) 0px 0px 0px 2px, rgb(78, 186, 135) 0px 0px 0px 4px",
+          "outlineColor": "rgba(0, 0, 0, 0)",
+          "outlineOffset": "0px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "radio": {
+        "id": "radio",
+        "ok": true,
+        "activeSelector": ".c-radio input[aria-label=\"private\"]",
+        "ringSelector": ".c-radio input[aria-label=\"private\"]:focus-visible + .rb",
+        "styles": {
+          "boxShadow": "oklch(0.17 0.004 160) 0px 0px 0px 2px, rgb(78, 186, 135) 0px 0px 0px 4px",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "2px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "slider": {
+        "id": "slider",
+        "ok": true,
+        "activeSelector": ".c-slider input[type=\"range\"]",
+        "ringSelector": ".c-slider input[type=\"range\"]:focus-visible",
+        "styles": {
+          "boxShadow": "oklch(0.17 0.004 160) 0px 0px 0px 2px, rgb(78, 186, 135) 0px 0px 0px 4px",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "4px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "stepper": {
+        "id": "stepper",
+        "ok": true,
+        "activeSelector": ".c-stepper button[aria-label=\"decrease\"]",
+        "ringSelector": ".c-stepper button[aria-label=\"decrease\"]:focus-visible",
+        "styles": {
+          "boxShadow": "none",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "-2px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "combobox": {
+        "id": "combobox",
+        "ok": true,
+        "activeSelector": ".c-combo-input input[aria-label=\"combo\"]",
+        "ringSelector": ".c-combo-input:focus-within",
+        "styles": {
+          "boxShadow": "oklch(0.712291 0.125417 160.091 / 0.26) 0px 0px 0px 3px",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "1px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "tag-remove": {
+        "id": "tag-remove",
+        "ok": true,
+        "activeSelector": ".c-tag button[aria-label=\"remove backend\"]",
+        "ringSelector": ".c-tag button[aria-label=\"remove backend\"]:focus-visible",
+        "styles": {
+          "boxShadow": "none",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "1px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "dropzone": {
+        "id": "dropzone",
+        "ok": true,
+        "activeSelector": ".c-drop",
+        "ringSelector": ".c-drop:focus-visible",
+        "styles": {
+          "boxShadow": "none",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "2px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "date-calendar": {
+        "id": "date-calendar",
+        "ok": true,
+        "activeSelector": ".c-datefield .cal",
+        "ringSelector": ".c-datefield .cal:focus-visible",
+        "styles": {
+          "boxShadow": "none",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "1px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "breadcrumb": {
+        "id": "breadcrumb",
+        "ok": true,
+        "activeSelector": ".c-crumbs a",
+        "ringSelector": ".c-crumbs a:focus-visible",
+        "styles": {
+          "boxShadow": "none",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "1px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "back": {
+        "id": "back",
+        "ok": true,
+        "activeSelector": ".c-back",
+        "ringSelector": ".c-back:focus-visible",
+        "styles": {
+          "boxShadow": "none",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "2px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "tab": {
+        "id": "tab",
+        "ok": true,
+        "activeSelector": ".c-utab",
+        "ringSelector": ".c-utab:focus-visible",
+        "styles": {
+          "boxShadow": "none",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "-2px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "pagination": {
+        "id": "pagination",
+        "ok": true,
+        "activeSelector": ".c-pager button",
+        "ringSelector": ".c-pager button:focus-visible",
+        "styles": {
+          "boxShadow": "none",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "1px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      },
+      "context-menu": {
+        "id": "context-menu",
+        "ok": true,
+        "activeSelector": ".c-ctx-item",
+        "ringSelector": ".c-ctx-item:focus-visible",
+        "styles": {
+          "boxShadow": "none",
+          "outlineColor": "rgb(78, 186, 135)",
+          "outlineOffset": "-2px",
+          "outlineStyle": "solid",
+          "outlineWidth": "2px"
+        }
+      }
+    }
+  },
+  "screenshots": {
+    "modes": [
+      "01-dark",
+      "02-light",
+      "03-dark-hc",
+      "04-light-hc",
+      "05-prefers-contrast",
+      "06-forced-colors",
+      "07-reduced-motion"
+    ],
+    "compactDensity": "08-compact-density.png",
+    "responsiveViewports": [
+      {
+        "fileName": "09-responsive.png",
+        "width": 560,
+        "height": 1700,
+        "label": "mobile responsive"
+      },
+      {
+        "fileName": "10-tablet.png",
+        "width": 900,
+        "height": 1700,
+        "label": "tablet"
+      },
+      {
+        "fileName": "11-ultrawide.png",
+        "width": 1920,
+        "height": 1700,
+        "label": "ultrawide"
+      }
+    ],
+    "focusVisible": "12-focus-visible.png"
+  },
+  "missingSelectors": [],
+  "byMode": {
+    "01-dark": {
+      "groupR_diffs": 0,
+      "groupR_gated": true
+    },
+    "02-light": {
+      "groupR_diffs": 0,
+      "groupR_gated": true
+    },
+    "03-dark-hc": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "04-light-hc": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "05-prefers-contrast": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "06-forced-colors": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "07-reduced-motion": {
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    }
+  }
+}

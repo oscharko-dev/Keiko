@@ -59,4 +59,30 @@ describe("CandidatesPane — a11y (WCAG 2.2 AA)", () => {
     expect(getByRole("textbox", { name: /^title$/i })).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  // Issue #282 FIX A-UI / A11y-4: terminal state renders Approve aria-disabled + Reopen button.
+  // axe must not flag the aria-disabled pattern or the final-note aria-describedby association.
+  it("has no violations with a terminal-state candidate (approved — Reopen + final-note visible)", async () => {
+    const { container } = render(
+      <CandidatesPane
+        candidates={[makeCandidate({ reviewState: "approved" })]}
+        onReview={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no violations with a terminal-state candidate when also governance-gated", async () => {
+    const { container } = render(
+      <CandidatesPane
+        candidates={[makeCandidate({ reviewState: "rejected" })]}
+        onReview={vi.fn()}
+        onEdit={vi.fn()}
+        actionsDisabled
+        actionsDisabledReason="Set a reviewer label to review or edit candidates."
+      />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
 });

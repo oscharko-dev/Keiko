@@ -102,19 +102,46 @@ describe("openKnowledgeStore — fresh install", () => {
     }
   });
 
-  it("refuses key-provider encryption mode until encrypted stores are implemented", () => {
+  it("opens an encrypted-key-provider store and applies the schema", () => {
+    const store = openKnowledgeStore({
+      dbPath: join(tmp, "capsules.db"),
+      protection: {
+        mode: "encrypted-key-provider",
+        keyProvider: {
+          providerId: "test-provider",
+          resolveKey: () => new Uint8Array(32).fill(7),
+        },
+      },
+    });
+    try {
+      expect(store._internal.contentCipher.isEncrypted).toBe(true);
+      const db = store._internal.db;
+      const version = db.prepare("PRAGMA user_version").get() as unknown as VersionRow;
+      expect(version.user_version).toBe(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("rejects encrypted-key-provider mode without a key provider", () => {
+    expect(() =>
+      openKnowledgeStore({
+        dbPath: join(tmp, "capsules.db"),
+        protection: { mode: "encrypted-key-provider" },
+      }),
+    ).toThrow(/requires a keyProvider/);
+  });
+
+  it("rejects a key whose length is not 32 bytes", () => {
     expect(() =>
       openKnowledgeStore({
         dbPath: join(tmp, "capsules.db"),
         protection: {
           mode: "encrypted-key-provider",
-          keyProvider: {
-            providerId: "test-provider",
-            resolveKey: () => new Uint8Array(32),
-          },
+          keyProvider: { providerId: "short", resolveKey: () => new Uint8Array(16) },
         },
       }),
-    ).toThrow(/Encrypted local-knowledge stores are not enabled/);
+    ).toThrow(/must be exactly 32 bytes/);
   });
 });
 

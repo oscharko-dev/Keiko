@@ -26,8 +26,15 @@ function elapsed(runner: LineSelectionRunner): number {
   return runner.nowMs() - runner.startMs;
 }
 
-function timedOut(runner: LineSelectionRunner, state: LineSelectionState, lineIndex: number): boolean {
-  if (lineIndex % LINE_TIMEOUT_CHECK_INTERVAL !== 0 || elapsed(runner) <= runner.limits.elapsedMsMax) {
+function timedOut(
+  runner: LineSelectionRunner,
+  state: LineSelectionState,
+  lineIndex: number,
+): boolean {
+  if (
+    lineIndex % LINE_TIMEOUT_CHECK_INTERVAL !== 0 ||
+    elapsed(runner) <= runner.limits.elapsedMsMax
+  ) {
     return false;
   }
   state.truncated = true;

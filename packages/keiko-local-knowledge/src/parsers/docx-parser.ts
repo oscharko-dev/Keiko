@@ -9,6 +9,7 @@ import type {
 import yauzl from "yauzl";
 
 import {
+  decodeXmlEntities as decodeXmlEntitiesShared,
   diagnostic,
   emptyResult,
   objectLimitDiagnostic,
@@ -266,13 +267,10 @@ async function readDocumentXml(bytes: Uint8Array, maxInputBytes: number): Promis
   }
 }
 
+// GRD-027: delegate to the shared decoder so docx text runs also resolve numeric character
+// references (smart quotes, accented letters) instead of surfacing literal `&#8217;`.
 function decodeXmlEntities(value: string): string {
-  return value
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&amp;", "&");
+  return decodeXmlEntitiesShared(value);
 }
 
 interface Paragraph {

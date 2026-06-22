@@ -4,6 +4,7 @@
 // O_EXCL open must refuse rather than follow.
 
 import { mkdtemp, mkdir, realpath, rm, symlink, writeFile, readFile } from "node:fs/promises";
+import { statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -123,6 +124,21 @@ describe("writeSideFile containment", () => {
     expect(after.toString()).toBe("OWNED");
   });
 
+  it("refuses a pre-planted symlink at the per-run side-file directory", async () => {
+    await writeFile(join(outsideDir, "victim.png"), Buffer.from("OWNED"));
+    try {
+      await symlink(outsideDir, join(baseDir, "run-dir-link"), "dir");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+    expect(() =>
+      writeSideFile(baseDir, "run-dir-link", "browser-1.png", Buffer.from("clean")),
+    ).toThrow(EvidenceWriteError);
+    const after = await readFile(join(outsideDir, "victim.png"));
+    expect(after.toString()).toBe("OWNED");
+  });
+
   it("refuses a path that lexically escapes via concatenation (name is a single segment)", () => {
     expect(() => writeSideFile(baseDir, "run-x", "../escape.png", Buffer.from("x"))).toThrow(
       EvidenceWriteError,
@@ -138,5 +154,16 @@ describe("writeSideFile evidenceSchemaVersion contract", () => {
     expect(Object.keys(result).sort()).toEqual(
       ["absolutePath", "bytes", "relativePath", "sha256"].sort(),
     );
+  });
+});
+
+describe("writeSideFile POSIX permission hardening (AC1)", () => {
+  it("creates the per-run dir with mode 0o700 and the side-file with mode 0o600", () => {
+    // POSIX only: Windows does not expose UNIX permission bits via statSync.mode.
+    if (process.platform === "win32") return;
+    const result = writeSideFile(baseDir, "run-perms", "browser-1.png", Buffer.from("acl-check"));
+    const runDir = join(baseDir, "run-perms");
+    expect(statSync(runDir).mode & 0o777).toBe(0o700);
+    expect(statSync(result.absolutePath).mode & 0o777).toBe(0o600);
   });
 });

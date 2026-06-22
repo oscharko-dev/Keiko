@@ -28,3 +28,17 @@ export function scoreFromDimensions(dimensions: readonly TestQualityRubricDimens
 export function verdictFromScore(score: number): "weak" | "strong" {
   return score < TEST_QUALITY_WEAK_THRESHOLD ? "weak" : "strong";
 }
+
+/**
+ * Classify a full rubric verdict. A candidate is only strong when the aggregate score and every
+ * mandatory rubric dimension meet the threshold; one weak dimension is enough to keep the finding
+ * visible instead of hiding it behind a passing average.
+ */
+export function verdictFromDimensions(
+  dimensions: readonly TestQualityRubricDimension[],
+): "weak" | "strong" {
+  if (verdictFromScore(scoreFromDimensions(dimensions)) === "weak") return "weak";
+  return dimensions.every((dimension) => dimension.score >= TEST_QUALITY_WEAK_THRESHOLD)
+    ? "strong"
+    : "weak";
+}

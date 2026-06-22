@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="packages/keiko-ui/public/assets/keiko-logo.svg" alt="Keiko logo" width="144" />
+  <img src="https://raw.githubusercontent.com/oscharko-dev/Keiko/release/0.2.0/packages/keiko-ui/public/keiko-logo.svg" alt="Keiko logo" width="144" />
 </p>
 
 <h1 align="center">Keiko</h1>
@@ -109,6 +109,19 @@ Connect a Figma board read-only with a personal access token. The token is encry
 
 Keiko's memory is now encrypted at rest (AES-256-GCM vault, ADR-0035) — no plaintext memory content touches disk. Memories are captured from natural conversation when salient, decay and can be forgotten under governance rules (`keiko memory maintain`), and are recalled semantically via embeddings. The memory window is available from the left rail as **MemoriaViva**.
 
+MemoriaViva is local machine state, not cloud telemetry or shared team memory. Memories are scoped
+to user, workspace, project, workflow, or global coordinates, and retrieval uses those scopes before
+adding any memory context to a model prompt. When memory is enabled for a conversation or workflow,
+Keiko may add a bounded, redacted memory context block to the model call; disabling memory or using
+memory-off mode omits that block. Forget/delete actions tombstone the selected memory for audit, and
+maintenance can archive, decay, forget stale records, or purge expired tombstones under
+deterministic retention rules. Diagnostics and audit exports are body-free: they report counts,
+status, scope summaries, and redacted audit events rather than raw memory bodies or structured
+payloads. Use `keiko memory diagnostics` for the local support snapshot; the Digital Twin panel
+does not maintain a separate browser-local memory store. See
+[Conversation Center privacy and retention](https://github.com/oscharko-dev/Keiko/blob/dev/docs/conversation-center-privacy.md)
+for the public memory privacy contract.
+
 ### Conversation Center and grounding
 
 Chat now streams tokens over SSE (first token in well under a second on TLS-intercepted enterprise networks). Grounded answers can draw on any local folder plus Local Knowledge connectors simultaneously; reciprocal-rank fusion keeps one source from starving the others, and grounding budgets are operator-configurable.
@@ -136,7 +149,7 @@ yarn add @oscharko-dev/keiko && yarn keiko init && yarn keiko:start
 pnpm add @oscharko-dev/keiko && pnpm exec keiko init && pnpm keiko:start
 
 # npx (no global install)
-npx @oscharko-dev/keiko init && npx keiko start
+npx @oscharko-dev/keiko init && npx @oscharko-dev/keiko start
 ```
 
 Open the local UI:
@@ -157,6 +170,10 @@ npm run keiko:stop
 | --------------------- | ---------------------------------------------- |
 | `npm run keiko:start` | Starts the local Keiko UI on the default port. |
 | `npm run keiko:stop`  | Stops the local Keiko UI process.              |
+
+These scripts call the installed package entry by relative path, so they do not depend on a
+global `keiko` already on `PATH`. This avoids stale-version launches when a machine still has an
+older global install on macOS or Windows.
 
 ## First-run setup
 
@@ -201,8 +218,46 @@ Surface coverage is intentionally not identical. The UI is the primary surface f
 | `keiko verify`                | Runs configured verification gates and writes redacted evidence. |
 | `keiko evidence list`         | Lists local evidence manifests.                                  |
 | `keiko evidence show <runId>` | Shows one redacted evidence manifest.                            |
+| `keiko doctor`                | Diagnoses stale global-vs-local launch paths.                    |
+| `keiko repair`                | Runs an offline diagnostic-and-repair pass on the local install. |
+| `keiko uninstall`             | Removes Keiko's runtime artifacts so you can reinstall cleanly.  |
 
 `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest. Use `keiko run`, `keiko verify`, or the UI evidence view when a stored manifest is required.
+
+### Repair and uninstall
+
+`keiko repair` runs an offline, deterministic pass that fixes a broken or half-installed local state without a full reinstall. It removes a stale `ui.pid` left by an unclean shutdown, tightens the `.keiko` state-directory permissions to `0o700`, and normalizes the permissions of every known Keiko-owned runtime artifact under it — the UI, Memory, and Local-Knowledge databases and their `-wal`/`-shm` sidecars, Evidence and Quality-Intelligence records, and the sealed credential vaults — to owner-only `0o700`/`0o600` on POSIX. It also prunes launcher records whose shortcut files were deleted, verifies the built CLI/UI assets, the launch path, and any configured model-gateway file, and flags lingering plaintext credentials left in the config by an interrupted migration. The audit is content-free: it reports paths and categories, never file contents, and never touches a customer file that merely lives under `.keiko`. Items it cannot fix automatically are listed as `action`. Add `--dry-run` to report without changing anything.
+
+On Windows, POSIX modes do not apply; repair reports that NTFS ACLs govern access rather than pretending an equivalent change was made.
+
+```bash
+keiko repair            # diagnose and repair in place
+keiko repair --dry-run  # report findings only
+```
+
+To verify (rather than repair) the at-rest posture of a local `.keiko` tree — no plaintext credentials, owner-only modes, encrypted Memory/Local-Knowledge content, and protected Evidence/QI artifacts — run the read-only auditor:
+
+```bash
+npm run audit:local-state -- --state-dir ~/.keiko   # exit 0 healthy, 1 on any finding
+```
+
+`keiko uninstall` reverses the runtime artifacts Keiko creates on a machine so you can clean your device and reinstall a clean version. It removes the user-local launcher shortcut(s), the `keiko:start` / `keiko:stop` scripts that `keiko init` added to your `package.json` (only when they still match what `init` writes), and Keiko-owned runtime state under `.keiko`. With `--state` (and by default), it removes the manifest of Keiko-owned sensitive artifacts — lifecycle and launcher files, the UI, Memory, and Local-Knowledge databases and their sidecars, Evidence and Quality-Intelligence records, and the sealed credential vaults — and then removes the state directory itself only once nothing of yours remains. A customized script, an unknown (non-Keiko) file under `.keiko`, and any symlink are never touched or followed. With no scope flag all three areas are removed; `--state`, `--launchers`, and `--scripts` narrow the operation, and `--dry-run` previews it.
+
+`keiko uninstall --state` deletes local Evidence, Memory, and Local-Knowledge stores. Removing a file from the filesystem unlinks it but does not guarantee secure erasure of SSD-backed data. Repair (`diagnose and fix permission drift`) and uninstall (`remove Keiko-owned local runtime artifacts`) are distinct: repair never deletes a store, and uninstall never weakens permissions.
+
+```bash
+keiko uninstall              # remove launcher, scripts, and state
+keiko uninstall --dry-run    # preview what would be removed
+keiko uninstall --state      # remove only Keiko-owned runtime state under .keiko
+keiko uninstall --launchers  # remove only the OS launcher shortcut
+```
+
+Keiko never removes its own installed npm package — a running process cannot reliably delete the files it is executing from. After `keiko uninstall` completes it prints the package-manager command to finish removal:
+
+```bash
+npm uninstall -g @oscharko-dev/keiko   # global install
+npm uninstall @oscharko-dev/keiko      # local install in a project
+```
 
 ### Connected sources: folder search vs. Knowledge Capsules
 
@@ -273,6 +328,10 @@ Environment variables can override file values:
 | `KEIKO_MODEL_<ID>_API_KEY_HEADER_NAME` | Per-model credential header name. |
 | `KEIKO_UI_PORT`                        | Local UI port override.           |
 
+`KEIKO_*` runtime variables are read from the process environment only. `keiko ui` does not
+import them automatically from a repository-local `.env`; use an explicit shell export, process
+env-file launch, `--config`, or the first-run setup flow.
+
 Supported credential headers are `authorization`, `x-litellm-key`, `x-api-key`, and `api-key`.
 
 Do not commit gateway config files, API tokens, `.keiko/`, or evidence that contains project-specific review material unless your process explicitly requires it.
@@ -313,19 +372,22 @@ The effective limits at runtime are visible via `GET /api/config` as `effectiveG
 
 ### Figma snapshot connector
 
-The Figma connector needs exactly one credential: a read-only personal access token (scopes `file_read` / `files:read`).
+The Figma connector needs exactly one credential: a read-only personal access token with
+`file_content:read` scope.
 
-| Variable                             | Purpose                                                                                                                                                                                                            | Default |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| `FIGMA_ACCESS_TOKEN`                 | Read-only Figma PAT. Loaded from the local `.env` (the only non-`KEIKO_*` name the loader imports) or the process environment; consumed server-side only, never sent to the browser, never persisted in snapshots. | —       |
-| `KEIKO_FIGMA_KEY`                    | Override for the encrypted vault key name used to store the PAT.                                                                                                                                                   | —       |
-| `KEIKO_FIGMA_PAGE_DEPTH`             | Per-screen BFS discovery depth of the scoped deep fetch.                                                                                                                                                           | 8       |
-| `KEIKO_FIGMA_MAX_NODES_PER_SCREEN`   | Node budget per screen before the branch stays shallow.                                                                                                                                                            | 10000   |
-| `KEIKO_FIGMA_MAX_FETCHES_PER_SCREEN` | Scoped API fetch budget per screen.                                                                                                                                                                                | 32      |
-| `KEIKO_FIGMA_MAX_SCREENS_DEEP`       | Maximum screens that are deep-fetched per snapshot.                                                                                                                                                                | 80      |
-| `KEIKO_FIGMA_FETCH_CONCURRENCY`      | Concurrent Figma API fetches during the snapshot build.                                                                                                                                                            | 3       |
-| `KEIKO_FIGMA_REQUEST_TIMEOUT_MS`     | Per-request timeout for Figma API and render downloads.                                                                                                                                                            | 60000   |
-| `KEIKO_FIGMA_BUILD_DEADLINE_MS`      | Total wall-clock deadline for one snapshot build (HTTP 504 `FIGMA_BUILD_TIMEOUT` when exceeded).                                                                                                                   | 600000  |
+| Variable                             | Purpose                                                                                                                                                                                                                   | Default |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `FIGMA_ACCESS_TOKEN`                 | Read-only Figma PAT. Loaded from the local `.env` (the only name the UI imports from a repo-local `.env`) or the process environment; consumed server-side only, never sent to the browser, never persisted in snapshots. | —       |
+| `KEIKO_FIGMA_KEY`                    | Override for the encrypted vault key name used to store the PAT.                                                                                                                                                          | —       |
+| `KEIKO_FIGMA_PAGE_DEPTH`             | Per-screen BFS discovery depth of the scoped deep fetch.                                                                                                                                                                  | 8       |
+| `KEIKO_FIGMA_MAX_NODES_PER_SCREEN`   | Node budget per screen before the branch stays shallow.                                                                                                                                                                   | 10000   |
+| `KEIKO_FIGMA_MAX_FETCHES_PER_SCREEN` | Scoped API fetch budget per screen.                                                                                                                                                                                       | 32      |
+| `KEIKO_FIGMA_MAX_SCREENS_DEEP`       | Maximum screens that are deep-fetched per snapshot.                                                                                                                                                                       | 80      |
+| `KEIKO_FIGMA_FETCH_CONCURRENCY`      | Concurrent Figma API fetches during the snapshot build.                                                                                                                                                                   | 3       |
+| `KEIKO_FIGMA_REQUEST_TIMEOUT_MS`     | Per-request timeout for Figma API and render downloads.                                                                                                                                                                   | 60000   |
+| `KEIKO_FIGMA_BUILD_DEADLINE_MS`      | Total wall-clock deadline for one snapshot build (HTTP 504 `FIGMA_BUILD_TIMEOUT` when exceeded).                                                                                                                          | 600000  |
+
+Pagination values accept positive integers; values above the hard safety ceilings are clamped: `pageDepth` 16, `maxNodesPerScreen` 50000, `maxFetchesPerScreen` 128, `maxScreensDeep` 250, `fetchConcurrency` 8.
 
 Figma is contacted only during the bounded snapshot build (scoped node fetch + screen render); every downstream stage — Quality Intelligence test generation, the accessibility baseline, design-to-code — reads the stored immutable snapshot. Re-snapshot is an explicit full re-fetch. Concurrent snapshot requests for the same board coalesce into one build. Budget caps surface as coverage notices in the snapshot summary, never as silent truncation. Failures are coded (`FIGMA_RATE_LIMITED`, `FIGMA_NETWORK_UNREACHABLE`, `FIGMA_EGRESS_TIMEOUT`, `FIGMA_TLS_CA_FAILURE`, `FIGMA_PROXY_*` — proxy codes appear only when a proxy is actually configured) and content-free: no URL, host, or token material ever appears in an error.
 
@@ -359,16 +421,22 @@ Keiko is a local tool, not a remote service.
 
 - The UI binds to `127.0.0.1`.
 - API keys are accepted from local config, local environment, or the first-run UI flow.
+- Local config stores **secret references, not secret values**: provider API keys and the Figma token are sealed in per-feature AES-256-GCM vaults, and `keiko.config.json` carries only non-secret metadata and stable `apiKeySecretRef` references ([ADR-0046](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0046-local-credential-vault.md)).
+- Memory Vault ([ADR-0035](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0035-memory-vault-encryption-at-rest.md)) and Local Knowledge ([ADR-0047](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0047-local-knowledge-content-encryption.md)) content are encrypted at rest; metadata stays cleartext for retrieval.
 - Credentials are redacted from logs, evidence, and browser responses.
 - Workspace reads are bounded by the selected local project path.
 - Commands are allowlisted and run without a shell.
 - Generated patches are dry-run by default and must be reviewed before application.
-- Evidence is redacted before it is written.
+- Evidence is redacted before it is written, stored owner-only, and bounded by deterministic retention.
+
+The full per-surface posture — distinguishing file permissions, redaction, encryption, retention, and tamper evidence as independent controls — is the [local runtime-state contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/local-runtime-state-contract.md). A deterministic auditor (`npm run audit:local-state -- --state-dir <path>`) checks a real `.keiko` tree against it.
 
 Known limits:
 
 - Keiko is not a sandbox or OS-level isolation layer.
-- Workflow evidence files are ordinary local files. Quality Intelligence run manifests additionally carry SHA-256 integrity hashes that are verified on read (tamper-evident, not tamper-proof), and MemoriaViva memory content is encrypted at rest (ADR-0035); neither protects against an attacker with local file access and the vault key.
+- Local encryption protects data **at rest**. It does not protect against malware running as the same user, a live compromised Keiko process, or a stolen machine on which the OS keychain is already unlocked — while a store is open its content is decrypted in process memory by necessity. The keyfile key tier stores the key beside the data; regulated deployments should prefer an injected `KEIKO_*_KEY` or the OS keychain.
+- Workflow evidence files are ordinary local files. Quality Intelligence run manifests carry SHA-256 integrity hashes verified on read (tamper-evident, not tamper-proof). Customer-reconstructive evidence artifacts are not yet encrypted at rest — owner-only permissions, redaction, and bounded retention are the compensating controls ([ADR-0048](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0048-evidence-artifact-confidentiality.md)).
+- Cleartext metadata leaks the shape of stored data (how much, which scopes, when), not its content.
 - Local project scripts can execute repository code when you run verification.
 - Do not run Keiko against untrusted repositories.
 
@@ -379,6 +447,7 @@ Every grounded answer in the Conversation Center shows a context inspection summ
 Read the full contracts and decisions:
 
 - [Connected context privacy contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/connected-context-privacy.md)
+- [Conversation Center privacy and retention](https://github.com/oscharko-dev/Keiko/blob/dev/docs/conversation-center-privacy.md)
 - [ADR-0022: Connected context privacy](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0022-connected-context-privacy.md)
 
 ## Troubleshooting
@@ -390,7 +459,8 @@ Read the full contracts and decisions:
 | No model appears       | Reopen Settings, verify the base URL and token, then run the credential test again.                      |
 | Credential test fails  | Confirm the gateway accepts OpenAI-compatible chat-completions requests at the configured base URL.      |
 | Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header such as `X-Litellm-Key`. |
-| Stale process state    | Run `npm run keiko:stop`, delete `.keiko/ui.pid` if the process is no longer running, then start again.  |
+| Stale process state    | Run `npm run keiko:stop`, then `npx keiko repair` to clear a stale pid and verify the install.           |
+| Broken local install   | Run `npx keiko repair` for an offline diagnostic-and-repair pass, or `npx keiko uninstall` to reset.     |
 
 For categorized playbooks covering TLS trust, first-run gateway setup, `NO_MODEL`, workspace path validation, and run-engine command denials, see the [Troubleshooting guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md).
 

@@ -1,0 +1,110 @@
+{
+  "issue": "#1296",
+  "harness": "playwright.issue-1296-editor-agent.config.ts",
+  "appPath": "packaged-cli-ui",
+  "route": "/",
+  "evidencePath": "docs/design-system/evidence/1296/editor",
+  "generatedAt": "2026-06-21T19:46:00.204Z",
+  "designReference": "design-system/editor-agent.html",
+  "productCss": "packages/keiko-ui/src/app/globals.css",
+  "assertions": {
+    "packagedUiLoaded": true,
+    "editorAgentGhostMatchesEditorGhost": true,
+    "screenshotsCaptured": 3,
+    "authorityBearingFlowsPrimitiveOnly": true
+  },
+  "modes": [
+    {
+      "mode": "dark",
+      "artifact": "dark-editor-agent.png",
+      "dataTheme": null,
+      "dataHc": null,
+      "tokenValues": {
+        "--ed-agent-line": "color-mix(in oklch, #4eba87 12%, transparent)",
+        "--ed-agent-gutter": "#4eba87",
+        "--ed-agent-ghost": "oklch(0.66 0.004 160)",
+        "--ed-agent-accept": "oklch(0.72 0.13 150)",
+        "--ed-agent-reject": "oklch(0.68 0.16 25)",
+        "--ed-agent-chip-bg": "color-mix(in oklch, #4eba87 18%, transparent)",
+        "--ed-agent-chip-line": "color-mix(in oklch, #4eba87 40%, transparent)",
+        "--ed-ghost": "oklch(0.66 0.004 160)",
+        "--ai-permission-surface": "color-mix(in oklch, oklch(0.78 0.13 75) 12%, transparent)",
+        "--ai-permission-border": "color-mix(in oklch, oklch(0.78 0.13 75) 40%, transparent)",
+        "--feedback-danger": "oklch(0.68 0.16 25)"
+      },
+      "resolved": {
+        "agentGhostColor": "oklch(0.66 0.004 160)",
+        "legacyGhostColor": "oklch(0.66 0.004 160)",
+        "agentLineBackground": "oklch(0.712291 0.125417 160.091 / 0.12)",
+        "agentGutterColor": "rgb(78, 186, 135)",
+        "chipBackground": "oklch(0.712291 0.125417 160.091 / 0.18)",
+        "chipBorderColor": "oklch(0.712291 0.125417 160.091 / 0.4)"
+      }
+    },
+    {
+      "mode": "light",
+      "artifact": "light-editor-agent.png",
+      "dataTheme": "light",
+      "dataHc": null,
+      "tokenValues": {
+        "--ed-agent-line": "color-mix(in oklch, #4eba87 12%, transparent)",
+        "--ed-agent-gutter": "oklch(0.48 0.13 160)",
+        "--ed-agent-ghost": "oklch(0.55 0.02 160)",
+        "--ed-agent-accept": "oklch(0.5 0.13 150)",
+        "--ed-agent-reject": "oklch(0.5 0.18 25)",
+        "--ed-agent-chip-bg": "color-mix(in oklch, #4eba87 18%, transparent)",
+        "--ed-agent-chip-line": "color-mix(in oklch, #4eba87 40%, transparent)",
+        "--ed-ghost": "oklch(0.55 0.02 160)",
+        "--ai-permission-surface": "color-mix(in oklch, oklch(0.43 0.14 75) 12%, transparent)",
+        "--ai-permission-border": "color-mix(in oklch, oklch(0.43 0.14 75) 40%, transparent)",
+        "--feedback-danger": "oklch(0.5 0.18 25)"
+      },
+      "resolved": {
+        "agentGhostColor": "oklch(0.55 0.02 160)",
+        "legacyGhostColor": "oklch(0.55 0.02 160)",
+        "agentLineBackground": "oklch(0.712291 0.125417 160.091 / 0.12)",
+        "agentGutterColor": "oklch(0.48 0.13 160)",
+        "chipBackground": "oklch(0.712291 0.125417 160.091 / 0.18)",
+        "chipBorderColor": "oklch(0.712291 0.125417 160.091 / 0.4)"
+      }
+    },
+    {
+      "mode": "high-contrast",
+      "artifact": "high-contrast-editor-agent.png",
+      "dataTheme": null,
+      "dataHc": "more",
+      "tokenValues": {
+        "--ed-agent-line": "color-mix(in oklch, #4eba87 12%, transparent)",
+        "--ed-agent-gutter": "oklch(0.86 0.16 160)",
+        "--ed-agent-ghost": "oklch(0.74 0.004 160)",
+        "--ed-agent-accept": "oklch(0.72 0.13 150)",
+        "--ed-agent-reject": "oklch(0.78 0.17 25)",
+        "--ed-agent-chip-bg": "color-mix(in oklch, #4eba87 28%, transparent)",
+        "--ed-agent-chip-line": "color-mix(in oklch, #4eba87 72%, transparent)",
+        "--ed-ghost": "oklch(0.74 0.004 160)",
+        "--ai-permission-surface": "color-mix(in oklch, oklch(0.88 0.14 80) 12%, transparent)",
+        "--ai-permission-border": "color-mix(in oklch, oklch(0.88 0.14 80) 40%, transparent)",
+        "--feedback-danger": "oklch(0.78 0.17 25)"
+      },
+      "resolved": {
+        "agentGhostColor": "oklch(0.74 0.004 160)",
+        "legacyGhostColor": "oklch(0.74 0.004 160)",
+        "agentLineBackground": "oklch(0.712291 0.125417 160.091 / 0.12)",
+        "agentGutterColor": "oklch(0.86 0.16 160)",
+        "chipBackground": "oklch(0.712291 0.125417 160.091 / 0.28)",
+        "chipBorderColor": "oklch(0.712291 0.125417 160.091 / 0.72)"
+      }
+    }
+  ],
+  "notes": [
+    "Screenshots cover real editor-context agent primitives in Dark, Light, and High Contrast.",
+    "Monaco ghost text consumes --ed-agent-ghost, which aliases --ed-ghost without visual drift.",
+    "Permission and sensitive-action prompts are token-backed primitives only in #1296; live authority wiring remains deferred to #1405."
+  ],
+  "artifacts": [
+    "dark-editor-agent.png",
+    "light-editor-agent.png",
+    "high-contrast-editor-agent.png",
+    "manifest.json"
+  ]
+}

@@ -72,6 +72,27 @@ describe("normalizeChatResponse", () => {
     expect(result.structuredOutput).toEqual({ answer: 42 });
   });
 
+  it("normalises text content arrays from OpenAI-compatible assistant messages", () => {
+    const payload = chatPayload({
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "hello " },
+              { type: "text", text: "there" },
+            ],
+          },
+          finish_reason: "stop",
+        },
+      ],
+    });
+
+    const result = normalizeChatResponse(payload, "example-chat-model", BASE_USAGE);
+
+    expect(result.content).toBe("hello there");
+  });
+
   it("throws MalformedToolCallError when tool-call arguments are not valid JSON", () => {
     const payload = chatPayload({
       choices: [

@@ -34,15 +34,56 @@ export const SPREADSHEET_FORMULA_LEAD_CHARS: ReadonlySet<string> = new Set<strin
   "\n",
 ]);
 
+// Whitespace code points a spreadsheet import may strip BEFORE formula detection. Several importers
+// (Excel/LibreOffice/Sheets) trim a leading whitespace run, so a cell like " =1+1" or a NBSP/tab-
+// prefixed formula can still evaluate even though its literal first char is not a lead char.
+const LEADING_WHITESPACE_CODE_POINTS: ReadonlySet<number> = new Set<number>([
+  0x09, // tab
+  0x0a, // line feed
+  0x0b, // vertical tab
+  0x0c, // form feed
+  0x0d, // carriage return
+  0x20, // space
+  0xa0, // no-break space
+  0x2007, // figure space
+  0x2028, // line separator
+  0x2029, // paragraph separator
+  0x202f, // narrow no-break space
+  0xfeff, // zero-width no-break space / BOM
+]);
+
+// The formula/DDE lead characters that remain dangerous once a leading whitespace run is stripped.
+// The whitespace leads themselves (TAB/CR/LF) stay covered by the literal first-char check.
+const FORMULA_LEAD_AFTER_WHITESPACE: ReadonlySet<string> = new Set<string>(["=", "+", "-", "@"]);
+
+// Scan past a leading whitespace run; return true when the first non-whitespace character is a
+// formula lead. Pure, no regex — scans UTF-16 code units (every listed whitespace point is BMP).
+function firstNonWhitespaceIsFormulaLead(value: string): boolean {
+  let index = 0;
+  while (index < value.length && LEADING_WHITESPACE_CODE_POINTS.has(value.charCodeAt(index))) {
+    index += 1;
+  }
+  // index === 0 → no leading whitespace (the literal first-char check already handled it);
+  // index >= length → the cell is all whitespace.
+  if (index === 0 || index >= value.length) {
+    return false;
+  }
+  return FORMULA_LEAD_AFTER_WHITESPACE.has(value.charAt(index));
+}
+
 /**
  * Returns `true` if `value` would be interpreted as a formula or DDE invocation
- * by a typical spreadsheet because of its leading character.
+ * by a typical spreadsheet because of its leading character — including the case where a leading
+ * whitespace run precedes a formula lead, which importers may trim before evaluating.
  */
 export function startsWithFormulaLead(value: string): boolean {
   if (value.length === 0) {
     return false;
   }
-  return SPREADSHEET_FORMULA_LEAD_CHARS.has(value.charAt(0));
+  if (SPREADSHEET_FORMULA_LEAD_CHARS.has(value.charAt(0))) {
+    return true;
+  }
+  return firstNonWhitespaceIsFormulaLead(value);
 }
 
 /**

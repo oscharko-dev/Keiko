@@ -22,6 +22,8 @@ import {
   type ReactNode,
 } from "react";
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
+import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import type { CapsuleListEntry, ConnectorGraphProps, RowActionKind } from "./connector-graph-types";
 import { STATUS_LABELS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
@@ -105,6 +107,7 @@ function CreateCapsuleDialog({
   const triggerRef = useRef<HTMLElement | null>(null);
   const [name, setName] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
+  useModalInteractionLock();
 
   useEffect(() => {
     triggerRef.current = document.activeElement as HTMLElement | null;
@@ -257,6 +260,7 @@ function DisconnectConfirmDialog({
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
+  useModalInteractionLock();
 
   // Focus the first control on open; restore the opener on close (WCAG 2.4.3).
   useEffect(() => {
@@ -328,154 +332,6 @@ function DisconnectConfirmDialog({
 }
 
 // ---------------------------------------------------------------------------
-// ConnectorEdgeSvg
-// ---------------------------------------------------------------------------
-
-function ConnectorEdgeSvg(): ReactNode {
-  return (
-    <svg
-      aria-hidden="true"
-      focusable="false"
-      width="40"
-      height="24"
-      viewBox="0 0 40 24"
-      style={{ flexShrink: 0, alignSelf: "center" }}
-    >
-      <path
-        d="M2 12 H32 M28 6 L38 12 L28 18"
-        stroke="var(--accent)"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-        opacity="0.7"
-      />
-    </svg>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// GraphNode
-// ---------------------------------------------------------------------------
-
-type GraphNodeKind = "files-window" | "local-knowledge" | "capsule-pool" | "conversation-center";
-
-const NODE_ICON: Record<GraphNodeKind, string> = {
-  "files-window": "📂",
-  "local-knowledge": "🧠",
-  "capsule-pool": "⬡",
-  "conversation-center": "💬",
-};
-
-function GraphNode({
-  kind,
-  label,
-  sublabel,
-  connected = false,
-}: {
-  kind: GraphNodeKind;
-  label: string;
-  sublabel?: string;
-  connected?: boolean;
-}): ReactNode {
-  // Connected state used to live only in the border colour (data-connected);
-  // the tick is a second, non-colour cue and the sr-only text carries it into
-  // the accessibility tree (uiux-fix F032, C228).
-  return (
-    <div className="lk-node" data-connected={String(connected)}>
-      <span aria-hidden="true" className="lk-node-icon">
-        {NODE_ICON[kind]}
-      </span>
-      <div>
-        <div className="lk-node-label">
-          {label}
-          {connected ? (
-            <span aria-hidden="true" className="lk-node-tick">
-              ✓
-            </span>
-          ) : null}
-        </div>
-        {sublabel !== undefined ? <div className="lk-node-sub">{sublabel}</div> : null}
-        <span className="visually-hidden">{connected ? "Connected" : "Not connected"}</span>
-      </div>
-    </div>
-  );
-}
-
-// Keeps each node and its outgoing arrow on the same flex line: as bare
-// siblings inside the wrapping .lk-pipeline an arrow could break alone onto
-// the next line and point at nothing (uiux-fix F032, C370).
-function PipelineSegment({ children }: { children: ReactNode }): ReactNode {
-  return (
-    <div role="listitem" style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-      {children}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// PipelineDiagram
-// ---------------------------------------------------------------------------
-
-function capsuleSublabel(count: number, loading: boolean): string {
-  if (loading) return "Loading…";
-  if (count === 0) return "No capsules";
-  return `${count.toString()} capsule${count === 1 ? "" : "s"}`;
-}
-
-function PipelineDiagram({
-  capsules,
-  isLoading,
-}: {
-  capsules: readonly CapsuleListEntry[];
-  isLoading: boolean;
-}): ReactNode {
-  const hasReady = capsules.some((c) => c.lifecycleState === "ready");
-  const hasAny = capsules.length > 0;
-  return (
-    <section aria-label="Connector pipeline diagram" style={{ flexShrink: 0 }}>
-      <div role="list" aria-label="Pipeline nodes" className="lk-pipeline">
-        <PipelineSegment>
-          <GraphNode
-            kind="files-window"
-            label="Files Window"
-            sublabel="Source"
-            connected={hasAny}
-          />
-          <ConnectorEdgeSvg />
-        </PipelineSegment>
-        <PipelineSegment>
-          <GraphNode
-            kind="local-knowledge"
-            label="Local Knowledge"
-            sublabel="Connector"
-            connected={hasAny}
-          />
-          <ConnectorEdgeSvg />
-        </PipelineSegment>
-        <PipelineSegment>
-          <GraphNode
-            kind="capsule-pool"
-            label="Capsules"
-            sublabel={capsuleSublabel(capsules.length, isLoading)}
-            connected={hasAny}
-          />
-          <ConnectorEdgeSvg />
-        </PipelineSegment>
-        <PipelineSegment>
-          <GraphNode
-            kind="conversation-center"
-            label="Conversation Center"
-            sublabel="Consumer"
-            connected={hasReady}
-          />
-        </PipelineSegment>
-      </div>
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // StatusBadge
 // ---------------------------------------------------------------------------
 
@@ -506,6 +362,9 @@ interface RowActionProps {
   readonly onCancel: (id: KnowledgeCapsuleId) => void;
   readonly onDisconnect: (id: KnowledgeCapsuleId) => void;
   readonly onHealth: (id: KnowledgeCapsuleId) => void;
+  // Keyboard alternative to drag (WCAG 2.5.7): dispatches the same connector
+  // drop event as drag-release onto the workspace.
+  readonly onAddToWorkspace: (id: KnowledgeCapsuleId) => void;
 }
 
 function IndexOrCancelBtn({
@@ -569,6 +428,7 @@ function CapsuleRowActions({
   onCancel,
   onDisconnect,
   onHealth,
+  onAddToWorkspace,
 }: RowActionProps): ReactNode {
   const { id, displayName } = capsule;
   return (
@@ -584,6 +444,17 @@ function CapsuleRowActions({
         onStart={onStart}
         onCancel={onCancel}
       />
+      <button
+        type="button"
+        disabled={busy}
+        aria-label={`Add capsule ${displayName} to workspace`}
+        onClick={() => {
+          onAddToWorkspace(id);
+        }}
+        className="lk-btn lk-btn-ghost"
+      >
+        Add to workspace
+      </button>
       <button
         type="button"
         disabled={busy}
@@ -620,6 +491,17 @@ function isRowActionDragTarget(target: EventTarget | null): boolean {
   return target.closest(".lk-capsule-actions,a,input,select,textarea") !== null;
 }
 
+function getWorkspaceCenter(): { readonly clientX: number; readonly clientY: number } | null {
+  const ws = document.querySelector("main.workspace");
+  if (!(ws instanceof HTMLElement)) return null;
+  const rect = ws.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return null;
+  return {
+    clientX: Math.round(rect.left + rect.width / 2),
+    clientY: Math.round(rect.top + rect.height / 2),
+  };
+}
+
 function isWorkspaceDropTarget(clientX: number, clientY: number): boolean {
   const target = document.elementFromPoint(clientX, clientY);
   if (!(target instanceof Element)) return false;
@@ -653,6 +535,7 @@ function CapsuleRow({
   onCancel,
   onDisconnect,
   onHealth,
+  onAddToWorkspace,
 }: RowActionProps): ReactNode {
   const [dragGhost, setDragGhost] = useState<CapsuleDragGhost | null>(null);
   const dragActiveRef = useRef(false);
@@ -723,16 +606,16 @@ function CapsuleRow({
   };
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>): void => {
     if (isRowActionDragTarget(event.target)) return;
-    event.stopPropagation();
-    if (event.button !== 0) return;
+    if (!isPrimaryActivationPointer(event)) return;
     event.preventDefault();
+    event.stopPropagation();
     startDragOut(event.clientX, event.clientY);
   };
   const onMouseDown = (event: ReactMouseEvent<HTMLElement>): void => {
     if (dragActiveRef.current || isRowActionDragTarget(event.target)) return;
-    event.stopPropagation();
-    if (event.button !== 0) return;
+    if (!isPrimaryActivationPointer(event)) return;
     event.preventDefault();
+    event.stopPropagation();
     startDragOut(event.clientX, event.clientY);
   };
 
@@ -768,6 +651,7 @@ function CapsuleRow({
           onCancel={onCancel}
           onDisconnect={onDisconnect}
           onHealth={onHealth}
+          onAddToWorkspace={onAddToWorkspace}
         />
       </article>
       {dragGhost !== null
@@ -889,6 +773,19 @@ function CapsuleSection({
             onCancel={onCancelIndexing}
             onDisconnect={onDisconnect}
             onHealth={onOpenHealth}
+            onAddToWorkspace={() => {
+              const center = getWorkspaceCenter();
+              if (center !== null)
+                dispatchConnectorDrop(
+                  {
+                    kind: "capsule",
+                    id: capsule.id,
+                    label: capsule.displayName,
+                    lifecycleState: capsule.lifecycleState,
+                  },
+                  center,
+                );
+            }}
           />
         </li>
       ))}
@@ -1104,7 +1001,6 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
         onDismissCreateError={clearCreateError}
         onDismissActionError={clearActionError}
       />
-      <PipelineDiagram capsules={capsules} isLoading={isLoading} />
       {/* Compact live region instead of aria-live on the whole list section —
           re-announcing every row after each reload flooded screen readers
           (uiux-fix F032, C226; pattern of MemoryList). */}

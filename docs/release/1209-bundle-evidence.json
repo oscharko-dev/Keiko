@@ -1,0 +1,71 @@
+{
+  "b1": {
+    "firstLoadScriptCount": 11,
+    "monacoMarkersInFirstLoad": 0,
+    "ok": true
+  },
+  "b2": {
+    "budgetBytes": 2621440,
+    "shipsTotalBytes": 1133887,
+    "loadedTotalBytes": 1133887,
+    "ok": true,
+    "shipsOk": true,
+    "loadedOk": true
+  },
+  "b3": {
+    "budgetBytes": 768000,
+    "largestWorkerBytes": 110398,
+    "largestWorkerLabel": "editor",
+    "largestLoadedWorkerBytes": 110398,
+    "largestLoadedWorkerLabel": "editor",
+    "ok": true,
+    "shipsOk": true,
+    "loadedOk": true
+  },
+  "workers": [
+    {
+      "label": "editor",
+      "gzipBytes": 110266,
+      "path": "packages/keiko-ui/out/_next/static/chunks/0oj6iz8mnbx8s.js"
+    },
+    {
+      "label": "editor",
+      "gzipBytes": 110398,
+      "path": "packages/keiko-ui/out/_next/static/chunks/43ils02xq1hm1.js"
+    }
+  ],
+  "disabledLanguageWorkers": [],
+  "editorRuntimeChunkCount": 5,
+  "editorRuntimeChunks": [
+    {
+      "path": "packages/keiko-ui/out/_next/static/chunks/29350453epqhl.js",
+      "gzipBytes": 884136,
+      "rawBytes": 3615222,
+      "workerLabel": null
+    },
+    {
+      "path": "packages/keiko-ui/out/_next/static/chunks/43ils02xq1hm1.js",
+      "gzipBytes": 110398,
+      "rawBytes": 362942,
+      "workerLabel": "editor"
+    },
+    {
+      "path": "packages/keiko-ui/out/_next/static/chunks/0oj6iz8mnbx8s.js",
+      "gzipBytes": 110266,
+      "rawBytes": 362942,
+      "workerLabel": "editor"
+    },
+    {
+      "path": "packages/keiko-ui/out/_next/static/chunks/1c7eg9jvw1s-i.js",
+      "gzipBytes": 16685,
+      "rawBytes": 50363,
+      "workerLabel": null
+    },
+    {
+      "path": "packages/keiko-ui/out/_next/static/chunks/35s_u8205h3r5.js",
+      "gzipBytes": 12402,
+      "rawBytes": 36086,
+      "workerLabel": null
+    }
+  ]
+}

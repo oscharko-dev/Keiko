@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligence";
+import { FigmaConnectorError } from "../figmaConnectorErrors.js";
 import type { FigmaScopedResult } from "../figmaConnector.js";
 import type { FigmaHttpPort } from "../figmaHttpPort.js";
 import type { FigmaRenderPort } from "../figmaRenderPort.js";
@@ -54,7 +55,7 @@ const harness = (screenIds: readonly string[]): Harness => {
     imagesCalls += 1;
     const ids = (new URL(request.url).searchParams.get("ids") ?? "").split(",");
     const images: Record<string, string> = {};
-    for (const id of ids) images[id] = `https://ephemeral/${id}.png`;
+    for (const id of ids) images[id] = `https://s3-alpha-sig.figma.com/${id}.png`;
     return Promise.resolve({ status: 200, json: { images }, headers: {} });
   };
   const renderPort: FigmaRenderPort = () =>
@@ -138,5 +139,23 @@ describe("resnapshotFigma — explicit full re-snapshot (#759, #735)", () => {
     await resnapshotFigma(URL_OK, deps, { version: "v-pinned-2" });
 
     expect(seenVersion).toBe("v-pinned-2");
+  });
+
+  it("propagates a fetch error from the scoped deep fetch (no silent swallow)", async () => {
+    const h = harness(["1:1"]);
+    const deps: ResnapshotFigmaDeps = {
+      ...h.deps,
+      connector: {
+        fetchScopedNodes: (_url, _options) => Promise.resolve(scopedResult()),
+        // A hard failure (e.g. exhausted 429 backoff) on the re-snapshot deep fetch must surface to
+        // the caller — a re-snapshot that silently swallowed it would persist a phantom empty build.
+        fetchScopedNodesDeep: (_url, _options) =>
+          Promise.reject(new FigmaConnectorError("FIGMA_RATE_LIMITED")),
+      },
+    };
+
+    await expect(resnapshotFigma(URL_OK, deps)).rejects.toMatchObject({
+      code: "FIGMA_RATE_LIMITED",
+    });
   });
 });

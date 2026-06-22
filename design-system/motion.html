@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Motion · Keiko Design System</title>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <style>
+      .lift-demo { width: 150px; height: 96px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow-card); display: grid; place-items: center; color: var(--fg-muted); font-size: 12.5px; transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s; }
+      .lift-demo:hover { transform: translateY(-3px); box-shadow: var(--shadow-pop); border-color: var(--accent-line); }
+      .fade-target { padding: 16px 18px; border-radius: var(--radius-sm); background: var(--inset); border: 1px solid var(--line-soft); font-size: 13px; color: var(--fg); }
+      .fade-go { animation: fadeUp 0.18s ease both; }
+      @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+      .flowline { width: 100%; height: 60px; overflow: visible; }
+      .flowline path { fill: none; stroke: var(--accent-text); stroke-width: 2.5; stroke-linecap: round; }
+      @media (prefers-reduced-motion: no-preference) { .flowline .f { stroke-dasharray: 10 8; animation: mflow 0.9s linear infinite; } }
+      @media (prefers-reduced-motion: reduce) { .flowline .f { stroke-dasharray: 3 6; } }
+      @keyframes mflow { to { stroke-dashoffset: -18; } }
+      .timing-bar { height: 8px; border-radius: 4px; background: var(--accent-dim); border: 1px solid var(--accent-line); }
+    </style>
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Guidelines · 05</div>
+        <h1>Motion</h1>
+        <p class="lead">Motion is feedback, not decoration. It’s quick, quiet and earns its place — confirming a state change or guiding the eye. Every animation has a still fallback for <span class="cls">prefers-reduced-motion</span>.</p>
+      </header>
+
+      <section class="sec" id="principles">
+        <div class="sec-head"><div class="num">01 — PRINCIPLES</div><h2>Three rules</h2></div>
+        <div class="card" style="padding:26px 28px;display:grid;grid-template-columns:repeat(3,1fr);gap:28px">
+          <div><h3 style="font-size:15px;margin:0 0 8px">Fast &amp; subtle</h3><p class="muted-cap">120–180ms, gentle easing. If you notice it consciously, it’s too much.</p></div>
+          <div><h3 style="font-size:15px;margin:0 0 8px">Meaningful</h3><p class="muted-cap">Motion shows a state change — hover, focus, data flowing. Never loops for decoration on content.</p></div>
+          <div><h3 style="font-size:15px;margin:0 0 8px">Optional</h3><p class="muted-cap">All motion is gated behind reduced-motion, which swaps to an instant or static state.</p></div>
+        </div>
+      </section>
+
+      <section class="sec" id="timing">
+        <div class="sec-head"><div class="num">02 — TIMING &amp; EASING</div><h2>Durations</h2><p>A short scale. Hover/colour shifts are near-instant; entrances are a touch slower; only the data-flow loops.</p></div>
+        <div class="card" style="padding:8px 24px">
+          <table class="tbl">
+            <thead><tr><th>Token</th><th>Duration</th><th></th><th>Use</th></tr></thead>
+            <tbody>
+              <tr><td class="fgw">micro</td><td class="mono">120ms</td><td><div class="timing-bar" style="width:24px"></div></td><td>hover / colour / opacity</td></tr>
+              <tr><td class="fgw">base</td><td class="mono">150ms</td><td><div class="timing-bar" style="width:32px"></div></td><td>transform, shadow, borders</td></tr>
+              <tr><td class="fgw">enter</td><td class="mono">180ms</td><td><div class="timing-bar" style="width:40px"></div></td><td>fade-up of new content</td></tr>
+              <tr><td class="fgw">flow</td><td class="mono">0.9s · loop</td><td><div class="timing-bar" style="width:64px"></div></td><td>connection data-flow only</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="muted-cap" style="margin-top:12px">Easing: <span class="cls">ease</span> for most; <span class="cls">linear</span> for the flow loop. No bounce, no overshoot.</p>
+      </section>
+
+      <section class="sec" id="states">
+        <div class="sec-head"><div class="num">03 — STATE TRANSITIONS</div><h2>Hover, lift &amp; entrance</h2><p>Hover the card; click replay for the entrance. These are the real transitions used across components.</p></div>
+        <div class="card demo-card">
+          <div style="display:flex;gap:30px;flex-wrap:wrap;align-items:center">
+            <div style="text-align:center"><div class="lift-demo">Hover me</div><p class="muted-cap" style="margin-top:10px">Lift · translateY + shadow</p></div>
+            <div style="text-align:center">
+              <div id="fadeBox" class="fade-target fade-go">New content fades up</div>
+              <button class="c-btn c-btn--sm" style="margin-top:10px" onclick="var b=document.getElementById('fadeBox'); b.classList.remove('fade-go'); void b.offsetWidth; b.classList.add('fade-go');">Replay entrance</button>
+            </div>
+            <div style="text-align:center"><button class="c-btn c-btn--primary">Press &amp; focus me</button><p class="muted-cap" style="margin-top:10px">Tab for the focus ring</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="flow">
+        <div class="sec-head"><div class="num">04 — THE CONNECTION FLOW</div><h2>Data flow</h2><p>When a connected source is being read, its edge carries a flowing dash. Heavier exchange flows faster and denser. Reduced-motion users get a distinct static dash instead of movement.</p></div>
+        <div class="card" style="padding:26px 28px">
+          <svg class="flowline" viewBox="0 0 600 60" preserveAspectRatio="none"><path class="f" d="M10 30 H590" /></svg>
+          <p class="muted-cap" style="margin-top:14px"><span class="cls">.conn-path[data-active]</span> — flowing dash + particles when active; <span class="cls">[data-intensity="heavy"]</span> speeds it up. Always paired with a flow tag, so it never relies on motion or colour alone.</p>
+        </div>
+      </section>
+
+      <section class="sec" id="reduced">
+        <div class="sec-head"><div class="num">05 — REDUCED MOTION</div><h2>Respecting reduced motion</h2></div>
+        <div class="note flag"><span class="tag">Honoured</span><div>When the OS requests reduced motion, the design system sets all transitions/animations to ~0ms and swaps looping effects for a clear static state (e.g. the flow becomes a distinct dashed line). Nothing essential is conveyed by motion alone — try it via your OS setting and these demos go still.</div></div>
+      </section>
+    </main>
+
+    <script src="lift-glyphs.js"></script>
+    
+      <script src="theme-control.js"></script>
+</body>
+</html>

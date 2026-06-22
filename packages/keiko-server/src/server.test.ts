@@ -6,6 +6,12 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
+import {
+  buildRedactor,
+  createInMemoryUiStore,
+  createRunRegistry,
+  type UiHandlerDeps,
+} from "./index.js";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 
@@ -107,6 +113,27 @@ describe("security headers", () => {
       "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
     );
   });
+
+  it("refreshes the CSP header from the provider between requests", async () => {
+    let csp = buildCspHeader(["'sha256-before'"]);
+    await closeServer();
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      cspProvider: () => csp,
+      port,
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+
+    const before = await fetchRaw("/");
+    expect(before.headers.get("content-security-policy")).toContain("'sha256-before'");
+
+    csp = buildCspHeader(["'sha256-after'"]);
+    const after = await fetchRaw("/");
+    const header = after.headers.get("content-security-policy") ?? "";
+    expect(header).toContain("'sha256-after'");
+    expect(header).not.toContain("'sha256-before'");
+  });
 });
 
 describe("DNS-rebinding defense", () => {
@@ -197,6 +224,73 @@ describe("unknown API routes", () => {
     });
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
+  });
+
+  it("rejects POST /api/editor/language without the CSRF header (#1198)", async () => {
+    const response = await fetch(`${baseUrl()}/api/editor/language`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "diagnostics",
+        root: "/tmp/x",
+        document: { path: "a.ts", languageId: "typescript", text: "const x = 1;\n" },
+      }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
+  });
+
+  it("serves POST /api/editor/language through the live BFF dispatch path (#1198)", async () => {
+    const workspaceRoot = join(staticRoot, "workspace");
+    await mkdir(join(workspaceRoot, "src"), { recursive: true });
+    const store = createInMemoryUiStore();
+    store.createProject(workspaceRoot, "fixture");
+    const handlerDeps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store,
+      editorLanguageRouteOptions: { now: () => 0 },
+    };
+    await closeServer();
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps,
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+
+    try {
+      const response = await fetch(`${baseUrl()}/api/editor/language`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+        body: JSON.stringify({
+          operation: "completion",
+          root: workspaceRoot,
+          document: {
+            path: "src/a.ts",
+            languageId: "typescript",
+            text: "const value = { alpha: 1 };\nvalue.\n",
+          },
+          position: { line: 1, character: 6 },
+        }),
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { result?: { items?: { label: string }[] } };
+      expect(body.result?.items?.map((item) => item.label)).toContain("alpha");
+    } finally {
+      store.close();
+    }
   });
 });
 

@@ -335,6 +335,78 @@ describe("desktop chat routes", () => {
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
   });
 
+  it("rejects an empty model response without persisting a fake assistant message", async () => {
+    await restartWithDeps(deps(fakeModel("")));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Say hello",
+      }),
+    });
+
+    expect(sendRes.status).toBe(502);
+    const body = (await sendRes.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe("GATEWAY_PROVIDER_ERROR");
+    expect(body.error?.message).toContain("empty assistant response");
+    const persisted = store.listMessages(created.chat.id);
+    expect(persisted.map((message) => message.role)).toEqual(["user"]);
+    expect(persisted.some((message) => message.role === "assistant")).toBe(false);
+    expect(JSON.stringify(persisted)).not.toContain("The model returned an empty response.");
+  });
+
+  it("does not send legacy empty-response placeholders back to the model as chat context", async () => {
+    await restartWithDeps(deps(fakeModel("fresh response")));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    store.createMessage({
+      chatId: created.chat.id,
+      role: "assistant",
+      content: "The model returned an empty response.",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Say hello again",
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    expect(JSON.stringify(seenRequests[0]?.messages)).not.toContain(
+      "The model returned an empty response.",
+    );
+    const body = (await sendRes.json()) as { messages: { role: string; content: string }[] };
+    expect(body.messages.map((message) => message.content)).toEqual([
+      "Say hello again",
+      "fresh response",
+    ]);
+  });
+
   // eslint-disable-next-line complexity
   it("does not retrieve unrelated memories before persisting candidate proposals from chat intents", async () => {
     const memoryDir = join(tmp, "memory-vault");
@@ -384,6 +456,81 @@ describe("desktop chat routes", () => {
       expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
     }
     expect(memoryVault.getAccessStats([recalled.id]).get(recalled.id)?.accessCount ?? 0).toBe(0);
+    memoryVault.close();
+  });
+
+  it("blocks confidential chat-intent candidates before durable persistence", async () => {
+    const memoryDir = join(tmp, "memory-vault-confidential");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(deps(fakeModel("memory response"), { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "remember that my private support email is developer@example.com",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: { actions: { kind: string; reason?: string }[] };
+    };
+    expect(body.memory?.actions).toEqual([
+      { kind: "rejected", reason: "sensitive-memory-requires-approval" },
+    ]);
+    expect(memoryVault.listMemories({ includeExpired: true })).toEqual([]);
+    memoryVault.close();
+  });
+
+  it("threads deployment redaction literals into chat-intent memory rejection", async () => {
+    const memoryDir = join(tmp, "memory-vault-customer-identifier");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(
+      deps(fakeModel("memory response"), {
+        memoryVault,
+        redactionSecrets: ["CustomerOmega"],
+      }),
+    );
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "remember that CustomerOmega requires SSO for releases",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: { actions: { kind: string; reason?: string }[] };
+    };
+    expect(body.memory?.actions).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
+    expect(memoryVault.listMemories({ includeExpired: true })).toEqual([]);
     memoryVault.close();
   });
 
@@ -442,6 +589,7 @@ describe("desktop chat routes", () => {
     );
     expect(acceptRes.status).toBe(200);
     expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("accepted");
+    const acceptedMemory = memoryVault.getMemory(proposalId as MemoryId);
 
     const createChatB = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
@@ -464,10 +612,27 @@ describe("desktop chat routes", () => {
     expect(recallRes.status).toBe(200);
     const recallBody = (await recallRes.json()) as {
       messages: { role: string; content: string }[];
-      memory?: { context: { memories: { bodyExcerpt: string }[] } };
+      memory?: {
+        context: {
+          memories: {
+            bodyExcerpt: string;
+            sourceKind: string;
+            sensitivity: string;
+            confidence: number;
+            status: string;
+            capturedAt: number;
+          }[];
+        };
+      };
     };
     expect(recallBody.memory?.context.memories).toHaveLength(1);
-    expect(recallBody.memory?.context.memories[0]?.bodyExcerpt).toContain("Paul");
+    const recalled = recallBody.memory?.context.memories[0];
+    expect(recalled?.bodyExcerpt).toContain("Paul");
+    expect(recalled?.sourceKind).toBe(acceptedMemory?.provenance.sourceKind);
+    expect(recalled?.sensitivity).toBe(acceptedMemory?.provenance.sensitivity);
+    expect(recalled?.confidence).toBe(acceptedMemory?.provenance.confidence);
+    expect(recalled?.status).toBe(acceptedMemory?.status);
+    expect(recalled?.capturedAt).toBe(acceptedMemory?.provenance.capturedAt);
     expect(recallBody.messages[1]?.content).toBe("Paul");
     expect(seenRequests[2]?.messages.at(-1)?.content).toContain("The user's name is Paul.");
     memoryVault.close();

@@ -10,8 +10,11 @@ import {
   createProject,
   fetchChatMessages,
   fetchChats,
+  fetchEvidenceManifest,
+  fetchRunReport,
   fetchModels,
   fetchProjects,
+  patchChatMessage,
   sendDesktopChat,
   sendDesktopChatStream,
   startGroundedWorkflowHandoff,
@@ -23,6 +26,7 @@ import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/
 import { sortProjects } from "@/lib/sidebar-sort";
 import { findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
+import { classifyRunReport, formatRunSummaryFromManifest } from "@/lib/run-summary";
 import type {
   Chat,
   ChatMessage,
@@ -129,6 +133,8 @@ export const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
 export const DEFAULT_MEMORY_BUDGET_TOKENS = 1200;
 const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
 const CHAT_DELETE_EVENT = "keiko:chat-delete";
+const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
+const RUN_SUMMARY_SYNC_MAX_ATTEMPTS = 120;
 
 // Issue #152 — conversation request lifecycle states (memory keiko-issue66).
 // `idle` is the resting state; `queued` is set the moment sendMessage commits
@@ -164,6 +170,10 @@ export function isInFlight(status: SendStatus): boolean {
 // pin the exact string without duplicating it.
 export const CONTEXT_OVERSIZED_USER_MESSAGE =
   "The conversation context exceeded the model's window. Clear history or pick a larger-context model.";
+export const GROUNDED_ATTACHMENT_NOTICE =
+  "Attachments are not supported for grounded chats. Remove the attachment or switch to a non-grounded chat.";
+export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
+  "The model request completed, but the provider did not return any answer text. Retry once; if it happens again, check the selected model deployment in Settings.";
 
 // A typed BFF overflow surfaces under the conversation-layer code; a raw provider
 // overflow surfaces under the gateway-layer code (CB-F2). Both map to the single
@@ -178,12 +188,23 @@ const CONTEXT_OVERSIZED_PHRASES = [
   "max_tokens",
   "too many tokens",
 ] as const;
+const EMPTY_MODEL_RESPONSE_PHRASES = [
+  "empty assistant response",
+  "empty grounded answer",
+  "without assistant content",
+] as const;
 
 function isContextOversizedError(error: unknown): boolean {
   if (error instanceof ApiError && CONTEXT_OVERSIZED_API_CODES.has(error.code)) return true;
   const text = error instanceof Error ? error.message.toLowerCase() : "";
   if (text.length === 0) return false;
   return CONTEXT_OVERSIZED_PHRASES.some((phrase) => text.includes(phrase));
+}
+
+function isEmptyModelResponseError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message.toLowerCase() : "";
+  if (text.length === 0) return false;
+  return EMPTY_MODEL_RESPONSE_PHRASES.some((phrase) => text.includes(phrase));
 }
 
 // CB-F1 / CB-F3 — the single unknown-limits-safe "over budget" predicate. A
@@ -196,6 +217,11 @@ export function isBudgetExceeded(budget: ConversationBudgetEstimate | undefined)
 function errorMessage(error: unknown): string {
   // AC#3 — context-overflow provider errors map to a single actionable message.
   if (isContextOversizedError(error)) return CONTEXT_OVERSIZED_USER_MESSAGE;
+  if (isEmptyModelResponseError(error)) {
+    return error instanceof ApiError
+      ? `${EMPTY_MODEL_RESPONSE_USER_MESSAGE} (${error.code})`
+      : EMPTY_MODEL_RESPONSE_USER_MESSAGE;
+  }
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
   return formatUserError(error, "Something went wrong. Try again.");
 }
@@ -290,6 +316,7 @@ export interface UseChatSessionResult {
   // to gate cancellation.
   sendStatus: SendStatus;
   error: string | undefined;
+  clearError?: (() => void) | undefined;
   setDraft: (value: string) => void;
   setSelectedModel: (id: string) => void;
   // Optional `title` names the fresh conversation (e.g. from the New-Chat-window dialog);
@@ -421,6 +448,46 @@ const INITIAL_STATE: SessionState = {
   selectedModel: undefined,
 };
 
+function mergeMessages(
+  existing: readonly ChatMessage[],
+  incoming: readonly ChatMessage[],
+): ChatMessage[] {
+  if (incoming.length === 0) return Array.from(existing);
+  const incomingById = new Map(incoming.map((message) => [message.id, message] as const));
+  const merged = existing.map((message) => incomingById.get(message.id) ?? message);
+  const existingIds = new Set(existing.map((message) => message.id));
+  for (const message of incoming) {
+    if (!existingIds.has(message.id)) merged.push(message);
+  }
+  return merged;
+}
+
+function isPendingRunSummaryMessage(message: ChatMessage): boolean {
+  return (
+    message.role === "system" &&
+    typeof message.runId === "string" &&
+    (message.workflowStatus === undefined ||
+      message.workflowStatus === "pending" ||
+      message.workflowStatus === "running")
+  );
+}
+
+function runSummaryFallbackKind(message: ChatMessage): {
+  readonly workflowId?: string;
+  readonly taskType?: string;
+} {
+  return {
+    ...(message.workflowId === undefined ? {} : { workflowId: message.workflowId }),
+    ...(message.taskType === undefined ? {} : { taskType: message.taskType }),
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, ms);
+  });
+}
+
 async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionState>> {
   const modelPayload = await fetchModels();
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
@@ -510,7 +577,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const [latestMemory, setLatestMemory] = useState<ConversationMemoryResultWire | undefined>();
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [memoryBudgetTokens, setMemoryBudgetTokens] = useState(DEFAULT_MEMORY_BUDGET_TOKENS);
+  const mountedRef = useRef(true);
   const activeChatIdRef = useRef<string | undefined>(undefined);
+  const runSummarySyncingRef = useRef<Set<string>>(new Set());
   const selectedModelPersistRef = useRef(0);
   // COMP-5 — synchronous read of the current model list inside setSelectedModel
   // (which is intentionally `useCallback(..., [])`) without recreating the callback.
@@ -680,6 +749,80 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setSendStatus(next);
   }, []);
 
+  const syncRunSummaryMessage = useCallback(
+    async (chat: Chat, projectPath: string, message: ChatMessage, syncKey: string) => {
+      const runId = message.runId;
+      if (runId === undefined) {
+        runSummarySyncingRef.current.delete(syncKey);
+        return;
+      }
+      const fallbackKind = runSummaryFallbackKind(message);
+      try {
+        for (let attempt = 0; attempt < RUN_SUMMARY_SYNC_MAX_ATTEMPTS; attempt += 1) {
+          if (!mountedRef.current || activeChatIdRef.current !== chat.id) return;
+
+          let summary:
+            | {
+                readonly workflowStatus: "completed" | "failed" | "cancelled";
+                readonly shortResult: string;
+              }
+            | undefined;
+
+          try {
+            const response = await fetchRunReport(runId);
+            const outcome = classifyRunReport(response.report, fallbackKind);
+            if (outcome.kind === "terminal") summary = outcome.summary;
+          } catch (caught) {
+            if (caught instanceof ApiError && caught.status === 404) {
+              try {
+                const response = await fetchEvidenceManifest(runId);
+                const manifestSummary = formatRunSummaryFromManifest(
+                  response.manifest,
+                  fallbackKind,
+                );
+                summary = {
+                  workflowStatus:
+                    manifestSummary.workflowStatus === "failed" ||
+                    manifestSummary.workflowStatus === "cancelled"
+                      ? manifestSummary.workflowStatus
+                      : "completed",
+                  shortResult: manifestSummary.shortResult,
+                };
+              } catch {
+                // Evidence may not exist yet while the worker is still settling; keep polling.
+              }
+            } else {
+              return;
+            }
+          }
+
+          if (summary !== undefined) {
+            const patched = await patchChatMessage(message.id, chat.id, projectPath, summary);
+            if (!mountedRef.current || activeChatIdRef.current !== chat.id) return;
+            setState((previous) =>
+              previous.activeChat?.id !== chat.id
+                ? previous
+                : {
+                    ...previous,
+                    messages: previous.messages.map((existing) =>
+                      existing.id === message.id ? patched.message : existing,
+                    ),
+                  },
+            );
+            return;
+          }
+
+          if (attempt < RUN_SUMMARY_SYNC_MAX_ATTEMPTS - 1) {
+            await sleep(RUN_SUMMARY_SYNC_INTERVAL_MS);
+          }
+        }
+      } finally {
+        runSummarySyncingRef.current.delete(syncKey);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     activeChatIdRef.current = state.activeChat?.id;
   }, [state.activeChat?.id]);
@@ -728,8 +871,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setState((previous) => ({
         ...previous,
         chats: previous.chats.filter((chat) => chat.id !== payload.chatId),
-        activeChat:
-          previous.activeChat?.id === payload.chatId ? undefined : previous.activeChat,
+        activeChat: previous.activeChat?.id === payload.chatId ? undefined : previous.activeChat,
         messages: previous.activeChat?.id === payload.chatId ? [] : previous.messages,
       }));
     };
@@ -742,10 +884,28 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       sendControllerRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    const chat = state.activeChat;
+    const project = state.activeProject;
+    if (chat === undefined || project === undefined) return;
+
+    for (const message of state.messages) {
+      if (!isPendingRunSummaryMessage(message)) continue;
+      const runId = message.runId;
+      if (runId === undefined) continue;
+      const syncKey = `${message.id}:${runId}`;
+      if (runSummarySyncingRef.current.has(syncKey)) continue;
+      runSummarySyncingRef.current.add(syncKey);
+      void syncRunSummaryMessage(chat, project.path, message, syncKey);
+    }
+  }, [state.activeChat, state.activeProject, state.messages, syncRunSummaryMessage]);
 
   const setSelectedModel = useCallback((id: string) => {
     setError(undefined);
@@ -1001,8 +1161,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           if (payload.memory !== undefined) setLatestMemory(payload.memory);
           resolve("completed");
         },
-        onError: ({ message }: { message: string }): void => {
-          setError(message);
+        onError: ({ code, message }: { code: string; message: string }): void => {
+          setError(errorMessage(new ApiError(code, message, 0)));
           removeTempMessage(tempAssistantId);
           resolve("failed");
         },
@@ -1308,6 +1468,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setError(CONTEXT_OVERSIZED_USER_MESSAGE);
       return;
     }
+    // Issue #4 — block grounded sends that would silently discard attachments.
+    // The grounded path derives context from the repo/local-knowledge scope and
+    // ignores pendingAttachments entirely. Surface a notice and abort so the
+    // user can remove the attachment before sending.
+    if (hasGroundingScope(chat) && pendingAttachments.length > 0) {
+      setError(GROUNDED_ATTACHMENT_NOTICE);
+      return;
+    }
     const optimistic: ChatMessage = {
       id: `local-${String(Date.now())}`,
       chatId: chat.id,
@@ -1382,6 +1550,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     state.selectedModel,
     state.models,
     state.messages,
+    pendingAttachments,
     sendGrounded,
     sendUngrounded,
     buildDocumentContext,
@@ -1485,8 +1654,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   //   3. An active chat row is required so the user/system message pair lands inside a chat.
   //
   // `apply` is omitted on the wire so patch application stays behind the existing workflow
-  // surfaces (AC#4). After a successful launch we refresh the active chat's messages so the
-  // RunSummaryCard system message renders without round-tripping through state.
+  // surfaces (AC#4). After a successful launch we merge the BFF-created user/system pair into
+  // the active chat so older messages and previous run summaries remain visible.
   const launchWorkflowFromConversation = useCallback(
     async (
       input: LaunchWorkflowFromConversationInput,
@@ -1528,11 +1697,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           user: { content: trimmed, timestamp: now },
           summary: { content: `Launched: ${entry.label}`, timestamp: now + 1 },
         });
-        // Refresh the local messages so the system run-summary lands in the chat without
-        // a network round-trip; the BFF already wrote both rows atomically.
         setState((previous) => ({
           ...previous,
-          messages: Array.from(result.messages),
+          messages: mergeMessages(previous.messages, result.messages),
         }));
         return { ok: true, runId: result.run.runId };
       } catch (caught) {
@@ -1571,7 +1738,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         });
         setState((previous) => ({
           ...previous,
-          messages: Array.from(result.messages),
+          messages: mergeMessages(previous.messages, result.messages),
         }));
         return { ok: true, runId: result.run.runId };
       } catch (caught) {
@@ -1595,6 +1762,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
     }));
   }, []);
+  const clearError = useCallback((): void => {
+    setError(undefined);
+  }, []);
 
   return {
     projects: state.projects,
@@ -1611,6 +1781,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     sending,
     sendStatus,
     error,
+    clearError,
     setDraft,
     setSelectedModel,
     openNewChat,

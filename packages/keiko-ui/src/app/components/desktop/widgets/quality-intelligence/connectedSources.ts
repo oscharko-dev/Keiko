@@ -15,17 +15,20 @@ import type {
   QualityIntelligenceCapsuleSource,
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceFileSource,
+  QualityIntelligenceImageSource,
+  QualityIntelligenceInlineSource,
   QualityIntelligenceWorkspaceSource,
 } from "@oscharko-dev/keiko-contracts";
 import { MAX_SCOPES } from "../../hooks/workspaceActions";
 
-/** One connected (non-manual) run source — folder, single file, capsule, capsule-set, or figma snapshot. */
+/** One connected non-manual run source. */
 export type ConnectedRunSource =
   | QualityIntelligenceFileSource
   | QualityIntelligenceWorkspaceSource
   | QualityIntelligenceCapsuleSource
   | QualityIntelligenceCapsuleSetSource
-  | QualityIntelligenceFigmaSnapshotSource;
+  | QualityIntelligenceFigmaSnapshotSource
+  | QualityIntelligenceImageSource;
 
 export interface ConnectedSourceProps {
   /** Folder root of the FIRST connected Files window (Epic #270 Slice 1). */
@@ -40,6 +43,112 @@ export interface ConnectedSourceProps {
   readonly connectedCapsuleSetIds?: readonly string[] | undefined;
   /** Figma Snapshot run ids from connected Figma Snapshot windows (Epic #750 #756). */
   readonly connectedFigmaSnapshotRunIds?: readonly string[] | undefined;
+  /**
+   * Scoped Figma Snapshot sources from connected Figma windows. When present, this supersedes the
+   * run-id-only list and can carry one or more selected screen ids.
+   */
+  readonly connectedFigmaSnapshotSources?:
+    | readonly QualityIntelligenceFigmaSnapshotSource[]
+    | undefined;
+  /** Image-only sources from connected Figma Image windows. */
+  readonly connectedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
+}
+
+const CONNECTED_SOURCES_CFG_KEY = "connectedSourcesJson";
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasStringField(record: Record<string, unknown>, key: string): boolean {
+  return typeof record[key] === "string";
+}
+
+// A scoped figma-snapshot source's screenIds, when present, must be a NON-EMPTY array of non-empty
+// strings. An absent field is a whole-snapshot source; a present-but-empty (or blank-element) array is
+// rejected so a malformed persisted source degrades to "drop this source" rather than silently being
+// read as a whole-snapshot scope (the scoped-snapshot no-leak invariant, mirrored server-side).
+function hasOptionalNonEmptyStringArrayField(
+  record: Record<string, unknown>,
+  key: string,
+): boolean {
+  const value = record[key];
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length > 0 &&
+      value.every((item) => typeof item === "string" && item.trim().length > 0))
+  );
+}
+
+function isConnectedRunSource(value: unknown): value is ConnectedRunSource {
+  if (!isRecord(value) || !hasStringField(value, "label")) return false;
+  switch (value.kind) {
+    case "file":
+    case "workspace":
+      return hasStringField(value, "path");
+    case "capsule":
+      return hasStringField(value, "capsuleId");
+    case "capsule-set":
+      return hasStringField(value, "capsuleSetId");
+    case "figma-snapshot":
+      return (
+        hasStringField(value, "snapshotRunId") &&
+        hasOptionalNonEmptyStringArrayField(value, "screenIds")
+      );
+    case "image":
+      return (
+        value["sourceKind"] === "figma-snapshot-screen" &&
+        hasStringField(value, "snapshotRunId") &&
+        hasStringField(value, "screenId")
+      );
+    default:
+      return false;
+  }
+}
+
+function parseConnectedRunSourcesJson(json: string): readonly ConnectedRunSource[] | null {
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed) || !parsed.every(isConnectedRunSource)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function connectedRunSourcesCfgFromSources(
+  sources: readonly ConnectedRunSource[],
+): Record<string, string> {
+  return sources.length > 0 ? { [CONNECTED_SOURCES_CFG_KEY]: JSON.stringify(sources) } : {};
+}
+
+export function connectedRunSourcesCfgFromInlineSources(
+  sources: readonly QualityIntelligenceInlineSource[],
+): Record<string, string> {
+  // Never serialize pasted requirements text into a window cfg; only portable source handles can ride
+  // through regenerated/opened run cards. An explicit empty filtered set is still serialized so
+  // reopening an existing qiRun card from history clears any previously carried handles.
+  return { [CONNECTED_SOURCES_CFG_KEY]: JSON.stringify(sources.filter(isConnectedRunSource)) };
+}
+
+export function connectedRunSourcesFromWindowCfg(
+  cfg: Record<string, unknown>,
+): readonly ConnectedRunSource[] {
+  const json = stringField(cfg, CONNECTED_SOURCES_CFG_KEY);
+  if (json !== undefined && json.length > 0) {
+    const parsed = parseConnectedRunSourcesJson(json);
+    if (parsed !== null) return parsed;
+  }
+  return buildConnectedRunSources({
+    connectedFilePath: stringField(cfg, "connectedFilePath") ?? null,
+    connectedRoot: stringField(cfg, "connectedRoot") ?? null,
+  });
 }
 
 export function baseName(p: string): string {
@@ -47,6 +156,10 @@ export function baseName(p: string): string {
   return parts.length > 0 ? (parts[parts.length - 1] ?? p) : p;
 }
 
+// Recognises POSIX, drive-letter, and UNC (\\server\share, //server/share) absolute paths. The UNC
+// arms are intentionally broader than workspaceActions' isAbsoluteRoot, which gates the connected
+// ROOT and rejects UNC: a UNC root is therefore filtered out before it can ever reach here, so this
+// only ever classifies a focused activeFilePath. Keep both in sync if UNC roots become reachable.
 function isAbsoluteBrowserPath(path: string): boolean {
   return (
     path.startsWith("/") ||
@@ -63,7 +176,14 @@ function toPortablePath(path: string): string {
 function trimTrailingSeparators(path: string): string {
   if (/^[A-Za-z]:[/\\]?$/u.test(path)) return path.replaceAll("\\", "/");
   if (/^\/\/[^/]+\/[^/]+$/u.test(toPortablePath(path))) return toPortablePath(path);
-  return toPortablePath(path).replace(/\/+$/u, "");
+  const trimmed = toPortablePath(path).replace(/\/+$/u, "");
+  // A lone POSIX root ("/", "//", "\") is all-separator: stripping it would collapse the root to ""
+  // and the server's detectWorkspaceAt("") would then resolve to its OWN cwd, silently ingesting the
+  // WRONG directory instead of the connected root. Keep the root as "/" so a folder source rooted at
+  // the filesystem root stays absolute AND correctly formed (the #714 AC the resolveConnectedFilePath
+  // join guard already enforces for the file path, applied to the root too). Guard on `path.length`
+  // so a genuinely empty input is left as "" (unchanged) rather than fabricated into a root.
+  return trimmed.length === 0 && path.length > 0 ? "/" : trimmed;
 }
 
 /**
@@ -83,7 +203,12 @@ export function resolveConnectedFilePath(
   if (root.length === 0) return null;
   const joinedRoot = trimTrailingSeparators(root);
   const relativePath = toPortablePath(candidate).replace(/^\/+/u, "");
-  return `${joinedRoot}/${relativePath}`;
+  // A drive root canonicalises to "C:/" — the trailing slash is RETAINED on purpose so it stays the
+  // drive ROOT and not the drive-relative "C:" (see trimTrailingSeparators). Unconditionally inserting
+  // "/" here would then double the separator ("C://docs/file.md"). Only add the separator when the
+  // root does not already end in one, so the resolved path is both absolute AND correctly formed (AC3).
+  const separator = joinedRoot.endsWith("/") ? "" : "/";
+  return `${joinedRoot}${separator}${relativePath}`;
 }
 
 function sourceKey(source: ConnectedRunSource): string {
@@ -95,8 +220,24 @@ function sourceKey(source: ConnectedRunSource): string {
       return `capsule:${source.capsuleId}`;
     case "capsule-set":
       return `capsule-set:${source.capsuleSetId}`;
-    case "figma-snapshot":
-      return `figma-snapshot:${source.snapshotRunId}`;
+    case "figma-snapshot": {
+      const ids = source.screenIds;
+      // Canonical scope token (dedupe + sort) so two scoped sources selecting the same screens in a
+      // different order collapse to one in the dedupe below, matching the server's canonical ref.
+      const scope =
+        ids === undefined || ids.length === 0
+          ? "*"
+          : [
+              ...new Set(
+                ids.map((screenId) => screenId.trim()).filter((screenId) => screenId.length > 0),
+              ),
+            ]
+              .sort()
+              .join(",");
+      return `figma-snapshot:${source.snapshotRunId}:${scope}`;
+    }
+    case "image":
+      return `image:${source.sourceKind}:${source.snapshotRunId}:${source.screenId}`;
   }
 }
 
@@ -107,7 +248,8 @@ function sourceKey(source: ConnectedRunSource): string {
  * capsule, and capsule-set is still included. A lone focused file therefore stays a one-element file
  * request (Epic #709 unchanged); a file + other folder + capsule becomes a three-element request.
  *
- * Precedence when the global cap is hit: file → folders → capsules → capsule-sets → figma snapshots.
+ * Precedence when the global cap is hit: file → folders → capsules → capsule-sets → figma snapshots
+ * → image descriptions.
  * The combined list is capped ONCE across all kinds, mirroring the server's single 16-source cap.
  */
 export function buildConnectedRunSources(
@@ -150,8 +292,19 @@ export function buildConnectedRunSources(
   for (const id of props.connectedCapsuleSetIds ?? []) {
     ordered.push({ kind: "capsule-set", label: id, capsuleSetId: id });
   }
-  for (const id of props.connectedFigmaSnapshotRunIds ?? []) {
-    ordered.push({ kind: "figma-snapshot", label: id, snapshotRunId: id });
+  const figmaSources =
+    props.connectedFigmaSnapshotSources !== undefined
+      ? props.connectedFigmaSnapshotSources
+      : (props.connectedFigmaSnapshotRunIds ?? []).map((id) => ({
+          kind: "figma-snapshot" as const,
+          label: id,
+          snapshotRunId: id,
+        }));
+  for (const source of figmaSources) {
+    ordered.push(source);
+  }
+  for (const source of props.connectedImageSources ?? []) {
+    ordered.push(source);
   }
 
   const seen = new Set<string>();

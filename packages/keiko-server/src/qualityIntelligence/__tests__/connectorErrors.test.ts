@@ -62,6 +62,39 @@ describe("containsForbiddenSecretShape", () => {
     expect(containsForbiddenSecretShape(value)).toBe(true);
   });
 
+  // Case-insensitive detection — previously bypassed by non-listed casings (Issue #281)
+  it("detects BEARER (upper-case)", () => {
+    expect(containsForbiddenSecretShape("BEARER abc")).toBe(true);
+  });
+  it("detects API_KEY (upper-case)", () => {
+    expect(containsForbiddenSecretShape("API_KEY=x")).toBe(true);
+  });
+  it("detects AUTHORIZATION: (upper-case)", () => {
+    expect(containsForbiddenSecretShape("AUTHORIZATION: Basic x")).toBe(true);
+  });
+  it("detects Set-COOKIE mixed-case", () => {
+    expect(containsForbiddenSecretShape("Set-COOKIE: a=b")).toBe(true);
+  });
+  it("detects X-API-KEY (upper-case)", () => {
+    expect(containsForbiddenSecretShape("X-API-KEY: 1")).toBe(true);
+  });
+
+  // Regression: original lower/mixed cases still detected
+  it("still detects bearer (lower-case)", () => {
+    expect(containsForbiddenSecretShape("bearer token123")).toBe(true);
+  });
+  it("still detects authorization: (lower-case)", () => {
+    expect(containsForbiddenSecretShape("authorization: Basic xyz")).toBe(true);
+  });
+  it("still detects x-api-key (lower-case)", () => {
+    expect(containsForbiddenSecretShape("x-api-key: secret")).toBe(true);
+  });
+
+  // False-positive guard: legitimate opaque ids must not be flagged
+  it.each(["qi-run-2f1c", "msg-1", "design-tests"])("passes opaque id: %s", (value) => {
+    expect(containsForbiddenSecretShape(value)).toBe(false);
+  });
+
   it.each(["plain text", "some envelope id", "abc-123"])("passes clean strings: %s", (value) => {
     expect(containsForbiddenSecretShape(value)).toBe(false);
   });

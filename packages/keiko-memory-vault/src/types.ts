@@ -7,6 +7,7 @@ import type {
   MemoryEdgeId,
   MemoryId,
   MemoryRecord,
+  MemoryReviewerId,
   MemoryScope,
   MemoryScopeKind,
   MemoryStatus,
@@ -46,6 +47,8 @@ export interface MemoryTombstone {
   readonly type: MemoryType;
   readonly forgottenAt: number;
   readonly forgetterSurface: string;
+  readonly reviewerId?: MemoryReviewerId;
+  readonly originalStatus?: MemoryStatus;
   readonly reason?: string;
 }
 
@@ -74,6 +77,23 @@ export type MemoryUpdatePatch = Partial<
   Omit<MemoryRecord, "id" | "schemaVersion" | "scope" | "createdAt">
 >;
 
+export interface MemoryBatchUpdate {
+  readonly id: MemoryId;
+  readonly patch: MemoryUpdatePatch;
+  readonly nowMs: number;
+}
+
+export interface MemoryBatchDelete {
+  readonly id: MemoryId;
+  readonly options: DeleteMemoryOptions;
+}
+
+export interface MemoryDeleteResult {
+  readonly memoryId: MemoryId;
+  readonly scope: MemoryScope;
+  readonly tombstone: MemoryTombstone | undefined;
+}
+
 export interface ListMemoriesOptions {
   readonly type?: readonly MemoryType[];
   readonly status?: readonly MemoryStatus[];
@@ -91,6 +111,7 @@ export interface ListMemoriesOptions {
 export interface DeleteMemoryOptions {
   readonly tombstone: boolean;
   readonly forgetterSurface: string;
+  readonly reviewerId?: MemoryReviewerId;
   readonly reason?: string;
   readonly nowMs: number;
 }
@@ -98,8 +119,10 @@ export interface DeleteMemoryOptions {
 export interface MemoryVaultStore {
   readonly insertMemory: (record: MemoryRecord) => MemoryRecord;
   readonly updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number) => MemoryRecord;
+  readonly updateMemories: (updates: readonly MemoryBatchUpdate[]) => readonly MemoryRecord[];
   readonly getMemory: (id: MemoryId) => MemoryRecord | undefined;
   readonly deleteMemory: (id: MemoryId, options: DeleteMemoryOptions) => void;
+  readonly deleteMemories: (deletes: readonly MemoryBatchDelete[]) => readonly MemoryDeleteResult[];
   readonly listMemories: (options?: ListMemoriesOptions) => readonly MemoryRecord[];
   readonly listMemoriesByScope: (
     scope: MemoryScope,
@@ -111,11 +134,21 @@ export interface MemoryVaultStore {
   readonly deleteEdge: (edgeId: MemoryEdgeId) => void;
   readonly upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput) => void;
   readonly getEmbedding: (memoryId: MemoryId) => MemoryEmbeddingRow | undefined;
+  readonly getEmbeddings: (
+    memoryIds: readonly MemoryId[],
+  ) => ReadonlyMap<MemoryId, MemoryEmbeddingRow>;
   readonly listTombstonesByScope: (scope: MemoryScope) => readonly MemoryTombstone[];
+  readonly purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number) => number;
   // Access tracking (#204). `recordAccess` upserts an insert-or-increment counter for each id
   // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the
   // maintenance planner. Both operate on the cleartext `memory_access` table — no content.
   readonly recordAccess: (ids: readonly MemoryId[], nowMs: number) => void;
+  // Outcome tracking (#204, O-V1). `recordOutcome` appends a governed retention judgement (utility
+  // in [0,1]) for each id — a proposal accepted (1) / rejected (0), a conflict won (1) / lost (0),
+  // an accepted correction superseding its origin (0). It never advances the access counter or
+  // timestamp; the maintenance planner folds the mean utility into effective strength so a
+  // proven-useful memory resists disuse-forgetting and a proven-bad one fades sooner.
+  readonly recordOutcome: (ids: readonly MemoryId[], utility: number, nowMs: number) => void;
   readonly getAccessStats: (ids?: readonly MemoryId[]) => ReadonlyMap<MemoryId, MemoryAccessStat>;
   readonly close: () => void;
 }

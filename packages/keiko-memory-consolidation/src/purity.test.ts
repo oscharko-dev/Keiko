@@ -17,6 +17,7 @@ import {
   JACCARD_DEFAULT,
   MAX_AGE_MS_DEFAULT,
   MAX_CLUSTERS_PER_RUN_DEFAULT,
+  MAX_RECORDS_PER_RUN_DEFAULT,
   STALE_CONFIDENCE_DEFAULT,
 } from "./_constants.js";
 import { FIXED_NOW_MS, makeEdgeIdFactory, makeIdFactory, makeRecord } from "./_support.js";
@@ -34,6 +35,7 @@ function freshOptions(): ConsolidationOptions {
     staleConfidenceThreshold: STALE_CONFIDENCE_DEFAULT,
     maxAgeMs: MAX_AGE_MS_DEFAULT,
     maxClustersPerRun: MAX_CLUSTERS_PER_RUN_DEFAULT,
+    maxRecordsPerRun: MAX_RECORDS_PER_RUN_DEFAULT,
   };
 }
 

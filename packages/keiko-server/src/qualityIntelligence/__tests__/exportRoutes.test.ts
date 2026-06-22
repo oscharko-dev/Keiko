@@ -4,8 +4,8 @@
 // the handler directly. Verifies local adapters, unknown adapter, TMS dry-run/live,
 // no-candidates, and formula-injection safety. Pure function + real fs.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,6 +14,7 @@ import {
   recordQualityIntelligenceRun,
   recordQualityIntelligenceCandidates,
   applyQualityIntelligenceCandidateEdit,
+  loadQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
 import type {
   EvidenceStore,
@@ -27,7 +28,9 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { handleQiExport } from "../exportRoutes.js";
-import { applyReviewDecision } from "../reviewStore.js";
+import { handleQiEditCandidate } from "../editRoutes.js";
+import { handleGetQiRun } from "../uiRoutes.js";
+import { applyReviewDecision, loadRunReviewState } from "../reviewStore.js";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -382,6 +385,7 @@ describe("handleQiExport — TMS adapter live export disabled", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: new Date().toISOString(),
+      redact: (v: unknown): unknown => v,
     });
 
     const result = asResult(
@@ -426,8 +430,67 @@ describe("handleQiExport — TMS dryRun with approved candidate", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: new Date().toISOString(),
+      redact: (v: unknown): unknown => v,
     });
 
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as { dryRun: boolean; candidateCount: number };
+    expect(body.dryRun).toBe(true);
+    expect(body.candidateCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── FIX E (Issue #282) — export honors RUN-scope approval ───────────────────
+//
+// A reviewer can approve the whole RUN (runState = approved) instead of each candidate. The
+// approvedOnly gate (incl. every TMS adapter, which forces approvedOnly) must treat a run-approved
+// run's candidates as approved — not 409 QI_NOTHING_TO_EXPORT.
+
+describe("handleQiExport — run-scope approval gates the approvedOnly filter", () => {
+  const approveRun = (): void => {
+    applyReviewDecision({
+      runId: RUN_ID,
+      evidenceDir,
+      action: "approve",
+      scope: "run",
+      reviewerLabel: "tester",
+      now: "2026-06-01T12:00:00.000Z",
+      redact: (v: unknown): unknown => v,
+    });
+  };
+
+  it("returns all candidates for an approvedOnly local export when the RUN is approved (no per-candidate approval)", async () => {
+    approveRun();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "json", dryRun: false, approvedOnly: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    // The single seeded candidate is present in the serialised body (its id round-trips).
+    expect((result.body as { body: string }).body).toContain("cand-001");
+  });
+
+  it("still returns 409 for an approvedOnly export when the run is NOT approved and no candidate is approved", async () => {
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "json", dryRun: false, approvedOnly: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
+  });
+
+  it("permits a TMS dry-run (forces approvedOnly) once the RUN is approved", async () => {
+    approveRun();
     const result = asResult(
       await handleQiExport(
         ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: true })),
@@ -511,7 +574,7 @@ describe("handleQiExport — local adapter coverage", () => {
 // ─── All TMS adapters with dryRun: false → 403 or 409 ────────────────────────
 
 describe("handleQiExport — all TMS adapters reject live export", () => {
-  it.each(["jira-issues", "qtest", "xray", "polarion", "alm"])(
+  it.each(["jira-issues", "qtest", "xray", "polarion", "alm", "quality-center"])(
     "TMS adapter '%s' with dryRun: false returns 403 (after approval) or 409 (no approval)",
     async (adapter) => {
       const result = asResult(
@@ -547,6 +610,7 @@ describe("handleQiExport — Epic #711 multi-format export", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: "2026-06-01T12:00:00.000Z",
+      redact: (v: unknown): unknown => v,
     });
   };
 
@@ -595,7 +659,26 @@ describe("handleQiExport — Epic #711 multi-format export", () => {
       ),
     );
     expect(result.status).toBe(200);
-    expect((result.body as { dryRun: boolean }).dryRun).toBe(true);
+    const body = result.body as { dryRun: boolean; candidateCount: number; preview: string };
+    expect(body.dryRun).toBe(true);
+    expect(body.candidateCount).toBe(1);
+    // The preview must carry the Quality Center serializer's own output, not an empty or
+    // wrong-adapter body — pins the preview content so an empty/truncated preview regresses RED.
+    expect(body.preview).toContain("Quality Center Export Preview");
+    expect(body.preview).toContain("QC-0001");
+  });
+
+  it("Quality Center dry-run returns 409 QI_NOTHING_TO_EXPORT when no candidate is approved (TMS forces approvedOnly)", async () => {
+    // No approveSeeded() — the seeded candidate stays unapproved. A TMS adapter forces approvedOnly,
+    // so the dry-run must NOT preview unapproved content; it returns 409 instead of a 200 preview.
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "quality-center", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
   });
 
   it("Quality Center live write is disabled: 403 QI_EXTERNAL_EXPORT_DISABLED (after approval)", async () => {
@@ -638,10 +721,29 @@ describe("handleQiExport — Epic #711 multi-format export", () => {
 
 // ─── Request-body size cap (Issue #721 — size caps enforced) ─────────────────────
 
+function makeChunkedReq(chunks: readonly string[]): IncomingMessage {
+  const req = Readable.from(chunks.map((c) => Buffer.from(c, "utf8")));
+  return req as unknown as IncomingMessage;
+}
+
 describe("handleQiExport — request body size cap", () => {
   it("returns 413 QI_BODY_TOO_LARGE for a body exceeding 16KB", async () => {
     const huge = JSON.stringify({ adapter: "csv", pad: "x".repeat(17 * 1024) });
     const result = asResult(await handleQiExport(ctx(RUN_ID, makeRawReq(huge)), deps(evidenceDir)));
+    expect(result.status).toBe(413);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
+  });
+
+  it("returns 413 QI_BODY_TOO_LARGE for a chunked oversized body (cap fires mid-stream)", async () => {
+    // Send the oversized body across two chunks so the second data event arrives after the cap
+    // fires. Without the `capped` flag, `chunks` holds the first chunk's bytes until GC and
+    // `resolve()` is called from the `end` handler after `reject()` (silently ignored by the
+    // Promise, but wasteful). With `capped`: chunks are cleared immediately and `end` is a no-op.
+    // Observable assertion: the route still returns 413 via the multi-chunk path.
+    const half = "x".repeat(9 * 1024);
+    const result = asResult(
+      await handleQiExport(ctx(RUN_ID, makeChunkedReq([half, half])), deps(evidenceDir)),
+    );
     expect(result.status).toBe(413);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
   });
@@ -671,5 +773,686 @@ describe("handleQiExport — reflects an inline candidate edit", () => {
     expect(body).toContain("Curated login title");
     expect(body).toContain("Authenticate");
     expect(body).not.toContain("User can log in with valid credentials");
+    // The edit REPLACED the seeded steps — none of the superseded step text may survive the export.
+    expect(body).not.toContain("Enter email");
+    expect(body).not.toContain("Enter password");
+    expect(body).not.toContain("Click Submit");
+  });
+});
+
+// ─── Live chain through the REAL route handlers (Epic #712 / Issue #728) ────────────────
+//
+// Issue #728 demands a LIVE edit → persist → reload → export proof through the real wiring,
+// not piecewise. The composition above injects the edit via the evidence library function,
+// bypassing the HTTP edit route (its validation, redactor threading, and audit write). This
+// case drives the edit through `handleQiEditCandidate`, confirms the immutable
+// `<runId>.qi.json` manifest is byte-unchanged by the edit, that the run-detail GET handler
+// reflects the curated text (the export route reads a SEPARATE projection from the edit
+// route — a write-here/read-there drift surface), and that every text + binary export format
+// carries the edited title and drops the superseded original. The `.review.json` edit audit
+// is asserted so the edit is provably audited end-to-end.
+
+const MANIFEST_FILE = (dir: string): string => join(dir, "qi", `${RUN_ID}.qi.json`);
+
+function editCtx(runId: string, body: Record<string, unknown>): RouteContext {
+  return {
+    req: makeReq(body),
+    res: {} as RouteContext["res"],
+    params: { id: runId },
+    url: new URL(`http://127.0.0.1/api/quality-intelligence/runs/${runId}/edit`),
+  };
+}
+
+function detailCtx(runId: string): RouteContext {
+  return {
+    req: makeRawReq(""),
+    res: {} as RouteContext["res"],
+    params: { id: runId },
+    url: new URL(`http://127.0.0.1/api/quality-intelligence/runs/${runId}`),
+  };
+}
+
+describe("handleQiEditCandidate → handleGetQiRun → handleQiExport (Issue #728 live chain)", () => {
+  it("edits via the real route, keeps the manifest byte-identical, and flows the curated text into reload + every export format", async () => {
+    const manifestBefore = readFileSync(MANIFEST_FILE(evidenceDir));
+
+    // 1. Edit through the REAL HTTP route (not the evidence function).
+    const edit = asResult(
+      await handleQiEditCandidate(
+        editCtx(RUN_ID, {
+          candidateId: "cand-001",
+          edited: { title: "Curated login title" },
+          editorLabel: "Alice",
+        }),
+        deps(evidenceDir),
+      ),
+    );
+    expect(edit.status).toBe(200);
+
+    // 2. AC3: the immutable run manifest is byte-identical — the edit touched only the candidate artifact.
+    expect(readFileSync(MANIFEST_FILE(evidenceDir)).equals(manifestBefore)).toBe(true);
+
+    // 3. AC1: the run-detail GET handler (its own projection) reflects the persisted edit.
+    const reloaded = asResult(handleGetQiRun(detailCtx(RUN_ID), deps(evidenceDir)));
+    expect(reloaded.status).toBe(200);
+    const reloadedRows = (reloaded.body as { candidates: readonly { id: string; title: string }[] })
+      .candidates;
+    expect(reloadedRows.find((c) => c.id === "cand-001")?.title).toBe("Curated login title");
+
+    // 4. AC2: every TEXT export format carries the edited title and drops the original.
+    for (const adapter of ["markdown", "csv", "plain-text"]) {
+      const result = asResult(
+        await handleQiExport(ctx(RUN_ID, makeReq({ adapter, dryRun: false })), deps(evidenceDir)),
+      );
+      expect(result.status).toBe(200);
+      const body = (result.body as { body: string }).body;
+      expect(body).toContain("Curated login title");
+      expect(body).not.toContain("User can log in with valid credentials");
+    }
+
+    // 5. AC2 (binary path): the STORE-method ZIP bundle carries the edited title verbatim.
+    const zip = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "zip-bundle", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(zip.status).toBe(200);
+    const zipBody = zip.body as { body: string; encoding: string };
+    expect(zipBody.encoding).toBe("base64");
+    const decoded = Buffer.from(zipBody.body, "base64").toString("latin1");
+    expect(decoded).toContain("Curated login title");
+    expect(decoded).not.toContain("User can log in with valid credentials");
+
+    // 6. AC4: the edit is audited in the review companion.
+    const review = loadRunReviewState(RUN_ID, evidenceDir);
+    const editEntries = (review?.auditLog ?? []).filter((entry) => entry.action === "edit");
+    expect(editEntries).toHaveLength(1);
+    expect(editEntries[0]?.candidateId).toBe("cand-001");
+  });
+});
+
+describe("handleQiEditCandidate → handleQiExport — strips bidi/zero-width chars before export (Epic #712)", () => {
+  it("an edited title with spoofing code points exports clean across markdown, plain-text, and the ZIP bundle", async () => {
+    const RLO = String.fromCodePoint(0x202e); // right-to-left override (bidi spoof)
+    const ZWSP = String.fromCodePoint(0x200b); // zero-width space
+
+    // Edit through the REAL route, injecting a bidi override + zero-width space into the title.
+    const edit = asResult(
+      await handleQiEditCandidate(
+        editCtx(RUN_ID, {
+          candidateId: "cand-001",
+          edited: { title: `Login ${RLO}admin${ZWSP} flow` },
+          editorLabel: "Alice",
+        }),
+        deps(evidenceDir),
+      ),
+    );
+    expect(edit.status).toBe(200);
+
+    // Text exports: the cleaned title is present and neither spoofing code point survives.
+    for (const adapter of ["markdown", "plain-text"]) {
+      const result = asResult(
+        await handleQiExport(ctx(RUN_ID, makeReq({ adapter, dryRun: false })), deps(evidenceDir)),
+      );
+      expect(result.status).toBe(200);
+      const body = (result.body as { body: string }).body;
+      expect(body).toContain("Login admin flow");
+      expect(body.includes(RLO)).toBe(false);
+      expect(body.includes(ZWSP)).toBe(false);
+    }
+
+    // Binary STORE-method ZIP: decode and assert the cleaned title is present and the UTF-8 byte
+    // sequence of each spoofing code point is absent (compared in latin1 so multi-byte runs match).
+    const zip = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "zip-bundle", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(zip.status).toBe(200);
+    const decoded = Buffer.from((zip.body as { body: string }).body, "base64").toString("latin1");
+    expect(decoded).toContain("Login admin flow");
+    expect(decoded.includes(Buffer.from(RLO, "utf8").toString("latin1"))).toBe(false);
+    expect(decoded.includes(Buffer.from(ZWSP, "utf8").toString("latin1"))).toBe(false);
+  });
+});
+
+// ─── Issue #283 AC4 — export evidence emission ───────────────────────────────────────
+
+describe("handleQiExport — emits export evidence (Issue #283, AC4)", () => {
+  const exportAdapter = async (
+    adapter: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<void> => {
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter, dryRun: false, ...extra })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+  };
+
+  const exportsOf = (): QualityIntelligenceEvidenceManifest["exports"] => {
+    const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
+    if (manifest === undefined) throw new Error("run manifest missing");
+    return manifest.exports;
+  };
+
+  const approveSeeded = (): void => {
+    applyReviewDecision({
+      runId: RUN_ID,
+      evidenceDir,
+      action: "approve",
+      scope: "candidate",
+      candidateId: "cand-001",
+      reviewerLabel: "tester",
+      now: "2026-06-01T12:00:00.000Z",
+      redact: (v: unknown): unknown => v,
+    });
+  };
+
+  it("records a row for a materialised local export (csv): target + attestation + dryRun=false", async () => {
+    await exportAdapter("csv");
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.targetAdapter).toBe("csv");
+    expect(rows[0]?.redactionAttested).toBe(true);
+    expect(rows[0]?.dryRun ?? false).toBe(false);
+    expect(rows[0]?.integrityHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("keeps totals.exports in lockstep and the manifest re-loads (integrity holds)", async () => {
+    await exportAdapter("csv");
+    const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
+    expect(manifest?.totals.exports).toBe(1);
+    expect(manifest?.exports.length).toBe(1);
+    // A second load must not throw — the recomputed exports hash + totals invariant survive a round-trip.
+    expect(() => loadQualityIntelligenceRun(RUN_ID, { evidenceDir })).not.toThrow();
+  });
+
+  it("deduplicates a repeated identical export (csv twice → one row)", async () => {
+    await exportAdapter("csv");
+    await exportAdapter("csv");
+    expect(exportsOf()).toHaveLength(1);
+  });
+
+  it("records distinct rows for distinct adapters (csv then json → two rows)", async () => {
+    await exportAdapter("csv");
+    await exportAdapter("json");
+    expect(
+      exportsOf()
+        .map((r) => r.targetAdapter)
+        .sort(),
+    ).toEqual(["csv", "json"]);
+  });
+
+  it("records a binary export target faithfully (pdf)", async () => {
+    await exportAdapter("pdf");
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.targetAdapter).toBe("pdf");
+    expect(rows[0]?.dryRun ?? false).toBe(false);
+  });
+
+  it("records a TMS dry-run preview with dryRun=true (jira-issues, approved)", async () => {
+    approveSeeded();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.targetAdapter).toBe("jira-issues");
+    expect(rows[0]?.dryRun).toBe(true);
+  });
+
+  it("records a TMS dry-run preview with dryRun=true (quality-center, approved)", async () => {
+    approveSeeded();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "quality-center", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.targetAdapter).toBe("quality-center");
+    expect(rows[0]?.dryRun).toBe(true);
+    expect(rows[0]?.redactionAttested).toBe(true);
+  });
+
+  it("records NO row for a disabled external TMS write (jira-issues live → 403)", async () => {
+    approveSeeded();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(403);
+    expect(exportsOf()).toHaveLength(0);
+  });
+
+  it("records a dry-run AND a materialised row as distinct (csv dry-run then csv download)", async () => {
+    asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "csv", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    await exportAdapter("csv");
+    const rows = exportsOf();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.dryRun ?? false).sort()).toEqual([false, true]);
+  });
+});
+
+// ─── Issue #283 AC4 — audit-evidence append is fail-open ──────────────────────────────
+//
+// A failed audit-evidence write must NOT turn a successful local export into a 500: the artifact has
+// no external side effect and the run already exists on disk (recordExportEvidence, exportRoutes.ts
+// :160-176). We provoke a write failure by making the qi/ directory read-only — the atomic manifest
+// re-persist cannot create its temp file — and assert the export still returns 200 with its body
+// intact. Without the fail-open swallow the append error would reach the handler's outer catch and
+// yield 500 QI_EXPORT_FAILED (verifier Gap 1).
+
+describe("handleQiExport — AC4 audit write is fail-open", () => {
+  it("returns 200 with the export body when the audit-evidence append fails", async () => {
+    if (platform() === "win32") return; // POSIX permission bits only
+    const qiDir = join(evidenceDir, "qi");
+    chmodSync(qiDir, 0o555); // read + traverse, but no new files → atomic manifest write fails
+    try {
+      const result = asResult(
+        await handleQiExport(
+          ctx(RUN_ID, makeReq({ adapter: "csv", dryRun: false })),
+          deps(evidenceDir),
+        ),
+      );
+      // Fail-open contract: the export succeeds despite the swallowed audit-write error.
+      expect(result.status).toBe(200);
+      expect((result.body as { body: string }).body.length).toBeGreaterThan(0);
+
+      // When the chmod actually blocked the write (i.e. not running as root) no audit row was
+      // recorded — the error was swallowed, not surfaced. Under root, chmod is a no-op and the row
+      // is written; the 200 + body assertions above (the invariant under test) still hold.
+      if (process.getuid?.() !== 0) {
+        const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
+        expect(manifest?.exports).toHaveLength(0);
+      }
+    } finally {
+      chmodSync(qiDir, 0o755); // restore so afterEach cleanup can remove the dir
+    }
+  });
+});
+
+// ─── Issue #283 L1 + m3 — formula escape is explicit and whitespace-robust ────────────
+
+describe("handleQiExport — spreadsheet formula escape is explicit and whitespace-robust", () => {
+  const exportInjectedTitle = async (title: string): Promise<string> => {
+    const injDir = mkdtempSync(join(tmpdir(), "keiko-export-inj2-"));
+    try {
+      recordQualityIntelligenceRun(runRecordInput("run-inj2"), { evidenceDir: injDir });
+      recordQualityIntelligenceCandidates({
+        runId: "run-inj2",
+        generatedAt: "2026-06-01T10:01:00.000Z",
+        candidates: [makeCandidate(title, "cand-inj2")],
+        evidenceDir: injDir,
+        redact: (v: unknown): unknown => v,
+      });
+      const result = asResult(
+        await handleQiExport(
+          ctx("run-inj2", makeReq({ adapter: "spreadsheet-safe-csv", dryRun: false })),
+          deps(injDir),
+        ),
+      );
+      expect(result.status).toBe(200);
+      return (result.body as { body: string }).body;
+    } finally {
+      rmSync(injDir, { recursive: true, force: true });
+    }
+  };
+
+  it("prefixes a leading formula char with an explicit apostrophe (not just removing the bare char)", async () => {
+    const body = await exportInjectedTitle("=SUM(A1:B1)");
+    expect(body).toContain("'=SUM(A1:B1)");
+  });
+
+  it("guards a formula hidden behind leading whitespace (' =1+1' bypass)", async () => {
+    const body = await exportInjectedTitle(" =1+1");
+    expect(body).toContain("' =1+1");
+  });
+});
+
+// ─── Issue #724 GROUP A — AC sweep: all multi-format adapters return 200; QC live → 403 ────────
+//
+// Mirrors the Issue #724 AC verbatim: "export a real run as CSV / PDF / Markdown / Text / ZIP;
+// attempt a Quality Center write → 403". A single it.each sweeps all five local/binary adapters.
+// Kills: any format dropped from the route ADAPTERS allowlist or the serialise DISPATCH table.
+
+describe("handleQiExport — Issue #724 AC sweep (multi-format + QC live gate)", () => {
+  it.each(["csv", "markdown", "plain-text", "pdf", "zip-bundle"])(
+    "adapter '%s' returns 200 through the route (AC sweep)",
+    async (adapter) => {
+      // Mutant killed: if any adapter is dropped from ADAPTERS or the serialise path, status !== 200.
+      const result = asResult(
+        await handleQiExport(ctx(RUN_ID, makeReq({ adapter, dryRun: false })), deps(evidenceDir)),
+      );
+      expect(result.status).toBe(200);
+    },
+  );
+
+  it("Quality Center live write returns 403 QI_EXTERNAL_EXPORT_DISABLED (AC: QC arm)", async () => {
+    // Approve the seeded candidate so the approvedOnly filter passes — the 403 is the TMS live gate,
+    // not the empty-selection 409. This is the QC arm of the AC sweep, co-located so the Issue AC
+    // reads as one block. Kills: removing the isTms && !dryRun guard from serialiseExport.
+    applyReviewDecision({
+      runId: RUN_ID,
+      evidenceDir,
+      action: "approve",
+      scope: "candidate",
+      candidateId: "cand-001",
+      reviewerLabel: "tester",
+      now: "2026-06-01T12:00:00.000Z",
+      redact: (v: unknown): unknown => v,
+    });
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "quality-center", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(403);
+    expect((result.body as { error: { code: string } }).error.code).toBe(
+      "QI_EXTERNAL_EXPORT_DISABLED",
+    );
+  });
+});
+
+// ─── Issue #724 GROUP B — ZIP entry CONTENT validation ───────────────────────────────────────
+//
+// The existing ZIP test (line 696) verifies entry NAMES only. These tests additionally verify
+// that the RIGHT serializer body lands under the RIGHT entry name, by parsing the local-header
+// structure and decoding the raw data bytes. A mutant that swaps serializer bodies under entry
+// names is invisible to the names-only test; these assertions catch it (RED).
+//
+// ZIP STORE (no-compression) local-header layout (RFC 1950 / PKZIP spec):
+//   offset +0:  4 bytes — local file header signature 0x04034b50
+//   offset +26: 2 bytes — file name length
+//   offset +28: 2 bytes — extra field length
+//   offset +30+nameLen+extraLen: data (compressedSize bytes)
+//
+// Central-directory entries are scanned first to get per-entry (nameLen, compressedSize, localOffset).
+
+describe("handleQiExport — Issue #724 GROUP B — ZIP entry CONTENT validation", () => {
+  interface ZipEntry {
+    name: string;
+    size: number;
+    localOffset: number;
+  }
+
+  /** Parse (name, compressedSize, localHeaderOffset) triples from a STORE ZIP's central directory. */
+  function parseCentralDirectory(bytes: Buffer): ZipEntry[] {
+    const entries: ZipEntry[] = [];
+    for (let i = 0; i + 4 <= bytes.length; i++) {
+      if (bytes.readUInt32LE(i) !== 0x02014b50) continue; // central-directory signature
+      const compressedSize = bytes.readUInt32LE(i + 20);
+      const nameLen = bytes.readUInt16LE(i + 28);
+      const extraLen = bytes.readUInt16LE(i + 30);
+      const commentLen = bytes.readUInt16LE(i + 32);
+      const localOffset = bytes.readUInt32LE(i + 42);
+      const name = bytes.toString("utf8", i + 46, i + 46 + nameLen);
+      entries.push({ name, size: compressedSize, localOffset });
+      i += 46 + nameLen + extraLen + commentLen - 1;
+    }
+    return entries;
+  }
+
+  /** Follow the local-header pointer and slice the raw (uncompressed STORE) data bytes. */
+  function extractEntryData(bytes: Buffer, localOffset: number, size: number): Buffer {
+    // local header: sig(4)+ver(2)+flags(2)+method(2)+time(2)+date(2)+crc(4)+compSize(4)+uncompSize(4)
+    //               +nameLen(2)+extraLen(2) = 30 bytes fixed, then nameLen+extraLen bytes before data
+    const localSig = bytes.readUInt32LE(localOffset);
+    if (localSig !== 0x04034b50) throw new Error(`bad local header sig at ${String(localOffset)}`);
+    const nameLen = bytes.readUInt16LE(localOffset + 26);
+    const extraLen = bytes.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + nameLen + extraLen;
+    return bytes.subarray(dataStart, dataStart + size);
+  }
+
+  /** Require an entry by name; throws (RED) if absent — replaces find + non-null-assertion. */
+  function requireEntry(entries: ZipEntry[], entryName: string): ZipEntry {
+    const found = entries.find((e) => e.name === entryName);
+    if (found === undefined) throw new Error(`ZIP entry not found: ${entryName}`);
+    return found;
+  }
+
+  it("ZIP entry run-export-001.csv contains the CSV header row 'CandidateId,'", async () => {
+    // Mutant killed: a route mutant that puts wrong serializer bytes under .csv → header absent → RED.
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "zip-bundle", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const bytes = Buffer.from((result.body as { body: string }).body, "base64");
+    const entries = parseCentralDirectory(bytes);
+    const csvEntry = requireEntry(entries, `${RUN_ID}.csv`);
+    const csvData = extractEntryData(bytes, csvEntry.localOffset, csvEntry.size);
+    expect(csvData.toString("utf8")).toContain("CandidateId,");
+  });
+
+  it("ZIP entry run-export-001.md contains a markdown candidate section ('## ')", async () => {
+    // Mutant killed: wrong serializer body under .md (e.g. plain-text bytes) has no '## ' → RED.
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "zip-bundle", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const bytes = Buffer.from((result.body as { body: string }).body, "base64");
+    const entries = parseCentralDirectory(bytes);
+    const mdEntry = requireEntry(entries, `${RUN_ID}.md`);
+    const mdData = extractEntryData(bytes, mdEntry.localOffset, mdEntry.size);
+    expect(mdData.toString("utf8")).toContain("## ");
+  });
+
+  it("ZIP entry run-export-001.txt contains a plain-text '===...' divider (60× '=')", async () => {
+    // Mutant killed: wrong serializer body under .txt (e.g. csv bytes) has no '===' run → RED.
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "zip-bundle", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const bytes = Buffer.from((result.body as { body: string }).body, "base64");
+    const entries = parseCentralDirectory(bytes);
+    const txtEntry = requireEntry(entries, `${RUN_ID}.txt`);
+    const txtData = extractEntryData(bytes, txtEntry.localOffset, txtEntry.size);
+    // The plain-text adapter opens with RULE = "=".repeat(60) — a 60-char run of '='.
+    expect(txtData.toString("utf8")).toContain("=".repeat(60));
+  });
+});
+
+// ─── Issue #724 GROUP C — Route-level zip-slip negative (Security finding #2) ───────────────
+//
+// Drives traversal-shaped runIds through handleQiExport with zip-bundle and asserts the route
+// returns NOT 200. The store calls assertValidRunId(runId) which rejects '/', '%', ' ', and
+// leading '.'; the thrown InvalidRunIdError is caught by the outer try/catch → 500
+// QI_EXPORT_FAILED. The key invariant: a traversal-shaped id NEVER yields a successful ZIP.
+// Kills: weakening assertValidRunId to accept separator characters → route returns 200 with a
+// ZIP that could contain a traversal entry name.
+
+describe("handleQiExport — Issue #724 GROUP C — zip-slip traversal runId guard", () => {
+  it.each([
+    ["../../etc/passwd", "slash and dot-dot"],
+    ["a%2e%2e", "percent-encoded dot-dot"],
+    ["a b", "space (NUL-class disallowed char)"],
+  ])(
+    "runId '%s' (%s) is rejected — route returns non-200, no traversal ZIP produced",
+    async (badId) => {
+      // assertValidRunId rejects these in the store layer; the outer catch → 500 QI_EXPORT_FAILED.
+      // The invariant under test: a traversal runId NEVER yields a 200 ZIP at the route boundary.
+      const result = asResult(
+        await handleQiExport(
+          ctx(badId, makeReq({ adapter: "zip-bundle", dryRun: false })),
+          deps(evidenceDir),
+        ),
+      );
+      expect(result.status).not.toBe(200);
+    },
+  );
+});
+
+// ─── Issue #724 GROUP D — Evidence targetAdapter per remaining format ─────────────────────────
+//
+// After a successful export, asserts the recorded evidence row's targetAdapter equals the
+// requested format for markdown, plain-text, and zip-bundle. The existing tests (lines 793-865)
+// already pin csv, pdf, jira-issues, and quality-center. These fill the Explorer Gap #5.
+// Kills: a mutant recording a hardcoded adapter label (e.g. always "csv") → RED for others.
+
+describe("handleQiExport — Issue #724 GROUP D — evidence targetAdapter for remaining formats", () => {
+  const exportAdapter = async (
+    adapter: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<void> => {
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter, dryRun: false, ...extra })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+  };
+
+  const exportsOf = (): QualityIntelligenceEvidenceManifest["exports"] => {
+    const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
+    if (manifest === undefined) throw new Error("run manifest missing");
+    return manifest.exports;
+  };
+
+  it("records targetAdapter='markdown' in the evidence row after a markdown export", async () => {
+    await exportAdapter("markdown");
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    // Mutant killed: if buildExportEvidenceRow hardcodes adapter label → wrong value → RED.
+    expect(rows[0]?.targetAdapter).toBe("markdown");
+    expect(rows[0]?.dryRun ?? false).toBe(false);
+  });
+
+  it("records targetAdapter='plain-text' in the evidence row after a plain-text export", async () => {
+    await exportAdapter("plain-text");
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    // Mutant killed: wrong adapter label in evidence row → assertion fails → RED.
+    expect(rows[0]?.targetAdapter).toBe("plain-text");
+    expect(rows[0]?.dryRun ?? false).toBe(false);
+  });
+
+  it("records targetAdapter='zip-bundle' in the evidence row after a zip-bundle export", async () => {
+    await exportAdapter("zip-bundle");
+    const rows = exportsOf();
+    expect(rows).toHaveLength(1);
+    // Mutant killed: if binaryResponse hardcodes mode label in buildExportEvidenceRow → RED.
+    expect(rows[0]?.targetAdapter).toBe("zip-bundle");
+    expect(rows[0]?.dryRun ?? false).toBe(false);
+  });
+});
+
+// ─── Issue #724 GROUP E — Binary dryRun characterization (ADR-0023 design pin) ─────────────
+//
+// Pins CURRENT behavior: binary formats (pdf, zip-bundle) IGNORE the dryRun flag and always
+// return the full binary artifact (dryRun: false in the response envelope, encoding: 'base64').
+// This is intentional per ADR-0023 — binary has no meaningful "preview" mode; returning the full
+// artifact is the only useful response.
+//
+// A future silent change (e.g. binary formats start honouring dryRun: true by returning a truncated
+// base64 body or dryRun: true in the envelope) would turn these assertions RED, forcing a deliberate
+// decision rather than an accidental behavior change.
+
+describe("handleQiExport — Issue #724 GROUP E — binary dryRun characterization (ADR-0023 pin)", () => {
+  it("pdf with dryRun:true still returns 200, encoding:'base64', and dryRun:false in envelope", async () => {
+    // Design pin: binary formats ignore dryRun — no preview mode exists for binary per ADR-0023.
+    // Changing binaryResponse to honour dryRun:true silently would turn this RED.
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "pdf", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as { encoding: string; dryRun: boolean; body: string };
+    expect(body.encoding).toBe("base64");
+    // dryRun in the response envelope must be false: the full artifact was returned, not a preview.
+    expect(body.dryRun).toBe(false);
+    // Sanity: the artifact is a real PDF, not an empty/truncated body.
+    expect(Buffer.from(body.body, "base64").subarray(0, 5).toString("latin1")).toBe("%PDF-");
+  });
+
+  it("zip-bundle with dryRun:true still returns 200, encoding:'base64', and dryRun:false in envelope", async () => {
+    // Design pin: binary formats ignore dryRun — no preview mode exists for binary per ADR-0023.
+    // Changing binaryResponse to honour dryRun:true silently would turn this RED.
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "zip-bundle", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as { encoding: string; dryRun: boolean; body: string };
+    expect(body.encoding).toBe("base64");
+    // dryRun in the response envelope must be false: the full artifact was returned, not a preview.
+    expect(body.dryRun).toBe(false);
+    // Sanity: the artifact starts with the PK ZIP magic bytes.
+    const bytes = Buffer.from(body.body, "base64");
+    expect(bytes[0]).toBe(0x50); // 'P'
+    expect(bytes[1]).toBe(0x4b); // 'K'
+  });
+});
+
+// ─── Issue #724 GROUP F — TMS gate ordering: unapproved TMS live export → 409 beats 403 ──────
+//
+// Without approveSeeded (candidate stays 'proposed'), a live TMS export must return 409
+// QI_NOTHING_TO_EXPORT — not 403 QI_EXTERNAL_EXPORT_DISABLED. The ordering in serialiseExport is:
+//   1. isTms → forces approvedOnly=true
+//   2. selectRows → empty (no approved candidates)
+//   3. rows.length === 0 → 409 (BEFORE the isTms && !dryRun → 403 check)
+// This pins the 409-beats-403 ordering: if the guard order were swapped, an unapproved-but-live
+// TMS request would return 403 instead, which is the wrong signal (implies a credentials problem
+// rather than a missing approval). Kills: swapping the guard order in serialiseExport → RED.
+
+describe("handleQiExport — Issue #724 GROUP F — TMS unapproved live export: 409 beats 403", () => {
+  it("jira-issues with dryRun:false and no approved candidates returns 409 QI_NOTHING_TO_EXPORT (not 403)", async () => {
+    // No approveSeeded() — seeded candidate stays 'proposed'. TMS forces approvedOnly → selectRows
+    // returns [] → 409 fires at rows.length===0, BEFORE the isTms && !dryRun → 403 check.
+    // If the guard order were swapped, this would return 403 instead → test goes RED.
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "jira-issues", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
+  });
+
+  it("quality-center with dryRun:false and no approved candidates also returns 409 (not 403)", async () => {
+    // Same ordering invariant for quality-center, which is also a TMS adapter.
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "quality-center", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
   });
 });

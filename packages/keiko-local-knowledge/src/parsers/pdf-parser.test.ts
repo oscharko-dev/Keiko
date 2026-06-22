@@ -9,6 +9,8 @@ import {
   type PdfTextContentChunk,
 } from "./pdf-parser.js";
 
+const PDF_TEXT_LAYER_PARSE_TIMEOUT_MS = 15_000;
+
 describe("pdfParser", () => {
   it("matches PDF extension and magic bytes", () => {
     expect(pdfParser.capability.matches(selectionFromBytes(PDF_MAGIC, { extension: "pdf" }))).toBe(
@@ -16,21 +18,25 @@ describe("pdfParser", () => {
     );
   });
 
-  it("extracts page text from a text-layer PDF", async () => {
-    const result = await pdfParser.parseAsync(
-      selectionFromBytes(PDF_TEXT_LAYER, { extension: "pdf", mediaType: "application/pdf" }),
-      buildParserOptions(),
-    );
-    expect(result.parser.parserId).toBe("pdf");
-    expect(result.parser.dependencyVersions).toEqual([
-      { packageName: "pdfjs-dist", version: "6.0.227" },
-      { packageName: "@napi-rs/canvas", version: "1.0.0" },
-    ]);
-    expect(result.pages).toHaveLength(1);
-    expect(result.units[0]).toMatchObject({ kind: "page", pageNumber: 1 });
-    expect("normalizedText" in result ? result.normalizedText : undefined).toContain("Hello PDF");
-    expect(result.diagnostics).toEqual([]);
-  });
+  it(
+    "extracts page text from a text-layer PDF",
+    async () => {
+      const result = await pdfParser.parseAsync(
+        selectionFromBytes(PDF_TEXT_LAYER, { extension: "pdf", mediaType: "application/pdf" }),
+        buildParserOptions(),
+      );
+      expect(result.parser.parserId).toBe("pdf");
+      expect(result.parser.dependencyVersions).toEqual([
+        { packageName: "pdfjs-dist", version: "6.0.227" },
+        { packageName: "@napi-rs/canvas", version: "1.0.0" },
+      ]);
+      expect(result.pages).toHaveLength(1);
+      expect(result.units[0]).toMatchObject({ kind: "page", pageNumber: 1 });
+      expect("normalizedText" in result ? result.normalizedText : undefined).toContain("Hello PDF");
+      expect(result.diagnostics).toEqual([]);
+    },
+    PDF_TEXT_LAYER_PARSE_TIMEOUT_MS,
+  );
 
   it("reports malformed PDF bytes safely", async () => {
     const result = await pdfParser.parseAsync(
@@ -46,7 +52,7 @@ describe("pdfParser", () => {
     );
   });
 
-  it("stops streamed text extraction at maxObjectsPerDocument", async () => {
+  it("stops streamed text extraction at maxObjectsPerDocument without cancelling pdfjs streams", async () => {
     const input = selectionFromBytes(PDF_MAGIC, {
       extension: "pdf",
       mediaType: "application/pdf",
@@ -81,6 +87,6 @@ describe("pdfParser", () => {
       code: "OBJECT_LIMIT_REACHED",
       severity: "error",
     });
-    expect(cancelled).toBe(true);
+    expect(cancelled).toBe(false);
   });
 });

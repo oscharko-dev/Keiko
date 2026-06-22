@@ -128,11 +128,14 @@ module.exports = {
       name: "adr-0019-direction-3c-tools-only-contracts-security-workspace",
       comment:
         "ADR-0019 direction rule 3 (tools boundary): keiko-tools may depend on " +
-        "keiko-contracts, keiko-security, and keiko-workspace only. Workspace is " +
+        "keiko-contracts, keiko-security, keiko-workspace, and keiko-sandbox only. Workspace is " +
         "an allowed dependency because ADR-0019 trust rule 4 explicitly directs tools to route " +
         "filesystem access through keiko-workspace (path containment + symlink realpath gate + " +
-        "deny/ignore rules + read-cap redaction). The boundary also forbids imports into the " +
-        "retired root `src/tools/` shim so production code cannot bypass the package surface.",
+        "deny/ignore rules + read-cap redaction). keiko-sandbox is allowed because ADR-0043 routes " +
+        'the egress-isolation wrapper for a network:"none" run through the single keiko-tools spawn ' +
+        "boundary (exec.ts); the sandbox package owns the wrapper decision only, never spawning. The " +
+        "boundary also forbids imports into the retired root `src/tools/` shim so production code " +
+        "cannot bypass the package surface.",
       severity: "error",
       from: {
         path:
@@ -141,11 +144,34 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|workspace|tools)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace|tools)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|workspace|tools)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|workspace|sandbox|tools)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace|sandbox|tools)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|workspace|sandbox|tools)|" +
           "src/(tools|harness|workflows|cli|ui|verification|evaluations|gateway|audit)|" +
           siblingPackageSourcePattern(["contracts", "security", "workspace"]) +
+          ")",
+      },
+    },
+    {
+      name: "adr-0043-sandbox-only-contracts",
+      comment:
+        "ADR-0043 sandbox boundary: keiko-sandbox is a near-leaf package that may depend only " +
+        "on keiko-contracts and Node pure/system probes. It owns wrapper planning and backend " +
+        "selection, never the keiko-tools spawn boundary or server orchestration. Also fires on " +
+        "tests/architecture/fixtures/sandbox/ so scripts/arch-check-negative.mjs proves the " +
+        "boundary live.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-sandbox/src/|tests/architecture/fixtures/sandbox/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|sandbox)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|sandbox)|" +
+          "@oscharko-dev/keiko-(?!contracts|sandbox)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli|server)|" +
+          siblingPackageSourcePattern(["contracts"]) +
           ")",
       },
     },
@@ -575,7 +601,7 @@ module.exports = {
         "including allow-listed domains such as `src/gateway/`, `src/workspace/`, and " +
         "`src/workflows/`, so production code cannot bypass the package surface. memory-vault, " +
         "memory-governance, " +
-        "and memory-retrieval added by issue #211 (Memory Center UI BFF routes). " +
+        "and memory-retrieval added by issue #211 (MemoriaViva UI BFF routes). " +
         "memory-capture added by issue #212 (Conversation Center in-chat capture BFF route). " +
         "memory-consolidation added by issue #208 (Memory consolidation jobs); the server " +
         "wires consolidation lifecycle handlers through packages/keiko-server/src/memory-" +
@@ -590,9 +616,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
           "src/(ui|cli|evaluations|gateway|workspace|tools|harness|workflows|audit|verification))",
       },
     },
@@ -677,6 +703,34 @@ module.exports = {
         path:
           "^(packages/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|sdk|server|quality-intelligence|local-knowledge)/|" +
           "node_modules/@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|sdk|server|quality-intelligence|local-knowledge)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|verification|evaluations))",
+        dependencyTypesNot: ["type-only"],
+      },
+    },
+    {
+      name: "adr-0042-editor-not-node-domain-values",
+      comment:
+        "ADR-0042 (browser-tier editor boundary): the browser-tier @oscharko-dev/keiko-editor " +
+        "package must not value-import Node-only domain packages, mirroring ADR-0019 direction " +
+        "rule 8 for keiko-ui. Type-only imports of shared keiko-contracts wire shapes are allowed " +
+        "(dependencyTypesNot: type-only). The editor owns UI rendering and the typed " +
+        "host-integration ports only; repository search, retrieval, memory engines, model routing, " +
+        "the Model Gateway, patch application, verification, evidence persistence, and keiko-ui " +
+        "internals are reached exclusively through host-injected callbacks or browser-safe " +
+        "contracts, never by value-importing the Node-side domain. The forbidden set enumerates " +
+        "the existing packages ADR-0042 keeps outside the editor browser tier. Also fires on " +
+        "tests/architecture/fixtures/editor-browser/ so the gate is proven live by " +
+        "scripts/arch-check-negative.mjs.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-editor/src/|tests/architecture/fixtures/editor-browser/)",
+        pathNot: "\\.test\\.ts$",
+      },
+      to: {
+        path:
+          "^(packages/keiko-(model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)/|" +
+          "node_modules/@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)|" +
+          "@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|server|quality-intelligence|local-knowledge|memory-(vault|capture|consolidation|governance|retrieval)|ui)|" +
           "src/(gateway|workspace|tools|harness|workflows|audit|verification|evaluations))",
         dependencyTypesNot: ["type-only"],
       },

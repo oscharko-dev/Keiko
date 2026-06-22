@@ -10,6 +10,8 @@ import { FilePreview } from "./FilePreview";
 
 interface FilesWidgetProps {
   root?: string;
+  activeFilePath?: string | undefined;
+  openFilesDirectly?: boolean | undefined;
   onActiveFileChange?: (
     path: string | null,
     root: string | null,
@@ -126,6 +128,8 @@ function formatBytes(bytes: number): string {
 
 export function FilesWidget({
   root,
+  activeFilePath,
+  openFilesDirectly = false,
   onActiveFileChange,
   onRootChange,
   onOpenFile,
@@ -384,13 +388,14 @@ export function FilesWidget({
       );
     }
 
+    const activePath = selectedPath ?? activeFilePath ?? null;
     return (
       <button
         className="tr-row tr-file"
         role="treeitem"
         aria-level={depth + 1}
-        aria-selected={selectedPath === entry.path}
-        data-active={selectedPath === entry.path}
+        aria-selected={activePath === entry.path}
+        data-active={activePath === entry.path}
         data-readable={entry.readable}
         data-path={entry.path}
         key={entry.path}
@@ -400,8 +405,14 @@ export function FilesWidget({
         aria-describedby={entry.readable ? undefined : unreadableReasonId}
         onClick={() => {
           if (!entry.readable) return;
+          const fileRoot = resolvedRoot ?? apiRoot;
+          if (openFilesDirectly && onOpenFile !== undefined) {
+            activeFileChangeRef.current?.(entry.path, fileRoot);
+            onOpenFile(fileRoot, entry.path);
+            return;
+          }
           setSelectedPath(entry.path);
-          activeFileChangeRef.current?.(entry.path, resolvedRoot ?? apiRoot);
+          activeFileChangeRef.current?.(entry.path, fileRoot);
         }}
         title={entry.readable ? entry.path : unreadableTitle}
       >

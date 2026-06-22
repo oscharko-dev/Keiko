@@ -167,7 +167,9 @@ export function useRelationshipActivityStream(
 ): RelationshipActivityStreamState {
   // Mutable ref map for last-seen timestamp per id (for MIN_STATE_INTERVAL_MS debounce).
   const lastUpdateRef = useRef<Map<string, number>>(new Map());
-  const visibleRef = useRef<boolean>(typeof document === "undefined" || document.visibilityState === "visible");
+  const visibleRef = useRef<boolean>(
+    typeof document === "undefined" || document.visibilityState === "visible",
+  );
 
   // React state: activity map (id → state) and throughput counts.
   const [activityMap, setActivityMap] = useState<ReadonlyMap<string, RelationshipActivityState>>(

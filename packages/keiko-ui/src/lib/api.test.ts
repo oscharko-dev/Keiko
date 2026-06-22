@@ -11,9 +11,16 @@ import {
   fetchFilesTree,
   fetchModels,
   fetchProjects,
+  requestEditorCompletion,
+  requestEditorDiagnostics,
+  requestEditorFormatting,
+  requestEditorHover,
+  requestEditorSymbols,
   saveFilesContent,
+  sendDesktopChatStream,
   startGroundedWorkflowHandoff,
   fetchWorkspaceSummary,
+  type StreamHandlers,
 } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -22,6 +29,214 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("requestEditorCompletion (Issue #1199)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts the overlay + cursor to the completion route with the CSRF header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: "1",
+        items: [{ label: "alpha", kind: "field", insertText: "alpha", origin: "deterministic" }],
+        isIncomplete: false,
+        truncated: false,
+        provenance: { sources: ["deterministic-language-service"], modelMode: "deterministic" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await requestEditorCompletion({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "const value = {};\nvalue.\n",
+      position: { line: 1, character: 6 },
+      triggerKind: "trigger-character",
+      triggerCharacter: ".",
+      contextBudgetBytes: 4_096,
+    });
+
+    expect(response.items[0]?.label).toBe("alpha");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/completion",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          schemaVersion: "1",
+          root: "/repo",
+          document: {
+            path: "src/a.ts",
+            languageId: "typescript",
+            text: "const value = {};\nvalue.\n",
+          },
+          position: { line: 1, character: 6 },
+          triggerKind: "trigger-character",
+          triggerCharacter: ".",
+          contextBudgetBytes: 4_096,
+        }),
+      }),
+    );
+  });
+
+  it("forwards an abort signal for superseded-request cancellation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: "1",
+        items: [],
+        isIncomplete: false,
+        truncated: false,
+        provenance: { sources: ["deterministic-language-service"], modelMode: "deterministic" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await requestEditorCompletion(
+      {
+        root: "/repo",
+        path: "src/a.ts",
+        languageId: "typescript",
+        text: "x",
+        position: { line: 0, character: 1 },
+        triggerKind: "invoked",
+        contextBudgetBytes: 1_024,
+      },
+      controller.signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/completion",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+});
+
+describe("language-intelligence helpers (Issue #1201)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requestEditorDiagnostics posts a diagnostics operation and unwraps the result", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        operation: "diagnostics",
+        result: {
+          diagnostics: [{ range: {}, severity: "error", message: "x", source: "typescript" }],
+          truncated: false,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await requestEditorDiagnostics({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "const x: number = 'no';\n",
+    });
+
+    expect(result.diagnostics).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          operation: "diagnostics",
+          root: "/repo",
+          document: {
+            path: "src/a.ts",
+            languageId: "typescript",
+            text: "const x: number = 'no';\n",
+          },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorHover posts a hover operation with the cursor position", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ operation: "hover", result: { contents: "x: number" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await requestEditorHover({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "const x = 1;\n",
+      position: { line: 0, character: 6 },
+    });
+
+    expect(result.contents).toBe("x: number");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "hover",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "const x = 1;\n" },
+          position: { line: 0, character: 6 },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorSymbols posts a symbols operation and forwards the abort signal", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ operation: "symbols", result: { symbols: [], truncated: false } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await requestEditorSymbols(
+      { root: "/repo", path: "src/a.ts", languageId: "typescript", text: "export const a = 1;\n" },
+      controller.signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
+  it("requestEditorFormatting posts a formatting operation with indentation options", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ operation: "formatting", result: { edits: [], truncated: false } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorFormatting({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "const x   =   1;\n",
+      options: { tabSize: 2, insertSpaces: true },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "formatting",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "const x   =   1;\n" },
+          options: { tabSize: 2, insertSpaces: true },
+        }),
+      }),
+    );
+  });
+});
 
 describe("fetchWorkspaceSummary", () => {
   afterEach(() => {
@@ -106,6 +321,10 @@ describe("files API helpers", () => {
           symlink: false,
           content: "const x = 1;\n",
           maxBytes: 1_000_000,
+          session: {
+            schemaVersion: "1",
+            version: { sizeBytes: 10, modifiedAt: 1, contentHash: "a".repeat(64) },
+          },
         }),
       )
       .mockResolvedValueOnce(
@@ -120,6 +339,10 @@ describe("files API helpers", () => {
           symlink: false,
           content: "const x = 2;\n",
           maxBytes: 1_000_000,
+          session: {
+            schemaVersion: "1",
+            version: { sizeBytes: 10, modifiedAt: 2, contentHash: "b".repeat(64) },
+          },
         }),
       );
     vi.stubGlobal("fetch", fetchMock);
@@ -178,6 +401,50 @@ describe("files API helpers", () => {
           path: "src/app.ts",
           content: "const x = 2;\n",
           expectedModifiedAt: 1,
+        }),
+      }),
+    );
+  });
+
+  it("serializes the version-aware baseVersion token on save (Issue #1197)", async () => {
+    const baseVersion = { sizeBytes: 12, modifiedAt: 7, contentHash: "a".repeat(64) };
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        root: "/repo",
+        path: "src/app.ts",
+        name: "app.ts",
+        sizeBytes: 13,
+        modifiedAt: 9,
+        extension: "ts",
+        mime: "text/plain",
+        symlink: false,
+        content: "const x = 3;\n",
+        maxBytes: 1_000_000,
+        session: {
+          schemaVersion: "1",
+          version: { sizeBytes: 13, modifiedAt: 9, contentHash: "b".repeat(64) },
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const saved = await saveFilesContent({
+      root: "/repo",
+      path: "src/app.ts",
+      content: "const x = 3;\n",
+      baseVersion,
+    });
+
+    expect(saved.session.version.contentHash).toBe("b".repeat(64));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/content",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          root: "/repo",
+          path: "src/app.ts",
+          content: "const x = 3;\n",
+          baseVersion,
         }),
       }),
     );
@@ -384,6 +651,93 @@ describe("askGrounded", () => {
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// consumeSseStream — residual lineBuffer flush (Issue #3 / WP-API)
+// ---------------------------------------------------------------------------
+
+function makeSseStream(chunks: readonly string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let idx = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller): void {
+      if (idx < chunks.length) {
+        controller.enqueue(encoder.encode(chunks[idx++]));
+      } else {
+        controller.close();
+      }
+    },
+  });
+}
+
+function makeStreamHandlers(overrides: Partial<StreamHandlers> = {}): StreamHandlers {
+  return {
+    onToken: vi.fn(),
+    onDone: vi.fn(),
+    onError: vi.fn(),
+    onCancelled: vi.fn(),
+    ...overrides,
+  };
+}
+
+function makeSseResponse(stream: ReadableStream<Uint8Array>): Response {
+  return new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
+describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // ITEM #3: a 'done' frame whose final data line arrives WITHOUT a trailing \n
+  // must still dispatch onDone. Against the pre-fix code this test is RED
+  // because the residual lineBuffer is never flushed when read.done fires.
+  it("dispatches onDone when the final done frame has no trailing newline", async () => {
+    const donePayload = { chat: { id: "c1" }, messages: [] };
+    // Normal SSE: two chunks. First carries the event line + data line.
+    // Second chunk is the data payload with NO trailing \n\n — simulating a
+    // proxy that drops the terminal blank line.
+    const stream = makeSseStream([
+      "event: done\n",
+      `data: ${JSON.stringify(donePayload)}`, // intentionally no trailing \n
+    ]);
+
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+
+    await sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+
+    expect(handlers.onDone).toHaveBeenCalledTimes(1);
+    expect(handlers.onDone).toHaveBeenCalledWith(expect.objectContaining({ chat: { id: "c1" } }));
+    expect(handlers.onToken).not.toHaveBeenCalled();
+    expect(handlers.onError).not.toHaveBeenCalled();
+  });
+
+  // Regression: normal \n\n-terminated streams must still work correctly.
+  it("dispatches onDone for a normally newline-terminated done frame", async () => {
+    const donePayload = { chat: { id: "c2" }, messages: [] };
+    const stream = makeSseStream([`event: done\ndata: ${JSON.stringify(donePayload)}\n\n`]);
+
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+
+    await sendDesktopChatStream(
+      { chatId: "c2", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+
+    expect(handlers.onDone).toHaveBeenCalledTimes(1);
+    expect(handlers.onError).not.toHaveBeenCalled();
   });
 });
 

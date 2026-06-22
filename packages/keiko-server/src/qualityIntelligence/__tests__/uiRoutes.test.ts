@@ -124,10 +124,15 @@ describe("handleListQiRuns", () => {
 
     const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), deps()));
     expect(result.status).toBe(200);
-    const body = result.body as { runs: readonly { id: string; status: string }[] };
+    const body = result.body as {
+      runs: readonly { id: string; status: string; reviewState: string }[];
+    };
     expect(body.runs).toHaveLength(2);
     expect(body.runs.map((r) => r.id)).toEqual(["run-a", "run-b"]);
     expect(body.runs[0]?.status).toBe("succeeded");
+    // FIX A11y-2 (Issue #282): every list item carries a review state; "open" until a reviewer acts.
+    expect(body.runs[0]?.reviewState).toBe("open");
+    expect(body.runs[1]?.reviewState).toBe("open");
   });
 
   it("returns an empty list when the store reports no runs", () => {
@@ -318,6 +323,27 @@ describe("handleGetQiRun", () => {
     expect(row2?.requirementExcerptRedacted).toBeUndefined();
   });
 
+  it("degrades a legacy run with no coverageMatrix to an empty coverageByAtom and 0% (Epic #734 D1)", () => {
+    // A run recorded before #738 has no coverageMatrix field. projectCoverageByAtom must early-return
+    // an empty array and computeCoveragePercentage must report 0 (not NaN / throw), so the run card
+    // degrades gracefully. The manifest() fixture deliberately omits coverageMatrix.
+    loadMock.mockReturnValue(manifest("run-legacy"));
+
+    const result = asResult(
+      handleGetQiRun(
+        ctx("/api/quality-intelligence/runs/run-legacy", { id: "run-legacy" }),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      coverageByAtom: readonly unknown[];
+      coveragePercentage: number;
+    };
+    expect(body.coverageByAtom).toEqual([]);
+    expect(body.coveragePercentage).toBe(0);
+  });
+
   it("projects drift metadata without exposing raw source fingerprints", () => {
     const withDrift = {
       ...(manifest("run-drift") as Record<string, unknown>),
@@ -370,6 +396,63 @@ describe("handleGetQiRun", () => {
     });
     expect(JSON.stringify(result.body)).not.toContain("a".repeat(64));
     expect(JSON.stringify(result.body)).not.toContain("b".repeat(64));
+  });
+
+  it("caps oversized candidate text in the browser projection and marks truncated fields", () => {
+    const huge = "x".repeat(5_000);
+    loadMock.mockReturnValue(manifest("run-large-candidate"));
+    loadCandidatesMock.mockReturnValue({
+      candidates: [
+        {
+          id: "cand-large-001",
+          title: huge,
+          preconditions: [huge],
+          steps: [huge],
+          expectedResults: [huge],
+          priority: "P1",
+          riskClass: "functional",
+          tags: [huge],
+          status: "proposed",
+          derivedFromAtomIds: ["atom-1"],
+        },
+      ],
+      editedRevisions: [],
+    });
+
+    const result = asResult(
+      handleGetQiRun(
+        ctx("/api/quality-intelligence/runs/run-large-candidate", {
+          id: "run-large-candidate",
+        }),
+        depsWithEvidenceDir("/tmp/qi-evidence"),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    interface LargeCandidateProjection {
+      readonly title: string;
+      readonly preconditions: readonly string[];
+      readonly steps: readonly string[];
+      readonly expectedResults: readonly string[];
+      readonly tags: readonly string[];
+      readonly truncatedFields?: readonly string[];
+    }
+    const body = result.body as { readonly candidates: readonly LargeCandidateProjection[] };
+    const candidate = body.candidates[0];
+    if (candidate === undefined) throw new Error("expected one projected candidate");
+    expect(JSON.stringify(result.body)).not.toContain(huge);
+    expect(candidate.title.length).toBeLessThan(huge.length);
+    expect(candidate.preconditions[0]?.length).toBeLessThan(huge.length);
+    expect(candidate.steps[0]?.length).toBeLessThan(huge.length);
+    expect(candidate.expectedResults[0]?.length).toBeLessThan(huge.length);
+    expect(candidate.tags[0]?.length).toBeLessThan(huge.length);
+    expect(candidate.truncatedFields).toEqual([
+      "title",
+      "preconditions",
+      "steps",
+      "expectedResults",
+      "tags",
+    ]);
   });
 
   it("returns 400 BAD_REQUEST for an empty id", () => {
@@ -475,6 +558,78 @@ describe("evidenceDir wiring (issue #620)", () => {
     expect(body.totalRunIds).toBe(0);
   });
 
+  it("handleListQiRuns reflects a run-level approval in the list item's reviewState (FIX A11y-2)", async () => {
+    const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
+    actualRecord(
+      {
+        runId: "run-approved",
+        planAt: "2026-06-01T10:00:00.000Z",
+        completedAt: "2026-06-01T10:01:00.000Z",
+        status: "succeeded",
+        policyProfileIds: [],
+        retentionPolicyId: "default",
+        modelGatewayCallCount: 1,
+        totals: { candidates: 0, findings: 0, exports: 0 },
+        findings: [],
+        exports: [],
+        evidenceRefs: [],
+        provenanceRefs: {
+          envelopeIds: [],
+          auditSummaryId: "qi-audit-test" as Parameters<
+            typeof actualRecord
+          >[0]["provenanceRefs"]["auditSummaryId"],
+        },
+      },
+      { evidenceDir },
+    );
+    const { applyReviewDecision } = await import("../reviewStore.js");
+    applyReviewDecision({
+      runId: "run-approved",
+      evidenceDir,
+      action: "approve",
+      scope: "run",
+      reviewerLabel: "tester",
+      now: "2026-06-01T11:00:00.000Z",
+      redact: (v: unknown): unknown => v,
+    });
+
+    const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), depsWithDir));
+    expect(result.status).toBe(200);
+    const body = result.body as { runs: readonly { id: string; reviewState: string }[] };
+    const item = body.runs.find((r) => r.id === "run-approved");
+    expect(item?.reviewState).toBe("approved");
+  });
+
+  it("handleListQiRuns defaults reviewState to 'open' for a run without a review companion", () => {
+    const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
+    actualRecord(
+      {
+        runId: "run-unreviewed",
+        planAt: "2026-06-01T10:00:00.000Z",
+        completedAt: "2026-06-01T10:01:00.000Z",
+        status: "succeeded",
+        policyProfileIds: [],
+        retentionPolicyId: "default",
+        modelGatewayCallCount: 1,
+        totals: { candidates: 0, findings: 0, exports: 0 },
+        findings: [],
+        exports: [],
+        evidenceRefs: [],
+        provenanceRefs: {
+          envelopeIds: [],
+          auditSummaryId: "qi-audit-test" as Parameters<
+            typeof actualRecord
+          >[0]["provenanceRefs"]["auditSummaryId"],
+        },
+      },
+      { evidenceDir },
+    );
+    const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), depsWithDir));
+    expect(result.status).toBe(200);
+    const body = result.body as { runs: readonly { id: string; reviewState: string }[] };
+    expect(body.runs.find((r) => r.id === "run-unreviewed")?.reviewState).toBe("open");
+  });
+
   it("handleGetQiRun returns 404 NOT_FOUND (not 500 INTERNAL) for an unknown id when evidenceDir is wired", () => {
     const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
 
@@ -571,9 +726,20 @@ describe("evidenceDir wiring (issue #620)", () => {
     });
   });
 
-  it("projects persisted weak-test rationale onto the candidate weakTestFlag", () => {
+  it("projects persisted weak-test rationale and candidate quality verdict onto the candidate", () => {
     const runId = "run-weak-flag";
     const candidateId = "cand-weak-001";
+    const qualityVerdict = {
+      verdict: "weak" as const,
+      score: 17.5,
+      dimensions: [
+        { name: "verifiability" as const, score: 20, rationale: "Expected result is measurable." },
+        { name: "atomicity" as const, score: 20, rationale: "Flow is narrow enough." },
+        { name: "determinism" as const, score: 20, rationale: "Relies on timing." },
+        { name: "ac-fidelity" as const, score: 10, rationale: "Misses the acceptance criteria." },
+      ],
+      overallRationale: "weak because it misses the originating AC",
+    };
     actualRecord(
       {
         runId,
@@ -625,6 +791,30 @@ describe("evidenceDir wiring (issue #620)", () => {
       evidenceDir,
       redact: (value: unknown): unknown => value,
     });
+    writeFileSync(
+      join(evidenceDir, "qi", `${runId}.candidates.json`),
+      JSON.stringify({
+        qiCandidatesSchemaVersion: 1,
+        runId,
+        generatedAt: "2026-06-09T10:01:00.000Z",
+        candidates: [
+          {
+            id: candidateId,
+            title: "Weak candidate",
+            preconditions: ["ready"],
+            steps: ["open help"],
+            expectedResults: ["help center opens"],
+            priority: "P1",
+            riskClass: "functional",
+            tags: [],
+            status: "proposed",
+            derivedFromAtomIds: [],
+            qualityVerdict,
+          },
+        ],
+      }),
+      "utf8",
+    );
 
     const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
     const result = asResult(
@@ -637,6 +827,12 @@ describe("evidenceDir wiring (issue #620)", () => {
       candidates: readonly {
         id: string;
         weakTestFlag?: { severity: string; rationale: string };
+        qualityVerdict?: {
+          verdict: string;
+          score: number;
+          dimensions: readonly { name: string; score: number; rationale: string }[];
+          overallRationale: string;
+        };
       }[];
     };
     expect(body.findingRefs).toEqual([
@@ -646,15 +842,22 @@ describe("evidenceDir wiring (issue #620)", () => {
           "AC fidelity: Misses the stated acceptance criteria.; Determinism: Relies on timing-sensitive behavior.",
       }),
     ]);
-    expect(body.candidates).toEqual([
-      expect.objectContaining({
-        id: candidateId,
-        weakTestFlag: {
-          severity: "high",
-          rationale:
-            "AC fidelity: Misses the stated acceptance criteria.; Determinism: Relies on timing-sensitive behavior.",
-        },
-      }),
-    ]);
+    const candidate = body.candidates[0];
+    expect(candidate?.id).toBe(candidateId);
+    expect(candidate?.weakTestFlag).toEqual({
+      severity: "high",
+      rationale:
+        "AC fidelity: Misses the stated acceptance criteria.; Determinism: Relies on timing-sensitive behavior.",
+    });
+    expect(candidate?.qualityVerdict).toMatchObject({
+      verdict: "weak",
+      score: 17.5,
+      overallRationale: "weak because it misses the originating AC",
+    });
+    expect(candidate?.qualityVerdict?.dimensions).toEqual(
+      expect.arrayContaining([
+        { name: "ac-fidelity", score: 10, rationale: "Misses the acceptance criteria." },
+      ]),
+    );
   });
 });

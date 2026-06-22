@@ -139,4 +139,16 @@ describe("QI Conversation Center handoff run-start (#281)", () => {
     );
     expect(result.status).toBe(404);
   });
+
+  it("413s with a payload-too-large code for an oversized body", async () => {
+    const oversized = "x".repeat(70 * 1024);
+    const result = await handleQiHandoff(
+      ctx(makeReq({ ...handoffBody("design-tests"), id: oversized })),
+      deps(evidenceDir, folder),
+    );
+    expect(result.status).toBe(413);
+    expect((result.body as { error: { code: string } }).error.code).toBe(
+      "QI_HANDOFF_PAYLOAD_TOO_LARGE",
+    );
+  });
 });

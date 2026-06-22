@@ -112,22 +112,31 @@ function InputField({
   label,
   value,
   disabled = false,
+  required = false,
   onChange,
 }: {
   readonly id: string;
   readonly label: string;
   readonly value: string;
   readonly disabled?: boolean;
+  readonly required?: boolean;
   readonly onChange: (next: string) => void;
 }): ReactNode {
   return (
     <label className="qi-edit-field" htmlFor={id}>
-      <span className="qi-edit-label">{label}</span>
+      {/* QI-01: the required marker is a CSS ::after glyph (see .qi-edit-label[data-required]),
+          so the label's accessible name stays exactly the field name — screen readers convey
+          "required" via aria-required, not by reading "star" (WCAG 3.3.2). */}
+      <span className="qi-edit-label" data-required={required ? "true" : undefined}>
+        {label}
+      </span>
       <input
         id={id}
         className="qi-edit-input"
         value={value}
         disabled={disabled}
+        required={required}
+        aria-required={required ? "true" : undefined}
         onChange={(e) => {
           onChange(e.target.value);
         }}
@@ -284,15 +293,13 @@ export function CandidateEditForm({
         void handleSubmit();
       }}
     >
-      <InputField
-        id={`${id}-title`}
-        label="Title"
-        value={state.title}
-        disabled={saving}
-        onChange={(v) => {
-          set("title", v);
-        }}
-      />
+      <div className="qi-edit-head">
+        <div className="qi-edit-head-copy">
+          <p className="qi-edit-eyebrow">Edit test case</p>
+          <h3 className="qi-edit-heading">{candidate.title}</h3>
+        </div>
+        <EditActions onCancel={requestCancel} saving={saving} />
+      </div>
       {saveError !== null ? (
         <p className="qi-edit-error" role="alert" aria-live="assertive">
           {saveError}
@@ -306,63 +313,78 @@ export function CandidateEditForm({
           ? "Unsaved changes — press Escape or activate Cancel again to discard them."
           : ""}
       </p>
-      <EditActions onCancel={requestCancel} saving={saving} />
-      <TextAreaField
-        id={`${id}-preconditions`}
-        label="Preconditions (one per line)"
-        value={state.preconditions}
-        disabled={saving}
-        onChange={(v) => {
-          set("preconditions", v);
-        }}
-      />
-      <TextAreaField
-        id={`${id}-steps`}
-        label="Steps (one per line)"
-        value={state.steps}
-        disabled={saving}
-        onChange={(v) => {
-          set("steps", v);
-        }}
-      />
-      <TextAreaField
-        id={`${id}-expected`}
-        label="Expected results (one per line)"
-        value={state.expectedResults}
-        disabled={saving}
-        onChange={(v) => {
-          set("expectedResults", v);
-        }}
-      />
-      <SelectField
-        id={`${id}-priority`}
-        label="Priority"
-        value={state.priority}
-        options={QUALITY_INTELLIGENCE_PRIORITIES}
-        disabled={saving}
-        onChange={(v) => {
-          set("priority", v);
-        }}
-      />
-      <SelectField
-        id={`${id}-risk`}
-        label="Risk class"
-        value={state.riskClass}
-        options={QUALITY_INTELLIGENCE_RISK_CLASSES}
-        disabled={saving}
-        onChange={(v) => {
-          set("riskClass", v);
-        }}
-      />
-      <InputField
-        id={`${id}-tags`}
-        label="Tags (comma-separated)"
-        value={state.tags}
-        disabled={saving}
-        onChange={(v) => {
-          set("tags", v);
-        }}
-      />
+      <div className="qi-edit-layout">
+        <div className="qi-edit-main">
+          <InputField
+            id={`${id}-title`}
+            label="Title"
+            value={state.title}
+            disabled={saving}
+            required
+            onChange={(v) => {
+              set("title", v);
+            }}
+          />
+          <TextAreaField
+            id={`${id}-preconditions`}
+            label="Preconditions (one per line)"
+            value={state.preconditions}
+            disabled={saving}
+            onChange={(v) => {
+              set("preconditions", v);
+            }}
+          />
+          <TextAreaField
+            id={`${id}-steps`}
+            label="Steps (one per line)"
+            value={state.steps}
+            disabled={saving}
+            onChange={(v) => {
+              set("steps", v);
+            }}
+          />
+          <TextAreaField
+            id={`${id}-expected`}
+            label="Expected results (one per line)"
+            value={state.expectedResults}
+            disabled={saving}
+            onChange={(v) => {
+              set("expectedResults", v);
+            }}
+          />
+        </div>
+        <div className="qi-edit-side">
+          <SelectField
+            id={`${id}-priority`}
+            label="Priority"
+            value={state.priority}
+            options={QUALITY_INTELLIGENCE_PRIORITIES}
+            disabled={saving}
+            onChange={(v) => {
+              set("priority", v);
+            }}
+          />
+          <SelectField
+            id={`${id}-risk`}
+            label="Risk class"
+            value={state.riskClass}
+            options={QUALITY_INTELLIGENCE_RISK_CLASSES}
+            disabled={saving}
+            onChange={(v) => {
+              set("riskClass", v);
+            }}
+          />
+          <InputField
+            id={`${id}-tags`}
+            label="Tags (comma-separated)"
+            value={state.tags}
+            disabled={saving}
+            onChange={(v) => {
+              set("tags", v);
+            }}
+          />
+        </div>
+      </div>
     </form>
   );
 }

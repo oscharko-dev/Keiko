@@ -21,6 +21,9 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryScope,
+  MemorySensitivity,
+  MemorySourceKind,
+  MemoryStatus,
   MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 
@@ -62,6 +65,17 @@ export interface RankingWeights {
   // ranker zeroes this weight in that case so the denominator (and therefore every score) is
   // byte-identical to the pre-semantic lexical behaviour.
   readonly semantic: number;
+  // Reinforcement strength derived from access frequency + recency-of-use (#204 plasticity).
+  // Closes the reinforcement loop online: a frequently-recalled memory ranks above a never-touched
+  // one. The subscore is 0 for every memory when no per-memory strength scores are supplied, AND the
+  // ranker zeroes this weight in that case so the score is byte-identical to the pre-strength
+  // behaviour. See strength.ts for the cognitive (ACT-R base-level) basis.
+  readonly strength: number;
+  // Frozen source-authority importance in [0,1] (#204, O-F5): an explicit user instruction outranks a
+  // passively-inferred system default at equal relevance. Derived deterministically from
+  // provenance.sourceKind (immutable since capture), so it needs no caller input and stays
+  // reproducible. Default weight is 0 (opt-in) so it never perturbs legacy ranking until configured.
+  readonly importance: number;
 }
 
 // Defaults are documented at the request-type boundary; this table is the single source of
@@ -75,12 +89,25 @@ export const DEFAULT_RANKING_WEIGHTS: RankingWeights = Object.freeze({
   correction: 0.1,
   graph: 0.15,
   semantic: 0.25,
+  // Reinforcement weight (#204). Sits between recency and semantic: reuse is a strong signal but must
+  // not override an explicit pin or a fresh correction. Only participates when the caller supplies
+  // per-memory strength scores; otherwise the ranker forces it to 0 (byte-identical legacy behaviour).
+  strength: 0.2,
+  // Source-authority importance weight (#204, O-F5). Default 0 (opt-in): always computed but inert
+  // until an operator sets a non-zero weight, so legacy ranking is byte-identical.
+  importance: 0,
 });
 
 export const DEFAULT_BUDGET_TOKENS = 1500;
 export const DEFAULT_MAX_INCLUDED = 12;
 export const DEFAULT_STALE_CONFIDENCE_THRESHOLD = 0.3;
 export const DEFAULT_LIST_BY_SCOPE_MAX_RESULTS = 500;
+
+// Signal-fusion strategy (#204, O-F2). "weighted-sum" (default) blends normalized subscores by
+// weight. "rrf" (Reciprocal Rank Fusion) fuses by RANK — score = Σ w/(k+rank) — needing no score
+// normalization and rewarding candidates multiple signals agree on; the documented fix for blending
+// heterogeneous-scale signals (lexical Jaccard vs cosine).
+export type RankingFusionMode = "weighted-sum" | "rrf";
 
 // ─── Request ──────────────────────────────────────────────────────────────────
 export interface MemoryRetrievalRequest {
@@ -98,11 +125,30 @@ export interface MemoryRetrievalRequest {
   readonly relevanceWeight?: number;
   readonly semanticWeight?: number;
   readonly staleConfidenceThreshold?: number;
+  /** Audit/debug opt-in. Active context retrieval suppresses superseded memories by default. */
+  readonly includeSuperseded?: boolean;
   // Per-memory cosine similarity (in [0,1]) of the query embedding to each candidate's stored
   // embedding, keyed by memory id (#204). Computed by the caller (which owns the embedding
   // gateway and the vault's stored vectors); the retrieval layer stays pure and IO-free. When
   // undefined or empty, the ranker falls back to byte-identical lexical behaviour.
   readonly semanticById?: ReadonlyMap<MemoryId, number>;
+  // Per-memory reinforcement strength (in [0,1]) derived from access frequency + recency-of-use,
+  // keyed by memory id (#204 plasticity). Computed by the caller from the vault's access counters
+  // via reinforcementStrength(); the retrieval layer stays pure and IO-free. When undefined, the
+  // ranker zeroes the strength weight so output is byte-identical to the pre-strength behaviour.
+  readonly strengthById?: ReadonlyMap<MemoryId, number>;
+  readonly strengthWeight?: number;
+  // Source-authority importance weight (#204, O-F5). Defaults to 0 (the signal is computed from
+  // provenance but inert) so legacy ranking is unchanged unless the caller opts in.
+  readonly importanceWeight?: number;
+  // Per-memory embedding vectors for MMR diversity re-ordering at selection time (#204, O-F3). When
+  // absent, selection stays the pure greedy-by-rank behaviour (byte-identical). mmrLambda balances
+  // relevance vs novelty (1 = pure relevance / inert, lower = more diverse); defaults to 0.7.
+  readonly embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
+  readonly mmrLambda?: number;
+  // Signal-fusion strategy (#204, O-F2). Defaults to "weighted-sum" (byte-identical legacy ranking);
+  // "rrf" opts into rank-based Reciprocal Rank Fusion.
+  readonly fusion?: RankingFusionMode;
 }
 
 // ─── Result + included/omitted ───────────────────────────────────────────────
@@ -110,6 +156,12 @@ export interface MemoryContextBlockEntry {
   readonly memoryId: MemoryId;
   readonly bodyExcerpt: string;
   readonly inclusionReason: string;
+  readonly sourceKind: MemorySourceKind;
+  readonly captureRationale?: string | undefined;
+  readonly sensitivity: MemorySensitivity;
+  readonly confidence: number;
+  readonly status: MemoryStatus;
+  readonly capturedAt: number;
 }
 
 export interface MemoryContextBlock {
@@ -129,6 +181,12 @@ export interface IncludedSubscores {
   // Cosine similarity in [0,1] of the query embedding to this memory's stored embedding (#204).
   // 0 when no semantic scores were supplied for this memory.
   readonly semantic: number;
+  // Reinforcement strength in [0,1] from access frequency + recency-of-use (#204 plasticity).
+  // 0 when no strength scores were supplied for this memory (the never-reused default).
+  readonly strength: number;
+  // Source-authority importance in [0,1] derived from provenance.sourceKind (#204, O-F5). Always
+  // computed; contributes to the score only when the importance weight is opted in.
+  readonly importance: number;
 }
 
 export interface IncludedMemory {

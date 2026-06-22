@@ -24,7 +24,10 @@ const FORBIDDEN_PHRASES = [
 describe("dependency-cruiser final topology", () => {
   it("contains no migration-era phrases in the architecture gate source", () => {
     for (const phrase of FORBIDDEN_PHRASES) {
-      expect(configSource.includes(phrase), `unexpected phrase in .dependency-cruiser.cjs: ${phrase}`).toBe(false);
+      expect(
+        configSource.includes(phrase),
+        `unexpected phrase in .dependency-cruiser.cjs: ${phrase}`,
+      ).toBe(false);
     }
   });
 

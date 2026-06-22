@@ -15,6 +15,7 @@ import type {
   CommandRunInput,
   ExecutableResolver,
   ExecutableResolverDeps,
+  FilesystemPolicy,
   HomeProvider,
   HunkConflict,
   NetworkPolicy,
@@ -94,6 +95,7 @@ describe("keiko-tools public surface", () => {
     expect(typeof tools.runCommand).toBe("function");
     // Patch:
     expect(typeof tools.applyPatch).toBe("function");
+    expect(typeof tools.buildRestorePatch).toBe("function");
     expect(typeof tools.renderDryRun).toBe("function");
     expect(typeof tools.validatePatch).toBe("function");
     expect(typeof tools.normalizeUnifiedDiffHunks).toBe("function");
@@ -132,6 +134,7 @@ describe("keiko-tools public surface", () => {
     pin<CommandRunInput>();
     pin<ExecutableResolver>();
     pin<ExecutableResolverDeps>();
+    pin<FilesystemPolicy>();
     pin<HomeProvider>();
     pin<HunkConflict>();
     pin<NetworkPolicy>();

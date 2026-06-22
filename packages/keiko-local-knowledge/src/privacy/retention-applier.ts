@@ -49,7 +49,10 @@ function cutoffFor(now: number, days: number): number {
   return now - days * DAY_MS;
 }
 
-function parseRetentionDays(field: keyof CapsuleRetentionPolicy, value: unknown): number | undefined {
+function parseRetentionDays(
+  field: keyof CapsuleRetentionPolicy,
+  value: unknown,
+): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     throw new KnowledgeStoreError(`${field} must be a finite non-negative number when set`);

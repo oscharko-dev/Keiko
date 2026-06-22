@@ -53,4 +53,43 @@ describe("mergeVisionHints", () => {
     // Even a hint that mimics a baseline line is appended below, leaving the baseline intact.
     expect(result.text.startsWith(BASELINE)).toBe(true);
   });
+
+  // ─── MAX_HINT_CHARS boundary (mutation-robustness, Issue #754) ────────────────────────────────
+  //
+  // The existing tests feed 10 000-char hints, which kill the guard trivially (any threshold < 10 000
+  // passes or fails together). These three cases pin the EXACT boundary so the mutation `>` → `>=`
+  // or `>=` → `>` on the sanitiseHints length guard is caught immediately.
+
+  it("keeps a hint of exactly MAX_HINT_CHARS (500) chars — pins the > boundary", () => {
+    // A 500-char hint is at the limit and MUST be kept. If `>` were mutated to `>=`, this hint
+    // would be dropped and augmentedCount would be 0, making both assertions fail.
+    const atLimit = "a".repeat(500);
+
+    const result = mergeVisionHints(BASELINE, [atLimit]);
+
+    expect(result.augmentedCount).toBe(1);
+    expect(result.text).toContain(atLimit);
+  });
+
+  it("drops a hint of exactly MAX_HINT_CHARS + 1 (501) chars — pins the strict > threshold", () => {
+    // A 501-char hint is one over the limit and MUST be dropped. If `>` were mutated to `<`,
+    // this hint would be kept and the baseline would no longer equal the result.
+    const overLimit = "a".repeat(501);
+
+    const result = mergeVisionHints(BASELINE, [overLimit]);
+
+    expect(result.augmentedCount).toBe(0);
+    expect(result.text).toBe(BASELINE);
+  });
+
+  it("caps output at exactly MAX_HINTS (24) items when 25 distinct valid hints are supplied", () => {
+    // 25 unique short hints saturate the dedup/cap loop. If the `>= MAX_HINTS` guard were mutated
+    // to `>`, 25 hints would pass (the break fires one iteration late) and augmentedCount would be
+    // 25, not 24. If it were mutated to `> MAX_HINTS`, all 25 would pass and the cap is lost.
+    const distinctHints = Array.from({ length: 25 }, (_, i) => `distinct hint ${String(i + 1)}`);
+
+    const result = mergeVisionHints(BASELINE, distinctHints);
+
+    expect(result.augmentedCount).toBe(24);
+  });
 });

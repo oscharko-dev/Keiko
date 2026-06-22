@@ -12,6 +12,30 @@
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 
 type QualityIntelligenceExportAdapter = QualityIntelligence.QualityIntelligenceExportAdapter;
+
+/**
+ * Binary export modes assembled at the runtime/route level (Issue #283 + #711) rather than by a pure
+ * domain adapter — a paginated text PDF and a STORE ZIP bundle. They are not part of the contract
+ * `QualityIntelligenceExportAdapter` union (which drives the serialise dispatch + TMS classification),
+ * but an export-evidence row must be able to record them faithfully as the produced target type.
+ */
+export type QualityIntelligenceBinaryExportMode = "pdf" | "zip-bundle";
+
+/**
+ * Traceability matrix export modes produced by the dedicated traceability route (Epic #734,
+ * Issue #740). Like binary modes, these are assembled at the route level — the matrix serializers
+ * are separate from the candidate-export adapters — so they extend the evidence target union here
+ * rather than the contract `QualityIntelligenceExportAdapter`.
+ */
+export type QualityIntelligenceTraceabilityExportMode =
+  | "traceability-csv"
+  | "traceability-markdown";
+
+/** Any target an export-evidence row may record: a domain adapter, a binary bundle mode, or a traceability matrix mode. */
+export type QualityIntelligenceExportTarget =
+  | QualityIntelligenceExportAdapter
+  | QualityIntelligenceBinaryExportMode
+  | QualityIntelligenceTraceabilityExportMode;
 type QualityIntelligenceLifecycleStatus = QualityIntelligence.QualityIntelligenceLifecycleStatus;
 type QualityIntelligenceRunId = QualityIntelligence.QualityIntelligenceRunId;
 type QualityIntelligenceValidationFindingKind =
@@ -85,9 +109,17 @@ export interface QualityIntelligenceFindingRow {
 
 export interface QualityIntelligenceExportRow {
   readonly id: string;
-  readonly targetAdapter: QualityIntelligenceExportAdapter;
+  readonly targetAdapter: QualityIntelligenceExportTarget;
   readonly integrityHash: string;
   readonly redactionAttested: boolean;
+  /**
+   * Whether this row records a dry-run preview rather than a materialised export (Issue #283, AC4).
+   * Absent/`false` means the export produced a downloadable artifact (local serialisation or a
+   * binary PDF/ZIP bundle); `true` means only a preview was rendered. Additive and optional:
+   * manifests written before #283 carry no export rows at all, and the strict-schema gate validates
+   * only top-level keys, so no schema-version bump is required.
+   */
+  readonly dryRun?: boolean;
 }
 
 export interface QualityIntelligenceEvidenceRefRow {
@@ -107,6 +139,13 @@ export interface QualityIntelligenceAtomFingerprintRow {
   readonly atomId: string;
   readonly envelopeId: string;
   readonly canonicalHashSha256Hex: string;
+  /**
+   * Optional opaque key for finding the current replacement atom during targeted regeneration. This is
+   * a hash-derived metadata key, not raw source text or a local filesystem path.
+   */
+  readonly replacementGroupId?: string;
+  /** Stable ordinal within replacementGroupId for same-document requirement replacements. */
+  readonly replacementOrdinal?: number;
 }
 
 export interface QualityIntelligenceProvenanceRefs {
@@ -141,7 +180,7 @@ export interface QualityIntelligenceEvidenceManifest {
   readonly integrityHashes: QualityIntelligenceIntegrityHashes;
   /** Optional: per-atom coverage classification (refs + status, no raw text). Added in #738. */
   readonly coverageMatrix?: readonly QualityIntelligenceCoverageMatrixRow[];
-  /** Optional: run quality score — percent of judged candidates rated "strong" [0-100]; null when the judge stage was skipped. Added in #736. */
+  /** Optional: run quality score — percent of candidates with a strong judge outcome [0-100]; null when the judge stage was skipped. Added in #736. */
   readonly qualityScore?: number | null;
   /** Optional: per-envelope content fingerprints for drift detection (Epic #735, Issue #742). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];

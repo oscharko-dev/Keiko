@@ -159,6 +159,45 @@ describe("captureSalientFromTurn", () => {
     expect(countMemories(vault, ctx)).toBe(3);
   });
 
+  it("forwards assistant text to the salience model as context-only", async () => {
+    const vault = makeVault();
+    let saliencePrompt = "";
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () => ({
+        call(request): Promise<NormalizedResponse> {
+          saliencePrompt = request.messages.map((message) => message.content).join("\n");
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: ATLAS_FACTS,
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "salience-test",
+              promptTokens: 7,
+              completionTokens: 3,
+              latencyMs: 11,
+              costClass: "high",
+            },
+          });
+        },
+      }),
+    });
+    const ctx = context();
+    await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "assistant-context-marker",
+    );
+    // User text is the extraction subject; assistant text is forwarded as a context-only block so
+    // the model can resolve ambiguous affirmative turns (e.g. "yes, exactly that").
+    expect(saliencePrompt).toContain(USER_TEXT);
+    expect(saliencePrompt).toContain("assistant-context-marker");
+  });
+
   it("persists records that carry tags and the salience captureRationale through validation", async () => {
     // The vault runs gateMemoryRecord on insert, so reading the records back proves the full
     // round-trip (tags + provenance.captureRationale) survives contract validation.
@@ -297,5 +336,154 @@ describe("captureSalientFromTurn", () => {
     );
     // The Atlas fact is a near-duplicate of the seed → dropped; Rust + Berlin remain.
     expect(actions).toHaveLength(2);
+  });
+
+  it("blocks confidential salience candidates before durable persistence", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () =>
+        fakeModel(
+          JSON.stringify([
+            {
+              body: "The user's private support email is developer@example.com.",
+              type: "fact",
+              confidence: 0.8,
+              scope: "user",
+              tags: ["support"],
+            },
+          ]),
+        ),
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: "I prefer issue triage on Monday mornings.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+    expect(actions).toEqual([{ kind: "rejected", reason: "sensitive-memory-requires-approval" }]);
+    expect(countMemories(vault, ctx)).toBe(0);
+  });
+
+  it("isPersistableMemoryCandidate guard emits rejected for sensitive and candidate for public", async () => {
+    // Model returns two items: one with an email address (triggers confidential sensitivity →
+    // requiresApproval → isPersistableMemoryCandidate false → {kind:"rejected"}) and one plain
+    // fact (public sensitivity → isPersistableMemoryCandidate true → {kind:"candidate"}).
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () =>
+        fakeModel(
+          JSON.stringify([
+            {
+              body: "The user's contact email is private@example.com.",
+              type: "fact",
+              confidence: 0.7,
+              scope: "user",
+              tags: ["contact"],
+            },
+            {
+              body: "The user works in the payments domain.",
+              type: "fact",
+              confidence: 0.7,
+              scope: "user",
+              tags: ["payments"],
+            },
+          ]),
+        ),
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      // User text is safe (no email/secret) so the egress guard passes; the model response
+      // contains one sensitive item (email → confidential) and one public item.
+      {
+        content: "I work in the payments domain and have a contact address.",
+        memory: { enabled: true },
+      },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+    expect(actions).toHaveLength(2);
+    const rejected = actions.filter((a) => a.kind === "rejected");
+    const candidates = actions.filter((a) => a.kind === "candidate");
+    expect(rejected).toHaveLength(1);
+    expect(candidates).toHaveLength(1);
+    expect((rejected[0] as { kind: "rejected"; reason: string }).reason).toBe(
+      "sensitive-memory-requires-approval",
+    );
+    // Only the non-sensitive candidate is persisted
+    expect(countMemories(vault, ctx)).toBe(1);
+  });
+
+  it("skips the salience model call when the user text is unsafe for memory egress", async () => {
+    const vault = makeVault();
+    let called = false;
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () => ({
+        call(): Promise<NormalizedResponse> {
+          called = true;
+          return Promise.resolve({
+            modelId: "gpt-test",
+            content: ATLAS_FACTS,
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "salience-test",
+              promptTokens: 7,
+              completionTokens: 3,
+              latencyMs: 11,
+              costClass: "high",
+            },
+          });
+        },
+      }),
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: "My private support email is developer@example.com.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "assistant text must not be sent to salience",
+    );
+    expect(actions).toEqual([]);
+    expect(called).toBe(false);
+    expect(countMemories(vault, ctx)).toBe(0);
+  });
+
+  it("threads deployment redaction literals into salience secret rejection", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({
+      memoryVault: vault,
+      redactionSecrets: ["CustomerOmega"],
+      modelPortFactory: () =>
+        fakeModel(
+          JSON.stringify([
+            {
+              body: "CustomerOmega requires SSO for releases.",
+              type: "fact",
+              confidence: 0.8,
+              scope: "project",
+              tags: ["customer"],
+            },
+          ]),
+        ),
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: "CustomerOmega requires SSO for releases.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "ok",
+    );
+    expect(actions).toEqual([]);
+    expect(countMemories(vault, ctx)).toBe(0);
   });
 });

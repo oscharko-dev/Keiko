@@ -10,9 +10,12 @@ export {
   validateQualityIntelligenceEvidenceManifest,
 } from "./manifestSchema.js";
 export type {
+  QualityIntelligenceBinaryExportMode,
+  QualityIntelligenceTraceabilityExportMode,
   QualityIntelligenceEvidenceManifest,
   QualityIntelligenceEvidenceRefRow,
   QualityIntelligenceExportRow,
+  QualityIntelligenceExportTarget,
   QualityIntelligenceFindingRow,
   QualityIntelligenceIntegrityHashes,
   QualityIntelligenceManifestTotals,
@@ -41,6 +44,7 @@ export type { QualityIntelligenceRetentionProfile } from "./retentionPolicy.js";
 
 // ─── Local-state store + CRUD (M2) ─────────────────────────────────────────────────
 export {
+  appendQualityIntelligenceExportRow,
   createInMemoryQualityIntelligenceLocalStore,
   createNodeQualityIntelligenceLocalStore,
   listQualityIntelligenceRuns,
@@ -49,6 +53,7 @@ export {
   QI_SUBDIR,
 } from "./store.js";
 export type {
+  QualityIntelligenceExportEvidenceInput,
   QualityIntelligenceLoadOptions,
   QualityIntelligenceLocalStore,
   QualityIntelligenceNodeStoreOptions,
@@ -94,21 +99,33 @@ export type {
   FigmaSnapshotScreenRow,
   FigmaSnapshotSkipReason,
   FigmaSnapshotSkippedScreenRow,
+  FigmaSnapshotStructuralScreenRow,
   FigmaSnapshotValidationResult,
 } from "./figmaSnapshot/schema.js";
-export { createNodeFigmaSnapshotStore } from "./figmaSnapshot/store.js";
+export {
+  createNodeFigmaSnapshotStore,
+  enforceFigmaSnapshotRetention,
+  DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS,
+} from "./figmaSnapshot/store.js";
 export type {
+  DeleteFigmaSnapshotResult,
+  FigmaSnapshotImageBytes,
+  FigmaSnapshotRetentionProfile,
   FigmaSnapshotStore,
   FigmaSnapshotStoreOptions,
+  FigmaSnapshotUserMetadata,
   RecordFigmaSnapshotInput,
   RecordFigmaSnapshotResult,
   RecordFigmaSnapshotScreenInput,
+  RecordFigmaSnapshotStructuralScreenInput,
+  UpdateFigmaSnapshotUserMetadataInput,
 } from "./figmaSnapshot/store.js";
 
 // ─── Retention, deletion, recovery (M3) ────────────────────────────────────────────
 export {
   applyQualityIntelligenceRetention,
   deleteQualityIntelligenceRun,
+  enforceQualityIntelligenceRetentionPolicy,
   quarantineCorruptQualityIntelligenceManifest,
   snapshotQualityIntelligenceRunsForRecovery,
 } from "./retention.js";
@@ -121,6 +138,9 @@ export type {
   QualityIntelligenceRecoverySnapshot,
   QualityIntelligenceRetentionDecision,
   QualityIntelligenceRetentionDecisionInput,
+  QualityIntelligenceRetentionDeletionFailure,
+  QualityIntelligenceRetentionEnforcementOptions,
+  QualityIntelligenceRetentionEnforcementResult,
   QualityIntelligenceRetentionResult,
   QualityIntelligenceRunDeletedEvent,
   QualityIntelligenceRunSnapshotEntry,

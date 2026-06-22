@@ -167,7 +167,9 @@ function captureCliHelp(
   return chunks.join("");
 }
 
-async function checkCliFlags(deps: SurfaceParityDeps): Promise<readonly SurfaceParityCheckResult[]> {
+async function checkCliFlags(
+  deps: SurfaceParityDeps,
+): Promise<readonly SurfaceParityCheckResult[]> {
   const genTestsHelp = captureCliHelp((args, io, env) => deps.runGenTestsCli(args, io, env, {}));
   const investigateHelp = captureCliHelp((args, io, env) =>
     deps.runInvestigateCli(args, io, env, {}),

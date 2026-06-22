@@ -6,6 +6,7 @@
 // may touch the filesystem); the pure domain owns splitting + hashing. Oversize and unsupported
 // inputs fail with user-actionable errors (#278 AC) before any model prompt is built.
 
+import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -13,6 +14,8 @@ import {
   QualityIntelligenceGeneration,
   QualityIntelligenceHardening,
   QualityIntelligenceFigma,
+  isUnsafeFormatCodePoint,
+  stripUnsafeFormatChars,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   detectWorkspaceAt,
@@ -63,6 +66,9 @@ function perSourceAtomBudget(total: number, sourceCount: number): number {
 const EVIDENCE_BUDGET_BYTES = 196_608;
 // Never starve a source below this many bytes — a tiny share is still usable context.
 const MIN_SOURCE_BUDGET_BYTES = 4_096;
+// Bound productive vision calls for one Figma snapshot source. The deterministic structural
+// baseline still covers every parseable screen; vision hints are additive and sampled first-in-order.
+const MAX_FIGMA_VISION_AUGMENTED_SCREENS = 12;
 
 /**
  * Fair per-source UTF-8 byte budget — the byte analogue of {@link perSourceAtomBudget}. Floor-divides
@@ -133,12 +139,50 @@ const CREDENTIAL_LABEL_SHAPES: readonly RegExp[] = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/gu,
 ];
 
+// Make a source label single-line AND spoof-safe with one code-point scan (the `no-control-regex`
+// lint rule forbids a control-range regex literal, and a scan is the established in-package idiom —
+// mirrors generationPort.scrubEvidenceText):
+//   - C0 controls (incl. tab/newline/CR) and DEL become a SPACE, so a multi-line or control-laden
+//     label can never glue a second line of content into the streamed displayLabel (#277/#278).
+//   - Bidi overrides/isolates, zero-width/BOM, LRM/RLM, the Arabic letter mark, and C1 controls are
+//     DROPPED outright. These are invisible or reorder surrounding text, so a source filename /
+//     capsule id cannot smuggle a right-to-left or zero-width spoof into the browser-streamed
+//     envelope display surface. The drop set is the SHARED `isUnsafeFormatCodePoint` predicate used
+//     by the candidate-text scrubber (keiko-quality-intelligence stripUnsafeFormatChars), so the
+//     source-label path is symmetric with the persisted/exported candidate-text path (Epic #729;
+//     the bidi/zero-width display-hygiene class of #280/#284). C0/DEL are handled first (→ space)
+//     because a single-line label spaces line breaks rather than gluing them.
+function stripUnsafeLabelChars(value: string): string {
+  let out = "";
+  for (const ch of value) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp <= 0x1f || cp === 0x7f) {
+      out += " ";
+      continue;
+    }
+    if (isUnsafeFormatCodePoint(cp)) {
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 const sanitiseLabel = (label: string): string => {
   // Strip any URL authority — ANY scheme (http, file, s3, ftp, …), not just http(s) — plus the
   // well-known credential token shapes, so a browser-supplied label never carries a URL or secret
   // into the envelope display surface that is streamed back to the client (#277/#278).
   let cleaned = label.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/giu, " ");
   for (const shape of CREDENTIAL_LABEL_SHAPES) cleaned = cleaned.replace(shape, " ");
+  // Map control characters (newline, CR, tab, NUL, DEL, …) to spaces and DROP bidi-override,
+  // zero-width, BOM, and C1 spoofing code points so a multi-line, control-laden, or
+  // visually-reordered label can never carry a second line of content into — or spoof the reading
+  // order of — the browser-streamed envelope displayLabel. Without the control→space step the
+  // absolute-path basename-collapse below (which splits on "/" only) would keep a trailing
+  // "\n<more content>" glued inside the final path segment, defeating the basename defence; without
+  // the bidi/zero-width drop a crafted filename could reorder the displayed label (#277/#278
+  // envelope display-surface invariant; Epic #729 symmetry with the candidate-text scrubber).
+  cleaned = stripUnsafeLabelChars(cleaned);
   cleaned = cleaned.trim();
   // Collapse an absolute POSIX / Windows-drive / UNC path label to its final segment so the
   // display label never leaks the filesystem layout (the basename is the useful display token).
@@ -153,6 +197,8 @@ const sanitiseLabel = (label: string): string => {
 // Reject a source whose absolute path (any segment) names a denied credential location. isDenied
 // inspects EVERY path segment, so a denied ancestor cannot be hidden by rooting a read deeper. Shared
 // by the folder and single-file paths so both honour the same containment guard (Epic #729 security).
+// Also rejects the symlink variant (assertRealPathNotDenied) so a benign-named link cannot resolve
+// into a protected location.
 function assertNotDenied(absPath: string, label: string, noun: string): void {
   if (isDenied(absPath)) {
     throw new QiIngestionError(
@@ -160,14 +206,51 @@ function assertNotDenied(absPath: string, label: string, noun: string): void {
       `${noun} "${label}" is in a protected location.`,
     );
   }
+  assertRealPathNotDenied(absPath, label, noun);
 }
 
-const envelopeIdFor = (
+// Defense-in-depth against a symlinked workspace root. The keiko-workspace deny gate (readWorkspaceFile)
+// inspects only the path RELATIVE to the realpath'd root, so a denied segment AT or ABOVE the connected
+// root is invisible to it: a benign-named "~/docs" symlink whose real target is "~/.aws" lets a
+// supported file inside it read through to the model, even though the lexical assertNotDenied above sees
+// only "docs". Re-running the deny gate over the REAL (symlink-resolved) absolute path rejects it. The
+// lexical check above already covers the no-symlink case, so this only ADDS denials when realpath
+// diverges into a protected location; a non-existent target surfaces later as NOT_FOUND, so a failed
+// realpath is a deliberate no-op here. (#713 single-file security review: "deny-list still applies";
+// #729 folder-root parity — both ingest paths share this boundary blind spot.)
+function assertRealPathNotDenied(absPath: string, label: string, noun: string): void {
+  let realPath: string;
+  try {
+    realPath = realpathSync(absPath);
+  } catch {
+    return;
+  }
+  if (realPath !== absPath && isDenied(realPath)) {
+    throw new QiIngestionError(
+      "QI_SOURCE_DENIED",
+      `${noun} "${label}" is in a protected location.`,
+    );
+  }
+}
+
+// Escape the field delimiter ("|") and the escape character ("\") in each user/path-controlled
+// field so a label or content value can never inject a raw delimiter and forge another source's
+// envelope id. The strictly-increasing loop index already disambiguates sources today; escaping
+// makes the pre-image injective on its own — robust even if the fields were ever reordered —
+// closing the latent cross-source provenance-spoofing surface flagged by the #732 composition
+// security audit. A value with no "\" or "|" encodes to itself, so clean labels/paths keep their
+// existing envelope id (and the atom ids derived from it), preserving re-check stability.
+const escapeEnvelopeField = (value: string): string =>
+  value.split("\\").join("\\\\").split("|").join("\\|");
+
+export const envelopeIdFor = (
   index: number,
   label: string,
   content: string,
 ): QI.QualityIntelligenceSourceEnvelopeId => {
-  const digest = sha256Hex(`qi-src-v1|${String(index)}|${label}|${content}`).slice(0, 24);
+  const digest = sha256Hex(
+    `qi-src-v1|${String(index)}|${escapeEnvelopeField(label)}|${escapeEnvelopeField(content)}`,
+  ).slice(0, 24);
   return QualityIntelligence.asQualityIntelligenceSourceEnvelopeId(`qi-src-${digest}`);
 };
 
@@ -182,6 +265,11 @@ const requirementsEnvelopeIdFor = (index: number): QI.QualityIntelligenceSourceE
 
 const stableLocalRef = (prefix: string, value: string): string =>
   `${prefix}:${sha256Hex(value).slice(0, 24)}`;
+
+const replacementGroupIdFor = (
+  envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
+  stableKey: string,
+): string => sha256Hex(`qi-replace-v1|${String(envelopeId)}|${stableKey}`);
 
 const auditSummaryIdFor = (runId: string): QI.QualityIntelligenceAuditSummaryId =>
   QualityIntelligence.asQualityIntelligenceAuditSummaryId(
@@ -226,7 +314,16 @@ function ingestRequirements(
     },
     localRef: `req:${String(index)}`,
   };
-  return { envelope, atoms };
+  return {
+    envelope,
+    atoms: atoms.map((entry, ordinal) =>
+      Object.freeze({
+        ...entry,
+        replacementGroupId: replacementGroupIdFor(envelopeId, `requirements:${String(index)}`),
+        replacementOrdinal: ordinal,
+      }),
+    ),
+  };
 }
 
 const WORKSPACE_BUDGET_BYTES = 196_608;
@@ -295,7 +392,7 @@ function documentRequirementAtoms(
   );
   if (split.length <= 1) return Object.freeze([]);
   return Object.freeze(
-    split.map((requirement) => {
+    split.map((requirement, ordinal) => {
       const canonicalText = `${entry.path}\n${requirement.canonicalText}`;
       const atom: QI.QualityIntelligenceRequirementAtom = {
         kind: "requirement",
@@ -305,7 +402,12 @@ function documentRequirementAtoms(
         redactionStatus: "redacted",
         lifecycleStatus: "draft",
       };
-      return Object.freeze({ atom: Object.freeze(atom), canonicalText });
+      return Object.freeze({
+        atom: Object.freeze(atom),
+        canonicalText,
+        replacementGroupId: replacementGroupIdFor(envelopeId, `document:${entry.path}`),
+        replacementOrdinal: ordinal,
+      });
     }),
   );
 }
@@ -330,8 +432,8 @@ function ingestWorkspace(
   byteBudget: number,
 ): OneSource {
   const label = sanitiseLabel(source.label);
-  // Reject a folder whose ROOT names a denied credential location: connecting e.g. ~/.aws or
-  // ~/.docker AS A FOLDER would otherwise ingest credential files whose RELATIVE paths
+  // Reject a folder whose ROOT names a denied credential location (lexically or via a symlinked root):
+  // connecting e.g. ~/.aws AS A FOLDER would otherwise ingest credential files whose RELATIVE paths
   // ("credentials", "config.json") never trip the per-file deny check (#729 security).
   assertNotDenied(resolve(source.path), label, "Folder");
   let workspace: ReturnType<typeof detectWorkspaceAt>;
@@ -506,7 +608,7 @@ function ingestFile(
     );
   }
   // Reject any path whose segments name a denied credential directory or file (.ssh, .aws, .env,
-  // *.pem, id_rsa, …) regardless of how the workspace root resolves below.
+  // *.pem, id_rsa, …) — lexically or after symlink resolution — regardless of the workspace root below.
   assertNotDenied(absFile, label, "File");
   const content = readSingleFileContent(absFile, label);
   // keiko-workspace decodes as UTF-8; a NUL byte is the canonical binary marker. A binary file that
@@ -573,6 +675,7 @@ function truncateToUtf8Bytes(text: string, maxBytes: number): string {
 interface CorpusDoc {
   readonly documentId: string;
   readonly text: string;
+  readonly fingerprintText?: string | undefined;
 }
 
 // Redact every member document and cap it. The LK corpus text is NOT redacted at index time — the
@@ -589,7 +692,7 @@ function processCapsuleDocs(docs: readonly CorpusDoc[], byteBudget: number): rea
   const processed: CorpusDoc[] = [];
   let totalBytes = 0;
   for (const doc of docs) {
-    const capped = truncateToUtf8Bytes(redact(doc.text), perDocBudget);
+    const capped = truncateToUtf8Bytes(redact(stripUnsafeFormatChars(doc.text)), perDocBudget);
     if (capped.trim().length === 0) continue;
     const bytes = utf8ByteLength(capped);
     // Always include the first usable document (capped to ≤ the per-document budget); thereafter
@@ -609,8 +712,10 @@ function capsuleDocAtom(
   docId: string,
   text: string,
   envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
+  fingerprintText = text,
 ): QualityIntelligenceIngestedAtom {
   const canonicalText = `${docId}\n${text}`;
+  const fingerprintCanonicalText = `${docId}\n${fingerprintText}`;
   // Derive the atom id from the stable document id only — never its position in the corpus order
   // (Epic #735 drift correctness, mirrors workspaceAtom). A capsule document id (and a Figma
   // screen id) is unique within its envelope, so adding/removing a sibling document never shifts an
@@ -621,7 +726,7 @@ function capsuleDocAtom(
     kind: "document-excerpt",
     id: QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-${digest}`),
     sourceEnvelopeId: envelopeId,
-    canonicalHashSha256Hex: sha256Hex(canonicalText),
+    canonicalHashSha256Hex: sha256Hex(fingerprintCanonicalText),
     redactionStatus: "redacted",
     lifecycleStatus: "draft",
   };
@@ -729,35 +834,286 @@ function ingestCapsuleSet(
 // redacted before the atom is built (defense in depth — the snapshot is already redacted at persist)
 // and budget-capped exactly like the capsule path so a large board degrades gracefully.
 
+type MaybePromise<T> = T | Promise<T>;
+
+function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
+  return typeof (value as Promise<T>).then === "function";
+}
+
+interface FigmaScreenTexts {
+  readonly text: string;
+  readonly fingerprintText: string;
+}
+
+interface IrStats {
+  readonly imageFillCount: number;
+  readonly textNodeCount: number;
+  readonly semanticNodeCount: number;
+}
+
+function collectIrStats(node: QualityIntelligenceFigma.IrNode, stats: IrStats): IrStats {
+  const next: IrStats = {
+    imageFillCount: stats.imageFillCount + node.imageFills.length,
+    textNodeCount:
+      stats.textNodeCount + (node.text !== undefined && node.text.trim().length > 0 ? 1 : 0),
+    semanticNodeCount:
+      stats.semanticNodeCount +
+      (node.interactionHint === "button" ||
+      node.interactionHint === "input" ||
+      node.interactionHint === "link"
+        ? 1
+        : 0),
+  };
+  return node.children.reduce<IrStats>((acc, child) => collectIrStats(child, acc), next);
+}
+
+function screenNeedsVisionAugmentation(
+  ir: QualityIntelligenceFigma.ScreenIr,
+  baseline: QualityIntelligenceFigma.ScreenTestBaseline,
+): boolean {
+  const stats = collectIrStats(ir.root, {
+    imageFillCount: 0,
+    textNodeCount: 0,
+    semanticNodeCount: 0,
+  });
+  const structuralItems = baseline.items.filter((item) => item.category !== "screen-render").length;
+  return (
+    stats.imageFillCount > 0 ||
+    stats.textNodeCount === 0 ||
+    stats.semanticNodeCount === 0 ||
+    structuralItems === 0
+  );
+}
+
+function figmaVisionRequest(
+  record: FigmaSnapshotRecord,
+  screen: FigmaSnapshotRecord["screens"][number],
+  baselineText: string,
+): Parameters<FigmaVisionHintProvider>[0] {
+  return {
+    snapshotRunId: record.runId,
+    screenId: screen.screenId,
+    image: screen.image,
+    imageRelativePath: screen.image.relativePath,
+    baselineText,
+  };
+}
+
+function mergeFigmaVisionHints(baselineText: string, hints: readonly string[]): FigmaScreenTexts {
+  return {
+    text: QualityIntelligenceFigma.mergeVisionHints(baselineText, hints).text,
+    fingerprintText: baselineText,
+  };
+}
+
 /** Vision-augment one screen's baseline text without ever overriding it (additive only). */
 function visionAugmentedScreenText(
   baseline: QualityIntelligenceFigma.ScreenTestBaseline,
-  screen: FigmaSnapshotRecord["screens"][number],
+  ir: QualityIntelligenceFigma.ScreenIr,
+  record: FigmaSnapshotRecord,
+  screen: ParsedScreen["row"],
   vision: FigmaVisionHintProvider | undefined,
-): string {
+): FigmaScreenTexts {
   const baselineText = QualityIntelligenceFigma.renderBaselineText(baseline);
-  if (vision === undefined) return baselineText;
-  const hints = vision({
-    screenId: screen.screenId,
-    imageRelativePath: screen.image.relativePath,
-    baselineText,
-  });
-  return QualityIntelligenceFigma.mergeVisionHints(baselineText, hints).text;
+  if (
+    vision === undefined ||
+    !isRenderedScreenRow(screen) ||
+    !screenNeedsVisionAugmentation(ir, baseline)
+  ) {
+    return { text: baselineText, fingerprintText: baselineText };
+  }
+  const hints = vision(figmaVisionRequest(record, screen, baselineText));
+  return isPromiseLike(hints)
+    ? { text: baselineText, fingerprintText: baselineText }
+    : mergeFigmaVisionHints(baselineText, hints);
+}
+
+async function visionAugmentedScreenTextAsync(
+  baseline: QualityIntelligenceFigma.ScreenTestBaseline,
+  ir: QualityIntelligenceFigma.ScreenIr,
+  record: FigmaSnapshotRecord,
+  screen: ParsedScreen["row"],
+  vision: FigmaVisionHintProvider | undefined,
+): Promise<FigmaScreenTexts> {
+  const baselineText = QualityIntelligenceFigma.renderBaselineText(baseline);
+  if (
+    vision === undefined ||
+    !isRenderedScreenRow(screen) ||
+    !screenNeedsVisionAugmentation(ir, baseline)
+  ) {
+    return { text: baselineText, fingerprintText: baselineText };
+  }
+  const hints = await vision(figmaVisionRequest(record, screen, baselineText));
+  return mergeFigmaVisionHints(baselineText, hints);
 }
 
 interface ParsedScreen {
-  readonly row: FigmaSnapshotRecord["screens"][number];
+  readonly row:
+    | FigmaSnapshotRecord["screens"][number]
+    | NonNullable<FigmaSnapshotRecord["structuralScreens"]>[number];
   readonly ir: QualityIntelligenceFigma.ScreenIr;
 }
 
+function isRenderedScreenRow(
+  row: ParsedScreen["row"],
+): row is FigmaSnapshotRecord["screens"][number] {
+  return "image" in row;
+}
+
 // Parse every screen's opaque irJson once; an unparseable screen is dropped (never crashes the run).
+// Rendered screens win if a corrupt record ever duplicates an id; structural-only rows then fill
+// the non-rendered/capped coverage gap for QI.
 function parseScreens(record: FigmaSnapshotRecord): readonly ParsedScreen[] {
   const parsed: ParsedScreen[] = [];
+  const seen = new Set<string>();
   for (const row of record.screens) {
     const ir = QualityIntelligenceFigma.parseScreenIr(row.irJson);
-    if (ir !== undefined) parsed.push({ row, ir });
+    if (ir !== undefined) {
+      parsed.push({ row, ir });
+      seen.add(row.screenId);
+    }
+  }
+  for (const row of record.structuralScreens ?? []) {
+    if (seen.has(row.screenId)) continue;
+    const ir = QualityIntelligenceFigma.parseScreenIr(row.irJson);
+    if (ir !== undefined) {
+      parsed.push({ row, ir });
+      seen.add(row.screenId);
+    }
   }
   return parsed;
+}
+
+function scopedParsedScreens(
+  record: FigmaSnapshotRecord,
+  screenIds: readonly string[] | undefined,
+): readonly ParsedScreen[] {
+  const parsed = parseScreens(record);
+  // Absent screenIds → whole snapshot (the contract's "absent = whole"). An explicitly EMPTY scope
+  // matches NOTHING — it must NEVER widen to the whole board. The route layer already rejects an empty
+  // array; this is the defense-in-depth invariant guaranteeing a scoped request can never silently fall
+  // back to every screen even if an internal caller passes an empty list.
+  if (screenIds === undefined) return parsed;
+  if (screenIds.length === 0) return [];
+  const wanted = new Set(screenIds);
+  return parsed.filter((screen) => wanted.has(screen.row.screenId));
+}
+
+// Canonicalise a scoped screen-id list (trim → drop empties → dedupe → sort) so the derived envelope
+// id / provenance ref is stable regardless of the order or duplicates a caller passed. The route layer
+// already canonicalises incoming requests; this keeps direct/internal callers consistent too.
+function canonicalFigmaScreenIds(screenIds: readonly string[]): readonly string[] {
+  return [...new Set(screenIds.map((id) => id.trim()).filter((id) => id.length > 0))].sort();
+}
+
+function figmaSnapshotSourceRef(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>,
+): string {
+  if (source.screenIds === undefined) return source.snapshotRunId;
+  const canonical = canonicalFigmaScreenIds(source.screenIds);
+  return canonical.length === 0
+    ? source.snapshotRunId
+    : `${source.snapshotRunId}#${canonical.join(",")}`;
+}
+
+function imageSourceRef(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+): string {
+  return `${source.sourceKind}:${source.snapshotRunId}#${source.screenId}`;
+}
+
+function imageDescriptionBaseline(screenId: string, screenName: string): string {
+  return (
+    "No structural JSON is attached to this source. Describe the visible UI screenshot for " +
+    "test generation. Focus on user-visible purpose, controls, form fields, labels, states, " +
+    `layout groups, and likely validation affordances.\nScreen id: ${screenId}\nScreen name: ${screenName}`
+  );
+}
+
+function imageDescriptionText(
+  screenId: string,
+  screenName: string,
+  hints: readonly string[],
+): string | undefined {
+  const cleaned = hints
+    .map((hint) => redactFigmaAtomText(hint).trim())
+    .filter((hint) => hint.length > 0);
+  if (cleaned.length === 0) return undefined;
+  return [
+    `Image description for ${screenName} (${screenId})`,
+    "",
+    ...cleaned.map((hint) => `- ${hint}`),
+  ].join("\n");
+}
+
+function parsedRenderedScreenForImageSource(
+  record: FigmaSnapshotRecord,
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  label: string,
+): {
+  readonly row: FigmaSnapshotRecord["screens"][number];
+  readonly ir: QualityIntelligenceFigma.ScreenIr;
+} {
+  const parsed = parseScreens(record).find((screen) => screen.row.screenId === source.screenId);
+  if (parsed === undefined || !isRenderedScreenRow(parsed.row)) {
+    throw new QiIngestionError(
+      "QI_IMAGE_UNAVAILABLE",
+      `Image "${label}" could not be found in the stored Figma snapshot.`,
+    );
+  }
+  return { row: parsed.row, ir: parsed.ir };
+}
+
+function imageDescriptionUnavailable(label: string): QiIngestionError {
+  return new QiIngestionError(
+    "QI_IMAGE_DESCRIPTION_UNAVAILABLE",
+    `Image "${label}" could not be described. Configure an image-input capable model for Quality Intelligence image sources.`,
+  );
+}
+
+function imageDescriptionDocFromHints(
+  screenId: string,
+  screenName: string,
+  hints: readonly string[],
+  byteBudget: number,
+): CorpusDoc | undefined {
+  const text = imageDescriptionText(screenId, screenName, hints);
+  if (text === undefined) return undefined;
+  const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, byteBudget);
+  const capped = truncateToUtf8Bytes(redactFigmaAtomText(text), perDocBudget);
+  if (capped.trim().length === 0) return undefined;
+  return {
+    documentId: `Image description: ${figmaDocumentId(screenId, screenName)}`,
+    text: capped,
+    fingerprintText: capped,
+  };
+}
+
+// Distinguish "the selected screens are not present in this snapshot" from "the snapshot produced no
+// usable baseline" so a scoped run surfaces a precise, user-actionable reason (audit: clear
+// screen-not-found error) in the streamed skippedSources notice. The code stays QI_SOURCE_EMPTY so the
+// N+1-resilience skip and the drift "all orphaned" allowance keep their existing control flow — only
+// the message is sharpened.
+function figmaSnapshotEmptyError(
+  record: FigmaSnapshotRecord,
+  source: Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>,
+  label: string,
+): QiIngestionError {
+  if (source.screenIds !== undefined) {
+    const requested = canonicalFigmaScreenIds(source.screenIds);
+    const present = new Set(parseScreens(record).map((screen) => screen.row.screenId));
+    const missing = requested.filter((id) => !present.has(id));
+    if (requested.length > 0 && missing.length === requested.length) {
+      return new QiIngestionError(
+        "QI_SOURCE_EMPTY",
+        `Figma snapshot "${label}": none of the selected screens (${missing.join(", ")}) exist in this snapshot.`,
+      );
+    }
+  }
+  return new QiIngestionError(
+    "QI_SOURCE_EMPTY",
+    `Figma snapshot "${label}" produced no usable screen baseline.`,
+  );
 }
 
 // Derive the deterministic navigation/flow/coverage test items per screen from the parsed screens +
@@ -789,6 +1145,73 @@ function a11yItemsByScreen(
   return QualityIntelligenceFigma.deriveA11yTestItemsByScreen(parsed.map((p) => p.ir));
 }
 
+function figmaDocumentId(screenId: string, screenName: string): string {
+  // Correct order (the #734 strip-before-redact rule): strip format chars first to
+  // de-obfuscate any zero-width-split secret, then redact (now catches raw AND ZW-split
+  // secrets → emits "[REDACTED]"), then sanitiseLabel for display safety (collapses
+  // newlines, URLs, paths). Mirrors redactFigmaAtomText = redact(stripUnsafeFormatChars)
+  // below, with sanitiseLabel as the final display-safe step.
+  const safeName = sanitiseLabel(redact(stripUnsafeFormatChars(screenName)));
+  return `${screenId} (${truncateToUtf8Bytes(safeName, MAX_LABEL_CHARS)})`;
+}
+
+// Strip Unicode bidi-override / zero-width / C1 spoofing code points from the untrusted Figma-derived
+// atom text BEFORE secret redaction. Two reasons for this order (the #734 strip-before-redact rule):
+// stripping first DE-OBFUSCATES a zero-width-split secret so the redactor can still match it, and it
+// removes the bidi/zero-width chars that would otherwise ride a Figma screen name or prototype trigger
+// verbatim into the QI atom text and every downstream export (bidi-spoofing of generated test titles).
+// Symmetric with the candidate-text path (buildRequirementExcerpt) and the source-label path
+// (sanitiseLabel / stripUnsafeLabelChars). TAB/LF/CR are preserved so the multi-line baseline structure
+// stays intact; clean inputs are byte-identical, so the atom hash and budget accounting are unchanged.
+const redactFigmaAtomText = (text: string): string => redact(stripUnsafeFormatChars(text));
+
+function consumeVisionProviderForScreen(
+  vision: FigmaVisionHintProvider | undefined,
+  remainingVisionScreens: number,
+  ir: QualityIntelligenceFigma.ScreenIr,
+  baseline: QualityIntelligenceFigma.ScreenTestBaseline,
+): { readonly provider: FigmaVisionHintProvider | undefined; readonly remaining: number } {
+  if (
+    vision === undefined ||
+    remainingVisionScreens <= 0 ||
+    !screenNeedsVisionAugmentation(ir, baseline)
+  ) {
+    return { provider: undefined, remaining: remainingVisionScreens };
+  }
+  return { provider: vision, remaining: remainingVisionScreens - 1 };
+}
+
+function corpusDocFromFigmaScreen(
+  row: ParsedScreen["row"],
+  ir: QualityIntelligenceFigma.ScreenIr,
+  augmented: FigmaScreenTexts,
+  perDocBudget: number,
+): { readonly doc: CorpusDoc; readonly bytes: number } | undefined {
+  const capped = truncateToUtf8Bytes(redactFigmaAtomText(augmented.text), perDocBudget);
+  if (capped.trim().length === 0) return undefined;
+  const fingerprintText = truncateToUtf8Bytes(
+    redactFigmaAtomText(augmented.fingerprintText),
+    perDocBudget,
+  );
+  return {
+    doc: {
+      documentId: figmaDocumentId(row.screenId, ir.name),
+      text: capped,
+      fingerprintText,
+    },
+    bytes: utf8ByteLength(capped),
+  };
+}
+
+function figmaDocFitsBudget(
+  docs: readonly CorpusDoc[],
+  totalBytes: number,
+  nextBytes: number,
+  perRunBudget: number,
+): boolean {
+  return docs.length === 0 || totalBytes + nextBytes <= perRunBudget;
+}
+
 // Derive the redacted, budget-capped canonical text for every parseable screen. Each screen's
 // deterministic structural baseline (#754) is augmented additively with its navigation/flow test
 // items (#811) AND its accessibility test items (#812) — concatenated, neither replacing the other —
@@ -800,27 +1223,69 @@ function figmaScreenDocs(
   record: FigmaSnapshotRecord,
   vision: FigmaVisionHintProvider | undefined,
   byteBudget: number,
+  screenIds?: readonly string[],
 ): readonly CorpusDoc[] {
   // Mirror processCapsuleDocs (:558-563): the per-run corpus budget is the smaller of the capsule's
   // own ceiling and this source's fair share of the global evidence byte budget (Epic #729 N+1
   // split). The per-document cap is likewise never larger than the per-run budget.
   const perRunBudget = Math.min(CAPSULE_BUDGET_BYTES, byteBudget);
   const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, perRunBudget);
-  const parsed = parseScreens(record);
+  const parsed = scopedParsedScreens(record, screenIds);
   const navItems = navItemsByScreen(parsed, record.links ?? []);
   const a11yItems = a11yItemsByScreen(parsed);
   const docs: CorpusDoc[] = [];
   let totalBytes = 0;
+  let remainingVisionScreens = MAX_FIGMA_VISION_AUGMENTED_SCREENS;
   for (const { row, ir } of parsed) {
     const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
     const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
-    const augmented = visionAugmentedScreenText(baseline, row, vision);
-    const capped = truncateToUtf8Bytes(redact(augmented), perDocBudget);
-    if (capped.trim().length === 0) continue;
-    const bytes = utf8ByteLength(capped);
-    if (docs.length > 0 && totalBytes + bytes > perRunBudget) break;
-    docs.push({ documentId: `${row.screenId} (${ir.name})`, text: capped });
-    totalBytes += bytes;
+    const visionSlot = isRenderedScreenRow(row)
+      ? consumeVisionProviderForScreen(vision, remainingVisionScreens, ir, baseline)
+      : { provider: undefined, remaining: remainingVisionScreens };
+    remainingVisionScreens = visionSlot.remaining;
+    const augmented = visionAugmentedScreenText(baseline, ir, record, row, visionSlot.provider);
+    const nextDoc = corpusDocFromFigmaScreen(row, ir, augmented, perDocBudget);
+    if (nextDoc === undefined) continue;
+    if (!figmaDocFitsBudget(docs, totalBytes, nextDoc.bytes, perRunBudget)) break;
+    docs.push(nextDoc.doc);
+    totalBytes += nextDoc.bytes;
+  }
+  return docs;
+}
+
+async function figmaScreenDocsAsync(
+  record: FigmaSnapshotRecord,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+  screenIds?: readonly string[],
+): Promise<readonly CorpusDoc[]> {
+  const perRunBudget = Math.min(CAPSULE_BUDGET_BYTES, byteBudget);
+  const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, perRunBudget);
+  const parsed = scopedParsedScreens(record, screenIds);
+  const navItems = navItemsByScreen(parsed, record.links ?? []);
+  const a11yItems = a11yItemsByScreen(parsed);
+  const docs: CorpusDoc[] = [];
+  let totalBytes = 0;
+  let remainingVisionScreens = MAX_FIGMA_VISION_AUGMENTED_SCREENS;
+  for (const { row, ir } of parsed) {
+    const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
+    const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
+    const visionSlot = isRenderedScreenRow(row)
+      ? consumeVisionProviderForScreen(vision, remainingVisionScreens, ir, baseline)
+      : { provider: undefined, remaining: remainingVisionScreens };
+    remainingVisionScreens = visionSlot.remaining;
+    const augmented = await visionAugmentedScreenTextAsync(
+      baseline,
+      ir,
+      record,
+      row,
+      visionSlot.provider,
+    );
+    const nextDoc = corpusDocFromFigmaScreen(row, ir, augmented, perDocBudget);
+    if (nextDoc === undefined) continue;
+    if (!figmaDocFitsBudget(docs, totalBytes, nextDoc.bytes, perRunBudget)) break;
+    docs.push(nextDoc.doc);
+    totalBytes += nextDoc.bytes;
   }
   return docs;
 }
@@ -841,18 +1306,16 @@ function ingestFigmaSnapshot(
       `Figma snapshot "${label}" could not be found or read. Build the snapshot first.`,
     );
   }
-  if (record.screens.length === 0) {
+  if (record.screens.length === 0 && (record.structuralScreens?.length ?? 0) === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `Figma snapshot "${label}" has no screens.`);
   }
-  const docs = figmaScreenDocs(record, vision, byteBudget);
+  const docs = figmaScreenDocs(record, vision, byteBudget, source.screenIds);
   if (docs.length === 0) {
-    throw new QiIngestionError(
-      "QI_SOURCE_EMPTY",
-      `Figma snapshot "${label}" produced no usable screen baseline.`,
-    );
+    throw figmaSnapshotEmptyError(record, source, label);
   }
-  const joinedText = docs.map((d) => d.text).join("\n");
-  const envelopeId = envelopeIdFor(index, label, source.snapshotRunId);
+  const joinedFingerprintText = docs.map((d) => d.fingerprintText ?? d.text).join("\n");
+  const sourceRef = figmaSnapshotSourceRef(source);
+  const envelopeId = envelopeIdFor(index, label, sourceRef);
   // A stored Figma Snapshot is figma evidence, not repository context. Use the dedicated
   // `figma-evidence` envelope kind (#278 AC2 "represented as an explicit connector-backed source"
   // + AC4 citation/audit attribution) so the persisted envelope, source-mix priority, and any
@@ -862,14 +1325,210 @@ function ingestFigmaSnapshot(
     kind: "figma-evidence",
     displayLabel: label,
     provenance: {
-      origin: `figma-snapshot:${source.snapshotRunId}`,
+      origin: `figma-snapshot:${sourceRef}`,
       registeredAt,
-      integrityHashSha256Hex: sha256Hex(joinedText),
+      integrityHashSha256Hex: sha256Hex(joinedFingerprintText),
     },
-    localRef: stableLocalRef("figma-snapshot", source.snapshotRunId),
+    localRef: stableLocalRef("figma-snapshot", sourceRef),
   };
-  const atoms = docs.map((d) => capsuleDocAtom(d.documentId, d.text, envelopeId));
+  const atoms = docs.map((d) =>
+    capsuleDocAtom(d.documentId, d.text, envelopeId, d.fingerprintText ?? d.text),
+  );
   return { envelope, atoms };
+}
+
+async function ingestFigmaSnapshotAsync(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>,
+  index: number,
+  registeredAt: string,
+  loader: FigmaSnapshotLoader,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): Promise<OneSource> {
+  const label = sanitiseLabel(source.label);
+  const record = loader(source.snapshotRunId);
+  if (record === undefined) {
+    throw new QiIngestionError(
+      "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
+      `Figma snapshot "${label}" could not be found or read. Build the snapshot first.`,
+    );
+  }
+  if (record.screens.length === 0 && (record.structuralScreens?.length ?? 0) === 0) {
+    throw new QiIngestionError("QI_SOURCE_EMPTY", `Figma snapshot "${label}" has no screens.`);
+  }
+  const docs = await figmaScreenDocsAsync(record, vision, byteBudget, source.screenIds);
+  if (docs.length === 0) {
+    throw figmaSnapshotEmptyError(record, source, label);
+  }
+  const joinedFingerprintText = docs.map((d) => d.fingerprintText ?? d.text).join("\n");
+  const sourceRef = figmaSnapshotSourceRef(source);
+  const envelopeId = envelopeIdFor(index, label, sourceRef);
+  const envelope: QI.QualityIntelligenceSourceEnvelope = {
+    id: envelopeId,
+    kind: "figma-evidence",
+    displayLabel: label,
+    provenance: {
+      origin: `figma-snapshot:${sourceRef}`,
+      registeredAt,
+      integrityHashSha256Hex: sha256Hex(joinedFingerprintText),
+    },
+    localRef: stableLocalRef("figma-snapshot", sourceRef),
+  };
+  const atoms = docs.map((d) =>
+    capsuleDocAtom(d.documentId, d.text, envelopeId, d.fingerprintText ?? d.text),
+  );
+  return { envelope, atoms };
+}
+
+function buildImageSourceEnvelope(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  label: string,
+  index: number,
+  registeredAt: string,
+  doc: CorpusDoc,
+): OneSource {
+  const sourceRef = imageSourceRef(source);
+  const envelopeId = envelopeIdFor(index, label, sourceRef);
+  const envelope: QI.QualityIntelligenceSourceEnvelope = {
+    id: envelopeId,
+    kind: "figma-evidence",
+    displayLabel: label,
+    provenance: {
+      origin: `image:${sourceRef}`,
+      registeredAt,
+      integrityHashSha256Hex: sha256Hex(doc.fingerprintText ?? doc.text),
+    },
+    localRef: stableLocalRef("image", sourceRef),
+  };
+  return {
+    envelope,
+    atoms: [capsuleDocAtom(doc.documentId, doc.text, envelopeId, doc.fingerprintText ?? doc.text)],
+  };
+}
+
+function imageDescriptionDoc(
+  record: FigmaSnapshotRecord,
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  label: string,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): CorpusDoc | undefined {
+  if (vision === undefined) return undefined;
+  const { row, ir } = parsedRenderedScreenForImageSource(record, source, label);
+  const hints = vision(
+    figmaVisionRequest(record, row, imageDescriptionBaseline(row.screenId, ir.name)),
+  );
+  if (isPromiseLike(hints)) return undefined;
+  return imageDescriptionDocFromHints(row.screenId, ir.name, hints, byteBudget);
+}
+
+async function imageDescriptionDocAsync(
+  record: FigmaSnapshotRecord,
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  label: string,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): Promise<CorpusDoc | undefined> {
+  if (vision === undefined) return undefined;
+  const { row, ir } = parsedRenderedScreenForImageSource(record, source, label);
+  const hints = await vision(
+    figmaVisionRequest(record, row, imageDescriptionBaseline(row.screenId, ir.name)),
+  );
+  return imageDescriptionDocFromHints(row.screenId, ir.name, hints, byteBudget);
+}
+
+function ingestImageSource(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  index: number,
+  registeredAt: string,
+  loader: FigmaSnapshotLoader,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): OneSource {
+  const label = sanitiseLabel(source.label);
+  const record = loader(source.snapshotRunId);
+  if (record === undefined) {
+    throw new QiIngestionError(
+      "QI_IMAGE_UNAVAILABLE",
+      `Image "${label}" could not be found or read. Build the Figma snapshot first.`,
+    );
+  }
+  const doc = imageDescriptionDoc(record, source, label, vision, byteBudget);
+  if (doc === undefined) throw imageDescriptionUnavailable(label);
+  return buildImageSourceEnvelope(source, label, index, registeredAt, doc);
+}
+
+async function ingestImageSourceAsync(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  index: number,
+  registeredAt: string,
+  loader: FigmaSnapshotLoader,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): Promise<OneSource> {
+  const label = sanitiseLabel(source.label);
+  const record = loader(source.snapshotRunId);
+  if (record === undefined) {
+    throw new QiIngestionError(
+      "QI_IMAGE_UNAVAILABLE",
+      `Image "${label}" could not be found or read. Build the Figma snapshot first.`,
+    );
+  }
+  const doc = await imageDescriptionDocAsync(record, source, label, vision, byteBudget);
+  if (doc === undefined) throw imageDescriptionUnavailable(label);
+  return buildImageSourceEnvelope(source, label, index, registeredAt, doc);
+}
+
+function ingestCapsuleSource(
+  source:
+    | Extract<QualityIntelligenceInlineSource, { kind: "capsule" }>
+    | Extract<QualityIntelligenceInlineSource, { kind: "capsule-set" }>,
+  index: number,
+  registeredAt: string,
+  capsuleResolver: CapsuleResolver | undefined,
+  byteBudget: number,
+): OneSource {
+  if (capsuleResolver === undefined) {
+    throw new QiIngestionError(
+      "QI_CAPSULE_UNAVAILABLE",
+      source.kind === "capsule"
+        ? "Capsule sources are unavailable: the Local Knowledge store is not configured."
+        : "Capsule-set sources are unavailable: the Local Knowledge store is not configured.",
+    );
+  }
+  return source.kind === "capsule"
+    ? ingestCapsule(source, index, registeredAt, capsuleResolver, byteBudget)
+    : ingestCapsuleSet(source, index, registeredAt, capsuleResolver, byteBudget);
+}
+
+function ingestStoredFigmaSource(
+  source:
+    | Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>
+    | Extract<QualityIntelligenceInlineSource, { kind: "image" }>,
+  index: number,
+  registeredAt: string,
+  figmaSnapshotLoader: FigmaSnapshotLoader | undefined,
+  figmaVision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): OneSource {
+  if (figmaSnapshotLoader === undefined) {
+    throw new QiIngestionError(
+      source.kind === "image" ? "QI_IMAGE_UNAVAILABLE" : "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
+      source.kind === "image"
+        ? "Image sources are unavailable: the evidence directory is not configured."
+        : "Figma-snapshot sources are unavailable: the evidence directory is not configured.",
+    );
+  }
+  return source.kind === "image"
+    ? ingestImageSource(source, index, registeredAt, figmaSnapshotLoader, figmaVision, byteBudget)
+    : ingestFigmaSnapshot(
+        source,
+        index,
+        registeredAt,
+        figmaSnapshotLoader,
+        figmaVision,
+        byteBudget,
+      );
 }
 
 function ingestOne(
@@ -889,29 +1548,11 @@ function ingestOne(
     case "file":
       return ingestFile(source, index, registeredAt, byteBudget);
     case "capsule":
-      if (capsuleResolver === undefined) {
-        throw new QiIngestionError(
-          "QI_CAPSULE_UNAVAILABLE",
-          "Capsule sources are unavailable: the Local Knowledge store is not configured.",
-        );
-      }
-      return ingestCapsule(source, index, registeredAt, capsuleResolver, byteBudget);
     case "capsule-set":
-      if (capsuleResolver === undefined) {
-        throw new QiIngestionError(
-          "QI_CAPSULE_UNAVAILABLE",
-          "Capsule-set sources are unavailable: the Local Knowledge store is not configured.",
-        );
-      }
-      return ingestCapsuleSet(source, index, registeredAt, capsuleResolver, byteBudget);
+      return ingestCapsuleSource(source, index, registeredAt, capsuleResolver, byteBudget);
     case "figma-snapshot":
-      if (figmaSnapshotLoader === undefined) {
-        throw new QiIngestionError(
-          "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
-          "Figma-snapshot sources are unavailable: the evidence directory is not configured.",
-        );
-      }
-      return ingestFigmaSnapshot(
+    case "image":
+      return ingestStoredFigmaSource(
         source,
         index,
         registeredAt,
@@ -922,10 +1563,63 @@ function ingestOne(
   }
 }
 
+async function ingestOneAsync(
+  source: QualityIntelligenceInlineSource,
+  index: number,
+  registeredAt: string,
+  capsuleResolver: CapsuleResolver | undefined,
+  figmaSnapshotLoader: FigmaSnapshotLoader | undefined,
+  figmaVision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): Promise<OneSource> {
+  if (source.kind !== "figma-snapshot" && source.kind !== "image") {
+    return ingestOne(
+      source,
+      index,
+      registeredAt,
+      capsuleResolver,
+      figmaSnapshotLoader,
+      figmaVision,
+      byteBudget,
+    );
+  }
+  if (figmaSnapshotLoader === undefined) {
+    throw new QiIngestionError(
+      source.kind === "image" ? "QI_IMAGE_UNAVAILABLE" : "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
+      source.kind === "image"
+        ? "Image sources are unavailable: the evidence directory is not configured."
+        : "Figma-snapshot sources are unavailable: the evidence directory is not configured.",
+    );
+  }
+  if (source.kind === "image") {
+    return ingestImageSourceAsync(
+      source,
+      index,
+      registeredAt,
+      figmaSnapshotLoader,
+      figmaVision,
+      byteBudget,
+    );
+  }
+  return ingestFigmaSnapshotAsync(
+    source,
+    index,
+    registeredAt,
+    figmaSnapshotLoader,
+    figmaVision,
+    byteBudget,
+  );
+}
+
 export interface IngestInlineSourcesInput {
   readonly request: QualityIntelligenceStartRunRequest;
   readonly runId: string;
   readonly registeredAt: string;
+  /**
+   * Drift-only mode: an existing run whose current source is now empty must still be comparable so all
+   * old candidates classify as orphaned-stale. Initial run creation keeps the strict non-empty guard.
+   */
+  readonly allowEmpty?: boolean | undefined;
   /** Optional capsule resolver (Epic #710, Issue #717). Absent → capsule sources throw QI_CAPSULE_UNAVAILABLE. */
   readonly capsuleResolver?: CapsuleResolver | undefined;
   /**
@@ -934,8 +1628,10 @@ export interface IngestInlineSourcesInput {
    */
   readonly figmaSnapshotLoader?: FigmaSnapshotLoader | undefined;
   /**
-   * Optional capability-routed vision hint provider (Issue #754/#810). Absent → IR-only baseline.
-   * Hints are additive and never override the deterministic structural baseline.
+   * Optional capability-routed image-input provider (Issue #754/#810). For figma-snapshot sources
+   * hints are additive and never override the deterministic structural baseline. For pure image
+   * sources the same provider must produce the textual image description; absent/empty output makes
+   * that image source unavailable instead of pretending a text-only model saw the screenshot.
    */
   readonly figmaVision?: FigmaVisionHintProvider | undefined;
 }
@@ -1008,6 +1704,78 @@ function ingestSourceInto(
   });
 }
 
+async function ingestSourceIntoAsync(
+  acc: IngestAccumulator,
+  source: QualityIntelligenceInlineSource,
+  index: number,
+  input: IngestInlineSourcesInput,
+  budgets: PerSourceBudgets,
+): Promise<void> {
+  let ingested: OneSource;
+  try {
+    ingested = await ingestOneAsync(
+      source,
+      index,
+      input.registeredAt,
+      input.capsuleResolver,
+      input.figmaSnapshotLoader,
+      input.figmaVision,
+      budgets.byteBudget,
+    );
+  } catch (error) {
+    if (!(error instanceof QiIngestionError)) throw error;
+    acc.firstSkipError ??= error;
+    acc.skippedSources.push({
+      label: sanitiseLabel(source.label),
+      kind: source.kind,
+      code: error.code,
+      message: error.message,
+    });
+    return;
+  }
+  const { envelope, atoms } = ingested;
+  const take = Math.min(budgets.atomBudget, MAX_TOTAL_ATOMS - acc.ingestedAtoms.length);
+  const taken = take <= 0 ? [] : atoms.slice(0, take);
+  acc.envelopes.push(envelope);
+  acc.ingestedAtoms.push(...taken);
+  acc.sourceSummaries.push({
+    label: envelope.displayLabel,
+    kind: source.kind,
+    atomCount: taken.length,
+  });
+}
+
+function emptyDriftIngestionResult(
+  input: IngestInlineSourcesInput,
+  droppedSourceCount: number,
+  skippedSources: readonly QiSkippedSource[],
+): QiIngestionResult {
+  return {
+    envelopes: [],
+    ingestedAtoms: [],
+    provenanceRefs: {
+      envelopeIds: [],
+      auditSummaryId: auditSummaryIdFor(input.runId),
+    },
+    sourceSummaries: [],
+    droppedSourceCount,
+    skippedSources,
+  };
+}
+
+function allowEmptyDriftIngestion(
+  input: IngestInlineSourcesInput,
+  acc: IngestAccumulator,
+  droppedSourceCount: number,
+): QiIngestionResult | undefined {
+  if (input.allowEmpty !== true) return undefined;
+  const blockingSkip = acc.skippedSources.find((source) => source.code !== "QI_SOURCE_EMPTY");
+  if (blockingSkip !== undefined) {
+    throw new QiIngestionError(blockingSkip.code, blockingSkip.message);
+  }
+  return emptyDriftIngestionResult(input, droppedSourceCount, acc.skippedSources);
+}
+
 export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestionResult {
   // Read through the typed property in the loop: `Array.isArray` would widen a local binding of the
   // readonly union array to `any[]`, so the guard checks length on the typed property directly.
@@ -1041,6 +1809,53 @@ export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestio
     ingestSourceInto(acc, source, i, input, budgets);
   }
   if (acc.ingestedAtoms.length === 0) {
+    const emptyDrift = allowEmptyDriftIngestion(input, acc, droppedSourceCount);
+    if (emptyDrift !== undefined) return emptyDrift;
+    throw (
+      acc.firstSkipError ??
+      new QiIngestionError("QI_SOURCE_EMPTY", "No usable evidence was produced from the sources.")
+    );
+  }
+  return {
+    envelopes: acc.envelopes,
+    ingestedAtoms: acc.ingestedAtoms,
+    provenanceRefs: {
+      envelopeIds: acc.envelopes.map((e) => String(e.id)),
+      auditSummaryId: auditSummaryIdFor(input.runId),
+    },
+    sourceSummaries: acc.sourceSummaries,
+    droppedSourceCount,
+    skippedSources: acc.skippedSources,
+  };
+}
+
+export async function ingestInlineSourcesAsync(
+  input: IngestInlineSourcesInput,
+): Promise<QiIngestionResult> {
+  const allSources: readonly QualityIntelligenceInlineSource[] = input.request.sources;
+  if (allSources.length === 0) {
+    throw new QiIngestionError("QI_NO_SOURCES", "At least one source is required to start a run.");
+  }
+  const sources = allSources.slice(0, MAX_QI_SOURCES);
+  const droppedSourceCount = allSources.length - sources.length;
+  const budgets: PerSourceBudgets = {
+    atomBudget: perSourceAtomBudget(MAX_TOTAL_ATOMS, sources.length),
+    byteBudget: perSourceByteBudget(sources.length),
+  };
+  const acc: IngestAccumulator = {
+    envelopes: [],
+    ingestedAtoms: [],
+    sourceSummaries: [],
+    skippedSources: [],
+  };
+  for (let i = 0; i < sources.length; i += 1) {
+    const source = sources[i];
+    if (source === undefined) continue;
+    await ingestSourceIntoAsync(acc, source, i, input, budgets);
+  }
+  if (acc.ingestedAtoms.length === 0) {
+    const emptyDrift = allowEmptyDriftIngestion(input, acc, droppedSourceCount);
+    if (emptyDrift !== undefined) return emptyDrift;
     throw (
       acc.firstSkipError ??
       new QiIngestionError("QI_SOURCE_EMPTY", "No usable evidence was produced from the sources.")

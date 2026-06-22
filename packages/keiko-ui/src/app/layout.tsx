@@ -39,11 +39,18 @@ export const viewport: Viewport = {
 // computed from the exported HTML — no CSP loosening involved.
 const THEME_BOOTSTRAP = `try{var t=localStorage.getItem("keiko.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}`;
 
+// Issue #1214: if a restart/redeploy interrupts the initial RSC/Flight boot, the static
+// prerender shell can remain visible forever and React effects never run. This pre-hydration
+// watchdog uses a bounded retry counter when the boot placeholder is still present and the
+// workspace never mounted. The counter is cleared after a successful AppShell mount.
+export const APP_BOOT_RECOVERY_BOOTSTRAP = `try{var k="keiko.app-boot-recovery-reload-count";setTimeout(function(){try{if(document.querySelector("main.workspace"))return;if(!document.querySelector(".app[aria-hidden='true'] .app-boot"))return;var n=parseInt(sessionStorage.getItem(k)||"0",10);if(!isFinite(n)||n<0)n=0;if(n>=2)return;sessionStorage.setItem(k,String(n+1));location.reload()}catch(e){}},8000)}catch(e){}`;
+
 export default function RootLayout({ children }: { children: ReactNode }): ReactNode {
   return (
     <html lang="en" data-theme="dark" suppressHydrationWarning>
       <body>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
+        <script dangerouslySetInnerHTML={{ __html: APP_BOOT_RECOVERY_BOOTSTRAP }} />
         {children}
       </body>
     </html>

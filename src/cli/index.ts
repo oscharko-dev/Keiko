@@ -3,6 +3,10 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCli } from "@oscharko-dev/keiko-cli";
 
+if (process.platform === "win32") {
+  process.title = "Keiko";
+}
+
 // Root package bin entry. This file remains the published executable target
 // (`bin: dist/cli/index.js` in the root package.json) and is the only
 // `src/cli/` file with a shebang.

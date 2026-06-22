@@ -19,3 +19,9 @@ export const MAX_AGE_MS_DEFAULT = 90 * 24 * 60 * 60 * 1000;
 // 100 keeps a single run well under a second even on slow CI. Set to 0 to short-circuit to
 // state:"skipped" (used by tests; in production a 0 run is a configuration smell).
 export const MAX_CLUSTERS_PER_RUN_DEFAULT = 100;
+
+// Hard stop on records admitted to the O(n^2) duplicate/conflict scans. This is separate from
+// maxClustersPerRun: cluster limits bound output, while this record budget bounds CPU work.
+export const MAX_RECORDS_PER_RUN_DEFAULT = 1_000;
+export const MAX_RECORDS_PER_RUN_HARD_LIMIT = 1_000;
+export const MAX_CLUSTERS_PER_RUN_HARD_LIMIT = 1_000;

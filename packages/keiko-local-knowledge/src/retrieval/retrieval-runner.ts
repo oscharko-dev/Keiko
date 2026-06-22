@@ -190,13 +190,27 @@ function finaliseWithGrounding(
     };
   }
   if (search.references.length === 0) {
+    // Surface the policy-specific reason ('no-evidence-stated') ONLY when the search actually ran
+    // over indexed content and nothing cleared the bar ('below-min-score'). For hard pre-search
+    // misses ('no-vectors' = nothing indexed, 'embedding-failed', 'empty-query',
+    // 'incompatible-embedding-identity') the search-layer reason is the actionable one and MUST be
+    // preserved — collapsing those into 'no-evidence-stated' would destroy exactly the distinction
+    // this fix is meant to expose: 'nothing indexed' vs 'searched, found nothing relevant'.
+    const reason: RetrievalNoEvidenceReason | undefined =
+      decision.reason === "no-evidence-stated" && search.noEvidenceReason === "below-min-score"
+        ? "no-evidence-stated"
+        : search.noEvidenceReason;
     return {
       references: [],
       noEvidence: true,
-      ...(search.noEvidenceReason !== undefined ? { reason: search.noEvidenceReason } : {}),
+      ...(reason !== undefined ? { reason } : {}),
     };
   }
-  return { references: search.references, noEvidence: false };
+  return {
+    references: search.references,
+    noEvidence: false,
+    ...(search.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
+  };
 }
 
 function clampTopK(input: number | undefined): number {

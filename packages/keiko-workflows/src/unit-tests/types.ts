@@ -11,6 +11,7 @@ import type { SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import type { TestFramework, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { VerificationAuditSummary } from "@oscharko-dev/keiko-verification";
 import type { WorkflowEventSink } from "./events.js";
+import type { TestStyle, TestVerification } from "./frontend.js";
 
 // ─── Status & target selection ───────────────────────────────────────────────────
 
@@ -29,6 +30,16 @@ export type {
   WorkflowLimits,
 } from "@oscharko-dev/keiko-contracts";
 export { DEFAULT_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-contracts";
+
+// Frontend test-stack detection and convention-driven test-style selection (Issue #1203). Re-exported
+// here so consumers of "./types.js" resolve them alongside the existing convention types.
+export type {
+  ComponentFramework,
+  FrontendTestStack,
+  TestStrategy,
+  TestStyle,
+  TestVerification,
+} from "./frontend.js";
 
 // Target selection: exactly one of file/module/changedFiles.
 export type UnitTestTarget =
@@ -144,4 +155,17 @@ export interface UnitTestWorkflowReport {
 
   // Number of patch rejections before a valid patch was accepted.
   readonly patchRetryCount: number;
+
+  // ─── Frontend test-style selection (Issue #1203) ───────────────────────────────────
+  // The convention-driven test style selected for the target. Absent on failures that occur before
+  // strategy selection (e.g. an early IO failure or cancellation).
+  readonly testStyle?: TestStyle | undefined;
+
+  // The verification runner the selected style would execute under in the assured pre-filter
+  // (vitest/jest/mocha/playwright), or "none" when no runner applies. Absent when no style was selected.
+  readonly verification?: TestVerification | undefined;
+
+  // A content-free limitation message when the target's frontend stack is unsupported (AC5): a clear
+  // statement is reported instead of a fabricated browser/component test. Absent otherwise.
+  readonly limitation?: string | undefined;
 }

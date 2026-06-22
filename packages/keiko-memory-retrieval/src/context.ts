@@ -58,6 +58,78 @@ function clipToTokenBudget(body: string, tokenBudget: number): string {
   return words.slice(0, wordBudget).join(" ") + "…";
 }
 
+function wordsOf(body: string): readonly string[] {
+  return body.split(/\s+/u).filter((w) => w.length > 0);
+}
+
+function clippedWords(words: readonly string[], count: number): string {
+  const excerpt = words.slice(0, count).join(" ");
+  return count < words.length ? `${excerpt}…` : excerpt;
+}
+
+function renderText(entries: readonly MemoryContextBlockEntry[]): string {
+  if (entries.length === 0) return "";
+  const lines = ["# Relevant memories"];
+  for (const e of entries) {
+    lines.push(`- (${e.inclusionReason}) ${e.bodyExcerpt}`);
+  }
+  return lines.join("\n");
+}
+
+function renderedCost(entries: readonly MemoryContextBlockEntry[]): number {
+  return estimateTokens(renderText(entries));
+}
+
+function entryForRank(
+  rank: IncludedMemory,
+  record: MemoryRecord,
+  bodyExcerpt: string,
+): MemoryContextBlockEntry {
+  return {
+    memoryId: rank.memoryId,
+    bodyExcerpt,
+    inclusionReason: rank.inclusionReason,
+    sourceKind: record.provenance.sourceKind,
+    ...(record.provenance.captureRationale !== undefined
+      ? { captureRationale: record.provenance.captureRationale }
+      : {}),
+    sensitivity: record.provenance.sensitivity,
+    confidence: record.provenance.confidence,
+    status: record.status,
+    capturedAt: record.provenance.capturedAt,
+  };
+}
+
+function fitEntryToBudget(
+  entries: readonly MemoryContextBlockEntry[],
+  rank: IncludedMemory,
+  record: MemoryRecord,
+  budgetTokens: number,
+  perEntry: number,
+): MemoryContextBlockEntry | undefined {
+  const initialExcerpt = clipToTokenBudget(record.body, perEntry);
+  const initialEntry = entryForRank(rank, record, initialExcerpt);
+  if (renderedCost([...entries, initialEntry]) <= budgetTokens) {
+    return initialEntry;
+  }
+
+  const words = wordsOf(record.body);
+  let lo = 1;
+  let hi = Math.min(words.length, Math.max(1, Math.floor(perEntry / TOKEN_PER_WORD_RATIO)));
+  let best: MemoryContextBlockEntry | undefined;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const candidate = entryForRank(rank, record, clippedWords(words, mid));
+    if (renderedCost([...entries, candidate]) <= budgetTokens) {
+      best = candidate;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return best;
+}
+
 interface AssemblyStep {
   readonly included: readonly IncludedMemory[];
   readonly entries: readonly MemoryContextBlockEntry[];
@@ -87,30 +159,22 @@ function greedyAssemble(
       omitted.push({ memoryId: rank.memoryId, reason: "out-of-scope" });
       continue;
     }
-    const excerpt = clipToTokenBudget(record.body, perEntry);
-    const cost = estimateTokens(excerpt);
-    if (used + cost > options.budgetTokens) {
+    const entry = fitEntryToBudget(
+      entries,
+      rank,
+      record,
+      options.budgetTokens,
+      Math.max(1, Math.min(perEntry, options.budgetTokens - used)),
+    );
+    if (entry === undefined) {
       omitted.push({ memoryId: rank.memoryId, reason: "budget-exceeded" });
       continue;
     }
-    used += cost;
+    used = renderedCost([...entries, entry]);
     included.push(rank);
-    entries.push({
-      memoryId: rank.memoryId,
-      bodyExcerpt: excerpt,
-      inclusionReason: rank.inclusionReason,
-    });
+    entries.push(entry);
   }
   return { included, entries, omitted, used };
-}
-
-function renderText(entries: readonly MemoryContextBlockEntry[]): string {
-  if (entries.length === 0) return "";
-  const lines = ["# Relevant memories"];
-  for (const e of entries) {
-    lines.push(`- (${e.inclusionReason}) ${e.bodyExcerpt}`);
-  }
-  return lines.join("\n");
 }
 
 /**

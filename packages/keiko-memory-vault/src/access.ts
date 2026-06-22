@@ -12,6 +12,12 @@ import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 export interface MemoryAccessStat {
   readonly lastAccessedAt: number;
   readonly accessCount: number;
+  // Governed retention outcomes (#204, O-V1). `outcomeCount` is how many times a deterministic
+  // governance event judged this memory's usefulness; `utilitySum` is the summed utility of those
+  // judgements (each in [0,1]). Their mean drives the maintenance utility factor. Both default 0 for
+  // a never-judged memory (no outcome => neutral factor).
+  readonly outcomeCount: number;
+  readonly utilitySum: number;
 }
 
 // Insert-or-increment. The ON CONFLICT clause turns a repeat access into a counter bump plus a
@@ -26,12 +32,28 @@ ON CONFLICT(memory_id) DO UPDATE SET
   last_accessed_at = excluded.last_accessed_at
 `;
 
-const SELECT_ALL_SQL = "SELECT memory_id, last_accessed_at, access_count FROM memory_access";
+// Append a governed retention OUTCOME (#204, O-V1). Unlike an access, an outcome NEVER advances the
+// recall counter or the last-access timestamp — it only accumulates the outcome count and summed
+// utility. A memory that was judged before it was ever recalled gets a fresh row with access_count 0
+// (the maintenance recency model then anchors on createdAt, not this insert's timestamp). `utility`
+// is clamped to [0,1] so a caller bug cannot skew the mean outside the modelled range.
+const RECORD_OUTCOME_SQL = `
+INSERT INTO memory_access (memory_id, last_accessed_at, access_count, outcome_count, utility_sum)
+VALUES (?, ?, 0, 1, ?)
+ON CONFLICT(memory_id) DO UPDATE SET
+  outcome_count = outcome_count + 1,
+  utility_sum = utility_sum + excluded.utility_sum
+`;
+
+const SELECT_ALL_SQL =
+  "SELECT memory_id, last_accessed_at, access_count, outcome_count, utility_sum FROM memory_access";
 
 interface AccessRow {
   readonly memory_id: string;
   readonly last_accessed_at: number;
   readonly access_count: number;
+  readonly outcome_count: number;
+  readonly utility_sum: number;
 }
 
 export function recordAccessRows(db: DatabaseSync, ids: readonly MemoryId[], nowMs: number): void {
@@ -42,12 +64,34 @@ export function recordAccessRows(db: DatabaseSync, ids: readonly MemoryId[], now
   }
 }
 
+function clampUtility(utility: number): number {
+  if (!(utility > 0)) return 0;
+  if (utility > 1) return 1;
+  return utility;
+}
+
+export function recordOutcomeRows(
+  db: DatabaseSync,
+  ids: readonly MemoryId[],
+  utility: number,
+  nowMs: number,
+): void {
+  if (ids.length === 0) return;
+  const clamped = clampUtility(utility);
+  const stmt = db.prepare(RECORD_OUTCOME_SQL);
+  for (const id of ids) {
+    stmt.run(id, nowMs, clamped);
+  }
+}
+
 function rowsToMap(rows: readonly AccessRow[]): Map<MemoryId, MemoryAccessStat> {
   const map = new Map<MemoryId, MemoryAccessStat>();
   for (const row of rows) {
     map.set(row.memory_id as MemoryId, {
       lastAccessedAt: row.last_accessed_at,
       accessCount: row.access_count,
+      outcomeCount: row.outcome_count,
+      utilitySum: row.utility_sum,
     });
   }
   return map;

@@ -576,6 +576,32 @@ export const structuredFileFixture: RetrievalEvalFixture = {
               ],
             },
             {
+              id: documentId("doc-xlsx"),
+              safeDisplayName: "controls.xlsx",
+              mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              parserId: "xlsx",
+              parsedUnits: [
+                {
+                  id: "xlsx-row-17",
+                  unit: {
+                    kind: "csv-row",
+                    tableName: "Controls",
+                    rowIndex: 16,
+                    characterStart: 0,
+                    characterEnd: 64,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-xlsx"),
+                  text: "xlsx control row body",
+                  topic: "xlsx-topic",
+                  parsedUnitId: "xlsx-row-17",
+                },
+              ],
+            },
+            {
               id: documentId("doc-html"),
               safeDisplayName: "guide.html",
               mediaType: "text/html",
@@ -652,6 +678,14 @@ export const structuredFileFixture: RetrievalEvalFixture = {
       topic: "section-topic",
       scope: { kind: "capsule", capsuleId: capsuleId("cap-structured") },
       expectedChunkIds: [chunkId("c-section")],
+      topK: 1,
+    },
+    {
+      id: "q-xlsx",
+      text: "find the xlsx control row",
+      topic: "xlsx-topic",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-structured") },
+      expectedChunkIds: [chunkId("c-xlsx")],
       topK: 1,
     },
   ],

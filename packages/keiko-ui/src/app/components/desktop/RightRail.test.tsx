@@ -7,30 +7,13 @@ describe("RightRail", () => {
     render(<RightRail openTools={new Set()} onTool={vi.fn()} />);
     expect(screen.getByRole("complementary", { name: "Workspace utilities" })).toBeInTheDocument();
   });
-});
 
-describe("RightRail — aria-pressed on tool buttons (WCAG 4.1.2)", () => {
-  it("sets aria-pressed=false when the panel is closed", () => {
+  it("does not expose removed workspace utility buttons", () => {
     render(<RightRail openTools={new Set()} onTool={vi.fn()} />);
-    const inspectorBtn = screen.getByRole("button", { name: "Inspector" });
-    expect(inspectorBtn).toHaveAttribute("aria-pressed", "false");
-  });
-
-  it("sets aria-pressed=true when the panel is open", () => {
-    render(<RightRail openTools={new Set(["inspector"])} onTool={vi.fn()} />);
-    const inspectorBtn = screen.getByRole("button", { name: "Inspector" });
-    expect(inspectorBtn).toHaveAttribute("aria-pressed", "true");
-  });
-
-  it("reflects open state independently for each tool button", () => {
-    render(<RightRail openTools={new Set(["activity"])} onTool={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "Activity" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Inspector" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    expect(screen.queryByRole("button", { name: "Workspace outline" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Inspector" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resources" })).not.toBeInTheDocument();
   });
 });

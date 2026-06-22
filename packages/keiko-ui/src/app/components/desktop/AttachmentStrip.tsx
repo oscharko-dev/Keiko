@@ -288,11 +288,11 @@ export function AttachButton({
       />
       <button
         type="button"
-        className="cmp-icon"
+        className="cmp-icon cmp-tip-start"
         aria-label="Attach file"
         aria-disabled={!supportsAny ? "true" : undefined}
         aria-describedby={!supportsAny ? ATTACH_DISABLED_HINT_ID : undefined}
-        title={supportsAny ? "Attach file" : "Attachments not supported by this model"}
+        data-tip={supportsAny ? "Attach file" : "Attachments not supported"}
         onClick={handleClick}
       >
         <Icons.files size={16} />

@@ -51,6 +51,7 @@ ON CONFLICT(memory_id) DO UPDATE SET
 `;
 
 const SELECT_SQL = "SELECT * FROM memory_embeddings WHERE memory_id = ?";
+const BULK_SELECT_CHUNK_SIZE = 500;
 
 const BYTES_PER_FLOAT32 = 4;
 
@@ -122,6 +123,10 @@ export function getEmbeddingRow(
 ): MemoryEmbeddingRow | undefined {
   const row = db.prepare(SELECT_SQL).get(memoryId) as unknown as EmbeddingDbRow | undefined;
   if (row === undefined) return undefined;
+  return rowToEmbedding(row, cipher);
+}
+
+function rowToEmbedding(row: EmbeddingDbRow, cipher: MemoryContentCipher): MemoryEmbeddingRow {
   const plainVector = openVectorBytes(row.vector, cipher);
   // Read-side soundness: a tampered DB row (or a future schema drift) must not silently land a
   // bad metric string in the typed return shape, and the DECRYPTED BLOB length must match the
@@ -143,4 +148,25 @@ export function getEmbeddingRow(
     createdAt: row.created_at,
   };
   return row.model_revision === null ? base : { ...base, modelRevision: row.model_revision };
+}
+
+export function getEmbeddingRows(
+  db: DatabaseSync,
+  memoryIds: readonly MemoryId[],
+  cipher: MemoryContentCipher,
+): ReadonlyMap<MemoryId, MemoryEmbeddingRow> {
+  const out = new Map<MemoryId, MemoryEmbeddingRow>();
+  if (memoryIds.length === 0) return out;
+  const uniqueIds = [...new Set(memoryIds)];
+  for (let i = 0; i < uniqueIds.length; i += BULK_SELECT_CHUNK_SIZE) {
+    const chunk = uniqueIds.slice(i, i + BULK_SELECT_CHUNK_SIZE);
+    const placeholders = chunk.map(() => "?").join(",");
+    const rows = db
+      .prepare(`SELECT * FROM memory_embeddings WHERE memory_id IN (${placeholders})`)
+      .all(...chunk) as unknown as readonly EmbeddingDbRow[];
+    for (const row of rows) {
+      out.set(row.memory_id as MemoryId, rowToEmbedding(row, cipher));
+    }
+  }
+  return out;
 }

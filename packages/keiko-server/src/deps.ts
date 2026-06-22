@@ -9,7 +9,9 @@
 import {
   createDefaultChatCapability,
   loadConfigFromFile,
+  loadEgressConfigFromFile,
   parseGatewayConfig,
+  resolveOutboundHttpEgressConfig,
   type EnvSource,
   type GatewayConfig,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -45,6 +47,8 @@ import {
   type ConsolidationJobRegistry,
 } from "./memory-consolidation-registry.js";
 import type {
+  OpenAIEmbeddingBatchOutcome,
+  OpenAIEmbeddingBatchRequest,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -56,6 +60,15 @@ import {
   resolveGroundingLimits,
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { EditorLanguageRouteOptions } from "./editor/languageRoutes.js";
+import { createProviderSecretResolver, type ProviderSecretResolver } from "./credentialVault.js";
+import { createLocalKnowledgeKeyProvider } from "./localKnowledgeKeyProvider.js";
+import type { KnowledgeStoreKeyProvider } from "@oscharko-dev/keiko-local-knowledge";
+import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
+import {
+  enforceQiRetentionAtStartup,
+  type QiRetentionAuditSink,
+} from "./qualityIntelligence/retentionEnforcement.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -84,6 +97,8 @@ export interface UiHandlerDeps {
   readonly evidenceStore: EvidenceStore;
   // Process environment for redaction (env-value scrubbing) and config resolution.
   readonly env: EnvSource;
+  // Resolved outbound HTTP egress policy, including config-file-only Figma egress.
+  readonly egress?: GatewayEgressConfig | undefined;
   // Live-payload redactor (D9). Applied to run reports, projections, and SSE event data.
   readonly redactor: Redactor;
   // The in-memory, bounded run registry. Injectable so tests never share global state.
@@ -107,10 +122,10 @@ export interface UiHandlerDeps {
   // ADR-0017 — browser tool session manager (BYO Chrome over CDP). Optional so existing tests
   // that do not exercise /api/browser/* keep their fixtures unchanged.
   readonly browser?: BrowserSessionManager | undefined;
-  // Issue #211 — Memory Center vault. Optional so legacy tests that do not exercise /api/memory/*
+  // Issue #211 — MemoriaViva vault. Optional so legacy tests that do not exercise /api/memory/*
   // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
   readonly memoryVault?: MemoryVaultStore | undefined;
-  // Issue #208 — explicit, bounded in-memory consolidation job registry for Memory Center polling.
+  // Issue #208 — explicit, bounded in-memory consolidation job registry for MemoriaViva polling.
   readonly consolidationJobs?: ConsolidationJobRegistry | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
   // and can be updated after a successful credential test without restarting the loopback server.
@@ -128,10 +143,23 @@ export interface UiHandlerDeps {
         egress?: GatewayEgressConfig,
       ) => Promise<readonly string[]>)
     | undefined;
+  // Test seam for Figma PAT setup. Production performs a bounded Figma /v1/me request.
+  readonly figmaCredentialTester?:
+    | ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>)
+    | undefined;
+  // Test-only deterministic editor language route options. Production leaves this undefined so the
+  // language service keeps the default deadline and real clock.
+  readonly editorLanguageRouteOptions?: EditorLanguageRouteOptions | undefined;
   // Issue #198 audit seam: lets local-knowledge route tests stub embedding requests without
   // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
   readonly localKnowledgeEmbeddingRequest?:
     | ((request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>)
+    | undefined;
+  // #189 GRD-004 array-batch embedding seam. Production leaves this undefined and uses
+  // requestOpenAIEmbeddingBatch; tests that set localKnowledgeEmbeddingRequest only get the
+  // batch path when they also provide a batch stub, so existing scalar-stub tests are unchanged.
+  readonly localKnowledgeEmbeddingBatchRequest?:
+    | ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>)
     | undefined;
   // Issue #539 (Epic #532) — relationship engine handler deps. Optional so legacy tests
   // that do not exercise /api/relationships/* keep their fixtures unchanged. Production
@@ -141,6 +169,11 @@ export interface UiHandlerDeps {
   // default). Consumed by QI read routes that pass evidenceDir to listQualityIntelligenceRuns /
   // loadQualityIntelligenceRun (which require either options.store or options.evidenceDir).
   readonly evidenceDir?: string | undefined;
+  // Issue #1322 — Local Knowledge content encryption at rest (ADR-0047). When set, capsule stores are
+  // opened encrypted: extracted text and vector content are sealed with the key this provider resolves.
+  // Optional so legacy tests that build deps manually keep their plaintext fixtures unchanged;
+  // buildUiHandlerDeps creates one so production stores encrypt by default.
+  readonly localKnowledgeKeyProvider?: KnowledgeStoreKeyProvider | undefined;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -174,6 +207,15 @@ export interface BuildHandlerDepsOptions {
         egress?: GatewayEgressConfig,
       ) => Promise<readonly string[]>)
     | undefined;
+  // Optional Figma credential-test seam (tests); production calls Figma /v1/me.
+  readonly figmaCredentialTester?:
+    | ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>)
+    | undefined;
+  // Issue #1323 AC4 — QI retention runs once at bootstrap. These optional seams let tests assert
+  // the forwarded deletion-audit events and inject a deterministic clock; production leaves them
+  // undefined (default no-op sink + wall-clock). See qualityIntelligence/retentionEnforcement.ts.
+  readonly qiRetentionAuditSink?: QiRetentionAuditSink | undefined;
+  readonly qiRetentionNow?: (() => number) | undefined;
 }
 
 function envModelToken(modelId: string): string {
@@ -238,11 +280,12 @@ function resolveConfig(
   configPath: string | undefined,
   env: EnvSource,
   localConfigPath: string,
+  secretResolver: ProviderSecretResolver,
 ): { config: GatewayConfig | undefined; configPresent: boolean } {
   if (configPath === undefined) {
     let config: GatewayConfig | undefined;
     try {
-      config = loadConfigFromFile(localConfigPath, env);
+      config = loadConfigFromFile(localConfigPath, env, { secretResolver });
     } catch (error) {
       if (error instanceof GatewayError) {
         config = resolveEnvOnlyConfig(env);
@@ -253,11 +296,26 @@ function resolveConfig(
     return { config, configPresent: config !== undefined };
   }
   try {
-    return { config: loadConfigFromFile(configPath, env), configPresent: true };
+    return { config: loadConfigFromFile(configPath, env, { secretResolver }), configPresent: true };
   } catch (error) {
     if (error instanceof GatewayError) {
       const config = resolveEnvOnlyConfig(env);
       return { config, configPresent: config !== undefined };
+    }
+    throw error;
+  }
+}
+
+function resolveConfiguredEgress(
+  configPath: string | undefined,
+  env: EnvSource,
+  localConfigPath: string,
+): GatewayEgressConfig | undefined {
+  try {
+    return loadEgressConfigFromFile(configPath ?? localConfigPath, env);
+  } catch (error) {
+    if (error instanceof GatewayError) {
+      return resolveOutboundHttpEgressConfig(undefined, env);
     }
     throw error;
   }
@@ -289,87 +347,14 @@ export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
   return deps.gatewayConfig?.present() ?? deps.configPresent;
 }
 
-// Probes a single egress env var by running parseGatewayConfig with only that variable
-// set, returning the resulting egress field or undefined when the value is invalid.
-// Logs a warning naming the variable on failure — never the value (may contain credentials).
-function probeEgressField(
-  envName: string,
-  envValue: string,
-  fieldKey: keyof GatewayEgressConfig,
-): GatewayEgressConfig[keyof GatewayEgressConfig] | undefined {
-  try {
-    const probed = parseGatewayConfig(
-      {
-        providers: [
-          { modelId: "keiko-egress-probe", baseUrl: "http://127.0.0.1", apiKey: "probe-key" },
-        ],
-      },
-      { [envName]: envValue },
-    ).egress;
-    return probed?.[fieldKey];
-  } catch (error) {
-    if (error instanceof GatewayError) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[keiko-model-gateway] Ignoring invalid egress env var ${envName} (reason: ${fieldKey} parse failed)`,
-      );
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-function firstEnvValue(
-  env: EnvSource,
-  ...names: string[]
-): { name: string; value: string } | undefined {
-  for (const name of names) {
-    const value = env[name];
-    if (typeof value === "string" && value.trim().length > 0) return { name, value };
-  }
-  return undefined;
-}
-
-function parseEnvOnlyEgressConfig(env: EnvSource): GatewayEgressConfig | undefined {
-  // Parse each egress field independently so a malformed HTTPS_PROXY (e.g. with embedded
-  // credentials) never silently discards a valid caBundlePath or noProxy. Each invalid
-  // field emits a console.warn (var name only, never the value) and the rest are applied.
-  const result: { -readonly [K in keyof GatewayEgressConfig]?: GatewayEgressConfig[K] } = {};
-
-  const httpProxy = firstEnvValue(env, "KEIKO_HTTP_PROXY", "HTTP_PROXY", "http_proxy");
-  if (httpProxy !== undefined) {
-    const val = probeEgressField(httpProxy.name, httpProxy.value, "httpProxy");
-    if (val !== undefined) result.httpProxy = val as string;
-  }
-
-  const httpsProxy = firstEnvValue(env, "KEIKO_HTTPS_PROXY", "HTTPS_PROXY", "https_proxy");
-  if (httpsProxy !== undefined) {
-    const val = probeEgressField(httpsProxy.name, httpsProxy.value, "httpsProxy");
-    if (val !== undefined) result.httpsProxy = val as string;
-  }
-
-  const noProxy = firstEnvValue(env, "KEIKO_NO_PROXY", "NO_PROXY", "no_proxy");
-  if (noProxy !== undefined) {
-    const val = probeEgressField(noProxy.name, noProxy.value, "noProxy");
-    if (val !== undefined) result.noProxy = val as readonly string[];
-  }
-
-  const caBundlePath = firstEnvValue(env, "KEIKO_CA_BUNDLE_PATH");
-  if (caBundlePath !== undefined) {
-    // caBundlePath is just a trimmed string — no validation that rejects valid paths.
-    result.caBundlePath = caBundlePath.value.trim();
-  }
-
-  return Object.keys(result).length === 0 ? undefined : result;
-}
-
 export function currentGatewayEgressConfig(
-  deps: Pick<UiHandlerDeps, "config" | "gatewayConfig" | "env">,
+  deps: Pick<UiHandlerDeps, "config" | "gatewayConfig" | "env" | "egress">,
 ): GatewayEgressConfig | undefined {
   return (
     deps.gatewayConfig?.current()?.egress ??
+    deps.egress ??
     deps.config?.egress ??
-    parseEnvOnlyEgressConfig(deps.env)
+    resolveOutboundHttpEgressConfig(undefined, deps.env)
   );
 }
 
@@ -378,7 +363,12 @@ export function currentGatewayEgressConfig(
 // misconfigured env does not prevent the server from starting.
 function parseEnvPositiveInt(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;
-  const n = Number.parseInt(raw, 10);
+  // GRD-037: strict parse so a typo'd value is genuinely ignored (as the comment promises) rather
+  // than silently coerced — Number.parseInt("16abc")→16 and ("4.9")→4. Mirrors the loud
+  // config-file validator's all-digits rule, but here a bad env var falls back to the default.
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const n = Number.parseInt(trimmed, 10);
   return Number.isFinite(n) && n >= 1 ? n : undefined;
 }
 
@@ -416,12 +406,10 @@ export function currentGroundingLimits(deps: UiHandlerDeps): GroundingLimits {
 // Re-export GroundingLimits so callers (read-handlers, store-handlers) only need one import.
 export type { GroundingLimits };
 
-function configSecretValues(config: GatewayConfig | undefined): readonly string[] {
-  // Epic #177 audit: include both `apiKey` and `baseUrl` so error-message and evidence
-  // redaction can scrub the provider URL the user (or the provider's response) might echo
-  // back. `baseUrl` is not a credential per se, but pairing it with the apiKey reveals the
-  // backend topology and gives an attacker a place to direct probes; the matrix's security
-  // section claims both shapes are scrubbed at the BFF boundary.
+function configTopologyValues(config: GatewayConfig | undefined): readonly string[] {
+  // Epic #177 audit: redact provider URLs and egress settings because backend topology gives an
+  // attacker a place to direct probes. Credentials are collected separately as opaque secrets for
+  // evidence hashing.
   if (config === undefined) return [];
   const out: string[] = [];
   const addEgressTopology = (egress: GatewayConfig["egress"]): void => {
@@ -432,10 +420,31 @@ function configSecretValues(config: GatewayConfig | undefined): readonly string[
   };
   addEgressTopology(config.egress);
   for (const provider of config.providers) {
-    out.push(provider.apiKey, provider.baseUrl);
+    out.push(provider.baseUrl);
     addEgressTopology(provider.egress);
   }
   return out;
+}
+
+function configOpaqueSecretValues(config: GatewayConfig | undefined): readonly string[] {
+  if (config === undefined) return [];
+  const out: string[] = [];
+  if (config.figma?.accessToken !== undefined) {
+    out.push(config.figma.accessToken);
+  }
+  for (const provider of config.providers) {
+    out.push(provider.apiKey);
+  }
+  return out;
+}
+
+function configSecretValues(config: GatewayConfig | undefined): readonly string[] {
+  return [...configTopologyValues(config), ...configOpaqueSecretValues(config)];
+}
+
+function figmaEnvSecretValues(env: EnvSource): readonly string[] {
+  const token = env.FIGMA_ACCESS_TOKEN;
+  return token !== undefined && token.length > 0 ? [token] : [];
 }
 
 function egressSecretValues(egress: GatewayConfig["egress"]): readonly string[] {
@@ -445,6 +454,11 @@ function egressSecretValues(egress: GatewayConfig["egress"]): readonly string[] 
   );
 }
 
+// The Figma PAT is redacted via its config (`config.figma.accessToken`) and env
+// (`FIGMA_ACCESS_TOKEN`) literals. The decrypted ENCRYPTED-VAULT token (#758) is intentionally NOT
+// added here: it never reaches a redactable payload — it is confined to the outbound `X-Figma-Token`
+// request header by construction (figmaConnector.ts) and is never returned, logged, or serialized.
+// Adding it would require decrypting the vault at redactor-build time, widening exposure for no gain.
 function redactionSecrets(
   env: EnvSource,
   config: GatewayConfig | undefined,
@@ -453,6 +467,7 @@ function redactionSecrets(
   return Array.from(
     new Set([
       ...keikoApiKeySecretValues(env),
+      ...figmaEnvSecretValues(env),
       ...configSecretValues(config),
       ...egressSecretValues(egress),
     ]),
@@ -462,18 +477,20 @@ function redactionSecrets(
 function runtimeRedactionSecrets(
   env: EnvSource,
   runtimeConfig: RuntimeGatewayConfig,
+  egress: GatewayConfig["egress"],
 ): readonly string[] {
   const config = runtimeConfig.current();
-  return redactionSecrets(env, config, config?.egress ?? parseEnvOnlyEgressConfig(env));
+  return redactionSecrets(env, config, config?.egress ?? egress);
 }
 
 function runtimeRedactString(
   env: EnvSource,
   runtimeConfig: RuntimeGatewayConfig,
+  egress: GatewayConfig["egress"],
 ): (value: string) => string {
   return (value: string): string =>
     createAuditRedactor(
-      { additionalSecrets: runtimeRedactionSecrets(env, runtimeConfig) },
+      { additionalSecrets: runtimeRedactionSecrets(env, runtimeConfig, egress) },
       env,
     )(value);
 }
@@ -482,13 +499,10 @@ function runtimeRedactString(
 // reuses `createAuditRedactor` (escaped literals + audited gateway patterns) wrapped by
 // `deepRedactStrings` so every string leaf of a serialized payload is scrubbed.
 export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor {
+  const egress = config?.egress ?? resolveOutboundHttpEgressConfig(undefined, env);
   const redactString = createAuditRedactor(
     {
-      additionalSecrets: redactionSecrets(
-        env,
-        config,
-        config?.egress ?? parseEnvOnlyEgressConfig(env),
-      ),
+      additionalSecrets: redactionSecrets(env, config, egress),
     },
     env,
   );
@@ -497,6 +511,23 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
 
 export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
   return redactionSecrets(deps.env, currentGatewayConfig(deps), currentGatewayEgressConfig(deps));
+}
+
+export function currentEvidenceTopologyRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
+  return Array.from(
+    new Set([
+      ...configTopologyValues(currentGatewayConfig(deps)),
+      ...egressSecretValues(currentGatewayEgressConfig(deps)),
+    ]),
+  );
+}
+
+export function currentEvidenceRequiresFullStringRedaction(deps: UiHandlerDeps): boolean {
+  return (
+    keikoApiKeySecretValues(deps.env).length > 0 ||
+    figmaEnvSecretValues(deps.env).length > 0 ||
+    configOpaqueSecretValues(currentGatewayConfig(deps)).length > 0
+  );
 }
 
 // The production ModelPort factory: a GatewayModelPort over a Gateway built from the resolved
@@ -644,19 +675,62 @@ function buildPeripherals(
 // wiring (loadConfigFromFile / resolveEvidenceDir / createNodeEvidenceStore). The UI store is
 // created at the resolved UI-DB path (explicit → KEIKO_UI_DATA_DIR → ~/.keiko/keiko-ui.db) unless
 // an injected store is supplied (tests).
-export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
-  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
-  const runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
-  const { config, configPresent } = resolveConfig(
+// One-time, idempotent migration of any pre-existing plaintext credentials in the local config
+// (Issue #1320), then resolution of the (now reference-only) config through a vault-backed resolver.
+// Migration is best-effort and crash-aware: it never throws into bootstrap, so a partial state simply
+// re-runs next start and is surfaced by `keiko repair`. It runs before the config is read so the
+// resolver turns the rewritten secret references back into live credentials.
+function loadRuntimeGatewayConfig(
+  options: BuildHandlerDepsOptions,
+  runtimeConfigPath: string,
+  resolvedEvidenceDir: string,
+): { config: GatewayConfig | undefined; configPresent: boolean; storagePath: string } {
+  const effectiveConfigPath = options.configPath ?? runtimeConfigPath;
+  migrateLocalConfigCredentials({
+    configPath: effectiveConfigPath,
+    env: options.env,
+    evidenceDir: resolvedEvidenceDir,
+  });
+  const secretResolver = createProviderSecretResolver({
+    configPath: effectiveConfigPath,
+    env: options.env,
+  });
+  const resolved = resolveConfig(
     options.configPath,
     options.env,
     runtimeConfigPath,
+    secretResolver,
   );
-  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, runtimeConfigPath);
-  const evidenceStore = createNodeEvidenceStore(
-    resolveEvidenceDir(options.evidenceDir, options.env),
+  return { ...resolved, storagePath: effectiveConfigPath };
+}
+
+// Resolve the evidence dir AND run QI run-retention ONCE per server instance at bootstrap (Issue
+// #1323 AC4). Lazy, no timer (a setInterval would race the filesystem-backed store). Best-effort:
+// retention never throws into construction (mirrors migrateLocalConfigCredentials). Short-lived runs
+// past their retention policy are purged deterministically rather than the policy id staying passive.
+function resolveEvidenceDirAndEnforceRetention(options: BuildHandlerDepsOptions): string {
+  const evidenceDir = resolveEvidenceDir(options.evidenceDir, options.env);
+  enforceQiRetentionAtStartup({
+    evidenceDir,
+    now: options.qiRetentionNow,
+    auditSink: options.qiRetentionAuditSink,
+  });
+  return evidenceDir;
+}
+
+export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
+  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
+  const runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
+  const resolvedEvidenceDir = resolveEvidenceDirAndEnforceRetention(options);
+  const { config, configPresent, storagePath } = loadRuntimeGatewayConfig(
+    options,
+    runtimeConfigPath,
+    resolvedEvidenceDir,
   );
-  const redactString = runtimeRedactString(options.env, runtimeConfig);
+  const egress = resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath);
+  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, storagePath);
+  const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
+  const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
   const { store: uiStore, relationship } = composePersistence(
     options.store,
@@ -674,18 +748,21 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     config,
     configPresent,
     evidenceStore,
-    evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
+    evidenceDir: resolvedEvidenceDir,
     env: options.env,
+    egress,
     redactor: liveRedactor,
     registry: options.registry ?? createRunRegistry(),
     modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(runtimeConfig),
-    redactionSecrets: runtimeRedactionSecrets(options.env, runtimeConfig),
+    redactionSecrets: runtimeRedactionSecrets(options.env, runtimeConfig, egress),
     store: uiStore,
     uiDbPath: resolvedUiDbPath,
     preferredProjectPath,
     gatewayConfig: runtimeConfig,
     gatewaySetupTester: options.gatewaySetupTester,
     gatewayModelDiscovery: options.gatewayModelDiscovery,
+    figmaCredentialTester: options.figmaCredentialTester,
+    localKnowledgeKeyProvider: createLocalKnowledgeKeyProvider({ env: options.env }),
     ...peripherals,
     consolidationJobs: createConsolidationJobRegistry(),
     ...(relationship === undefined ? {} : { relationship }),

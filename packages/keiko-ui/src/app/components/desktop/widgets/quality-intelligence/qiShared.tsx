@@ -6,6 +6,7 @@
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceReviewState,
+  TestQualityRubricDimension,
   QualityIntelligenceUiWeakTestFlag,
 } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
@@ -20,6 +21,34 @@ export const REVIEW_LABEL: Readonly<Record<QualityIntelligenceReviewState, strin
   rejected: "Rejected",
   withdrawn: "Withdrawn",
 };
+
+// CSS class map for review state badges — shared by CandidatesPane (per-candidate badge) and
+// QiHubPanel (run-row badge) so the same colour tokens apply consistently in both views
+// (Issue #282 / A11y-2: run-row now carries a review badge, must reuse the same CSS map).
+export const REVIEW_CLASS: Readonly<Record<QualityIntelligenceReviewState, string>> = {
+  open: "qi-review-open",
+  approved: "qi-review-approved",
+  "changes-requested": "qi-review-changes",
+  rejected: "qi-review-rejected",
+  withdrawn: "qi-review-withdrawn",
+};
+
+// No aria-label here: naming is prohibited on a generic <span> (ARIA 1.2), so assistive tech
+// ignores it. The "Review:" context is supplied via a screen-reader-only prefix instead.
+// Used by CandidatesPane (per-candidate) and QiHubPanel (run-row) — single source of truth
+// (de-duplicated from CandidatesPane.tsx by Issue #282 A11y-2 refactor).
+export function ReviewBadge({
+  state,
+}: {
+  readonly state: QualityIntelligenceReviewState;
+}): ReactNode {
+  return (
+    <span className={`qi-review-badge ${REVIEW_CLASS[state]}`}>
+      <span className="sr-only">Review: </span>
+      {REVIEW_LABEL[state]}
+    </span>
+  );
+}
 
 // Coded errors render message-first with the machine code trailing in parentheses — users read the
 // human sentence, auditors still get the stable code (uiux-fix F047 C271: the raw "QI_…: message"
@@ -154,6 +183,54 @@ export function WeakTestFlag({
         Weak test
       </span>
       <p className="qi-weak-flag-reason">{flag.rationale}</p>
+    </div>
+  );
+}
+
+export interface CandidateQualityVerdict {
+  readonly verdict: "strong" | "weak";
+  readonly score: number;
+  readonly dimensions: readonly TestQualityRubricDimension[];
+  readonly overallRationale: string;
+}
+
+const QUALITY_DIMENSION_LABEL: Readonly<Record<string, string>> = {
+  verifiability: "Verifiability",
+  atomicity: "Atomicity",
+  determinism: "Determinism",
+  "ac-fidelity": "AC fidelity",
+};
+
+function qualityVerdictLabel(verdict: CandidateQualityVerdict["verdict"]): string {
+  return verdict === "strong" ? "Strong" : "Weak";
+}
+
+export function CandidateQualityVerdictNote({
+  verdict,
+}: {
+  readonly verdict: CandidateQualityVerdict;
+}): ReactNode {
+  const rounded = Math.round(verdict.score);
+  const label = qualityVerdictLabel(verdict.verdict);
+  return (
+    <div
+      role="note"
+      aria-label={`Quality judge verdict: ${label}, ${rounded.toString()} out of 100. ${verdict.overallRationale}`}
+      className="qi-cand-block"
+      data-testid="qi-quality-verdict"
+    >
+      <p className="qi-cand-block-label">Quality verdict</p>
+      <p>
+        {label} - {rounded.toString()}/100
+      </p>
+      <ul className="qi-cand-list" aria-label="Quality dimensions">
+        {verdict.dimensions.map((dimension) => (
+          <li key={dimension.name}>
+            {QUALITY_DIMENSION_LABEL[dimension.name] ?? dimension.name}{" "}
+            {Math.round(dimension.score).toString()}: {dimension.rationale}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

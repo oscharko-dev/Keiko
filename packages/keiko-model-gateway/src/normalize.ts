@@ -105,6 +105,29 @@ function firstChoice(payload: Record<string, unknown>): Record<string, unknown> 
   return isRecord(choices[0]) ? choices[0] : undefined;
 }
 
+function textPart(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!isRecord(value)) {
+    return "";
+  }
+  if (typeof value.text === "string") {
+    return value.text;
+  }
+  return typeof value.content === "string" ? value.content : "";
+}
+
+export function textFromContent(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value.map(textPart).join("");
+}
+
 export function normalizeChatResponse(
   rawPayload: unknown,
   modelId: string,
@@ -118,7 +141,7 @@ export function normalizeChatResponse(
   const finishReason = mapFinishReason(choice?.finish_reason);
   assertNotRefusal(message, finishReason);
   const toolCalls = parseToolCalls(message);
-  const content = typeof message.content === "string" ? message.content : "";
+  const content = textFromContent(message.content);
   const structuredOutput =
     expectStructured && content.length > 0 ? parseStructuredOutput(content) : null;
   return { modelId, content, finishReason, toolCalls, structuredOutput, usage };

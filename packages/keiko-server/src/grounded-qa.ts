@@ -31,15 +31,18 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   validateConnectedContextPack,
   type ConnectedContextPack,
+  type EvidenceAtom,
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   buildGroundedAnswerContextPackSummary,
   type GroundedAnswer,
+  type GroundedCitationDocumentFormat,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -75,6 +78,7 @@ import {
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { rememberGroundedTurn } from "./grounded-turn-registry.js";
+import { assertUsableAssistantContent } from "./assistant-response.js";
 
 // ─── Body parsing (mirrors store-handlers' bounded reader) ────────────────────
 
@@ -115,6 +119,10 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 export function badRequest(message: string): RouteResult {
   return { status: 400, body: errorBody("BAD_REQUEST", message) };
+}
+
+export function clarificationRequest(message: string): RouteResult {
+  return { status: 400, body: errorBody("CLARIFICATION_NEEDED", message) };
 }
 
 function notFound(message: string): RouteResult {
@@ -387,7 +395,8 @@ function requestAbortSignal(ctx: RouteContext): AbortSignal {
       controller.abort("grounded request cancelled");
     }
   };
-  ctx.req.on("aborted", abort);
+  // The req "aborted" event is deprecated since Node 17 and fires unreliably.
+  // The res "close" event is the canonical signal for a disconnected client.
   ctx.res.on("close", () => {
     if (!ctx.res.writableEnded) abort();
   });
@@ -406,8 +415,12 @@ function formatLineRange(citation: GroundedEvidenceCitation): string {
 }
 
 function redactedString(redactor: Redactor, value: string): string {
-  const redacted = redactor(value);
-  return typeof redacted === "string" ? redacted : value;
+  // GRD-001: strip Trojan-source / invisible format chars BEFORE redaction so a zero-width
+  // character cannot split a secret shape past the redactor, and so reordered/hidden text
+  // never reaches the prompt or the browser-rendered wire.
+  const safe = stripUnsafeFormatChars(value);
+  const redacted = redactor(safe);
+  return typeof redacted === "string" ? redacted : safe;
 }
 
 export function promptSafeExcerptText(value: string): string {
@@ -511,6 +524,27 @@ export function packBudgetSummary(pack: ConnectedContextPack): string {
   ].join("; ");
 }
 
+// Bounded document extraction (Issue #1285): a citation derived from a `document-extract` atom
+// refers to a connected DOCX/XLSX/PDF rather than a code/text file. The format token is derived
+// from the (already-redacted) scopePath suffix so prompt framing and browser citations can label
+// document evidence distinctly without re-deriving it in the UI.
+function documentFormatForAtom(atom: EvidenceAtom): GroundedCitationDocumentFormat | undefined {
+  if (atom.provenance.kind !== "document-extract") {
+    return undefined;
+  }
+  const path = atom.scopePath.toLowerCase();
+  if (path.endsWith(".docx")) {
+    return "docx";
+  }
+  if (path.endsWith(".xlsx")) {
+    return "xlsx";
+  }
+  if (path.endsWith(".pdf")) {
+    return "pdf";
+  }
+  return undefined;
+}
+
 export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): readonly string[] {
   const lines: string[] = [];
   for (const file of pack.files) {
@@ -526,8 +560,13 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
         score: excerpt.atom.score,
         stableId: excerpt.atom.stableId,
       });
+      const documentFormat = documentFormatForAtom(excerpt.atom);
+      const label =
+        documentFormat === undefined
+          ? "Evidence"
+          : `Document evidence (${documentFormat.toUpperCase()}, extracted text)`;
       lines.push(
-        `- Evidence ${redactedString(redactor, citation)} (score ${excerpt.atom.score.toFixed(2)}):`,
+        `- ${label} ${redactedString(redactor, citation)} (score ${excerpt.atom.score.toFixed(2)}):`,
       );
       lines.push("```");
       lines.push(promptSafeExcerptText(redactedString(redactor, excerpt.content)));
@@ -613,8 +652,9 @@ function createGatewayAnswerer(
         signal,
       );
       const content = response.content.trim();
+      assertUsableAssistantContent(content, modelId);
       return {
-        content: content.length > 0 ? content : "The model returned an empty response.",
+        content,
         usage: {
           promptTokens: response.usage.promptTokens,
           completionTokens: response.usage.completionTokens,
@@ -647,7 +687,8 @@ function defaultRunner(
 // ─── Citation projection ──────────────────────────────────────────────────────
 
 export function redactString(redactor: Redactor, value: string): string {
-  return redactor(value) as string;
+  // GRD-001: strip Trojan-source / invisible format chars before redaction (see redactedString).
+  return redactor(stripUnsafeFormatChars(value)) as string;
 }
 
 export function buildCitations(
@@ -657,11 +698,13 @@ export function buildCitations(
   const citations: GroundedEvidenceCitation[] = [];
   for (const file of pack.files) {
     for (const excerpt of file.excerpts) {
+      const documentFormat = documentFormatForAtom(excerpt.atom);
       citations.push({
         scopePath: redactString(redactor, excerpt.atom.scopePath),
         lineRange: excerpt.atom.lineRange,
         score: excerpt.atom.score,
         stableId: redactString(redactor, excerpt.atom.stableId),
+        ...(documentFormat === undefined ? {} : { documentFormat }),
       });
     }
   }
@@ -864,7 +907,7 @@ async function runGroundedRunner(
     return output;
   } catch (error) {
     if (error instanceof ClarificationNeededError) {
-      return badRequest(clarificationUserMessage(error));
+      return clarificationRequest(clarificationUserMessage(error));
     }
     const workspaceResult = mappedWorkspaceError(error);
     if (workspaceResult !== undefined) return workspaceResult;

@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useId, useMemo, useState } from "react";
-import type { ChangeEvent, FormEvent, ReactNode } from "react";
+import type { ChangeEvent, FormEvent, ReactNode, WheelEvent } from "react";
 import Link from "next/link";
 import {
   cancelMemoryConsolidationJob,
@@ -13,6 +13,7 @@ import {
   type MemoryConsolidationStaleFlag,
   type StartMemoryConsolidationInput,
 } from "@/lib/memory-api";
+import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
 import { formatError } from "./format-error";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -22,6 +23,7 @@ const DEFAULT_SETTINGS: StartMemoryConsolidationInput = {
   staleConfidenceThreshold: 0.3,
   maxAgeMs: 90 * DAY_MS,
   maxClustersPerRun: 100,
+  maxRecordsPerRun: 1_000,
 };
 
 /* "1 review items" → "1 review item" (uiux-fix F034, C372) */
@@ -46,7 +48,25 @@ function formatElapsed(ms: number): string {
 
 /* Raw memory ids were plain text — link each id to the detail route so review
    decisions are actionable (uiux-fix F034, C240; pattern: .mc-row-detail-link) */
-function MemoryIdLink({ id }: { readonly id: string }): ReactNode {
+function MemoryIdLink({
+  id,
+  onOpenDetail,
+}: {
+  readonly id: string;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+}): ReactNode {
+  if (onOpenDetail !== undefined) {
+    return (
+      <button
+        type="button"
+        className="mc-id-link mc-link-button"
+        title={id}
+        onClick={() => onOpenDetail(id)}
+      >
+        {id}
+      </button>
+    );
+  }
   return (
     <Link
       href={`/memoriaviva/detail?id=${encodeURIComponent(id)}`}
@@ -58,41 +78,59 @@ function MemoryIdLink({ id }: { readonly id: string }): ReactNode {
   );
 }
 
-function MemoryIdList({ ids }: { readonly ids: readonly string[] }): ReactNode {
+function MemoryIdList({
+  ids,
+  onOpenDetail,
+}: {
+  readonly ids: readonly string[];
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+}): ReactNode {
   return (
     <>
       {ids.map((id, index) => (
         <Fragment key={`${index.toString()}:${id}`}>
           {index > 0 ? ", " : null}
-          <MemoryIdLink id={id} />
+          <MemoryIdLink id={id} onOpenDetail={onOpenDetail} />
         </Fragment>
       ))}
     </>
   );
 }
 
-function ReviewAction({ item }: { readonly item: MemoryConsolidationReviewItem }): ReactNode {
+function ReviewAction({
+  item,
+  onOpenDetail,
+}: {
+  readonly item: MemoryConsolidationReviewItem;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+}): ReactNode {
   if (item.proposedAction === undefined) return <>No automatic action proposed.</>;
   if (item.proposedAction.kind === "merge") {
     return (
       <>
-        Merge into <MemoryIdLink id={item.proposedAction.winner} />; replace{" "}
-        <MemoryIdList ids={item.proposedAction.losers} />.
+        Merge into <MemoryIdLink id={item.proposedAction.winner} onOpenDetail={onOpenDetail} />;
+        replace <MemoryIdList ids={item.proposedAction.losers} onOpenDetail={onOpenDetail} />.
       </>
     );
   }
   return (
     <>
-      Supersede <MemoryIdLink id={item.proposedAction.older} /> with{" "}
-      <MemoryIdLink id={item.proposedAction.newer} />.
+      Supersede <MemoryIdLink id={item.proposedAction.older} onOpenDetail={onOpenDetail} /> with{" "}
+      <MemoryIdLink id={item.proposedAction.newer} onOpenDetail={onOpenDetail} />.
     </>
   );
 }
 
-function StaleFlagEntry({ flag }: { readonly flag: MemoryConsolidationStaleFlag }): ReactNode {
+function StaleFlagEntry({
+  flag,
+  onOpenDetail,
+}: {
+  readonly flag: MemoryConsolidationStaleFlag;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+}): ReactNode {
   return (
     <>
-      <MemoryIdLink id={flag.memoryId} /> — {flag.reason}
+      <MemoryIdLink id={flag.memoryId} onOpenDetail={onOpenDetail} /> — {flag.reason}
     </>
   );
 }
@@ -107,6 +145,17 @@ interface SettingsFieldProps {
   readonly help: string;
   readonly disabled?: boolean;
   readonly onChange: (name: keyof StartMemoryConsolidationInput, value: number) => void;
+}
+
+function decimalsForStep(step: number): number {
+  const [, fraction = ""] = step.toString().split(".");
+  return fraction.length;
+}
+
+function clamp(value: number, min: number | undefined, max: number | undefined): number {
+  if (min !== undefined && value < min) return min;
+  if (max !== undefined && value > max) return max;
+  return value;
 }
 
 function SettingsField({
@@ -125,25 +174,47 @@ function SettingsField({
      .mc-dialog-label (12px/600) instead of inheriting 16px (C241); inputs use
      the existing .mc-dialog-input instead of the undefined `lk-input` (C134). */
   const helpId = useId();
+  const stepField = (direction: 1 | -1): void => {
+    const stepValue = step ?? 1;
+    const base = Number.isFinite(value) ? value : (min ?? 0);
+    const precision = Math.min(decimalsForStep(stepValue) + 2, 8);
+    const next = Number((base + direction * stepValue).toFixed(precision));
+    onChange(name, clamp(next, min, max));
+  };
+  const handleWheel = (event: WheelEvent<HTMLInputElement>): void => {
+    if (disabled || event.deltaY === 0) return;
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    stepField(direction);
+  };
   return (
-    <div style={{ display: "grid", gap: 6 }}>
-      <label style={{ display: "grid", gap: 6 }}>
+    <div style={{ display: "grid", gap: "var(--space-3)" }}>
+      <label style={{ display: "grid", gap: "var(--space-3)" }}>
         <span className="mc-dialog-label">{label}</span>
-        <input
-          type="number"
-          inputMode="decimal"
-          className="mc-dialog-input"
-          name={name}
-          value={Number.isFinite(value) ? value : ""}
-          min={min}
-          max={max}
-          step={step}
-          disabled={disabled}
-          aria-describedby={helpId}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => {
-            onChange(name, Number(event.target.value));
-          }}
-        />
+        <span className="number-control">
+          <input
+            type="number"
+            inputMode="decimal"
+            className="mc-dialog-input number-control-input"
+            name={name}
+            value={Number.isFinite(value) ? value : ""}
+            min={min}
+            max={max}
+            step={step}
+            disabled={disabled}
+            aria-describedby={helpId}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => {
+              onChange(name, Number(event.target.value));
+            }}
+            onWheel={handleWheel}
+          />
+          <NumberControlStepper
+            label={label.toLowerCase()}
+            disabled={disabled}
+            onStepUp={() => stepField(1)}
+            onStepDown={() => stepField(-1)}
+          />
+        </span>
       </label>
       <span id={helpId} style={{ color: "var(--fg-muted)", fontSize: 12 }}>
         {help}
@@ -157,6 +228,8 @@ interface MemoryConsolidationProps {
   readonly fetchJobImpl?: typeof fetchMemoryConsolidationJob;
   readonly cancelJobImpl?: typeof cancelMemoryConsolidationJob;
   readonly pollIntervalMs?: number;
+  readonly onBack?: (() => void) | undefined;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
 }
 
 export function MemoryConsolidation({
@@ -164,6 +237,8 @@ export function MemoryConsolidation({
   fetchJobImpl = fetchMemoryConsolidationJob,
   cancelJobImpl = cancelMemoryConsolidationJob,
   pollIntervalMs = 2_000,
+  onBack,
+  onOpenDetail,
 }: MemoryConsolidationProps): ReactNode {
   const [settings, setSettings] = useState<StartMemoryConsolidationInput>(DEFAULT_SETTINGS);
   const [jobRecord, setJobRecord] = useState<MemoryConsolidationJobEnvelope | null>(null);
@@ -257,17 +332,35 @@ export function MemoryConsolidation({
 
   return (
     <>
-      <header className="lk-header">
-        <div style={{ display: "grid", gap: 4 }}>
+      <header className="lk-header mc-consolidation-header">
+        <div
+          className="mc-consolidation-heading"
+          style={{ display: "grid", gap: "var(--space-2)" }}
+        >
           <h1 className="lk-title">MemoriaViva Consolidation</h1>
           <p style={{ margin: 0, color: "var(--fg-muted)" }}>
             Start a bounded consolidation job, inspect its output, and cancel it while it is still
             queued or running.
           </p>
         </div>
-        <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
-          Back to MemoriaViva
-        </Link>
+        {onBack !== undefined ? (
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost lk-btn-lg"
+            aria-label="Back to MemoriaViva"
+            onClick={onBack}
+          >
+            Back
+          </button>
+        ) : (
+          <Link
+            href="/memoriaviva"
+            className="lk-btn lk-btn-ghost lk-btn-lg"
+            aria-label="Back to MemoriaViva"
+          >
+            Back
+          </Link>
+        )}
       </header>
 
       {/* Scroll container (uiux-fix F005): html,body clip overflow globally —
@@ -288,7 +381,7 @@ export function MemoryConsolidation({
             <div
               style={{
                 display: "grid",
-                gap: 12,
+                gap: "var(--space-5)",
                 gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
               }}
             >
@@ -333,9 +426,21 @@ export function MemoryConsolidation({
                 name="maxClustersPerRun"
                 value={settings.maxClustersPerRun}
                 min={0}
+                max={1000}
                 step={1}
                 disabled={submitting || hasActiveRun}
                 help="Hard bound on duplicate clusters inspected in one run."
+                onChange={updateSetting}
+              />
+              <SettingsField
+                label="Max records per run"
+                name="maxRecordsPerRun"
+                value={settings.maxRecordsPerRun}
+                min={0}
+                max={1000}
+                step={1}
+                disabled={submitting || hasActiveRun}
+                help="Hard bound on accepted records admitted to one scan."
                 onChange={updateSetting}
               />
             </div>
@@ -349,7 +454,7 @@ export function MemoryConsolidation({
             {/* aria-disabled + click/submit guards instead of native disabled:
                 disabling the focused button throws keyboard focus to <body>
                 (uiux-fix F005, PR #823 pattern). */}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-5)" }}>
               <button
                 type="submit"
                 className="lk-btn lk-btn-primary"
@@ -390,7 +495,6 @@ export function MemoryConsolidation({
 
         <section
           aria-label="Consolidation job status"
-          aria-live="polite"
           style={{
             display: "grid",
             gap: 16,
@@ -407,13 +511,18 @@ export function MemoryConsolidation({
               <div
                 style={{
                   display: "grid",
-                  gap: 12,
+                  gap: "var(--space-5)",
                   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                 }}
               >
                 <div>
                   <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>State</div>
-                  <div role="status" style={{ fontWeight: 700, textTransform: "capitalize" }}>
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                    style={{ fontWeight: 700, textTransform: "capitalize" }}
+                  >
                     {activeJob.state}
                   </div>
                 </div>
@@ -444,6 +553,13 @@ export function MemoryConsolidation({
                   </div>
                 </div>
                 <div>
+                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Records inspected</div>
+                  <div style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {activeJob.result?.recordsInspected ?? 0}
+                    {activeJob.result?.truncated === true ? " (truncated)" : ""}
+                  </div>
+                </div>
+                <div>
                   <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Memories loaded</div>
                   <div style={{ fontVariantNumeric: "tabular-nums" }}>
                     {jobRecord?.memoryCount ?? 0}
@@ -464,7 +580,7 @@ export function MemoryConsolidation({
               ) : null}
 
               {summary !== null ? (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-5)" }}>
                   <span className="mc-badge mc-badge-default">
                     {plural(summary.reviewCount, "review item")}
                   </span>
@@ -483,6 +599,8 @@ export function MemoryConsolidation({
         {activeJob?.result !== undefined ? (
           <section
             aria-label="Consolidation results"
+            aria-live="polite"
+            aria-atomic="false"
             style={{
               display: "grid",
               gap: 16,
@@ -492,7 +610,7 @@ export function MemoryConsolidation({
             <article
               style={{
                 display: "grid",
-                gap: 12,
+                gap: "var(--space-5)",
                 padding: 16,
                 border: "1px solid var(--line)",
                 borderRadius: 14,
@@ -507,17 +625,25 @@ export function MemoryConsolidation({
               {activeJob.result.reviewItems.length === 0 ? (
                 <p style={{ margin: 0, color: "var(--fg-muted)" }}>No review items returned.</p>
               ) : (
-                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "grid",
+                    gap: "var(--space-5)",
+                  }}
+                >
                   {activeJob.result.reviewItems.map((item) => (
-                    <li key={item.id} style={{ display: "grid", gap: 4 }}>
+                    <li key={item.id} style={{ display: "grid", gap: "var(--space-2)" }}>
                       <strong style={{ textTransform: "capitalize" }}>
                         {item.reason.replaceAll("-", " ")}
                       </strong>
                       <span>
-                        <MemoryIdList ids={item.relatedMemoryIds} />
+                        <MemoryIdList ids={item.relatedMemoryIds} onOpenDetail={onOpenDetail} />
                       </span>
                       <span style={{ color: "var(--fg-muted)" }}>
-                        <ReviewAction item={item} />
+                        <ReviewAction item={item} onOpenDetail={onOpenDetail} />
                       </span>
                     </li>
                   ))}
@@ -528,7 +654,7 @@ export function MemoryConsolidation({
             <article
               style={{
                 display: "grid",
-                gap: 12,
+                gap: "var(--space-5)",
                 padding: 16,
                 border: "1px solid var(--line)",
                 borderRadius: 14,
@@ -541,10 +667,18 @@ export function MemoryConsolidation({
               {activeJob.result.staleFlags.length === 0 ? (
                 <p style={{ margin: 0, color: "var(--fg-muted)" }}>No stale flags returned.</p>
               ) : (
-                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "grid",
+                    gap: "var(--space-5)",
+                  }}
+                >
                   {activeJob.result.staleFlags.map((flag) => (
                     <li key={`${flag.memoryId}:${flag.reason}`}>
-                      <StaleFlagEntry flag={flag} />
+                      <StaleFlagEntry flag={flag} onOpenDetail={onOpenDetail} />
                     </li>
                   ))}
                 </ul>
@@ -554,7 +688,7 @@ export function MemoryConsolidation({
             <article
               style={{
                 display: "grid",
-                gap: 12,
+                gap: "var(--space-5)",
                 padding: 16,
                 border: "1px solid var(--line)",
                 borderRadius: 14,
@@ -567,13 +701,21 @@ export function MemoryConsolidation({
               {activeJob.result.edgesProposed.length === 0 ? (
                 <p style={{ margin: 0, color: "var(--fg-muted)" }}>No edges proposed.</p>
               ) : (
-                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 12 }}>
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "grid",
+                    gap: "var(--space-5)",
+                  }}
+                >
                   {activeJob.result.edgesProposed.map((edge) => (
-                    <li key={edge.id} style={{ display: "grid", gap: 4 }}>
+                    <li key={edge.id} style={{ display: "grid", gap: "var(--space-2)" }}>
                       <strong>{edge.kind}</strong>
                       <span>
-                        <MemoryIdLink id={edge.fromMemoryId} /> →{" "}
-                        <MemoryIdLink id={edge.toMemoryId} />
+                        <MemoryIdLink id={edge.fromMemoryId} onOpenDetail={onOpenDetail} /> →{" "}
+                        <MemoryIdLink id={edge.toMemoryId} onOpenDetail={onOpenDetail} />
                       </span>
                       {edge.provenanceSummary !== undefined ? (
                         <span style={{ color: "var(--fg-muted)" }}>{edge.provenanceSummary}</span>

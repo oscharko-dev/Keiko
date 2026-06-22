@@ -122,6 +122,16 @@ describe("computeFigmaConnectorMetrics", () => {
     expect(metrics.navGraph).toEqual({ screens: 2, transitions: 2 });
   });
 
+  it("includes navGraph with transitions:0 when the IR has screens but no links", () => {
+    // Asymmetric source material (#811): one screen, zero links. The nav graph exists because the
+    // IR carries screens, so we must emit {screens:1, transitions:0} rather than omit it — this
+    // pins the `screens === 0 && links === 0` guard against an `&&`→`||` mutation that would
+    // wrongly omit the nav graph whenever EITHER input is empty.
+    const ir = irResult([screen("a", "A")]); // default links: []
+    const metrics = computeFigmaConnectorMetrics(ir, snapshot(["a"]), tally(1, 0));
+    expect(metrics.navGraph).toEqual({ screens: 1, transitions: 0 });
+  });
+
   it("OMITS nav graph entirely on a fully empty IR (no zero placeholder)", () => {
     const ir = irResult([]);
     const metrics = computeFigmaConnectorMetrics(ir, snapshot([]), tally(1, 0));

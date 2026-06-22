@@ -19,13 +19,19 @@ import { createHash } from "node:crypto";
 import type {
   DocumentId,
   DocumentRecord,
+  ExtractionCapabilityAvailability,
   KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceScope,
+  LargeDocumentResourcePolicy,
   ParserDiagnostic,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
-import { isSafeScopePath } from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+  isSafeScopePath,
+} from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
@@ -35,8 +41,24 @@ import type {
   ParserOptions,
   ParserRegistry,
   ParserSelectionInput,
+  ProgressiveExtractor,
 } from "../parsers/index.js";
-import { buildParserOptions, unsupportedParser } from "../parsers/index.js";
+import {
+  buildParserOptions,
+  createProgressivePdfExtractor,
+  classifyLargeDocument,
+  isLegacyBinaryOfficeFormat,
+  legacyFormatDiagnostic,
+  unsupportedParser,
+  usesProgressivePath,
+  type ProgressiveExtractionSource,
+} from "../parsers/index.js";
+import { DEFAULT_CHUNKING_STRATEGY_KEY } from "../chunking/types.js";
+import {
+  extractDocumentProgressive,
+  selectProgressiveExtractor,
+  type ProgressiveExtractContext,
+} from "./extract-progressive.js";
 import type { InternalParserResult } from "../parsers/types.js";
 import { redactDiagnosticMessage } from "../privacy/diagnostic-redactor.js";
 import type { KnowledgeStore } from "../store.js";
@@ -72,6 +94,17 @@ export interface ExtractDocumentDeps {
   readonly fs: WorkspaceFs;
   readonly store: KnowledgeStore;
   readonly parserRegistry: ParserRegistry;
+  // Bounded large-document ingestion (Epic #1160, Issue #1286). All optional; when omitted the
+  // defaults apply and only large supported PDFs take the progressive page-windowed path while
+  // every other file keeps the exact existing full-buffer behavior.
+  readonly largeDocumentPolicy?: LargeDocumentResourcePolicy;
+  readonly extractionCapabilities?: ExtractionCapabilityAvailability;
+  // Injectable so tests drive the synthetic streaming extractor; defaults to the PDF extractor.
+  readonly progressiveExtractors?: readonly ProgressiveExtractor[];
+  readonly largeDocumentJobId?: string;
+  // The chunking strategy key the orchestrator will use; pinned into the checkpoint fingerprint so
+  // resume refuses a checkpoint produced under a different chunking strategy.
+  readonly chunkingStrategyVersion?: string;
 }
 
 // ─── Path helpers (re-derived to keep extract.ts self-contained for the realpath gate) ──
@@ -210,6 +243,26 @@ function persistFailureRow(
   }
 }
 
+// GRD-010: decide whether to persist a cascade-deleting failure row. A TRANSIENT IO failure
+// (READ_FAILED / STAT_FAILED) on an incremental refresh must NOT destroy a previously-good index
+// — persisting overwrites the document row and CASCADE-deletes its chunks+vectors. When a prior
+// NON-failed row exists, skip persistence so a momentary lock / NFS hiccup / permission flap
+// preserves retrievable content (the orchestrator then reports a non-destructive skip). Permanent
+// failures (MALFORMED_INPUT, PARSER_FAILED, OVERSIZED_FILE, …) and first-time failures still persist.
+function shouldPersistFailureRow(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  documentId: DocumentId,
+  error: DiscoveryError,
+  optionPersist: boolean,
+): boolean {
+  if (!optionPersist) return false;
+  const isTransient = error.code === "READ_FAILED" || error.code === "STAT_FAILED";
+  if (!isTransient) return true;
+  const existing = readExistingDocumentRow(deps.store._internal.db, params.capsuleId, documentId);
+  return existing === undefined || existing.status === "failed";
+}
+
 function buildFailureResult(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -238,7 +291,7 @@ function buildFailureResult(
     status: "failed",
     safeDisplayName: safeDisplay(params.file.relativePath),
   };
-  if (options.persist) {
+  if (shouldPersistFailureRow(deps, params, documentId, error, options.persist)) {
     persistFailureRow(deps, params, documentId, document, diagnostic, now);
   }
   const outcome: ExtractionOutcome = {
@@ -266,12 +319,26 @@ function persistDependentRows(
   const db = deps.store._internal.db;
   deleteDependentRows(db, capsuleId, documentId);
   if (parserResult.normalizedText !== undefined) {
-    insertDocumentTextRow(db, capsuleId, documentId, parserResult.normalizedText);
+    insertDocumentTextRow(
+      db,
+      deps.store._internal.contentCipher,
+      capsuleId,
+      documentId,
+      parserResult.normalizedText,
+    );
   }
   for (const page of parserResult.pages) insertPageRow(db, capsuleId, page);
-  for (const section of parserResult.sections) insertSectionRow(db, capsuleId, section);
+  for (const section of parserResult.sections) {
+    insertSectionRow(db, deps.store._internal.contentCipher, capsuleId, section);
+  }
   parserResult.units.forEach((unit, index) => {
-    insertParsedUnitRow(db, capsuleId, `${String(documentId)}#u${String(index)}`, unit);
+    insertParsedUnitRow(
+      db,
+      deps.store._internal.contentCipher,
+      capsuleId,
+      `${String(documentId)}#u${String(index)}`,
+      unit,
+    );
   });
   parserResult.diagnostics.forEach((diagnostic, index) => {
     insertDiagnosticRow(db, {
@@ -463,6 +530,48 @@ function selectedRelativePath(
   return relativePath;
 }
 
+function resolveRealPathTarget(
+  deps: ExtractDocumentDeps,
+  path: string,
+  relativePath: string,
+  message: string,
+): string | TargetResolution {
+  try {
+    return deps.fs.realPath(path);
+  } catch {
+    return targetError({ code: "READ_FAILED", message, relativePath }, true);
+  }
+}
+
+function containedRealFileTarget(
+  realRoot: string,
+  real: string,
+  relativePath: string,
+): TargetResolution | undefined {
+  if (!isContained(realRoot, real)) {
+    return targetError(
+      {
+        code: "PATH_ESCAPE",
+        message: `realpath escapes scope root: ${relativePath}`,
+        relativePath,
+      },
+      true,
+    );
+  }
+  const realRelativePath = toPosixRelative(realRoot, real);
+  if (isDenied(realRelativePath)) {
+    return targetError(
+      {
+        code: "READ_FAILED",
+        message: "resolved file is denied by workspace policy",
+        relativePath,
+      },
+      true,
+    );
+  }
+  return undefined;
+}
+
 function resolveTargetPath(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -477,40 +586,22 @@ function resolveTargetPath(
   }
   const root = policy.rootPath;
   const absolute = joinAbs(root, relativePath);
-  let real: string;
-  try {
-    real = deps.fs.realPath(absolute);
-  } catch {
-    return targetError(
-      {
-        code: "READ_FAILED",
-        message: "realPath failed for selected file",
-        relativePath,
-      },
-      true,
-    );
-  }
-  if (!isContained(root, real)) {
-    return targetError(
-      {
-        code: "PATH_ESCAPE",
-        message: `realpath escapes scope root: ${relativePath}`,
-        relativePath,
-      },
-      true,
-    );
-  }
-  const realRelativePath = toPosixRelative(root, real);
-  if (isDenied(realRelativePath)) {
-    return targetError(
-      {
-        code: "READ_FAILED",
-        message: "resolved file is denied by workspace policy",
-        relativePath,
-      },
-      true,
-    );
-  }
+  const realRoot = resolveRealPathTarget(
+    deps,
+    root,
+    relativePath,
+    "realPath failed for selected source root",
+  );
+  if (typeof realRoot !== "string") return realRoot;
+  const real = resolveRealPathTarget(
+    deps,
+    absolute,
+    relativePath,
+    "realPath failed for selected file",
+  );
+  if (typeof real !== "string") return real;
+  const containmentError = containedRealFileTarget(realRoot, real, relativePath);
+  if (containmentError !== undefined) return containmentError;
   // Normalise to forward slashes so subsequent IO calls (readFileBytes, stat) receive
   // a consistent path even when realPath returned a Windows backslash path.
   return { absolutePath: normaliseSep(real), requestedAbsolutePath: absolute, relativePath };
@@ -601,7 +692,9 @@ function readUnchangedFastPath(
   const existing = readExistingDocumentRow(deps.store._internal.db, params.capsuleId, documentId);
   if (existing === undefined) return undefined;
   if (existing.content_hash !== contentHash) return undefined;
-  if (existing.status === "failed") return undefined;
+  // Skip only terminal-good states. A `pending` row is an interrupted progressive extraction
+  // (Issue #1286) and `failed` should be retried; both must re-extract rather than be skipped.
+  if (existing.status !== "extracted" && existing.status !== "unsupported") return undefined;
   const document: DocumentRecord = {
     id: documentId,
     capsuleId: params.capsuleId,
@@ -615,7 +708,7 @@ function readUnchangedFastPath(
       parserVersion: existing.parser_version,
     },
     lastExtractedAt: existing.last_extracted_at,
-    status: existing.status as DocumentRecord["status"],
+    status: existing.status,
     safeDisplayName: existing.safe_display_name,
   };
   return {
@@ -625,6 +718,121 @@ function readUnchangedFastPath(
     outcome: { kind: "skipped", document, reason: "unchanged" },
     diagnostics: [],
   };
+}
+
+// ─── Large-document routing (Epic #1160, Issue #1286) ────────────────────────
+let defaultProgressiveExtractorsCache: readonly ProgressiveExtractor[] | undefined;
+
+function defaultProgressiveExtractors(): readonly ProgressiveExtractor[] {
+  defaultProgressiveExtractorsCache ??= [createProgressivePdfExtractor()];
+  return defaultProgressiveExtractorsCache;
+}
+
+function largeDocumentContextFor(
+  deps: ExtractDocumentDeps,
+  resolved: ResolvedTarget,
+  options: ParserOptions,
+): ProgressiveExtractContext {
+  return {
+    policy: deps.largeDocumentPolicy ?? DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+    capabilities: deps.extractionCapabilities ?? DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+    extractors: deps.progressiveExtractors ?? defaultProgressiveExtractors(),
+    jobId: deps.largeDocumentJobId ?? "extract",
+    chunkingStrategyVersion: deps.chunkingStrategyVersion ?? DEFAULT_CHUNKING_STRATEGY_KEY,
+    absolutePath: resolved.absolutePath,
+    relativePath: resolved.relativePath,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  };
+}
+
+const PROGRESSIVE_HASH_CHUNK_BYTES = 4 * 1024 * 1024;
+
+async function readRange(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  target: ResolvedTarget,
+  startByte: number,
+  length: number,
+): Promise<Uint8Array | DiscoveryError> {
+  const reader = deps.fs.readFileRange;
+  if (reader === undefined) {
+    return {
+      code: "READ_FAILED",
+      message: "WorkspaceFs.readFileRange is unavailable",
+      relativePath: params.file.relativePath,
+    };
+  }
+  const requestedError = validateRequestedTarget(deps, params, target);
+  if (requestedError !== undefined) return requestedError;
+  const resolvedError = validateResolvedTarget(deps, params, target);
+  if (resolvedError !== undefined) return resolvedError;
+  try {
+    return await reader(target.absolutePath, startByte, length);
+  } catch {
+    return {
+      code: "READ_FAILED",
+      message: "readFileRange failed for selected file",
+      relativePath: params.file.relativePath,
+    };
+  }
+}
+
+function progressiveRangeSource(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  target: ResolvedTarget,
+): ProgressiveExtractionSource | DiscoveryError {
+  if (deps.fs.readFileRange === undefined) {
+    return {
+      code: "READ_FAILED",
+      message: "WorkspaceFs.readFileRange is unavailable",
+      relativePath: params.file.relativePath,
+    };
+  }
+  return {
+    totalBytes: params.file.sizeBytes,
+    readWindow: async (startByte, length): Promise<Uint8Array> => {
+      const bytes = await readRange(deps, params, target, startByte, length);
+      if (bytes instanceof Uint8Array) return bytes;
+      throw new Error(bytes.message);
+    },
+  };
+}
+
+async function hashProgressiveSource(source: ProgressiveExtractionSource): Promise<string> {
+  if (source.readWindow === undefined) {
+    throw new Error("progressive source does not support bounded range reads");
+  }
+  const hash = createHash("sha256");
+  for (let offset = 0; offset < source.totalBytes; offset += PROGRESSIVE_HASH_CHUNK_BYTES) {
+    const bytes = await source.readWindow(
+      offset,
+      Math.min(PROGRESSIVE_HASH_CHUNK_BYTES, source.totalBytes - offset),
+    );
+    if (bytes.byteLength === 0) break;
+    hash.update(bytes);
+  }
+  return hash.digest("hex");
+}
+
+// Legacy binary office formats (.doc/.ppt/.xls) get the existing unsupported path plus a stable
+// CONVERTER_UNAVAILABLE diagnostic with actionable guidance, leaving the job stable.
+function appendLegacyDiagnostic(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  documentId: DocumentId,
+  extension: string,
+  result: ExtractionResult,
+): ExtractionResult {
+  const diagnostic = legacyFormatDiagnostic(extension, documentId);
+  if (diagnostic === undefined) return result;
+  insertDiagnosticRow(deps.store._internal.db, {
+    id: `${String(documentId)}#legacy`,
+    capsuleId: params.capsuleId,
+    diagnostic,
+    createdAt: deps.store._internal.now(),
+  });
+  return { ...result, diagnostics: [...result.diagnostics, diagnostic] };
 }
 
 // ─── Top-level entry point ───────────────────────────────────────────────────
@@ -877,6 +1085,80 @@ async function parseAndPersistDocument(
   return parserExtractionResult(params, document, redactedParserResult, status);
 }
 
+async function progressiveExtractionResult(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  resolved: ResolvedTarget,
+  documentId: DocumentId,
+  options: ParserOptions,
+  extension: string,
+  mediaType: string,
+): Promise<ExtractionResult | undefined> {
+  const context = largeDocumentContextFor(deps, resolved, options);
+  const preflight = classifyLargeDocument(
+    { extension, mediaType, sizeBytes: params.file.sizeBytes },
+    context.policy,
+  );
+  if (preflight.decision === "reject-oversized") {
+    return buildOversizedFailure(deps, params, documentId, {
+      ...options,
+      maxBytes: context.policy.maxRawFileBytes,
+    });
+  }
+  const extractor =
+    params.file.sizeBytes >= context.policy.largeFileThresholdBytes
+      ? selectProgressiveExtractor(context, extension, mediaType)
+      : undefined;
+  if (!usesProgressivePath(preflight) && extractor === undefined) return undefined;
+  if (extractor === undefined) return undefined;
+  const source = progressiveRangeSource(deps, params, resolved);
+  if (!("totalBytes" in source)) return buildFailureResult(deps, params, documentId, source);
+  let contentHash: string;
+  try {
+    contentHash = await hashProgressiveSource(source);
+  } catch {
+    return buildFailureResult(deps, params, documentId, {
+      code: "READ_FAILED",
+      message: "readFileRange failed for selected file",
+      relativePath: params.file.relativePath,
+    });
+  }
+  const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
+  return (
+    fast ??
+    (await extractDocumentProgressive(deps, params, context, source, contentHash, extractor))
+  );
+}
+
+async function standardExtractionResult(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  resolved: ResolvedTarget,
+  documentId: DocumentId,
+  options: ParserOptions,
+  extension: string,
+): Promise<ExtractionResult> {
+  if (params.file.sizeBytes > options.maxBytes) {
+    return buildOversizedFailure(deps, params, documentId, options);
+  }
+  const bytes = await readBoundedDocumentBytes(deps, params, documentId, resolved, options);
+  if (!(bytes instanceof Uint8Array)) return bytes;
+  const contentHash = hashBytes(bytes);
+  const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
+  if (fast !== undefined) return fast;
+  const result = await parseAndPersistDocument(
+    deps,
+    params,
+    documentId,
+    bytes,
+    contentHash,
+    options,
+  );
+  return isLegacyBinaryOfficeFormat(extension)
+    ? appendLegacyDiagnostic(deps, params, documentId, extension, result)
+    : result;
+}
+
 export async function extractDocument(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -888,23 +1170,19 @@ export async function extractDocument(
   const canonicalParams = paramsWithRelativePath(params, resolved.relativePath);
   const documentId = extractionDocumentId(canonicalParams);
   const options = canonicalParams.parserOptions ?? buildParserOptions();
-  if (canonicalParams.file.sizeBytes > options.maxBytes) {
-    return buildOversizedFailure(deps, canonicalParams, documentId, options);
-  }
-  const bytes = await readBoundedDocumentBytes(
+  const extension = extensionOf(canonicalParams.file.relativePath);
+  const mediaType = mediaTypeFor(extension);
+  const progressive = await progressiveExtractionResult(
     deps,
     canonicalParams,
-    documentId,
     resolved,
+    documentId,
     options,
+    extension,
+    mediaType,
   );
-  if (!(bytes instanceof Uint8Array)) {
-    return bytes;
-  }
-  const contentHash = hashBytes(bytes);
-  const fast = readUnchangedFastPath(deps, canonicalParams, documentId, contentHash);
-  if (fast !== undefined) return fast;
-  return parseAndPersistDocument(deps, canonicalParams, documentId, bytes, contentHash, options);
+  if (progressive !== undefined) return progressive;
+  return standardExtractionResult(deps, canonicalParams, resolved, documentId, options, extension);
 }
 
 export function recordExtractionFailure(

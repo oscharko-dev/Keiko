@@ -6,10 +6,29 @@ import { Workspace, workspaceDropPointToWindowOrigin } from "./Workspace";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
 import type { AppWindow } from "./windows/types";
 import {
+  FIGMA_VIEW_DRAG_TYPE,
+  FIGMA_VIEW_DROP_EVENT,
+  serializeFigmaViewDrag,
+} from "./figma-view-drag";
+import {
+  FIGMA_JSON_DRAG_TYPE,
+  FIGMA_JSON_DROP_EVENT,
+  serializeFigmaJsonDrag,
+} from "./figma-json-drag";
+import {
+  FIGMA_IMAGE_DRAG_TYPE,
+  FIGMA_IMAGE_DROP_EVENT,
+  serializeFigmaImageDrag,
+} from "./figma-image-drag";
+import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
   LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
   serializeLocalKnowledgeConnectorDrag,
 } from "../../local-knowledge/connector-drag";
+
+vi.mock("./WorkspaceShader", () => ({
+  WorkspaceShader: () => null,
+}));
 
 function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -31,6 +50,8 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     toggleTool: vi.fn(),
     focus: vi.fn(),
     close: vi.fn(),
+    minimize: vi.fn(),
+    restore: vi.fn(),
     maximize: vi.fn(),
     update: vi.fn(),
     setSnap: vi.fn(),
@@ -52,6 +73,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     linkedFilesContext: vi.fn(() => null),
     currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),
+    fitView: vi.fn(),
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
@@ -75,7 +97,7 @@ function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
 
 describe("M1 — empty startup layout", () => {
   it("renders the empty-state affordance when wins is an empty array", () => {
-    const { container } = render(
+    render(
       <Workspace
         ws={workspace({ wins: [] })}
         wsRef={createRef<HTMLDivElement>()}
@@ -83,26 +105,23 @@ describe("M1 — empty startup layout", () => {
       />,
     );
     expect(screen.getByText("Empty workspace")).toBeInTheDocument();
-    // Both the empty-state button and the FAB carry aria-label="New window".
-    // Query the empty-state-specific button via its class to avoid ambiguity.
-    expect(container.querySelector(".ws-empty-btn")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Open a new window" })).toHaveClass(
+      "empty-workspace-blob",
+    );
   });
 
-  it("calls openPalette when the empty-state New window button is clicked", async () => {
+  it("calls openPalette when the empty-state blob button is clicked", async () => {
     const openPalette = vi.fn();
     const user = userEvent.setup();
-    const { container } = render(
+    render(
       <Workspace
         ws={workspace({ wins: [] })}
         wsRef={createRef<HTMLDivElement>()}
         openPalette={openPalette}
       />,
     );
-    const emptyBtn = container.querySelector<HTMLButtonElement>(".ws-empty-btn");
-    expect(emptyBtn).not.toBeNull();
-    await user.click(emptyBtn as HTMLButtonElement);
-    // Both the empty-state button and the FAB call openPalette — at least 1 call is expected.
-    expect(openPalette).toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Open a new window" }));
+    expect(openPalette).toHaveBeenCalledTimes(1);
   });
 
   it("does not render the empty-state when wins has at least one window", () => {
@@ -115,6 +134,20 @@ describe("M1 — empty startup layout", () => {
         openPalette={() => undefined}
       />,
     );
+    expect(screen.queryByText("Empty workspace")).toBeNull();
+  });
+
+  it("does not render minimized windows on the workspace surface", () => {
+    const wins = [appWindow({ id: "agents-1", type: "agents", minimized: true })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    expect(container.querySelector('[data-window-id="agents-1"]')).toBeNull();
     expect(screen.queryByText("Empty workspace")).toBeNull();
   });
 });
@@ -141,7 +174,25 @@ describe("Workspace card connections", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: "Connect Local Knowledge from top edge" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Connect Local Knowledge from top edge" }),
+    ).toBeNull();
+  });
+
+  it("marks canvas overlays hidden when a visible window is maximized", () => {
+    const wins = [appWindow({ id: "agents-1", type: "agents", max: true })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    expect(container.querySelector(".workspace")).toHaveAttribute(
+      "data-canvas-overlays-hidden",
+      "true",
+    );
   });
 
   it("confirms a valid target even when a target child stops pointer bubbling", () => {
@@ -159,9 +210,9 @@ describe("Workspace card connections", () => {
 
     render(<Workspace ws={ws} wsRef={createRef<HTMLDivElement>()} openPalette={() => undefined} />);
 
-    // uiux-fix F031 C297 — control labels are window-scoped now ("Maximize Files
+    // uiux-fix F031 C297 — control labels are window-scoped now ("Full screen Files
     // window"), so the files-1 target is addressable by name directly.
-    const targetMaximizeButton = screen.getByRole("button", { name: "Maximize Files window" });
+    const targetMaximizeButton = screen.getByRole("button", { name: "Full screen Files window" });
     expect(targetMaximizeButton).toBeDefined();
 
     fireEvent.pointerDown(targetMaximizeButton as HTMLElement, { button: 0 });
@@ -196,10 +247,12 @@ describe("Workspace card connections", () => {
     );
   });
 
-  it("scales the scene with CSS zoom so widget content re-rasterizes (#305)", () => {
+  it("scales the scene with CSS zoom while preserving outer-pixel pan geometry (#305)", () => {
     // `transform: scale()` would rasterize the scene once at its natural size
     // and upscale the bitmap, blurring text/SVG inside widgets at zoom > 1.
     // The scene must use CSS `zoom` to trigger a layout pass and re-rasterize.
+    // Chrome applies CSS zoom to transform translation too, so pan is divided by
+    // zoom to keep maximized/window viewport math aligned with rendered pixels.
     const { container } = render(
       <Workspace
         ws={workspace({ view: { x: 12, y: 34, zoom: 1.75 } })}
@@ -212,7 +265,7 @@ describe("Workspace card connections", () => {
     expect(scene).not.toBeNull();
     const style = (scene as HTMLElement).style;
     expect(style.zoom).toBe("1.75");
-    expect(style.transform).toBe("translate(12px, 34px)");
+    expect(style.transform).toBe("translate(6.857142857142857px, 19.428571428571427px)");
     expect(style.transform).not.toContain("scale(");
   });
 
@@ -344,6 +397,395 @@ describe("Workspace card connections", () => {
       selectedState: "ready",
     });
     expect(update).toHaveBeenCalledWith("conn-1", { x: 80, y: 81, w: 260, h: 220 });
+  });
+
+  it("creates a scoped Figma View card when a snapshot thumbnail is dropped", () => {
+    const add = vi.fn(() => "figma-view-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const dataTransfer = {
+      types: [FIGMA_VIEW_DRAG_TYPE],
+      getData: vi.fn((type: string) =>
+        type === FIGMA_VIEW_DRAG_TYPE
+          ? serializeFigmaViewDrag({
+              snapshotRunId: "fs-123",
+              screenId: "1:102746",
+              name: "Kontokorrentkredit hinzufügen",
+            })
+          : "",
+      ),
+      dropEffect: "none",
+    };
+
+    const dropEvent = createEvent.drop(surface, { dataTransfer });
+    Object.defineProperties(dropEvent, {
+      clientX: { value: 450 },
+      clientY: { value: 260 },
+    });
+    fireEvent(surface, dropEvent);
+
+    expect(add).toHaveBeenCalledWith("figmaView", {
+      snapshotRunId: "fs-123",
+      selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+    });
+    expect(update).toHaveBeenCalledWith("figma-view-1", { x: 30, y: 81, w: 360, h: 360 });
+  });
+
+  it("creates the same scoped Figma View card from the pointer drag-out event", () => {
+    const add = vi.fn(() => "figma-view-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    window.dispatchEvent(
+      new CustomEvent(FIGMA_VIEW_DROP_EVENT, {
+        detail: {
+          payload: {
+            snapshotRunId: "fs-123",
+            screenId: "1:102746",
+            name: "Kontokorrentkredit hinzufügen",
+          },
+          clientX: 450,
+          clientY: 260,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("figmaView", {
+      snapshotRunId: "fs-123",
+      selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+    });
+    expect(update).toHaveBeenCalledWith("figma-view-1", { x: 30, y: 81, w: 360, h: 360 });
+  });
+
+  it("creates a scoped Figma JSON source window and migrates an existing QI edge", () => {
+    vi.useFakeTimers();
+    try {
+      const add = vi.fn(() => "figma-json-1");
+      const update = vi.fn();
+      const removeConn = vi.fn();
+      const connect = vi.fn();
+      const workspaceApi = api({ add, update, removeConn, connect });
+      const wins = [
+        appWindow({
+          id: "quality",
+          type: "quality",
+          z: 2,
+        }),
+        appWindow({
+          id: "figma-view-1",
+          type: "figmaView",
+          x: 420,
+          z: 1,
+          cfg: {
+            snapshotRunId: "fs-123",
+            selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+            selectedScreenName: "Kontokorrentkredit hinzufügen",
+          },
+        }),
+      ];
+      render(
+        <Workspace
+          ws={workspace({
+            wins,
+            conns: [{ id: "quality~figma-view-1", a: "quality", b: "figma-view-1" }],
+            view: { x: 20, y: 30, zoom: 2 },
+            api: workspaceApi,
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+      vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+        left: 10,
+        top: 12,
+        right: 1010,
+        bottom: 812,
+        width: 1000,
+        height: 800,
+        x: 10,
+        y: 12,
+        toJSON: () => ({}),
+      } as DOMRect);
+      const dataTransfer = {
+        types: [FIGMA_JSON_DRAG_TYPE],
+        getData: vi.fn((type: string) =>
+          type === FIGMA_JSON_DRAG_TYPE
+            ? serializeFigmaJsonDrag({
+                snapshotRunId: "fs-123",
+                screenId: "1:102746",
+                name: "Kontokorrentkredit hinzufügen",
+                sourceWindowId: "figma-view-1",
+              })
+            : "",
+        ),
+        dropEffect: "none",
+      };
+
+      const dropEvent = createEvent.drop(surface, { dataTransfer });
+      Object.defineProperties(dropEvent, {
+        clientX: { value: 450 },
+        clientY: { value: 260 },
+      });
+      fireEvent(surface, dropEvent);
+
+      expect(add).toHaveBeenCalledWith("figmaJson", {
+        snapshotRunId: "fs-123",
+        screenId: "1:102746",
+        selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+        selectedScreenName: "Kontokorrentkredit hinzufügen",
+      });
+      expect(update).toHaveBeenCalledWith("figma-json-1", {
+        x: -50,
+        y: 81,
+        w: 520,
+        h: 540,
+      });
+      expect(removeConn).toHaveBeenCalledWith("quality~figma-view-1");
+
+      vi.runOnlyPendingTimers();
+
+      expect(connect).toHaveBeenCalledWith("figma-json-1", "quality");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("creates the same scoped Figma JSON source from the pointer drag-out event", () => {
+    const add = vi.fn(() => "figma-json-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    window.dispatchEvent(
+      new CustomEvent(FIGMA_JSON_DROP_EVENT, {
+        detail: {
+          payload: {
+            snapshotRunId: "fs-123",
+            screenId: "1:102746",
+            name: "Kontokorrentkredit hinzufügen",
+          },
+          clientX: 450,
+          clientY: 260,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("figmaJson", {
+      snapshotRunId: "fs-123",
+      screenId: "1:102746",
+      selectedScreenIdsJson: JSON.stringify(["1:102746"]),
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+    });
+    expect(update).toHaveBeenCalledWith("figma-json-1", { x: -50, y: 81, w: 520, h: 540 });
+  });
+
+  it("creates a standalone Figma image source and migrates a QI edge from the source view", () => {
+    vi.useFakeTimers();
+    try {
+      const add = vi.fn(() => "figma-image-1");
+      const update = vi.fn();
+      const removeConn = vi.fn();
+      const connect = vi.fn();
+      const workspaceApi = api({ add, update, removeConn, connect });
+      const wins = [
+        appWindow({ id: "quality", type: "quality", z: 2 }),
+        appWindow({ id: "figma-view-1", type: "figmaView", x: 420, z: 1 }),
+      ];
+      render(
+        <Workspace
+          ws={workspace({
+            wins,
+            conns: [{ id: "quality~figma-view-1", a: "quality", b: "figma-view-1" }],
+            view: { x: 20, y: 30, zoom: 2 },
+            api: workspaceApi,
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+      vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+        left: 10,
+        top: 12,
+        right: 1010,
+        bottom: 812,
+        width: 1000,
+        height: 800,
+        x: 10,
+        y: 12,
+        toJSON: () => ({}),
+      } as DOMRect);
+      const payload = {
+        snapshotRunId: "fs-123",
+        screenId: "1:102746",
+        name: "Kontokorrentkredit hinzufügen",
+        imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+        sourceWindowId: "figma-view-1",
+      };
+      const dataTransfer = {
+        types: [FIGMA_IMAGE_DRAG_TYPE],
+        getData: vi.fn((type: string) =>
+          type === FIGMA_IMAGE_DRAG_TYPE ? serializeFigmaImageDrag(payload) : "",
+        ),
+        dropEffect: "none",
+      };
+
+      const dropEvent = createEvent.drop(surface, { dataTransfer });
+      Object.defineProperties(dropEvent, {
+        clientX: { value: 450 },
+        clientY: { value: 260 },
+      });
+      fireEvent(surface, dropEvent);
+
+      expect(add).toHaveBeenCalledWith("figmaImage", {
+        snapshotRunId: "fs-123",
+        screenId: "1:102746",
+        selectedScreenName: "Kontokorrentkredit hinzufügen",
+        imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+      });
+      expect(update).toHaveBeenCalledWith("figma-image-1", {
+        x: -70,
+        y: 81,
+        w: 560,
+        h: 420,
+      });
+      expect(removeConn).toHaveBeenCalledWith("quality~figma-view-1");
+
+      vi.runOnlyPendingTimers();
+
+      expect(connect).toHaveBeenCalledWith("figma-image-1", "quality");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("creates the same standalone Figma image source from the pointer drag-out event", () => {
+    const add = vi.fn(() => "figma-image-1");
+    const update = vi.fn();
+    const workspaceApi = api({ add, update });
+    render(
+      <Workspace
+        ws={workspace({
+          wins: [],
+          view: { x: 20, y: 30, zoom: 2 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 12,
+      right: 1010,
+      bottom: 812,
+      width: 1000,
+      height: 800,
+      x: 10,
+      y: 12,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    window.dispatchEvent(
+      new CustomEvent(FIGMA_IMAGE_DROP_EVENT, {
+        detail: {
+          payload: {
+            snapshotRunId: "fs-123",
+            screenId: "1:102746",
+            name: "Kontokorrentkredit hinzufügen",
+            imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+          },
+          clientX: 450,
+          clientY: 260,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("figmaImage", {
+      snapshotRunId: "fs-123",
+      screenId: "1:102746",
+      selectedScreenName: "Kontokorrentkredit hinzufügen",
+      imageSrc: "/api/figma/snapshots/fs-123/screens/1/image",
+    });
+    expect(update).toHaveBeenCalledWith("figma-image-1", { x: -70, y: 81, w: 560, h: 420 });
   });
 
   it("maps a workspace drop point through pan and zoom into connector window origin", () => {
@@ -481,5 +923,353 @@ describe("Workspace card connections", () => {
     expect(live).not.toBeNull();
     expect(live?.textContent).toMatch(/connecting from/i);
     expect(live?.textContent).toMatch(/escape to cancel/i);
+  });
+});
+
+describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
+  it("workspace surface is keyboard-focusable (tabIndex=0)", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    expect(surface.tabIndex).toBe(0);
+  });
+
+  it("pans the free workspace surface on primary-button drag", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
+    expect(surface).toHaveAttribute("data-panning", "true");
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
+    fireEvent.pointerUp(window);
+
+    expect(panBy).toHaveBeenCalledWith(30, 15);
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("keeps middle-button workspace panning available for mouse users", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
+
+    expect(surface).toHaveAttribute("data-panning", "true");
+
+    fireEvent.pointerUp(window);
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("does not let Space plus primary drag over a window steal window interactions", () => {
+    const focus = vi.fn();
+    const panBy = vi.fn();
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    const workspaceApi = api({ focus, panBy });
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    expect(surface).toHaveAttribute("data-hand-tool", "true");
+
+    fireEvent.pointerDown(windowEl as HTMLElement, { button: 0, clientX: 100, clientY: 100 });
+    expect(surface).not.toHaveAttribute("data-panning");
+
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
+    fireEvent.pointerUp(window);
+    fireEvent.keyUp(window, { key: " ", code: "Space" });
+
+    expect(panBy).not.toHaveBeenCalled();
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(surface).not.toHaveAttribute("data-panning");
+    expect(surface).not.toHaveAttribute("data-hand-tool");
+  });
+
+  it("pans the free board with Space plus primary drag", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    expect(surface).toHaveAttribute("data-hand-tool", "true");
+    fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
+    fireEvent.pointerUp(window);
+    fireEvent.keyUp(window, { key: " ", code: "Space" });
+
+    expect(panBy).toHaveBeenCalledWith(30, 15);
+    expect(surface).not.toHaveAttribute("data-panning");
+    expect(surface).not.toHaveAttribute("data-hand-tool");
+  });
+
+  it("does not pan the board from right click or macOS control click", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 2, clientX: 100, clientY: 100 });
+    expect(surface).not.toHaveAttribute("data-panning");
+
+    fireEvent.pointerDown(surface, { button: 0, ctrlKey: true, clientX: 100, clientY: 100 });
+    expect(surface).not.toHaveAttribute("data-panning");
+  });
+
+  it("does not arm the Space hand tool from an interactive control", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const button = document.querySelector<HTMLElement>(".ws-fab");
+    if (button === null) throw new Error("missing workspace FAB");
+    expect(button).toHaveClass("cmp-tip-end");
+    const event = createEvent.keyDown(button, { key: " ", code: "Space" });
+
+    fireEvent(button, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(surface).not.toHaveAttribute("data-hand-tool");
+  });
+
+  it("does not start background panning while a modal interaction lock is active", () => {
+    document.documentElement.setAttribute("data-keiko-modal-open", "true");
+    try {
+      render(
+        <Workspace
+          ws={workspace({})}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+      fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
+
+      expect(surface).not.toHaveAttribute("data-panning");
+      expect(document.body.style.userSelect).toBe("");
+    } finally {
+      document.documentElement.removeAttribute("data-keiko-modal-open");
+    }
+  });
+
+  it("prevents text selection while the free workspace surface is actively panned", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+
+    fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
+    expect(document.body.style.userSelect).toBe("none");
+
+    fireEvent.pointerCancel(window);
+    expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("fits the workspace to visible windows from the zoom control strip", async () => {
+    const fitView = vi.fn();
+    const user = userEvent.setup();
+    const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
+    render(
+      <Workspace
+        ws={workspace({ wins, api: api({ fitView }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Fit workspace to windows" }));
+
+    expect(fitView).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables fit-to-windows when the workspace has no visible windows", () => {
+    render(
+      <Workspace
+        ws={workspace({ wins: [] })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Fit workspace to windows" })).toBeDisabled();
+  });
+
+  it("ArrowLeft pans content right (panBy +step, 0)", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "ArrowLeft", target: surface });
+    expect(panBy).toHaveBeenCalledTimes(1);
+    expect(panBy).toHaveBeenCalledWith(48, 0);
+  });
+
+  it("ArrowRight pans content left (panBy -step, 0)", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "ArrowRight", target: surface });
+    expect(panBy).toHaveBeenCalledTimes(1);
+    expect(panBy).toHaveBeenCalledWith(-48, 0);
+  });
+
+  it("ArrowUp pans content down (panBy 0, +step)", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "ArrowUp", target: surface });
+    expect(panBy).toHaveBeenCalledTimes(1);
+    expect(panBy).toHaveBeenCalledWith(0, 48);
+  });
+
+  it("ArrowDown pans content up (panBy 0, -step)", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "ArrowDown", target: surface });
+    expect(panBy).toHaveBeenCalledTimes(1);
+    expect(panBy).toHaveBeenCalledWith(0, -48);
+  });
+
+  it("Shift+ArrowRight uses a larger step (4×)", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "ArrowRight", shiftKey: true, target: surface });
+    expect(panBy).toHaveBeenCalledTimes(1);
+    expect(panBy).toHaveBeenCalledWith(-192, 0);
+  });
+
+  it("arrow keys call event.preventDefault()", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const event = createEvent.keyDown(surface, { key: "ArrowDown" });
+    // Simulate target === currentTarget by firing directly on surface
+    fireEvent(surface, event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("non-arrow key does not call panBy", () => {
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    render(
+      <Workspace
+        ws={workspace({ api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    fireEvent.keyDown(surface, { key: "Tab", target: surface });
+    fireEvent.keyDown(surface, { key: "Escape", target: surface });
+    fireEvent.keyDown(surface, { key: " ", target: surface });
+    expect(panBy).not.toHaveBeenCalled();
+  });
+
+  it("arrow key from a focused child window does not trigger panBy", () => {
+    // Guard: event.target !== event.currentTarget when key bubbles from a child.
+    const panBy = vi.fn();
+    const workspaceApi = api({ panBy });
+    const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    // Find a child inside the workspace (e.g., the window element) and fire
+    // keyDown from it — it bubbles to the surface but target !== currentTarget.
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+    // Dispatch on the child; the event bubbles but target stays the child.
+    fireEvent.keyDown(windowEl as HTMLElement, { key: "ArrowLeft", bubbles: true });
+    expect(panBy).not.toHaveBeenCalled();
   });
 });

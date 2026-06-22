@@ -12,6 +12,7 @@
 
 export type QiHandoffErrorCode =
   | "QI_HANDOFF_BAD_REQUEST"
+  | "QI_HANDOFF_PAYLOAD_TOO_LARGE"
   | "QI_HANDOFF_UNKNOWN_CHAT_MESSAGE"
   | "QI_HANDOFF_FORBIDDEN_PAYLOAD"
   | "QI_HANDOFF_INTERNAL";
@@ -22,6 +23,8 @@ export interface QiHandoffErrorBody {
 
 const SAFE_MESSAGES: Readonly<Record<QiHandoffErrorCode, string>> = {
   QI_HANDOFF_BAD_REQUEST: "The request body is not a valid Quality Intelligence handoff envelope.",
+  QI_HANDOFF_PAYLOAD_TOO_LARGE:
+    "The Quality Intelligence handoff envelope exceeds the maximum permitted size.",
   QI_HANDOFF_UNKNOWN_CHAT_MESSAGE:
     "The referenced Conversation Center chat message could not be located.",
   QI_HANDOFF_FORBIDDEN_PAYLOAD:

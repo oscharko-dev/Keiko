@@ -9,12 +9,11 @@
 // structural event into one of the SEMANTIC kinds in this file by reading the new record's
 // status, comparing against a previous-status cache, and classifying the transition.
 //
-// Two kinds — "memory:retrieved" and "memory:workflow-used" — are NOT emitted by the
-// vault. They are surfaced here so the audit ledger has a single closed type for every
-// memory-touching audit signal. The retrieval and workflow integration layers emit them
-// directly via `recordMemoryAudit(...)` once those packages adopt the audit boundary (a
-// follow-up issue tracks the wiring). They are listed in `MEMORY_AUDIT_EVENT_KINDS` so
-// the closed enum is stable across schema versions.
+// Retrieval/workflow-specific kinds are NOT emitted by the vault. They are surfaced here
+// so the audit ledger has a single closed type for every memory-touching audit signal.
+// Retrieval and workflow integration layers emit them directly via `recordMemoryAudit(...)`.
+// They are listed in `MEMORY_AUDIT_EVENT_KINDS` so the closed enum is stable across schema
+// versions.
 //
 // Audit invariant (mirrors `MemoryAuditRecord`): NEVER carry raw memory body or payload.
 // `summary` is a short, REDACTED rationale (bounded length). `scope` and IDs are
@@ -49,7 +48,9 @@ export type MemoryAuditEventKind =
   | "memory:archived"
   | "memory:forgotten"
   | "memory:retrieved"
-  | "memory:workflow-used";
+  | "memory:workflow-used"
+  | "memory:workflow-omitted"
+  | "memory:workflow-write-candidate";
 
 export const MEMORY_AUDIT_EVENT_KINDS: readonly MemoryAuditEventKind[] = [
   "memory:proposed",
@@ -63,6 +64,8 @@ export const MEMORY_AUDIT_EVENT_KINDS: readonly MemoryAuditEventKind[] = [
   "memory:forgotten",
   "memory:retrieved",
   "memory:workflow-used",
+  "memory:workflow-omitted",
+  "memory:workflow-write-candidate",
 ] as const;
 
 // ─── Common envelope ─────────────────────────────────────────────────────────
@@ -82,7 +85,8 @@ interface MemoryAuditEventEnvelope {
 // Each member adds the minimum extra context the audit reader needs to make sense of the
 // event without dipping into the record store. `memoryId` + `scope` for single-record
 // kinds; `oldMemoryId` + `newMemoryId` for supersession; `scopes` + `matchedMemoryIds`
-// for retrieval; `workflowRunId` + `usedMemoryIds` for workflow use.
+// for retrieval; `workflowRunId` + `usedMemoryIds` for workflow use; omitted/workflow
+// candidate events carry IDs and bounded reasons only, never raw memory bodies.
 export type MemoryAuditEvent =
   | (MemoryAuditEventEnvelope & {
       readonly kind: "memory:proposed";
@@ -140,4 +144,18 @@ export type MemoryAuditEvent =
       readonly kind: "memory:workflow-used";
       readonly workflowRunId: string;
       readonly usedMemoryIds: readonly MemoryId[];
+    })
+  | (MemoryAuditEventEnvelope & {
+      readonly kind: "memory:workflow-omitted";
+      readonly workflowRunId: string;
+      readonly scopes: readonly MemoryScope[];
+      readonly omittedMemoryId: MemoryId;
+      readonly reason: string;
+    })
+  | (MemoryAuditEventEnvelope & {
+      readonly kind: "memory:workflow-write-candidate";
+      readonly workflowRunId: string;
+      readonly source: "workflow-success" | "workflow-correction";
+      readonly scope: MemoryScope;
+      readonly proposedMemoryIds: readonly MemoryId[];
     });

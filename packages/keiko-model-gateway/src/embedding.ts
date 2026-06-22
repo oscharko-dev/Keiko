@@ -8,6 +8,8 @@
 
 import type { EmbeddingModelIdentity, EmbeddingVectorMetric } from "@oscharko-dev/keiko-contracts";
 import type {
+  OpenAIEmbeddingBatchOutcome,
+  OpenAIEmbeddingBatchRequest,
   OpenAIEmbeddingErrorKind,
   OpenAIEmbeddingRequest,
   OpenAIEmbeddingOutcome,
@@ -24,6 +26,11 @@ export type EmbeddingFailureReason =
   | "timeout"
   | "cancelled"
   | "unsupported-model"
+  | "proxy-unreachable"
+  | "proxy-auth-required"
+  | "proxy-egress-failed"
+  | "proxy-blocked-by-policy"
+  | "tls-ca-failure"
   | "invalid-response"
   | "incompatible-with-stored-identity";
 
@@ -60,6 +67,12 @@ export interface OpenAIEmbeddingAdapter {
   readonly apiKeyHeaderName?: string;
   readonly egress?: OutboundHttpEgressConfig | undefined;
   readonly request: (input: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>;
+  // Optional array-batch port (#189 GRD-004). When present, the indexing batcher embeds
+  // many chunks per HTTP round-trip via this method; when absent it falls back to issuing
+  // one `request` per chunk, so existing adapters/stubs keep working unchanged.
+  readonly requestBatch?: (
+    input: OpenAIEmbeddingBatchRequest,
+  ) => Promise<OpenAIEmbeddingBatchOutcome>;
 }
 
 const PROBE_INPUT = "ping" as const;
@@ -73,32 +86,38 @@ const SAFE_MESSAGES: Readonly<Record<EmbeddingFailureReason, string>> = Object.f
   timeout: "embedding probe timed out",
   cancelled: "embedding probe was cancelled by the caller",
   "unsupported-model": "embedding model is not available on the configured gateway",
+  "proxy-unreachable": "configured proxy is unreachable",
+  "proxy-auth-required": "configured proxy requires authentication",
+  "proxy-egress-failed": "configured proxy failed outbound egress",
+  "proxy-blocked-by-policy": "configured proxy blocked outbound egress",
+  "tls-ca-failure": "TLS certificate verification failed for outbound egress",
   "invalid-response": "embedding response was malformed",
   "incompatible-with-stored-identity":
     "embedding model identity changed — existing capsules are no longer compatible",
 });
+
+const ADAPTER_FAILURE_REASONS: Readonly<Record<OpenAIEmbeddingErrorKind, EmbeddingFailureReason>> =
+  Object.freeze({
+    "wrong-header": "wrong-header",
+    "rate-limited": "rate-limited",
+    "unsupported-model": "unsupported-model",
+    timeout: "timeout",
+    cancelled: "cancelled",
+    "invalid-response": "invalid-response",
+    "proxy-unreachable": "proxy-unreachable",
+    "proxy-auth-required": "proxy-auth-required",
+    "proxy-egress-failed": "proxy-egress-failed",
+    "proxy-blocked-by-policy": "proxy-blocked-by-policy",
+    "tls-ca-failure": "tls-ca-failure",
+    transport: "unavailable",
+  });
 
 function fail(reason: EmbeddingFailureReason): EmbeddingCapabilityCheck {
   return { ok: false, reason, safeMessage: SAFE_MESSAGES[reason] };
 }
 
 function reasonFromAdapter(kind: OpenAIEmbeddingErrorKind): EmbeddingFailureReason {
-  switch (kind) {
-    case "wrong-header":
-      return "wrong-header";
-    case "rate-limited":
-      return "rate-limited";
-    case "unsupported-model":
-      return "unsupported-model";
-    case "timeout":
-      return "timeout";
-    case "cancelled":
-      return "cancelled";
-    case "invalid-response":
-      return "invalid-response";
-    case "transport":
-      return "unavailable";
-  }
+  return ADAPTER_FAILURE_REASONS[kind];
 }
 
 function hasCredentials(adapter: OpenAIEmbeddingAdapter): boolean {

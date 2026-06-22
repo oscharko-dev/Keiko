@@ -11,6 +11,7 @@ import type {
   KnowledgeSourceScope,
   CapsuleLifecycleState,
   CapsuleHealth,
+  CapsuleLargeDocumentHealth,
   CapsuleReindexRequest,
   CapsuleDeleteRequest,
   ParserDiagnostic,
@@ -61,10 +62,11 @@ export interface CapsuleActionResponse {
 
 function buildHeaders(method: string, body: BodyInit | null | undefined): Record<string, string> {
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (body !== undefined && body !== null) {
+  const isStateChanging = method !== "GET" && method !== "HEAD";
+  if (isStateChanging || (body !== undefined && body !== null)) {
     headers["Content-Type"] = "application/json";
   }
-  if (method !== "GET" && method !== "HEAD") {
+  if (isStateChanging) {
     headers["X-Keiko-CSRF"] = "1";
   }
   return headers;
@@ -267,6 +269,9 @@ export interface CapsuleDetail {
   readonly sources: readonly SourceIndexStats[];
   readonly parserDiagnostics: readonly ParserDiagnostic[];
   readonly indexingJobs: readonly IndexingJobRecord[];
+  // Bounded large-document ingestion (Epic #1160, Issue #1286). Optional so an older BFF response
+  // without it still renders.
+  readonly largeDocumentHealth?: CapsuleLargeDocumentHealth;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +331,20 @@ export async function repairCapsuleFailedFiles(
   capsuleId: KnowledgeCapsuleId,
 ): Promise<CapsuleActionResponse> {
   const request: CapsuleReindexRequest = { capsuleId, mode: "repair-failed" };
+  return fetchJson<CapsuleActionResponse>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
+    { method: "POST", body: JSON.stringify(request) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/local-knowledge/capsules/:id/reindex — resume interrupted large-document jobs
+// ---------------------------------------------------------------------------
+
+export async function resumeCapsuleLargeDocuments(
+  capsuleId: KnowledgeCapsuleId,
+): Promise<CapsuleActionResponse> {
+  const request: CapsuleReindexRequest = { capsuleId, mode: "resume" };
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
     { method: "POST", body: JSON.stringify(request) },

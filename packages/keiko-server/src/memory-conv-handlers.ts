@@ -31,6 +31,7 @@ import {
 } from "@oscharko-dev/keiko-memory-retrieval";
 import {
   extractCandidatesFromUserText,
+  memoryTextEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -55,6 +56,16 @@ import {
 } from "./memory-conversation-context.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import {
+  enforcePersistableMemoryOutcome,
+  isPersistableMemoryCandidate,
+  memoryCapturePolicyForDeps,
+} from "./memory-capture-policy.js";
+import {
+  buildConversationRetrievalSignals,
+  conversationFusionMode,
+  type ConversationRetrievalSignals,
+} from "./memory-retrieval-signals.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -174,10 +185,7 @@ interface ContextInput {
   readonly budgetTokens: number | undefined;
 }
 
-function parseRequiredString(
-  raw: Record<string, unknown>,
-  key: string,
-): string | RouteResult {
+function parseRequiredString(raw: Record<string, unknown>, key: string): string | RouteResult {
   const value = raw[key];
   if (typeof value === "string" && value.length > 0) {
     return value;
@@ -243,6 +251,9 @@ function parseContextInput(raw: Record<string, unknown>): ContextInput | RouteRe
 function buildRetrievalRequest(
   scopes: readonly MemoryScope[],
   input: ContextInput,
+  nowMs: number,
+  signals: ConversationRetrievalSignals,
+  fusion: ReturnType<typeof conversationFusionMode>,
 ): MemoryRetrievalRequest {
   // exactOptionalPropertyTypes: omit undefined fields instead of assigning them.
   const req: {
@@ -251,14 +262,61 @@ function buildRetrievalRequest(
     queryText?: string;
     types?: readonly MemoryType[];
     budgetTokens?: number;
+    semanticById?: ReadonlyMap<MemoryId, number>;
+    strengthById?: ReadonlyMap<MemoryId, number>;
+    embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
+    fusion?: ReturnType<typeof conversationFusionMode>;
   } = {
     scopes,
-    nowMs: Date.now(),
+    nowMs,
+    fusion,
   };
   if (input.queryText !== undefined) req.queryText = input.queryText;
   if (input.types !== undefined) req.types = input.types;
   if (input.budgetTokens !== undefined) req.budgetTokens = input.budgetTokens;
+  // Embedding-cosine (#204, O-F4), reinforcement (O-P1), and MMR-diversity (O-F3) signals, same as
+  // the chat path. Passed only when present so a vault with no embeddings / no access history ranks
+  // byte-identically.
+  if (signals.semanticById !== undefined) req.semanticById = signals.semanticById;
+  if (signals.strengthById.size > 0) req.strengthById = signals.strengthById;
+  if (signals.embeddingById.size > 0) req.embeddingById = signals.embeddingById;
   return req;
+}
+
+// Builds the embedding + reinforcement signals, runs scoped retrieval, and records the reinforcement
+// reflex — the same pipeline the chat path uses. Extracted so the route handler stays a thin
+// parse/dispatch/audit shell.
+async function retrieveConversationMemory(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  scopes: readonly MemoryScope[],
+  input: ContextInput,
+): Promise<ReturnType<typeof retrieveMemoryContext>> {
+  const port = vaultAsQueryPort(vault);
+  const nowMs = Date.now();
+  // Embedding egress gate (#204, O-F4): only send the query to the secondary embedding model when it
+  // is not secret-shaped — matching the chat path's safeForSecondaryModel guard.
+  const safeForSecondaryModel =
+    input.queryText === undefined ||
+    memoryTextEgressRejectionReason(input.queryText, memoryCapturePolicyForDeps(deps)) === null;
+  const signals = await buildConversationRetrievalSignals(
+    deps,
+    vault,
+    input.queryText,
+    scopes,
+    nowMs,
+    safeForSecondaryModel,
+  );
+  const result = retrieveMemoryContext(
+    buildRetrievalRequest(scopes, input, nowMs, signals, conversationFusionMode(deps)),
+    port,
+  );
+  // Reinforcement reflex (#204, O-P1): every recall is an access, same as the chat path.
+  const accessedIds = result.included.map((item) => item.memoryId);
+  if (accessedIds.length > 0) {
+    vault.recordAccess(accessedIds, Date.now());
+  }
+  return result;
 }
 
 export async function handleMemoryRetrieveContext(
@@ -275,8 +333,7 @@ export async function handleMemoryRetrieveContext(
   const context = resolveConversationMemoryContext(deps, input.projectPath, input.chatId);
   if (isRouteResult(context)) return context;
   const scopes = conversationMemoryScopes(context);
-  const port = vaultAsQueryPort(vault);
-  const result = retrieveMemoryContext(buildRetrievalRequest(scopes, input), port);
+  const result = await retrieveConversationMemory(deps, vault, scopes, input);
   if (result.included.length > 0) {
     const event: MemoryAuditEvent = {
       schemaVersion: "1",
@@ -391,14 +448,15 @@ export async function handleMemoryCaptureFromConversation(
   const outcomes: readonly CaptureOutcome[] = extractCandidatesFromUserText(
     input.text,
     captureContext,
-    { resolver: createMemoryTargetResolver(vault) },
+    memoryCapturePolicyForDeps(deps, { resolver: createMemoryTargetResolver(vault) }),
   );
   // Issue #642: persist every candidate outcome as a `proposed` memory record so the
   // /api/memory/proposals/:id/accept route can find it by the returned proposalId. Uses the
   // shared `buildMemoryRecordFromProposal` builder for parity with chat-handlers.ts.
-  persistCandidateOutcomes(vault, outcomes);
+  const persistableOutcomes = outcomes.map(enforcePersistableMemoryOutcome);
+  persistCandidateOutcomes(vault, persistableOutcomes);
   // Redact every outcome (proposal bodies may carry user text that needs scrubbing).
-  return { status: 200, body: deps.redactor({ outcomes }) };
+  return { status: 200, body: deps.redactor({ outcomes: persistableOutcomes }) };
 }
 
 function persistCandidateOutcomes(
@@ -406,7 +464,7 @@ function persistCandidateOutcomes(
   outcomes: readonly CaptureOutcome[],
 ): void {
   for (const outcome of outcomes) {
-    if (outcome.kind !== "candidate") continue;
+    if (!isPersistableMemoryCandidate(outcome)) continue;
     const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
     const record = buildMemoryRecordFromProposal(proposalId, outcome);
     if (record !== null) {

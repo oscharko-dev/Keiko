@@ -200,6 +200,35 @@ describe("FilesWidget", () => {
     expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
   });
 
+  it("opens a file directly when embedded in the editor workspace", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo space",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "package.json",
+          path: "package.json",
+          kind: "file",
+          sizeBytes: 18,
+          extension: "json",
+        },
+      ],
+    });
+    const onOpenFile = vi.fn();
+
+    render(
+      <FilesWidget root="/repo space" openFilesDirectly activeFilePath="" onOpenFile={onOpenFile} />,
+    );
+
+    await userEvent.click(await screen.findByRole("treeitem", { name: /package\.json/i }));
+
+    expect(fetchFilesPreview).not.toHaveBeenCalled();
+    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
+    expect(screen.queryByText('"keiko"')).toBeNull();
+  });
+
   it("does not offer editor launch for unsupported previews", async () => {
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
       root: "/repo space",
@@ -529,6 +558,76 @@ describe("FilePreview", () => {
       await screen.findByText("No safe text or image preview is available for this file type."),
     ).toBeInTheDocument();
     expect(screen.getAllByText("archive.bin").length).toBeGreaterThan(0);
+  });
+
+  it("explains that DOCX is searchable via bounded extraction with stated limits (Issue #1285)", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/repo",
+      path: "docs/handbook.docx",
+      name: "handbook.docx",
+      sizeBytes: 16_384,
+      modifiedAt: 1,
+      extension: "docx",
+      mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      symlink: false,
+      kind: "binary",
+      reason: "unsupported",
+    });
+
+    render(<FilePreview root="/repo" path="docs/handbook.docx" onClose={() => undefined} />);
+
+    expect(
+      await screen.findByText(
+        /DOCX files up to 2 MB are searchable in Repository Search via bounded text extraction/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("handbook.docx").length).toBeGreaterThan(0);
+  });
+
+  it("explains that XLSX is searchable via bounded extraction (Issue #1285)", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/repo",
+      path: "docs/budget.xlsx",
+      name: "budget.xlsx",
+      sizeBytes: 20_000,
+      modifiedAt: 1,
+      extension: "xlsx",
+      mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      symlink: false,
+      kind: "binary",
+      reason: "unsupported",
+    });
+
+    render(<FilePreview root="/repo" path="docs/budget.xlsx" onClose={() => undefined} />);
+
+    expect(
+      await screen.findByText(
+        /XLSX files up to 2 MB are searchable in Repository Search via bounded text extraction/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("explains that text-layer PDF is searchable via bounded extraction (Issue #1285)", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/repo",
+      path: "docs/manual.pdf",
+      name: "manual.pdf",
+      sizeBytes: 24_000,
+      modifiedAt: 1,
+      extension: "pdf",
+      mime: "application/pdf",
+      symlink: false,
+      kind: "binary",
+      reason: "unsupported",
+    });
+
+    render(<FilePreview root="/repo" path="docs/manual.pdf" onClose={() => undefined} />);
+
+    expect(
+      await screen.findByText(
+        /PDF files up to 2 MB are searchable in Repository Search via bounded text extraction/,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("renders a generic safety alert when the BFF returns 403 DENIED", async () => {

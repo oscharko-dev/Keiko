@@ -30,6 +30,14 @@ export interface QualityIntelligenceCandidateRow {
   readonly tags: readonly string[];
   readonly status: QualityIntelligence.QualityIntelligenceTestCaseStatus;
   readonly derivedFromAtomIds: readonly string[];
+  readonly qualityVerdict?: QualityIntelligenceCandidateQualityVerdict;
+}
+
+export interface QualityIntelligenceCandidateQualityVerdict {
+  readonly verdict: QualityIntelligence.TestQualityJudgeVerdict["verdict"];
+  readonly score: number;
+  readonly dimensions: readonly QualityIntelligence.TestQualityRubricDimension[];
+  readonly overallRationale: string;
 }
 
 export interface QualityIntelligenceCandidatesArtifact {
@@ -42,20 +50,39 @@ export interface QualityIntelligenceCandidatesArtifact {
   readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
 }
 
+type CandidateWithQualityVerdict = QualityIntelligence.QualityIntelligenceTestCaseCandidate & {
+  readonly qualityVerdict?: QualityIntelligenceCandidateQualityVerdict;
+};
+
+const cloneQualityVerdict = (
+  verdict: QualityIntelligenceCandidateQualityVerdict,
+): QualityIntelligenceCandidateQualityVerdict => ({
+  verdict: verdict.verdict,
+  score: verdict.score,
+  dimensions: verdict.dimensions.map((dimension) => ({ ...dimension })),
+  overallRationale: verdict.overallRationale,
+});
+
 const toRow = (
   candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
-): QualityIntelligenceCandidateRow => ({
-  id: String(candidate.id),
-  title: candidate.title,
-  preconditions: [...candidate.preconditions],
-  steps: [...candidate.steps],
-  expectedResults: [...candidate.expectedResults],
-  priority: candidate.priority,
-  riskClass: candidate.riskClass,
-  tags: [...candidate.tags],
-  status: candidate.status,
-  derivedFromAtomIds: candidate.derivedFromAtomIds.map(String),
-});
+): QualityIntelligenceCandidateRow => {
+  const qualityVerdict = (candidate as CandidateWithQualityVerdict).qualityVerdict;
+  return {
+    id: String(candidate.id),
+    title: candidate.title,
+    preconditions: [...candidate.preconditions],
+    steps: [...candidate.steps],
+    expectedResults: [...candidate.expectedResults],
+    priority: candidate.priority,
+    riskClass: candidate.riskClass,
+    tags: [...candidate.tags],
+    status: candidate.status,
+    derivedFromAtomIds: candidate.derivedFromAtomIds.map(String),
+    ...(qualityVerdict !== undefined
+      ? { qualityVerdict: cloneQualityVerdict(qualityVerdict) }
+      : {}),
+  };
+};
 
 const PRIORITIES: ReadonlySet<string> = new Set(
   QualityIntelligence.QUALITY_INTELLIGENCE_PRIORITIES,
@@ -66,6 +93,9 @@ const RISK_CLASSES: ReadonlySet<string> = new Set(
 const TEST_CASE_STATUSES: ReadonlySet<string> = new Set(
   QualityIntelligence.QUALITY_INTELLIGENCE_TEST_CASE_STATUSES,
 );
+const TEST_QUALITY_DIMENSIONS: ReadonlySet<string> = new Set(
+  QualityIntelligence.TEST_QUALITY_RUBRIC_DIMENSIONS,
+);
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -75,6 +105,8 @@ const isNonEmptyString = (value: unknown): value is string =>
 
 const isStringArray = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
+
+const isString = (value: unknown): value is string => typeof value === "string";
 
 const isPriority = (value: unknown): value is QualityIntelligence.QualityIntelligencePriority =>
   typeof value === "string" && PRIORITIES.has(value);
@@ -87,6 +119,46 @@ const isTestCaseStatus = (
 ): value is QualityIntelligence.QualityIntelligenceTestCaseStatus =>
   typeof value === "string" && TEST_CASE_STATUSES.has(value);
 
+const isQualityVerdictValue = (
+  value: unknown,
+): value is QualityIntelligence.TestQualityJudgeVerdict["verdict"] =>
+  value === "strong" || value === "weak";
+
+const isScore = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+
+const isDimensionScore = (value: unknown): value is number =>
+  isScore(value) && Number.isInteger(value);
+
+const isRubricDimensionName = (
+  value: unknown,
+): value is QualityIntelligence.TestQualityDimensionName =>
+  typeof value === "string" && TEST_QUALITY_DIMENSIONS.has(value);
+
+function isRubricDimension(
+  value: unknown,
+): value is QualityIntelligence.TestQualityRubricDimension {
+  return (
+    isObjectRecord(value) &&
+    isRubricDimensionName(value.name) &&
+    isDimensionScore(value.score) &&
+    isString(value.rationale)
+  );
+}
+
+function isCandidateQualityVerdict(
+  value: unknown,
+): value is QualityIntelligenceCandidateQualityVerdict {
+  return (
+    isObjectRecord(value) &&
+    isQualityVerdictValue(value.verdict) &&
+    isScore(value.score) &&
+    Array.isArray(value.dimensions) &&
+    value.dimensions.every(isRubricDimension) &&
+    isString(value.overallRationale)
+  );
+}
+
 const isEditedBy = (
   value: unknown,
 ): value is QualityIntelligence.QualityIntelligenceCandidateEditProvenance["editedBy"] =>
@@ -94,7 +166,11 @@ const isEditedBy = (
 
 // An edited list field persists as an array of non-blank strings — the edit route rejects blank
 // ("") items before persist (editRoutes.ts isListField). Empty arrays are accepted on read so a
-// legitimately-cleared preconditions/tags list still loads: strict on write, fail-open on read.
+// legitimately-cleared preconditions/tags list still loads: strict on write, fail-open on read. The
+// route additionally enforces minItems:1 for steps/expectedResults, but that is a write-time domain
+// rule (a body must have at least one step); on read we stay deliberately fail-open for every list
+// field here — this validator only gates the provenance log shape, never the candidate row itself
+// (rows carry the merged effective value, validated separately by isStringArray).
 const isListOfNonBlankStrings = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string" && item.length > 0);
 
@@ -127,6 +203,8 @@ const CANDIDATE_ROW_VALIDATORS: readonly ((row: Record<string, unknown>) => bool
   (row): boolean => isStringArray(row.tags),
   (row): boolean => isTestCaseStatus(row.status),
   (row): boolean => isStringArray(row.derivedFromAtomIds),
+  (row): boolean =>
+    row.qualityVerdict === undefined || isCandidateQualityVerdict(row.qualityVerdict),
 ];
 
 function isCandidateRow(value: unknown): value is QualityIntelligenceCandidateRow {
@@ -370,9 +448,21 @@ export const applyQualityIntelligenceCandidateEdit = (
   const candidates = artifact.candidates.map((row) =>
     row.id === input.candidateId ? updatedRow : row,
   );
+  // Redact the provenance label before persist: `editorLabel` is the one user-controlled free-text
+  // field of the provenance (the edit route derives it from the request body) and is stored as a
+  // string leaf of the candidates artifact — never write an unredacted label to disk. This restores
+  // parity with recordQualityIntelligenceCandidates (which redacts the whole editedRevisions[]) and
+  // upholds the file-level "every string leaf redacted before persist" invariant. Only the label is
+  // routed through the redactor: `editedAt` (machine ISO timestamp) and `editedBy` (closed enum) are
+  // server-set, carry no secret, and must stay byte-exact so the strict read validator still accepts
+  // them. `candidateId` likewise stays the matched row id so the revision keeps referencing its row.
+  const redactedProvenance: EditProvenance = {
+    ...input.provenance,
+    editorLabel: input.redact(input.provenance.editorLabel) as string,
+  };
   const revision: EditedRevision = {
     candidateId: input.candidateId,
-    provenance: input.provenance,
+    provenance: redactedProvenance,
     editedFields: redactedFields,
   };
   store.record(input.runId, {

@@ -15,9 +15,9 @@
 //   - The raw payload is NEVER serialised either. The same rationale.
 //   - The storage path is run through the audit redactor in case a user-supplied path
 //     happens to contain a credential-shaped segment.
-//   - Audit event tail trusts the persist-time redaction (#214 handler) — events are
-//     read from the same date-bucketed manifest and inherit the redactor already
-//     applied to their `summary` field.
+//   - Audit event tail is sanitised again on export. Persist-time redaction remains the
+//     primary boundary, but diagnostics must stay non-leaking even if a local manifest is
+//     edited or produced by an older writer.
 //
 // This function does NOT mutate the vault. It only reads.
 
@@ -29,6 +29,7 @@ import { auditRunIdFor } from "./memory-audit-handler.js";
 import {
   auditEventTouchesScope,
   memoryScopeKey,
+  sanitizeAuditEvent,
   sanitizeMemoryScope,
 } from "./memory-scope-sanitizer.js";
 
@@ -111,17 +112,17 @@ function readRecentAuditEvents(
   nowMs: number,
   limit: number,
   allowedScopeKeys: ReadonlySet<string>,
+  redactString: (input: string) => string,
 ): readonly MemoryAuditEvent[] {
-  const today = readAuditManifest(store, auditRunIdFor(nowMs)).filter((event) =>
-    auditEventTouchesScope(event, allowedScopeKeys),
-  );
+  const today = readAuditManifest(store, auditRunIdFor(nowMs))
+    .map((event) => sanitizeAuditEvent(event, redactString))
+    .filter((event) => auditEventTouchesScope(event, allowedScopeKeys));
   if (today.length >= limit) {
     return today.slice(today.length - limit);
   }
-  const yesterday = readAuditManifest(
-    store,
-    auditRunIdFor(nowMs - 24 * 60 * 60 * 1000),
-  ).filter((event) => auditEventTouchesScope(event, allowedScopeKeys));
+  const yesterday = readAuditManifest(store, auditRunIdFor(nowMs - 24 * 60 * 60 * 1000))
+    .map((event) => sanitizeAuditEvent(event, redactString))
+    .filter((event) => auditEventTouchesScope(event, allowedScopeKeys));
   const combined = [...yesterday, ...today];
   if (combined.length <= limit) {
     return combined;
@@ -162,7 +163,10 @@ export function exportMemoryDiagnostics(
     for (const record of records) {
       histogram[record.status] += 1;
     }
-    return { scope: sanitizedScopes[index] ?? sanitizeMemoryScope(scope, options.redactString), count: records.length };
+    return {
+      scope: sanitizedScopes[index] ?? sanitizeMemoryScope(scope, options.redactString),
+      count: records.length,
+    };
   });
   const tail = clampTail(options.lastNAuditEvents);
   const recentAuditEvents = readRecentAuditEvents(
@@ -170,6 +174,7 @@ export function exportMemoryDiagnostics(
     nowMs,
     tail,
     allowedScopeKeys,
+    options.redactString,
   );
   return {
     schemaVersion: "1",

@@ -65,7 +65,8 @@ function runLongRangeUnderstanding(): { passed: boolean; evidence: string } {
   const { request, portWithEdges, portNoEdges } = loadDecisionsFixture();
   const withGraph = graphSubscoreFor(portWithEdges, request, LINKED_ID);
   const withoutEdges = retrieveMemoryContext(request, portNoEdges);
-  const withoutGraph = withoutEdges.included.find((m) => String(m.memoryId) === LINKED_ID)?.subscores.graph;
+  const withoutGraph = withoutEdges.included.find((m) => String(m.memoryId) === LINKED_ID)
+    ?.subscores.graph;
   const omittedReason = withoutEdges.omitted.find((m) => String(m.memoryId) === LINKED_ID)?.reason;
   const positivePass = withGraph !== undefined && withGraph > 0;
   const controlPass = withoutGraph === undefined && omittedReason === "below-threshold";

@@ -12,8 +12,8 @@
 // SQLite" alternative.
 //
 // Safety:
-// - Base dir is realpath-contained once at construction (reusing the assertContainedRealPath
-//   primitive); every child path is re-checked before any read/write/delete.
+// - Base dir is realpath-contained once at construction; every child path is derived from a
+//   validated runId and the lexical directory entry is inspected before overwrite/delete.
 // - File names are derived from the VALIDATED runId via assertValidRunId — no separator/`..`/NUL
 //   can reach the resolved path.
 // - Writes are atomic O_EXCL temp + rename. A partial write leaves a `.tmp` that is invisible to
@@ -34,11 +34,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  assertContainedRealPath,
-  resolveWithinWorkspace,
-  type WorkspaceFs,
-} from "@oscharko-dev/keiko-workspace";
+import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
@@ -127,10 +123,9 @@ function existingQiBaseDir(baseDir: string, fs: WorkspaceFs): string | undefined
   }
 }
 
-function containedQiManifestPath(runId: string, realBase: string, fs: WorkspaceFs): string {
+function lexicalQiManifestPath(runId: string, realBase: string): string {
   assertValidRunId(runId);
-  const lexical = resolveWithinWorkspace(realBase, `${runId}${QI_MANIFEST_SUFFIX}`);
-  return assertContainedRealPath(fs, realBase, lexical, `${runId}${QI_MANIFEST_SUFFIX}`);
+  return resolveWithinWorkspace(realBase, `${runId}${QI_MANIFEST_SUFFIX}`);
 }
 
 function isQiManifestName(name: string): boolean {
@@ -154,6 +149,14 @@ function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
     throw new EvidenceReadError(
       `cannot inspect QI manifest: ${error instanceof Error ? error.message : "unknown"}`,
     );
+  }
+}
+
+function assertWritableQiManifestEntry(target: string, fs: WorkspaceFs): void {
+  const entry = lstatSync(target, { throwIfNoEntry: false });
+  if (entry === undefined) return;
+  if (!entry.isFile() || !isSingleLinkRegularFile(target, fs)) {
+    throw new EvidenceWriteError("cannot overwrite a non-ledger QI manifest");
   }
 }
 
@@ -205,7 +208,7 @@ function reportQiLocation(baseDir: string, fs: WorkspaceFs, runId: string): stri
   const realBase = existingQiBaseDir(baseDir, fs);
   return realBase === undefined
     ? join(resolve(baseDir), `${runId}${QI_MANIFEST_SUFFIX}`)
-    : containedQiManifestPath(runId, realBase, fs);
+    : lexicalQiManifestPath(runId, realBase);
 }
 
 function parseAndValidateManifest(json: string): QualityIntelligenceEvidenceManifest {
@@ -242,21 +245,6 @@ function assertHashMatches(
   }
 }
 
-// Backward-compatible group check: a group that shipped before it was integrity-hashed (coverageMatrix
-// #738, sourceFingerprints #735) may exist on a legacy manifest without a stored hash. Enforce the
-// check only once a stored hash is present; new manifests always carry it, so tampering with a current
-// group is still caught.
-function assertOptionalHashMatches(
-  label: string,
-  value: unknown,
-  stored: string | undefined,
-): void {
-  if (stored === undefined) return;
-  if (sha256OfJson(value) !== stored) {
-    throw new EvidenceReadError(`QI manifest ${label} integrity hash mismatch`);
-  }
-}
-
 function assertIntegrityHashesMatch(manifest: QualityIntelligenceEvidenceManifest): void {
   const expected = buildIntegrityHashes(manifest.findings, manifest.exports, manifest.evidenceRefs);
   assertHashMatches("findings", expected.findings, manifest.integrityHashes.findings);
@@ -271,14 +259,23 @@ function assertIntegrityHashesMatch(manifest: QualityIntelligenceEvidenceManifes
     expectedAtomFingerprints,
     manifest.integrityHashes.atomFingerprints,
   );
-  assertOptionalHashMatches(
+  // coverageMatrix and sourceFingerprints: derive expected = (collection === undefined ? undefined :
+  // sha256OfJson(collection)) and compare with assertHashMatches so a present collection with a
+  // deleted stored sub-hash FAILS CLOSED (mirrors atomFingerprints above — removal-proof).
+  const expectedCoverageMatrix =
+    manifest.coverageMatrix === undefined ? undefined : sha256OfJson(manifest.coverageMatrix);
+  assertHashMatches(
     "coverageMatrix",
-    manifest.coverageMatrix,
+    expectedCoverageMatrix,
     manifest.integrityHashes.coverageMatrix,
   );
-  assertOptionalHashMatches(
+  const expectedSourceFingerprints =
+    manifest.sourceFingerprints === undefined
+      ? undefined
+      : sha256OfJson(manifest.sourceFingerprints);
+  assertHashMatches(
     "sourceFingerprints",
-    manifest.sourceFingerprints,
+    expectedSourceFingerprints,
     manifest.integrityHashes.sourceFingerprints,
   );
 }
@@ -345,7 +342,8 @@ function recordQiManifest(
 ): string {
   assertValidRunId(manifest.runId);
   const realBase = prepareQiBaseDir(baseDir, fs);
-  const target = containedQiManifestPath(manifest.runId, realBase, fs);
+  const target = lexicalQiManifestPath(manifest.runId, realBase);
+  assertWritableQiManifestEntry(target, fs);
   atomicWriteQiManifest(target, JSON.stringify(manifest), randomSuffix);
   return target;
 }
@@ -356,7 +354,7 @@ function deleteQiManifest(baseDir: string, fs: WorkspaceFs, runId: string): bool
   if (realBase === undefined) {
     return false;
   }
-  const target = containedQiManifestPath(runId, realBase, fs);
+  const target = lexicalQiManifestPath(runId, realBase);
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
     return false;
   }
@@ -414,7 +412,7 @@ export interface QualityIntelligenceRecordInput {
   readonly provenanceRefs: QualityIntelligenceEvidenceManifest["provenanceRefs"];
   /** Optional coverage matrix (per-atom status, refs only). Added in #738. */
   readonly coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"];
-  /** Optional run quality score — percent of judged candidates rated "strong" [0-100]; null when judge was skipped. Added in #736. */
+  /** Optional run quality score — percent of candidates with a strong judge outcome [0-100]; null when judge was skipped. Added in #736. */
   readonly qualityScore?: QualityIntelligenceEvidenceManifest["qualityScore"];
   /** Optional per-envelope content fingerprints for drift detection (Epic #735). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];
@@ -620,6 +618,99 @@ export function recordQualityIntelligenceRun(
     coverageMatrix: redacted.coverageMatrix,
     modelParameters: redacted.modelParameters,
   });
+  return { manifest, location: store.record(manifest) };
+}
+
+// ─── Export-evidence append (Issue #283, AC4) ────────────────────────────────────────
+
+export interface QualityIntelligenceExportEvidenceInput {
+  readonly runId: string;
+  /** The export row to append: target adapter, artifact id, integrity hash, attestation, mode. */
+  readonly export: QualityIntelligenceEvidenceManifest["exports"][number];
+}
+
+// Fold a second redaction summary into a base one so the manifest's counts-only redaction summary
+// stays internally consistent after an export row is appended (the run summary + the row's scan).
+function foldRedactionSummary(
+  base: QualityIntelligenceEvidenceManifest["redactionSummary"],
+  add: QualityIntelligenceEvidenceManifest["redactionSummary"],
+): QualityIntelligenceEvidenceManifest["redactionSummary"] {
+  const patternsMatched: Record<string, number> = { ...base.patternsMatched };
+  for (const [key, count] of Object.entries(add.patternsMatched)) {
+    patternsMatched[key] = (patternsMatched[key] ?? 0) + count;
+  }
+  return {
+    totalStringsScanned: base.totalStringsScanned + add.totalStringsScanned,
+    stringsRedacted: base.stringsRedacted + add.stringsRedacted,
+    patternsMatched,
+  };
+}
+
+/**
+ * Append one export-evidence row to an already-recorded run manifest (Issue #283, AC4 — "export
+ * evidence records target type, artifact IDs, mapping profile, and result without leaking secrets";
+ * Audit Addendum — "audit evidence for every export action").
+ *
+ * Every QI export action — a local serialisation download, a binary PDF/ZIP bundle, or a dry-run
+ * preview — emits one audit row recording WHAT was exported (`targetAdapter`), the artifact id, its
+ * integrity hash, the redaction attestation, and whether it was a dry-run. The disabled external-TMS
+ * write path produces no artifact and therefore records nothing.
+ *
+ * Rows are deduplicated by `(id, dryRun)` so re-exporting the same adapter in the same mode is
+ * idempotent — the audit captures each distinct (artifact, mode) once rather than once per click,
+ * which also bounds manifest growth.
+ *
+ * Invariants preserved (mirrors {@link recordQualityIntelligenceRun}):
+ *  - the new row's string leaves pass the persist redactor before assembly (the row carries only
+ *    ids / an enum / a sha-256 hash / booleans, so this is a no-op in practice, but the persist
+ *    redactor is applied unconditionally to keep the fail-closed contract uniform);
+ *  - `integrityHashes.exports` is recomputed over the full new collection; the other hash groups are
+ *    carried over unchanged because their collections did not change;
+ *  - `totals.exports` stays equal to `exports.length` (asserted on read);
+ *  - the counts-only `redactionSummary` folds in the new row's scan;
+ *  - the manifest is rewritten through the same atomic O_EXCL temp + rename path.
+ *
+ * Throws `EvidenceReadError` when the run manifest does not exist (an export cannot precede its run)
+ * and `EvidenceWriteError` when neither `store` nor `evidenceDir` is supplied or the write fails.
+ */
+export function appendQualityIntelligenceExportRow(
+  input: QualityIntelligenceExportEvidenceInput,
+  options: QualityIntelligenceRecordOptions = {},
+): QualityIntelligenceRecordResult {
+  assertValidRunId(input.runId);
+  const store = resolveStore(options);
+  if (store === undefined) {
+    throw new EvidenceWriteError(
+      "appendQualityIntelligenceExportRow requires options.store or options.evidenceDir",
+    );
+  }
+  const existing = store.load(input.runId);
+  if (existing === undefined) {
+    throw new EvidenceReadError(
+      `cannot append export evidence: QI run "${input.runId}" was not found`,
+    );
+  }
+  const { redacted: redactedRow, summary: rowSummary } = redactQualityIntelligenceEvidence(
+    input.export,
+    options.redaction ?? {},
+  );
+  const isSameRow = (row: QualityIntelligenceEvidenceManifest["exports"][number]): boolean =>
+    row.id === redactedRow.id && (row.dryRun ?? false) === (redactedRow.dryRun ?? false);
+  if (existing.exports.some(isSameRow)) {
+    return { manifest: existing, location: store.location(input.runId) };
+  }
+  const exports = [...existing.exports, redactedRow];
+  const integrityHashes: QualityIntelligenceIntegrityHashes = {
+    ...existing.integrityHashes,
+    exports: sha256OfJson(exports),
+  };
+  const manifest: QualityIntelligenceEvidenceManifest = {
+    ...existing,
+    exports,
+    totals: { ...existing.totals, exports: exports.length },
+    integrityHashes,
+    redactionSummary: foldRedactionSummary(existing.redactionSummary, rowSummary),
+  };
   return { manifest, location: store.record(manifest) };
 }
 

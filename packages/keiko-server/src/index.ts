@@ -5,7 +5,7 @@
 
 export { createUiServer, DEFAULT_UI_PORT, UI_HOST, type UiServerDeps } from "./server.js";
 export { buildCspHeader, extractInlineScriptHashes } from "./csp.js";
-export { loadCspHeader } from "./load-csp.js";
+export { createLiveCspHeaderProvider, loadCspHeader } from "./load-csp.js";
 export { applySecurityHeaders } from "./headers.js";
 export { isAllowedHost } from "./host-check.js";
 export { resolveContainedPath, serveFile } from "./static.js";
@@ -114,6 +114,13 @@ export {
 export { TerminalToolError, type TerminalErrorCode } from "./terminal-errors.js";
 export { runMemoryMaintenance, type MaintenanceCounts } from "./memory-maintenance-handlers.js";
 export {
+  exportMemoryDiagnostics,
+  type ExportMemoryDiagnosticsOptions,
+  type MemoryDiagnostics,
+  type MemoryScopeCount,
+  type MemoryStatusHistogram,
+} from "./memory-diagnostics.js";
+export {
   createMemoryEmbedder,
   selectMemoryEmbeddingModelId,
   type MemoryEmbedder,
@@ -139,3 +146,15 @@ export {
   type FilesTreeEntry,
   type FilesTreeResponse,
 } from "./files.js";
+
+// Epic #1307 / Issue #1314 — Prompt Enhancer governed surface. The BFF route handler and the reusable,
+// deterministic orchestration the CLI command (`keiko prompt-enhancer`) drives so both surfaces produce
+// byte-identical enhancements (AC1). Routed through the Model Gateway; never dispatches a model.
+export {
+  handlePromptEnhancement,
+  buildPromptEnhancementRecordInput,
+  runPromptEnhancement,
+  PromptEnhancementCancelledError,
+  PromptEnhancementInputError,
+  type RunPromptEnhancementDeps,
+} from "./promptEnhancer/index.js";

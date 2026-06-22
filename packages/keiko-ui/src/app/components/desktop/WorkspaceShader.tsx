@@ -1,7 +1,27 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  WALLPAPER_ENABLED_EVENT,
+  WALLPAPER_ENABLED_KEY,
+  WALLPAPER_OPACITY_EVENT,
+  FRAME_BORDER_STRENGTH_EVENT,
+  FRAME_INNER_GLOW_STRENGTH_EVENT,
+  WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT,
+  WORKSPACE_GRID_STRENGTH_EVENT,
+  applyFrameBorderStrength,
+  applyFrameInnerGlowStrength,
+  applyWorkspaceBackgroundBrightness,
+  applyWorkspaceGridStrength,
+  clampPercent,
+  readFrameBorderStrength,
+  readFrameInnerGlowStrength,
+  readWallpaperEnabled,
+  readWallpaperOpacity,
+  readWorkspaceBackgroundBrightness,
+  readWorkspaceGridStrength,
+} from "./workspace-appearance";
 
 const KEIKO_VERT = `
 attribute vec2 aPos;
@@ -12,7 +32,6 @@ const KEIKO_FRAG = `
 precision highp float;
 uniform vec2  uRes;
 uniform float uTime;
-uniform vec2  uMouse;   // 0..1, y up
 uniform float uLight;   // 1 = light theme, 0 = dark; WebGL default 0 keeps failure mode dark
 uniform vec2  uRip[4];  // ripple origins (0..1, y up)
 uniform float uRipT[4]; // seconds since each ripple fired (large = inactive)
@@ -40,7 +59,6 @@ void main(){
   vec2 uv = gl_FragCoord.xy / uRes.xy;
   float aspect = uRes.x / uRes.y;
   vec2 p = vec2(uv.x * aspect, uv.y);
-  vec2 m = vec2(uMouse.x * aspect, uMouse.y);
 
   float t = uTime * 0.06;
 
@@ -62,10 +80,6 @@ void main(){
     fbm(p * 2.1 + vec2(0.0, t)),
     fbm(p * 2.1 + vec2(t, 4.7))
   );
-  // mouse bends the flow toward the cursor
-  vec2 toM = m - p;
-  float md = exp(-length(toM) * 2.2);
-  warp += toM * md * 0.28;
   warp += rip * 0.07;
 
   float f = fbm(p * 2.4 + warp * 1.7 + vec2(t * 0.6, 0.0));
@@ -89,9 +103,6 @@ void main(){
   // orca-green sheen on the brightest specular ridges
   float spec = smoothstep(0.80, 1.0, bands);
   col += green * spec * mix(0.16, 0.085, uLight);
-
-  // soft green glow trailing the cursor — fun to fidget with
-  col += green * md * 0.085;
 
   // ripple highlight
   vec3 ripCol = mix(vec3(1.0), green, uLight);
@@ -117,23 +128,15 @@ function compileShader(gl: WebGLRenderingContext, type: number, src: string): We
   return s;
 }
 
-function readOpacity(): number {
-  if (typeof window === "undefined") return 1;
-  const raw = window.localStorage.getItem("keiko.wallpaper.opacity");
-  if (raw === null) return 1;
-  const v = Number.parseInt(raw, 10);
-  return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) / 100 : 1;
-}
-
 function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void) | undefined {
-  canvas.style.opacity = String(readOpacity());
+  canvas.style.opacity = String(readWallpaperOpacity() / 100);
 
   const onOpacity = (e: Event): void => {
     const detail = (e as CustomEvent<number>).detail;
-    const value = typeof detail === "number" ? detail : readOpacity() * 100;
-    canvas.style.opacity = String(Math.max(0, Math.min(100, value)) / 100);
+    const value = typeof detail === "number" ? detail : readWallpaperOpacity();
+    canvas.style.opacity = String(clampPercent(value) / 100);
   };
-  window.addEventListener("keiko:wallpaper-opacity", onOpacity);
+  window.addEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
 
   let gl: WebGLRenderingContext | null = null;
   try {
@@ -149,7 +152,7 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   if (gl === null) {
     // No WebGL — solid --bg shows through the transparent canvas.
     return () => {
-      window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
+      window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
     };
   }
 
@@ -157,14 +160,14 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   const fs = compileShader(gl, gl.FRAGMENT_SHADER, KEIKO_FRAG);
   if (vs === null || fs === null) {
     return () => {
-      window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
+      window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
     };
   }
 
   const prog = gl.createProgram();
   if (prog === null) {
     return () => {
-      window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
+      window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
     };
   }
   gl.attachShader(prog, vs);
@@ -172,7 +175,7 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   gl.linkProgram(prog);
   if (!(gl.getProgramParameter(prog, gl.LINK_STATUS) as boolean)) {
     return () => {
-      window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
+      window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
     };
   }
   gl.useProgram(prog);
@@ -186,7 +189,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
 
   const uRes: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uRes");
   const uTime: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uTime");
-  const uMouse: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uMouse");
   const uLight: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uLight");
   const uRip: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uRip");
   const uRipT: WebGLUniformLocation | null = gl.getUniformLocation(prog, "uRipT");
@@ -195,7 +197,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   let W = 1;
   let H = 1;
   const dpr = Math.min(window.devicePixelRatio ?? 1, 1.5);
-  const mouse = { tx: 0.5, ty: 0.5, x: 0.5, y: 0.5 };
   const ripPos = new Float32Array(RN * 2);
   const ripStart: number[] = new Array(RN).fill(Number.NEGATIVE_INFINITY);
   let ripHead = 0;
@@ -216,13 +217,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   if (ro !== null) ro.observe(host);
   else window.addEventListener("resize", resize);
 
-  const onMove = (e: PointerEvent): void => {
-    const r = host.getBoundingClientRect();
-    mouse.tx = (e.clientX - r.left) / Math.max(1, r.width);
-    // y-axis is flipped: WebGL UV y=0 is bottom, pointer y=0 is top
-    mouse.ty = 1 - (e.clientY - r.top) / Math.max(1, r.height);
-  };
-
   const onDown = (e: PointerEvent): void => {
     const r = host.getBoundingClientRect();
     const nx = (e.clientX - r.left) / Math.max(1, r.width);
@@ -234,7 +228,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     ripHead = (ripHead + 1) % RN;
   };
 
-  host.addEventListener("pointermove", onMove);
   host.addEventListener("pointerdown", onDown);
 
   const t0 = performance.now();
@@ -247,9 +240,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     const now = performance.now();
     const time = (now - t0) / 1000;
 
-    mouse.x += (mouse.tx - mouse.x) * 0.06;
-    mouse.y += (mouse.ty - mouse.y) * 0.06;
-
     for (let i = 0; i < RN; i++) {
       ripT[i] = (now - (ripStart[i] ?? Number.NEGATIVE_INFINITY)) / 1000;
     }
@@ -259,7 +249,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     if (gl !== null) {
       gl.uniform2f(uRes, canvas.width, canvas.height);
       gl.uniform1f(uTime, time);
-      gl.uniform2f(uMouse, mouse.x, mouse.y);
       gl.uniform1f(uLight, light);
       gl.uniform2fv(uRip, ripPos);
       gl.uniform1fv(uRipT, ripT);
@@ -285,8 +274,7 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     running = false;
     cancelAnimationFrame(raf);
     document.removeEventListener("visibilitychange", onVis);
-    window.removeEventListener("keiko:wallpaper-opacity", onOpacity);
-    host.removeEventListener("pointermove", onMove);
+    window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
     host.removeEventListener("pointerdown", onDown);
     if (ro !== null) ro.disconnect();
     else window.removeEventListener("resize", resize);
@@ -301,8 +289,65 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
 
 export function WorkspaceShader(): ReactNode {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [enabled, setEnabled] = useState(readWallpaperEnabled);
 
   useEffect(() => {
+    applyWorkspaceBackgroundBrightness(readWorkspaceBackgroundBrightness());
+    applyWorkspaceGridStrength(readWorkspaceGridStrength());
+    applyFrameBorderStrength(readFrameBorderStrength());
+    applyFrameInnerGlowStrength(readFrameInnerGlowStrength());
+    const onBrightness = (event: Event): void => {
+      const detail = (event as CustomEvent<number>).detail;
+      applyWorkspaceBackgroundBrightness(
+        typeof detail === "number" ? detail : readWorkspaceBackgroundBrightness(),
+      );
+    };
+    const onGridStrength = (event: Event): void => {
+      const detail = (event as CustomEvent<number>).detail;
+      applyWorkspaceGridStrength(typeof detail === "number" ? detail : readWorkspaceGridStrength());
+    };
+    const onFrameBorderStrength = (event: Event): void => {
+      const detail = (event as CustomEvent<number>).detail;
+      applyFrameBorderStrength(typeof detail === "number" ? detail : readFrameBorderStrength());
+    };
+    const onFrameInnerGlowStrength = (event: Event): void => {
+      const detail = (event as CustomEvent<number>).detail;
+      applyFrameInnerGlowStrength(
+        typeof detail === "number" ? detail : readFrameInnerGlowStrength(),
+      );
+    };
+    window.addEventListener(WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT, onBrightness);
+    window.addEventListener(WORKSPACE_GRID_STRENGTH_EVENT, onGridStrength);
+    window.addEventListener(FRAME_BORDER_STRENGTH_EVENT, onFrameBorderStrength);
+    window.addEventListener(FRAME_INNER_GLOW_STRENGTH_EVENT, onFrameInnerGlowStrength);
+    return () => {
+      window.removeEventListener(WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT, onBrightness);
+      window.removeEventListener(WORKSPACE_GRID_STRENGTH_EVENT, onGridStrength);
+      window.removeEventListener(FRAME_BORDER_STRENGTH_EVENT, onFrameBorderStrength);
+      window.removeEventListener(FRAME_INNER_GLOW_STRENGTH_EVENT, onFrameInnerGlowStrength);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onEnabled = (event: Event): void => {
+      const detail = (event as CustomEvent<boolean>).detail;
+      setEnabled(typeof detail === "boolean" ? detail : readWallpaperEnabled());
+    };
+    const onStorage = (event: StorageEvent): void => {
+      if (event.key === null || event.key === WALLPAPER_ENABLED_KEY) {
+        setEnabled(readWallpaperEnabled());
+      }
+    };
+    window.addEventListener(WALLPAPER_ENABLED_EVENT, onEnabled);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(WALLPAPER_ENABLED_EVENT, onEnabled);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
     const canvas = canvasRef.current;
     if (canvas === null) return;
     const host = canvas.parentElement;
@@ -329,7 +374,7 @@ export function WorkspaceShader(): ReactNode {
       mq.removeEventListener("change", apply);
       dispose?.();
     };
-  }, []);
+  }, [enabled]);
 
-  return <canvas ref={canvasRef} className="ws-shader" aria-hidden="true" />;
+  return enabled ? <canvas ref={canvasRef} className="ws-shader" aria-hidden="true" /> : null;
 }

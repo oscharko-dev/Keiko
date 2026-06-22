@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { openProviderCredentialVault } from "@oscharko-dev/keiko-server/credential-vault";
 import { runModelsCli } from "./models.js";
 import type { CliIo } from "./runner.js";
 
@@ -25,6 +26,8 @@ function makeIo(): Captured {
 }
 
 const API_KEY_PATTERN = /\b(?:sk-[A-Za-z0-9_-]{16,}|example-test-token-[A-Za-z0-9_-]{8,})/;
+const REAL_TMPDIR = realpathSync(tmpdir());
+const PROVIDER_CREDENTIALS_KEY = Buffer.alloc(32, 0x31).toString("base64");
 
 function validConfig(): string {
   return JSON.stringify({
@@ -40,6 +43,32 @@ function validConfig(): string {
     ],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
   });
+}
+
+function writeReferenceOnlyConfig(dir: string): string {
+  const path = join(dir, "vaulted.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      providers: [
+        {
+          modelId: "example-chat-model",
+          baseUrl: "https://host.example/v1",
+          apiKeySecretRef: "cred:example-chat-model",
+          timeoutMs: 30000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+    }),
+    "utf8",
+  );
+  openProviderCredentialVault({
+    configPath: path,
+    env: { KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY },
+  }).set("cred:example-chat-model", "example-test-token-1234567890");
+  return path;
 }
 
 describe("runModelsCli list", () => {
@@ -70,7 +99,7 @@ describe("runModelsCli list", () => {
 describe("runModelsCli validate", () => {
   let dir: string;
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "keiko-cli-"));
+    dir = mkdtempSync(join(REAL_TMPDIR, "keiko-cli-"));
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -84,6 +113,17 @@ describe("runModelsCli validate", () => {
     expect(code).toBe(0);
     expect(c.out()).toContain("valid");
     expect(c.out()).toContain("1");
+  });
+
+  it("validates a migrated reference-only config by resolving the local credential vault", () => {
+    const path = writeReferenceOnlyConfig(dir);
+    const c = makeIo();
+    const code = runModelsCli(["validate", "--config", path], c.io, {
+      KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY,
+    });
+    expect(code).toBe(0);
+    expect(c.out()).toContain("valid");
+    expect(c.out() + c.err()).not.toContain("example-test-token-1234567890");
   });
 
   it("reports an invalid config on stderr with the error code and exits 1", () => {

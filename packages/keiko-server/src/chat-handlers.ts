@@ -27,7 +27,16 @@ import type {
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
+  maybeRunAutoMaintenance,
+  type AutoMaintenanceState,
+} from "./memory-maintenance-handlers.js";
+import {
+  buildConversationRetrievalSignals,
+  conversationFusionMode,
+} from "./memory-retrieval-signals.js";
+import {
   extractCandidatesFromUserText,
+  memoryTextEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -38,7 +47,7 @@ import {
   type ChatMessage,
   type Project,
 } from "./store/index.js";
-import { composeConversationPrompt } from "./conversation-prompt.js";
+import { CONVERSATION_SYSTEM_PROMPT, composeConversationPrompt } from "./conversation-prompt.js";
 import {
   validateConversationPayload,
   type ConversationAttachment,
@@ -50,6 +59,11 @@ import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
+import {
+  isPersistableMemoryCandidate,
+  memoryCapturePolicyForDeps,
+  SENSITIVE_MEMORY_REJECTION_REASON,
+} from "./memory-capture-policy.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
 import {
   conversationMemoryScopes,
@@ -57,9 +71,13 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
-import { cosineSimilarity, embedAndStoreMemory, embedMemoryText } from "./memory-embedding.js";
+import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { captureSalientFromTurn } from "./memory-salience.js";
+import {
+  assertUsableAssistantContent,
+  isLegacyEmptyAssistantPlaceholder,
+} from "./assistant-response.js";
 
 const DEFAULT_CHAT_MODEL = "example-chat-model";
 const DEFAULT_CHAT_TITLE = "New chat";
@@ -217,7 +235,9 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
     available: isProjectAvailable(item),
   }));
   const chats = deps.store.listChats(project.path);
-  const messages = deps.store.listMessages(chat.id);
+  const messages = deps.store
+    .listMessages(chat.id)
+    .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
   return {
     project: { ...project, available: isProjectAvailable(project) },
     chat,
@@ -262,6 +282,9 @@ export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): Rou
 function messageForGateway(
   message: ChatMessage,
 ): { role: "user" | "assistant"; content: string } | null {
+  if (isLegacyEmptyAssistantPlaceholder(message)) {
+    return null;
+  }
   if (message.role !== "user" && message.role !== "assistant") {
     return null;
   }
@@ -278,8 +301,7 @@ function conversationForGateway(messages: readonly ChatMessage[]): GatewayConver
   return [
     {
       role: "system",
-      content:
-        "You are Keiko, an enterprise developer-assist AI. Be concise, practical, and explicit about uncertainty. Do not claim tool access you do not have in this chat.",
+      content: CONVERSATION_SYSTEM_PROMPT,
     },
     ...usable,
   ];
@@ -567,11 +589,13 @@ export function createAssistantMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   content: string,
+  modelId: string,
 ): ChatMessage {
+  assertUsableAssistantContent(content, modelId);
   return deps.store.createMessage({
     chatId: request.chatId,
     role: "assistant",
-    content: content.length > 0 ? content : "The model returned an empty response.",
+    content,
     timestamp: Date.now(),
     runId: undefined,
     workflowId: undefined,
@@ -645,46 +669,9 @@ function recordConversationMemoryRetrieval(
   recordMemoryAudit({ evidenceStore: deps.evidenceStore }, event);
 }
 
-// Gathers the candidate memory ids the retrieval layer will rank for these scopes, so the caller
-// can score each against the query embedding BEFORE retrieval runs. A superset of the eventually-
-// ranked set is harmless: ids the ranker filters out simply never read their semantic score.
-function gatherCandidateIds(
-  vault: MemoryVaultStore,
-  scopes: readonly MemoryScope[],
-): readonly MemoryId[] {
-  const port = vaultAsQueryPort(vault);
-  const ids: MemoryId[] = [];
-  const seen = new Set<string>();
-  for (const scope of scopes) {
-    for (const record of port.listByScope(scope)) {
-      if (seen.has(record.id)) continue;
-      seen.add(record.id);
-      ids.push(record.id);
-    }
-  }
-  return ids;
-}
-
-// Builds the per-memory semantic score map for the candidate set, or undefined when no embedding
-// model is configured (query embedding null) — that undefined drives the byte-identical lexical
-// fallback in the ranker. A candidate whose stored vector is missing or dimension-mismatched is
-// simply omitted from the map (semantic subscore 0 for it).
-async function buildSemanticScores(
-  deps: UiHandlerDeps,
-  vault: MemoryVaultStore,
-  queryText: string,
-  candidateIds: readonly MemoryId[],
-): Promise<ReadonlyMap<MemoryId, number> | undefined> {
-  const queryEmbedding = await embedMemoryText(deps, queryText);
-  if (queryEmbedding === null) return undefined;
-  const scores = new Map<MemoryId, number>();
-  for (const id of candidateIds) {
-    const stored = vault.getEmbedding(id);
-    if (stored === undefined) continue;
-    scores.set(id, cosineSimilarity(queryEmbedding.vector, stored.vector));
-  }
-  return scores;
-}
+// The candidate-id gathering, semantic scoring, and strength projection that both this chat path and
+// the BFF /api/memory/context route need now live in ONE place — memory-retrieval-signals.ts — so the
+// two surfaces cannot drift (#204, O-F4). See buildConversationRetrievalSignals.
 
 function toMemoryResult(
   retrieval: ReturnType<typeof retrieveMemoryContext>,
@@ -697,11 +684,70 @@ function toMemoryResult(
         memoryId: String(item.memoryId),
         bodyExcerpt: item.bodyExcerpt,
         inclusionReason: item.inclusionReason,
+        sourceKind: item.sourceKind,
+        ...(item.captureRationale !== undefined ? { captureRationale: item.captureRationale } : {}),
+        sensitivity: item.sensitivity,
+        confidence: item.confidence,
+        status: item.status,
+        capturedAt: item.capturedAt,
       })),
       budget: retrieval.budget,
     },
     actions: [],
   };
+}
+
+// Process-lifetime rate-limit cursor for autonomous maintenance (#204, O-V4). One loopback server =
+// one cursor, so the >=6h interval is honoured across chat turns. Module-scoped (not on deps) so it
+// is never shared across test fixtures; auto-maintenance is opt-in (env), so tests that do not set
+// the flag never advance it.
+const memoryMaintenanceCursor: AutoMaintenanceState = {};
+
+// Opportunistic, bounded, rate-limited (#204, O-V4) maintenance fired once memory is in use. Opt-in
+// via env (default off so existing behaviour is unchanged); short-circuits on the cursor almost
+// every turn and never throws into the chat path.
+function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
+  maybeRunAutoMaintenance(vault, deps.evidenceStore, memoryMaintenanceCursor, {
+    nowMs: Date.now(),
+    enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN === "1",
+  });
+}
+
+// Build the embedding/strength/diversity signals and run scoped retrieval — the shared pipeline the
+// BFF route also uses (#204, O-F2/O-F3/O-F4/O-P1). semanticById is gated on the secondary-model
+// egress check; all signals are passed only when present so a fresh vault ranks byte-identically, and
+// the fusion mode is env-opt-in (default weighted-sum).
+async function retrieveChatMemory(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  scopes: readonly MemoryScope[],
+  content: string,
+  budgetTokens: number | undefined,
+  nowMs: number,
+): Promise<ReturnType<typeof retrieveMemoryContext>> {
+  const safeForSecondaryModel =
+    memoryTextEgressRejectionReason(content, memoryCapturePolicyForDeps(deps)) === null;
+  const signals = await buildConversationRetrievalSignals(
+    deps,
+    vault,
+    content,
+    scopes,
+    nowMs,
+    safeForSecondaryModel,
+  );
+  return retrieveMemoryContext(
+    {
+      scopes,
+      queryText: content,
+      ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+      ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
+      ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
+      ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
+      fusion: conversationFusionMode(deps),
+      nowMs,
+    },
+    vaultAsQueryPort(vault),
+  );
 }
 
 export async function buildMemoryResult(
@@ -718,21 +764,18 @@ export async function buildMemoryResult(
     return emptyMemoryResult(memory.enabled);
   }
   const scopes = conversationMemoryScopes(context);
-  const semanticById = await buildSemanticScores(
+  const budgetTokens = memory.budgetTokens;
+  if (budgetTokens === 0) {
+    return emptyMemoryResult(true);
+  }
+  const nowMs = Date.now();
+  const retrieval = await retrieveChatMemory(
     deps,
     vault,
+    scopes,
     request.content,
-    gatherCandidateIds(vault, scopes),
-  );
-  const retrieval = retrieveMemoryContext(
-    {
-      scopes,
-      queryText: request.content,
-      ...(memory.budgetTokens !== undefined ? { budgetTokens: memory.budgetTokens } : {}),
-      ...(semanticById !== undefined ? { semanticById } : {}),
-      nowMs: Date.now(),
-    },
-    vaultAsQueryPort(vault),
+    budgetTokens,
+    nowMs,
   );
   // Reinforcement reflex (#204): every recall is an access. Bumping the access counter for the
   // included memories feeds the decay/reinforcement maintenance cycle so frequently-recalled
@@ -741,6 +784,10 @@ export async function buildMemoryResult(
   if (includedIds.length > 0) {
     vault.recordAccess(includedIds, Date.now());
   }
+  // Autonomous maintenance (#204, O-V4): now that memory is actively in use, opportunistically run
+  // ONE bounded, rate-limited maintenance pass so the decay/forget curve advances without a
+  // free-running background loop.
+  maybeRunChatAutoMaintenance(deps, vault);
   const result = toMemoryResult(retrieval);
   recordConversationMemoryRetrieval(deps, context, result.context.memories);
   return result;
@@ -765,6 +812,9 @@ async function captureActionFromOutcome(
   switch (outcome.kind) {
     case "candidate": {
       if (deps.memoryVault === undefined) return null;
+      if (!isPersistableMemoryCandidate(outcome)) {
+        return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
+      }
       const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
       const record = buildMemoryRecordFromProposal(proposalId, outcome);
       if (record === null) return null;
@@ -807,7 +857,9 @@ async function captureMemoryActions(
     return [];
   }
   const outcomes = extractCandidatesFromUserText(request.content, buildCaptureContext(context), {
-    resolver: createMemoryTargetResolver(deps.memoryVault),
+    ...memoryCapturePolicyForDeps(deps, {
+      resolver: createMemoryTargetResolver(deps.memoryVault),
+    }),
   });
   const actions: ConversationMemoryActionWire[] = [];
   for (const outcome of outcomes) {
@@ -897,7 +949,7 @@ async function persistModelChatTurn(
     // system prompt) would otherwise surface it un-redacted on the success path, mirroring the
     // grounded-QA path (grounded-qa.ts line 549) which already applies deps.redactor here.
     const redactedContent = deps.redactor(response.content) as string;
-    const assistantMessage = createAssistantMessage(deps, request, redactedContent);
+    const assistantMessage = createAssistantMessage(deps, request, redactedContent, modelId);
     const memoryActions = await collectMemoryActions(
       deps,
       request,

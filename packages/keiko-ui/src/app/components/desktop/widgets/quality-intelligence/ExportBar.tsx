@@ -14,6 +14,7 @@ import {
   exportQiRunTraceability,
   type QiTraceabilityFormat,
 } from "@/lib/quality-intelligence-api";
+import KeikoSelect from "../../KeikoSelect";
 import { formatError } from "./qiShared";
 
 // Traceability adapters are served by a dedicated, matrix-driven route (Epic #734, Issue #740);
@@ -89,6 +90,9 @@ export function ExportBar({
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState<string | null>(null);
+  // Issue #282 A11y-3 / AC3: "approvedOnly" defaults to false to preserve the existing export
+  // scope (all test cases). The user opts in explicitly via the checkbox below.
+  const [approvedOnly, setApprovedOnly] = useState(false);
   const selected = ADAPTERS.find((a) => a.id === adapter);
   const isTms = selected?.tms ?? false;
 
@@ -101,7 +105,9 @@ export function ExportBar({
       setDownloaded(res.filename);
       return;
     }
-    const res = await exportImpl(runId, adapter, { dryRun: isTms, approvedOnly: false });
+    // Pass the user-chosen approvedOnly value (default false = all test cases, preserving the
+    // prior behaviour). TMS adapters force approvedOnly server-side regardless of this value.
+    const res = await exportImpl(runId, adapter, { dryRun: isTms, approvedOnly });
     if (res.dryRun) {
       // "test case(s)", not the internal term "candidates" — the suite-wide object name
       // (uiux-fix F047 C388: ExportBar said "candidates", hub "cases", launcher "test cases").
@@ -114,7 +120,7 @@ export function ExportBar({
       triggerDownload(res.filename, res.contentType, res.body, res.encoding);
       setDownloaded(res.filename);
     }
-  }, [runId, adapter, isTms, exportImpl, traceabilityImpl]);
+  }, [runId, adapter, isTms, approvedOnly, exportImpl, traceabilityImpl]);
 
   const handleExport = useCallback(async (): Promise<void> => {
     setBusy(true);
@@ -132,38 +138,83 @@ export function ExportBar({
 
   return (
     <div className="qi-export" data-testid="qi-export-bar">
-      <label className="qi-field qi-field-inline">
-        <span className="qi-field-label">Export</span>
-        <select
-          className="qi-select"
-          value={adapter}
+      <div className="qi-export-head">
+        <div className="qi-export-copy">
+          <p className="qi-export-title">Export</p>
+          {/* Scope notice: always present for non-TMS adapters so users understand what they are
+              about to download (AC3 governance visibility). */}
+          {!isTms ? (
+            <p className="qi-export-hint" role="note" data-testid="qi-export-scope-notice">
+              {approvedOnly
+                ? "Exports approved test cases only."
+                : "Exports all test cases, including unapproved."}
+            </p>
+          ) : null}
+        </div>
+        {/* Issue #282 A11y-3 / AC3: "Approved only" scope control. Hidden for TMS adapters (TMS
+            forces approvedOnly server-side; the server owns that decision — showing a checkbox that
+            appears to control it would be misleading). Default unchecked = all test cases exported,
+            preserving the previous behaviour (no silent scope change). */}
+        {!isTms ? (
+          <label className="qi-export-approved-label">
+            <input
+              type="checkbox"
+              className="qi-checkbox"
+              checked={approvedOnly}
+              disabled={busy}
+              onChange={(e) => {
+                setApprovedOnly(e.target.checked);
+              }}
+              data-testid="qi-export-approved-only"
+            />
+            <span>Approved only</span>
+          </label>
+        ) : null}
+      </div>
+      <div className="qi-export-controls">
+        <div className="qi-field qi-export-format">
+          <span className="qi-field-label">Format</span>
+          <KeikoSelect
+            triggerClassName="qi-select"
+            value={adapter}
+            ariaLabel="Export"
+            disabled={busy}
+            // Issue #723 AC2 a11y: when a TMS (preview-only) adapter such as Quality Center is
+            // selected, associate the "preview only — configure a connector" note with the picker so
+            // forms-mode screen-reader users hear the disabled/preview state on the control itself,
+            // not only when reading sequentially. Omitted for local formats (no such note renders),
+            // which keeps the reference from ever dangling.
+            ariaDescribedBy={isTms ? "qi-export-connector-hint" : undefined}
+            menuTitle="Export"
+            sections={[
+              {
+                options: ADAPTERS.map((adapterOption) => ({
+                  value: adapterOption.id,
+                  label: adapterOption.label,
+                })),
+              },
+            ]}
+            onValueChange={(next) => {
+              setAdapter(next);
+              setPreview(null);
+              setError(null);
+              setDownloaded(null);
+            }}
+          />
+        </div>
+        <button
+          type="button"
+          className="qi-btn qi-btn-primary qi-export-action"
           disabled={busy}
-          onChange={(e) => {
-            setAdapter(e.target.value);
-            setPreview(null);
-            setError(null);
-            setDownloaded(null);
+          onClick={() => {
+            void handleExport();
           }}
         >
-          {ADAPTERS.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button
-        type="button"
-        className="qi-btn qi-btn-secondary"
-        disabled={busy}
-        onClick={() => {
-          void handleExport();
-        }}
-      >
-        {/* Explicit busy label — a 40-candidate PDF/ZIP export takes a noticeable moment, and the
-            neighbouring DriftPanel/RunLauncher both signal busy (uiux-fix F047 C155). */}
-        {busy ? "Exporting…" : isTms ? "Preview" : "Download"}
-      </button>
+          {/* Explicit busy label — a 40-candidate PDF/ZIP export takes a noticeable moment, and the
+              neighbouring DriftPanel/RunLauncher both signal busy (uiux-fix F047 C155). */}
+          {busy ? "Exporting…" : isTms ? "Preview" : "Download"}
+        </button>
+      </div>
       {/* Persistent live region (uiux-fix F047 C155): exists before any result arrives so screen
           readers reliably announce the download confirmation / preview readiness — a role="status"
           element inserted together with its content is often skipped. The visible confirmation and
@@ -176,7 +227,12 @@ export function ExportBar({
             : ""}
       </p>
       {isTms ? (
-        <p className="qi-export-hint" role="note" data-testid="qi-export-connector-hint">
+        <p
+          id="qi-export-connector-hint"
+          className="qi-export-hint"
+          role="note"
+          data-testid="qi-export-connector-hint"
+        >
           {selected?.id === "quality-center"
             ? "Quality Center is preview-only. Configure a connector to enable live export."
             : "External target — preview only. Configure a connector to enable live export."}

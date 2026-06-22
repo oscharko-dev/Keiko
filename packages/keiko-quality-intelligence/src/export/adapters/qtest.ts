@@ -39,6 +39,34 @@ const mapPriority = (priority: QualityIntelligenceTestCaseCandidate["priority"])
   return priority;
 };
 
+// Build the qTest rows for a single candidate. One row per (step, expected) pair — the row count is
+// the longer of `steps`/`expectedResults` so a trailing expected result is never dropped (Issue
+// #283); a candidate with neither yields one empty-step row.
+function qtestRowsFor(candidate: QualityIntelligenceTestCaseCandidate): string {
+  const head: readonly string[] = [
+    candidate.title,
+    buildDescription(candidate),
+    "Manual",
+    mapPriority(candidate.priority),
+    candidate.status,
+  ];
+  const rowCount = Math.max(candidate.steps.length, candidate.expectedResults.length);
+  if (rowCount === 0) {
+    return encodeSpreadsheetSafeRow([...head, "", "", ""]);
+  }
+  let rows = "";
+  for (let i = 0; i < rowCount; i += 1) {
+    const stepNumber = i < candidate.steps.length ? String(i + 1) : "";
+    rows += encodeSpreadsheetSafeRow([
+      ...head,
+      stepNumber,
+      candidate.steps[i] ?? "",
+      candidate.expectedResults[i] ?? "",
+    ]);
+  }
+  return rows;
+}
+
 export function adaptToQtest(
   bundle: QualityIntelligenceExportBundle,
   candidates: readonly QualityIntelligenceTestCaseCandidate[],
@@ -55,35 +83,8 @@ export function adaptToQtest(
   let body = encodeSpreadsheetSafeRow(QTEST_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);
-    if (candidate === undefined) {
-      continue;
-    }
-    if (candidate.steps.length === 0) {
-      body += encodeSpreadsheetSafeRow([
-        candidate.title,
-        buildDescription(candidate),
-        "Manual",
-        mapPriority(candidate.priority),
-        candidate.status,
-        "",
-        "",
-        "",
-      ]);
-      continue;
-    }
-    for (let i = 0; i < candidate.steps.length; i += 1) {
-      const action = candidate.steps[i] ?? "";
-      const expected = candidate.expectedResults[i] ?? "";
-      body += encodeSpreadsheetSafeRow([
-        candidate.title,
-        buildDescription(candidate),
-        "Manual",
-        mapPriority(candidate.priority),
-        candidate.status,
-        String(i + 1),
-        action,
-        expected,
-      ]);
+    if (candidate !== undefined) {
+      body += qtestRowsFor(candidate);
     }
   }
   return body;
