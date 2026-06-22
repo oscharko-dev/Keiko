@@ -16,8 +16,9 @@ npx playwright install chromium
 BASE_REF=origin/release/0.2.0 node docs/design-system/evidence/1298/equivalence-harness.mjs
 ```
 
-Exits non-zero if any Group-R reference-fidelity probe differs in dark or light. Writes
-`computed-value-proof.json` + `01-dark.png … 09-responsive.png`.
+Exits non-zero if any Group-R reference-fidelity probe differs in dark or light, or if keyboard focus
+does not expose the expected focus-visible/focus-within ring on a representative primitive. Writes
+`computed-value-proof.json` + `01-dark.png … 12-focus-visible.png`.
 
 ## What is proved
 
@@ -54,6 +55,14 @@ native `<input>` stays the control). This is a React change proved by
 is `aria-hidden`, toggling by accessible name still flips the control, and the dialog stays axe-clean.
 It is not reproducible in this CSS-only harness.
 
+### Keyboard focus proof
+
+The harness tabs through the rendered product markup and records representative checkbox, radio,
+slider, stepper, combobox, tag remove, file upload, date calendar, breadcrumb, back, tab, pagination,
+and context-menu targets. Each target must enter `:focus-visible` or `:focus-within` and expose a
+visible ring in `computed-value-proof.json → keyboardFocus`. `12-focus-visible.png` captures the final
+focused state from that keyboard pass.
+
 ## Screenshots (real product `globals.css`)
 
 | File                      | Mode                                                             |
@@ -66,11 +75,15 @@ It is not reproducible in this CSS-only harness.
 | `06-forced-colors.png`    | `forced-colors: active` (Windows High Contrast)                  |
 | `07-reduced-motion.png`   | `prefers-reduced-motion: reduce` (state transitions off)         |
 | `08-compact-density.png`  | `[data-density="compact"]` (tightened control heights)           |
-| `09-responsive.png`       | 560px viewport — intrinsic flex-wrap reflow + form-grid collapse |
+| `09-responsive.png`       | 560px mobile viewport — intrinsic flex-wrap reflow + grid collapse |
+| `10-tablet.png`           | 900px tablet viewport                                            |
+| `11-ultrawide.png`        | 1920px ultrawide viewport                                        |
+| `12-focus-visible.png`    | Keyboard focus proof screenshot                                  |
 
 Each screenshot renders the canonical `inputs.html` markup (checkbox, radio, slider, stepper,
 combobox with open list, tag input, file dropzone + file item, segmented date field) and
 `nav-components.html` markup (breadcrumbs, back, underline tabs, pagination, context menu, wizard
 steps), plus the responsive `.c-form-grid`, so they double as the side-by-side comparison against the
-reference. Default, hover-equivalent, focus-ring (`:focus-visible`), selected, disabled and
-completed/active states are all present in the captured surfaces.
+reference. Default, hover-equivalent, selected, disabled and completed/active states are present in
+the theme/responsive captures; keyboard focus-ring evidence is proved separately by the harness and
+shown in `12-focus-visible.png`.

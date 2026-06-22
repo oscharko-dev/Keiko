@@ -48,14 +48,14 @@
         <div class="sec-head"><div class="num">02 — RANGE &amp; NUMBER</div><h2>Slider &amp; stepper</h2><p>Accent track fill and a haloed thumb; the stepper pairs nudge buttons with a monospace value.</p></div>
         <div class="card demo-card" style="display:grid;grid-template-columns:1.4fr 1fr;gap:30px;align-items:center">
           <div class="demo-stack" style="gap:22px">
-            <div><div class="c-label">Temperature</div><div class="c-slider"><input type="range" min="0" max="100" value="35" id="sl1" /><span class="val" id="sv1">0.35</span></div></div>
-            <div><div class="c-label">Max tokens</div><div class="c-slider"><input type="range" min="256" max="8192" step="256" value="4096" id="sl2" /><span class="val" id="sv2">4096</span></div></div>
+            <div><div class="c-label" id="temperature-label">Temperature</div><div class="c-slider"><input type="range" min="0" max="100" value="35" id="sl1" aria-labelledby="temperature-label" /><span class="val" id="sv1">0.35</span></div></div>
+            <div><div class="c-label" id="max-tokens-label">Max tokens</div><div class="c-slider"><input type="range" min="256" max="8192" step="256" value="4096" id="sl2" aria-labelledby="max-tokens-label" /><span class="val" id="sv2">4096</span></div></div>
           </div>
           <div class="demo-stack">
-            <div class="c-label">Parallel runs</div>
+            <div class="c-label" id="parallel-runs-label">Parallel runs</div>
             <div class="c-stepper">
               <button aria-label="Decrease" data-step="-1"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 12 h12" /></svg></button>
-              <input id="step" value="4" inputmode="numeric" />
+              <input id="step" value="4" inputmode="numeric" aria-labelledby="parallel-runs-label" />
               <button aria-label="Increase" data-step="1"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 6 v12 M6 12 h12" /></svg></button>
             </div>
           </div>
@@ -74,11 +74,11 @@
             </div>
           </div>
           <div>
-            <div class="c-label">Reviewers</div>
+            <div class="c-label" id="reviewers-label">Reviewers</div>
             <div class="c-tagfield" id="tagfield">
-              <span class="c-tag">@maya<button aria-label="Remove">✕</button></span>
-              <span class="c-tag">@theo<button aria-label="Remove">✕</button></span>
-              <input type="text" placeholder="Add…" id="taginput" />
+              <span class="c-tag">@maya<button aria-label="Remove @maya">✕</button></span>
+              <span class="c-tag">@theo<button aria-label="Remove @theo">✕</button></span>
+              <input type="text" placeholder="Add…" id="taginput" aria-labelledby="reviewers-label" />
             </div>
           </div>
         </div>
@@ -89,11 +89,11 @@
         <div class="sec-head"><div class="num">04 — UPLOAD &amp; DATE</div><h2>File upload &amp; date field</h2><p>A dashed dropzone that lights up on hover/drag, an uploaded-file row with progress, and a segmented date input.</p></div>
         <div class="card demo-card" style="display:grid;grid-template-columns:1.2fr 1fr;gap:30px;align-items:start">
           <div class="demo-stack">
-            <div class="c-drop" id="drop">
+            <button class="c-drop" id="drop" type="button" aria-describedby="drop-help">
               <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16 V4 M7 9 l5-5 5 5" /><path d="M5 16 v3 a1 1 0 0 0 1 1 h12 a1 1 0 0 0 1-1 v-3" /></svg></span>
               <div class="tt"><b>Click to upload</b> or drag &amp; drop</div>
-              <div class="ts">PNG, SVG or PDF · up to 10 MB</div>
-            </div>
+              <div class="ts" id="drop-help">PNG, SVG or PDF · up to 10 MB</div>
+            </button>
             <div class="c-fileitem">
               <span class="fi"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3 h7 l5 5 v13 H7 Z" /><path d="M14 3 v5 h5" /></svg></span>
               <div style="flex:1"><div class="nm">keiko-tokens.css <span class="mt">· 16.3 KB · 72%</span></div><div class="bar"><i style="width:72%"></i></div></div>
@@ -102,7 +102,7 @@
           <div class="demo-stack">
             <div class="c-label">Schedule</div>
             <div class="c-datefield">
-              <span class="seg" tabindex="0">21</span><span class="sep">/</span><span class="seg" tabindex="0">06</span><span class="sep">/</span><span class="seg" tabindex="0">2026</span>
+              <span class="seg" tabindex="0" role="spinbutton" aria-label="Day" aria-valuemin="1" aria-valuemax="31" aria-valuenow="21">21</span><span class="sep">/</span><span class="seg" tabindex="0" role="spinbutton" aria-label="Month" aria-valuemin="1" aria-valuemax="12" aria-valuenow="6">06</span><span class="sep">/</span><span class="seg" tabindex="0" role="spinbutton" aria-label="Year" aria-valuemin="2026" aria-valuemax="2030" aria-valuenow="2026">2026</span>
               <button class="cal" aria-label="Open calendar"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5.5" width="16" height="15" rx="2" /><path d="M4 9.5 H20 M8 3.5 V7 M16 3.5 V7" /></svg></button>
             </div>
             <div class="c-field-hint">Runs at 09:00 in the workspace timezone.</div>
@@ -170,7 +170,7 @@
           e.preventDefault();
           var t = document.createElement("span"); t.className = "c-tag";
           var v = ti.value.trim().replace(/^@?/, "@");
-          var remove = document.createElement("button"); remove.setAttribute("aria-label", "Remove"); remove.textContent = "✕";
+          var remove = document.createElement("button"); remove.setAttribute("aria-label", "Remove " + v); remove.textContent = "✕";
           t.append(document.createTextNode(v), remove);
           tf.insertBefore(t, ti); ti.value = "";
         } else if (e.key === "Backspace" && !ti.value) {
