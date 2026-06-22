@@ -136,21 +136,29 @@ Chat now streams tokens over SSE (first token in well under a second on TLS-inte
 
 ### Install and start
 
-Install Keiko in the project where you want to use it:
+Install Keiko in the project where you want to use it, then run the local `keiko` binary:
 
 ```bash
 # npm
-npm install @oscharko-dev/keiko && npx keiko init && npm run keiko:start
+npm install -D @oscharko-dev/keiko
+npx keiko init
+npm run keiko:start
 
 # yarn
-yarn add @oscharko-dev/keiko && yarn keiko init && yarn keiko:start
+yarn add -D @oscharko-dev/keiko
+yarn keiko init
+yarn keiko:start
 
 # pnpm
-pnpm add @oscharko-dev/keiko && pnpm exec keiko init && pnpm keiko:start
-
-# npx (no global install)
-npx @oscharko-dev/keiko init && npx @oscharko-dev/keiko start
+pnpm add -D @oscharko-dev/keiko
+pnpm exec keiko init
+pnpm keiko:start
 ```
+
+`npx keiko init` relies on the project-local binary created by installing
+`@oscharko-dev/keiko`. Do not use `npx keiko init` as a standalone registry
+command in a fresh project, because `keiko` is the binary name, not the npm
+package name.
 
 Open the local UI:
 
@@ -164,7 +172,7 @@ Stop Keiko when you are done:
 npm run keiko:stop
 ```
 
-`npx keiko init` adds these local scripts to `package.json`:
+`keiko init` adds these local scripts to `package.json`:
 
 | Script                | Purpose                                        |
 | --------------------- | ---------------------------------------------- |
@@ -459,7 +467,7 @@ Read the full contracts and decisions:
 | No model appears       | Reopen Settings, verify the base URL and token, then run the credential test again.                      |
 | Credential test fails  | Confirm the gateway accepts OpenAI-compatible chat-completions requests at the configured base URL.      |
 | Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header such as `X-Litellm-Key`. |
-| Stale process state    | Run `npm run keiko:stop`, then `npx keiko repair` to clear a stale pid and verify the install.           |
+| Stale process state    | Run `npm run keiko:stop`, then `npx keiko repair` from a project where `@oscharko-dev/keiko` is installed to clear a stale pid and verify the install. |
 | Broken local install   | Run `npx keiko repair` for an offline diagnostic-and-repair pass, or `npx keiko uninstall` to reset.     |
 
 For categorized playbooks covering TLS trust, first-run gateway setup, `NO_MODEL`, workspace path validation, and run-engine command denials, see the [Troubleshooting guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md).
