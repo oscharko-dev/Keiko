@@ -298,7 +298,10 @@ for (const file of REF_PAGES) {
 
 await browser.close();
 
-const failed = gatedDiffs.length > 0;
+// A reference-page capture failure (e.g. a missing editor-*.html) must FAIL the gate, not record a
+// silent error field alongside a PASS verdict.
+const captureFailed = refCaptures.some((c) => "error" in c);
+const failed = gatedDiffs.length > 0 || captureFailed;
 writeFileSync(
   resolve(HERE, "editor-fidelity-proof.json"),
   JSON.stringify(

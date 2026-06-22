@@ -236,7 +236,9 @@ const PROBES_R = [
   [".c-stepper", ["borderTopColor", "backgroundColor"]],
   [".c-combo-input", ["borderTopColor", "backgroundColor"]],
   [".c-combo-list", ["backgroundColor", "borderTopColor"]],
-  [".c-combo-opt", ["color"]],
+  // Target the UNSELECTED option: the first .c-combo-opt carries aria-selected="true" (→ the selected
+  // colour), so probe the second one for the default --text-secondary option colour.
+  [".c-combo-opt:not([aria-selected])", ["color"]],
   [".c-datefield", ["borderTopColor", "backgroundColor"]],
   [".c-fileitem", ["backgroundColor", "borderTopColor"]],
   // Navigation (#1298) — neutral surfaces.
@@ -515,7 +517,9 @@ const perfFailed =
   boundedRowSmoke.afterScrollTop <= 0 ||
   boundedRowSmoke.durationMs > 250 ||
   boundedRowSmoke.stickyHeaderDeltaPx > 4;
-const failed = rDiffsGated.length > 0 || focusFailed || perfFailed;
+// A missing probe selector (e.g. a migrated surface was renamed away) must FAIL the gate, not pass
+// silently — otherwise a dropped surface would still record PASS with fewer probes.
+const failed = rDiffsGated.length > 0 || focusFailed || perfFailed || missing.size > 0;
 
 writeFileSync(
   resolve(HERE, "consolidated-fidelity-proof.json"),

@@ -12,9 +12,9 @@
     "keiko-nav.css"
   ],
   "run": {
-    "startedAt": "2026-06-22T04:01:18.924Z",
-    "generatedAt": "2026-06-22T04:01:21.608Z",
-    "repoHeadSha": "4a812fb0ae3211beca4b8c904983780931bbe3cf"
+    "startedAt": "2026-06-22T04:56:50.260Z",
+    "generatedAt": "2026-06-22T04:56:52.889Z",
+    "repoHeadSha": "649f11f0a1e93f1bed010236702b64c97de6667c"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
@@ -267,7 +267,7 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.09999990463256836,
+    "durationMs": 0,
     "afterScrollTop": 8363,
     "scrollHeight": 8783,
     "clientHeight": 420,
