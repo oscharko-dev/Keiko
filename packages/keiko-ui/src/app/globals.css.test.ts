@@ -3309,12 +3309,7 @@ describe("Issue #1299 — component state matrix", () => {
     let m: RegExpExecArray | null;
     while ((m = rowRe.exec(slice)) !== null) {
       const [, key, label, group, icon] = m;
-      if (
-        key !== undefined &&
-        label !== undefined &&
-        group !== undefined &&
-        icon !== undefined
-      ) {
+      if (key !== undefined && label !== undefined && group !== undefined && icon !== undefined) {
         rows.push({ key, label, group, icon });
       }
     }
@@ -3429,7 +3424,9 @@ describe("Issue #1299 — component state matrix", () => {
       (sum, [, bits]) => sum + [...bits].filter((bit) => bit === "1").length,
       0,
     );
-    expect(checkedCellCount, "expected the matrix to contain checked state cells").toBeGreaterThan(0);
+    expect(checkedCellCount, "expected the matrix to contain checked state cells").toBeGreaterThan(
+      0,
+    );
 
     for (const row of meta) {
       if (dataSyncKeys.has(row.key)) {
@@ -3452,6 +3449,7 @@ interface Issue1300ConsolidatedProof {
   readonly verdict: string;
   readonly referenceFiles: readonly string[];
   readonly groupR: { readonly totalProbes: number; readonly gatedDiffCount: number };
+  readonly missingSelectors: readonly string[];
   readonly accentDerived: { readonly byMode: Record<string, unknown> };
   readonly accessibilityProof: {
     readonly focusProof: { readonly activeIsBack: boolean; readonly hasFocusRing: boolean };
@@ -3509,6 +3507,11 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
       consolidatedProof.groupR.totalProbes,
       "the consolidated gate must cover the full migrated-surface union, not a token sample",
     ).toBeGreaterThanOrEqual(400);
+    // No probe selector may be silently absent — a renamed/dropped migrated surface must surface here.
+    expect(
+      consolidatedProof.missingSelectors,
+      "every probed surface must exist in both product and reference (no silently-dropped probes)",
+    ).toEqual([]);
   });
 
   it("the consolidated proof concatenates every migrated 0.4.0 component layer", () => {
