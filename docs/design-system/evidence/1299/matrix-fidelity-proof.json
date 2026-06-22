@@ -3,35 +3,68 @@
   "docMatrix": "docs/design-system/state-matrix.md",
   "rowCount": 11,
   "diffCount": 0,
+  "proofElementCount": 66,
+  "expectedProofElementCount": 66,
+  "dataSyncProofCount": 18,
+  "proofDiffCount": 0,
   "byMode": {
     "01-dark": {
       "renderedRows": 11,
-      "diffs": 0
+      "diffs": 0,
+      "proofElements": 66,
+      "expectedProofElements": 66,
+      "dataSyncProofElements": 18,
+      "proofDiffs": 0
     },
     "02-light": {
       "renderedRows": 11,
-      "diffs": 0
+      "diffs": 0,
+      "proofElements": 66,
+      "expectedProofElements": 66,
+      "dataSyncProofElements": 18,
+      "proofDiffs": 0
     },
     "03-dark-hc": {
       "renderedRows": 11,
-      "diffs": 0
+      "diffs": 0,
+      "proofElements": 66,
+      "expectedProofElements": 66,
+      "dataSyncProofElements": 18,
+      "proofDiffs": 0
     },
     "04-light-hc": {
       "renderedRows": 11,
-      "diffs": 0
+      "diffs": 0,
+      "proofElements": 66,
+      "expectedProofElements": 66,
+      "dataSyncProofElements": 18,
+      "proofDiffs": 0
     },
     "05-prefers-contrast": {
       "renderedRows": 11,
-      "diffs": 0
+      "diffs": 0,
+      "proofElements": 66,
+      "expectedProofElements": 66,
+      "dataSyncProofElements": 18,
+      "proofDiffs": 0
     },
     "06-forced-colors": {
       "renderedRows": 11,
-      "diffs": 0
+      "diffs": 0,
+      "proofElements": 66,
+      "expectedProofElements": 66,
+      "dataSyncProofElements": 18,
+      "proofDiffs": 0
     },
     "07-reduced-motion": {
       "renderedRows": 11,
-      "diffs": 0
+      "diffs": 0,
+      "proofElements": 66,
+      "expectedProofElements": 66,
+      "dataSyncProofElements": 18,
+      "proofDiffs": 0
     }
   },
-  "diffs": []
+  "diffs": [],
+  "proofDiffs": []
 }

@@ -1,11 +1,15 @@
 // Issue #1299 — component state matrix browser evidence harness.
 //
 // Proves that the live `design-system/states.html` renders its applicability matrix
-// identically across all 7 canonical theme / contrast / motion modes AND that the
-// rendered matrix matches `docs/design-system/state-matrix.md` cell-for-cell.
+// identically across all 7 canonical theme / contrast / motion modes, that the
+// rendered matrix matches `docs/design-system/state-matrix.md` cell-for-cell, and
+// that every checked state has a rendered proof element.
 //
 // What is proved:
-//   - The per-component state strips in states.html render without layout errors in every mode.
+//   - The per-component state proof in states.html renders one proof element for every checked
+//     matrix cell in every mode.
+//   - Data/sync proof states render with a text label plus a glyph marker, so the state is not
+//     encoded by colour alone.
 //   - The matrix rendered by the browser (#mx tbody) agrees with the documented matrix in
 //     state-matrix.md: for each component row, each of the 11 state cells (check = span.y svg
 //     present, dot = absent) matches the documented check / dot value.
@@ -15,7 +19,8 @@
 // Reproduction (from repo root, after `npm ci` + `npx playwright install chromium`):
 //   node docs/design-system/evidence/1299/equivalence-harness.mjs
 //
-// Exits non-zero if any rendered matrix cell differs from state-matrix.md in any mode.
+// Exits non-zero if any rendered matrix cell differs from state-matrix.md in any mode, any
+// checked state lacks a live proof element, or any data/sync proof lacks non-colour evidence.
 // Writes matrix-fidelity-proof.json + 01-dark.png ... 07-reduced-motion.png.
 
 import { chromium } from "playwright";
@@ -38,6 +43,22 @@ const MODES = [
   { id: "06-forced-colors",     theme: null,    hc: null,   media: { forcedColors: "active" } },
   { id: "07-reduced-motion",    theme: null,    hc: null,   media: { reducedMotion: "reduce" } },
 ];
+
+const STATE_KEYS = ["d", "h", "f", "a", "s", "x", "l", "e", "m", "y", "c"];
+const STATE_LABELS = new Map([
+  ["d", "Default"],
+  ["h", "Hover"],
+  ["f", "Focus"],
+  ["a", "Active"],
+  ["s", "Selected"],
+  ["x", "Disabled"],
+  ["l", "Loading"],
+  ["e", "Error"],
+  ["m", "Empty"],
+  ["y", "Syncing"],
+  ["c", "Conflict"],
+]);
+const DATA_SYNC_STATES = new Set(["l", "e", "m", "y", "c"]);
 
 // --- Parse state-matrix.md applicability table --------------------------------
 // Format: pipe table, 12 cells per row (Component + 11 state columns).
@@ -81,7 +102,11 @@ const context = await browser.newContext({
 
 const byMode = {};
 const allDiffs = [];
+const allProofDiffs = [];
 let rowCount = 0;
+let proofElementCount = 0;
+let expectedProofElementCount = 0;
+let dataSyncProofCount = 0;
 
 for (const mode of MODES) {
   const page = await context.newPage();
@@ -128,6 +153,89 @@ for (const mode of MODES) {
 
   rowCount = renderedRows.length;
 
+  const expectedProofs = new Set();
+  for (const { name, bits } of renderedRows) {
+    bits.split("").forEach((on, index) => {
+      if (on === "1") expectedProofs.add(`${name}::${STATE_KEYS[index]}`);
+    });
+  }
+  expectedProofElementCount = expectedProofs.size;
+
+  const renderedProofs = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll("#state-proof [data-family][data-state]")).map((el) => {
+      const label = el.querySelector("[data-state-label]");
+      const icon = el.querySelector("[data-state-icon]");
+      return {
+        family: el.getAttribute("data-family"),
+        state: el.getAttribute("data-state"),
+        noncolor: el.getAttribute("data-noncolor") === "true",
+        labelText: (label?.textContent ?? "").trim(),
+        iconText: (icon?.textContent ?? "").trim(),
+        text: (el.textContent ?? "").trim(),
+      };
+    });
+  });
+
+  proofElementCount = renderedProofs.length;
+  dataSyncProofCount = renderedProofs.filter((proof) => DATA_SYNC_STATES.has(proof.state)).length;
+  const proofMap = new Map();
+  const modeProofDiffs = [];
+  for (const proof of renderedProofs) {
+    const key = `${proof.family}::${proof.state}`;
+    if (proofMap.has(key)) {
+      modeProofDiffs.push({
+        mode: mode.id,
+        component: proof.family,
+        state: proof.state,
+        issue: "duplicate state proof element",
+      });
+    }
+    proofMap.set(key, proof);
+    if (!expectedProofs.has(key)) {
+      modeProofDiffs.push({
+        mode: mode.id,
+        component: proof.family,
+        state: proof.state,
+        issue: "state proof element is not required by rendered matrix",
+      });
+    }
+  }
+  for (const key of expectedProofs) {
+    const proof = proofMap.get(key);
+    const [component, state] = key.split("::");
+    if (proof === undefined) {
+      modeProofDiffs.push({
+        mode: mode.id,
+        component,
+        state,
+        issue: "checked matrix cell is missing a live state proof element",
+      });
+      continue;
+    }
+    const expectedLabel = STATE_LABELS.get(state);
+    if (proof.labelText !== expectedLabel || !proof.text.includes(expectedLabel)) {
+      modeProofDiffs.push({
+        mode: mode.id,
+        component,
+        state,
+        issue: "state proof element is missing the visible state label",
+        expected: expectedLabel,
+        rendered: proof.text,
+      });
+    }
+    if (DATA_SYNC_STATES.has(state)) {
+      if (!proof.noncolor || proof.iconText.length === 0) {
+        modeProofDiffs.push({
+          mode: mode.id,
+          component,
+          state,
+          issue: "data/sync state proof is missing non-colour glyph evidence",
+          rendered: proof.text,
+        });
+      }
+    }
+  }
+
   // Compare rendered rows against documented matrix.
   const modeDiffs = [];
   for (const { name, bits } of renderedRows) {
@@ -160,9 +268,14 @@ for (const mode of MODES) {
   byMode[mode.id] = {
     renderedRows: renderedRows.length,
     diffs: modeDiffs.length,
+    proofElements: renderedProofs.length,
+    expectedProofElements: expectedProofs.size,
+    dataSyncProofElements: renderedProofs.filter((proof) => DATA_SYNC_STATES.has(proof.state)).length,
+    proofDiffs: modeProofDiffs.length,
   };
 
   allDiffs.push(...modeDiffs);
+  allProofDiffs.push(...modeProofDiffs);
 
   // Screenshot the full proof page.
   await page.screenshot({
@@ -181,8 +294,13 @@ const proof = {
   docMatrix: "docs/design-system/state-matrix.md",
   rowCount,
   diffCount: allDiffs.length,
+  proofElementCount,
+  expectedProofElementCount,
+  dataSyncProofCount,
+  proofDiffCount: allProofDiffs.length,
   byMode,
   diffs: allDiffs,
+  proofDiffs: allProofDiffs,
 };
 
 writeFileSync(resolve(HERE, "matrix-fidelity-proof.json"), JSON.stringify(proof, null, 2));
@@ -197,11 +315,12 @@ console.log(
     `state-matrix.md: ${MATRIX_MD}`,
     `Rendered row count: ${rowCount}`,
     `Total diffs across all modes: ${allDiffs.length}`,
+    `Total proof diffs across all modes: ${allProofDiffs.length}`,
     modeLines,
-    allDiffs.length === 0
-      ? "PASS -- rendered matrix matches state-matrix.md in all 7 modes."
-      : `FAIL -- ${allDiffs.length} cell(s) differ. See matrix-fidelity-proof.json.`,
+    allDiffs.length === 0 && allProofDiffs.length === 0
+      ? "PASS -- rendered matrix and live state proofs match state-matrix.md in all 7 modes."
+      : `FAIL -- ${allDiffs.length} matrix cell(s) and ${allProofDiffs.length} proof element(s) differ. See matrix-fidelity-proof.json.`,
   ].join("\n"),
 );
 
-process.exit(allDiffs.length === 0 ? 0 : 1);
+process.exit(allDiffs.length === 0 && allProofDiffs.length === 0 ? 0 : 1);

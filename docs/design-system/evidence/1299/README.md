@@ -10,7 +10,7 @@ all seven theme / contrast / motion modes.
 
 ## What is proved
 
-The harness proves two things in a single run:
+The harness proves three things in a single run:
 
 1. **Rendered matrix = documented matrix.** For every mode, the browser renders the `#mx tbody`
    table that `states.html` builds from its `ROWS` array. The harness reads each rendered cell
@@ -20,21 +20,27 @@ The harness proves two things in a single run:
    -- in either the HTML or the markdown -- causes the run to exit non-zero and names the
    component and column in `matrix-fidelity-proof.json`.
 
-2. **Visual proof across all 7 modes.** Full-page screenshots capture both the per-component
-   state strips (every component shown in Default, Hover, Focus, Active, Selected, Disabled,
-   Loading, Error, Empty, Syncing, and Conflict -- forced into each state so all are visible
-   at once) and the applicability matrix, in every mode. Because all states are driven by the
-   Tier-2/3/4 tokens, the screenshots double as proof that the correct token resolves in each
-   mode.
+2. **Every checked state has a live proof element.** For every mode, the harness reads
+   `#state-proof [data-family][data-state]` and asserts that every checked matrix cell has a
+   rendered proof element. Data & sync states (Loading, Error, Empty, Syncing, Conflict) must
+   additionally carry `data-noncolor="true"`, a visible state label, and a glyph marker so the
+   state is not encoded by colour alone.
+
+3. **Visual proof across all 7 modes.** Full-page screenshots capture the generated per-family
+   state proof and the applicability matrix in every mode. Because the proof elements are driven
+   by the Tier-2/3/4 tokens, the screenshots are the visual evidence for the matrix; the JSON
+   assertions above are the machine-readable proof that no checked state is missing from the
+   rendered page.
 
 ## Committed gate
 
-`matrix-fidelity-proof.json` records **0 diffs** across all 7 modes (see `diffCount` and
-`byMode` fields). The vitest block `"Issue #1299 -- component state matrix"` in
+`matrix-fidelity-proof.json` records **0 matrix diffs** and **0 proof diffs** across all 7 modes
+(see `diffCount`, `proofDiffCount`, and `byMode` fields). The vitest block `"Issue #1299 --
+component state matrix"` in
 `packages/keiko-ui/src/app/globals.css.test.ts` independently pins
 `docs/design-system/state-matrix.md` cell-for-cell against the `ROWS` array in
-`design-system/states.html`, so CI catches any divergence between the two sources without
-requiring a browser.
+`design-system/states.html`, and statically guards the proof marker / non-colour metadata the
+browser harness consumes.
 
 ## Screenshots
 
@@ -49,8 +55,8 @@ requiring a browser.
 | `07-reduced-motion.png` | `prefers-reduced-motion: reduce` |
 
 Each screenshot renders the full `states.html` proof page: the vocabulary section (eleven
-badges), the per-component live state strips, and the applicability matrix rendered from
-`ROWS`.
+badges), the generated per-family state proof for all checked cells, and the applicability matrix
+rendered from `ROWS`.
 
 ## Reproduction
 
@@ -60,5 +66,7 @@ npx playwright install chromium
 node docs/design-system/evidence/1299/equivalence-harness.mjs
 ```
 
-Exits non-zero if any rendered cell differs from `docs/design-system/state-matrix.md` in any
-mode. Writes `matrix-fidelity-proof.json` and `01-dark.png` ... `07-reduced-motion.png`.
+Exits non-zero if any rendered cell differs from `docs/design-system/state-matrix.md`, if any
+checked state lacks a proof element, or if any data/sync state lacks non-colour label/glyph
+evidence in any mode. Writes `matrix-fidelity-proof.json` and `01-dark.png` ...
+`07-reduced-motion.png`.
