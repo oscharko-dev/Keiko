@@ -23,8 +23,8 @@
 //
 // Self-contained reproduction (from repo root, after `npm ci` + `npx playwright install chromium`):
 //   BASE_REF=origin/release/0.2.0 node docs/design-system/evidence/1298/equivalence-harness.mjs
-// Writes computed-value-proof.json + 01-dark.png … 09-responsive.png and exits non-zero if any
-// Group-R (dark/light) computed value differs.
+// Writes computed-value-proof.json + 01-dark.png … 12-focus-visible.png and exits non-zero if any
+// Group-R (dark/light) computed value or keyboard-focus proof differs.
 import { chromium } from "playwright";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -77,14 +77,14 @@ const BODY = `
     <div class="c-stepper"><button aria-label="decrease">−</button><input value="3" aria-label="count"/><button aria-label="increase">+</button></div>
   </div>
   <div class="ev-row">
-    <div class="c-combo"><div class="c-combo-input"><input placeholder="Search…" aria-label="combo"/><span class="chev">▾</span></div>
-      <div class="c-combo-list"><div class="c-combo-opt" aria-selected="true">gpt-oss-120b<span class="ck">✓</span></div><div class="c-combo-opt">claude-sonnet<span class="ck">✓</span></div></div>
+    <div class="c-combo"><div class="c-combo-input"><input placeholder="Search…" aria-label="combo" role="combobox" aria-expanded="true" aria-controls="ev-combo-list" aria-autocomplete="list"/><span class="chev">▾</span></div>
+      <div class="c-combo-list" id="ev-combo-list" role="listbox" aria-label="Models"><div class="c-combo-opt" role="option" aria-selected="true">gpt-oss-120b<span class="ck">✓</span></div><div class="c-combo-opt" role="option">claude-sonnet<span class="ck">✓</span></div></div>
     </div>
-    <div class="c-tagfield"><span class="c-tag">backend<button aria-label="remove">×</button></span><span class="c-tag">infra<button aria-label="remove">×</button></span><input placeholder="Add…" aria-label="tags"/></div>
+    <div class="c-tagfield"><span class="c-tag">backend<button aria-label="remove backend">×</button></span><span class="c-tag">infra<button aria-label="remove infra">×</button></span><input placeholder="Add…" aria-label="tags"/></div>
   </div>
   <div class="ev-row">
-    <div class="c-drop"><div class="ic">⬆</div><div class="tt"><b>Click to upload</b> or drag &amp; drop</div><div class="ts">PNG, PDF up to 10MB</div></div>
-    <div class="c-datefield"><span class="seg">2026</span><span class="sep">/</span><span class="seg">06</span><span class="sep">/</span><span class="seg">21</span><button class="cal" aria-label="open calendar">▦</button></div>
+    <button class="c-drop" type="button" aria-describedby="ev-drop-help"><span class="ic">⬆</span><span class="tt"><b>Click to upload</b> or drag &amp; drop</span><span class="ts" id="ev-drop-help">PNG, PDF up to 10MB</span></button>
+    <div class="c-datefield"><span class="seg" tabindex="0" role="spinbutton" aria-label="year" aria-valuemin="2026" aria-valuemax="2030" aria-valuenow="2026">2026</span><span class="sep">/</span><span class="seg" tabindex="0" role="spinbutton" aria-label="month" aria-valuemin="1" aria-valuemax="12" aria-valuenow="6">06</span><span class="sep">/</span><span class="seg" tabindex="0" role="spinbutton" aria-label="day" aria-valuemin="1" aria-valuemax="31" aria-valuenow="21">21</span><button class="cal" aria-label="open calendar">▦</button></div>
   </div>
   <div class="c-fileitem"><span class="fi">PDF</span><div style="flex:1"><div class="nm">spec.pdf</div><div class="mt">240 KB</div><div class="bar"><i style="width:62%"></i></div></div></div>
 </section>
@@ -92,9 +92,9 @@ const BODY = `
 <section class="ev-sec"><h3>Navigation (.c-* — DS 0.4.0)</h3>
   <nav class="c-crumbs" aria-label="Breadcrumb"><a href="#">workspace</a><span class="sep">/</span><a href="#">src</a><span class="sep">/</span><span aria-current="page">app.ts</span></nav>
   <button class="c-back" type="button">← Back</button>
-  <div class="c-utabs" role="tablist"><button class="c-utab" role="tab" aria-selected="true">Overview</button><button class="c-utab" role="tab" aria-selected="false">Runs<span class="ct">12</span></button><button class="c-utab" role="tab" aria-selected="false">Settings</button></div>
+  <div class="c-utabs" role="tablist" aria-label="Evidence tabs"><button class="c-utab" role="tab" aria-selected="true" tabindex="0">Overview</button><button class="c-utab" role="tab" aria-selected="false" tabindex="-1">Runs<span class="ct">12</span></button><button class="c-utab" role="tab" aria-selected="false" tabindex="-1">Settings</button></div>
   <div class="c-pager"><button aria-label="previous">‹</button><button aria-current="page">1</button><button>2</button><button>3</button><span class="gap">…</span><button>9</button><button aria-label="next">›</button></div>
-  <div class="c-ctx"><button class="c-ctx-item">Rename<span class="k">⌘R</span></button><button class="c-ctx-item active">Duplicate</button><div class="c-ctx-sep"></div><button class="c-ctx-item danger">Delete<span class="k">⌫</span></button></div>
+  <div class="c-ctx" role="menu" aria-label="Row actions" aria-orientation="vertical"><button class="c-ctx-item" role="menuitem" tabindex="0">Rename<span class="k">⌘R</span></button><button class="c-ctx-item active" role="menuitem" tabindex="-1">Duplicate</button><div class="c-ctx-sep" role="separator"></div><button class="c-ctx-item danger" role="menuitem" tabindex="-1">Delete<span class="k">⌫</span></button></div>
   <div class="c-steps"><div class="c-step done"><span class="dot">✓</span><span class="lb">Connect</span></div><div class="c-step-line"></div><div class="c-step active"><span class="dot">2</span><span class="lb">Configure</span></div><div class="c-step-line"></div><div class="c-step"><span class="dot">3</span><span class="lb">Review</span></div></div>
 </section>
 
@@ -154,6 +154,73 @@ const MODES = [
   { id: "07-reduced-motion", theme: null, hc: null, media: { reducedMotion: "reduce" } },
 ];
 const GATE_R_MODES = new Set(["01-dark", "02-light"]);
+const FOCUS_TARGETS = [
+  {
+    id: "checkbox",
+    activeSelector: '.c-check input[aria-label="on"]',
+    ringSelector: '.c-check input[aria-label="on"]:focus-visible + .bx',
+  },
+  {
+    id: "radio",
+    activeSelector: '.c-radio input[aria-label="private"]',
+    ringSelector: '.c-radio input[aria-label="private"]:focus-visible + .rb',
+  },
+  {
+    id: "slider",
+    activeSelector: '.c-slider input[type="range"]',
+    ringSelector: '.c-slider input[type="range"]:focus-visible',
+  },
+  {
+    id: "stepper",
+    activeSelector: '.c-stepper button[aria-label="decrease"]',
+    ringSelector: '.c-stepper button[aria-label="decrease"]:focus-visible',
+  },
+  {
+    id: "combobox",
+    activeSelector: '.c-combo-input input[aria-label="combo"]',
+    ringSelector: ".c-combo-input:focus-within",
+  },
+  {
+    id: "tag-remove",
+    activeSelector: '.c-tag button[aria-label="remove backend"]',
+    ringSelector: '.c-tag button[aria-label="remove backend"]:focus-visible',
+  },
+  {
+    id: "dropzone",
+    activeSelector: ".c-drop",
+    ringSelector: ".c-drop:focus-visible",
+  },
+  {
+    id: "date-calendar",
+    activeSelector: ".c-datefield .cal",
+    ringSelector: ".c-datefield .cal:focus-visible",
+  },
+  {
+    id: "breadcrumb",
+    activeSelector: ".c-crumbs a",
+    ringSelector: ".c-crumbs a:focus-visible",
+  },
+  {
+    id: "back",
+    activeSelector: ".c-back",
+    ringSelector: ".c-back:focus-visible",
+  },
+  {
+    id: "tab",
+    activeSelector: ".c-utab",
+    ringSelector: ".c-utab:focus-visible",
+  },
+  {
+    id: "pagination",
+    activeSelector: ".c-pager button",
+    ringSelector: ".c-pager button:focus-visible",
+  },
+  {
+    id: "context-menu",
+    activeSelector: ".c-ctx-item",
+    ringSelector: ".c-ctx-item:focus-visible",
+  },
+];
 
 function pageHtml(cssText, extra = "") {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${cssText}
@@ -165,7 +232,13 @@ function pageHtml(cssText, extra = "") {
 }
 
 async function applyMode(page, cssText, mode, extra = "") {
-  await page.emulateMedia({ colorScheme: "dark", ...mode.media });
+  await page.emulateMedia({
+    colorScheme: "dark",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+    ...mode.media,
+  });
   await page.setContent(pageHtml(cssText, extra), { waitUntil: "load" });
   await page.evaluate(
     ({ theme, hc }) => {
@@ -235,6 +308,80 @@ function diffSets(a, b, probes, modeId, sink, counters, missing) {
   }
 }
 
+async function collectFocusProof(page) {
+  await applyMode(page, POST, MODES[0]);
+  const found = {};
+  for (let i = 0; i < 80 && Object.keys(found).length < FOCUS_TARGETS.length; i++) {
+    await page.keyboard.press("Tab");
+    const record = await page.evaluate((targets) => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return null;
+      for (const target of targets) {
+        if (!active.matches(target.activeSelector)) continue;
+        const ring = document.querySelector(target.ringSelector);
+        if (!(ring instanceof HTMLElement)) {
+          return {
+            id: target.id,
+            ok: false,
+            activeSelector: target.activeSelector,
+            ringSelector: target.ringSelector,
+            reason: "ring selector did not match while keyboard-focused",
+          };
+        }
+        const cs = getComputedStyle(ring);
+        const styles = {
+          boxShadow: cs.boxShadow,
+          outlineColor: cs.outlineColor,
+          outlineOffset: cs.outlineOffset,
+          outlineStyle: cs.outlineStyle,
+          outlineWidth: cs.outlineWidth,
+        };
+        const hasRing =
+          styles.boxShadow !== "none" ||
+          (styles.outlineStyle !== "none" && styles.outlineWidth !== "0px");
+        return {
+          id: target.id,
+          ok: hasRing,
+          activeSelector: target.activeSelector,
+          ringSelector: target.ringSelector,
+          styles,
+        };
+      }
+      return null;
+    }, FOCUS_TARGETS);
+    if (record && found[record.id] === undefined) found[record.id] = record;
+  }
+
+  const missingTargets = FOCUS_TARGETS.filter((target) => found[target.id] === undefined).map(
+    (target) => target.id,
+  );
+  const failedTargets = Object.values(found).filter((record) => record.ok !== true);
+  if (missingTargets.length || failedTargets.length) {
+    throw new Error(
+      `keyboard focus proof failed: missing=${missingTargets.join(",") || "none"} failed=${
+        failedTargets.map((record) => `${record.id}:${JSON.stringify(record)}`).join("; ") ||
+        "none"
+      }`,
+    );
+  }
+  return found;
+}
+
+async function captureViewport(ctx, fileName, width, height, label) {
+  const shot = await ctx.newPage();
+  await shot.emulateMedia({
+    colorScheme: "dark",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+  });
+  await shot.setViewportSize({ width, height });
+  await shot.setContent(pageHtml(POST), { waitUntil: "load" });
+  await shot.screenshot({ path: resolve(HERE, fileName), fullPage: true });
+  await shot.close();
+  return { fileName, width, height, label };
+}
+
 const browser = await chromium.launch();
 const ctx = await browser.newContext({
   deviceScaleFactor: 2,
@@ -281,12 +428,14 @@ await applyMode(page, POST, MODES[0], "");
 await page.evaluate(() => document.documentElement.setAttribute("data-density", "compact"));
 await page.screenshot({ path: resolve(HERE, "08-compact-density.png"), fullPage: true });
 
-const narrow = await ctx.newPage();
-await narrow.emulateMedia({ colorScheme: "dark" });
-await narrow.setViewportSize({ width: 560, height: 1700 });
-await narrow.setContent(pageHtml(POST), { waitUntil: "load" });
-await narrow.screenshot({ path: resolve(HERE, "09-responsive.png"), fullPage: true });
-await narrow.close();
+const viewportScreenshots = [
+  await captureViewport(ctx, "09-responsive.png", 560, 1700, "mobile responsive"),
+  await captureViewport(ctx, "10-tablet.png", 900, 1700, "tablet"),
+  await captureViewport(ctx, "11-ultrawide.png", 1920, 1700, "ultrawide"),
+];
+
+const focusVisible = await collectFocusProof(page);
+await page.screenshot({ path: resolve(HERE, "12-focus-visible.png"), fullPage: true });
 
 writeFileSync(
   resolve(HERE, "computed-value-proof.json"),
@@ -321,6 +470,19 @@ writeFileSync(
           "preserved, glyph aria-hidden, toggle behaviour, axe-clean) — a React change not " +
           "reproducible in this CSS-only harness.",
       },
+      keyboardFocus: {
+        description:
+          "Keyboard Tab proof that representative input/navigation primitives enter :focus-visible " +
+          "or :focus-within states and expose a visible ring in the real product globals.css.",
+        targetCount: FOCUS_TARGETS.length,
+        targets: focusVisible,
+      },
+      screenshots: {
+        modes: MODES.map((mode) => mode.id),
+        compactDensity: "08-compact-density.png",
+        responsiveViewports: viewportScreenshots,
+        focusVisible: "12-focus-visible.png",
+      },
       missingSelectors: [...missing],
       byMode,
     },
@@ -332,6 +494,7 @@ writeFileSync(
 console.log(
   `\nGROUP R (reference fidelity): ${rCounters.total} probes, gated diffs ${rDiffsGated.length}, recorded diffs ${rDiffsRecorded.length}`,
 );
+console.log(`KEYBOARD FOCUS: ${Object.keys(focusVisible).length}/${FOCUS_TARGETS.length} targets proved`);
 for (const d of rDiffsGated.slice(0, 60)) console.log("  GATED " + d);
 for (const d of rDiffsRecorded.slice(0, 30)) console.log("  recorded " + d);
 if (missing.size) {

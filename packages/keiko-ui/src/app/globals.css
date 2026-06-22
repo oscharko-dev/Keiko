@@ -9953,6 +9953,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   transform: none;
 }
 .c-radio input:focus-visible + .rb {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
   box-shadow:
     0 0 0 2px var(--background-primary),
     0 0 0 4px var(--focus-ring);
@@ -10013,6 +10015,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   transform: scale(1.12);
 }
 .c-slider input[type="range"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 4px;
   box-shadow:
     0 0 0 2px var(--background-primary),
     0 0 0 4px var(--focus-ring);
@@ -10089,6 +10093,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   background: var(--combobox-surface);
 }
 .c-combo-input:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
   border-color: var(--input-border-focus);
   box-shadow: 0 0 0 3px var(--input-ring-focus);
 }
@@ -10187,15 +10193,17 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   border: 1px solid var(--tag-border);
 }
 .c-tag button {
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
+  margin: -4px -2px -4px 0;
   border: 0;
   background: transparent;
   color: var(--tag-text);
   cursor: pointer;
   display: grid;
   place-items: center;
-  border-radius: 4px;
+  border-radius: 6px;
+  line-height: 1;
   opacity: 0.7;
 }
 .c-tag button:hover {
@@ -10210,6 +10218,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
 
 /* ── file upload / dropzone (design-system/keiko-inputs.css) ── */
 .c-drop {
+  width: 100%;
+  appearance: none;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -10218,6 +10228,8 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   border-radius: var(--radius-surface);
   border: 1.5px dashed var(--file-dropzone-border);
   background: var(--file-dropzone-surface);
+  color: var(--text-primary);
+  font: inherit;
   text-align: center;
   cursor: pointer;
   transition:
