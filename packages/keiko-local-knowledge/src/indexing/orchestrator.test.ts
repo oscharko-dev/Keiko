@@ -989,7 +989,7 @@ describe("runIndexingJob — embedding capability preflight", () => {
     }
   });
 
-  it("fails before discovery when the gateway reports a different embedding model identity", async () => {
+  it("fails before discovery when the gateway reports different embedding dimensions", async () => {
     await drain(runIndexingJob(buildOptions(fixture)));
     const before = countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId);
     expect(before).toBeGreaterThan(0);
@@ -1001,7 +1001,7 @@ describe("runIndexingJob — embedding capability preflight", () => {
         return {
           ok: true,
           value: {
-            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions + 1),
             modelId: "canonical-embedding-model",
           },
         };
@@ -1020,7 +1020,7 @@ describe("runIndexingJob — embedding capability preflight", () => {
     if (terminal?.kind === "job-failed") {
       expect(terminal.error.code).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
       expect(terminal.error.message).toBe(
-        "embedding model identity changed — existing capsules are no longer compatible",
+        "embedding vector dimensions do not match the expected value",
       );
       expect(terminal.result.processedDocuments).toBe(0);
       expect(terminal.result.vectorsPersisted).toBe(0);

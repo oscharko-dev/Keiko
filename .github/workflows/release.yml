@@ -46,6 +46,13 @@ jobs:
           cache: "npm"
       - name: Install dependencies
         run: npm ci
+      - name: Install sandbox isolation backend (bubblewrap)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap needs them
+          # to create the network namespace for the ADR-0043 live egress proof.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Typecheck
         run: npm run typecheck
       - name: Version consistency
