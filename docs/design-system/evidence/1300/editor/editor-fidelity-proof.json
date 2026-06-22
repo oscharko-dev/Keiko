@@ -1,0 +1,642 @@
+{
+  "issue": 1300,
+  "epic": 1290,
+  "surface": "editor",
+  "postCssSha256": "f6c7c4e56f268460573292f919291ebb2fd890204f65ce7eaf37a3e7a7947c8d",
+  "referenceFiles": ["keiko-tokens.css", "keiko-semantic-tokens.css", "keiko-editor-tokens.css"],
+  "referenceFileSha256": {
+    "keiko-tokens.css": "6dc51e347aed8c924c1041af31ceb8be3370125c248d387bbbb075f936bc7583",
+    "keiko-semantic-tokens.css": "217e36e42423fb2645f611feb725944ec76b88dc067cb98023a7a3e166dcee2a",
+    "keiko-editor-tokens.css": "9d61f7df19dc02861354eb30206403942695608a8c9ee43cde0db13c0da81bac"
+  },
+  "run": {
+    "generatedAt": "2026-06-22T05:48:41.117Z",
+    "repoHeadSha": "6ff3116eb00c2fd83ee697ab62dd8c1f5718262e"
+  },
+  "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
+  "tokenFidelity": {
+    "description": "Editor token tier resolves identically under product globals.css and DS 0.4.0 reference (keiko-tokens + keiko-semantic-tokens + keiko-editor-tokens). Gated 0-diff dark+light for every neutral editor token the product defines; accent-derived recorded; reference-only (unadopted 0.4.0) editor tokens recorded as carried-forward variance.",
+    "tokenCount": 43,
+    "totalProbes": 160,
+    "gatedDiffCount": 0,
+    "recordedDiffCount": 1,
+    "gatedDiffs": [],
+    "recordedDiffs": [
+      "[03-dark-hc] --ed-bracket-match { ref=\"82,188,139,184\" product=\"78,186,134,184\" }"
+    ],
+    "byMode": {
+      "01-dark": {
+        "gatedDiffs": 0,
+        "accentDiffs": 4,
+        "referenceOnly": 3,
+        "gated": true
+      },
+      "02-light": {
+        "gatedDiffs": 0,
+        "accentDiffs": 2,
+        "referenceOnly": 3,
+        "gated": true
+      },
+      "03-dark-hc": {
+        "gatedDiffs": 0,
+        "accentDiffs": 2,
+        "referenceOnly": 3,
+        "gated": false
+      },
+      "04-light-hc": {
+        "gatedDiffs": 0,
+        "accentDiffs": 2,
+        "referenceOnly": 3,
+        "gated": false
+      }
+    }
+  },
+  "accentDerived": {
+    "description": "Recorded, not gated. Accent-derived editor tokens resolve through --accent (product hex #4eba87 vs reference oklch(0.72 0.124 160), ~1.5% pre-existing primitive delta). Identical chain.",
+    "tokens": ["--ed-statusbar-accent", "--ed-selection", "--ed-agent-line", "--ed-focus"],
+    "diffs": [
+      "[01-dark] --ed-statusbar-accent { ref=\"82,188,138,255\" product=\"78,186,135,255\" }",
+      "[01-dark] --ed-selection { ref=\"81,189,139,66\" product=\"77,185,135,66\" }",
+      "[01-dark] --ed-agent-line { ref=\"82,189,140,31\" product=\"74,189,132,31\" }",
+      "[01-dark] --ed-focus { ref=\"82,188,138,255\" product=\"78,186,135,255\" }",
+      "[02-light] --ed-selection { ref=\"81,189,139,66\" product=\"77,185,135,66\" }",
+      "[02-light] --ed-agent-line { ref=\"82,189,140,31\" product=\"74,189,132,31\" }",
+      "[03-dark-hc] --ed-selection { ref=\"81,189,139,66\" product=\"77,185,135,66\" }",
+      "[03-dark-hc] --ed-agent-line { ref=\"82,189,140,31\" product=\"74,189,132,31\" }",
+      "[04-light-hc] --ed-selection { ref=\"81,189,139,66\" product=\"77,185,135,66\" }",
+      "[04-light-hc] --ed-agent-line { ref=\"82,189,140,31\" product=\"74,189,132,31\" }"
+    ]
+  },
+  "referenceOnly": {
+    "description": "Recorded carried-forward variance: 0.4.0 editor reference tokens NOT yet declared by the product. These cover inlay hints, git blame and fold placeholders — editor surfaces owned by the editor epics #1373 / #1390, outside the DS epic #1290 token migration. Tracked for adoption there; not a #1300 regression. Product falls back to --ed-fg until adopted.",
+    "ownerEpics": ["#1373", "#1390"],
+    "tokens": ["--ed-inlay-fg", "--ed-blame-fg", "--ed-fold-placeholder"]
+  },
+  "tokenRecord": {
+    "01-dark": {
+      "--ed-bg": {
+        "product": "12,14,13,255",
+        "reference": "12,14,13,255",
+        "productDefined": true
+      },
+      "--ed-fg": {
+        "product": "197,205,217,255",
+        "reference": "197,205,217,255",
+        "productDefined": true
+      },
+      "--ed-bg-gutter": {
+        "product": "12,14,13,255",
+        "reference": "12,14,13,255",
+        "productDefined": true
+      },
+      "--ed-gutter-fg": {
+        "product": "242,247,244,97",
+        "reference": "242,247,244,97",
+        "productDefined": true
+      },
+      "--ed-gutter-fg-active": {
+        "product": "169,171,170,255",
+        "reference": "169,171,170,255",
+        "productDefined": true
+      },
+      "--ed-line-active": {
+        "product": "235,255,235,13",
+        "reference": "235,255,235,13",
+        "productDefined": true
+      },
+      "--ed-statusbar-bg": {
+        "product": "22,24,22,255",
+        "reference": "22,24,22,255",
+        "productDefined": true
+      },
+      "--ed-statusbar-fg": {
+        "product": "169,171,170,255",
+        "reference": "169,171,170,255",
+        "productDefined": true
+      },
+      "--ed-statusbar-accent": {
+        "product": "78,186,135,255",
+        "reference": "82,188,138,255",
+        "productDefined": true
+      },
+      "--ed-syn-keyword": {
+        "product": "199,146,234,255",
+        "reference": "199,146,234,255",
+        "productDefined": true
+      },
+      "--ed-syn-string": {
+        "product": "195,232,141,255",
+        "reference": "195,232,141,255",
+        "productDefined": true
+      },
+      "--ed-syn-comment": {
+        "product": "125,139,165,255",
+        "reference": "125,139,165,255",
+        "productDefined": true
+      },
+      "--ed-syn-function": {
+        "product": "130,170,255,255",
+        "reference": "130,170,255,255",
+        "productDefined": true
+      },
+      "--ed-syn-type": {
+        "product": "255,203,107,255",
+        "reference": "255,203,107,255",
+        "productDefined": true
+      },
+      "--ed-syn-number": {
+        "product": "247,140,108,255",
+        "reference": "247,140,108,255",
+        "productDefined": true
+      },
+      "--ed-syn-constant": {
+        "product": "247,140,108,255",
+        "reference": "247,140,108,255",
+        "productDefined": true
+      },
+      "--ed-syn-operator": {
+        "product": "137,221,255,255",
+        "reference": "137,221,255,255",
+        "productDefined": true
+      },
+      "--ed-syn-property": {
+        "product": "128,203,196,255",
+        "reference": "128,203,196,255",
+        "productDefined": true
+      },
+      "--ed-syn-punct": {
+        "product": "137,221,255,255",
+        "reference": "137,221,255,255",
+        "productDefined": true
+      },
+      "--ed-syn-regexp": {
+        "product": "233,163,163,255",
+        "reference": "233,163,163,255",
+        "productDefined": true
+      },
+      "--ed-syn-variable": {
+        "product": "197,205,217,255",
+        "reference": "197,205,217,255",
+        "productDefined": true
+      },
+      "--ed-selection": {
+        "product": "77,185,135,66",
+        "reference": "81,189,139,66",
+        "productDefined": true
+      },
+      "--ed-find-match": {
+        "product": "232,170,79,87",
+        "reference": "232,170,79,87",
+        "productDefined": true
+      },
+      "--ed-find-match-active": {
+        "product": "232,170,78,153",
+        "reference": "232,170,78,153",
+        "productDefined": true
+      },
+      "--ed-bracket-match": {
+        "product": "77,185,135,102",
+        "reference": "77,185,135,102",
+        "productDefined": true
+      },
+      "--ed-cursor": {
+        "product": "243,246,244,255",
+        "reference": "243,246,244,255",
+        "productDefined": true
+      },
+      "--ed-error": {
+        "product": "234,106,100,255",
+        "reference": "234,106,100,255",
+        "productDefined": true
+      },
+      "--ed-info": {
+        "product": "109,179,228,255",
+        "reference": "109,179,228,255",
+        "productDefined": true
+      },
+      "--ed-hint": {
+        "product": "138,141,139,255",
+        "reference": "138,141,139,255",
+        "productDefined": true
+      },
+      "--ed-diff-ins-line": {
+        "product": "74,195,107,38",
+        "reference": "74,195,107,38",
+        "productDefined": true
+      },
+      "--ed-diff-rem-line": {
+        "product": "235,107,101,38",
+        "reference": "235,107,101,38",
+        "productDefined": true
+      },
+      "--ed-diff-chg-line": {
+        "product": "108,178,232,33",
+        "reference": "108,178,232,33",
+        "productDefined": true
+      },
+      "--ed-ghost": {
+        "product": "144,147,145,255",
+        "reference": "144,147,145,255",
+        "productDefined": true
+      },
+      "--ed-agent-ghost": {
+        "product": "144,147,145,255",
+        "reference": "144,147,145,255",
+        "productDefined": true
+      },
+      "--ed-agent-accept": {
+        "product": "98,187,120,255",
+        "reference": "98,187,120,255",
+        "productDefined": true
+      },
+      "--ed-agent-reject": {
+        "product": "234,106,100,255",
+        "reference": "234,106,100,255",
+        "productDefined": true
+      },
+      "--ed-agent-line": {
+        "product": "74,189,132,31",
+        "reference": "82,189,140,31",
+        "productDefined": true
+      },
+      "--ed-focus": {
+        "product": "78,186,135,255",
+        "reference": "82,188,138,255",
+        "productDefined": true
+      },
+      "--ed-focus-inner": {
+        "product": "12,14,13,255",
+        "reference": "12,14,13,255",
+        "productDefined": true
+      },
+      "--ed-inlay-fg": {
+        "product": "197,205,217,255",
+        "reference": "144,147,145,255",
+        "productDefined": false
+      },
+      "--ed-blame-fg": {
+        "product": "197,205,217,255",
+        "reference": "138,141,139,255",
+        "productDefined": false
+      },
+      "--ed-minimap-bg": {
+        "product": "12,14,13,255",
+        "reference": "12,14,13,255",
+        "productDefined": true
+      },
+      "--ed-fold-placeholder": {
+        "product": "197,205,217,255",
+        "reference": "138,141,139,255",
+        "productDefined": false
+      }
+    },
+    "02-light": {
+      "--ed-bg": {
+        "product": "248,251,249,255",
+        "reference": "248,251,249,255",
+        "productDefined": true
+      },
+      "--ed-fg": {
+        "product": "43,52,64,255",
+        "reference": "43,52,64,255",
+        "productDefined": true
+      },
+      "--ed-bg-gutter": {
+        "product": "248,251,249,255",
+        "reference": "248,251,249,255",
+        "productDefined": true
+      },
+      "--ed-gutter-fg": {
+        "product": "32,37,34,97",
+        "reference": "32,37,34,97",
+        "productDefined": true
+      },
+      "--ed-gutter-fg-active": {
+        "product": "72,79,75,255",
+        "reference": "72,79,75,255",
+        "productDefined": true
+      },
+      "--ed-line-active": {
+        "product": "39,39,39,13",
+        "reference": "39,39,39,13",
+        "productDefined": true
+      },
+      "--ed-statusbar-bg": {
+        "product": "246,248,247,255",
+        "reference": "246,248,247,255",
+        "productDefined": true
+      },
+      "--ed-statusbar-fg": {
+        "product": "72,79,75,255",
+        "reference": "72,79,75,255",
+        "productDefined": true
+      },
+      "--ed-statusbar-accent": {
+        "product": "0,115,67,255",
+        "reference": "0,115,67,255",
+        "productDefined": true
+      },
+      "--ed-syn-keyword": {
+        "product": "139,43,184,255",
+        "reference": "139,43,184,255",
+        "productDefined": true
+      },
+      "--ed-syn-string": {
+        "product": "44,116,48,255",
+        "reference": "44,116,48,255",
+        "productDefined": true
+      },
+      "--ed-syn-comment": {
+        "product": "90,102,117,255",
+        "reference": "90,102,117,255",
+        "productDefined": true
+      },
+      "--ed-syn-function": {
+        "product": "35,95,192,255",
+        "reference": "35,95,192,255",
+        "productDefined": true
+      },
+      "--ed-syn-type": {
+        "product": "133,96,0,255",
+        "reference": "133,96,0,255",
+        "productDefined": true
+      },
+      "--ed-syn-number": {
+        "product": "168,72,10,255",
+        "reference": "168,72,10,255",
+        "productDefined": true
+      },
+      "--ed-syn-constant": {
+        "product": "168,72,10,255",
+        "reference": "168,72,10,255",
+        "productDefined": true
+      },
+      "--ed-syn-operator": {
+        "product": "15,116,145,255",
+        "reference": "15,116,145,255",
+        "productDefined": true
+      },
+      "--ed-syn-property": {
+        "product": "14,107,102,255",
+        "reference": "14,107,102,255",
+        "productDefined": true
+      },
+      "--ed-syn-punct": {
+        "product": "15,116,145,255",
+        "reference": "15,116,145,255",
+        "productDefined": true
+      },
+      "--ed-syn-regexp": {
+        "product": "163,59,59,255",
+        "reference": "163,59,59,255",
+        "productDefined": true
+      },
+      "--ed-syn-variable": {
+        "product": "43,52,64,255",
+        "reference": "43,52,64,255",
+        "productDefined": true
+      },
+      "--ed-selection": {
+        "product": "77,185,135,66",
+        "reference": "81,189,139,66",
+        "productDefined": true
+      },
+      "--ed-find-match": {
+        "product": "123,62,0,87",
+        "reference": "123,62,0,87",
+        "productDefined": true
+      },
+      "--ed-find-match-active": {
+        "product": "122,63,0,153",
+        "reference": "122,63,0,153",
+        "productDefined": true
+      },
+      "--ed-bracket-match": {
+        "product": "77,185,135,102",
+        "reference": "77,185,135,102",
+        "productDefined": true
+      },
+      "--ed-cursor": {
+        "product": "31,38,34,255",
+        "reference": "31,38,34,255",
+        "productDefined": true
+      },
+      "--ed-error": {
+        "product": "179,34,40,255",
+        "reference": "179,34,40,255",
+        "productDefined": true
+      },
+      "--ed-info": {
+        "product": "0,91,159,255",
+        "reference": "0,91,159,255",
+        "productDefined": true
+      },
+      "--ed-hint": {
+        "product": "100,107,103,255",
+        "reference": "100,107,103,255",
+        "productDefined": true
+      },
+      "--ed-diff-ins-line": {
+        "product": "35,149,78,36",
+        "reference": "35,149,78,36",
+        "productDefined": true
+      },
+      "--ed-diff-rem-line": {
+        "product": "181,33,41,31",
+        "reference": "181,33,41,31",
+        "productDefined": true
+      },
+      "--ed-diff-chg-line": {
+        "product": "0,93,162,33",
+        "reference": "0,93,162,33",
+        "productDefined": true
+      },
+      "--ed-ghost": {
+        "product": "104,117,110,255",
+        "reference": "104,117,110,255",
+        "productDefined": true
+      },
+      "--ed-agent-ghost": {
+        "product": "104,117,110,255",
+        "reference": "104,117,110,255",
+        "productDefined": true
+      },
+      "--ed-agent-accept": {
+        "product": "19,119,56,255",
+        "reference": "19,119,56,255",
+        "productDefined": true
+      },
+      "--ed-agent-reject": {
+        "product": "179,34,40,255",
+        "reference": "179,34,40,255",
+        "productDefined": true
+      },
+      "--ed-agent-line": {
+        "product": "74,189,132,31",
+        "reference": "82,189,140,31",
+        "productDefined": true
+      },
+      "--ed-focus": {
+        "product": "0,115,67,255",
+        "reference": "0,115,67,255",
+        "productDefined": true
+      },
+      "--ed-focus-inner": {
+        "product": "248,251,249,255",
+        "reference": "248,251,249,255",
+        "productDefined": true
+      },
+      "--ed-inlay-fg": {
+        "product": "43,52,64,255",
+        "reference": "89,95,92,255",
+        "productDefined": false
+      },
+      "--ed-blame-fg": {
+        "product": "43,52,64,255",
+        "reference": "100,107,103,255",
+        "productDefined": false
+      },
+      "--ed-minimap-bg": {
+        "product": "248,251,249,255",
+        "reference": "248,251,249,255",
+        "productDefined": true
+      },
+      "--ed-fold-placeholder": {
+        "product": "43,52,64,255",
+        "reference": "100,107,103,255",
+        "productDefined": false
+      }
+    }
+  },
+  "referenceCaptureSummary": {
+    "expectedCount": 14,
+    "actualCount": 14,
+    "errorCount": 0,
+    "errors": []
+  },
+  "referenceCaptures": [
+    {
+      "file": "ref-editor-theme-dark.png",
+      "page": "editor-theme.html",
+      "mode": "dark",
+      "title": "Editor Theme · Keiko Design System",
+      "theme": "dark",
+      "textLen": 8583
+    },
+    {
+      "file": "ref-editor-theme-light.png",
+      "page": "editor-theme.html",
+      "mode": "light",
+      "title": "Editor Theme · Keiko Design System",
+      "theme": "light",
+      "textLen": 8583
+    },
+    {
+      "file": "ref-editor-chrome-dark.png",
+      "page": "editor-chrome.html",
+      "mode": "dark",
+      "title": "Editor · Chrome & Tabs · Keiko Design System",
+      "theme": "dark",
+      "textLen": 5978
+    },
+    {
+      "file": "ref-editor-chrome-light.png",
+      "page": "editor-chrome.html",
+      "mode": "light",
+      "title": "Editor · Chrome & Tabs · Keiko Design System",
+      "theme": "light",
+      "textLen": 5978
+    },
+    {
+      "file": "ref-editor-gutter-dark.png",
+      "page": "editor-gutter.html",
+      "mode": "dark",
+      "title": "Editor · Gutter · Keiko Design System",
+      "theme": "dark",
+      "textLen": 6176
+    },
+    {
+      "file": "ref-editor-gutter-light.png",
+      "page": "editor-gutter.html",
+      "mode": "light",
+      "title": "Editor · Gutter · Keiko Design System",
+      "theme": "light",
+      "textLen": 6176
+    },
+    {
+      "file": "ref-editor-navigation-dark.png",
+      "page": "editor-navigation.html",
+      "mode": "dark",
+      "title": "Editor · Navigation & Search · Keiko Design System",
+      "theme": "dark",
+      "textLen": 5580
+    },
+    {
+      "file": "ref-editor-navigation-light.png",
+      "page": "editor-navigation.html",
+      "mode": "light",
+      "title": "Editor · Navigation & Search · Keiko Design System",
+      "theme": "light",
+      "textLen": 5580
+    },
+    {
+      "file": "ref-editor-panels-dark.png",
+      "page": "editor-panels.html",
+      "mode": "dark",
+      "title": "Editor · Tool Windows · Keiko Design System",
+      "theme": "dark",
+      "textLen": 5084
+    },
+    {
+      "file": "ref-editor-panels-light.png",
+      "page": "editor-panels.html",
+      "mode": "light",
+      "title": "Editor · Tool Windows · Keiko Design System",
+      "theme": "light",
+      "textLen": 5084
+    },
+    {
+      "file": "ref-editor-markdown-dark.png",
+      "page": "editor-markdown.html",
+      "mode": "dark",
+      "title": "Editor · Markdown Views · Keiko Design System",
+      "theme": "dark",
+      "textLen": 5927
+    },
+    {
+      "file": "ref-editor-markdown-light.png",
+      "page": "editor-markdown.html",
+      "mode": "light",
+      "title": "Editor · Markdown Views · Keiko Design System",
+      "theme": "light",
+      "textLen": 5927
+    },
+    {
+      "file": "ref-editor-agent-dark.png",
+      "page": "editor-agent.html",
+      "mode": "dark",
+      "title": "Editor · Agent in Editor · Keiko Design System",
+      "theme": "dark",
+      "textLen": 6012
+    },
+    {
+      "file": "ref-editor-agent-light.png",
+      "page": "editor-agent.html",
+      "mode": "light",
+      "title": "Editor · Agent in Editor · Keiko Design System",
+      "theme": "light",
+      "textLen": 6012
+    }
+  ],
+  "runningEditorEvidence": {
+    "note": "Real Monaco / tabs / diagnostics / find / ghost-text / agent-prompt captures are produced by the executable e2e suites and committed under the #1295/#1296 evidence dirs.",
+    "suites": ["npm run test:e2e:editor-fidelity-1295", "npm run test:e2e:editor-fidelity-1296"],
+    "captures": [
+      "docs/design-system/evidence/1295/editor/",
+      "docs/design-system/evidence/1296/editor/"
+    ]
+  },
+  "missingReferenceTokenCount": 0,
+  "missing": [],
+  "verdict": "PASS"
+}

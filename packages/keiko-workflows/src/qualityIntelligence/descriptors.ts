@@ -41,8 +41,8 @@ export interface QualityIntelligenceWorkflowLimits {
    * Maximum model gateway dispatches the adversarial test-quality judge may make per run
    * (Epic #736, Issue #747). One dispatch per candidate; defaults to the candidate cap so a
    * realistic run is judged in full while a pathological run can never dispatch an unbounded
-   * number of judge calls. Candidates beyond this ceiling are left unjudged (excluded from the
-   * run quality score rather than counted as weak).
+   * number of judge calls. Candidates beyond this ceiling receive deterministic weak judge findings,
+   * so the run still accounts for every candidate without dispatching unbounded calls.
    */
   readonly maxJudgeCallsPerRun: number;
 }

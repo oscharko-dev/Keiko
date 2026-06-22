@@ -85,6 +85,74 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   "some",
   "every",
   "each",
+  "aber",
+  "alle",
+  "als",
+  "am",
+  "an",
+  "auch",
+  "auf",
+  "aus",
+  "bei",
+  "bin",
+  "bis",
+  "bitte",
+  "da",
+  "das",
+  "dass",
+  "dein",
+  "deine",
+  "dem",
+  "den",
+  "der",
+  "des",
+  "die",
+  "dir",
+  "du",
+  "durch",
+  "ein",
+  "eine",
+  "einem",
+  "einen",
+  "einer",
+  "es",
+  "für",
+  "habe",
+  "haben",
+  "hat",
+  "ich",
+  "im",
+  "ist",
+  "kann",
+  "kannst",
+  "kein",
+  "keine",
+  "mit",
+  "mir",
+  "nach",
+  "nicht",
+  "noch",
+  "oder",
+  "sagen",
+  "sind",
+  "und",
+  "uns",
+  "von",
+  "war",
+  "was",
+  "welche",
+  "welchen",
+  "welcher",
+  "welches",
+  "wenn",
+  "wer",
+  "wie",
+  "wir",
+  "wird",
+  "wo",
+  "zu",
+  "zum",
+  "zur",
 ]);
 
 // Module-scope regex pool. Each pattern uses character classes only (no nested quantifiers),
@@ -93,7 +161,33 @@ const QUOTED_DOUBLE_RE = /"([^"\n]+)"/g;
 const QUOTED_SINGLE_RE = /'([^'\n]+)'/g;
 const BACKTICK_RE = /`([^`\n]+)`/g;
 const PATH_RE = /(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,8}/g;
+// Requires a genuine lower/digit -> upper transition so all-caps acronyms and SHOUTING words
+// (WHY, HTTP, BROKEN) are NOT mistaken for code identifiers. A spurious 0.85 identifier anchor
+// would both satisfy the clarification gate for a vague question and seed symbol-file retrieval
+// with a non-symbol — see planner/plan.ts decideClarification and grounded symbolFileAnchorTerms.
+const CAMEL_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*[a-z0-9][A-Z][A-Za-z0-9_$]*)\b/g;
 const TOKEN_SPLIT_RE = /[^A-Za-z0-9_.]+/;
+const TECHNICAL_TERM_PATTERNS: readonly {
+  readonly pattern: RegExp;
+  readonly term: string;
+}[] = [
+  { pattern: /\btype[\s_-]?script\b/gi, term: "typescript" },
+  { pattern: /\bjava[\s_-]?script\b/gi, term: "javascript" },
+  { pattern: /\bnode(?:\.js)?\b/gi, term: "node" },
+  { pattern: /\bnext(?:\.js)?\b/gi, term: "nextjs" },
+  { pattern: /\bpackage\.json\b/gi, term: "package.json" },
+  { pattern: /\bpackage[\s_-]?manager\b/gi, term: "package-manager" },
+  { pattern: /\btsconfig(?:\.[a-z0-9]+)?\b/gi, term: "tsconfig" },
+  { pattern: /\bvitest\b/gi, term: "vitest" },
+  { pattern: /\bvite\b/gi, term: "vite" },
+  { pattern: /\bplaywright\b/gi, term: "playwright" },
+  { pattern: /\bjest\b/gi, term: "jest" },
+  { pattern: /\bcypress\b/gi, term: "cypress" },
+  { pattern: /\breact\b/gi, term: "react" },
+  { pattern: /\bnpm\b/gi, term: "npm" },
+  { pattern: /\bpnpm\b/gi, term: "pnpm" },
+  { pattern: /\byarn\b/gi, term: "yarn" },
+];
 
 export type SearchAnchorKind = "literal" | "identifier" | "path" | "quoted";
 
@@ -156,6 +250,27 @@ function collectMatches(
   return parts.join("");
 }
 
+function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
+  let remaining = source;
+  for (const entry of TECHNICAL_TERM_PATTERNS) {
+    const re = new RegExp(entry.pattern.source, entry.pattern.flags);
+    const parts: string[] = [];
+    let cursor = 0;
+    let match = re.exec(remaining);
+    while (match !== null) {
+      const full = match[0];
+      pushAnchor(out, entry.term, "identifier", 0.85);
+      parts.push(remaining.slice(cursor, match.index));
+      parts.push(" ".repeat(full.length));
+      cursor = match.index + full.length;
+      match = re.exec(remaining);
+    }
+    parts.push(remaining.slice(cursor));
+    remaining = parts.join("");
+  }
+  return remaining;
+}
+
 function tokenizeRemaining(remaining: string, out: MutableAnchor[]): number {
   let considered = 0;
   for (const raw of remaining.split(TOKEN_SPLIT_RE)) {
@@ -216,6 +331,8 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   remaining = collectMatches(remaining, QUOTED_SINGLE_RE, "quoted", 1, collected);
   remaining = collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected);
   remaining = collectMatches(remaining, PATH_RE, "path", 0.95, collected);
+  remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);
+  remaining = collectTechnicalTerms(remaining, collected);
   const tokensConsidered = tokenizeRemaining(remaining, collected);
   const merged = sortAnchors(dedup(collected));
   const truncated = merged.length > maxAnchors;

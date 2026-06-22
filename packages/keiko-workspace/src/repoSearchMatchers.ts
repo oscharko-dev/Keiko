@@ -116,6 +116,74 @@ const NL_STOP_WORDS: ReadonlySet<string> = new Set([
   "only",
   "based",
   "answer",
+  "aber",
+  "alle",
+  "als",
+  "am",
+  "an",
+  "auch",
+  "auf",
+  "aus",
+  "bei",
+  "bin",
+  "bis",
+  "bitte",
+  "da",
+  "das",
+  "dass",
+  "dein",
+  "deine",
+  "dem",
+  "den",
+  "der",
+  "des",
+  "die",
+  "dir",
+  "du",
+  "durch",
+  "ein",
+  "eine",
+  "einem",
+  "einen",
+  "einer",
+  "es",
+  "für",
+  "habe",
+  "haben",
+  "hat",
+  "ich",
+  "im",
+  "ist",
+  "kann",
+  "kannst",
+  "kein",
+  "keine",
+  "mit",
+  "mir",
+  "nach",
+  "nicht",
+  "noch",
+  "oder",
+  "sagen",
+  "sind",
+  "und",
+  "uns",
+  "von",
+  "war",
+  "was",
+  "welche",
+  "welchen",
+  "welcher",
+  "welches",
+  "wenn",
+  "wer",
+  "wie",
+  "wir",
+  "wird",
+  "wo",
+  "zu",
+  "zum",
+  "zur",
 ]);
 
 const DEFINITION_INTENT_TOKENS: ReadonlySet<string> = new Set([
@@ -140,6 +208,16 @@ const HTTP_METHOD_TOKENS: ReadonlySet<string> = new Set([
   "head",
   "options",
 ]);
+
+const TECHNICAL_PHRASES: readonly { readonly pattern: RegExp; readonly term: string }[] = [
+  { pattern: /\btype[\s_-]?script\b/iu, term: "typescript" },
+  { pattern: /\bjava[\s_-]?script\b/iu, term: "javascript" },
+  { pattern: /\bnode(?:\.js)?\b/iu, term: "node" },
+  { pattern: /\bnext(?:\.js)?\b/iu, term: "nextjs" },
+  { pattern: /\bpackage\.json\b/iu, term: "package.json" },
+  { pattern: /\bpackage[\s_-]?manager\b|\bpaket[\s_-]?manager\b/iu, term: "package-manager" },
+  { pattern: /\btest[\s_-]?runner\b|\btestumgebung\b/iu, term: "test-runner" },
+];
 
 interface NaturalLanguageIntent {
   readonly definitionIntent: boolean;
@@ -173,6 +251,16 @@ function naturalLanguageContentTokens(
   return content.length > 0 ? content : normalized;
 }
 
+function technicalPhraseTerms(queryText: string, caseSensitive: boolean): readonly string[] {
+  const terms = new Set<string>();
+  for (const entry of TECHNICAL_PHRASES) {
+    if (entry.pattern.test(queryText)) {
+      terms.add(caseSensitive ? entry.term : entry.term.toLowerCase());
+    }
+  }
+  return [...terms];
+}
+
 function uniqueStrings(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
 }
@@ -202,7 +290,9 @@ function analyzeNaturalLanguageIntent(
       .map((t) => (caseSensitive ? t : t.toLowerCase())),
   );
   const httpMethods = uniqueStrings(
-    lowered.filter((t) => HTTP_METHOD_TOKENS.has(t)).map((t) => (caseSensitive ? t : t.toLowerCase())),
+    lowered
+      .filter((t) => HTTP_METHOD_TOKENS.has(t))
+      .map((t) => (caseSensitive ? t : t.toLowerCase())),
   );
   return { definitionIntent, symbolTokens, routeTokens, httpMethods };
 }
@@ -275,7 +365,12 @@ function adjustedDefinitionIntentScore(
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
   const rawTokens = query.text.split(/\s+/).filter((t) => t.length > 0);
   const normalizedTokens = naturalLanguageNormalizedTokens(rawTokens);
-  const tokens = naturalLanguageContentTokens(rawTokens, query.caseSensitive);
+  // GRD-033: dedupe content tokens (as symbol/route/method tokens already are) so a repeated
+  // query word does not double-count in `hits/total`, which over-rewarded prose-heavy scopes.
+  const tokens = uniqueStrings([
+    ...naturalLanguageContentTokens(rawTokens, query.caseSensitive),
+    ...technicalPhraseTerms(query.text, query.caseSensitive),
+  ]);
   const intent = analyzeNaturalLanguageIntent(normalizedTokens, query.caseSensitive);
   const total = tokens.length;
   return {
@@ -359,7 +454,7 @@ export function buildMatcher(query: RetrievalQuery): LineMatcher {
 
 // Anchored-glob compilation for findFiles. Supports `*`, `**`, `?`, and literal characters.
 // Brace expansion and extglob patterns are intentionally not supported.
-export function compileGlob(pattern: string): RegExp {
+export function compileGlob(pattern: string, caseSensitive = true): RegExp {
   let body = "";
   let i = 0;
   while (i < pattern.length) {
@@ -380,5 +475,5 @@ export function compileGlob(pattern: string): RegExp {
     }
     i += 1;
   }
-  return new RegExp(`^${body}$`);
+  return new RegExp(`^${body}$`, caseSensitive ? "u" : "iu");
 }

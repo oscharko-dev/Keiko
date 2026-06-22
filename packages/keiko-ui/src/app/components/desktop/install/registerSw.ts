@@ -14,8 +14,91 @@
  * falls back to the manual instructions shipped in #124.
  */
 
+const ACTIVATE_WAITING_MESSAGE_TYPE = "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER";
+const UPDATE_RELOAD_PENDING_KEY = "keiko.service-worker-update-reload-pending";
+
+let reloadedForActivatedUpdate = false;
+
 function hasServiceWorker(): boolean {
   return typeof navigator !== "undefined" && "serviceWorker" in navigator;
+}
+
+function setPendingUpdateReload(): void {
+  try {
+    window.sessionStorage.setItem(UPDATE_RELOAD_PENDING_KEY, "true");
+  } catch {
+    // Session storage can be blocked. Keep update activation as a best-effort recovery path.
+  }
+}
+
+function consumePendingUpdateReload(): boolean {
+  try {
+    if (window.sessionStorage.getItem(UPDATE_RELOAD_PENDING_KEY) !== "true") return false;
+    window.sessionStorage.removeItem(UPDATE_RELOAD_PENDING_KEY);
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function clearPendingUpdateReload(): void {
+  try {
+    window.sessionStorage.removeItem(UPDATE_RELOAD_PENDING_KEY);
+  } catch {
+    // Session storage can be blocked. There is nothing to clear in that case.
+  }
+}
+
+function reloadOnceForActivatedUpdate(): void {
+  if (reloadedForActivatedUpdate) return;
+  if (!consumePendingUpdateReload()) return;
+  reloadedForActivatedUpdate = true;
+  window.location.reload();
+}
+
+function installControllerChangeReload(sw: ServiceWorkerContainer): void {
+  sw.addEventListener("controllerchange", reloadOnceForActivatedUpdate);
+}
+
+function activateWaitingWorker(registration: ServiceWorkerRegistration): void {
+  const waiting = registration.waiting;
+  if (waiting === null) return;
+
+  setPendingUpdateReload();
+  try {
+    waiting.postMessage({ type: ACTIVATE_WAITING_MESSAGE_TYPE });
+  } catch {
+    clearPendingUpdateReload();
+  }
+}
+
+function watchInstallingWorker(
+  sw: ServiceWorkerContainer,
+  registration: ServiceWorkerRegistration,
+): void {
+  const installing = registration.installing;
+  if (installing === null) return;
+
+  installing.addEventListener("statechange", () => {
+    if (installing.state !== "installed") return;
+    if (sw.controller === null) return;
+    activateWaitingWorker(registration);
+  });
+}
+
+function handleRegisteredServiceWorker(
+  sw: ServiceWorkerContainer,
+  registration: ServiceWorkerRegistration,
+): void {
+  installControllerChangeReload(sw);
+
+  if (sw.controller !== null) {
+    activateWaitingWorker(registration);
+  }
+
+  registration.addEventListener("updatefound", () => {
+    watchInstallingWorker(sw, registration);
+  });
 }
 
 function deleteKeikoShellCaches(): void {
@@ -70,10 +153,15 @@ export function registerSw(): void {
   // `DOMException` in spec but other runtimes may differ, and we never inspect the error
   // in production code.
   try {
-    void sw.register("/sw.js", { scope: "/" }).catch((_error: unknown) => {
-      // Silent failure by design. See ADR-0024 D6.
-      return undefined;
-    });
+    void sw
+      .register("/sw.js", { scope: "/" })
+      .then((registration) => {
+        handleRegisteredServiceWorker(sw, registration);
+      })
+      .catch((_error: unknown) => {
+        // Silent failure by design. See ADR-0024 D6.
+        return undefined;
+      });
   } catch {
     // Silent failure by design. See ADR-0024 D6.
   }

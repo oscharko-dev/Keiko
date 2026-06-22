@@ -40,7 +40,7 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 
 import {
   ClarificationNeededError,
-  echoAnswerer,
+  isSymbolDefinitionPath,
   retrieveConnectedContextPack,
   runGroundedExploration,
   type GroundedAnswerer,
@@ -49,6 +49,16 @@ import {
 
 const NOW = 1_700_000_000_000;
 let ROOT = "";
+
+const echoAnswerer: GroundedAnswerer = {
+  answer: (question, pack) => {
+    const filePaths = pack.files.map((f) => f.scopePath).join(", ");
+    const summary =
+      `Inspected ${String(pack.files.length)} file(s) for: ${question}. ` +
+      `Findings include: ${filePaths.length === 0 ? "(no evidence)" : filePaths}.`;
+    return Promise.resolve(summary);
+  },
+};
 
 function fakeWorkspace(): WorkspaceInfo {
   return {
@@ -469,6 +479,136 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("prioritizes exact symbol filename matches for workspace-root code questions", async () => {
+    mkdirSync(join(ROOT, "docs/adr"), { recursive: true });
+    mkdirSync(join(ROOT, "packages/keiko-ui/src/app/components/desktop/windows"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(ROOT, "docs/adr/ADR-0026-workspace-substrate.md"),
+      "The DOM renderer uses WindowFrame.tsx.\n",
+    );
+    writeFileSync(
+      join(ROOT, "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx"),
+      "import type { ReactNode } from 'react';\n" +
+        "interface WindowFrameProps { readonly title: string; }\n" +
+        "const filler = [\n" +
+        Array.from({ length: 260 }, (_, index) => `  "line-${index.toString()}",\n`).join("") +
+        "];\n" +
+        "export function WindowFrame(props: WindowFrameProps): ReactNode {\n" +
+        "  return props.title;\n" +
+        "}\n",
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Wo ist WindowFrame implementiert?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.plan.retrievalIntent).toBe("targeted-code-search");
+    expect(out.pack.files[0]?.scopePath).toBe(
+      "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx",
+    );
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) =>
+        excerpt.content.includes("export function WindowFrame"),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("keeps large lockfiles bounded when grounding package-manager metadata", async () => {
+    writeFileSync(
+      join(ROOT, "package.json"),
+      JSON.stringify({ packageManager: "npm@10.9.8" }, null, 2),
+    );
+    writeFileSync(join(ROOT, "package-lock.json"), `${"x".repeat(100_000)}\n`);
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Welcher Package Manager wird verwendet?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const lockfile = out.pack.files.find((file) => file.scopePath === "package-lock.json");
+    expect(lockfile).toBeDefined();
+    const totalLockfileBytes =
+      lockfile?.excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0) ?? 0;
+    expect(totalLockfileBytes).toBeLessThanOrEqual(8192);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("includes package and test config metadata for connected-folder test-environment questions", async () => {
+    mkdirSync(join(ROOT, "packages/keiko-ui/src/app/components/desktop"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "packages/keiko-ui/package.json"),
+      JSON.stringify(
+        {
+          name: "@oscharko-dev/keiko-ui",
+          scripts: { test: "vitest run" },
+          devDependencies: { vitest: "4.1.8", vite: "8.0.16" },
+        },
+        null,
+        2,
+      ),
+    );
+    writeFileSync(
+      join(ROOT, "packages/keiko-ui/vitest.config.ts"),
+      "import { defineConfig } from 'vitest/config';\n" +
+        "export default defineConfig({ test: { environment: 'jsdom' } });\n",
+    );
+    writeFileSync(
+      join(ROOT, "packages/keiko-ui/src/app/components/desktop/AppShell.tsx"),
+      "export function AppShell() {\n  return 'app shell';\n}\n",
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "directory",
+          relativePaths: ["packages/keiko-ui"],
+          explicitConnection: true,
+        }),
+        query: happyQuery({
+          text: "Kannst du die App sehen und mir sagen welche Testumgebung genutzt wird?",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const paths = out.pack.files.map((file) => file.scopePath);
+    expect(paths).toContain("packages/keiko-ui/package.json");
+    expect(paths).toContain("packages/keiko-ui/vitest.config.ts");
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "packages/keiko-ui/package.json")
+        ?.excerpts.some((excerpt) => excerpt.content.includes('"test": "vitest run"')),
+    ).toBe(true);
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "packages/keiko-ui/vitest.config.ts")
+        ?.excerpts.some((excerpt) => excerpt.content.includes("environment: 'jsdom'")),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("omits .keiko evidence artifacts when real source files answer a normal repository question", async () => {
     seedIssue876Repo();
 
@@ -516,6 +656,53 @@ describe("runGroundedExploration", () => {
     expect(
       out.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes("ZodConfigSchema")),
     ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("reads an explicitly connected single file even when the question has no lexical hit", async () => {
+    mkdirSync(join(ROOT, "src/pages"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "src/pages/index.vue"),
+      "<template>\n" +
+        '  <main class="landing-page">\n' +
+        "    <h1>Willkommen</h1>\n" +
+        "  </main>\n" +
+        "</template>\n" +
+        "\n" +
+        '<script setup lang="ts">\n' +
+        "const title = 'Digitalisierung';\n" +
+        "</script>\n",
+    );
+    writeFileSync(
+      join(ROOT, "src/pages/sibling.vue"),
+      "<template>\n  <section>optimieren code sibling decoy</section>\n</template>\n",
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "files",
+          relativePaths: ["src/pages/index.vue"],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Kannst du diesen Code optimieren?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files.map((file) => file.scopePath)).toEqual(["src/pages/index.vue"]);
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes("<template>")),
+    ).toBe(true);
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes("Digitalisierung")),
+    ).toBe(true);
+    expect(JSON.stringify(out.pack)).not.toContain("sibling decoy");
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(false);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -1075,5 +1262,23 @@ describe("retrieveConnectedContextPack (Epic #532 M1)", () => {
       }),
     ).rejects.toBeInstanceOf(CancelledError);
     expect(answerCalls).toBe(0);
+  });
+});
+
+describe("isSymbolDefinitionPath", () => {
+  it("accepts a code definition file matching term.<ext> at any depth, case-insensitively", () => {
+    expect(isSymbolDefinitionPath("packages/core/src/PaymentService.tsx", "PaymentService")).toBe(
+      true,
+    );
+    expect(isSymbolDefinitionPath("src/windowFrame.ts", "WindowFrame")).toBe(true);
+    expect(isSymbolDefinitionPath("a/b/Foo.vue", "foo")).toBe(true);
+  });
+
+  it("rejects co-named spec/story/non-code files the broad `**/term.*` glob over-matches", () => {
+    // The single-walk regression guard: these must NOT be treated as the symbol's definition file.
+    expect(isSymbolDefinitionPath("src/PaymentService.test.tsx", "PaymentService")).toBe(false);
+    expect(isSymbolDefinitionPath("src/PaymentService.stories.tsx", "PaymentService")).toBe(false);
+    expect(isSymbolDefinitionPath("docs/PaymentService.md", "PaymentService")).toBe(false);
+    expect(isSymbolDefinitionPath("src/PaymentService.d.ts", "PaymentService")).toBe(false);
   });
 });

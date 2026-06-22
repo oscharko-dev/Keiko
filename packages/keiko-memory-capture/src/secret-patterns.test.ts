@@ -103,16 +103,12 @@ describe("scanForSecrets — private-credential-path patterns", () => {
 describe("scanForSecrets — provider base URLs", () => {
   it("rejects provider base URLs called out explicitly in natural language", () => {
     expect(
-      scanForSecrets(
-        "remember that our provider base URL is https://llm.internal.example.com/v1",
-      ),
+      scanForSecrets("remember that our provider base URL is https://llm.internal.example.com/v1"),
     ).toBe("provider-base-url");
   });
 
   it("rejects an OpenAI-compatible endpoint URL even without nearby provider wording", () => {
-    expect(scanForSecrets("https://gateway.example.invalid/openai/v1")).toBe(
-      "provider-base-url",
-    );
+    expect(scanForSecrets("https://gateway.example.invalid/openai/v1")).toBe("provider-base-url");
   });
 
   it("does not reject an ordinary documentation URL", () => {
@@ -128,9 +124,7 @@ describe("scanForSecrets — raw log content", () => {
   });
 
   it("rejects stack-trace style content with repeated frames", () => {
-    expect(scanForSecrets("stack trace line 1 at foo() line 2 at bar()")).toBe(
-      "raw-log-content",
-    );
+    expect(scanForSecrets("stack trace line 1 at foo() line 2 at bar()")).toBe("raw-log-content");
   });
 
   it("does not reject plain prose that mentions a module failure", () => {

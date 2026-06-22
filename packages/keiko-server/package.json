@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-server",
-  "version": "0.2.0-beta.4",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./credential-vault": {
+      "types": "./dist/credentialVault.d.ts",
+      "import": "./dist/credentialVault.js"
     }
   },
   "scripts": {
@@ -32,6 +36,7 @@
     "@oscharko-dev/keiko-quality-intelligence": "*",
     "@oscharko-dev/keiko-local-knowledge": "*",
     "@oscharko-dev/keiko-workspace": "*",
+    "@oscharko-dev/keiko-sandbox": "*",
     "@oscharko-dev/keiko-tools": "*",
     "@oscharko-dev/keiko-evidence": "*",
     "@oscharko-dev/keiko-verification": "*",
@@ -42,6 +47,7 @@
     "@oscharko-dev/keiko-memory-governance": "*",
     "@oscharko-dev/keiko-memory-retrieval": "*",
     "@oscharko-dev/keiko-memory-capture": "*",
-    "@oscharko-dev/keiko-memory-consolidation": "*"
+    "@oscharko-dev/keiko-memory-consolidation": "*",
+    "typescript": "^6.0.3"
   }
 }

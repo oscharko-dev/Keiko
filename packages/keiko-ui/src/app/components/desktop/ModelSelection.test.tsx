@@ -5,6 +5,7 @@
 //            does not resolve value-exports correctly in jsdom).
 
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
@@ -241,7 +242,8 @@ describe("ChatWindow no-eligible-models error (AC #1)", () => {
     expect(screen.queryByText(/No conversation-eligible model/i)).toBeNull();
   });
 
-  it("does not render embedding-only models in the chat selector", () => {
+  it("does not render embedding-only models in the chat selector", async () => {
+    const user = userEvent.setup();
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -249,7 +251,8 @@ describe("ChatWindow no-eligible-models error (AC #1)", () => {
         models: [embeddingModel("text-embedding-3-large"), chatModel("gpt-oss")],
       }),
     );
-    expect(screen.getByRole("option", { name: "gpt-oss" })).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Models" }));
+    expect(await screen.findByRole("option", { name: "gpt-oss" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "text-embedding-3-large" })).toBeNull();
   });
 });
@@ -301,14 +304,19 @@ describe("ChatWindow send button aria-disabled (AC #1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AC #4 — Footer displays the real selected model id
+// Footer intentionally hides model status; model state remains managed by the session.
 // ---------------------------------------------------------------------------
 
-describe("Footer selectedModel display (AC #4)", () => {
-  it("shows the selected model id when a model is configured", () => {
+describe("Footer selectedModel visibility", () => {
+  it("does not show the selected model id when a model is configured", () => {
     render(
       <Footer
         winCount={1}
+        windows={[]}
+        windowPaletteOpen={false}
+        onToggleWindowPalette={vi.fn()}
+        onSelectWindow={vi.fn()}
+        onCloseWindowPalette={vi.fn()}
         mode="autonomous"
         selectedModel="gpt-4o"
         projectName="Keiko"
@@ -317,13 +325,19 @@ describe("Footer selectedModel display (AC #4)", () => {
         evidenceStatusLabel="No review open"
       />,
     );
-    expect(screen.getByText(/gpt-4o/i)).toBeInTheDocument();
+    expect(screen.queryByText(/gpt-4o/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /1 window/ })).toBeInTheDocument();
   });
 
-  it("shows 'No model selected' when selectedModel is undefined", () => {
+  it("does not show 'No model selected' when selectedModel is undefined", () => {
     render(
       <Footer
         winCount={1}
+        windows={[]}
+        windowPaletteOpen={false}
+        onToggleWindowPalette={vi.fn()}
+        onSelectWindow={vi.fn()}
+        onCloseWindowPalette={vi.fn()}
         mode="autonomous"
         selectedModel={undefined}
         projectName="Keiko"
@@ -332,7 +346,8 @@ describe("Footer selectedModel display (AC #4)", () => {
         evidenceStatusLabel="No review open"
       />,
     );
-    expect(screen.getByText(/No model selected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No model selected/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /1 window/ })).toBeInTheDocument();
   });
 });
 
@@ -400,21 +415,31 @@ describe("isConversationEligibleModel (AC #2 wire-level)", () => {
 // ---------------------------------------------------------------------------
 
 describe("ChatWindow mini composer (AC #2)", () => {
-  it("renders the mini composer and inherits selectedModel from the session (no own picker)", () => {
-    // The mini composer does not render its own model select; it relies on the
-    // parent session (ChatSessionProvider) for the selected model.
+  it("renders the mini composer and inherits selectedModel from the session", () => {
     renderWindow(
       makeSession({
+        activeChat: {
+          id: "chat-1",
+          projectPath: "/repo",
+          title: "Chat 1",
+          selectedModel: "inherited-model",
+          branchLabel: undefined,
+          status: undefined,
+          connectedScope: undefined,
+          localKnowledgeScope: undefined,
+          createdAt: 1,
+          updatedAt: 2,
+        },
         selectedModel: "inherited-model",
         noEligibleModels: false,
         models: [chatModel("inherited-model")],
       }),
       true, // mini=true
     );
-    // The mini composer renders a textarea but no model <select> at the top level
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
-    // The model select is not rendered in mini mode (no ComposerBar)
-    expect(screen.queryByLabelText("Model")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Models" })).toHaveTextContent(
+      "inherited-model",
+    );
   });
 
   it("renders the no-model alert in mini mode when noEligibleModels is true", () => {

@@ -1,11 +1,19 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { Server } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseUiArgs, runUiCli, waitForShutdown, type UiCliArgs, type UiCliDeps } from "./ui.js";
-import { DEFAULT_UI_PORT } from "@oscharko-dev/keiko-server";
+import {
+  createLiveCspSource,
+  parseUiArgs,
+  runUiCli,
+  waitForShutdown,
+  type UiCliArgs,
+  type UiCliDeps,
+} from "./ui.js";
+import { DEFAULT_UI_PORT, extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
 import type { UiHandlerDeps } from "@oscharko-dev/keiko-server";
 import type { CliIo } from "./runner.js";
 
@@ -39,6 +47,15 @@ function fakeServer(record: { port?: number }): Server {
       return this as unknown as Server;
     },
   } as unknown as Server;
+}
+
+function expectSingleHandlerDeps(captured: readonly UiHandlerDeps[]): UiHandlerDeps {
+  expect(captured).toHaveLength(1);
+  const handlerDeps = captured[0];
+  if (handlerDeps === undefined) {
+    throw new Error("expected captured handler deps");
+  }
+  return handlerDeps;
 }
 
 describe("parseUiArgs", () => {
@@ -173,17 +190,93 @@ describe("runUiCli", () => {
     expect(err.join("")).toContain("build:ui");
   });
 
+  it("prefers the built workspace checkout over a stale inherited global static root", async () => {
+    const { io, out } = captureIo();
+    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-checkout-"));
+    const localStaticRoot = join(cwd, "dist", "ui", "static");
+    const localCliRoot = join(cwd, "dist", "cli");
+    const captured: { staticRoot?: string } = {};
+    try {
+      await writeFile(join(cwd, "package.json"), '{"name":"@oscharko-dev/keiko"}\n', "utf8");
+      await mkdir(localStaticRoot, { recursive: true });
+      await mkdir(localCliRoot, { recursive: true });
+      await writeFile(join(localStaticRoot, "index.html"), "<html></html>", { encoding: "utf8" });
+      await writeFile(join(localCliRoot, "index.js"), "#!/usr/bin/env node\n", {
+        encoding: "utf8",
+      });
+      const code = await runUiCli(
+        [],
+        io,
+        { KEIKO_UI_STATIC_ROOT: "/opt/old-keiko/dist/ui/static" },
+        {
+          cwd,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          createServer: ({ staticRoot: resolvedStaticRoot }) => {
+            captured.staticRoot = resolvedStaticRoot;
+            return fakeServer({});
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(captured.staticRoot).toBe(localStaticRoot);
+      expect(out.join("")).toContain("http://127.0.0.1:1983");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("re-execs through the built workspace checkout instead of a stale parent bin", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-reexec-"));
+    const localStaticRoot = join(cwd, "dist", "ui", "static");
+    const localCliEntry = join(cwd, "dist", "cli", "index.js");
+    const spawned: { command: string; args: readonly string[] }[] = [];
+    try {
+      await writeFile(join(cwd, "package.json"), '{"name":"@oscharko-dev/keiko"}\n', "utf8");
+      await mkdir(localStaticRoot, { recursive: true });
+      await mkdir(join(cwd, "dist", "cli"), { recursive: true });
+      await writeFile(join(localStaticRoot, "index.html"), "<html></html>", { encoding: "utf8" });
+      await writeFile(localCliEntry, "#!/usr/bin/env node\n", { encoding: "utf8" });
+      const code = await runUiCli(
+        [],
+        io,
+        {},
+        {
+          cwd,
+          currentExecArgv: () => [],
+          sqliteProbe: () => false,
+          spawnFn: (command, args) => {
+            spawned.push({ command, args });
+            const child = new EventEmitter() as EventEmitter & { kill: () => void };
+            child.kill = (): void => undefined;
+            queueMicrotask(() => child.emit("exit", 0, null));
+            return child as never;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]?.args).toContain(localCliEntry);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("starts the server, listens on the parsed port, and prints the URL", async () => {
     const { io, out } = captureIo();
-    const record: { port?: number } = {};
+    const record: { port?: number; csp?: string } = {};
     const deps: UiCliDeps = {
       staticRoot,
       hashesFile: join(staticRoot, "csp-hashes.json"),
-      createServer: () => fakeServer(record),
+      createServer: ({ csp }) => {
+        record.csp = csp;
+        return fakeServer(record);
+      },
     };
     const code = await runUiCli(["--port", "4399"], io, {}, deps);
     expect(code).toBe(0);
     expect(record.port).toBe(4399);
+    expect(record.csp).toContain("script-src");
     expect(out.join("")).toContain("http://127.0.0.1:4399");
   });
 
@@ -269,7 +362,7 @@ describe("runUiCli", () => {
     }
   });
 
-  it("loads KEIKO_* values from local .env and ignores unrelated keys", async () => {
+  it("does not load trusted KEIKO_* runtime values from a repo-local .env", async () => {
     const { io } = captureIo();
     const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-dotenv-"));
     const configPath = join(cwd, "gateway.json");
@@ -286,6 +379,7 @@ describe("runUiCli", () => {
         `KEIKO_CONFIG_FILE=${configPath}`,
         "KEIKO_MODEL_EXAMPLE_CHAT_MODEL_BASE_URL=https://models.example.invalid/openai/v1",
         "KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY=fake-test-key",
+        "KEIKO_EVIDENCE_DIR=/tmp/keiko-attacker-evidence",
         "NPM_TOKEN=must-not-be-loaded",
         "FIGMA_ACCESS_TOKEN=figd_test_allowlisted",
       ].join("\n"),
@@ -304,15 +398,48 @@ describe("runUiCli", () => {
     try {
       const code = await runUiCli([], io, {}, deps);
       expect(code).toBe(0);
-      expect(captured[0]?.configPresent).toBe(true);
-      expect(captured[0]?.config?.providers[0]?.modelId).toBe("example-chat-model");
-      expect(captured[0]?.env.NPM_TOKEN).toBeUndefined();
-      // FIGMA_ACCESS_TOKEN is the one allowlisted non-KEIKO name (#751 connector contract).
-      expect(captured[0]?.env.FIGMA_ACCESS_TOKEN).toBe("figd_test_allowlisted");
-      captured[0]?.store.close();
-      captured[0]?.memoryVault?.close();
+      const handlerDeps = expectSingleHandlerDeps(captured);
+      expect(handlerDeps.configPresent).toBe(false);
+      expect(handlerDeps.config).toBeUndefined();
+      expect(handlerDeps.env.KEIKO_CONFIG_FILE).toBeUndefined();
+      expect(handlerDeps.env.KEIKO_MODEL_EXAMPLE_CHAT_MODEL_BASE_URL).toBeUndefined();
+      expect(handlerDeps.env.KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY).toBeUndefined();
+      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBeUndefined();
+      expect(handlerDeps.env.NPM_TOKEN).toBeUndefined();
+      // FIGMA_ACCESS_TOKEN remains the only repo-local .env exception (#751 connector contract).
+      expect(handlerDeps.env.FIGMA_ACCESS_TOKEN).toBe("figd_test_allowlisted");
+      handlerDeps.store.close();
+      handlerDeps.memoryVault?.close();
     } finally {
       await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("createLiveCspSource", () => {
+  it("reloads the CSP when csp-hashes.json changes after startup", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "keiko-ui-csp-live-"));
+    const staticRoot = join(dir, "static");
+    const hashesFile = join(dir, "csp-hashes.json");
+    const { io } = captureIo();
+    try {
+      await mkdir(staticRoot, { recursive: true });
+      const html = "<html><body><script>window.__TEST__='new';</script></body></html>";
+      await writeFile(join(staticRoot, "index.html"), html, "utf8");
+      const [expectedHash] = extractInlineScriptHashes([html]);
+      await writeFile(hashesFile, JSON.stringify(["'sha256-old'"]), "utf8");
+      const runtime = await createLiveCspSource(staticRoot, hashesFile, io);
+      expect(expectedHash).toBeDefined();
+      if (expectedHash === undefined) throw new Error("expected inline script hash");
+      expect(runtime.csp()).toContain(expectedHash);
+      expect(runtime.csp()).not.toContain("'sha256-old'");
+      await writeFile(hashesFile, JSON.stringify(["'sha256-new'"]), "utf8");
+      await sleep(700);
+      expect(runtime.csp()).toContain(expectedHash);
+      expect(runtime.csp()).not.toContain("'sha256-new'");
+      runtime.dispose();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });
@@ -331,7 +458,11 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
 
   it("re-execs and propagates the child exit code when sqlite is unavailable", async () => {
     const { io } = captureIo();
-    const spawnCalls: { command: string; args: readonly string[] }[] = [];
+    const spawnCalls: {
+      command: string;
+      args: readonly string[];
+      opts: import("node:child_process").SpawnOptions;
+    }[] = [];
     const code = await runUiCli(
       [],
       io,
@@ -339,8 +470,8 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
       {
         currentExecArgv: () => [],
         sqliteProbe: () => false,
-        spawnFn: (cmd: string, args: readonly string[]) => {
-          spawnCalls.push({ command: cmd, args });
+        spawnFn: (cmd: string, args: readonly string[], opts) => {
+          spawnCalls.push({ command: cmd, args, opts });
           return fakeChild(7) as unknown as import("node:child_process").ChildProcess;
         },
       },
@@ -348,6 +479,7 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
     expect(code).toBe(7);
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]?.args[0]).toBe("--experimental-sqlite");
+    expect(spawnCalls[0]?.opts.argv0).toBe("Keiko");
   });
 
   it("does not re-exec when sqlite is already importable", async () => {

@@ -56,6 +56,8 @@ describe("createFigmaConnector — scoped fetch", () => {
     expect(url).toContain("ids=12%3A34");
     expect(url).toMatch(/[?&]depth=\d+/);
     expect(url).not.toMatch(/\/v1\/files\/KEY123(\?|$)/);
+    // No version pinned ⇒ the version param must be ABSENT (guards buildScopedUrl's undefined check).
+    expect(url).not.toContain("version=");
   });
 
   it("pins the version query param when supplied", async () => {
@@ -332,6 +334,16 @@ describe("createFigmaConnector — coded errors", () => {
 });
 
 describe("createFigmaConnector — depth cap", () => {
+  it("uses a shallow bounded discovery depth by default", async () => {
+    const recorder = recordingPort(okResponse());
+    const connector = createFigmaConnector({
+      http: recorder.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+    await connector.fetchScopedNodes(URL_OK);
+    expect(firstRequest(recorder).url).toContain("depth=2");
+  });
+
   it("uses a configurable depth and never an unbounded fetch", async () => {
     const recorder = recordingPort(okResponse());
     const connector = createFigmaConnector({
@@ -486,6 +498,72 @@ describe("createFigmaConnector — deep scoped pagination (#837)", () => {
     expect(countText(deep.nodes)).toBe(1);
     expect(deep.coverage?.screensDeepFetched).toBe(1);
   });
+
+  it("soft-skips a per-screen rate-limit exhaustion, keeping shallow content and coverage", async () => {
+    const port = treePort(fullTree(["s1", "s2"]), new Map([["s1", 429]]));
+    const connector = createFigmaConnector({
+      http: port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: deepConfig,
+      retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+      sleep: () => Promise.resolve(),
+    });
+
+    const deep = await connector.fetchScopedNodesDeep(URL_OK);
+
+    expect(countText(deep.nodes)).toBe(1);
+    expect(deep.coverage?.screensDeepFetched).toBe(1);
+    expect(deep.coverage?.screensTruncated).toBe(1);
+  });
+
+  it("does not spend the global retry budget on a fail-soft per-screen 429", async () => {
+    const requests: string[] = [];
+    const base = treePort(fullTree(["s1", "s2"]), new Map([["s1", 429]]));
+    const connector = createFigmaConnector({
+      http: (req) => {
+        const url = new URL(req.url);
+        requests.push(url.searchParams.get("ids") ?? "");
+        return base(req);
+      },
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: deepConfig,
+      retryPolicy: { maxRetries: 3, baseDelayMs: 100, maxDelayMs: 100 },
+      sleep: () => Promise.resolve(),
+    });
+
+    const deep = await connector.fetchScopedNodesDeep(URL_OK);
+
+    expect(requests.filter((id) => id === "s1")).toHaveLength(1);
+    expect(countText(deep.nodes)).toBe(1);
+    expect(deep.coverage).toMatchObject({
+      screenCount: 2,
+      screensDeepFetched: 1,
+      screensTruncated: 1,
+    });
+  });
+
+  // A hard forward-proxy failure (#802) surfaces from the transport boundary as a FigmaConnectorError
+  // (figmaHttpPort maps an OutboundHttpEgressError → the coded proxy error). On a per-screen deep
+  // fetch it MUST abort the build (symmetric with RENDER_EGRESS_ABORT_CODES), never soft-skip the
+  // screen to shallow content while hiding a misconfigured proxy.
+  it.each(["FIGMA_PROXY_AUTH_REQUIRED", "FIGMA_PROXY_BLOCKED_BY_POLICY"] as const)(
+    "aborts the deep build when a per-screen fetch hits a hard proxy failure (%s), never a silent shallow degrade",
+    async (code) => {
+      const base = treePort(fullTree(["s1", "s2"]));
+      const port: FigmaHttpPort = (req) => {
+        const id = new URL(req.url).searchParams.get("ids") ?? "";
+        // Discovery (12:34) succeeds; the s1 deep fetch throws the hard proxy error.
+        if (id === "s1") return Promise.reject(new FigmaConnectorError(code));
+        return base(req);
+      };
+      const connector = createFigmaConnector({
+        http: port,
+        env: { FIGMA_ACCESS_TOKEN: TOKEN },
+        config: deepConfig,
+      });
+      await expect(connector.fetchScopedNodesDeep(URL_OK)).rejects.toMatchObject({ code });
+    },
+  );
 });
 
 describe("createFigmaConnector — resilience (#759)", () => {

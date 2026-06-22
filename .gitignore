@@ -116,6 +116,8 @@ Temporary Items
 node_modules/
 dist/
 coverage/
+test-results/
+playwright-report/
 *.log
 .env
 .env.*
@@ -143,6 +145,11 @@ keiko-live-start.png
 # Audit evidence manifests (ADR-0010 D4). `keiko run` writes redacted evidence to the
 # workspace-relative default base dir by default; never commit it.
 .keiko/
+
+# E2E QI pipeline scratch harness: live-BFF driver scripts, isolated run config + state, and
+# generated per-board artifacts. Session-local instrumentation that sources real credentials from
+# the parent .env; never commit.
+/.keiko-e2e/
 
 # Wave 1 UI build artifacts (ADR-0011 D3; relocated to packages/keiko-ui by issue #167). Only
 # the package's source + package.json are committed. Build outputs, the Next typegen file, and

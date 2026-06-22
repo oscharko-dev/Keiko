@@ -12,8 +12,8 @@ PORT="${KEIKO_UI_PORT:-1983}"
 HOST="${KEIKO_UI_HOST:-127.0.0.1}"
 ENTRY="$ROOT/dist/cli/index.js"
 STATIC_DIR="$ROOT/dist/ui/static"
-# The server loads the precomputed CSP hashes at startup (src/cli/ui.ts -> loadCspHeader);
-# a build that produced the static export but not this file would start then fail.
+# The server resolves CSP hashes from this file at request time (src/cli/ui.ts ->
+# createLiveCspHeaderProvider), so a rebuilt UI can recover without a lucky restart order.
 CSP_HASHES="$ROOT/dist/ui/csp-hashes.json"
 # Runtime state (pid + log). Defaults to the gitignored .keiko/ under the repo;
 # overridable (mainly for tests) so a run never clobbers another instance's state.
@@ -91,8 +91,8 @@ cmd_start() {
   fi
 
   # The built assets must all be present: `npm run build` compiles the CLI/BFF and
-  # `npm run build:ui` produces the static export AND the CSP hashes the server loads
-  # at startup. Missing any one of them is a build problem, not a runtime one.
+  # `npm run build:ui` produces the static export AND the CSP hashes the server resolves
+  # at request time. Missing any one of them is a build problem, not a runtime one.
   if [ ! -f "$ENTRY" ] || [ ! -d "$STATIC_DIR" ] || [ ! -f "$CSP_HASHES" ]; then
     echo "Keiko UI: build assets missing." >&2
     echo "Run: npm run build && npm run build:ui" >&2

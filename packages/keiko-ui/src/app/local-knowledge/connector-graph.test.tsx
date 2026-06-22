@@ -5,6 +5,7 @@
 import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorGraph } from "./connector-graph";
 import {
@@ -20,6 +21,19 @@ import type {
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
 
 const pushMock = vi.fn();
+
+type MockLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
+  readonly href: string;
+  readonly children: ReactNode;
+};
+
+vi.mock("next/link", () => ({
+  default: ({ href, children, ...props }: MockLinkProps) => (
+    <a href={href} onClick={(event) => event.preventDefault()} {...props}>
+      {children}
+    </a>
+  ),
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
@@ -89,23 +103,17 @@ describe("ConnectorGraph — empty state", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders pipeline node labels in source-to-consumer order", async () => {
+  it("does not render the former pipeline visualization", async () => {
     render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
 
     await waitFor(() => {
       expect(screen.getByTestId("empty-state")).toBeInTheDocument();
     });
 
-    const nodeList = screen.getByRole("list", { name: /pipeline nodes/i });
-    const items = nodeList.querySelectorAll('[role="listitem"]');
-    expect(items).toHaveLength(4);
-
-    // Labels appear in order: Files Window, Local Knowledge, Capsules, Conversation Center
-    const labels = Array.from(items).map((el) => el.textContent ?? "");
-    expect(labels[0]).toContain("Files Window");
-    expect(labels[1]).toContain("Local Knowledge");
-    expect(labels[2]).toContain("Capsules");
-    expect(labels[3]).toContain("Conversation Center");
+    expect(screen.queryByRole("list", { name: /pipeline nodes/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/connector pipeline diagram/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Files Window")).not.toBeInTheDocument();
+    expect(screen.queryByText("Conversation Center")).not.toBeInTheDocument();
   });
 
   it("opens an in-app create dialog instead of using window.prompt", async () => {
@@ -150,7 +158,7 @@ describe("ConnectorGraph — with capsules", () => {
     expect(screen.queryByTestId("empty-state")).toBeNull();
   });
 
-  it("renders capsules list region with capsule count in pipeline node sublabel", async () => {
+  it("renders capsules list region with capsule count in the status summary", async () => {
     const capsules = [
       makeCapsule({ id: makeCapsuleId("1"), displayName: "A" }),
       makeCapsule({ id: makeCapsuleId("2"), displayName: "B" }),
@@ -161,9 +169,8 @@ describe("ConnectorGraph — with capsules", () => {
       expect(screen.getByText("A")).toBeInTheDocument();
     });
 
-    // The pipeline Capsules node sublabel should reflect the count
-    const nodeList = screen.getByRole("list", { name: /pipeline nodes/i });
-    expect(nodeList.textContent).toContain("2 capsules");
+    expect(screen.getByRole("region", { name: /knowledge capsules/i })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("2 capsules");
   });
 
   it("exports a capsule drag payload for dropping onto the workspace", async () => {
@@ -227,6 +234,34 @@ describe("ConnectorGraph — with capsules", () => {
     workspace.remove();
   });
 
+  it("does not start capsule drag-out from right click or macOS control click", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("drag-blocked"), displayName: "Blocked KC" });
+    const workspace = document.createElement("main");
+    workspace.className = "workspace";
+    document.body.appendChild(workspace);
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn(() => workspace);
+    const dropListener = vi.fn();
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const row = await screen.findByRole("button", {
+      name: "Drag capsule Blocked KC to workspace",
+    });
+    fireEvent.pointerDown(row, { button: 2, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 44 });
+    fireEvent.pointerUp(window, { clientX: 120, clientY: 140 });
+    fireEvent.pointerDown(row, { button: 0, ctrlKey: true, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 40, clientY: 44 });
+    fireEvent.pointerUp(window, { clientX: 120, clientY: 140 });
+
+    expect(dropListener).not.toHaveBeenCalled();
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    document.elementFromPoint = originalElementFromPoint;
+    workspace.remove();
+  });
+
   it("dispatches the same connector drop event from native dragend on the workspace", async () => {
     const capsule = makeCapsule({ id: makeCapsuleId("native"), displayName: "First KC" });
     const workspace = document.createElement("main");
@@ -260,6 +295,83 @@ describe("ConnectorGraph — with capsules", () => {
     window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
     document.elementFromPoint = originalElementFromPoint;
     workspace.remove();
+  });
+});
+
+describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
+  it("dispatches the connector drop event when 'Add to workspace' is clicked (keyboard path)", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("kbdrop"), displayName: "KB Capsule" });
+
+    // Set up a fake workspace element so getWorkspaceCenter() finds it
+    const workspace = document.createElement("main");
+    workspace.className = "workspace";
+    // jsdom getBoundingClientRect returns zeros by default; override to a
+    // non-zero rect so the button is accepted by the Workspace bounds check.
+    workspace.getBoundingClientRect = () =>
+      ({
+        left: 100,
+        right: 900,
+        top: 50,
+        bottom: 750,
+        width: 800,
+        height: 700,
+        x: 100,
+        y: 50,
+        toJSON: () => undefined,
+      }) as DOMRect;
+    document.body.appendChild(workspace);
+
+    const dropListener = vi.fn();
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+
+    const user = userEvent.setup();
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("KB Capsule")).toBeInTheDocument();
+    });
+
+    const addBtn = screen.getByRole("button", { name: /add capsule KB Capsule to workspace/i });
+    await user.click(addBtn);
+
+    expect(dropListener).toHaveBeenCalledTimes(1);
+    const event = dropListener.mock.calls[0]?.[0] as CustomEvent<LocalKnowledgeConnectorDropDetail>;
+    expect(event.detail.payload).toEqual({
+      kind: "capsule",
+      id: "cap-kbdrop",
+      label: "KB Capsule",
+      lifecycleState: "ready",
+    });
+    // Coordinates should be the workspace center (500, 400)
+    expect(event.detail.clientX).toBe(500);
+    expect(event.detail.clientY).toBe(400);
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    workspace.remove();
+  });
+
+  it("does not dispatch the drop event when no workspace element is present", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("nowspc"), displayName: "No WS Capsule" });
+
+    const dropListener = vi.fn();
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+
+    const user = userEvent.setup();
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No WS Capsule")).toBeInTheDocument();
+    });
+
+    // No main.workspace in the DOM — click should silently no-op
+    const addBtn = screen.getByRole("button", {
+      name: /add capsule No WS Capsule to workspace/i,
+    });
+    await user.click(addBtn);
+
+    expect(dropListener).not.toHaveBeenCalled();
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
   });
 });
 
@@ -480,7 +592,9 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     const onOpenCapsule = vi.fn();
     const user = userEvent.setup();
 
-    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} onOpenCapsule={onOpenCapsule} />);
+    render(
+      <ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} onOpenCapsule={onOpenCapsule} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Health Cap")).toBeInTheDocument();

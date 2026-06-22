@@ -218,6 +218,7 @@ function insertSeedRows(store: KnowledgeStore, options: ResolvedSeedOptions): vo
   });
   insertParsedUnitRow(
     store._internal.db,
+    store._internal.contentCipher,
     options.capsuleId,
     `unit-${String(options.capsuleId)}`,
     options.unit,

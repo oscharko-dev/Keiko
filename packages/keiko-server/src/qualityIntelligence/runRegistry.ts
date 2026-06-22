@@ -67,6 +67,8 @@ export class QiRunRegistry {
       requestedAt: run.requestedAt,
       completedAt: null,
       totals: { ...run.totals },
+      // An in-flight run is not yet persisted and cannot have been reviewed (Issue #282 FIX A11y-2).
+      reviewState: "open" as const,
     }));
   }
 

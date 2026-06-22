@@ -376,9 +376,9 @@ describe("composeCapsules", () => {
       },
     });
 
-    expect(() =>
-      composeCapsules(store, { displayName: "Atomic", capsuleIds: [aId, bId] }),
-    ).toThrow("simulated audit failure");
+    expect(() => composeCapsules(store, { displayName: "Atomic", capsuleIds: [aId, bId] })).toThrow(
+      "simulated audit failure",
+    );
 
     // Restore prepare so subsequent queries work.
     Object.defineProperty(db, "prepare", { configurable: true, value: originalPrepare });

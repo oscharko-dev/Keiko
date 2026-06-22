@@ -6,11 +6,10 @@
 
 import {
   listCapabilities,
-  loadConfigFromFile,
   type EnvSource,
   GatewayError,
 } from "@oscharko-dev/keiko-model-gateway";
-import { resolveConfigPathFromArgs } from "./gateway-config.js";
+import { loadGatewayConfigFromFile, resolveConfigPathFromArgs } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
@@ -47,7 +46,7 @@ function validateConfig(args: readonly string[], io: CliIo, env: EnvSource): num
     return 1;
   }
   try {
-    const config = loadConfigFromFile(resolution.path, env);
+    const config = loadGatewayConfigFromFile(resolution.path, env);
     io.out(
       `Gateway config valid. ${String(config.providers.length)} model providers configured.\n`,
     );

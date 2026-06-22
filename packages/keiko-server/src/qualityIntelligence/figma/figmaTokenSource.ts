@@ -54,9 +54,10 @@ function codeForStatus(status: number, reason: string): FigmaConnectorErrorCode 
   if (status === 401) return "FIGMA_TOKEN_INVALID";
   if (status === 403) return classifyForbidden(reason);
   if (status === 404) return "FIGMA_NOT_FOUND";
-  // Forward-proxy egress failures (#802): 407 proxy-auth, 502/504 gateway. A plain 503 is the
-  // upstream Figma service being unavailable, not a proxy fault — it stays UPSTREAM below.
-  if (status === 407 || status === 502 || status === 504) return "FIGMA_PROXY_EGRESS_FAILED";
+  // Forward-proxy auth is visible as 407. Other proxy failures arrive as OutboundHttpEgressError
+  // before this status classifier runs; raw upstream 502/504 responses must not be blamed on proxy
+  // egress because that sends operators to the wrong remediation path.
+  if (status === 407) return "FIGMA_PROXY_EGRESS_FAILED";
   if (status >= 500) return "FIGMA_UPSTREAM_UNAVAILABLE";
   return "FIGMA_INTERNAL";
 }

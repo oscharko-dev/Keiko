@@ -114,6 +114,7 @@ function seedDocument(
   for (const parsedUnit of doc.parsedUnits) {
     insertParsedUnitRow(
       store._internal.db,
+      store._internal.contentCipher,
       capsule.id,
       chunkParsedUnitId(String(doc.id), parsedUnit.id),
       composeParsedUnit(String(doc.id), parsedUnit),

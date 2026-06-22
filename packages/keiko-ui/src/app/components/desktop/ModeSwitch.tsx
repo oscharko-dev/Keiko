@@ -23,6 +23,11 @@ export function ModeSwitch({ mode, onChange }: ModeSwitchProps): ReactNode {
           M
         </span>{" "}
         You
+        {mode === "manual" && (
+          <span className="modesw-active-cue" aria-hidden="true">
+            ✓
+          </span>
+        )}
       </button>
       <button
         type="button"
@@ -34,6 +39,11 @@ export function ModeSwitch({ mode, onChange }: ModeSwitchProps): ReactNode {
       >
         {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG via .modesw-orca; next/image overlays a wrapper that breaks the segmented control. */}
         <img className="modesw-orca" src="/assets/keiko-logo.svg" alt="" /> Keiko
+        {mode === "autonomous" && (
+          <span className="modesw-active-cue" aria-hidden="true">
+            ✓
+          </span>
+        )}
       </button>
     </div>
   );

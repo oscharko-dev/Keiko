@@ -10,17 +10,19 @@ describe("isMemorySuppressed", () => {
     expect(isMemorySuppressed(m, 1_000, 0.3)).toEqual({ suppressed: false });
   });
 
-  it.each(
-    [["archived"], ["forgotten"], ["conflicted"], ["rejected"], ["expired"], ["proposed"]] as const,
-  )(
-    "suppresses status=%s",
-    (status) => {
-      const m = buildRecord({ status });
-      const result = isMemorySuppressed(m, 1_000, 0.3);
-      expect(result.suppressed).toBe(true);
-      expect(result.reason).toBe(status);
-    },
-  );
+  it.each([
+    ["archived"],
+    ["forgotten"],
+    ["conflicted"],
+    ["rejected"],
+    ["expired"],
+    ["proposed"],
+  ] as const)("suppresses status=%s", (status) => {
+    const m = buildRecord({ status });
+    const result = isMemorySuppressed(m, 1_000, 0.3);
+    expect(result.suppressed).toBe(true);
+    expect(result.reason).toBe(status);
+  });
 
   it("does not suppress superseded by status alone", () => {
     expect(isMemorySuppressed(buildRecord({ status: "superseded" }), 1_000, 0.3).suppressed).toBe(

@@ -109,6 +109,25 @@ describe("rankCandidates", () => {
     expect(result.diagnostics.omittedCounts["near-duplicate"]).toBe(3);
   });
 
+  it("does not auto-collapse workspace package manifests as near-duplicates", () => {
+    const result = rankCandidates(
+      {
+        atoms: [
+          atom("package.json", 1),
+          atom("packages/keiko-ui/package.json", 1),
+          atom("packages/keiko-server/package.json", 1),
+          atom("packages/keiko-workflows/package.json", 1),
+        ],
+        anchors: [anchor("package.json", "identifier")],
+      },
+      BASE_OPTIONS,
+    );
+    expect(result.diagnostics.omittedCounts["near-duplicate"]).toBe(0);
+    expect(result.kept.map((candidate) => candidate.scopePath)).toContain(
+      "packages/keiko-ui/package.json",
+    );
+  });
+
   it("does not infer near-duplicates for a two-file same-name pair", () => {
     const result = rankCandidates(
       {

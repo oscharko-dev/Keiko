@@ -90,6 +90,11 @@ function primeFetches(models: readonly ModelCapability[]): void {
 
 afterEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
+  document.documentElement.style.removeProperty("--workspace-bg-brightness");
+  document.documentElement.style.removeProperty("--workspace-grid-strength");
+  document.documentElement.style.removeProperty("--frame-border-strength");
+  document.documentElement.style.removeProperty("--frame-inner-glow-strength");
 });
 
 describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () => {
@@ -105,9 +110,12 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     primeFetches([embeddingCapability("test-embed-1")]);
     render(<SettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByTestId("conv-elig-no")).toHaveTextContent(/embedding model/i);
+      expect(screen.getByTestId("embedding-elig-ok")).toHaveTextContent(/embedding-ready/i);
     });
-    expect(screen.getByTestId("conv-elig-no")).toHaveTextContent(/not selectable/i);
+    expect(screen.getByTestId("embedding-elig-ok")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/available for embeddings/i),
+    );
   });
 
   it("renders the OCR/vision-only reason for an ocr-vision capability", async () => {
@@ -118,15 +126,16 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     });
   });
 
-  it("marks intentionally ineligible models with an ineligible status tone", async () => {
+  it("marks embedding models as available without making them conversation-eligible", async () => {
     primeFetches([embeddingCapability("test-embed-1")]);
     const { container } = render(<SettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByTestId("conv-elig-no")).toBeInTheDocument();
+      expect(screen.getByTestId("embedding-elig-ok")).toBeInTheDocument();
     });
-    const status = container.querySelector('.ml-status[title="not selectable for conversation"]');
+    const status = container.querySelector('.ml-status[title="available for embeddings"]');
     expect(status).not.toBeNull();
-    expect(status?.className).toContain("ineligible");
+    expect(status?.className).toContain("connected");
+    expect(container.textContent ?? "").toContain("0 chat");
   });
 });
 
@@ -225,11 +234,89 @@ describe("SettingsPanel tabs (uiux-fix C070/C147)", () => {
     expect(modelsTab).toHaveAttribute("aria-pressed", "true");
     const generalTab = screen.getByRole("button", { name: "General" });
     expect(generalTab).toHaveAttribute("aria-pressed", "false");
-    fireEvent.click(generalTab);
+    fireEvent.pointerDown(generalTab);
     expect(generalTab).toHaveAttribute("aria-pressed", "true");
     expect(modelsTab).toHaveAttribute("aria-pressed", "false");
     await waitFor(() => {
       expect(fetchModelsMock).toHaveBeenCalled();
     });
+  });
+});
+
+describe("SettingsPanel workspace wallpaper controls", () => {
+  it("defaults the liquid wallpaper off and enables opacity only after opt-in", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    const generalTab = screen.getByRole("button", { name: "General" });
+    fireEvent.click(generalTab);
+
+    const switchControl = screen.getByRole("switch", { name: "Liquid wallpaper" });
+    expect(switchControl).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("slider", { name: "Wallpaper opacity" })).toBeDisabled();
+
+    fireEvent.click(switchControl);
+
+    expect(switchControl).toHaveAttribute("aria-checked", "true");
+    expect(window.localStorage.getItem("keiko.wallpaper.enabled")).toBe("true");
+    expect(screen.getByRole("slider", { name: "Wallpaper opacity" })).toBeEnabled();
+  });
+
+  it("persists workspace background brightness and applies the CSS variable", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Workspace background brightness" }), {
+      target: { value: "38" },
+    });
+
+    expect(window.localStorage.getItem("keiko.workspace.background.brightness")).toBe("38");
+    expect(document.documentElement.style.getPropertyValue("--workspace-bg-brightness")).toBe(
+      "38%",
+    );
+  });
+
+  it("persists workspace grid strength and applies the CSS variable", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Workspace grid strength" }), {
+      target: { value: "64" },
+    });
+
+    expect(window.localStorage.getItem("keiko.workspace.grid.strength")).toBe("64");
+    expect(document.documentElement.style.getPropertyValue("--workspace-grid-strength")).toBe(
+      "64%",
+    );
+  });
+
+  it("persists workspace border strength and applies the CSS variable", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Workspace border strength" }), {
+      target: { value: "57" },
+    });
+
+    expect(window.localStorage.getItem("keiko.frame.border.strength")).toBe("57");
+    expect(document.documentElement.style.getPropertyValue("--frame-border-strength")).toBe("57%");
+  });
+
+  it("persists workspace inner glow and applies the CSS variable", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Workspace inner glow" }), {
+      target: { value: "34" },
+    });
+
+    expect(window.localStorage.getItem("keiko.frame.inner.glow.strength")).toBe("34");
+    expect(document.documentElement.style.getPropertyValue("--frame-inner-glow-strength")).toBe(
+      "34%",
+    );
   });
 });

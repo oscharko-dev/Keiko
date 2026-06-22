@@ -7,35 +7,24 @@
 // returned text to the user message via prompt.ts which already redacts + byte-caps every
 // free-text field through safePromptText.
 //
-// Scope strategy: bug-investigation is a workflow-class operation, so we synthesize a
-// WorkflowDefinitionId-keyed scope using the workflow's stable id literal. A future
-// per-workspace scope can be added by routing a real WorkspaceId through deps; today the
-// workflow-definition scope is the minimal coordinate sufficient for the audit ledger to
-// pin memory IDs to a run without leaking cross-scope (epic §Architecture Invariant 1).
+// Scope strategy: bug-investigation runs inside one repository, so workflow memory is
+// bounded to the current project path. This prevents lessons from one regulated repository
+// from being recalled in another while still letting the memory proposal provenance carry
+// `workflow-outcome` / `sourceWorkflowRunId` through the capture pipeline.
 
 import type {
   MemoryScope,
   MemoryWorkflowContext,
   MemoryWorkflowPort,
-  MemoryWorkflowDefinitionId,
   MemoryWriteCandidateEvent,
 } from "@oscharko-dev/keiko-contracts";
+import type { ProjectId } from "@oscharko-dev/keiko-contracts/memory";
 import type {
   BugInvestigationReport,
   BugReportInput,
   BugWorkflowStatus,
   Hypothesis,
 } from "./types.js";
-
-// The branded WorkflowDefinitionId for this workflow. The brand is a phantom symbol so a
-// single bounded cast at this module's boundary preserves nominal typing for every
-// downstream consumer.
-const BUG_INVESTIGATION_DEFINITION_ID = "bug-investigation" as MemoryWorkflowDefinitionId;
-
-const BUG_INVESTIGATION_SCOPE: MemoryScope = {
-  kind: "workflow",
-  workflowDefinitionId: BUG_INVESTIGATION_DEFINITION_ID,
-} as const;
 
 // Default token budget passed to the port. The port may ignore it; the workflow does not
 // enforce it (the prompt boundary clamp in safePromptText is the authoritative byte cap).
@@ -56,6 +45,13 @@ function memoryQueryText(report: BugReportInput): string {
   return desc !== undefined && desc.length > 0 ? desc : "bug investigation";
 }
 
+function bugInvestigationMemoryScope(workspaceRoot: string): MemoryScope {
+  return {
+    kind: "project",
+    projectId: workspaceRoot as ProjectId,
+  };
+}
+
 // Fetches the assembled memory context. Returns undefined when no port was injected OR when
 // the port returned an empty block — both cases are treated identically by the prompt
 // builder so retrieval failures degrade gracefully (text === "" is indistinguishable from
@@ -63,13 +59,15 @@ function memoryQueryText(report: BugReportInput): string {
 export async function acquireMemoryContext(
   port: MemoryWorkflowPort | undefined,
   report: BugReportInput,
+  workspaceRoot: string,
 ): Promise<MemoryWorkflowContext | undefined> {
   if (port === undefined) {
     return undefined;
   }
+  const scope = bugInvestigationMemoryScope(workspaceRoot);
   try {
     const context = await port.getContextForWorkflow(
-      [BUG_INVESTIGATION_SCOPE],
+      [scope],
       memoryQueryText(report),
       DEFAULT_MEMORY_TOKEN_BUDGET,
     );
@@ -78,7 +76,7 @@ export async function acquireMemoryContext(
     }
     port.onMemoryUsed?.({
       memoryIds: context.includedMemoryIds,
-      scopes: [BUG_INVESTIGATION_SCOPE],
+      scopes: [scope],
       reason: "bug-investigation:pre-prompt",
     });
     return context;
@@ -103,6 +101,7 @@ function buildProposalSummary(status: BugWorkflowStatus, hypothesis: Hypothesis)
 export function emitMemoryWriteCandidate(
   port: MemoryWorkflowPort | undefined,
   report: BugInvestigationReport,
+  workspaceRoot: string,
 ): void {
   if (port?.onMemoryWriteCandidate === undefined) {
     return;
@@ -112,7 +111,7 @@ export function emitMemoryWriteCandidate(
   }
   const event: MemoryWriteCandidateEvent = {
     proposalSummary: buildProposalSummary(report.status, report.hypothesis),
-    scope: BUG_INVESTIGATION_SCOPE,
+    scope: bugInvestigationMemoryScope(workspaceRoot),
     source: "workflow-success",
   };
   try {

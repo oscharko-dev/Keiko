@@ -24,6 +24,8 @@ export {
   citationRequirementForUnit,
   scoreCitationQuality,
   scoreContextBudgetFit,
+  scoreMeanReciprocalRank,
+  scoreNdcg,
   scoreNoEvidenceAccuracy,
   scorePrecision,
   scoreRecall,

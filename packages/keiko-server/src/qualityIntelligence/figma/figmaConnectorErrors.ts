@@ -13,6 +13,7 @@
 //   scope         → FIGMA_INSUFFICIENT_SCOPE
 //   rate-limit    → FIGMA_RATE_LIMITED
 //   not-found     → FIGMA_NOT_FOUND
+//   readiness     → FIGMA_NOT_READY
 //   oversized     → FIGMA_OVERSIZED_SCOPE | FIGMA_RESPONSE_TOO_LARGE
 //   render-failed → FIGMA_RENDER_FAILED
 //   proxy egress  → FIGMA_PROXY_UNREACHABLE (proxy host unreachable)
@@ -40,6 +41,7 @@ export type FigmaConnectorErrorCode =
   | "FIGMA_TOKEN_EXPIRED"
   | "FIGMA_TOKEN_REVOKED"
   | "FIGMA_NOT_FOUND"
+  | "FIGMA_NOT_READY"
   | "FIGMA_INSUFFICIENT_SCOPE"
   | "FIGMA_RENDER_FAILED"
   | "FIGMA_PROXY_EGRESS_FAILED"
@@ -71,6 +73,8 @@ const SAFE_MESSAGES: Readonly<Record<FigmaConnectorErrorCode, string>> = {
   FIGMA_TOKEN_REVOKED:
     "The Figma access token has been revoked. Re-key the connector with a new read-only token.",
   FIGMA_NOT_FOUND: "The requested Figma node could not be found for the supplied link.",
+  FIGMA_NOT_READY:
+    "The requested Figma scope is not release-ready. Pin a Figma version, select a Release section, or mark the frame Ready for dev before snapshotting.",
   FIGMA_INSUFFICIENT_SCOPE:
     "The configured Figma access token is not permitted to read the requested node. Re-key the connector with a read-only token that can read this file.",
   FIGMA_RENDER_FAILED:
@@ -90,7 +94,7 @@ const SAFE_MESSAGES: Readonly<Record<FigmaConnectorErrorCode, string>> = {
   FIGMA_RESPONSE_TOO_LARGE:
     "The Figma API response exceeded the maximum allowed size. Connect a narrower section to reduce the response.",
   FIGMA_RATE_LIMITED:
-    "Figma rate-limited the snapshot-build after repeated retries. Wait a moment and re-run the snapshot.",
+    "Figma rate-limited the snapshot-build after repeated retries. Re-run with a narrower Release section or lower the Figma fetch limits.",
   FIGMA_UPSTREAM_UNAVAILABLE:
     "The Figma service is currently unavailable. Try the scoped fetch again later.",
   FIGMA_NETWORK_UNREACHABLE:

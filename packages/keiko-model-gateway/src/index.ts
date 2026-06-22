@@ -24,12 +24,17 @@ export type {
   GatewayConfig,
   GatewayRequest,
   GatewayStreamChunk,
+  InfillingAlignment,
   LatencyClass,
   ModelCapability,
+  CompletionInteractionMode,
+  CompletionDegradeReason,
+  CompletionModelSelection,
   ModelKind,
   ModelProviderConfig,
   NormalizedResponse,
   NormalizedToolCall,
+  OutboundHttpEgressConfig,
   ProviderAdapter,
   ResponseFormat,
   StreamDelta,
@@ -43,11 +48,17 @@ export {
   createDefaultChatCapability,
   explainConversationIneligibility,
   findCapability,
+  INFILLING_ALIGNMENTS,
+  isAlignedInfillingModel,
+  isAsYouTypeCompletionModel,
   isConversationEligibleModel,
   listCapabilities,
+  modelSupportsInfilling,
   resolveCostClass,
   selectCheapest,
+  selectCompletionModelFromCapabilities,
   type CapabilityQuery,
+  type CompletionSelectionOptions,
   type ConversationIneligibilityReason,
 } from "./capabilities.js";
 
@@ -57,8 +68,10 @@ export {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
   loadConfigFromFile,
+  loadEgressConfigFromFile,
   normalizeApiKeyHeaderName,
   parseGatewayConfig,
+  resolveOutboundHttpEgressConfig,
   toSafeObject,
   validateBaseUrl,
   type EnvSource,
@@ -72,7 +85,10 @@ export {
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
+  selectCompletionModel,
   selectConfiguredModel,
+  type ConfiguredCapabilityProvider,
+  type ConfiguredCapabilitySource,
   type ModelSelectionQuery,
 } from "./model-selection.js";
 
@@ -88,6 +104,9 @@ export {
 
 export {
   requestOpenAIEmbedding,
+  requestOpenAIEmbeddingBatch,
+  type OpenAIEmbeddingBatchOutcome,
+  type OpenAIEmbeddingBatchRequest,
   type OpenAIEmbeddingErrorKind,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
@@ -103,6 +122,7 @@ export {
   ConfigInvalidError,
   ContextOverflowError,
   ERROR_CODES,
+  GatewayEgressError,
   GatewayError,
   MalformedToolCallError,
   ModelRefusalError,
@@ -112,6 +132,7 @@ export {
   TransportError,
   UnknownModelError,
   type ErrorCode,
+  type GatewayEgressErrorCode,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 
 // Quality Intelligence sub-module (Epic #270, Issue #279). Exposed under a namespace so
@@ -136,3 +157,9 @@ export type {
   QualityIntelligenceDispatcherArgs,
   QualityIntelligenceDispatcherResult,
 } from "./qualityIntelligence/dispatcher.js";
+
+// Prompt Enhancer sub-module (Epic #1307, Issue #1310; ADR-0044 §1). Exposed under a namespace,
+// mirroring Quality Intelligence, so callers reach the generation-profile execution catalog, the
+// deterministic planner, the structured generator, and the provider-neutral renderers. Model-bound
+// candidate/critic dispatch is added by #1312.
+export * as PromptEnhancer from "./promptEnhancer/index.js";

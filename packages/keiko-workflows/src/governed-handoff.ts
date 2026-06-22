@@ -20,7 +20,9 @@ function fileHeader(file: PatchFileChange): readonly string[] {
 function filePatchBytes(file: PatchFileChange): number {
   const lines = [...fileHeader(file)];
   for (const hunk of file.hunks) {
-    lines.push(`@@ -${String(hunk.oldStart)},${String(hunk.oldLines)} +${String(hunk.newStart)},${String(hunk.newLines)} @@`);
+    lines.push(
+      `@@ -${String(hunk.oldStart)},${String(hunk.oldLines)} +${String(hunk.newStart)},${String(hunk.newLines)} @@`,
+    );
     lines.push(...hunk.lines);
   }
   return Buffer.byteLength(lines.join("\n"), "utf8");

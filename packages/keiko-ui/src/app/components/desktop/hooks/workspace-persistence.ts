@@ -9,6 +9,10 @@ type JsonScalar = string | number | boolean;
 
 const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
 const MAX_REFERENCE_VALUE_LENGTH = 256;
+const MAX_FIGMA_SELECTED_SCREEN_IDS = 16;
+const MAX_FIGMA_SCREEN_NAME_LENGTH = 256;
+const MAX_EDITOR_OPEN_FILES = 64;
+const MAX_EDITOR_OPEN_FILE_LENGTH = 512;
 
 const CREDENTIAL_KEY_MARKERS = [
   "apikey",
@@ -43,7 +47,12 @@ const ENV_CREDENTIAL_FILENAMES = [
 
 const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>> = {
   chat: ["chatId"],
+  editor: ["openFiles", "layoutJson"],
   files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
+  figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
+  figmaView: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
+  figmaJson: ["snapshotRunId", "screenId", "selectedScreenIdsJson", "selectedScreenName"],
+  figmaImage: ["snapshotRunId", "screenId", "selectedScreenName", "imageSrc"],
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -144,11 +153,217 @@ function isSafeOpaqueReference(value: string): boolean {
   return true;
 }
 
+function isSafeFigmaScreenId(value: string): boolean {
+  if (value.length === 0 || value.length > MAX_REFERENCE_VALUE_LENGTH) return false;
+  if (value.trim() !== value || isSecretShapedString(value)) return false;
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    const isDigit = code >= 48 && code <= 57;
+    const isUpper = code >= 65 && code <= 90;
+    const isLower = code >= 97 && code <= 122;
+    const isPunct = code === 46 || code === 58 || code === 95 || code === 45;
+    if (!isDigit && !isUpper && !isLower && !isPunct) return false;
+  }
+  return true;
+}
+
+function sanitizeFigmaSelectedScreenIdsJson(value: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    parsed.length > MAX_FIGMA_SELECTED_SCREEN_IDS
+  ) {
+    return undefined;
+  }
+  const screenIds: string[] = [];
+  for (const item of parsed) {
+    if (typeof item !== "string") return undefined;
+    const screenId = item.trim();
+    if (!isSafeFigmaScreenId(screenId)) return undefined;
+    screenIds.push(screenId);
+  }
+  return JSON.stringify(screenIds);
+}
+
+function isSafeFigmaImageSrc(value: string): boolean {
+  return /^\/api\/figma\/snapshots\/[^/?#]+\/screens\/\d+\/image$/u.test(value);
+}
+
+function sanitizeFigmaConfigValue(key: string, value: unknown): JsonScalar | undefined {
+  if (typeof value !== "string") return undefined;
+  if (key === "snapshotRunId") return isSafeOpaqueReference(value) ? value : undefined;
+  if (key === "screenId") return isSafeFigmaScreenId(value) ? value : undefined;
+  if (key === "imageSrc") return isSafeFigmaImageSrc(value) ? value : undefined;
+  if (key === "selectedScreenIdsJson") return sanitizeFigmaSelectedScreenIdsJson(value);
+  if (key === "selectedScreenName") {
+    if (value.length > MAX_FIGMA_SCREEN_NAME_LENGTH || isSecretShapedString(value)) {
+      return undefined;
+    }
+    return value;
+  }
+  return undefined;
+}
+
+function sanitizeEditorOpenFiles(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return undefined;
+    const path = item.trim().replace(/\\/gu, "/").replace(/^\/+/u, "");
+    if (
+      path.length === 0 ||
+      path.length > MAX_EDITOR_OPEN_FILE_LENGTH ||
+      isSecretShapedString(path) ||
+      out.includes(path)
+    ) {
+      continue;
+    }
+    out.push(path);
+    if (out.length >= MAX_EDITOR_OPEN_FILES) break;
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function sanitizeEditorLayoutJson(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+  const record = parsed as Record<string, unknown>;
+  if (record["schemaVersion"] === 2 || record["version"] === 2) {
+    const rawPanes = isRecord(record["panes"]) ? record["panes"] : {};
+    const panes: Record<
+      string,
+      { id: string; activeFile: string; openFiles: readonly string[]; tabOrder: readonly string[] }
+    > = {};
+    for (const [paneId, pane] of Object.entries(rawPanes)) {
+      if (!isRecord(pane)) continue;
+      const activeFile =
+        typeof pane["activeFile"] === "string" ? pane["activeFile"].trim() : "";
+      const openFiles = sanitizeEditorOpenFiles(pane["openFiles"]);
+      const tabOrder = sanitizeEditorOpenFiles(pane["tabOrder"]) ?? openFiles;
+      if (openFiles === undefined && activeFile.length === 0) continue;
+      const files = openFiles ?? sanitizeEditorOpenFiles([activeFile]);
+      if (files === undefined) continue;
+      panes[paneId.slice(0, 48)] = {
+        id: paneId.slice(0, 48),
+        activeFile: activeFile.length > 0 ? activeFile.replace(/\\/gu, "/").replace(/^\/+/u, "") : files[0]!,
+        openFiles: files,
+        tabOrder: tabOrder ?? files,
+      };
+    }
+    const paneIds = new Set(Object.keys(panes));
+    const sanitizeNode = (node: unknown): unknown => {
+      if (!isRecord(node)) return null;
+      if (node["type"] === "pane" && typeof node["paneId"] === "string" && paneIds.has(node["paneId"])) {
+        return { type: "pane", paneId: node["paneId"] };
+      }
+      if (node["type"] === "split") {
+        const first = sanitizeNode(node["first"]);
+        const second = sanitizeNode(node["second"]);
+        if (first === null || second === null) return null;
+        const ratio =
+          typeof node["ratio"] === "number" && Number.isFinite(node["ratio"])
+            ? Math.min(85, Math.max(15, Math.round(node["ratio"])))
+            : 50;
+        return {
+          type: "split",
+          id: typeof node["id"] === "string" ? node["id"].slice(0, 48) : "split-1",
+          direction: node["direction"] === "column" ? "column" : "row",
+          ratio,
+          first,
+          second,
+        };
+      }
+      return null;
+    };
+    const tree = sanitizeNode(record["tree"]);
+    const firstPaneId = Object.keys(panes)[0];
+    if (tree === null || firstPaneId === undefined) return undefined;
+    const activePaneId =
+      typeof record["activePaneId"] === "string" && paneIds.has(record["activePaneId"])
+        ? record["activePaneId"]
+        : firstPaneId;
+    const sidebarWidth =
+      typeof record["sidebarWidth"] === "number" && Number.isFinite(record["sidebarWidth"])
+        ? Math.min(440, Math.max(180, Math.round(record["sidebarWidth"])))
+        : 260;
+    return JSON.stringify({
+      schemaVersion: 2,
+      root: typeof record["root"] === "string" ? record["root"] : "",
+      activePaneId,
+      tree,
+      panes,
+      sidebarWidth,
+      sidebarCollapsed: record["sidebarCollapsed"] === true,
+    });
+  }
+  const rawPanes = Array.isArray(record["panes"]) ? record["panes"].slice(0, 2) : [];
+  const panes: { id: string; file: string; openFiles: readonly string[] }[] = [];
+  for (const [index, pane] of rawPanes.entries()) {
+    if (typeof pane !== "object" || pane === null || Array.isArray(pane)) return undefined;
+    const paneRecord = pane as Record<string, unknown>;
+    const file = typeof paneRecord["file"] === "string" ? paneRecord["file"].trim() : "";
+    const openFiles = sanitizeEditorOpenFiles(paneRecord["openFiles"]);
+    if (file.length > MAX_EDITOR_OPEN_FILE_LENGTH || isSecretShapedString(file)) continue;
+    const nextOpenFiles =
+      openFiles ?? (file.length > 0 ? sanitizeEditorOpenFiles([file]) : undefined);
+    if (nextOpenFiles === undefined) continue;
+    panes.push({
+      id:
+        typeof paneRecord["id"] === "string" && paneRecord["id"].trim().length > 0
+          ? paneRecord["id"].trim().slice(0, 32)
+          : `pane-${index + 1}`,
+      file: file.length > 0 ? file.replace(/\\/gu, "/").replace(/^\/+/u, "") : nextOpenFiles[0]!,
+      openFiles: nextOpenFiles,
+    });
+  }
+  if (panes.length === 0) return undefined;
+  const direction = record["direction"] === "column" ? "column" : "row";
+  const splitRatio =
+    typeof record["splitRatio"] === "number" && Number.isFinite(record["splitRatio"])
+      ? Math.min(75, Math.max(25, Math.round(record["splitRatio"])))
+      : 50;
+  const sidebarWidth =
+    typeof record["sidebarWidth"] === "number" && Number.isFinite(record["sidebarWidth"])
+      ? Math.min(440, Math.max(180, Math.round(record["sidebarWidth"])))
+      : 260;
+  const activePaneId =
+    typeof record["activePaneId"] === "string" &&
+    panes.some((pane) => pane.id === record["activePaneId"])
+      ? record["activePaneId"]
+      : panes[0]!.id;
+  return JSON.stringify({
+    version: 1,
+    panes,
+    activePaneId,
+    direction,
+    splitRatio,
+    sidebarWidth,
+    sidebarCollapsed: record["sidebarCollapsed"] === true,
+  });
+}
+
 function sanitizeConfigValue(
   type: WindowType,
   key: string,
   value: unknown,
-): JsonScalar | undefined {
+): AppWindow["cfg"][string] {
+  if (type === "editor" && key === "openFiles") return sanitizeEditorOpenFiles(value);
+  if (type === "editor" && key === "layoutJson") return sanitizeEditorLayoutJson(value);
+  if (type === "figma" || type === "figmaView" || type === "figmaJson" || type === "figmaImage") {
+    return sanitizeFigmaConfigValue(key, value);
+  }
   if (!isJsonScalar(value) || isCredentialKey(key)) return undefined;
   if (typeof value !== "string") return value;
   const persistence = WIN_META[type].persistence;
@@ -159,10 +374,7 @@ function sanitizeConfigValue(
   return persistence === "durable.ui" ? REDACTED_WORKSPACE_CONFIG_VALUE : undefined;
 }
 
-function sanitizeCfgForPersistence(
-  type: WindowType,
-  cfg: unknown,
-): Record<string, string | number | boolean | undefined> {
+function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["cfg"] {
   if (!isRecord(cfg)) return {};
   const persistence = WIN_META[type].persistence;
   if (persistence === "durable.config") return {};
@@ -170,7 +382,7 @@ function sanitizeCfgForPersistence(
     ...(WIN_TYPES[type].config ?? []).map((field) => field.key),
     ...(INTERNAL_CFG_KEYS[type] ?? []),
   ]);
-  const out: Record<string, string | number | boolean | undefined> = {};
+  const out: AppWindow["cfg"] = {};
   for (const [key, value] of Object.entries(cfg)) {
     if (!allowedKeys.has(key)) continue;
     const next = sanitizeConfigValue(type, key, value);
@@ -226,8 +438,34 @@ function sanitizeWindow(win: unknown): AppWindow | null {
   const prev = sanitizePrev(win["prev"]);
   return {
     ...next,
+    ...(win["minimized"] === true ? { minimized: true } : {}),
     ...(prev !== undefined ? { prev } : {}),
     ...(isFiniteNumber(win["zoom"]) ? { zoom: win["zoom"] } : {}),
+  };
+}
+
+function firstSelectedFigmaScreenId(cfg: Record<string, unknown>): string | undefined {
+  const raw = cfg["selectedScreenIdsJson"];
+  if (typeof raw !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const first = parsed[0];
+    return typeof first === "string" && first.length > 0 ? first : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function migrateLegacyFigmaWindow(win: AppWindow): AppWindow {
+  if (win.type !== "figma") return win;
+  if (firstSelectedFigmaScreenId(win.cfg) === undefined) return win;
+  return {
+    ...win,
+    type: "figmaView",
+    cfg: {
+      ...win.cfg,
+    },
   };
 }
 
@@ -235,9 +473,12 @@ export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[
   const out: AppWindow[] = [];
   for (const win of wins) {
     const next = sanitizeWindow(win);
-    if (next !== null) out.push(next);
+    if (next !== null) out.push(migrateLegacyFigmaWindow(next));
   }
-  return out;
+  const figmaManagers = out.filter((win) => win.type === "figma");
+  if (figmaManagers.length <= 1) return out;
+  const keeper = figmaManagers.reduce((best, next) => (next.z > best.z ? next : best));
+  return out.filter((win) => win.type !== "figma" || win.id === keeper.id);
 }
 
 export function parsePersistedWindows(raw: string | null): AppWindow[] | null {

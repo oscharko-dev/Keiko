@@ -17,24 +17,39 @@ export interface CapsuleDocumentText {
   readonly text: string;
 }
 
-const SELECT_DOCUMENT_TEXTS_SQL =
-  "SELECT document_id, normalized_text FROM document_texts WHERE capsule_id = ? ORDER BY document_id";
+// Safe default: caps the in-process document load to prevent unbounded memory
+// consumption on large capsules. Callers may override with a smaller value.
+const DEFAULT_MAX_DOCUMENTS = 10_000;
+
+export interface ListCapsuleDocumentTextsOptions {
+  /** Maximum number of documents to return (SQL LIMIT). Defaults to 10 000. */
+  readonly maxDocuments?: number;
+}
 
 /**
- * Returns the full normalized text for every indexed document in a capsule, ordered by
- * document_id for deterministic output. Documents with empty text are skipped. Sync — reads the
- * node:sqlite handle directly like the capsule-lifecycle queries.
+ * Returns the full normalized text for up to `maxDocuments` indexed documents in a
+ * capsule, ordered by document_id for deterministic output. Documents with empty text
+ * are skipped. Sync — reads the node:sqlite handle directly like the capsule-lifecycle
+ * queries.
  */
 export function listCapsuleDocumentTexts(
   store: KnowledgeStore,
   capsuleId: string | KnowledgeCapsuleId,
+  options: ListCapsuleDocumentTextsOptions = {},
 ): readonly CapsuleDocumentText[] {
-  const rows = store._internal.db.prepare(SELECT_DOCUMENT_TEXTS_SQL).all(String(capsuleId));
+  const limit = options.maxDocuments ?? DEFAULT_MAX_DOCUMENTS;
+  const sql =
+    "SELECT document_id, normalized_text FROM document_texts WHERE capsule_id = ? ORDER BY document_id LIMIT ?";
+  const rows = store._internal.db.prepare(sql).all(String(capsuleId), limit);
+  const cipher = store._internal.contentCipher;
   const result: CapsuleDocumentText[] = [];
   for (const row of rows) {
     const documentId = row.document_id;
-    const text = row.normalized_text;
-    if (typeof documentId === "string" && typeof text === "string" && text.length > 0) {
+    const stored = row.normalized_text;
+    if (typeof documentId !== "string" || typeof stored !== "string") continue;
+    // Decrypt at the store boundary so QI ingestion always receives plaintext corpus text.
+    const text = cipher.openText(stored);
+    if (text.length > 0) {
       result.push({ documentId, text });
     }
   }

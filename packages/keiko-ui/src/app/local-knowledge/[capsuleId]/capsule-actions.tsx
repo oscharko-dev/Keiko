@@ -16,13 +16,25 @@ import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/ke
 import {
   connectCapsuleSource,
   deleteCapsule,
+  fetchCapsuleDetail,
   refreshCapsuleChangedFiles,
   repairCapsuleFailedFiles,
   startIndexing,
 } from "@/lib/local-knowledge-api";
-import type { CapsuleActionResponse, ConnectCapsuleSourceScope } from "@/lib/local-knowledge-api";
-import { fetchFilesTree, fetchProjects } from "@/lib/api";
-import type { FilesTreeEntry, ProjectWithAvailability } from "@/lib/types";
+import type {
+  CapsuleActionResponse,
+  CapsuleDetail,
+  ConnectCapsuleSourceScope,
+} from "@/lib/local-knowledge-api";
+import type { FilesTreeEntry } from "@/lib/types";
+import { formatBytes } from "@/lib/format";
+import {
+  LOCAL_KNOWLEDGE_MAX_FILE_BYTES,
+  LOCAL_KNOWLEDGE_MAX_OBJECTS_PER_DOCUMENT,
+  LOCAL_KNOWLEDGE_PARSER_TIMEOUT_MS,
+} from "@/lib/local-knowledge-limits";
+import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
+import { LocalFileBrowserDialog } from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
 import { Icons } from "@/app/components/desktop/Icons";
 import { formatError } from "../format-error";
 
@@ -31,10 +43,18 @@ import { formatError } from "../format-error";
 // ---------------------------------------------------------------------------
 
 type ActionKind = "delete" | "refresh" | "repair";
+type ProgressActionKind = Exclude<ActionKind, "delete"> | "index";
 
 interface ConfirmState {
   readonly kind: ActionKind;
   readonly nameInput: string;
+}
+
+interface ProgressState {
+  readonly detail: CapsuleDetail | null;
+  readonly startedAt: number;
+  readonly now: number;
+  readonly pollError: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -62,6 +82,48 @@ function confirmButtonLabel(kind: ActionKind, busy: boolean): string {
   if (kind === "delete") return "Delete";
   if (kind === "refresh") return "Refresh";
   return "Repair";
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return "0%";
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100).toString()}%`;
+}
+
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0s";
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds.toString()}s`;
+  return `${minutes.toString()}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+function completedDocuments(job: CapsuleDetail["indexingJobs"][number] | undefined): number {
+  if (job === undefined) return 0;
+  return job.processedDocuments + job.failedDocuments + job.skippedDocuments;
+}
+
+function progressStyle(value: number): { readonly width: string } {
+  return { width: formatPercent(value) };
+}
+
+function initialProgressState(now = Date.now()): ProgressState {
+  return { detail: null, startedAt: now, now, pollError: null };
+}
+
+function formatLimitDuration(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes.toString()} min`;
+  const hours = minutes / 60;
+  return `${hours.toString()} h`;
+}
+
+function localKnowledgeLimitSummary(): string {
+  return `Maximum single file size: ${formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES)}. Parser budget: ${LOCAL_KNOWLEDGE_MAX_OBJECTS_PER_DOCUMENT.toLocaleString("en-US")} objects, ${formatLimitDuration(LOCAL_KNOWLEDGE_PARSER_TIMEOUT_MS)} per document.`;
+}
+
+function isOversizedPickerFile(entry: FilesTreeEntry): boolean {
+  return entry.kind === "file" && entry.sizeBytes > LOCAL_KNOWLEDGE_MAX_FILE_BYTES;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,268 +177,25 @@ function buildScope(
   return { kind: "files", rootPath: trimmedRoot, files };
 }
 
-function displayLocalPath(root: string, relativePath: string | null): string {
-  if (relativePath === null || relativePath.length === 0) return root;
-  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
-  return `${root.replace(/[/\\]+$/u, "")}${separator}${relativePath.replace(/\//gu, separator)}`;
+function pickerModeForScope(kind: ConnectCapsuleSourceScope["kind"]): "files" | "folder-or-files" {
+  return kind === "files" ? "files" : "folder-or-files";
 }
 
-function parentRelativePath(path: string | null): string | null {
-  if (path === null || path.length === 0) return null;
-  const trimmed = path.replace(/\/+$/u, "");
-  const idx = trimmed.lastIndexOf("/");
-  if (idx < 0) return null;
-  const parent = trimmed.slice(0, idx);
-  return parent.length > 0 ? parent : null;
+function pickerFileDisabledReason(entry: FilesTreeEntry): string | undefined {
+  if (isOversizedPickerFile(entry)) {
+    return `File is ${formatBytes(entry.sizeBytes)}; maximum is ${formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES)}.`;
+  }
+  if (!entry.readable) return "File is not readable.";
+  return undefined;
 }
 
-interface LocalSourcePickerDialogProps {
-  readonly scopeKind: ConnectCapsuleSourceScope["kind"];
-  readonly initialRootPath: string;
-  readonly initialFilesInput: string;
-  readonly onApply: (rootPath: string, filesInput?: string) => void;
-  readonly onCancel: () => void;
-  readonly fetchProjectsImpl?: typeof fetchProjects;
-  readonly fetchFilesTreeImpl?: typeof fetchFilesTree;
-}
-
-function LocalSourcePickerDialog({
-  scopeKind,
-  initialRootPath,
-  initialFilesInput,
-  onApply,
-  onCancel,
-  fetchProjectsImpl = fetchProjects,
-  fetchFilesTreeImpl = fetchFilesTree,
-}: LocalSourcePickerDialogProps): ReactNode {
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(dialogRef, true, onCancel);
-
-  const [projects, setProjects] = useState<readonly ProjectWithAvailability[]>([]);
-  const [activeRoot, setActiveRoot] = useState(initialRootPath.trim());
-  const [rootDraft, setRootDraft] = useState(initialRootPath.trim());
-  const [currentPath, setCurrentPath] = useState<string | null>(null);
-  const [entries, setEntries] = useState<readonly FilesTreeEntry[]>([]);
-  const [selectedFiles, setSelectedFiles] = useState<ReadonlySet<string>>(
-    () => new Set(parseFilesInput(initialFilesInput)),
-  );
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void fetchProjectsImpl()
-      .then((payload) => {
-        if (cancelled) return;
-        const available = payload.projects.filter((project) => project.available);
-        setProjects(available);
-        if (activeRoot.length === 0 && available[0] !== undefined) {
-          setActiveRoot(available[0].path);
-          setRootDraft(available[0].path);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setProjects([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeRoot.length, fetchProjectsImpl]);
-
-  useEffect(() => {
-    if (activeRoot.length === 0) {
-      setEntries([]);
-      setError(null);
-      return undefined;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void fetchFilesTreeImpl(activeRoot, currentPath ?? "")
-      .then((payload) => {
-        if (cancelled) return;
-        setEntries(payload.entries);
-        setActiveRoot(payload.root);
-        setRootDraft(payload.root);
-      })
-      .catch((caught: unknown) => {
-        if (!cancelled) {
-          setEntries([]);
-          setError(formatError(caught));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeRoot, currentPath, fetchFilesTreeImpl]);
-
-  function openRoot(nextRoot: string): void {
-    const trimmed = nextRoot.trim();
-    if (trimmed.length === 0) return;
-    setSelectedFiles(new Set());
-    setCurrentPath(null);
-    setActiveRoot(trimmed);
-  }
-
-  function chooseProject(project: ProjectWithAvailability): void {
-    setRootDraft(project.path);
-    openRoot(project.path);
-  }
-
-  function toggleFile(path: string): void {
-    setSelectedFiles((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  }
-
-  const visiblePath = displayLocalPath(activeRoot, currentPath);
-  const selectedFileLines = Array.from(selectedFiles).join("\n");
-  const canApply =
-    scopeKind === "files" ? activeRoot.length > 0 && selectedFiles.size > 0 : activeRoot.length > 0;
-
-  return createPortal(
-    <div className="dlg-overlay in" role="presentation">
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="lkd-source-picker-title"
-        aria-describedby="lkd-source-picker-desc"
-        className="dlg lkd-source-picker"
-        tabIndex={-1}
-      >
-        <div className="dlg-head">
-          <div className="dlg-htext">
-            <div id="lkd-source-picker-title" className="dlg-title">
-              Choose local source
-            </div>
-            <div id="lkd-source-picker-desc" className="dlg-sub">
-              Select a local {scopeKind === "files" ? "file or files" : "folder"} for this capsule.
-            </div>
-          </div>
-        </div>
-        <div className="dlg-body lkd-source-picker-body">
-          {projects.length > 0 ? (
-            <div className="lkd-picker-projects" aria-label="Registered project folders">
-              {projects.map((project) => (
-                <button
-                  key={project.path}
-                  type="button"
-                  className="lk-btn lk-btn-ghost"
-                  onClick={() => chooseProject(project)}
-                >
-                  {project.name ?? project.path}
-                </button>
-              ))}
-            </div>
-          ) : null}
-
-          <form
-            className="lkd-picker-root"
-            onSubmit={(event) => {
-              event.preventDefault();
-              openRoot(rootDraft);
-            }}
-          >
-            <label htmlFor="lkd-picker-root-input" className="dlg-label">
-              Folder root
-            </label>
-            <input
-              id="lkd-picker-root-input"
-              type="text"
-              className="dlg-input lkd-connect-input"
-              value={rootDraft}
-              placeholder="/absolute/path/to/folder"
-              onChange={(event) => setRootDraft(event.target.value)}
-            />
-            <button type="submit" className="lk-btn lk-btn-ghost">
-              Open
-            </button>
-          </form>
-
-          <div className="lkd-picker-current">
-            <button
-              type="button"
-              className="lk-btn lk-btn-ghost"
-              disabled={currentPath === null}
-              onClick={() => setCurrentPath(parentRelativePath(currentPath))}
-            >
-              Up
-            </button>
-            <span className="mono" title={visiblePath}>
-              {visiblePath || "No folder selected"}
-            </span>
-          </div>
-
-          {error !== null ? (
-            <div role="alert" className="lk-alert">
-              {error}
-            </div>
-          ) : null}
-          {loading ? (
-            <p role="status" className="lk-loading">
-              Loading folder…
-            </p>
-          ) : (
-            <ul className="lkd-picker-list" aria-label="Local source browser">
-              {entries.map((entry) => (
-                <li key={entry.path} className="lkd-picker-entry">
-                  {entry.kind === "directory" ? (
-                    <button
-                      type="button"
-                      className="lkd-picker-row"
-                      disabled={!entry.readable}
-                      onClick={() => {
-                        setSelectedFiles(new Set());
-                        setCurrentPath(entry.path);
-                      }}
-                    >
-                      <Icons.folder size={14} />
-                      <span>{entry.name}</span>
-                    </button>
-                  ) : (
-                    <label className="lkd-picker-row">
-                      <input
-                        type="checkbox"
-                        disabled={scopeKind !== "files" || !entry.readable}
-                        checked={selectedFiles.has(entry.path)}
-                        onChange={() => toggleFile(entry.path)}
-                      />
-                      <span>{entry.name}</span>
-                    </label>
-                  )}
-                </li>
-              ))}
-              {!loading && entries.length === 0 && activeRoot.length > 0 ? (
-                <li className="lkd-picker-empty">No entries in this folder.</li>
-              ) : null}
-            </ul>
-          )}
-        </div>
-        <div className="dlg-foot">
-          <button type="button" className="dlg-btn" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="dlg-btn primary"
-            disabled={!canApply}
-            onClick={() =>
-              onApply(scopeKind === "files" ? activeRoot : visiblePath, selectedFileLines)
-            }
-          >
-            Use selection
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+function pickerFileMeta(entry: FilesTreeEntry): ReactNode {
+  const oversized = isOversizedPickerFile(entry);
+  return (
+    <>
+      {formatBytes(entry.sizeBytes)}
+      {oversized ? " · too large" : ""}
+    </>
   );
 }
 
@@ -500,13 +319,25 @@ function ConnectSourceForm({
         </div>
       ) : null}
       {pickerOpen ? (
-        <LocalSourcePickerDialog
-          scopeKind={scopeKind}
+        <LocalFileBrowserDialog
+          mode={pickerModeForScope(scopeKind)}
+          title="Choose local source"
+          description={`Select a local ${scopeKind === "files" ? "file or files" : "folder"} for this capsule.`}
+          note={localKnowledgeLimitSummary()}
           initialRootPath={rootPath}
-          initialFilesInput={filesInput}
-          onApply={(nextRootPath, nextFilesInput) => {
-            setRootPath(nextRootPath);
-            if (nextFilesInput !== undefined) setFilesInput(nextFilesInput);
+          initialFiles={parseFilesInput(filesInput)}
+          isFileDisabled={isOversizedPickerFile}
+          fileDisabledReason={pickerFileDisabledReason}
+          fileMeta={pickerFileMeta}
+          onApply={(selection) => {
+            if (selection.files.length > 0) {
+              setScopeKind("files");
+              setRootPath(selection.rootPath);
+              setFilesInput(selection.files.join("\n"));
+            } else {
+              setRootPath(selection.folderPath);
+              if (scopeKind !== "files") setFilesInput("");
+            }
             setConnectError(null);
             setPickerOpen(false);
           }}
@@ -600,9 +431,82 @@ interface ConfirmModalProps {
   readonly nameInput: string;
   readonly busy: boolean;
   readonly error: string | null;
+  readonly progress: ProgressState | null;
   readonly onNameChange: (value: string) => void;
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
+}
+
+function ActionProgress({
+  kind,
+  progress,
+}: {
+  kind: ProgressActionKind;
+  progress: ProgressState;
+}): ReactNode {
+  const detail = progress.detail;
+  const latestJob = detail?.indexingJobs[0];
+  const totalDocuments = latestJob?.totalDocuments ?? detail?.health.documentCount ?? 0;
+  const completed = completedDocuments(latestJob);
+  const documentProgress = totalDocuments > 0 ? completed / totalDocuments : 0;
+  const chunkCount = detail?.health.chunkCount ?? 0;
+  const vectorCount = detail?.health.vectorCount ?? 0;
+  const vectorProgress = chunkCount > 0 ? vectorCount / chunkCount : 0;
+  const elapsedMs = progress.now - progress.startedAt;
+  const docsPerMs = completed > 0 ? completed / Math.max(elapsedMs, 1) : 0;
+  const etaMs = docsPerMs > 0 ? Math.max(0, totalDocuments - completed) / docsPerMs : 0;
+  const statusLabel = latestJob?.status ?? detail?.capsule.lifecycleState ?? "starting";
+  const actionLabel =
+    kind === "index"
+      ? "Indexing documents"
+      : kind === "refresh"
+        ? "Refreshing changed files"
+        : "Repairing failed files";
+  const etaLabel =
+    docsPerMs > 0 && totalDocuments > completed
+      ? `Estimated remaining ${formatDuration(etaMs)}`
+      : "Estimating remaining time";
+
+  return (
+    <div className="lkd-action-progress" role="status" aria-live="polite">
+      <div className="lkd-action-progress-head">
+        <span>{actionLabel}</span>
+        <span>{statusLabel}</span>
+      </div>
+      <div className="lkd-action-progress-note">
+        Still working. Elapsed {formatDuration(elapsedMs)}. {etaLabel}.
+      </div>
+      <div className="lkd-status-bars">
+        <div className="lkd-status-bar-row">
+          <span>Documents</span>
+          <ProgressBar value={documentProgress} label="Action document progress" />
+          <span>
+            {completed.toString()} / {totalDocuments.toString()}
+          </span>
+        </div>
+        <div className="lkd-status-bar-row">
+          <span>Vectors</span>
+          <ProgressBar value={vectorProgress} label="Action vector progress" />
+          <span>
+            {vectorCount.toString()} / {chunkCount.toString()}
+          </span>
+        </div>
+      </div>
+      {progress.pollError !== null ? (
+        <div className="lkd-action-progress-note">
+          Progress refresh is delayed: {progress.pollError}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProgressBar({ value, label }: { value: number; label: string }): ReactNode {
+  return (
+    <div className="lkd-progress" role="img" aria-label={`${label}: ${formatPercent(value)}`}>
+      <span className="lkd-progress-fill" data-tone="ok" style={progressStyle(value)} />
+    </div>
+  );
 }
 
 function ConfirmModal({
@@ -611,12 +515,14 @@ function ConfirmModal({
   nameInput,
   busy,
   error,
+  progress,
   onNameChange,
   onConfirm,
   onCancel,
 }: ConfirmModalProps): ReactNode {
   const dialogRef = useRef<HTMLDivElement>(null);
   const confirmInputRef = useRef<HTMLInputElement>(null);
+  useModalInteractionLock();
   useFocusTrap(dialogRef, true, onCancel);
 
   // Auto-focus the confirmation input when the modal opens. Done via ref + effect (not
@@ -705,6 +611,7 @@ function ConfirmModal({
           </div>
         ) : (
           <div className="dlg-body">
+            {busy && progress !== null ? <ActionProgress kind={kind} progress={progress} /> : null}
             {error !== null ? (
               <div role="alert" className="lk-alert">
                 {error}
@@ -750,6 +657,7 @@ export interface CapsuleActionsProps {
   readonly refreshCapsuleImpl?: typeof refreshCapsuleChangedFiles;
   readonly repairCapsuleImpl?: typeof repairCapsuleFailedFiles;
   readonly startIndexingImpl?: typeof startIndexing;
+  readonly fetchCapsuleDetailImpl?: typeof fetchCapsuleDetail;
 }
 
 export function CapsuleActions({
@@ -764,19 +672,69 @@ export function CapsuleActions({
   refreshCapsuleImpl = refreshCapsuleChangedFiles,
   repairCapsuleImpl = repairCapsuleFailedFiles,
   startIndexingImpl = startIndexing,
+  fetchCapsuleDetailImpl = fetchCapsuleDetail,
 }: CapsuleActionsProps): ReactNode {
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [indexBusy, setIndexBusy] = useState(false);
   const [indexError, setIndexError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<ProgressState | null>(null);
+  const progressActive =
+    progress !== null && (indexBusy || (busy && confirm !== null && confirm.kind !== "delete"));
+
+  useEffect(() => {
+    if (!progressActive) return undefined;
+    const tick = window.setInterval(() => {
+      setProgress((current) => (current === null ? current : { ...current, now: Date.now() }));
+    }, 1_000);
+    return () => window.clearInterval(tick);
+  }, [progressActive]);
+
+  useEffect(() => {
+    if (!progressActive) return undefined;
+    let cancelled = false;
+    async function poll(): Promise<void> {
+      try {
+        const detail = await fetchCapsuleDetailImpl(capsuleId);
+        if (cancelled) return;
+        setProgress((current) =>
+          current === null
+            ? {
+                detail,
+                startedAt: Date.now(),
+                now: Date.now(),
+                pollError: null,
+              }
+            : { ...current, detail, now: Date.now(), pollError: null },
+        );
+      } catch (error) {
+        if (cancelled) return;
+        setProgress((current) =>
+          current === null
+            ? current
+            : { ...current, now: Date.now(), pollError: formatError(error) },
+        );
+      }
+    }
+    void poll();
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [capsuleId, fetchCapsuleDetailImpl, progressActive]);
 
   async function handleIndex(): Promise<void> {
     if (indexBusy) return;
+    setProgress(initialProgressState());
     setIndexBusy(true);
     setIndexError(null);
     try {
       await startIndexingImpl(capsuleId);
+      setProgress(null);
       onActionComplete();
     } catch (error) {
       setIndexError(formatError(error));
@@ -787,6 +745,7 @@ export function CapsuleActions({
 
   function openModal(kind: ActionKind): void {
     setActionError(null);
+    setProgress(null);
     setConfirm({ kind, nameInput: "" });
   }
 
@@ -794,6 +753,7 @@ export function CapsuleActions({
     if (busy) return;
     setConfirm(null);
     setActionError(null);
+    setProgress(null);
   }
 
   function handleNameChange(value: string): void {
@@ -804,10 +764,12 @@ export function CapsuleActions({
     kind: ActionKind,
     action: () => Promise<CapsuleActionResponse>,
   ): Promise<void> {
+    if (kind !== "delete") setProgress(initialProgressState());
     setBusy(true);
     setActionError(null);
     try {
       const response = await action();
+      setProgress(null);
       setConfirm(null);
       if (kind === "delete") {
         if (onDeleted !== undefined) onDeleted(response);
@@ -846,6 +808,7 @@ export function CapsuleActions({
         onConnected={onActionComplete}
         connectImpl={connectCapsuleSourceImpl}
       />
+      <p className="lkd-limit-note">{localKnowledgeLimitSummary()}</p>
 
       {showIndexButton ? (
         <div className="lkd-index-row">
@@ -863,6 +826,9 @@ export function CapsuleActions({
             <div role="alert" aria-live="assertive" className="lk-alert">
               {indexError}
             </div>
+          ) : null}
+          {indexBusy && progress !== null ? (
+            <ActionProgress kind="index" progress={progress} />
           ) : null}
         </div>
       ) : null}
@@ -905,6 +871,7 @@ export function CapsuleActions({
           nameInput={confirm.nameInput}
           busy={busy}
           error={actionError}
+          progress={progress}
           onNameChange={handleNameChange}
           onConfirm={handleConfirm}
           onCancel={handleCancel}

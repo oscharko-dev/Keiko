@@ -103,6 +103,37 @@ describe("applyMemoryRetention — maxAgeMs", () => {
     expect(vault.getMemory(brandedMemoryId("old-2"))).toBeUndefined();
   });
 
+  it("applies age expiry deterministically across accepted, archived, and expired records", () => {
+    const vault = makeVault();
+    insertRecord(vault, {
+      id: "old-accepted",
+      updatedAt: NOW - 10 * ONE_DAY_MS,
+      status: "accepted",
+    });
+    insertRecord(vault, {
+      id: "old-archived",
+      updatedAt: NOW - 10 * ONE_DAY_MS,
+      status: "archived",
+    });
+    insertRecord(vault, {
+      id: "old-expired",
+      updatedAt: NOW - 10 * ONE_DAY_MS,
+      status: "expired",
+    });
+    const policy: MemoryRetentionPolicy = { maxAgeMs: 7 * ONE_DAY_MS };
+    const result = applyMemoryRetention({ vault, scopes: [SCOPE], policy, nowMs: NOW });
+    expect(result.forgotten.map((decision) => decision.status).sort()).toEqual([
+      "accepted",
+      "archived",
+      "expired",
+    ]);
+    expect(result.byReason["expire-age"]).toBe(3);
+    expect(vault.getMemory(brandedMemoryId("old-accepted"))).toBeUndefined();
+    expect(vault.getMemory(brandedMemoryId("old-archived"))).toBeUndefined();
+    expect(vault.getMemory(brandedMemoryId("old-expired"))).toBeUndefined();
+    expect(vault.listTombstonesByScope(SCOPE)).toHaveLength(3);
+  });
+
   it("never forgets pinned records even when past maxAgeMs", () => {
     const vault = makeVault();
     insertRecord(vault, { id: "pinned-old", updatedAt: NOW - 10 * ONE_DAY_MS, pinned: true });
@@ -132,6 +163,23 @@ describe("applyMemoryRetention — maxRecordsPerScope", () => {
     expect(vault.getMemory(brandedMemoryId("r-2"))).toBeUndefined();
     expect(vault.getMemory(brandedMemoryId("r-3"))).toBeDefined();
     expect(vault.getMemory(brandedMemoryId("r-4"))).toBeDefined();
+  });
+
+  it("uses memory id as a deterministic tie-breaker when updatedAt values match", () => {
+    const vault = makeVault();
+    insertRecord(vault, { id: "same-c", updatedAt: NOW - ONE_DAY_MS });
+    insertRecord(vault, { id: "same-a", updatedAt: NOW - ONE_DAY_MS });
+    insertRecord(vault, { id: "same-b", updatedAt: NOW - ONE_DAY_MS });
+    const policy: MemoryRetentionPolicy = { maxRecordsPerScope: 1 };
+    const result = applyMemoryRetention({ vault, scopes: [SCOPE], policy, nowMs: NOW });
+    expect(result.forgotten.map((decision) => decision.memoryId)).toEqual([
+      brandedMemoryId("same-a"),
+      brandedMemoryId("same-b"),
+    ]);
+    expect(vault.getMemory(brandedMemoryId("same-a"))).toBeUndefined();
+    expect(vault.getMemory(brandedMemoryId("same-b"))).toBeUndefined();
+    expect(vault.getMemory(brandedMemoryId("same-c"))).toBeDefined();
+    expect(vault.listTombstonesByScope(SCOPE)).toHaveLength(2);
   });
 
   it("does not count pinned records toward the cap and never evicts them", () => {
@@ -191,24 +239,30 @@ describe("applyMemoryRetention — expireProposalsAfterMs", () => {
   });
 });
 
-// ── purgeForgottenAfterMs (no-op surface) ────────────────────────────────────
+// ── purgeForgottenAfterMs ────────────────────────────────────────────────────
 
 describe("applyMemoryRetention — purgeForgottenAfterMs", () => {
-  it("reports backlog count without deleting any tombstone", () => {
+  it("purges tombstones older than the threshold through the vault port", () => {
     const vault = makeVault();
-    insertRecord(vault, { id: "to-tomb", updatedAt: NOW - 30 * ONE_DAY_MS });
-    // Delete with a tombstone so listTombstonesByScope returns it.
-    vault.deleteMemory(brandedMemoryId("to-tomb"), {
+    insertRecord(vault, { id: "old-tomb", updatedAt: NOW - 30 * ONE_DAY_MS });
+    insertRecord(vault, { id: "fresh-tomb", updatedAt: NOW - ONE_DAY_MS });
+    vault.deleteMemory(brandedMemoryId("old-tomb"), {
       tombstone: true,
       forgetterSurface: "retention",
-      reason: "test-seed",
+      reason: "old test seed",
       nowMs: NOW - 30 * ONE_DAY_MS,
+    });
+    vault.deleteMemory(brandedMemoryId("fresh-tomb"), {
+      tombstone: true,
+      forgetterSurface: "retention",
+      reason: "fresh test seed",
+      nowMs: NOW - ONE_DAY_MS,
     });
     const policy: MemoryRetentionPolicy = { purgeForgottenAfterMs: 7 * ONE_DAY_MS };
     const result = applyMemoryRetention({ vault, scopes: [SCOPE], policy, nowMs: NOW });
     expect(result.forgottenPurgeBacklog).toBe(1);
-    // Tombstone should still be there (no-op surface).
     expect(vault.listTombstonesByScope(SCOPE)).toHaveLength(1);
+    expect(vault.listTombstonesByScope(SCOPE)[0]?.memoryId).toBe(brandedMemoryId("fresh-tomb"));
   });
 });
 

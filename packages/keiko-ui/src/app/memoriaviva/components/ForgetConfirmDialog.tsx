@@ -96,7 +96,7 @@ export function ForgetConfirmDialog({
     setError(null);
     try {
       if (isDeleteMode) {
-        await deleteMemoryImpl(record.id as MemoryId);
+        await deleteMemoryImpl(record.id as MemoryId, "user-initiated delete from MemoriaViva");
       } else {
         await forgetMemoryImpl(record.id as MemoryId, "user-initiated forget from MemoriaViva");
       }
@@ -132,8 +132,8 @@ export function ForgetConfirmDialog({
         <p id="forget-dialog-desc" className="mc-dialog-body">
           {isDeleteMode ? (
             <>
-              This action is <strong>permanent</strong>. The memory will be hard-deleted without a
-              tombstone audit record. You cannot undo this.
+              This action is <strong>permanent</strong>. The memory will be removed and a tombstone
+              audit record will be created. You cannot undo this.
             </>
           ) : (
             <>

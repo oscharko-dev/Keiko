@@ -14,7 +14,7 @@ import {
 } from "./fs.js";
 import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { assertContainedRealPath } from "./realpath.js";
+import { containedRealPathInfo } from "./realpath.js";
 import { FileTooLargeError, PathDeniedError, WorkspaceReadError } from "./errors.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
@@ -53,6 +53,17 @@ function toRealRelative(fs: WorkspaceFs, root: string, absolutePath: string): st
   } catch {
     return toRelative(root, absolutePath);
   }
+}
+
+// A benign-named workspace root that is a SYMLINK into a denied location (e.g. "~/docs" -> "~/.aws")
+// is invisible to the root-relative deny checks: they only see paths BELOW the root, never the denied
+// segment that resolving the root itself introduces. Flag it — but ONLY when the symlink ADDS the
+// denial (the real root is denied while the lexical root is not). A non-symlinked root, a benign
+// platform link (macOS "/tmp" -> "/private/tmp"), and a root that merely sits under a denied-named
+// ANCESTOR the user did not symlink into (e.g. the product's own ".claude" worktree) all keep working,
+// preserving the existing relative-only semantics for every non-attack path.
+function realRootIsDeniedViaSymlink(realRoot: string, lexicalRoot: string): boolean {
+  return isDenied(realRoot) && !isDenied(lexicalRoot);
 }
 
 // Returns false when the entry must be skipped for any security or noise reason, recording
@@ -143,6 +154,19 @@ function runWalk(workspace: WorkspaceInfo, opts: DiscoveryOptions, fs: Workspace
     denied: 0,
     ignored: 0,
   };
+  // Refuse to walk a benign-named root that resolves into a denied location via a symlink: discovery
+  // does not realpath-contain the ROOT, so it would otherwise list a symlinked credential dir's files.
+  // Treated as denied (no throw — discovery filters rather than raises), consistent with per-entry deny.
+  let realRoot: string;
+  try {
+    realRoot = fs.realPath(workspace.root);
+  } catch {
+    realRoot = workspace.root;
+  }
+  if (realRootIsDeniedViaSymlink(realRoot, workspace.root)) {
+    walk.denied += 1;
+    return walk;
+  }
   descend(walk, resolveWithinWorkspace(workspace.root, "."), 0);
   return walk;
 }
@@ -223,7 +247,15 @@ export function readWorkspaceFile(
   if (isDenied(normalizedRel)) {
     throw new PathDeniedError(`refusing to read a denied path: ${normalizedRel}`, normalizedRel);
   }
-  const resolvedPath = assertContainedRealPath(fs, workspace.root, absolutePath, normalizedRel);
+  const contained = containedRealPathInfo(fs, workspace.root, absolutePath);
+  // Deny a benign-named root symlink that resolves into a protected location (e.g. "~/docs" ->
+  // "~/.aws"): the deny checks here only see the path relative to the realpath'd root, so a denied
+  // segment in the ROOT itself is invisible to them and the file would read through. Only the symlink
+  // case is added — see realRootIsDeniedViaSymlink — so existing non-symlink reads are unchanged.
+  if (realRootIsDeniedViaSymlink(contained.realBase, workspace.root)) {
+    throw new PathDeniedError(`refusing to read a denied path: ${normalizedRel}`, normalizedRel);
+  }
+  const resolvedPath = contained.path;
   const resolvedRel = toRealRelative(fs, workspace.root, resolvedPath);
   if (isDenied(resolvedRel)) {
     throw new PathDeniedError(`refusing to read a denied path: ${normalizedRel}`, normalizedRel);

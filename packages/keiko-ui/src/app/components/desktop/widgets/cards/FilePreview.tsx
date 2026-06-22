@@ -21,6 +21,19 @@ interface FilePreviewProps {
 const DENIED_PREVIEW_MESSAGE =
   "This file is excluded from the read surface for safety (matches a deny pattern such as .env, *.pem, node_modules, .git, …).";
 const MAX_HIGHLIGHT_BYTES = 200_000;
+// Issue #1285 — Repository Search now extracts bounded text from small DOCX/XLSX/text-layer-PDF
+// documents that are explicitly connected to a chat. The preview pane still shows no inline preview
+// for these binary formats, but the copy reflects that they are searchable (within limits) rather
+// than categorically unsupported.
+const SEARCHABLE_DOCUMENT_LABELS: Readonly<Record<string, string>> = {
+  docx: "DOCX",
+  xlsx: "XLSX",
+  pdf: "PDF",
+};
+
+function searchableDocumentMessage(label: string): string {
+  return `${label} files up to 2 MB are searchable in Repository Search via bounded text extraction when explicitly connected to a chat. Encrypted, scanned, or larger documents are not extracted — use Local Knowledge for those. No inline preview is available for this format here.`;
+}
 
 interface PreviewError {
   readonly message: string;
@@ -70,6 +83,31 @@ function previewKindLabel(preview: FilesPreviewResponse): string {
   if (preview.kind === "text") return preview.extension ?? "text";
   if (preview.kind === "image") return preview.mime;
   return preview.extension ?? "binary";
+}
+
+function extensionForPreview(preview: FilesPreviewResponse): string {
+  const extension = preview.extension?.trim().toLowerCase();
+  if (extension !== undefined && extension.length > 0) return extension;
+  const lastDot = preview.name.lastIndexOf(".");
+  return lastDot >= 0
+    ? preview.name
+        .slice(lastDot + 1)
+        .trim()
+        .toLowerCase()
+    : "";
+}
+
+function binaryPreviewMessage(
+  preview: Extract<FilesPreviewResponse, { readonly kind: "binary" }>,
+): string {
+  if (preview.reason === "too_large") {
+    return `Preview disabled because this file exceeds ${formatBytes(preview.maxBytes ?? 0)}.`;
+  }
+  const documentLabel = SEARCHABLE_DOCUMENT_LABELS[extensionForPreview(preview)];
+  if (documentLabel !== undefined) {
+    return searchableDocumentMessage(documentLabel);
+  }
+  return "No safe text or image preview is available for this file type.";
 }
 
 function MetadataRow({
@@ -283,11 +321,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           <div className="fpv-meta-card">
             <FileIcon name={preview.name} />
             <h3>{preview.name}</h3>
-            <p>
-              {preview.reason === "too_large"
-                ? `Preview disabled because this file exceeds ${formatBytes(preview.maxBytes ?? 0)}.`
-                : "No safe text or image preview is available for this file type."}
-            </p>
+            <p>{binaryPreviewMessage(preview)}</p>
             <div className="fpv-meta">
               <MetadataRow label="Type" value={preview.mime} />
               <MetadataRow label="Extension" value={preview.extension ?? "none"} />

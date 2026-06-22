@@ -230,6 +230,9 @@ function shortSummary(
   if (report?.status === "failed" || report?.status === "rejected") return `${label} failed.`;
   if (report?.status === "cancelled") return `${label} was cancelled.`;
   if (report !== null) return `${label} completed.`;
+  if (evidence?.patch?.redactedDiff !== undefined) {
+    return `${label} evidence loaded with a reviewable diff.`;
+  }
   return `${label} evidence loaded: ${evidence?.run.outcome ?? "unknown"}.`;
 }
 
@@ -329,6 +332,35 @@ function renderListCard(title: string, values: readonly string[] | undefined): R
   );
 }
 
+// Issue #1296 — a low/medium/high agent confidence renders as the Design System
+// 0.4.0 confidence signal: a 3-segment track PLUS an uppercase word, never colour
+// alone. The track is decorative (aria-hidden); the word carries the meaning, so a
+// screen reader hears "Confidence High" / "Confidence Low — verify".
+type ConfidenceLevel = "low" | "medium" | "high";
+const CONFIDENCE_LABEL: Readonly<Record<ConfidenceLevel, string>> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low — verify",
+};
+function isConfidenceLevel(value: string): value is ConfidenceLevel {
+  return value === "low" || value === "medium" || value === "high";
+}
+function ConfidenceSignal({ level }: { readonly level: ConfidenceLevel }): ReactNode {
+  return (
+    <div className="arun-kv">
+      <span>Confidence</span>
+      <span className="ai-conf" data-level={level}>
+        <span className="track" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="lbl">{CONFIDENCE_LABEL[level]}</span>
+      </span>
+    </div>
+  );
+}
+
 function renderHypothesis(report: RunReport): ReactNode {
   const hypothesis = report.hypothesis;
   if (hypothesis === undefined) return null;
@@ -336,9 +368,16 @@ function renderHypothesis(report: RunReport): ReactNode {
     ["Root cause", hypothesis.rootCause],
     ["Regression test", hypothesis.regressionTestStrategy],
     ["Uncertainty", hypothesis.uncertainty],
-    ["Confidence", hypothesis.confidence],
   ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].length > 0);
-  if (rows.length === 0) return null;
+  // A level (low/medium/high) upgrades to the DS confidence signal; any other
+  // non-empty confidence string keeps the plain key/value row (behaviour-preserving).
+  const confidence = typeof hypothesis.confidence === "string" ? hypothesis.confidence : "";
+  const confidenceLevel = isConfidenceLevel(confidence) ? confidence : undefined;
+  const confidenceFallback =
+    confidence.length > 0 && confidenceLevel === undefined ? confidence : undefined;
+  if (rows.length === 0 && confidenceLevel === undefined && confidenceFallback === undefined) {
+    return null;
+  }
   return (
     <div className="arun-result-card">
       <div className="arun-result-title">Hypothesis</div>
@@ -348,6 +387,13 @@ function renderHypothesis(report: RunReport): ReactNode {
           <strong>{value}</strong>
         </div>
       ))}
+      {confidenceFallback !== undefined ? (
+        <div className="arun-kv">
+          <span>Confidence</span>
+          <strong>{confidenceFallback}</strong>
+        </div>
+      ) : null}
+      {confidenceLevel !== undefined ? <ConfidenceSignal level={confidenceLevel} /> : null}
     </div>
   );
 }
@@ -435,6 +481,11 @@ export function AgentRunWidget({
   const showApply = canApply(workflow, report);
   const showCancel = !terminal && report?.status === "running";
   const applyFileCount = diffFileCount(report?.proposedDiff);
+  const runBusy =
+    applying ||
+    sse.status === "connecting" ||
+    report?.status === "running" ||
+    (report === null && evidence === null && error === null);
 
   // uiux-fix F018 C124: the Cancel button unmounts the moment the run turns
   // terminal; if it held keyboard focus the browser silently drops focus to
@@ -511,7 +562,7 @@ export function AgentRunWidget({
   }
 
   return (
-    <div className="arun arun-real">
+    <div className="arun arun-real" aria-busy={runBusy ? "true" : undefined}>
       <div className="arun-head">
         <span className="arun-role">{WORKFLOW_LABELS[workflow]}</span>
         {/* uiux-fix F054 C385: cfg.model is optional — skip the pill entirely so no
@@ -594,7 +645,13 @@ export function AgentRunWidget({
       {/* uiux-fix F018 C109: role=log announces appended entries (TerminalWidget
           pattern). The C026 disconnect row below lives inside this live region, so
           it needs no role of its own. */}
-      <div className="arun-log" role="log" aria-live="polite" aria-label="Run events">
+      <div
+        className="arun-log"
+        role="log"
+        aria-live="polite"
+        aria-label="Run events"
+        aria-busy={runBusy ? "true" : undefined}
+      >
         {sse.status === "error" && sse.error !== null ? (
           // uiux-fix F018 C026: a dropped stream froze the log without any hint;
           // useSSE clears the error again once the auto-reconnect succeeds.
@@ -666,16 +723,36 @@ export function AgentRunWidget({
           ) : null}
         </div>
       ) : evidence !== null ? (
-        <div className="arun-result-card">
-          <div className="arun-result-title">Evidence</div>
-          <div className="arun-kv">
-            <span>Outcome</span>
-            <strong>{evidence.run.outcome}</strong>
+        <div className="arun-results">
+          <div className="arun-result-card">
+            <div className="arun-result-title">Evidence</div>
+            <div className="arun-kv">
+              <span>Outcome</span>
+              <strong>{evidence.run.outcome}</strong>
+            </div>
+            <div className="arun-kv">
+              <span>Duration</span>
+              <strong>{formatMs(evidence.run.durationMs)}</strong>
+            </div>
+            {evidence.patch !== undefined ? (
+              <>
+                <div className="arun-kv">
+                  <span>Changed files</span>
+                  <strong>{evidence.patch.changedFiles.toString()}</strong>
+                </div>
+                <div className="arun-kv">
+                  <span>Patch size</span>
+                  <strong>{formatBytes(evidence.patch.patchBytes)}</strong>
+                </div>
+              </>
+            ) : null}
           </div>
-          <div className="arun-kv">
-            <span>Duration</span>
-            <strong>{formatMs(evidence.run.durationMs)}</strong>
-          </div>
+          {evidence.patch?.redactedDiff !== undefined ? (
+            <div className="arun-result-card">
+              <div className="arun-result-title">Proposed diff</div>
+              <pre>{evidence.patch.redactedDiff}</pre>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

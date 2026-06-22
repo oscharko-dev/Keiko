@@ -16,6 +16,8 @@ function included(id: string, score = 1): IncludedMemory {
       correction: 0,
       graph: 0,
       semantic: 0,
+      strength: 0,
+      importance: 0,
     },
     inclusionReason: `id ${id}`,
   };
@@ -76,6 +78,15 @@ describe("assembleContextBlock — caps and pressure", () => {
     expect(result.omitted.every((o) => o.reason === "budget-exceeded")).toBe(true);
   });
 
+  it("omits a ranked memory whose record is absent (out-of-scope)", () => {
+    // 'ghost' is ranked but has no record in the supplied set — it must be omitted, not crash.
+    const present = buildRecord({ id: "present", body: "hello world" });
+    const ranked = [included("present"), included("ghost")];
+    const result = assembleContextBlock(ranked, [present], { budgetTokens: 1000, maxIncluded: 12 });
+    expect(result.included.map((e) => String(e.memoryId))).toEqual(["present"]);
+    expect(result.omitted).toContainEqual({ memoryId: memoryId("ghost"), reason: "out-of-scope" });
+  });
+
   it("under heavy budget pressure (100 candidates, tiny budget) omits most as budget-exceeded", () => {
     const records = Array.from({ length: 100 }, (_, i) =>
       buildRecord({ id: `m${String(i)}`, body: "alpha beta gamma delta epsilon zeta eta theta" }),
@@ -94,8 +105,9 @@ describe("assembleContextBlock — caps and pressure", () => {
       body: "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi",
     });
     const ranked = [included("long")];
-    // budget 8 tokens, maxIncluded 1 -> per-entry ~ 8 tokens -> ~6 words after the 1.3x.
-    const result = assembleContextBlock(ranked, [record], { budgetTokens: 8, maxIncluded: 1 });
+    // budget 16 tokens, maxIncluded 1 -> includes rendered header/reason overhead and still clips
+    // the long body on a word boundary.
+    const result = assembleContextBlock(ranked, [record], { budgetTokens: 16, maxIncluded: 1 });
     const entry = result.contextBlock.memories[0];
     expect(entry?.bodyExcerpt.endsWith("…")).toBe(true);
     // Excerpt strictly shorter than the original body.
@@ -109,5 +121,16 @@ describe("assembleContextBlock — caps and pressure", () => {
     const ranked = records.map((r) => included(r.id));
     const result = assembleContextBlock(ranked, records, { budgetTokens: 20, maxIncluded: 50 });
     expect(result.budget.used).toBeLessThanOrEqual(result.budget.tokens);
+  });
+
+  it("charges the rendered header and inclusion reason against the budget", () => {
+    const records = [
+      buildRecord({ id: "a", body: "alpha beta gamma" }),
+      buildRecord({ id: "b", body: "delta epsilon zeta" }),
+    ];
+    const ranked = records.map((r) => included(r.id));
+    const result = assembleContextBlock(ranked, records, { budgetTokens: 18, maxIncluded: 2 });
+    expect(result.budget.used).toBe(estimateTokens(result.contextBlock.text));
+    expect(estimateTokens(result.contextBlock.text)).toBeLessThanOrEqual(result.budget.tokens);
   });
 });

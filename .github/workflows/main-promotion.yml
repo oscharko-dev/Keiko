@@ -19,10 +19,25 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
-          if [ "$BASE_REF" = "main" ] && [ "$HEAD_REF" = "dev" ] && [ "$HEAD_REPO" = "$BASE_REPO" ]; then
-            echo "Protected main promotion gate satisfied: only the repository dev branch may promote to main."
+          if [ "$BASE_REF" != "main" ]; then
+            echo "This gate only applies when base branch is main."
             exit 0
           fi
-          echo "Main only accepts promotion PRs from the repository dev branch."
-          echo "base_ref=$BASE_REF head_ref=$HEAD_REF base_repo=$BASE_REPO head_repo=$HEAD_REPO"
-          exit 1
+
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "Main only accepts promotion PRs from the same repository."
+            echo "base_ref=$BASE_REF head_ref=$HEAD_REF base_repo=$BASE_REPO head_repo=$HEAD_REPO"
+            exit 1
+          fi
+
+          case "$HEAD_REF" in
+            dev | release/*)
+              echo "Protected main promotion gate satisfied: $HEAD_REF may promote to main."
+              exit 0
+              ;;
+            *)
+              echo "Main only accepts promotion PRs from dev or release/*."
+              echo "base_ref=$BASE_REF head_ref=$HEAD_REF base_repo=$BASE_REPO head_repo=$HEAD_REPO"
+              exit 1
+              ;;
+          esac

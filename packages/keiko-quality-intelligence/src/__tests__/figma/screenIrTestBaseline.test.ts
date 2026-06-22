@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriveScreenTestBaseline,
+  MAX_IR_NODES_PER_SCREEN,
   parseScreenIr,
   renderBaselineText,
   type StructuralTestItem,
@@ -90,6 +91,21 @@ describe("deriveScreenTestBaseline", () => {
     expect(items[0]?.category).toBe("screen-render");
     expect(render[0]?.sourceNodeId).toBeUndefined();
     expect(render[0]?.title).toContain("Dashboard");
+  });
+
+  // The render item must NOT assert reachability — navGraph is the single source of truth for
+  // reachability and the adversarial judge flagged the contradiction on multi-screen boards.
+  it('screen-render title is "renders correctly" and does NOT contain "reachable"', () => {
+    const ir = screen(
+      "s-render-title",
+      "Splash",
+      node("root", "container", { children: [] }),
+    );
+
+    const render = deriveScreenTestBaseline(ir).items.find((i) => i.category === "screen-render");
+
+    expect(render?.title).toBe('Screen "Splash" renders correctly');
+    expect(render?.title).not.toContain("reachable");
   });
 
   it("derives a state test from a generic state/variant naming convention", () => {
@@ -418,7 +434,7 @@ describe("parseScreenIr — layout/sizing/cornerRadius/typography round trip", (
               type: "TEXT",
               interactionHint: "text",
               text: "Hallo",
-              typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400 },
+              typography: { fontFamily: "Inter", fontSize: 16, fontWeight: 400, lineHeight: 24 },
               imageFills: [],
               children: [],
             },
@@ -438,6 +454,7 @@ describe("parseScreenIr — layout/sizing/cornerRadius/typography round trip", (
       fontFamily: "Inter",
       fontSize: 16,
       fontWeight: 400,
+      lineHeight: 24,
     });
   });
 
@@ -463,5 +480,60 @@ describe("parseScreenIr — layout/sizing/cornerRadius/typography round trip", (
     expect(parsed?.root.sizing).toBeUndefined();
     expect(parsed?.root.cornerRadius).toBeUndefined();
     expect(parsed?.root.typography).toBeUndefined();
+  });
+});
+
+// ─── Node-breadth bound (Issue #754, SEC2 hardening) ─────────────────────────────
+// A pathologically WIDE persisted irJson (flat siblings — invisible to the depth bound) must not
+// materialise unbounded memory/time during parse + every derivation that walks the tree. parseScreenIr
+// caps the TOTAL accepted node count at MAX_IR_NODES_PER_SCREEN, set above the per-screen ceiling the
+// governed Figma pipeline enforces, so real boards are byte-identical and only an out-of-band oversized
+// IR is truncated. Synthetic fixtures only.
+
+describe("parseScreenIr — node-breadth bound", () => {
+  const wideIrJson = (childCount: number): unknown => ({
+    id: "s-wide",
+    name: "Wide",
+    root: {
+      id: "root",
+      name: "root",
+      type: "FRAME",
+      interactionHint: "container",
+      imageFills: [],
+      children: Array.from({ length: childCount }, (_, i) => ({
+        id: `n${String(i)}`,
+        name: `n${String(i)}`,
+        type: "FRAME",
+        interactionHint: "input",
+        imageFills: [],
+        children: [],
+      })),
+    },
+  });
+
+  it("parses a board at the connector's per-screen node ceiling fully (behaviour-preserving)", () => {
+    // 10_000 is the connector's maxNodesPerScreen ceiling; the cap MUST sit above it so a governed
+    // board is never truncated. root (1) + 10_000 children = 10_001 nodes < MAX_IR_NODES_PER_SCREEN.
+    const parsed = parseScreenIr(wideIrJson(10_000));
+    expect(parsed?.root.children.length).toBe(10_000);
+  });
+
+  it("truncates a pathologically wide Screen-IR at MAX_IR_NODES_PER_SCREEN total nodes", () => {
+    const parsed = parseScreenIr(wideIrJson(MAX_IR_NODES_PER_SCREEN + 5000));
+    if (parsed === undefined) throw new Error("expected a parseable Screen-IR");
+    // The root consumes one unit of the budget, so exactly MAX_IR_NODES_PER_SCREEN - 1 children survive
+    // — never the full oversized count.
+    expect(parsed.root.children.length).toBe(MAX_IR_NODES_PER_SCREEN - 1);
+    const baseline = deriveScreenTestBaseline(parsed);
+    // screen-render (1) + 2 items per surviving input child — bounded, not derived from the raw width.
+    expect(baseline.items.length).toBe(1 + 2 * (MAX_IR_NODES_PER_SCREEN - 1));
+  });
+
+  it("truncates deterministically — the same oversized IR yields an identical bounded tree", () => {
+    const json = wideIrJson(MAX_IR_NODES_PER_SCREEN + 3000);
+    const a = parseScreenIr(json);
+    const b = parseScreenIr(json);
+    expect(a?.root.children.length).toBe(MAX_IR_NODES_PER_SCREEN - 1);
+    expect(a?.root.children.length).toBe(b?.root.children.length);
   });
 });

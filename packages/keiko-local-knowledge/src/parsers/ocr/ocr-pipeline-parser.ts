@@ -11,14 +11,27 @@
 import type { ParsedUnit, ParserResult } from "@oscharko-dev/keiko-contracts";
 
 import { diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "../_internal.js";
-import type { ParserAdapter, ParserCapability, ParserOptions, ParserSelectionInput } from "../types.js";
+import type {
+  ParserAdapter,
+  ParserCapability,
+  ParserOptions,
+  ParserSelectionInput,
+} from "../types.js";
 import type { OcrAdapter, OcrPageResult } from "./types.js";
 
 const PARSER_ID = "ocr-pipeline";
 const PARSER_VERSION = "1";
 
 const OCR_EXTENSIONS: ReadonlySet<string> = new Set([
-  "pdf", "png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "webp",
+  "pdf",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "bmp",
+  "tif",
+  "tiff",
+  "webp",
 ]);
 
 const OCR_MEDIA_PREFIXES: readonly string[] = ["image/", "application/pdf"];
@@ -27,9 +40,9 @@ const OCR_MEDIA_PREFIXES: readonly string[] = ["image/", "application/pdf"];
 const OCR_MAGIC: readonly { readonly prefix: readonly number[] }[] = Object.freeze([
   { prefix: [0x25, 0x50, 0x44, 0x46] }, // PDF: %PDF
   { prefix: [0x89, 0x50, 0x4e, 0x47] }, // PNG
-  { prefix: [0xff, 0xd8, 0xff] },        // JPEG
+  { prefix: [0xff, 0xd8, 0xff] }, // JPEG
   { prefix: [0x47, 0x49, 0x46, 0x38] }, // GIF8
-  { prefix: [0x42, 0x4d] },             // BMP
+  { prefix: [0x42, 0x4d] }, // BMP
 ]);
 
 function matchesMagicBytes(bytes: Uint8Array): boolean {
@@ -37,7 +50,10 @@ function matchesMagicBytes(bytes: Uint8Array): boolean {
     if (bytes.length < entry.prefix.length) continue;
     let match = true;
     for (let i = 0; i < entry.prefix.length; i += 1) {
-      if (bytes[i] !== entry.prefix[i]) { match = false; break; }
+      if (bytes[i] !== entry.prefix[i]) {
+        match = false;
+        break;
+      }
     }
     if (match) return true;
   }
@@ -53,7 +69,10 @@ function isOcrCandidate(input: ParserSelectionInput): boolean {
 }
 
 function unsupportedReason(input: ParserSelectionInput): string {
-  if (input.extension.toLowerCase() === "pdf" || input.mediaType.toLowerCase() === "application/pdf")
+  if (
+    input.extension.toLowerCase() === "pdf" ||
+    input.mediaType.toLowerCase() === "application/pdf"
+  )
     return "pdf-not-implemented";
   return "image-not-supported";
 }
@@ -64,7 +83,11 @@ function isAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
 
-function cancelled(cap: ParserCapability, input: ParserSelectionInput, options: ParserOptions): ParserResult {
+function cancelled(
+  cap: ParserCapability,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+): ParserResult {
   return emptyResult(cap, input.documentId, options, [
     diagnostic("PARSER_CANCELLED", "caller aborted parser", input.documentId, "info"),
   ]);
@@ -82,25 +105,51 @@ function resultFromOcrOutcome(
         ? unsupportedReason(input)
         : `ocr-failed:${ocrResult.reason}`;
     return emptyResult(
-      cap, input.documentId, options,
-      [diagnostic("UNSUPPORTED_FORMAT", `ocr adapter returned ok:false (${ocrResult.reason})`, input.documentId, "info")],
+      cap,
+      input.documentId,
+      options,
+      [
+        diagnostic(
+          "UNSUPPORTED_FORMAT",
+          `ocr adapter returned ok:false (${ocrResult.reason})`,
+          input.documentId,
+          "info",
+        ),
+      ],
       [{ kind: "unsupported-media", documentId: input.documentId, reason }],
     );
   }
-  const pageUnit: ParsedUnit = { kind: "page", documentId: input.documentId, pageNumber: 1, characterStart: 0, characterEnd: ocrResult.text.length };
+  const pageUnit: ParsedUnit = {
+    kind: "page",
+    documentId: input.documentId,
+    pageNumber: 1,
+    characterStart: 0,
+    characterEnd: ocrResult.text.length,
+  };
   return emptyResult(cap, input.documentId, options, [], [pageUnit]);
 }
 
 function buildSyncParse(cap: ParserCapability) {
   return (input: ParserSelectionInput, options: ParserOptions): ParserResult => {
     if (input.bytes.byteLength > options.maxBytes) {
-      return emptyResult(cap, input.documentId, options, [oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes)]);
+      return emptyResult(cap, input.documentId, options, [
+        oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
+      ]);
     }
     if (isAborted(options.signal)) return cancelled(cap, input, options);
     const reason = unsupportedReason(input);
     return emptyResult(
-      cap, input.documentId, options,
-      [diagnostic("UNSUPPORTED_FORMAT", `ocr adapter present but sync parse called; use parseAsync (${reason})`, input.documentId, "info")],
+      cap,
+      input.documentId,
+      options,
+      [
+        diagnostic(
+          "UNSUPPORTED_FORMAT",
+          `ocr adapter present but sync parse called; use parseAsync (${reason})`,
+          input.documentId,
+          "info",
+        ),
+      ],
       [{ kind: "unsupported-media", documentId: input.documentId, reason }],
     );
   };
@@ -109,19 +158,25 @@ function buildSyncParse(cap: ParserCapability) {
 function buildAsyncParse(cap: ParserCapability, adapter: OcrAdapter) {
   return async (input: ParserSelectionInput, options: ParserOptions): Promise<ParserResult> => {
     if (input.bytes.byteLength > options.maxBytes) {
-      return emptyResult(cap, input.documentId, options, [oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes)]);
+      return emptyResult(cap, input.documentId, options, [
+        oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
+      ]);
     }
     if (isAborted(options.signal)) return cancelled(cap, input, options);
     const startedAt = options.now();
     const preCheck = shouldStop(startedAt, options, 0);
     if (preCheck.stop && preCheck.code !== undefined && preCheck.message !== undefined) {
-      return emptyResult(cap, input.documentId, options, [diagnostic(preCheck.code, preCheck.message, input.documentId, "info")]);
+      return emptyResult(cap, input.documentId, options, [
+        diagnostic(preCheck.code, preCheck.message, input.documentId, "info"),
+      ]);
     }
     const ocrResult = await adapter.ocrPage({ bytes: input.bytes, pageNumber: 1 });
     if (isAborted(options.signal)) return cancelled(cap, input, options);
     const postCheck = shouldStop(startedAt, options, 0);
     if (postCheck.stop && postCheck.code !== undefined && postCheck.message !== undefined) {
-      return emptyResult(cap, input.documentId, options, [diagnostic(postCheck.code, postCheck.message, input.documentId, "info")]);
+      return emptyResult(cap, input.documentId, options, [
+        diagnostic(postCheck.code, postCheck.message, input.documentId, "info"),
+      ]);
     }
     return resultFromOcrOutcome(ocrResult, cap, input, options);
   };
@@ -131,12 +186,23 @@ function buildAsyncParse(cap: ParserCapability, adapter: OcrAdapter) {
 // Extends ParserAdapter with an async entrypoint. The sync `parse` is required by the
 // registry contract; `parseAsync` is the real OCR path.
 export interface OcrPipelineAdapter extends ParserAdapter {
-  readonly parseAsync: (input: ParserSelectionInput, options: ParserOptions) => Promise<ParserResult>;
+  readonly parseAsync: (
+    input: ParserSelectionInput,
+    options: ParserOptions,
+  ) => Promise<ParserResult>;
 }
 
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
 export function createOcrPipelineParser(adapter: OcrAdapter): OcrPipelineAdapter {
-  const capability = Object.freeze({ parserId: PARSER_ID, parserVersion: PARSER_VERSION, matches: isOcrCandidate });
-  return Object.freeze({ capability, parse: buildSyncParse(capability), parseAsync: buildAsyncParse(capability, adapter) });
+  const capability = Object.freeze({
+    parserId: PARSER_ID,
+    parserVersion: PARSER_VERSION,
+    matches: isOcrCandidate,
+  });
+  return Object.freeze({
+    capability,
+    parse: buildSyncParse(capability),
+    parseAsync: buildAsyncParse(capability, adapter),
+  });
 }

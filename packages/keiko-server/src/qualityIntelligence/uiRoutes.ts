@@ -28,6 +28,7 @@ import type {
   QualityIntelligenceUiAtomCoverage,
   QualityIntelligenceUiWeakTestFlag,
   QualityIntelligenceUiDriftMetadata,
+  TestQualityRubricDimension,
 } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -55,6 +56,7 @@ function resolveEvidenceDir(deps: UiHandlerDeps): string | undefined {
 
 function projectRunSummary(
   manifest: ReturnType<typeof loadQualityIntelligenceRun>,
+  reviewState: QualityIntelligenceUiRunSummary["reviewState"],
 ): QualityIntelligenceUiRunSummary | null {
   if (manifest === undefined) return null;
   return {
@@ -67,13 +69,92 @@ function projectRunSummary(
       findings: manifest.totals.findings,
       exports: manifest.totals.exports,
     },
+    reviewState,
   };
+}
+
+// FIX A11y-2 (Issue #282) — resolve the run's overall review state for the list item so the hub list
+// can show a per-run lifecycle badge (AC1). Loads the small `.review.json` companion per listed run;
+// this is acceptable because the list path already loads a per-run manifest and the list is bounded
+// by the route limit. Defaults to "open" when no companion exists or no evidence dir is configured.
+function listReviewStateFor(
+  runId: string,
+  evidenceDir: string | undefined,
+): QualityIntelligenceUiRunSummary["reviewState"] {
+  if (evidenceDir === undefined) return "open";
+  return runReviewStateOf(loadRunReviewState(runId, evidenceDir));
 }
 
 interface RunDetailInputs {
   readonly manifest: NonNullable<ReturnType<typeof loadQualityIntelligenceRun>>;
   readonly candidateRows: readonly QualityIntelligenceCandidateRow[];
   readonly reviewArtifact: ReturnType<typeof loadRunReviewState>;
+}
+
+type CandidateTextField = "title" | "preconditions" | "steps" | "expectedResults" | "tags";
+type CandidateListField = Exclude<CandidateTextField, "title">;
+
+interface CandidateQualityVerdict {
+  readonly verdict: "strong" | "weak";
+  readonly score: number;
+  readonly dimensions: readonly TestQualityRubricDimension[];
+  readonly overallRationale: string;
+}
+
+type CandidateRowWithQualityVerdict = QualityIntelligenceCandidateRow & {
+  readonly qualityVerdict?: CandidateQualityVerdict;
+};
+
+type ProjectedCandidate = QualityIntelligenceUiCandidate & {
+  readonly qualityVerdict?: CandidateQualityVerdict;
+  readonly truncatedFields?: readonly CandidateTextField[];
+};
+
+const CANDIDATE_TEXT_LIMITS: Readonly<Record<CandidateTextField, number>> = {
+  title: 240,
+  preconditions: 1_000,
+  steps: 1_000,
+  expectedResults: 1_000,
+  tags: 120,
+};
+
+const CANDIDATE_LIST_LIMITS: Readonly<Record<CandidateListField, number>> = {
+  preconditions: 20,
+  steps: 50,
+  expectedResults: 50,
+  tags: 30,
+};
+
+interface ProjectedText {
+  readonly value: string;
+  readonly truncated: boolean;
+}
+
+interface ProjectedList {
+  readonly value: readonly string[];
+  readonly truncated: boolean;
+}
+
+function truncateTextForUi(value: string, limit: number): ProjectedText {
+  if (value.length <= limit) return { value, truncated: false };
+  return { value: `${value.slice(0, Math.max(0, limit - 3))}...`, truncated: true };
+}
+
+function truncateListForUi(values: readonly string[], field: CandidateListField): ProjectedList {
+  const maxItems = CANDIDATE_LIST_LIMITS[field];
+  const maxChars = CANDIDATE_TEXT_LIMITS[field];
+  const items = values.slice(0, maxItems);
+  let truncated = values.length > maxItems;
+  const projected = items.map((item) => {
+    const next = truncateTextForUi(item, maxChars);
+    if (next.truncated) truncated = true;
+    return next.value;
+  });
+  return { value: projected, truncated };
+}
+
+function addTruncatedField(fields: CandidateTextField[], field: CandidateTextField): void {
+  if (!fields.includes(field)) fields.push(field);
 }
 
 /**
@@ -99,20 +180,35 @@ function projectCandidate(
   weakTestFlags: ReadonlyMap<string, QualityIntelligenceUiWeakTestFlag>,
 ): QualityIntelligenceUiCandidate {
   const weakTestFlag = weakTestFlags.get(row.id);
-  return {
+  const title = truncateTextForUi(row.title, CANDIDATE_TEXT_LIMITS.title);
+  const preconditions = truncateListForUi(row.preconditions, "preconditions");
+  const steps = truncateListForUi(row.steps, "steps");
+  const expectedResults = truncateListForUi(row.expectedResults, "expectedResults");
+  const tags = truncateListForUi(row.tags, "tags");
+  const qualityVerdict = (row as CandidateRowWithQualityVerdict).qualityVerdict;
+  const truncatedFields: CandidateTextField[] = [];
+  if (title.truncated) addTruncatedField(truncatedFields, "title");
+  if (preconditions.truncated) addTruncatedField(truncatedFields, "preconditions");
+  if (steps.truncated) addTruncatedField(truncatedFields, "steps");
+  if (expectedResults.truncated) addTruncatedField(truncatedFields, "expectedResults");
+  if (tags.truncated) addTruncatedField(truncatedFields, "tags");
+  const projected: ProjectedCandidate = {
     id: row.id,
-    title: row.title,
-    preconditions: row.preconditions,
-    steps: row.steps,
-    expectedResults: row.expectedResults,
+    title: title.value,
+    preconditions: preconditions.value,
+    steps: steps.value,
+    expectedResults: expectedResults.value,
     priority: row.priority,
     riskClass: row.riskClass,
-    tags: row.tags,
+    tags: tags.value,
     status: row.status,
     reviewState: candidateReviewStateOf(reviewArtifact, row.id),
     derivedFromAtomIds: row.derivedFromAtomIds,
+    ...(qualityVerdict !== undefined ? { qualityVerdict } : {}),
     ...(weakTestFlag !== undefined ? { weakTestFlag } : {}),
+    ...(truncatedFields.length > 0 ? { truncatedFields } : {}),
   };
+  return projected;
 }
 
 function projectCoverageByAtom(
@@ -260,7 +356,7 @@ export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteR
       if (runs.length >= limit) break;
       try {
         const manifest = loadQualityIntelligenceRun(id, { evidenceDir });
-        const summary = projectRunSummary(manifest);
+        const summary = projectRunSummary(manifest, listReviewStateFor(id, evidenceDir));
         if (summary !== null) runs.push(summary);
       } catch {
         // A single corrupt manifest must not prevent listing other runs: skip and continue. The

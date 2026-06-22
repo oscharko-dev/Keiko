@@ -50,12 +50,14 @@ interface BudgetIndicatorProps {
   readonly budget: ConversationBudgetEstimate | undefined;
   readonly onClearHistory: () => void;
   readonly disabled?: boolean | undefined;
+  readonly compact?: boolean | undefined;
 }
 
 export function BudgetIndicator({
   budget,
   onClearHistory,
   disabled,
+  compact = false,
 }: BudgetIndicatorProps): ReactNode {
   // uiux-fix F010 (C175): "Clear history" empties the visible conversation with a
   // single click — destructive-looking on a core path. Inline two-step confirm plus
@@ -109,8 +111,12 @@ export function BudgetIndicator({
       <div className="cmp-budget-row">
         <span className="cmp-budget-count">
           {hasKnownWindow
-            ? `Approximate context: ${tokensLabel} / ${windowLabel} tokens`
-            : `Approximate context: ${tokensLabel} tokens`}
+            ? compact
+              ? `Context: ${tokensLabel} / ${windowLabel}`
+              : `Approximate context: ${tokensLabel} / ${windowLabel} tokens`
+            : compact
+              ? `Context: ${tokensLabel}`
+              : `Approximate context: ${tokensLabel} tokens`}
         </span>
         {hasKnownWindow ? (
           <span
@@ -163,7 +169,7 @@ export function BudgetIndicator({
             }}
             disabled={disabled === true}
           >
-            Clear history
+            {compact ? "Clear" : "Clear history"}
           </button>
         )}
         {cleared ? (

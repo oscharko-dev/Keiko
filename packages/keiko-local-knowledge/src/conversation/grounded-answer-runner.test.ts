@@ -16,7 +16,6 @@ import { scriptedAdapter, seedCapsuleWithVectors } from "../retrieval/_support.j
 import type { KnowledgeStore } from "../store.js";
 
 import { runGroundedAnswer } from "./grounded-answer-runner.js";
-import { ScriptedAnswerGenerator } from "./scripted-answer-generator.js";
 import type { AnswerGenerator, AnswerGeneratorInput, ConversationGroundedQuery } from "./types.js";
 
 interface Fixture {
@@ -80,13 +79,13 @@ describe("runGroundedAnswer — happy path", () => {
     expect(result.pack.scope.capsuleIds).toContain(seeded.capsuleId);
   });
 
-  it("integrates with ScriptedAnswerGenerator end-to-end", async () => {
+  it("integrates retrieval, generation, and citation attachment end-to-end", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-b" });
     const result = await runGroundedAnswer(
       {
         retrieval: { store, embeddingAdapter: scriptedAdapter() },
-        answerGenerator: new ScriptedAnswerGenerator(),
+        answerGenerator: fakeGenerator("Found grounded evidence [1]."),
       },
       {
         conversationId: "conv-2",
@@ -132,6 +131,29 @@ describe("runGroundedAnswer — no-evidence short-circuit", () => {
     expect(result.noEvidence).toBe(true);
     expect(result.reason).toBe("empty-query");
     expect(generator).not.toHaveBeenCalled();
+  });
+});
+
+describe("runGroundedAnswer — generator rejection propagation", () => {
+  it("rejects with the same error when the generator rejects", async () => {
+    // RED: without this test the propagation path was untested. GREEN: runGroundedAnswer
+    // does not catch the generator's rejection — it propagates naturally via the awaited
+    // `deps.answerGenerator.generate(...)` call.
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-rej" });
+    const boom = new Error("generator exploded");
+    const rejectingGenerator: AnswerGenerator = {
+      generate: (): Promise<string> => Promise.reject(boom),
+    };
+    await expect(
+      runGroundedAnswer(
+        {
+          retrieval: { store, embeddingAdapter: scriptedAdapter() },
+          answerGenerator: rejectingGenerator,
+        },
+        { conversationId: "conv-rej", capsuleId: seeded.capsuleId, text: "alpha" },
+      ),
+    ).rejects.toBe(boom);
   });
 });
 

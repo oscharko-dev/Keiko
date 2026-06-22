@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
-import { assertProfileCompatibleWithModel } from "../capabilityGate.js";
+import {
+  assertProfileCompatibleWithModel,
+  buildSelectionQueryForCapabilities,
+} from "../capabilityGate.js";
 import { QualityIntelligenceSafeErrorException } from "../safeError.js";
 import {
   getQualityIntelligenceTaskProfile,
@@ -26,6 +29,23 @@ function chatCapability(overrides: Partial<ModelCapability> = {}): ModelCapabili
     preferredUseCases: [],
     knownLimitations: [],
     ...overrides,
+  };
+}
+
+// No live profile requires `vision` or `function-calling` today, but the gate's capability map and
+// the QualityIntelligenceCapability type admit both. A synthetic profile exercises those branches in
+// the gate (and, below, the matching selection-query builder) so a mapping regression is caught.
+function syntheticProfile(
+  requiredCapabilities: QualityIntelligenceCapability[],
+): QualityIntelligenceTaskProfile {
+  return {
+    id: "qi:test-design",
+    requiredCapabilities,
+    tokenBudgetHint: 1024,
+    timeoutMsHint: 10_000,
+    retriesMax: 0,
+    cacheable: false,
+    temperatureHint: 0,
   };
 }
 
@@ -63,24 +83,6 @@ describe("assertProfileCompatibleWithModel", () => {
       assertProfileCompatibleWithModel(profile, embedding);
     }).toThrow(QualityIntelligenceSafeErrorException);
   });
-
-  // No live profile requires `vision` or `function-calling` today, but the gate's capability map
-  // declares branches for both (capabilityGate.ts) and the QualityIntelligenceCapability type admits
-  // them. A synthetic profile exercises those branches so a regression in the vision→supportsImageInput
-  // or function-calling→toolCalling mapping is caught (#279 AC1: capability-gated before request).
-  function syntheticProfile(
-    requiredCapabilities: QualityIntelligenceCapability[],
-  ): QualityIntelligenceTaskProfile {
-    return {
-      id: "qi:test-design",
-      requiredCapabilities,
-      tokenBudgetHint: 1024,
-      timeoutMsHint: 10_000,
-      retriesMax: 0,
-      cacheable: false,
-      temperatureHint: 0,
-    };
-  }
 
   it("throws qi/capability-mismatch listing 'function-calling' when toolCalling is absent", () => {
     const model = chatCapability({ toolCalling: false });
@@ -120,6 +122,69 @@ describe("assertProfileCompatibleWithModel", () => {
     const model = chatCapability({ supportsImageInput: true, toolCalling: true });
     expect(() => {
       assertProfileCompatibleWithModel(syntheticProfile(["text", "vision"]), model);
+    }).not.toThrow();
+  });
+});
+
+// buildSelectionQueryForCapabilities is the WRITE side of the SAME capability mapping that
+// modelSupports/assertProfileCompatibleWithModel reads (Issue #762: one shared mapping, no per-stage
+// duplicate). These pins lock all four arms so the auto-selection query can never silently drop a
+// capability the gate still enforces — the latent vision/function-calling drop is the specific mutant
+// they kill (no current profile requires those, so only a direct unit test can catch a regression).
+describe("buildSelectionQueryForCapabilities", () => {
+  it("maps a text-only profile to a bare chat query (no capability flags)", () => {
+    expect(buildSelectionQueryForCapabilities(["text"])).toEqual({ kind: "chat" });
+  });
+
+  it("maps structured-output to the structuredOutput query flag", () => {
+    expect(buildSelectionQueryForCapabilities(["text", "structured-output"])).toEqual({
+      kind: "chat",
+      structuredOutput: true,
+    });
+  });
+
+  it("maps vision to the supportsImageInput query flag", () => {
+    expect(buildSelectionQueryForCapabilities(["text", "vision"])).toEqual({
+      kind: "chat",
+      supportsImageInput: true,
+    });
+  });
+
+  it("maps function-calling to the toolCalling query flag", () => {
+    expect(buildSelectionQueryForCapabilities(["text", "function-calling"])).toEqual({
+      kind: "chat",
+      toolCalling: true,
+    });
+  });
+
+  it("maps every capability of a full profile into the query simultaneously", () => {
+    expect(
+      buildSelectionQueryForCapabilities([
+        "text",
+        "structured-output",
+        "function-calling",
+        "vision",
+      ]),
+    ).toEqual({
+      kind: "chat",
+      structuredOutput: true,
+      toolCalling: true,
+      supportsImageInput: true,
+    });
+  });
+
+  it("stays consistent with the gate: the query a profile builds is satisfied only by a model the gate accepts", () => {
+    // A model that advertises exactly the queried flags must pass the gate for the same capabilities,
+    // proving the write side (query) and read side (gate) agree for vision + function-calling.
+    const required: QualityIntelligenceCapability[] = ["text", "vision", "function-calling"];
+    const query = buildSelectionQueryForCapabilities(required);
+    expect(query.supportsImageInput).toBe(true);
+    expect(query.toolCalling).toBe(true);
+    expect(() => {
+      assertProfileCompatibleWithModel(
+        syntheticProfile(required),
+        chatCapability({ supportsImageInput: true, toolCalling: true }),
+      );
     }).not.toThrow();
   });
 });

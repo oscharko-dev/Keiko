@@ -3,9 +3,16 @@ import {
   createDefaultEmbeddingCapability,
   isLikelyEmbeddingModelId,
   listCapabilities,
+  selectCompletionModelFromCapabilities,
+  type CompletionSelectionOptions,
 } from "./capabilities.js";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
-import type { GatewayConfig, ModelCapability, ModelKind } from "./types.js";
+import type {
+  CompletionModelSelection,
+  GatewayConfig,
+  ModelCapability,
+  ModelKind,
+} from "./types.js";
 
 const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
 
@@ -17,6 +24,15 @@ export interface ModelSelectionQuery {
   // Issue #810: require image-input (multimodal) capability. When true, only configured
   // models that advertise supportsImageInput === true are eligible.
   readonly supportsImageInput?: boolean | undefined;
+}
+
+export interface ConfiguredCapabilityProvider {
+  readonly modelId: string;
+}
+
+export interface ConfiguredCapabilitySource {
+  readonly providers: readonly ConfiguredCapabilityProvider[];
+  readonly capabilities?: readonly ModelCapability[] | undefined;
 }
 
 function matches(capability: ModelCapability, query: ModelSelectionQuery): boolean {
@@ -38,14 +54,14 @@ function matches(capability: ModelCapability, query: ModelSelectionQuery): boole
   return true;
 }
 
-export function assertConfiguredModel(config: GatewayConfig, modelId: string): void {
+export function assertConfiguredModel(config: ConfiguredCapabilitySource, modelId: string): void {
   if (!config.providers.some((provider) => provider.modelId === modelId)) {
     throw new ConfigInvalidError(`model '${modelId}' is not configured as a provider`);
   }
 }
 
 export function findConfiguredCapability(
-  config: GatewayConfig,
+  config: ConfiguredCapabilitySource,
   modelId: string,
 ): ModelCapability | undefined {
   return (
@@ -59,14 +75,16 @@ export function findConfiguredCapability(
   );
 }
 
-export function listConfiguredCapabilities(config: GatewayConfig): readonly ModelCapability[] {
+export function listConfiguredCapabilities(
+  config: ConfiguredCapabilitySource,
+): readonly ModelCapability[] {
   return config.providers
     .map((provider) => findConfiguredCapability(config, provider.modelId))
     .filter((capability): capability is ModelCapability => capability !== undefined);
 }
 
 export function selectConfiguredModel(
-  config: GatewayConfig,
+  config: ConfiguredCapabilitySource,
   query: ModelSelectionQuery,
 ): string | undefined {
   let best: ModelCapability | undefined;
@@ -79,4 +97,15 @@ export function selectConfiguredModel(
     }
   }
   return best?.id;
+}
+
+// Completion-oriented model selection (Issue #1210, ADR-0042 D5). Resolves the configured
+// capabilities and applies the infilling-aware decision tree (as-you-type → manual → deterministic)
+// from `selectCompletionModelFromCapabilities`. Only configured providers are eligible, so a
+// capability that names no provider can never be elected. The result is content-free.
+export function selectCompletionModel(
+  config: GatewayConfig,
+  options: CompletionSelectionOptions = {},
+): CompletionModelSelection {
+  return selectCompletionModelFromCapabilities(listConfiguredCapabilities(config), options);
 }

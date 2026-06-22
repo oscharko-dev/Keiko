@@ -26,16 +26,19 @@ const channel = (value: number): string =>
 /**
  * Whether a Figma paint contributes a visible colour. Figma omits `visible` when a paint is shown, so
  * only an explicit `visible:false` hides it (mirrors {@link isHidden} for nodes). A paint-level
- * `opacity:0` or a SOLID `color.a:0` is fully transparent and likewise contributes no visible colour.
+ * `opacity <= 0` or a SOLID `color.a <= 0` is fully transparent and likewise contributes no visible colour.
  * Used so neither the reported text/background colour (#812) nor an extracted colour token (#752) is
  * ever taken from a paint that does not render.
  */
 export const isVisiblePaint = (paint: Record<string, unknown>): boolean => {
   if (paint.visible === false) return false;
   const opacity = readNumber(paint.opacity);
-  if (opacity === 0) return false;
+  if (opacity !== undefined && opacity <= 0) return false;
   const color = asNode(paint.color);
-  if (color !== undefined && readNumber(color.a) === 0) return false;
+  if (color !== undefined) {
+    const alpha = readNumber(color.a);
+    if (alpha !== undefined && alpha <= 0) return false;
+  }
   return true;
 };
 
@@ -47,7 +50,9 @@ export const paintColorToHex = (paint: Record<string, unknown>): string | undefi
   const g = readNumber(color.g);
   const b = readNumber(color.b);
   if (r === undefined || g === undefined || b === undefined) return undefined;
-  const a = readNumber(color.a) ?? 1;
+  const colorAlpha = readNumber(color.a) ?? 1;
+  const paintOpacity = readNumber(paint.opacity) ?? 1;
+  const a = Math.min(1, Math.max(0, colorAlpha)) * Math.min(1, Math.max(0, paintOpacity));
   const base = `#${channel(r)}${channel(g)}${channel(b)}`;
   return a < 1 ? `${base}${channel(a)}` : base;
 };
@@ -78,13 +83,26 @@ export interface Rgb {
   readonly b: number;
 }
 
-// Parse the leading `#RRGGBB` of a normalized hex (the optional alpha suffix is ignored for contrast:
-// WCAG contrast is defined on opaque colours and the IR composites onto a solid background). Returns
-// undefined for a malformed value so the caller emits a coverage notice rather than crashing.
-export const parseHexRgb = (hex: string): Rgb | undefined => {
+export interface Rgba extends Rgb {
+  /** Alpha in the 0..1 range. */
+  readonly a: number;
+}
+
+// Parse `#RRGGBB[AA]` into rendered colour channels. Returns undefined for a malformed value so the
+// caller emits a coverage notice rather than crashing.
+export const parseHexRgba = (hex: string): Rgba | undefined => {
   if (!/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/u.test(hex)) return undefined;
   const r = Number.parseInt(hex.slice(1, 3), 16);
   const g = Number.parseInt(hex.slice(3, 5), 16);
   const b = Number.parseInt(hex.slice(5, 7), 16);
+  const a = hex.length === 9 ? Number.parseInt(hex.slice(7, 9), 16) / 255 : 1;
+  return { r, g, b, a };
+};
+
+// Legacy RGB parser for callers that intentionally want the opaque leading colour.
+export const parseHexRgb = (hex: string): Rgb | undefined => {
+  const parsed = parseHexRgba(hex);
+  if (parsed === undefined) return undefined;
+  const { r, g, b } = parsed;
   return { r, g, b };
 };

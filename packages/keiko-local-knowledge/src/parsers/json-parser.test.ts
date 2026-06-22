@@ -185,3 +185,38 @@ describe("jsonParser", () => {
     expect(result.diagnostics.some((d) => d.code === "PARSER_CANCELLED")).toBe(true);
   });
 });
+
+describe("jsonParser — JSON Lines / NDJSON (GRD-011)", () => {
+  function pointersOf(units: readonly ParsedUnit[]): readonly (string | undefined)[] {
+    return units.map((u) => (u.kind === "json-path" ? u.jsonPointer : undefined));
+  }
+
+  it("parses .jsonl line-by-line into per-record units instead of failing the whole document", () => {
+    const result = jsonParser.parse(
+      selectionFromText('{"a":1}\n{"b":2}\n', { extension: "jsonl" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    const pointers = pointersOf(result.units);
+    expect(pointers).toContain("/0/a");
+    expect(pointers).toContain("/1/b");
+    const text = ("normalizedText" in result ? result.normalizedText : undefined) ?? "";
+    expect(text).toContain("/0/a: 1");
+    expect(text).toContain("/1/b: 2");
+  });
+
+  it("skips a malformed line as a non-fatal warning while keeping good records (.ndjson)", () => {
+    const result = jsonParser.parse(
+      selectionFromText('{"a":1}\n{bad}\n{"c":3}\n', { extension: "ndjson" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const pointers = pointersOf(result.units);
+    expect(pointers).toContain("/0/a");
+    expect(pointers).toContain("/2/c");
+    expect(
+      result.diagnostics.some((d) => d.severity === "warning" && d.code === "MALFORMED_INPUT"),
+    ).toBe(true);
+    // The whole document must NOT be rejected (no error-severity diagnostic).
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+  });
+});

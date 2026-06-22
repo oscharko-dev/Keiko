@@ -13,11 +13,12 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // SPDX IDs and names already present in the repo's resolved transitive graph plus a small
 // permissive set explicitly approved in spec D4. Adding a new license requires a deliberate edit
 // to this constant — surfaced via PR review.
-const APPROVED_LICENSES = new Set([
+export const APPROVED_LICENSES = new Set([
   "Apache-2.0",
   "MIT",
   "ISC",
@@ -89,7 +90,86 @@ function runRootSbom() {
   return result.stdout;
 }
 
-function offendersForComponent(component) {
+// Evaluate an SPDX license expression (CycloneDX `licenses[].expression`) against the allow-list
+// with correct SPDX precedence: `AND` binds tighter than `OR`, parentheses group, `OR` lets the
+// licensee choose any satisfied operand, and `AND` requires every operand. This recognises
+// dual-licensed transitive dependencies in the resolved graph — e.g. `(MPL-2.0 OR Apache-2.0)`,
+// used here under its approved Apache-2.0 option — without adding any new license to
+// APPROVED_LICENSES. It is fail-closed: any unparseable or unrecognised form (unbalanced
+// parentheses, `WITH` exceptions, `+` suffixes, leftover tokens) yields `false`, so a
+// precedence-sensitive expression such as `GPL-3.0-only AND (MIT OR ISC)` is never falsely approved
+// by a lone permissive operand.
+export function isLicenseExpressionApproved(expression) {
+  if (typeof expression !== "string" || expression.trim().length === 0) {
+    return false;
+  }
+  const tokens = expression
+    .replaceAll("(", " ( ")
+    .replaceAll(")", " ) ")
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+
+  // Hand-written recursive-descent over OR > AND > atom. Each parse function returns
+  // { ok, value, pos }: `ok` is false on a structural error (fail closed), `value` is whether the
+  // sub-expression is satisfiable, `pos` is the next unconsumed token index.
+  const parseAtom = (pos) => {
+    const token = tokens[pos];
+    if (token === "(") {
+      const inner = parseOr(pos + 1);
+      if (!inner.ok || tokens[inner.pos] !== ")") {
+        return { ok: false, value: false, pos };
+      }
+      return { ok: true, value: inner.value, pos: inner.pos + 1 };
+    }
+    if (token === undefined || token === ")" || token === "AND" || token === "OR") {
+      return { ok: false, value: false, pos };
+    }
+    return { ok: true, value: APPROVED_LICENSES.has(token), pos: pos + 1 };
+  };
+
+  const parseBinary = (pos, operator, combine, next) => {
+    let current = next(pos);
+    if (!current.ok) {
+      return current;
+    }
+    let value = current.value;
+    while (tokens[current.pos] === operator) {
+      const operand = next(current.pos + 1);
+      if (!operand.ok) {
+        return operand;
+      }
+      value = combine(value, operand.value);
+      current = operand;
+    }
+    return { ok: true, value, pos: current.pos };
+  };
+
+  function parseAnd(pos) {
+    return parseBinary(pos, "AND", (left, right) => left && right, parseAtom);
+  }
+  function parseOr(pos) {
+    return parseBinary(pos, "OR", (left, right) => left || right, parseAnd);
+  }
+
+  const result = parseOr(0);
+  // Fail closed unless the whole expression parsed cleanly with no leftover tokens.
+  return result.ok && result.pos === tokens.length && result.value;
+}
+
+// Evaluate one CycloneDX `licenses[]` entry against the allow-list. CycloneDX expresses a single
+// license as `{ license: { id | name } }` and a compound license choice as
+// `{ expression: "<SPDX expression>" }`. Returns the offending license string, or null when the
+// entry is acceptable.
+function entryLicenseOffense(entry) {
+  if (typeof entry?.expression === "string") {
+    return isLicenseExpressionApproved(entry.expression) ? null : entry.expression;
+  }
+  const license = entry?.license ?? {};
+  const candidate = license.id ?? license.name ?? "<unknown>";
+  return APPROVED_LICENSES.has(candidate) ? null : candidate;
+}
+
+export function offendersForComponent(component) {
   const id = `${component.name}@${component.version}`;
   const licenses = Array.isArray(component.licenses) ? component.licenses : [];
   // CycloneDX entries without an explicit `licenses` array are treated as offenders — we cannot
@@ -99,10 +179,9 @@ function offendersForComponent(component) {
   }
   const offenders = [];
   for (const entry of licenses) {
-    const license = entry?.license ?? {};
-    const candidate = license.id ?? license.name ?? "<unknown>";
-    if (!APPROVED_LICENSES.has(candidate)) {
-      offenders.push({ id, license: candidate });
+    const offense = entryLicenseOffense(entry);
+    if (offense !== null) {
+      offenders.push({ id, license: offense });
     }
   }
   return offenders;
@@ -157,4 +236,8 @@ function main() {
   );
 }
 
-main();
+const invokedDirectly =
+  process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+  main();
+}

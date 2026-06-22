@@ -1,0 +1,159 @@
+{
+  "issue": 1295,
+  "baseRef": "origin/release/0.2.0",
+  "totalProbes": 2324,
+  "diffCount": 0,
+  "missingSelectors": [],
+  "byMode": {
+    "01-dark": {
+      "probes": 332,
+      "diffs": 0
+    },
+    "02-light": {
+      "probes": 332,
+      "diffs": 0
+    },
+    "03-dark-hc": {
+      "probes": 332,
+      "diffs": 0
+    },
+    "04-light-hc": {
+      "probes": 332,
+      "diffs": 0
+    },
+    "05-prefers-contrast": {
+      "probes": 332,
+      "diffs": 0
+    },
+    "06-forced-colors": {
+      "probes": 332,
+      "diffs": 0
+    },
+    "07-reduced-motion": {
+      "probes": 332,
+      "diffs": 0
+    }
+  },
+  "diffs": [],
+  "categoryC": {
+    "description": "Deliberate adaptations (separate from 0-diff gate). C1: shadow-ink rows adapt warm ink in Light (dark identical, light differs). C3: mc-dialog-backdrop routes to --overlay-scrim (both dark+light identical — centralisation, no value change). C4: hl-*/fpv-src route to --ed-syn-*/--ed-fg which have HC overrides (dark+light identical, HC intentionally differs).",
+    "C1": {
+      "probes": {
+        ".hd-tool-cta::boxShadow": {
+          "group": "C1",
+          "label": "C1-hd-tool-cta",
+          "darkPre": "oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.75) 0px 10px 24px -18px",
+          "darkPost": "oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.75) 0px 10px 24px -18px",
+          "darkIdentical": true,
+          "lightPre": "oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.75) 0px 10px 24px -18px",
+          "lightPost": "oklch(1 0 0 / 0.04) 0px 1px 0px 0px inset, rgba(20, 30, 25, 0.75) 0px 10px 24px -18px",
+          "lightDiffers": true
+        },
+        ".cmp-model-menu::boxShadow": {
+          "group": "C1",
+          "label": "C1-cmp-model-menu",
+          "darkPre": "rgba(0, 0, 0, 0.8) 0px 18px 40px -24px, oklch(0.26 0.004 160) 0px 0px 0px 1px",
+          "darkPost": "rgba(0, 0, 0, 0.8) 0px 18px 40px -24px, oklch(0.26 0.004 160) 0px 0px 0px 1px",
+          "darkIdentical": true,
+          "lightPre": "rgba(0, 0, 0, 0.8) 0px 18px 40px -24px, oklch(0.915 0.005 160) 0px 0px 0px 1px",
+          "lightPost": "rgba(20, 30, 25, 0.8) 0px 18px 40px -24px, oklch(0.915 0.005 160) 0px 0px 0px 1px",
+          "lightDiffers": true
+        },
+        ".ksel-menu::boxShadow": {
+          "group": "C1",
+          "label": "C1-ksel-menu",
+          "darkPre": "rgba(0, 0, 0, 0.85) 0px 18px 42px -26px, oklch(0.26 0.004 160) 0px 0px 0px 1px",
+          "darkPost": "rgba(0, 0, 0, 0.85) 0px 18px 42px -26px, oklch(0.26 0.004 160) 0px 0px 0px 1px",
+          "darkIdentical": true,
+          "lightPre": "rgba(0, 0, 0, 0.85) 0px 18px 42px -26px, oklch(0.915 0.005 160) 0px 0px 0px 1px",
+          "lightPost": "rgba(20, 30, 25, 0.85) 0px 18px 42px -26px, oklch(0.915 0.005 160) 0px 0px 0px 1px",
+          "lightDiffers": true
+        }
+      }
+    },
+    "C3": {
+      "probes": {
+        ".mc-dialog-backdrop::backgroundColor": {
+          "group": "C3",
+          "label": "C3-mc-dialog-backdrop",
+          "darkPre": "oklch(0 0 0 / 0.55)",
+          "darkPost": "oklch(0 0 0 / 0.55)",
+          "darkIdentical": true,
+          "lightPre": "oklch(0.3 0.01 160 / 0.34)",
+          "lightPost": "oklch(0.3 0.01 160 / 0.34)",
+          "lightIdentical": true
+        }
+      }
+    },
+    "C4": {
+      "description": "hl-*/fpv-src: dark identical PRE/POST (same hex), HC modes differ (--ed-syn-* HC overrides improve contrast). This is intentional.",
+      "probes": {
+        ".fpv-src::color": {
+          "darkPre": "rgb(197, 205, 217)",
+          "darkPost": "rgb(197, 205, 217)",
+          "darkIdentical": true,
+          "hcPre": "rgb(197, 205, 217)",
+          "hcPost": "rgb(255, 255, 255)",
+          "hcDiffers": true
+        },
+        ".hl-str::color": {
+          "darkPre": "rgb(195, 232, 141)",
+          "darkPost": "rgb(195, 232, 141)",
+          "darkIdentical": true,
+          "hcPre": "rgb(195, 232, 141)",
+          "hcPost": "rgb(182, 240, 138)",
+          "hcDiffers": true
+        },
+        ".hl-num::color": {
+          "darkPre": "rgb(247, 140, 108)",
+          "darkPost": "rgb(247, 140, 108)",
+          "darkIdentical": true,
+          "hcPre": "rgb(247, 140, 108)",
+          "hcPost": "rgb(255, 179, 138)",
+          "hcDiffers": true
+        },
+        ".hl-key::color": {
+          "darkPre": "rgb(199, 146, 234)",
+          "darkPost": "rgb(199, 146, 234)",
+          "darkIdentical": true,
+          "hcPre": "rgb(199, 146, 234)",
+          "hcPost": "rgb(216, 182, 255)",
+          "hcDiffers": true
+        },
+        ".hl-type::color": {
+          "darkPre": "rgb(255, 203, 107)",
+          "darkPost": "rgb(255, 203, 107)",
+          "darkIdentical": true,
+          "hcPre": "rgb(255, 203, 107)",
+          "hcPost": "rgb(255, 212, 121)",
+          "hcDiffers": true
+        },
+        ".hl-fn::color": {
+          "darkPre": "rgb(130, 170, 255)",
+          "darkPost": "rgb(130, 170, 255)",
+          "darkIdentical": true,
+          "hcPre": "rgb(130, 170, 255)",
+          "hcPost": "rgb(159, 193, 255)",
+          "hcDiffers": true
+        },
+        ".hl-key2::color": {
+          "darkPre": "rgb(130, 170, 255)",
+          "darkPost": "rgb(130, 170, 255)",
+          "darkIdentical": true,
+          "hcPre": "rgb(130, 170, 255)",
+          "hcPost": "rgb(159, 193, 255)",
+          "hcDiffers": true
+        },
+        ".hl-punct::color": {
+          "darkPre": "rgb(137, 221, 255)",
+          "darkPost": "rgb(137, 221, 255)",
+          "darkIdentical": true,
+          "hcPre": "rgb(137, 221, 255)",
+          "hcPost": "rgb(166, 233, 255)",
+          "hcDiffers": true
+        }
+      }
+    },
+    "failures": []
+  }
+}

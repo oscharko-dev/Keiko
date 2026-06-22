@@ -5,7 +5,7 @@
 
 // Bounded text caps. Chosen to keep audit summaries and rationales safe to ship to a
 // browser surface without truncation, and to keep the body cap aligned with a comfortable
-// Memory Center card without scrolling.
+// MemoriaViva card without scrolling.
 export const MEMORY_BODY_MAX_CHARS = 4096;
 export const MEMORY_RATIONALE_MAX_CHARS = 1024;
 export const MEMORY_REASON_MAX_CHARS = 1024;
@@ -73,11 +73,7 @@ export function validateTags(field: string, input: unknown, errors: string[]): v
   }
 }
 
-export function validateRetentionHint(
-  field: string,
-  input: unknown,
-  errors: string[],
-): void {
+export function validateRetentionHint(field: string, input: unknown, errors: string[]): void {
   if (!isRecord(input)) {
     errors.push(`${field} must be an object when set`);
     return;

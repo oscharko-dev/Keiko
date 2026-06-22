@@ -18,6 +18,15 @@ export default tseslint.config(
       "only-for-internal-use/**",
       "Only for Internal Use/**",
       "tests/architecture/fixtures/**",
+      // Standalone frontend test-generation fixture projects (Issue #1203): intentionally idiomatic
+      // example code with uninstalled deps (React, Testing Library, Playwright), held as data — not
+      // product code subject to the repo's strict typed rules. Excluded from build and test collection.
+      "tests/fixtures/frontend-test-generation/**",
+      // Design-system evidence reproduction harnesses (e.g. the #1293 computed-value equivalence
+      // harness): standalone Node + Playwright scripts that mix Node and in-browser (page.evaluate)
+      // globals and live outside any TypeScript program. They are committed evidence/repro artifacts,
+      // not product code, so they are excluded from the strict typed lint (like the fixtures above).
+      "docs/design-system/evidence/**/*.mjs",
     ],
   },
   js.configs.recommended,
@@ -36,11 +45,49 @@ export default tseslint.config(
       "no-console": "warn",
     },
   },
+  // The keiko-editor package's build tsconfig (tsconfig.json) excludes test files and the jsdom
+  // setup so they never reach dist. Point the typed-lint parser at the package's lint-only project
+  // (tsconfig.eslint.json) for those files so the React component suites and the setup are still
+  // fully type-checked under strict-type-checked.
+  {
+    files: [
+      "packages/keiko-editor/src/**/*.{ts,tsx}",
+      "packages/keiko-editor/vitest.config.ts",
+      "packages/keiko-editor/vitest.setup.ts",
+    ],
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+        project: ["packages/keiko-editor/tsconfig.eslint.json"],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
   // Test files are exempt from max-lines-per-function: describe() blocks legitimately group many
   // it() cases. Covers both TypeScript suites and the .mjs harnesses for the Node build/gate scripts
   // (e.g. scripts/__tests__/*.test.mjs, which test the .mjs supply-chain and package-surface gates).
-  { files: ["**/*.test.ts", "**/*.test.mjs"], rules: { "max-lines-per-function": "off" } },
+  {
+    files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs"],
+    rules: { "max-lines-per-function": "off" },
+  },
   { files: ["**/*.{js,cjs}"], ...tseslint.configs.disableTypeChecked },
+  {
+    files: ["design-system/**/*.js"],
+    languageOptions: {
+      globals: {
+        document: "readonly",
+        getComputedStyle: "readonly",
+        localStorage: "readonly",
+        location: "readonly",
+        window: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/explicit-function-return-type": "off",
+      "max-lines-per-function": "off",
+      "no-empty": ["error", { allowEmptyCatch: true }],
+    },
+  },
   {
     files: ["**/*.cjs"],
     languageOptions: {
@@ -62,6 +109,11 @@ export default tseslint.config(
       "no-console": "off",
       "@typescript-eslint/explicit-function-return-type": "off",
     },
+  },
+  {
+    files: ["tests/e2e/fixtures/*.js"],
+    languageOptions: { globals: { Buffer: "readonly", process: "readonly" } },
+    rules: { "@typescript-eslint/explicit-function-return-type": "off" },
   },
   prettier,
 );

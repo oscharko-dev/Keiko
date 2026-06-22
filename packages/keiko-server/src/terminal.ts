@@ -197,10 +197,7 @@ function assertCwdInsideProject(
     return info.path;
   } catch (error) {
     if (error instanceof TerminalToolError) throw error;
-    throw new TerminalToolError(
-      "CWD_DENIED",
-      "Working directory is denied by policy.",
-    );
+    throw new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
   }
 }
 

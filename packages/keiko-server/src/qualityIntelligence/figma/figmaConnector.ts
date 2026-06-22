@@ -27,6 +27,7 @@ import { classifyTokenFailure, resolveFigmaToken } from "./figmaTokenSource.js";
 import {
   DEFAULT_SCOPED_PAGINATION_LIMITS,
   paginateScopedDocument,
+  resolveScopedPaginationLimits,
   type FigmaScopeCoverage,
   type RawFigmaNode,
   type ScopedNodeFetcher,
@@ -34,11 +35,22 @@ import {
 } from "./figmaScopedPagination.js";
 
 const FIGMA_API_ORIGIN = "https://api.figma.com";
-const DEFAULT_DEPTH = 4;
+const DEFAULT_DEPTH = 2;
 const DEFAULT_MAX_NODE_COUNT = 5000;
 const EPOCH = "1970-01-01T00:00:00.000Z";
+const DEEP_FETCH_FAIL_SOFT_RETRY_POLICY: FigmaRetryPolicy = {
+  maxRetries: 0,
+  baseDelayMs: 500,
+  maxDelayMs: 500,
+};
 
 export interface FigmaConnectorConfig {
+  /**
+   * Optional config-key PAT alternate (#751 AC2). Sits between the vault and env sources in the
+   * vault > config > env precedence. It is only honoured when the connector is constructed directly
+   * with a config token; the governed production build ({@link governedSnapshotBuild}) resolves
+   * vault > env (no config token), so this field stays inert there by design.
+   */
   readonly accessToken?: string;
   readonly depth?: number;
   readonly releaseMarker?: string;
@@ -163,6 +175,15 @@ const guardScopeSize = (node: RawFigmaNode, maxNodeCount: number): void => {
 // rate-limit exhausted, egress/TLS broken) — it must abort, not silently degrade a branch to shallow.
 // Any other per-node failure (a transient 5xx or a vanished sub-node) is soft: that branch keeps its
 // shallow content and the build proceeds with a truncation-aware coverage report.
+// The proxy family is covered in full — symmetric with RENDER_EGRESS_ABORT_CODES in
+// figmaSnapshotBuilder.ts — so a forward-proxy that requires auth (FIGMA_PROXY_AUTH_REQUIRED) or
+// denies the request by policy (FIGMA_PROXY_BLOCKED_BY_POLICY) on a per-screen fetch aborts the build
+// instead of silently degrading that screen to shallow content.
+// Rate-limit exhaustion is deliberately NOT in this hard-abort set. The discovery fetch still aborts
+// on FIGMA_RATE_LIMITED before this fetcher is constructed, but a single per-screen deepening fetch
+// that exhausts retries can safely degrade to the already-fetched shallow screen while coverage marks
+// it truncated. That keeps large boards reviewable instead of failing the whole snapshot after one
+// expensive branch hits Figma's cost-based limit.
 const DEEP_FETCH_ABORT_CODES: ReadonlySet<string> = new Set([
   "FIGMA_TOKEN_MISSING",
   "FIGMA_TOKEN_INVALID",
@@ -170,9 +191,10 @@ const DEEP_FETCH_ABORT_CODES: ReadonlySet<string> = new Set([
   "FIGMA_TOKEN_REVOKED",
   "FIGMA_INSUFFICIENT_SCOPE",
   "FIGMA_CONSENT_REQUIRED",
-  "FIGMA_RATE_LIMITED",
   "FIGMA_PROXY_EGRESS_FAILED",
   "FIGMA_PROXY_UNREACHABLE",
+  "FIGMA_PROXY_AUTH_REQUIRED",
+  "FIGMA_PROXY_BLOCKED_BY_POLICY",
   "FIGMA_TLS_CA_FAILURE",
 ]);
 
@@ -198,11 +220,12 @@ const fetchDocumentAt = async (
   nodeId: string,
   fetchDepth: number,
   version: string | undefined,
+  retryPolicy: FigmaRetryPolicy = rt.retryPolicy,
 ): Promise<RawFigmaNode> => {
   const requestUrl = buildScopedUrl(fileKey, nodeId, fetchDepth, version);
   const response = await fetchWithBackoff(
     () => rt.deps.http({ url: requestUrl, headers: { "X-Figma-Token": token } }),
-    rt.retryPolicy,
+    retryPolicy,
     rt.sleep,
   );
   if (response.status < 200 || response.status >= 300) {
@@ -272,6 +295,7 @@ const makeDeepFetcher = (
         nodeId,
         rt.paginationLimits.pageDepth,
         version,
+        DEEP_FETCH_FAIL_SOFT_RETRY_POLICY,
       );
     } catch (err) {
       if (err instanceof FigmaConnectorError && DEEP_FETCH_ABORT_CODES.has(err.code)) throw err;
@@ -321,7 +345,10 @@ export const createFigmaConnector = (deps: FigmaConnectorDeps): FigmaConnector =
     maxNodeCount: deps.config?.maxNodeCount ?? DEFAULT_MAX_NODE_COUNT,
     retryPolicy: deps.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY,
     sleep: deps.sleep ?? realFigmaRetrySleep,
-    paginationLimits: { ...DEFAULT_SCOPED_PAGINATION_LIMITS, ...deps.config?.pagination },
+    paginationLimits: resolveScopedPaginationLimits({
+      ...DEFAULT_SCOPED_PAGINATION_LIMITS,
+      ...deps.config?.pagination,
+    }),
   };
   return {
     fetchScopedNodes: (url, options = {}) => doFetchScopedNodes(rt, url, options),

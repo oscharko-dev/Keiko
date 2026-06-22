@@ -3,18 +3,22 @@
 // - The totals-vs-collection-length invariant fails closed.
 // - Schema validation rejects a stored manifest with an unknown top-level key (defensive read).
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  appendQualityIntelligenceExportRow,
   listQualityIntelligenceRuns,
   loadQualityIntelligenceRun,
   QI_SUBDIR,
   recordQualityIntelligenceRun,
   type QualityIntelligenceRecordInput,
 } from "../store.js";
-import type { QualityIntelligenceEvidenceManifest } from "../manifestSchema.js";
+import type {
+  QualityIntelligenceEvidenceManifest,
+  QualityIntelligenceExportRow,
+} from "../manifestSchema.js";
 import { EvidenceReadError, EvidenceWriteError } from "../../errors.js";
 
 let evidenceDir: string;
@@ -143,6 +147,24 @@ describe("recordQualityIntelligenceRun + load + list", () => {
     expect(() => recordQualityIntelligenceRun(input, { evidenceDir })).toThrow(EvidenceWriteError);
   });
 
+  it("refuses to overwrite an existing symlinked QI manifest entry", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "keiko-qi-victim-"));
+    try {
+      const victim = join(outside, "victim.qi.json");
+      await writeFile(victim, "ORIGINAL", "utf8");
+      await mkdir(join(evidenceDir, QI_SUBDIR), { recursive: true });
+      await symlink(victim, join(evidenceDir, QI_SUBDIR, "run-symlink.qi.json"));
+
+      expect(() => recordQualityIntelligenceRun(baseInput("run-symlink"), { evidenceDir })).toThrow(
+        EvidenceWriteError,
+      );
+      expect(await readFile(victim, "utf8")).toBe("ORIGINAL");
+      expect(loadQualityIntelligenceRun("run-symlink", { evidenceDir })).toBeUndefined();
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("loadQualityIntelligenceRun returns undefined for a missing runId", () => {
     expect(loadQualityIntelligenceRun("run-absent", { evidenceDir })).toBeUndefined();
   });
@@ -174,6 +196,98 @@ describe("recordQualityIntelligenceRun + load + list", () => {
       ...baseInput("../escape"),
     };
     expect(() => recordQualityIntelligenceRun(input, { evidenceDir })).toThrow();
+  });
+});
+
+// ─── appendQualityIntelligenceExportRow (Issue #283, AC4 — export-evidence emission) ──────────────
+//
+// The route exercises the writer's happy path end-to-end (keiko-server exportRoutes.test.ts), but the
+// writer's own error branches (no-store, run-not-found) and the persist-redactor invariant are only
+// reachable at the unit level — the route's fail-open catch swallows both error types. These tests
+// pin that contract so a future refactor cannot silently turn a guard into a no-op (verifier Gap 2).
+
+describe("appendQualityIntelligenceExportRow (Issue #283 AC4)", () => {
+  const exportRow = (
+    overrides: Partial<QualityIntelligenceExportRow> = {},
+  ): QualityIntelligenceExportRow => ({
+    id: "qi-export-aaaaaaaaaaaaaaaaaaaaaaaa",
+    targetAdapter: "csv",
+    integrityHash: "b".repeat(64),
+    redactionAttested: true,
+    dryRun: false,
+    ...overrides,
+  });
+
+  it("throws EvidenceWriteError when neither store nor evidenceDir is supplied", () => {
+    expect(() =>
+      appendQualityIntelligenceExportRow({ runId: "run-export-x", export: exportRow() }, {}),
+    ).toThrow(EvidenceWriteError);
+  });
+
+  it("throws EvidenceReadError when the run manifest does not exist (an export cannot precede its run)", () => {
+    expect(() =>
+      appendQualityIntelligenceExportRow(
+        { runId: "run-absent", export: exportRow() },
+        { evidenceDir },
+      ),
+    ).toThrow(EvidenceReadError);
+  });
+
+  it("appends one row, keeps totals.exports in lockstep, and the manifest reloads (integrity holds)", () => {
+    recordQualityIntelligenceRun(baseInput("run-export-1"), { evidenceDir });
+    const { manifest } = appendQualityIntelligenceExportRow(
+      { runId: "run-export-1", export: exportRow({ targetAdapter: "csv" }) },
+      { evidenceDir },
+    );
+    expect(manifest.exports).toHaveLength(1);
+    expect(manifest.exports[0]?.targetAdapter).toBe("csv");
+    expect(manifest.totals.exports).toBe(1);
+    // The recomputed exports group hash + the totals===length invariant must survive a defensive reload.
+    const reloaded = loadQualityIntelligenceRun("run-export-1", { evidenceDir });
+    expect(reloaded?.exports).toHaveLength(1);
+    expect(reloaded?.totals.exports).toBe(1);
+  });
+
+  it("deduplicates by (id, dryRun): the same row appended twice yields one row", () => {
+    recordQualityIntelligenceRun(baseInput("run-export-dedup"), { evidenceDir });
+    const row = exportRow({ id: "qi-export-dup", dryRun: false });
+    appendQualityIntelligenceExportRow({ runId: "run-export-dedup", export: row }, { evidenceDir });
+    const { manifest } = appendQualityIntelligenceExportRow(
+      { runId: "run-export-dedup", export: row },
+      { evidenceDir },
+    );
+    expect(manifest.exports).toHaveLength(1);
+  });
+
+  it("treats the same id in a different mode as a distinct row (dry-run vs materialised)", () => {
+    recordQualityIntelligenceRun(baseInput("run-export-modes"), { evidenceDir });
+    appendQualityIntelligenceExportRow(
+      { runId: "run-export-modes", export: exportRow({ id: "qi-export-modes", dryRun: true }) },
+      { evidenceDir },
+    );
+    const { manifest } = appendQualityIntelligenceExportRow(
+      { runId: "run-export-modes", export: exportRow({ id: "qi-export-modes", dryRun: false }) },
+      { evidenceDir },
+    );
+    expect(manifest.exports).toHaveLength(2);
+    expect(manifest.exports.map((r) => r.dryRun ?? false).sort()).toEqual([false, true]);
+  });
+
+  it("routes the appended row through the persist redactor (a planted secret never reaches disk)", async () => {
+    recordQualityIntelligenceRun(baseInput("run-export-redact"), { evidenceDir });
+    appendQualityIntelligenceExportRow(
+      {
+        runId: "run-export-redact",
+        export: exportRow({ id: "qi-export-leaked-token-from-row-XYZ" }),
+      },
+      { evidenceDir, redaction: { additionalSecrets: ["leaked-token-from-row-XYZ"] } },
+    );
+    const onDisk = await readFile(
+      join(evidenceDir, QI_SUBDIR, "run-export-redact.qi.json"),
+      "utf8",
+    );
+    expect(onDisk).not.toContain("leaked-token-from-row-XYZ");
+    expect(onDisk).toContain("[REDACTED]");
   });
 });
 
@@ -355,6 +469,56 @@ describe("load-time integrity verification (issue #637)", () => {
       coverageMatrix: matrix.map((row, i) => (i === 0 ? { ...row, status: "uncovered" } : row)),
     });
     expect(() => loadQualityIntelligenceRun("run-tamper-cov", { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("rejects a load when integrityHashes.coverageMatrix is deleted while the collection is kept (fail-closed)", async () => {
+    // RED against assertOptionalHashMatches: stored===undefined → early return → loads.
+    // GREEN after switching to assertHashMatches with derived expected (mirrors atomFingerprints).
+    recordQualityIntelligenceRun(
+      {
+        ...baseInput("run-tamper-cov-nohash"),
+        coverageMatrix: [
+          { atomId: "atom-1", status: "covered", confidence: 0.9, coveringCandidateIds: ["tc-1"] },
+        ],
+      },
+      { evidenceDir },
+    );
+    const original = await readManifest("run-tamper-cov-nohash");
+    const integrityHashes = original.integrityHashes as Record<string, unknown>;
+    // Simulate an attacker who deletes the stored sub-hash so the optional guard passes.
+    const hashesWithoutCoverage = { ...integrityHashes };
+    delete hashesWithoutCoverage.coverageMatrix;
+    await writeManifest("run-tamper-cov-nohash", {
+      ...original,
+      integrityHashes: hashesWithoutCoverage,
+    });
+    expect(() => loadQualityIntelligenceRun("run-tamper-cov-nohash", { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("rejects a load when integrityHashes.sourceFingerprints is deleted while the collection is kept (fail-closed)", async () => {
+    // RED against assertOptionalHashMatches: stored===undefined → early return → loads.
+    // GREEN after switching to assertHashMatches with derived expected (mirrors atomFingerprints).
+    recordQualityIntelligenceRun(
+      {
+        ...baseInput("run-tamper-srcfp-nohash"),
+        sourceFingerprints: [{ envelopeId: "env-1", integrityHashSha256Hex: "a".repeat(64) }],
+      },
+      { evidenceDir },
+    );
+    const original = await readManifest("run-tamper-srcfp-nohash");
+    const integrityHashes = original.integrityHashes as Record<string, unknown>;
+    // Simulate an attacker who deletes the stored sub-hash so the optional guard passes.
+    const hashesWithoutSrcFp = { ...integrityHashes };
+    delete hashesWithoutSrcFp.sourceFingerprints;
+    await writeManifest("run-tamper-srcfp-nohash", {
+      ...original,
+      integrityHashes: hashesWithoutSrcFp,
+    });
+    expect(() => loadQualityIntelligenceRun("run-tamper-srcfp-nohash", { evidenceDir })).toThrow(
       EvidenceReadError,
     );
   });

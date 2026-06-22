@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Table &amp; Data Grid · Keiko Design System</title>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <link rel="stylesheet" href="keiko-inputs.css" />
+    <link rel="stylesheet" href="keiko-data.css" />
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Components · Data</div>
+        <h1>Table &amp; <span class="dim">data grid.</span></h1>
+        <p class="lead">The tabular layer enterprise screens depend on — sortable headers, row selection, a sticky header, numeric alignment, density, and first-class loading &amp; empty states. Every surface reads a component token, so it tracks all three modes for free.</p>
+      </header>
+
+      <!-- LIVE GRID -->
+      <section class="sec" id="grid">
+        <div class="sec-head"><div class="num">01 — DATA GRID</div><h2>The full grid</h2><p>Click a column header to sort. Tick rows to select. The header stays pinned as the body scrolls; numbers align right on tabular figures.</p></div>
+
+        <div class="demo-row" style="margin-bottom:16px;gap:10px">
+          <div class="c-seg" role="group" aria-label="Density">
+            <button data-den="comfortable" aria-selected="true">Comfortable</button>
+            <button data-den="compact" aria-selected="false">Compact</button>
+          </div>
+          <label class="c-check" style="margin-left:6px"><input type="checkbox" id="zebra" /><span class="bx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5" /></svg></span>Zebra rows</label>
+        </div>
+
+        <div class="c-tablewrap" id="gridwrap">
+          <div class="c-tablescroll">
+            <table class="c-table responsive" id="grid-table" role="grid" aria-label="Agents" aria-multiselectable="true">
+              <thead>
+                <tr role="row">
+                  <th class="selcell" role="columnheader"><label class="c-check"><input type="checkbox" id="selall" aria-label="Select all" /><span class="bx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5" /></svg></span></label></th>
+                  <th class="sortable" role="columnheader" tabindex="0" aria-sort="none" data-key="name" data-type="t">Agent <span class="so"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5 V19 M6 13 l6 6 6-6" /></svg></span></th>
+                  <th class="sortable" role="columnheader" tabindex="0" aria-sort="none" data-key="status" data-type="t">Status</th>
+                  <th class="sortable num" role="columnheader" tabindex="0" aria-sort="descending" data-key="runs" data-type="n">Runs <span class="so"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5 V19 M6 13 l6 6 6-6" /></svg></span></th>
+                  <th class="sortable num" role="columnheader" tabindex="0" aria-sort="none" data-key="success" data-type="n">Success</th>
+                  <th class="sortable" role="columnheader" tabindex="0" aria-sort="none" data-key="model" data-type="t">Model</th>
+                  <th class="sortable" role="columnheader" tabindex="0" aria-sort="none" data-key="updated" data-type="t">Updated</th>
+                </tr>
+              </thead>
+              <tbody id="grid-body"></tbody>
+            </table>
+          </div>
+          <div class="c-table-foot">
+            <span class="rc" id="selcount">0 selected</span>
+            <span class="grow"></span>
+            <span class="rc">1–6 of 6</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- STATES -->
+      <section class="sec" id="states">
+        <div class="sec-head"><div class="num">02 — STATES</div><h2>Loading &amp; empty</h2><p>A grid is never just rows. Loading shimmers the cell shapes so layout never jumps; empty states explain and offer the next action.</p></div>
+        <div class="stack">
+          <div>
+            <div class="sub-head">Loading — skeleton rows</div>
+            <div class="c-tablewrap">
+              <div class="c-tablescroll">
+                <table class="c-table is-loading">
+                  <thead><tr><th>Agent</th><th>Status</th><th class="num">Runs</th><th>Model</th></tr></thead>
+                  <tbody>
+                    <tr><td>x</td><td>x</td><td class="num">0</td><td>x</td></tr>
+                    <tr><td>x</td><td>x</td><td class="num">0</td><td>x</td></tr>
+                    <tr><td>x</td><td>x</td><td class="num">0</td><td>x</td></tr>
+                    <tr><td>x</td><td>x</td><td class="num">0</td><td>x</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="sub-head">Empty — no rows yet</div>
+            <div class="c-tablewrap">
+              <div class="c-table-empty">
+                <div class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2" /><path d="M3.5 9.5 H20.5 M9 5 V19" /></svg></div>
+                <div class="tt">No agents yet</div>
+                <div class="ts">Connect a workspace or create your first agent to see runs appear here.</div>
+                <button class="c-btn c-btn--primary c-btn--sm" style="margin-top:4px">Create agent</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ANATOMY -->
+      <section class="sec" id="tokens">
+        <div class="sec-head"><div class="num">03 — TOKENS</div><h2>What it's made of</h2><p>No new colours — the grid resolves entirely to existing table &amp; surface tokens.</p></div>
+        <div class="card" style="padding:8px 24px;overflow-x:auto">
+          <table class="tbl">
+            <thead><tr><th>Part</th><th>Token</th><th>Resolves to</th></tr></thead>
+            <tbody>
+              <tr><td class="fgw">Header</td><td class="mono">--table-header-text · --surface-secondary</td><td>fg-faint on card-2</td></tr>
+              <tr><td class="fgw">Row border</td><td class="mono">--table-row-border</td><td>line-soft</td></tr>
+              <tr><td class="fgw">Row hover</td><td class="mono">--table-row-surface-hover</td><td>card</td></tr>
+              <tr><td class="fgw">Row selected</td><td class="mono">--table-row-surface-selected</td><td>accent-dim</td></tr>
+              <tr><td class="fgw">Sort indicator</td><td class="mono">--text-accent</td><td>accent-text</td></tr>
+              <tr><td class="fgw">Skeleton</td><td class="mono">--skeleton-base → --skeleton-highlight</td><td>inset → card-2</td></tr>
+              <tr><td class="fgw">Density</td><td class="mono">--row-pad-y · --row-pad-x</td><td>9/12px → 6/10px compact</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      var ROWS = [
+        { name: "Triage Bot", initials: "TB", status: "ok", statusLabel: "Active", runs: 1284, success: 98, model: "gpt-oss-120b", updated: "2m ago", u: 2 },
+        { name: "Doc Summariser", initials: "DS", status: "ok", statusLabel: "Active", runs: 932, success: 95, model: "claude-sonnet", updated: "14m ago", u: 14 },
+        { name: "PR Reviewer", initials: "PR", status: "warn", statusLabel: "Degraded", runs: 651, success: 81, model: "gpt-oss-120b", updated: "1h ago", u: 60 },
+        { name: "Release Notes", initials: "RN", status: "idle", statusLabel: "Idle", runs: 210, success: 99, model: "claude-haiku", updated: "3h ago", u: 180 },
+        { name: "Schema Linter", initials: "SL", status: "danger", statusLabel: "Failing", runs: 88, success: 42, model: "gpt-oss-20b", updated: "5h ago", u: 300 },
+        { name: "Changelog Drafter", initials: "CD", status: "ok", statusLabel: "Active", runs: 1503, success: 97, model: "claude-sonnet", updated: "1d ago", u: 1440 }
+      ];
+      var SORT = { key: "runs", dir: -1, type: "n" };
+
+      function badge(s, label) {
+        var map = { ok: "c-badge--ok", warn: "c-badge--warn", danger: "c-badge--danger", idle: "" };
+        return '<span class="c-badge ' + map[s] + '"><span class="dot"></span>' + label + '</span>';
+      }
+      function render() {
+        var body = document.getElementById("grid-body");
+        var rows = ROWS.slice().sort(function (a, b) {
+          var k = SORT.key, x = a[k], y = b[k];
+          if (SORT.type === "n") return (x - y) * SORT.dir;
+          if (k === "updated") return (a.u - b.u) * SORT.dir;
+          return String(x).localeCompare(String(y)) * SORT.dir;
+        });
+        body.innerHTML = rows.map(function (r) {
+          return '<tr role="row" data-name="' + r.name + '">' +
+            '<td class="selcell" role="gridcell"><label class="c-check"><input type="checkbox" class="rowsel" aria-label="Select ' + r.name + '" /><span class="bx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5" /></svg></span></label></td>' +
+            '<td role="gridcell" data-label="Agent"><div class="c-cell-user"><span class="av">' + r.initials + '</span><span class="pri">' + r.name + '</span></div></td>' +
+            '<td role="gridcell" data-label="Status">' + badge(r.status, r.statusLabel) + '</td>' +
+            '<td class="num" role="gridcell" data-label="Runs">' + r.runs.toLocaleString() + '</td>' +
+            '<td class="num" role="gridcell" data-label="Success">' + r.success + '%</td>' +
+            '<td role="gridcell" data-label="Model" style="font-family:var(--font-mono);font-size:12px">' + r.model + '</td>' +
+            '<td role="gridcell" data-label="Updated">' + r.updated + '</td>' +
+          '</tr>';
+        }).join("");
+        bindRowSel();
+      }
+      function setSort(key, type) {
+        if (SORT.key === key) SORT.dir *= -1; else { SORT.key = key; SORT.type = type; SORT.dir = type === "n" ? -1 : 1; }
+        document.querySelectorAll("#grid-table thead th.sortable").forEach(function (th) {
+          th.setAttribute("aria-sort", th.dataset.key === SORT.key ? (SORT.dir === 1 ? "ascending" : "descending") : "none");
+        });
+        render();
+      }
+      document.querySelectorAll("#grid-table thead th.sortable").forEach(function (th) {
+        th.addEventListener("click", function () { setSort(th.dataset.key, th.dataset.type); });
+        th.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSort(th.dataset.key, th.dataset.type); } });
+      });
+      function updateCount() {
+        var n = document.querySelectorAll(".rowsel:checked").length;
+        document.getElementById("selcount").textContent = n + " selected";
+      }
+      function bindRowSel() {
+        document.querySelectorAll(".rowsel").forEach(function (cb) {
+          cb.addEventListener("change", function () {
+            cb.closest("tr").setAttribute("aria-selected", cb.checked ? "true" : "false");
+            updateCount();
+            var all = document.querySelectorAll(".rowsel"), on = document.querySelectorAll(".rowsel:checked");
+            var sa = document.getElementById("selall");
+            sa.indeterminate = on.length > 0 && on.length < all.length;
+            sa.checked = on.length === all.length;
+          });
+        });
+      }
+      document.getElementById("selall").addEventListener("change", function () {
+        var on = this.checked;
+        document.querySelectorAll(".rowsel").forEach(function (cb) { cb.checked = on; cb.closest("tr").setAttribute("aria-selected", on ? "true" : "false"); });
+        updateCount();
+      });
+      // density + zebra
+      document.querySelectorAll('[data-den]').forEach(function (b) {
+        b.addEventListener("click", function () {
+          document.querySelectorAll('[data-den]').forEach(function (x) { x.setAttribute("aria-selected", "false"); });
+          b.setAttribute("aria-selected", "true");
+          document.documentElement.setAttribute("data-density", b.dataset.den === "compact" ? "compact" : "comfortable");
+        });
+      });
+      document.getElementById("zebra").addEventListener("change", function () {
+        document.getElementById("grid-table").classList.toggle("zebra", this.checked);
+      });
+      render();
+    </script>
+    <script src="theme-control.js"></script>
+  </body>
+</html>

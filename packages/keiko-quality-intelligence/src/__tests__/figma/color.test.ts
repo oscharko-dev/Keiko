@@ -4,6 +4,7 @@ import {
   isVisiblePaint,
   paintColorToHex,
   parseHexRgb,
+  parseHexRgba,
 } from "../../domain/figma/color.js";
 import type { FigmaSourceNode } from "../../domain/figma/sourceNode.js";
 
@@ -33,6 +34,13 @@ describe("paintColorToHex", () => {
     expect(paintColorToHex({ color: { r: 1, g: 0, b: 0, a: 1 } })).toBe("#ff0000");
   });
 
+  it("multiplies colour alpha by paint opacity", () => {
+    expect(paintColorToHex({ color: { r: 1, g: 0, b: 0, a: 1 }, opacity: 0.5 })).toBe("#ff000080");
+    expect(paintColorToHex({ color: { r: 0, g: 0, b: 1, a: 0.5 }, opacity: 0.5 })).toBe(
+      "#0000ff40",
+    );
+  });
+
   it("returns undefined for a paint with no colour", () => {
     expect(paintColorToHex({ type: "SOLID" })).toBeUndefined();
   });
@@ -47,8 +55,9 @@ describe("isVisiblePaint", () => {
     expect(isVisiblePaint(solid(0, 0, 0, { visible: false }))).toBe(false);
   });
 
-  it("rejects a fully-transparent paint (opacity:0 or color.a:0)", () => {
+  it("rejects a fully-transparent paint (opacity<=0 or color.a<=0)", () => {
     expect(isVisiblePaint(solid(0, 0, 0, { opacity: 0 }))).toBe(false);
+    expect(isVisiblePaint(solid(0, 0, 0, { opacity: -1 }))).toBe(false);
     expect(isVisiblePaint({ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 0 } })).toBe(false);
   });
 });
@@ -90,5 +99,19 @@ describe("parseHexRgb", () => {
   });
   it("returns undefined for a malformed value", () => {
     expect(parseHexRgb("not-a-hex")).toBeUndefined();
+  });
+});
+
+describe("parseHexRgba", () => {
+  it("parses #RRGGBB with an opaque alpha", () => {
+    expect(parseHexRgba("#ff8000")).toEqual({ r: 255, g: 128, b: 0, a: 1 });
+  });
+
+  it("parses a trailing alpha pair instead of dropping it", () => {
+    const parsed = parseHexRgba("#ff000080");
+    expect(parsed?.r).toBe(255);
+    expect(parsed?.g).toBe(0);
+    expect(parsed?.b).toBe(0);
+    expect(parsed?.a).toBeCloseTo(128 / 255, 10);
   });
 });

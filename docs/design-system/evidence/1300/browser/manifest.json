@@ -1,0 +1,1303 @@
+{
+  "issue": 1300,
+  "epic": 1290,
+  "appPath": "packages/keiko-ui/out",
+  "route": "/",
+  "shotCount": 72,
+  "modes": ["dark", "light", "dark-hc", "light-hc", "reduced-motion", "forced-colors"],
+  "viewports": ["desktop", "tablet", "mobile"],
+  "scenarios": [
+    {
+      "id": "shell",
+      "description": "empty workspace shell",
+      "requiredSelectors": [".header", ".workspace", ".stage"]
+    },
+    {
+      "id": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ]
+    },
+    {
+      "id": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ]
+    },
+    {
+      "id": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ]
+    }
+  ],
+  "manifest": [
+    {
+      "file": "desktop__shell__dark.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "desktop",
+      "mode": "dark",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 782,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-chat-quality__dark.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "desktop",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1778,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-memory-relationships__dark.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "desktop",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1656,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-files-editor__dark.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "desktop",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1190,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__shell__light.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "desktop",
+      "mode": "light",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 782,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-chat-quality__light.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "desktop",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1778,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-memory-relationships__light.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "desktop",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1656,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-files-editor__light.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "desktop",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1190,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__shell__dark-hc.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "desktop",
+      "mode": "dark-hc",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 782,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-chat-quality__dark-hc.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "desktop",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1778,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-memory-relationships__dark-hc.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "desktop",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1656,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-files-editor__dark-hc.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "desktop",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1190,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__shell__light-hc.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "desktop",
+      "mode": "light-hc",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 782,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-chat-quality__light-hc.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "desktop",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1778,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-memory-relationships__light-hc.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "desktop",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1656,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-files-editor__light-hc.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "desktop",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1190,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__shell__reduced-motion.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "desktop",
+      "mode": "reduced-motion",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 782,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-chat-quality__reduced-motion.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "desktop",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1778,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-memory-relationships__reduced-motion.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "desktop",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1656,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-files-editor__reduced-motion.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "desktop",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1190,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__shell__forced-colors.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "desktop",
+      "mode": "forced-colors",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 782,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-chat-quality__forced-colors.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "desktop",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1778,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-memory-relationships__forced-colors.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "desktop",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1656,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__workspace-files-editor__forced-colors.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "desktop",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1190,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__shell__dark.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "tablet",
+      "mode": "dark",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-chat-quality__dark.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "tablet",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-memory-relationships__dark.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "tablet",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-files-editor__dark.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "tablet",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__shell__light.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "tablet",
+      "mode": "light",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-chat-quality__light.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "tablet",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-memory-relationships__light.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "tablet",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-files-editor__light.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "tablet",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__shell__dark-hc.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "tablet",
+      "mode": "dark-hc",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-chat-quality__dark-hc.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "tablet",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-memory-relationships__dark-hc.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "tablet",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-files-editor__dark-hc.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "tablet",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__shell__light-hc.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "tablet",
+      "mode": "light-hc",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-chat-quality__light-hc.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "tablet",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-memory-relationships__light-hc.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "tablet",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-files-editor__light-hc.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "tablet",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__shell__reduced-motion.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "tablet",
+      "mode": "reduced-motion",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-chat-quality__reduced-motion.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "tablet",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-memory-relationships__reduced-motion.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "tablet",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-files-editor__reduced-motion.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "tablet",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__shell__forced-colors.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "tablet",
+      "mode": "forced-colors",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-chat-quality__forced-colors.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "tablet",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-memory-relationships__forced-colors.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "tablet",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__workspace-files-editor__forced-colors.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "tablet",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__shell__dark.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "mobile",
+      "mode": "dark",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-chat-quality__dark.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "mobile",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-memory-relationships__dark.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "mobile",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-files-editor__dark.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "mobile",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__shell__light.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "mobile",
+      "mode": "light",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-chat-quality__light.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "mobile",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-memory-relationships__light.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "mobile",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-files-editor__light.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "mobile",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__shell__dark-hc.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "mobile",
+      "mode": "dark-hc",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-chat-quality__dark-hc.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "mobile",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-memory-relationships__dark-hc.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "mobile",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-files-editor__dark-hc.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "mobile",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__shell__light-hc.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "mobile",
+      "mode": "light-hc",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-chat-quality__light-hc.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "mobile",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-memory-relationships__light-hc.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "mobile",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-files-editor__light-hc.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "mobile",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__shell__reduced-motion.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "mobile",
+      "mode": "reduced-motion",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-chat-quality__reduced-motion.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "mobile",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-memory-relationships__reduced-motion.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "mobile",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-files-editor__reduced-motion.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "mobile",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__shell__forced-colors.png",
+      "route": "/",
+      "scenario": "shell",
+      "description": "empty workspace shell",
+      "viewport": "mobile",
+      "mode": "forced-colors",
+      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 0,
+      "textLen": 776,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-chat-quality__forced-colors.png",
+      "route": "/",
+      "scenario": "workspace-chat-quality",
+      "description": "seeded workspace windows: chat, Quality Intelligence, Local Knowledge",
+      "viewport": "mobile",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-chat\"]",
+        "[data-window-id=\"issue-1300-quality\"]",
+        "[data-window-id=\"issue-1300-local-knowledge\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 3,
+      "textLen": 1772,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-memory-relationships__forced-colors.png",
+      "route": "/",
+      "scenario": "workspace-memory-relationships",
+      "description": "seeded workspace windows: MemoriaViva and Relationships",
+      "viewport": "mobile",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-memoria\"]",
+        "[data-window-id=\"issue-1300-relationships\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1650,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__workspace-files-editor__forced-colors.png",
+      "route": "/",
+      "scenario": "workspace-files-editor",
+      "description": "seeded workspace windows: Files and Editor",
+      "viewport": "mobile",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1300-files\"]",
+        "[data-window-id=\"issue-1300-editor\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 2,
+      "textLen": 1184,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    }
+  ]
+}

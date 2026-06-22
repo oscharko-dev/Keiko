@@ -129,7 +129,13 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
     const events: readonly CapsuleAuditEvent[] = [
       { kind: "capsule-created", capsuleId, occurredAt: 1 },
       { kind: "capsule-deleted", capsuleId, occurredAt: 2 },
-      { kind: "indexing-job-started", capsuleId, sourceIds: [sourceId], jobId: "job-1", occurredAt: 3 },
+      {
+        kind: "indexing-job-started",
+        capsuleId,
+        sourceIds: [sourceId],
+        jobId: "job-1",
+        occurredAt: 3,
+      },
       {
         kind: "indexing-job-completed",
         capsuleId,

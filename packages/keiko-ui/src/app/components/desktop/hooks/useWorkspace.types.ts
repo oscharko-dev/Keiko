@@ -3,6 +3,10 @@ import type { SnapZone } from "../windows/connectionUtils";
 import type { WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import type { ChatConnectedScope } from "@/lib/types";
+import type {
+  QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
+} from "@oscharko-dev/keiko-contracts";
 
 export interface ViewportWorld {
   readonly x: number;
@@ -22,6 +26,8 @@ export interface WorkspaceApi {
   readonly toggleTool: (type: WindowType) => void;
   readonly focus: (id: string) => void;
   readonly close: (id: string) => void;
+  readonly minimize: (id: string) => void;
+  readonly restore: (id: string) => void;
   readonly maximize: (id: string) => void;
   readonly update: (id: string, patch: Partial<AppWindow>) => void;
   readonly setSnap: (zone: SnapZone | null) => void;
@@ -42,8 +48,17 @@ export interface WorkspaceApi {
   readonly linkedConnectorCapsuleSetIds: (id: string) => readonly string[];
   /** Epic #750 #756 — snapshot run ids from connected Figma Snapshot windows. */
   readonly linkedFigmaSnapshotRunIds: (id: string) => readonly string[];
+  /** Figma Snapshot sources, optionally scoped to selected screen ids. */
+  readonly linkedFigmaSnapshotSources?:
+    | ((id: string) => readonly QualityIntelligenceFigmaSnapshotSource[])
+    | undefined;
+  /** Image-only sources from connected Figma Image windows. */
+  readonly linkedImageSources?:
+    | ((id: string) => readonly QualityIntelligenceImageSource[])
+    | undefined;
   readonly currentFilesContext: () => FilesWindowContext | null;
   readonly zoomTo: (z: number) => void;
+  readonly fitView: () => void;
   readonly resetView: () => void;
   readonly panBy: (dx: number, dy: number) => void;
   readonly rect: () => DOMRect | null;

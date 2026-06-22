@@ -85,11 +85,22 @@ function scrubEvidenceText(text: string): string {
   return out.replace(/<\/?qi-evidence/giu, "[evidence]");
 }
 
+// Second line of defence behind the structural fence (Issue #284 AC1: "Untrusted content cannot
+// override system or workflow instructions"). After scrubbing, run the natural-language
+// prompt-injection scanner on each evidence block: a detected imperative ("ignore previous
+// instructions", a `system:` role line, a jailbreak token, …) is NOT silently passed through — the
+// block is tagged with the matched pattern names so the model sees the evidence is suspect (it is
+// already DATA, never instructions, per the system prompt). Non-blocking by design: a requirement
+// that legitimately quotes such a phrase must still produce a run, so detection annotates the block
+// rather than failing the run. The pattern names are corpus slugs (`[a-z-]`), inert in an attribute.
 function buildEvidenceBlocks(evidence: QualityIntelligenceGenerationPortArgs["evidence"]): string {
   return evidence
     .map((e) => {
       const kind = e.kind.replace(/[^a-z0-9-]/giu, "");
-      return `<qi-evidence index="${String(e.index)}" kind="${kind}">\n${scrubEvidenceText(e.text)}\n</qi-evidence>`;
+      const scrubbed = scrubEvidenceText(e.text);
+      const scan = QualityIntelligenceHardening.scanForPromptInjections(scrubbed);
+      const flagged = scan.safe ? "" : ` flagged="prompt-injection:${scan.injections.join(",")}"`;
+      return `<qi-evidence index="${String(e.index)}" kind="${kind}"${flagged}>\n${scrubbed}\n</qi-evidence>`;
     })
     .join("\n");
 }

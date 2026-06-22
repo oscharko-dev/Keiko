@@ -9,12 +9,13 @@
 // URL encoding: URLSearchParams.set already encodes; useSearchParams.get already decodes
 // — no double encode/decode (#64 lesson).
 
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import type { ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
+import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
+import { Toggle } from "../../components/desktop/widgets/shared/Toggle";
 import { formatError } from "./format-error";
 import { MemoryFilters, type MemoryFilterState, SCOPE_LABELS, TYPE_LABELS } from "./MemoryFilters";
 import type {
@@ -82,33 +83,64 @@ function StatusBadge({ status }: { readonly status: string }): ReactNode {
   return <span className={`mc-badge ${cls}`}>{status}</span>;
 }
 
+function formatConfidence(confidence: number): string {
+  return `${(confidence * 100).toFixed(0)}% confidence`;
+}
+
 // ---------------------------------------------------------------------------
 // MemoryRow
 // ---------------------------------------------------------------------------
 
-function MemoryRow({ record }: { readonly record: MemoryRecord }): ReactNode {
+function MemoryRow({
+  record,
+  onOpenDetail,
+}: {
+  readonly record: MemoryRecord;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+}): ReactNode {
+  const row = (
+    <>
+      <div className="mc-row-main">
+        {/* title: full text on hover — the row body is single-line truncated
+            and otherwise only reachable via the detail view (uiux-fix F035). */}
+        <span className="mc-row-body" title={record.body}>
+          {record.body}
+        </span>
+        <div className="mc-row-meta">
+          <span className="mc-row-type">{TYPE_LABELS[record.type]}</span>
+          <span className="mc-row-scope">{SCOPE_LABELS[record.scope.kind]}</span>
+          <span className="mc-row-source">Source {record.provenance.sourceKind}</span>
+          <span className="mc-row-confidence">
+            {formatConfidence(record.provenance.confidence)}
+          </span>
+          <span className="mc-row-sensitivity">Sensitivity {record.provenance.sensitivity}</span>
+          {record.pinned ? (
+            // Same badge as the detail page — a bare accent-coloured "P" was
+            // cryptic, failed light-theme contrast (2.41:1), and aria-label on
+            // a generic span is prohibited ARIA (uiux-fix F035).
+            <span className="mc-badge mc-badge-pinned">Pinned</span>
+          ) : null}
+        </div>
+      </div>
+      <StatusBadge status={record.status} />
+    </>
+  );
+
   return (
     <li>
-      <Link href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`} className="mc-row">
-        <div className="mc-row-main">
-          {/* title: full text on hover — the row body is single-line truncated
-              and otherwise only reachable via the detail page (uiux-fix F035). */}
-          <span className="mc-row-body" title={record.body}>
-            {record.body}
-          </span>
-          <div className="mc-row-meta">
-            <span className="mc-row-type">{TYPE_LABELS[record.type]}</span>
-            <span className="mc-row-scope">{SCOPE_LABELS[record.scope.kind]}</span>
-            {record.pinned ? (
-              // Same badge as the detail page — a bare accent-coloured "P" was
-              // cryptic, failed light-theme contrast (2.41:1), and aria-label on
-              // a generic span is prohibited ARIA (uiux-fix F035).
-              <span className="mc-badge mc-badge-pinned">Pinned</span>
-            ) : null}
-          </div>
-        </div>
-        <StatusBadge status={record.status} />
-      </Link>
+      {onOpenDetail !== undefined ? (
+        <button
+          type="button"
+          className="mc-row mc-row-button"
+          onClick={() => onOpenDetail(record.id)}
+        >
+          {row}
+        </button>
+      ) : (
+        <Link href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`} className="mc-row">
+          {row}
+        </Link>
+      )}
     </li>
   );
 }
@@ -144,12 +176,60 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
   const searchParams = useSearchParams();
   const router = useRouter();
   const [, startTransition] = useTransition();
+  const [policyEnabled, setPolicyEnabled] = useState(true);
+  const filters = useMemo(() => filtersFromParams(searchParams), [searchParams]);
 
+  const handleFilterChange = useCallback(
+    (next: MemoryFilterState): void => {
+      const qs = filtersToParams(next).toString();
+      startTransition(() => {
+        router.push(`/memoriaviva${qs.length > 0 ? `?${qs}` : ""}`);
+      });
+    },
+    [router, startTransition],
+  );
+
+  return (
+    <MemoryListContent
+      filters={filters}
+      onFilterChange={handleFilterChange}
+      fetchMemoriesImpl={fetchMemoriesImpl}
+      policyEnabled={policyEnabled}
+      onPolicyEnabledChange={setPolicyEnabled}
+      showWorkspaceBackLink
+    />
+  );
+}
+
+export interface MemoryListContentProps {
+  readonly filters: MemoryFilterState;
+  readonly onFilterChange: (next: MemoryFilterState) => void;
+  readonly fetchMemoriesImpl?: typeof fetchMemories;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+  readonly onOpenConsolidation?: (() => void) | undefined;
+  readonly onOpenReviewQueue?: (() => void) | undefined;
+  readonly policyEnabled?: boolean | undefined;
+  readonly onPolicyEnabledChange?: ((next: boolean) => void) | undefined;
+  readonly showWorkspaceBackLink?: boolean;
+}
+
+export function MemoryListContent({
+  filters,
+  onFilterChange,
+  fetchMemoriesImpl = fetchMemories,
+  onOpenDetail,
+  onOpenConsolidation,
+  onOpenReviewQueue,
+  policyEnabled,
+  onPolicyEnabledChange,
+  showWorkspaceBackLink = true,
+}: MemoryListContentProps): ReactNode {
   const [memories, setMemories] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const filters = filtersFromParams(searchParams);
+  const [uncontrolledPolicyEnabled, setUncontrolledPolicyEnabled] = useState(true);
+  const effectivePolicyEnabled = policyEnabled ?? uncontrolledPolicyEnabled;
+  const setEffectivePolicyEnabled = onPolicyEnabledChange ?? setUncontrolledPolicyEnabled;
 
   const hasFilters =
     filters.scope.length > 0 ||
@@ -175,42 +255,57 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
 
   useEffect(() => {
     void load(filters);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- filters derived from searchParams, re-run on param change
-  }, [searchParams]);
-
-  const handleFilterChange = useCallback(
-    (next: MemoryFilterState): void => {
-      const qs = filtersToParams(next).toString();
-      startTransition(() => {
-        router.push(`/memoriaviva${qs.length > 0 ? `?${qs}` : ""}`);
-      });
-    },
-    [router],
-  );
+  }, [filters, load]);
 
   return (
     <>
       <header className="lk-header">
         <h1 className="lk-title">MemoriaViva</h1>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <div className="mc-view-actions">
+          <div className="mc-policy-switch">
+            <Toggle
+              on={effectivePolicyEnabled}
+              onChange={setEffectivePolicyEnabled}
+              label="Enable MemoriaViva policy"
+            />
+            <span>Policy {effectivePolicyEnabled ? "on" : "off"}</span>
+          </div>
           {/* Declared exit back to the desktop shell — the memoriaviva routes
               live outside the workspace and had no way back (uiux-fix F035). */}
-          <Link href="/" className="lk-btn lk-btn-ghost lk-btn-lg">
-            Back to Workspace
-          </Link>
-          <Link href="/memoriaviva/consolidation" className="lk-btn lk-btn-ghost lk-btn-lg">
-            Consolidation
-          </Link>
-          <Link
-            href="/memoriaviva/review-queue"
-            className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
-          >
-            Review queue
-          </Link>
+          {showWorkspaceBackLink ? (
+            <Link href="/" className="lk-btn lk-btn-ghost lk-btn-lg">
+              Back to Workspace
+            </Link>
+          ) : null}
+          {onOpenConsolidation !== undefined ? (
+            <button type="button" className="lk-btn lk-btn-ghost lk-btn-lg" onClick={onOpenConsolidation}>
+              Consolidation
+            </button>
+          ) : (
+            <Link href="/memoriaviva/consolidation" className="lk-btn lk-btn-ghost lk-btn-lg">
+              Consolidation
+            </Link>
+          )}
+          {onOpenReviewQueue !== undefined ? (
+            <button
+              type="button"
+              className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
+              onClick={onOpenReviewQueue}
+            >
+              Review queue
+            </button>
+          ) : (
+            <Link
+              href="/memoriaviva/review-queue"
+              className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
+            >
+              Review queue
+            </Link>
+          )}
         </div>
       </header>
 
-      <MemoryFilters filters={filters} onChange={handleFilterChange} />
+      <MemoryFilters filters={filters} onChange={onFilterChange} />
 
       {/* Compact live region instead of aria-live on the whole list section —
           announcing every inserted row flooded screen readers after each
@@ -263,7 +358,7 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
             }}
           >
             {memories.map((record) => (
-              <MemoryRow key={record.id} record={record} />
+              <MemoryRow key={record.id} record={record} onOpenDetail={onOpenDetail} />
             ))}
           </ul>
         )}

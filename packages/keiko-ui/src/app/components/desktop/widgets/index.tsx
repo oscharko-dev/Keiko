@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { ChatWindow } from "../ChatWindow";
@@ -7,6 +7,7 @@ import { useChatSession } from "../hooks/useChatSession";
 import { ProjectPanel } from "./panels/ProjectPanel";
 import { ChatHistoryPanel } from "./panels/ChatHistoryPanel";
 import { SearchPanel } from "./panels/SearchPanel";
+import { PromptEnhancerPanel } from "./panels/PromptEnhancerPanel";
 import { PluginsPanel } from "./panels/PluginsPanel";
 import { AutomationsPanel } from "./panels/AutomationsPanel";
 import { MobilePanel } from "./panels/MobilePanel";
@@ -25,12 +26,20 @@ import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
 import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
+import { FigmaJsonSourceWindow } from "./figma/FigmaJsonSourceWindow";
+import { FigmaImageSourceWindow } from "./figma/FigmaImageSourceWindow";
 import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
 import { RelationshipsView } from "../../../relationships/RelationshipsView";
+import { MemoriaVivaWindow } from "../../../memoriaviva/components/MemoriaVivaWindow";
 import { ConnectorGraph } from "../../../local-knowledge/connector-graph";
-import { buildConnectedRunSources } from "./quality-intelligence/connectedSources";
-import type { QualityIntelligenceInlineSource } from "@oscharko-dev/keiko-contracts";
+import {
+  buildConnectedRunSources,
+  connectedRunSourcesCfgFromInlineSources,
+  connectedRunSourcesCfgFromSources,
+  connectedRunSourcesFromWindowCfg,
+} from "./quality-intelligence/connectedSources";
+import type { ChatMessage } from "@/lib/types";
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
@@ -42,29 +51,27 @@ function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
 }
 
-// Reconstruct the inline sources a qiRun window's run was launched from so the run card can re-check
-// drift (Epic #735). The hub serialises the connected source set (file / folders / capsules /
-// capsule-sets / figma snapshots, in the RunLauncher's exact order) into `connectedSourcesJson` when
-// it opens the run; we parse it here so re-check sees byte-identical sources and an unchanged source
-// reports no drift. Older windows that carry only the single connectedFilePath/connectedRoot scalars
-// fall back to reconstructing a single source. Empty → the card hides the drift affordance.
-function qiConnectedSources(
-  cfg: Record<string, unknown>,
-): readonly QualityIntelligenceInlineSource[] {
-  const json = str(cfg, "connectedSourcesJson");
-  if (json !== undefined && json.length > 0) {
-    try {
-      const parsed: unknown = JSON.parse(json);
-      // The server re-validates every source entry, so a light array guard is enough here.
-      if (Array.isArray(parsed)) return parsed as readonly QualityIntelligenceInlineSource[];
-    } catch {
-      // fall through to the legacy single-source reconstruction
-    }
+function stringArray(cfg: Record<string, unknown>, key: string): readonly string[] | undefined {
+  const raw = cfg[key];
+  if (!Array.isArray(raw)) return undefined;
+  const values = raw
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+  return values.length > 0 ? values : undefined;
+}
+
+function stringArrayJson(cfg: Record<string, unknown>, key: string): readonly string[] {
+  const raw = str(cfg, key);
+  if (raw === undefined || raw.trim().length === 0) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim());
+  } catch {
+    return [];
   }
-  return buildConnectedRunSources({
-    connectedFilePath: str(cfg, "connectedFilePath") ?? null,
-    connectedRoot: str(cfg, "connectedRoot") ?? null,
-  });
 }
 
 // Serialise the currently-connected source set (Files folders/file, Connector capsules, Figma
@@ -79,8 +86,10 @@ function connectedSourcesCfgFromCtx(ctx: WindowRenderContext): Record<string, st
     connectedCapsuleIds: ctx.linkedCapsuleIds,
     connectedCapsuleSetIds: ctx.linkedCapsuleSetIds,
     connectedFigmaSnapshotRunIds: ctx.linkedFigmaSnapshotRunIds,
+    connectedFigmaSnapshotSources: ctx.linkedFigmaSnapshotSources,
+    connectedImageSources: ctx.linkedImageSources,
   });
-  return sources.length > 0 ? { connectedSourcesJson: JSON.stringify(sources) } : {};
+  return connectedRunSourcesCfgFromSources(sources);
 }
 
 function agentAccess(cfg: Record<string, unknown>): "ask" | "full" | undefined {
@@ -121,7 +130,7 @@ function ChatWindowSessionHost({
   const chatId = str(cfg, "chatId");
   const title = str(cfg, "title");
   const { updateCfg } = ctx;
-  const { activeChat, chats, loading, openChat, openNewChat } = session;
+  const { activeChat, activeProject, chats, loading, openChat, openNewChat } = session;
   const activeTarget =
     activeChat !== undefined && activeChat.status !== "closed" ? activeChat : undefined;
 
@@ -144,12 +153,28 @@ function ChatWindowSessionHost({
       });
   }, [chatId, activeTarget?.id, chats, loading, openChat, openNewChat, title, updateCfg]);
 
+  useEffect(() => {
+    if (loading || chatId === undefined || activeTarget?.id !== chatId) return;
+    if (activeTarget.title !== title) updateCfg({ title: activeTarget.title });
+  }, [activeTarget?.id, activeTarget?.title, chatId, loading, title, updateCfg]);
+
   const targetMissing =
     chatId !== undefined &&
     !session.loading &&
     activeTarget?.id !== chatId &&
     !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
   const waitingForTarget = session.loading || (chatId !== undefined && activeTarget?.id !== chatId);
+  const openRunResult = useCallback(
+    (message: ChatMessage): void => {
+      if (message.runId === undefined) return;
+      const cfg: Record<string, string | number | boolean> = { runId: message.runId };
+      const workflow = message.workflowId ?? message.taskType;
+      if (workflow !== undefined) cfg.workflow = workflow;
+      if (activeProject?.path !== undefined) cfg.workspaceRoot = activeProject.path;
+      ctx.openWindow("agents", cfg);
+    },
+    [activeProject?.path, ctx],
+  );
 
   return (
     <ChatSessionProvider value={session}>
@@ -161,7 +186,16 @@ function ChatWindowSessionHost({
       ) : waitingForTarget ? (
         <div className="lk-loading">Opening chat...</div>
       ) : (
-        <ChatWindow mini={ctx.mini === true} linkedRoot={ctx.linkedRoot} />
+        <ChatWindow
+          mini={ctx.mini === true}
+          minimalChat={ctx.minimalChat === true}
+          compact={ctx.compact === true}
+          controlsNarrow={ctx.controlsNarrow === true}
+          barCompact={ctx.barCompact === true}
+          workflowCompact={ctx.workflowCompact === true}
+          linkedRoot={ctx.linkedRoot}
+          onOpenRunResult={openRunResult}
+        />
       )}
     </ChatSessionProvider>
   );
@@ -176,6 +210,7 @@ registerWindowRender("chatHistory", (_cfg, ctx) => (
   />
 ));
 registerWindowRender("project", () => <ProjectPanel />);
+registerWindowRender("promptEnhancer", () => <PromptEnhancerPanel />);
 registerWindowRender("search", () => <SearchPanel />);
 registerWindowRender("plugins", () => <PluginsPanel />);
 registerWindowRender("automations", () => <AutomationsPanel />);
@@ -194,8 +229,8 @@ registerWindowRender("quality", (_cfg, ctx) => (
   <QiHubPanel
     openRun={(runId, recheckableSources) => {
       const sourceCfg =
-        recheckableSources !== undefined && recheckableSources.length > 0
-          ? { connectedSourcesJson: JSON.stringify(recheckableSources) }
+        recheckableSources !== undefined
+          ? connectedRunSourcesCfgFromInlineSources(recheckableSources)
           : connectedSourcesCfgFromCtx(ctx);
       ctx.openWindow("qiRun", { runId, ...sourceCfg });
     }}
@@ -205,6 +240,8 @@ registerWindowRender("quality", (_cfg, ctx) => (
     connectedCapsuleIds={ctx.linkedCapsuleIds}
     connectedCapsuleSetIds={ctx.linkedCapsuleSetIds}
     connectedFigmaSnapshotRunIds={ctx.linkedFigmaSnapshotRunIds}
+    connectedFigmaSnapshotSources={ctx.linkedFigmaSnapshotSources}
+    connectedImageSources={ctx.linkedImageSources}
   />
 ));
 registerWindowRender("qiRun", (cfg, ctx) => {
@@ -216,11 +253,11 @@ registerWindowRender("qiRun", (cfg, ctx) => {
       </div>
     );
   }
-  const connectedSources = qiConnectedSources(cfg);
+  const connectedSources = connectedRunSourcesFromWindowCfg(cfg);
   // A regeneration writes a NEW immutable run; open it on the canvas so the user sees the merged
   // (fresh + regenerated) tests, carrying the same connected sources so the new card can itself
   // re-check drift (Epic #735, Issue #744 "refreshed card"). The original run card is left intact.
-  const carried = str(cfg, "connectedSourcesJson");
+  const sourceCfg = connectedRunSourcesCfgFromSources(connectedSources);
   return (
     <QiRunCard
       runId={runId}
@@ -228,7 +265,7 @@ registerWindowRender("qiRun", (cfg, ctx) => {
       onRegenerated={(result) => {
         ctx.openWindow("qiRun", {
           runId: result.runId,
-          ...(carried !== undefined && carried.length > 0 ? { connectedSourcesJson: carried } : {}),
+          ...sourceCfg,
         });
       }}
     />
@@ -266,7 +303,7 @@ registerWindowRender("files", (cfg, ctx) => {
     });
   };
   const onOpenFile = (fileRoot: string, path: string): void => {
-    ctx.openWindow("editor", { root: fileRoot, file: path });
+    ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] });
   };
   return root !== undefined ? (
     <FilesWidget
@@ -283,12 +320,42 @@ registerWindowRender("files", (cfg, ctx) => {
     />
   );
 });
-registerWindowRender("editor", (cfg) => {
+registerWindowRender("editor", (cfg, ctx) => {
   const root = str(cfg, "root");
   const file = str(cfg, "file");
-  const props: { root?: string; file?: string } = {};
+  const openFiles = stringArray(cfg, "openFiles");
+  const layoutJson = str(cfg, "layoutJson");
+  const props: {
+    root?: string;
+    file?: string;
+    openFiles?: readonly string[];
+    layoutJson?: string;
+    windowId?: string;
+    linkedRoot?: string | null;
+    linkedFilePath?: string | undefined;
+    linkedCapsuleIds?: readonly string[];
+    linkedCapsuleSetIds?: readonly string[];
+    onWorkspaceChange?:
+      | ((patch: {
+          root?: string | undefined;
+          file?: string | undefined;
+          openFiles?: readonly string[] | undefined;
+          layoutJson?: string | undefined;
+        }) => void)
+      | undefined;
+  } = {};
   if (root !== undefined) props.root = root;
   if (file !== undefined) props.file = file;
+  if (openFiles !== undefined) props.openFiles = openFiles;
+  if (layoutJson !== undefined) props.layoutJson = layoutJson;
+  props.linkedRoot = ctx.linkedRoot;
+  props.linkedFilePath = ctx.linkedFilePath;
+  props.linkedCapsuleIds = ctx.linkedCapsuleIds;
+  props.linkedCapsuleSetIds = ctx.linkedCapsuleSetIds;
+  props.windowId = ctx.windowId;
+  props.onWorkspaceChange = (patch) => {
+    ctx.updateCfg(patch);
+  };
   return <EditorWidget {...props} />;
 });
 registerWindowRender("browser", (cfg) => {
@@ -323,6 +390,7 @@ registerWindowRender("agents", (cfg, ctx) => (
     linkedFilePath={ctx.linkedFilePath}
   />
 ));
+registerWindowRender("memoria", () => <MemoriaVivaWindow />);
 // uiux-fix F023 C054 — no real integrations exist yet; the widget renders an honest
 // static list, so the legacy `provider` cfg (fabricated "connected" state) is ignored.
 registerWindowRender("integ", () => <IntegrationsWidget />);
@@ -330,14 +398,62 @@ registerWindowRender("integ", () => <IntegrationsWidget />);
 // component after a successful build so the connected QI hub can read it via linkedFigmaSnapshotRunIds.
 registerWindowRender("figma", (cfg, ctx) => {
   const snapshotRunId = str(cfg, "snapshotRunId");
+  const selectedScreenIds = stringArrayJson(cfg, "selectedScreenIdsJson");
+  const selectedScreenName = str(cfg, "selectedScreenName");
   return (
     <FigmaSnapshotWindow
+      sourceWindowId={ctx.windowId}
       snapshotRunId={snapshotRunId}
+      selectedScreenIds={selectedScreenIds}
+      selectedScreenName={selectedScreenName}
+      openScreenSource={({ snapshotRunId: runId, screenId, name }) => {
+        ctx.openWindow("figmaView", {
+          snapshotRunId: runId,
+          selectedScreenIdsJson: JSON.stringify([screenId]),
+          selectedScreenName: name,
+        });
+      }}
       updateCfg={(patch) => {
         ctx.updateCfg(patch);
       }}
     />
   );
+});
+
+registerWindowRender("figmaView", (cfg, ctx) => {
+  const snapshotRunId = str(cfg, "snapshotRunId");
+  const selectedScreenIds = stringArrayJson(cfg, "selectedScreenIdsJson");
+  const selectedScreenName = str(cfg, "selectedScreenName");
+  return (
+    <FigmaSnapshotWindow
+      sourceWindowId={ctx.windowId}
+      snapshotRunId={snapshotRunId}
+      selectedScreenIds={selectedScreenIds}
+      selectedScreenName={selectedScreenName}
+      updateCfg={(patch) => {
+        ctx.updateCfg(patch);
+      }}
+    />
+  );
+});
+
+registerWindowRender("figmaJson", (cfg) => {
+  const snapshotRunId = str(cfg, "snapshotRunId");
+  const screenId = str(cfg, "screenId");
+  const selectedScreenName = str(cfg, "selectedScreenName");
+  return (
+    <FigmaJsonSourceWindow
+      snapshotRunId={snapshotRunId}
+      screenId={screenId}
+      screenName={selectedScreenName}
+    />
+  );
+});
+
+registerWindowRender("figmaImage", (cfg) => {
+  const imageSrc = str(cfg, "imageSrc");
+  const selectedScreenName = str(cfg, "selectedScreenName");
+  return <FigmaImageSourceWindow imageSrc={imageSrc} screenName={selectedScreenName} />;
 });
 
 // Epic #189 Slice 3 M2 — connector picker window. updateCfg persists selectedKind/selectedId into

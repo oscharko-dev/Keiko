@@ -25,3 +25,6 @@ export * from "./contextpack/index.js";
 // ─── Quality Intelligence workflow execution (Epic #270, Issue #273/#279) ────
 // Scripted + model-routed run entries, descriptors, cancellation, and the run-lifecycle types.
 export * from "./qualityIntelligence/index.js";
+
+// ─── Prompt Enhancer workflow execution (Epic #1307, Issue #1314) ─────────────
+export * from "./promptEnhancer/index.js";

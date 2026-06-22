@@ -47,6 +47,10 @@ function toRelative(root: string, absolutePath: string): string {
 export interface ContainedRealPathInfo {
   readonly path: string;
   readonly realRelative: string;
+  // The symlink-resolved workspace root (`fs.realPath(root)`, lexical root on failure). Exposed so the
+  // read path can deny a benign-named root symlink that resolves into a protected location — a denied
+  // segment that lives in the realpath'd ROOT is invisible to the root-relative deny checks.
+  readonly realBase: string;
 }
 
 export function containedRealPathInfo(
@@ -63,7 +67,7 @@ export function containedRealPathInfo(
         absolutePath,
       );
     }
-    return { path: target, realRelative: toRelative(realBase, target) };
+    return { path: target, realRelative: toRelative(realBase, target), realBase };
   } catch (error) {
     if (error instanceof PathEscapeError) {
       throw error;
@@ -75,7 +79,7 @@ export function containedRealPathInfo(
         absolutePath,
       );
     }
-    return { path: absolutePath, realRelative: toRelative(realBase, parentReal) };
+    return { path: absolutePath, realRelative: toRelative(realBase, parentReal), realBase };
   }
 }
 

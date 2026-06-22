@@ -32,6 +32,7 @@ import { ActiveRunLimitError } from "./runs.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { ChatMessage, NewChatMessage } from "./store/types.js";
+import { memoryCaptureCustomerMatchers } from "./memory-capture-policy.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const RESERVED_WORKFLOW_INPUT_FIELDS = new Set([
@@ -423,6 +424,7 @@ function engineContextFor(
       { additionalSecrets: currentRedactionSecrets(deps) },
       deps.env,
     ),
+    memoryCustomerIdentifierMatchers: memoryCaptureCustomerMatchers(deps),
   };
 }
 

@@ -158,6 +158,32 @@ describe("classifyAtomCoverage", () => {
     expect(result.confidence).toBe(0);
     expect(result.coveringCandidateIds).toHaveLength(0);
   });
+
+  it("drops covering candidate ids but preserves the raw confidence for a present sub-threshold mapping", () => {
+    const atom = makeAtom("atom-1");
+    // Feed NON-EMPTY candidateIds: the existing < 0.3 test fed an already-empty list, so it could
+    // not distinguish "dropped because below threshold" from "passed an empty list straight through".
+    const mapping = makeMapping("atom-1", 0.1, ["tc-should-be-dropped"]);
+    const result = classifyAtomCoverage(atom, mapping);
+    expect(result.status).toBe("uncovered");
+    expect(result.coveringCandidateIds).toHaveLength(0);
+    // The dropped id must NOT appear in the output — explicit pin so a mutant that passes ids through is caught.
+    expect(result.coveringCandidateIds.map(String)).not.toContain("tc-should-be-dropped");
+    // The raw mapping confidence is preserved (distinct from the undefined-mapping → 0 path).
+    expect(result.confidence).toBe(0.1);
+  });
+
+  it("carries the mapping confidence and covering ids through for covered and weakly-covered atoms", () => {
+    const atom = makeAtom("atom-1");
+    const covered = classifyAtomCoverage(atom, makeMapping("atom-1", 0.92, ["tc-1", "tc-2"]));
+    expect(covered.status).toBe("covered");
+    expect(covered.confidence).toBe(0.92);
+    expect(covered.coveringCandidateIds.map(String)).toEqual(["tc-1", "tc-2"]);
+    const weak = classifyAtomCoverage(atom, makeMapping("atom-1", 0.5, ["tc-3"]));
+    expect(weak.status).toBe("weakly-covered");
+    expect(weak.confidence).toBe(0.5);
+    expect(weak.coveringCandidateIds.map(String)).toEqual(["tc-3"]);
+  });
 });
 
 describe("buildAtomCoverageStatuses", () => {
@@ -197,6 +223,9 @@ describe("buildAtomCoverageStatuses", () => {
     };
     const statuses = buildAtomCoverageStatuses([atom], map);
     expect(statuses[0]?.coveringCandidateIds).toHaveLength(2);
+    // The status and confidence must be carried through the build step, not just the ids.
+    expect(statuses[0]?.status).toBe("covered");
+    expect(statuses[0]?.confidence).toBe(0.9);
   });
 });
 
@@ -284,6 +313,37 @@ describe("coverageConfidence (run-size independence)", () => {
 
   it("returns 0 for an atom with no citers", () => {
     expect(coverageConfidence(0, 1)).toBe(0);
+  });
+
+  // ─── Band/boundary pins (hard-coded focus values so mutating FOCUS_COVERED_MAX is caught) ───
+
+  it("treats bestFocus exactly at the FOCUS_COVERED_MAX boundary (3) as focused", () => {
+    expect(coverageConfidence(1, 3)).toBeCloseTo(0.85);
+    expect(coverageConfidence(1, 3)).toBeGreaterThanOrEqual(COVERAGE_THRESHOLD_COVERED);
+  });
+
+  it("treats bestFocus just past FOCUS_COVERED_MAX (4) as broad / weakly-covered", () => {
+    expect(coverageConfidence(1, 4)).toBeCloseTo(0.5);
+    expect(coverageConfidence(1, 4)).toBeLessThan(COVERAGE_THRESHOLD_COVERED);
+  });
+
+  it("focused band: a single dedicated citer is exactly 0.85, two citers exactly 0.9 (coefficient pin)", () => {
+    expect(coverageConfidence(1, 1)).toBeCloseTo(0.85);
+    expect(coverageConfidence(2, 1)).toBeCloseTo(0.9);
+  });
+
+  it("broad band: a single broad citer is exactly 0.5 (coefficient pin)", () => {
+    expect(coverageConfidence(1, 9)).toBeCloseTo(0.5);
+  });
+
+  it("broad band is clamped at 0.699 and never reaches the covered threshold at high citer counts", () => {
+    expect(coverageConfidence(400, 9)).toBeCloseTo(0.699, 2);
+    expect(coverageConfidence(400, 9)).toBeLessThan(COVERAGE_THRESHOLD_COVERED);
+  });
+
+  it("is monotonic non-decreasing in the citer count on the broad path too", () => {
+    expect(coverageConfidence(2, 9)).toBeGreaterThanOrEqual(coverageConfidence(1, 9));
+    expect(coverageConfidence(3, 9)).toBeGreaterThanOrEqual(coverageConfidence(2, 9));
   });
 });
 

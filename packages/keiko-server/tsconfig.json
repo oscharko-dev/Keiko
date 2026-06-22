@@ -17,6 +17,7 @@
     { "path": "../keiko-quality-intelligence" },
     { "path": "../keiko-local-knowledge" },
     { "path": "../keiko-workspace" },
+    { "path": "../keiko-sandbox" },
     { "path": "../keiko-tools" },
     { "path": "../keiko-evidence" },
     { "path": "../keiko-verification" },

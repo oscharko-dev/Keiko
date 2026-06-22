@@ -14,6 +14,7 @@ import {
   QualityIntelligenceHandoff,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { UiHandlerDeps } from "../deps.js";
+import { localKnowledgeProtectionOptions } from "../localKnowledgeKeyProvider.js";
 
 /** One indexed document's id + full normalized text, read through the LK QI handoff seam. */
 export interface CapsuleDocumentText {
@@ -26,10 +27,14 @@ export interface CapsuleDocumentText {
  * capsule; `capsuleSet` fans out over a capsule-set's members. Both share one lazily-opened store
  * handle and return `[]` on any failure (unknown id, store-open error) so the ingestion layer maps
  * the empty result to a coded, user-actionable QI_CAPSULE_UNAVAILABLE error.
+ *
+ * `close` releases the underlying SQLite handle; must be called once per resolver lifetime (e.g. in
+ * the finally block of executeQiRun) to prevent a handle leak per QI run.
  */
 export interface CapsuleResolver {
   readonly capsule: (capsuleId: string) => readonly CapsuleDocumentText[];
   readonly capsuleSet: (capsuleSetId: string) => readonly CapsuleDocumentText[];
+  readonly close: () => void;
 }
 
 /**
@@ -42,6 +47,7 @@ export function makeCapsuleResolver(deps: UiHandlerDeps): CapsuleResolver | unde
   if (uiDbPath === undefined || uiDbPath.length === 0) return undefined;
 
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: dirname(uiDbPath) });
+  const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
   let store: ReturnType<typeof openKnowledgeStore> | null = null;
   let openFailed = false;
 
@@ -49,7 +55,7 @@ export function makeCapsuleResolver(deps: UiHandlerDeps): CapsuleResolver | unde
     if (openFailed) return null;
     if (store !== null) return store;
     try {
-      store = openKnowledgeStore({ dbPath });
+      store = openKnowledgeStore(protection === undefined ? { dbPath } : { dbPath, protection });
       return store;
     } catch {
       openFailed = true;
@@ -77,5 +83,8 @@ export function makeCapsuleResolver(deps: UiHandlerDeps): CapsuleResolver | unde
     capsule: (capsuleId) => read(capsuleId, QualityIntelligenceHandoff.listCapsuleDocumentTexts),
     capsuleSet: (capsuleSetId) =>
       read(capsuleSetId, QualityIntelligenceHandoff.listCapsuleSetDocumentTexts),
+    close: (): void => {
+      store?.close();
+    },
   };
 }

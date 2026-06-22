@@ -115,10 +115,7 @@ function handleScopeEntry(walk: EntryWalk, entry: string): void {
       "Connected scope path is not accessible from the selected project.",
     );
   }
-  if (
-    !allowedByFilters(entryRel) ||
-    !allowedByFilters(realRel)
-  ) {
+  if (!allowedByFilters(entryRel) || !allowedByFilters(realRel)) {
     return;
   }
   if (stat.isDirectory) {

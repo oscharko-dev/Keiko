@@ -16,11 +16,14 @@ import type {
   QualityIntelligenceCapsuleSource,
   QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
   QualityIntelligenceRunStreamMessage,
+  QualityIntelligenceSkippedSource,
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { SSE_HEADERS } from "../sse.js";
+import { writeOrDestroy } from "../sse-write.js";
 import {
   STREAMING,
   type HandlerOutcome,
@@ -29,7 +32,14 @@ import {
   type RouteDefinition,
 } from "../routes.js";
 import type { Redactor, UiHandlerDeps } from "../deps.js";
-import { executeQiRun, QiGenerationError, QiIngestionError } from "./runExecution.js";
+import {
+  executeQiRun,
+  QiGenerationError,
+  QiIngestionError,
+  type QiRunAccepted,
+} from "./runExecution.js";
+import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
+import type { QiSkippedSource } from "./runIngestion.js";
 import { qiRunRegistry } from "./runRegistry.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -103,7 +113,49 @@ function validateFigmaSnapshotSource(
       "A figma-snapshot source requires a non-empty snapshotRunId.",
     );
   }
-  return { kind: "figma-snapshot", label, snapshotRunId: raw.snapshotRunId };
+  // Single source of truth shared with the re-check route so run/recheck never diverge. An absent
+  // field stays a whole-snapshot source; a present field must be a non-empty, bounded, canonicalised
+  // scope — an explicit empty array is rejected here so it can never silently widen to the whole board.
+  const parsed = parseFigmaSnapshotScreenIds(raw.screenIds);
+  if (!parsed.ok) {
+    return errorResult(400, "QI_BAD_REQUEST", parsed.reason);
+  }
+  return {
+    kind: "figma-snapshot",
+    label,
+    snapshotRunId: raw.snapshotRunId,
+    ...(parsed.screenIds !== undefined ? { screenIds: parsed.screenIds } : {}),
+  };
+}
+
+function validateImageSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QualityIntelligenceImageSource | RouteResult {
+  if (raw.sourceKind !== "figma-snapshot-screen") {
+    return errorResult(
+      400,
+      "QI_BAD_REQUEST",
+      "An image source requires sourceKind figma-snapshot-screen.",
+    );
+  }
+  if (typeof raw.snapshotRunId !== "string" || raw.snapshotRunId.trim().length === 0) {
+    return errorResult(
+      400,
+      "QI_BAD_REQUEST",
+      "An image source requires a non-empty snapshotRunId.",
+    );
+  }
+  if (typeof raw.screenId !== "string" || raw.screenId.trim().length === 0) {
+    return errorResult(400, "QI_BAD_REQUEST", "An image source requires a non-empty screenId.");
+  }
+  return {
+    kind: "image",
+    label,
+    sourceKind: "figma-snapshot-screen",
+    snapshotRunId: raw.snapshotRunId,
+    screenId: raw.screenId,
+  };
 }
 
 // Connector sources (Local Knowledge capsule / capsule-set, Figma snapshot). Split out so
@@ -120,6 +172,9 @@ function validateConnectorSource(
   }
   if (raw.kind === "figma-snapshot") {
     return validateFigmaSnapshotSource(label, raw);
+  }
+  if (raw.kind === "image") {
+    return validateImageSource(label, raw);
   }
   return undefined;
 }
@@ -287,6 +342,56 @@ function classifyStartError(error: unknown): { readonly code: string; readonly m
 }
 
 type WriteFn = (message: QualityIntelligenceRunStreamMessage) => void;
+type QiExecutionSummary = Awaited<ReturnType<typeof executeQiRun>>;
+type StreamTotals = Extract<QualityIntelligenceRunStreamMessage, { type: "done" }>["totals"];
+
+// Project the internal QiSkippedSource[] (which also carries a free-text `message`) to exactly the
+// wire contract QualityIntelligenceSkippedSource[] ({label, kind, code}). Streaming `message`
+// verbatim would widen the browser-facing SSE surface — the `accepted` frame bypasses deps.redactor,
+// unlike `event` — so it is dropped here (Issue #730).
+function toWireSkippedSources(
+  skipped: readonly QiSkippedSource[],
+): readonly QualityIntelligenceSkippedSource[] {
+  return skipped.map((s) => ({ label: s.label, kind: s.kind, code: s.code }));
+}
+
+function writeAcceptedFrame(write: WriteFn, accepted: QiRunAccepted): void {
+  write({
+    type: "accepted",
+    runId: accepted.runId,
+    requestedAt: accepted.requestedAt,
+    sourceCount: accepted.sourceCount,
+    atomCount: accepted.atomCount,
+    ...(accepted.droppedSourceCount > 0 ? { droppedSourceCount: accepted.droppedSourceCount } : {}),
+    ...(accepted.skippedSources.length > 0
+      ? { skippedSources: toWireSkippedSources(accepted.skippedSources) }
+      : {}),
+  });
+}
+
+export function doneFrameForSummary(
+  deps: UiHandlerDeps,
+  runId: string,
+  summary: QiExecutionSummary,
+  totals: StreamTotals,
+): QualityIntelligenceRunStreamMessage {
+  // Surface the bounded reasonSummary for BOTH a terminal failed run and a succeeded-but-degraded run
+  // (model/parser fell back to the deterministic baseline). The reason is already safeReasonSummary-
+  // bounded server-side; re-redact defensively before it reaches the wire.
+  const reasonSummary =
+    summary.reasonSummary !== undefined
+      ? applyRedactor(deps.redactor, summary.reasonSummary)
+      : undefined;
+  const degraded = summary.status === "succeeded" && reasonSummary !== undefined ? true : undefined;
+  return {
+    type: "done",
+    runId,
+    status: summary.status,
+    totals,
+    ...(reasonSummary !== undefined ? { reasonSummary } : {}),
+    ...(degraded !== undefined ? { degraded } : {}),
+  };
+}
 
 async function streamRunExecution(
   deps: UiHandlerDeps,
@@ -306,19 +411,7 @@ async function streamRunExecution(
       registeredAt,
       signal,
       onAccepted: (accepted) => {
-        write({
-          type: "accepted",
-          runId: accepted.runId,
-          requestedAt: accepted.requestedAt,
-          sourceCount: accepted.sourceCount,
-          atomCount: accepted.atomCount,
-          ...(accepted.droppedSourceCount > 0
-            ? { droppedSourceCount: accepted.droppedSourceCount }
-            : {}),
-          ...(accepted.skippedSources.length > 0
-            ? { skippedSources: accepted.skippedSources }
-            : {}),
-        });
+        writeAcceptedFrame(write, accepted);
       },
       onEvent: (event) => {
         if (event.payload.kind === "candidate:proposed") totals.candidates += 1;
@@ -328,7 +421,7 @@ async function streamRunExecution(
       },
     });
     terminal = summary.status;
-    write({ type: "done", runId, status: summary.status, totals });
+    write(doneFrameForSummary(deps, runId, summary, totals));
   } catch (error) {
     const { code, message } = classifyStartError(error);
     write({ type: "error", code, message });
@@ -346,15 +439,16 @@ export async function handleStartQiRun(
 
   const runId = `qi-run-${randomUUID()}`;
   const registeredAt = new Date().toISOString();
-  ctx.res.writeHead(200, { ...SSE_HEADERS, "X-Accel-Buffering": "no" });
-  const write: WriteFn = (message) => {
-    ctx.res.write(`data: ${JSON.stringify(message)}\n\n`);
-  };
-
+  // Register and wire the disconnect listener BEFORE writeHead to close the narrow race where a
+  // client disconnects after parsing succeeds but before the response is committed.
   const controller = qiRunRegistry.register(runId, registeredAt);
   ctx.res.on("close", () => {
     controller.abort();
   });
+  ctx.res.writeHead(200, { ...SSE_HEADERS, "X-Accel-Buffering": "no" });
+  const write: WriteFn = (message) => {
+    writeOrDestroy(ctx.res, `data: ${JSON.stringify(message)}\n\n`, controller);
+  };
 
   await streamRunExecution(deps, parsed.request, runId, registeredAt, controller.signal, write);
   ctx.res.end();

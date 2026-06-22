@@ -8,11 +8,14 @@ export type { EvalRunnerDeps, EvalRunOptions } from "./runner.js";
 export { createScriptedModelPort } from "./scripted-model.js";
 export type { ScriptedModelPort } from "./scripted-model.js";
 export { createEvaluationModelProvider } from "./model-provider.js";
-export type { EvaluationModelProviderDeps } from "./model-provider.js";
+export type { EvaluationConfigLoader, EvaluationModelProviderDeps } from "./model-provider.js";
 export { scoreFixture, aggregateScorecard, summarizeScorecard } from "./scorer.js";
 export type { ScoringInput } from "./scorer.js";
 export { checkSurfaceParity } from "./surface-parity.js";
 export { renderEvalSummary } from "./render.js";
+// Prompt Enhancer evaluation suite (Epic #1307, Issue #1315). Exposed as a single auditable namespace,
+// mirroring the gateway's `PromptEnhancer` and evidence's `PromptEnhancement` namespace convention.
+export * as PromptEnhancerEval from "./promptEnhancer/index.js";
 export {
   ALL_FIXTURES,
   SUITE_NAMES,

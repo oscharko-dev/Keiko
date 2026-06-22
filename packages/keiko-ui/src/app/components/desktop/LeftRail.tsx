@@ -1,7 +1,6 @@
 "use client";
 
 import type { ReactNode } from "react";
-import Link from "next/link";
 import { Icons, type IconName } from "./Icons";
 import type { Theme } from "./hooks/useTheme";
 
@@ -13,16 +12,7 @@ interface RailTool {
 }
 
 const PRIMARY: readonly RailTool[] = [
-  { id: "keiko", icon: "spark", label: "Keiko", img: "/assets/keiko-logo.svg" },
   { id: "chatHistory", icon: "archive", label: "Chat History" },
-  { id: "project", icon: "folder", label: "Project" },
-  { id: "search", icon: "search", label: "Search" },
-  { id: "plugins", icon: "plugins", label: "Plugins" },
-];
-
-const SECONDARY: readonly RailTool[] = [
-  { id: "automations", icon: "automations", label: "Automations" },
-  { id: "mobile", icon: "mobile", label: "Keiko Mobile" },
 ];
 
 function RailButton({
@@ -94,25 +84,18 @@ export function LeftRail({
       </div>
       <span className="spacer" />
       <div className="rail-group">
-        {SECONDARY.map((tool) => (
-          <RailButton
-            key={tool.id}
-            tool={tool}
-            active={openTools.has(tool.id)}
-            onClick={() => onTool(tool.id)}
-          />
-        ))}
-        {/* Issue #211 — MemoriaViva is a page route, not a window tool */}
-        <Link
-          href="/memoriaviva"
+        <button
+          type="button"
           className="rail-btn"
-          data-active="false"
+          data-active={openTools.has("memoria") ? "true" : "false"}
           data-side="left"
           aria-label="MemoriaViva"
+          aria-pressed={openTools.has("memoria")}
           data-tip="MemoriaViva"
+          onClick={() => onTool("memoria")}
         >
           <Icons.brain size={19} />
-        </Link>
+        </button>
         {/* Epic #270 — Quality Intelligence opens as a singleton Workspace window (not a page route). */}
         <button
           type="button"
@@ -126,6 +109,19 @@ export function LeftRail({
         >
           <Icons.check size={19} />
         </button>
+        {/* Epic #1307, Issue #1314 — Prompt Enhancer opens as a singleton Workspace tool window. */}
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
+          data-active={openTools.has("promptEnhancer") ? "true" : "false"}
+          aria-label="Prompt Enhancer"
+          aria-pressed={openTools.has("promptEnhancer")}
+          data-tip="Prompt Enhancer"
+          onClick={() => onTool("promptEnhancer")}
+        >
+          <Icons.spark size={19} />
+        </button>
         <button
           type="button"
           className="rail-btn"
@@ -138,26 +134,29 @@ export function LeftRail({
         >
           <Icons.localKnowledge size={19} />
         </button>
-        {/* Epic #532 — Relationships opens as a singleton Workspace window (not a page route). */}
         <button
           type="button"
           className="rail-btn"
           data-side="left"
-          data-active={openTools.has("relationships") ? "true" : "false"}
-          aria-label="Relationships"
-          aria-pressed={openTools.has("relationships")}
-          data-tip="Relationships"
-          onClick={() => onTool("relationships")}
+          data-active={openTools.has("figma") ? "true" : "false"}
+          aria-label="Figma Snapshot"
+          aria-pressed={openTools.has("figma")}
+          data-tip="Figma Snapshot"
+          onClick={() => onTool("figma")}
         >
-          <Icons.branch size={19} />
+          <Icons.layers size={19} />
         </button>
       </div>
       <div className="rail-div" />
+      {/* SH-01: aria-pressed reflects current state (true = light theme is active);
+          the action label describes the next state — "Dark mode" when light, "Light
+          mode" when dark — which is the standard WAI-ARIA APG toggle-button pattern. */}
       <button
         type="button"
         className="rail-btn"
         data-side="left"
         aria-label={theme === "light" ? "Dark mode" : "Light mode"}
+        aria-pressed={theme === "light"}
         data-tip={theme === "light" ? "Dark mode" : "Light mode"}
         onClick={onToggleTheme}
       >
@@ -174,19 +173,6 @@ export function LeftRail({
         onClick={() => onTool("settings")}
       >
         <Icons.settings size={19} />
-      </button>
-      {/* uiux-fix F011 C293: generic person glyph instead of a hardcoded "M" initial
-          (wrong for any real user), and the button now performs an action — it opens
-          Settings, the closest account surface — instead of being a dead control. */}
-      <button
-        type="button"
-        className="rail-avatar"
-        data-side="left"
-        aria-label="Account"
-        data-tip="Account"
-        onClick={() => onTool("settings")}
-      >
-        <Icons.user size={15} />
       </button>
     </nav>
   );

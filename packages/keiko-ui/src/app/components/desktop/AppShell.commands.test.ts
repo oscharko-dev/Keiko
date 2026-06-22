@@ -12,7 +12,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
-import { buildAppShellCommands, headerStatus } from "./AppShell";
+import { buildAppShellCommands, headerStatus, normalizeEditorWindowCfg } from "./AppShell";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 
 function fakeApi(): WorkspaceApi {
@@ -21,6 +21,8 @@ function fakeApi(): WorkspaceApi {
     toggleTool: vi.fn(),
     focus: vi.fn(),
     close: vi.fn(),
+    minimize: vi.fn(),
+    restore: vi.fn(),
     maximize: vi.fn(),
     update: vi.fn(),
     setSnap: vi.fn(),
@@ -42,6 +44,7 @@ function fakeApi(): WorkspaceApi {
     linkedFilesContext: vi.fn(() => null),
     currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),
+    fitView: vi.fn(),
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
@@ -73,13 +76,15 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       fakeUndoStack(),
     );
     const newCommands = commands.filter((c) => c.id.startsWith("new-"));
-    expect(newCommands.length).toBeGreaterThanOrEqual(8);
-    expect(newCommands.find((c) => c.id === "new-chat")).toBeDefined();
-    expect(newCommands.find((c) => c.id === "new-files")).toBeDefined();
-    expect(newCommands.find((c) => c.id === "new-review")).toBeDefined();
-    // Epic #750 #756 — the Figma Snapshot window must be launchable (it was unreachable when "figma"
-    // was missing from CARD_TYPES); pin it so the surface cannot regress to dead code.
-    expect(newCommands.find((c) => c.id === "new-figma")).toBeDefined();
+    expect(newCommands.map((c) => c.id)).toEqual([
+      "new-chat",
+      "new-connector",
+      "new-files",
+      "new-editor",
+      "new-agents",
+    ]);
+    expect(newCommands.find((c) => c.id === "new-editor")).toBeDefined();
+    expect(newCommands.find((c) => c.id === "new-figma")).toBeUndefined();
   });
 
   it("includes Tile / Split / Cascade / Theme commands", () => {
@@ -139,6 +144,19 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(undo?.label).toBe("Undo: Toggle project panel");
   });
 
+  it("renders the typed action label when the redo stack has an entry", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack({ canRedo: true, redoLabel: "Restore quality panel" }),
+    );
+    const redo = commands.find((c) => c.id === "redo");
+    expect(redo?.label).toBe("Redo: Restore quality panel");
+  });
+
   it("running the Undo command delegates to the undo stack", () => {
     const stack = fakeUndoStack();
     const commands = buildAppShellCommands(fakeApi(), vi.fn(), vi.fn(), "dark", vi.fn(), stack);
@@ -153,6 +171,79 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     const redo = commands.find((c) => c.id === "redo");
     redo?.run();
     expect(stack.redo).toHaveBeenCalledTimes(1);
+  });
+
+  it("running layout commands delegates to the workspace API", () => {
+    const api = fakeApi();
+    const commands = buildAppShellCommands(api, vi.fn(), vi.fn(), "dark", vi.fn(), fakeUndoStack());
+
+    commands.find((c) => c.id === "tile")?.run();
+    commands.find((c) => c.id === "split")?.run();
+    commands.find((c) => c.id === "cascade")?.run();
+
+    expect(api.tileAll).toHaveBeenCalledTimes(1);
+    expect(api.splitFront).toHaveBeenCalledTimes(1);
+    expect(api.cascade).toHaveBeenCalledTimes(1);
+  });
+
+  it("running the theme command delegates to the theme toggle", () => {
+    const toggleTheme = vi.fn();
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      toggleTheme,
+      fakeUndoStack(),
+    );
+
+    commands.find((c) => c.id === "theme")?.run();
+
+    expect(toggleTheme).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the moon icon for the light theme toggle path", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "light",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+
+    expect(commands.find((c) => c.id === "theme")?.icon).toBe("moon");
+  });
+
+  it("uses the sun icon for the dark theme toggle path", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+
+    expect(commands.find((c) => c.id === "theme")?.icon).toBe("sun");
+  });
+
+  it("running card create commands delegates to the palette picker", () => {
+    const openPalettePick = vi.fn();
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      openPalettePick,
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+
+    commands.find((c) => c.id === "new-chat")?.run();
+    commands.find((c) => c.id === "new-files")?.run();
+
+    expect(openPalettePick).toHaveBeenCalledWith("chat");
+    expect(openPalettePick).toHaveBeenCalledWith("files");
   });
 
   it("Edit group commands (undo/redo) are categorised under 'Edit'", () => {
@@ -180,15 +271,15 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       vi.fn(),
       fakeUndoStack(),
     );
-    const project = commands.find((c) => c.id === "open-project");
-    project?.run();
-    expect(onTool).toHaveBeenCalledWith("project");
+    const settings = commands.find((c) => c.id === "open-settings");
+    settings?.run();
+    expect(onTool).toHaveBeenCalledWith("settings");
   });
 
-  // uiux-fix F008 C222 — keiko, settings, quality and relationships are registered tool windows
+  // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with LeftRail buttons but were missing from TOOL_TYPES, making them unreachable from the
-  // command palette (same forgotten-WindowType pattern as #756/"figma"). Pin them.
-  it("includes Open commands for settings, local knowledge, quality, relationships and keiko", () => {
+  // command palette. Pin the visible singleton tools here.
+  it("includes Open commands for MemoriaViva, settings, local knowledge, Figma Snapshot, quality and relationships", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
       vi.fn(),
@@ -198,11 +289,123 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       fakeUndoStack(),
     );
     const ids = new Set(commands.map((c) => c.id));
+    expect(ids.has("open-memoria")).toBe(true);
     expect(ids.has("open-settings")).toBe(true);
     expect(ids.has("open-localKnowledge")).toBe(true);
+    expect(ids.has("open-figma")).toBe(true);
     expect(ids.has("open-quality")).toBe(true);
     expect(ids.has("open-relationships")).toBe(true);
-    expect(ids.has("open-keiko")).toBe(true);
+  });
+
+  it("does not expose the hidden Plugins surface through commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "open-plugins")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Search surface through commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "open-search")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Project surface through commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "open-project")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Keiko Digital Twin surface through commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "open-keiko")).toBeUndefined();
+  });
+
+  it("exposes Agents through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-agents")).toMatchObject({
+      label: "New Agents",
+      group: "Create",
+    });
+  });
+
+  it("does not expose the hidden Integrations surface through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-integ")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Browser surface through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-browser")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Terminal surface through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-terminal")).toBeUndefined();
+  });
+
+  it("does not expose the hidden Review surface through create commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "new-review")).toBeUndefined();
   });
 
   // uiux-fix F008 C141 — shortcut discoverability: the undo/redo rows surface their chords.
@@ -217,6 +420,62 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     );
     expect(commands.find((c) => c.id === "undo")?.shortcut).toBe("⌘Z");
     expect(commands.find((c) => c.id === "redo")?.shortcut).toBe("⇧⌘Z");
+  });
+});
+
+describe("normalizeEditorWindowCfg", () => {
+  it("treats the selected folder itself as an editor workspace without a file target", () => {
+    expect(
+      normalizeEditorWindowCfg({
+        root: "/Users/example/Keiko",
+        file: "/Users/example/Keiko",
+      }),
+    ).toEqual({ root: "/Users/example/Keiko" });
+  });
+
+  it("normalizes absolute file paths inside the selected folder to workspace-relative paths", () => {
+    expect(
+      normalizeEditorWindowCfg({
+        root: "/Users/example/Keiko",
+        file: "/Users/example/Keiko/packages/keiko-editor/package.json",
+      }),
+    ).toEqual({
+      root: "/Users/example/Keiko",
+      file: "packages/keiko-editor/package.json",
+      openFiles: ["packages/keiko-editor/package.json"],
+    });
+  });
+
+  it("normalizes persisted editor tabs and keeps relative tab order stable", () => {
+    expect(
+      normalizeEditorWindowCfg({
+        root: "/Users/example/Keiko",
+        file: "/Users/example/Keiko/package.json",
+        openFiles: [
+          "/Users/example/Keiko/src/app.ts",
+          "README.md",
+          "/Users/example/Keiko/src/app.ts",
+          "/Users/example/Other/outside.ts",
+        ],
+      }),
+    ).toEqual({
+      root: "/Users/example/Keiko",
+      file: "package.json",
+      openFiles: ["src/app.ts", "README.md", "package.json"],
+    });
+  });
+
+  it("supports the filesystem root as an editor workspace root", () => {
+    expect(
+      normalizeEditorWindowCfg({
+        root: "/",
+        file: "/Users/example/Keiko/package.json",
+      }),
+    ).toEqual({
+      root: "/",
+      file: "Users/example/Keiko/package.json",
+      openFiles: ["Users/example/Keiko/package.json"],
+    });
   });
 });
 

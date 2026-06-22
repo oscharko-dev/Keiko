@@ -3,6 +3,9 @@ import type { MemoryAuditEvent, MemoryScope } from "@oscharko-dev/keiko-contract
 import { safeSummary } from "./memory-audit-event-builders.js";
 
 function maskedCoordinate(value: string, redactString: (input: string) => string): string {
+  if (value.startsWith("[redacted:") && value.endsWith("]")) {
+    return value;
+  }
   const redacted = redactString(value);
   if (redacted !== value) {
     return redacted;
@@ -81,6 +84,19 @@ export function sanitizeAuditEvent(
       };
     case "memory:workflow-used":
       return { ...event, summary: redactedSummary };
+    case "memory:workflow-omitted":
+      return {
+        ...event,
+        summary: redactedSummary,
+        reason: safeSummary(event.reason, redactString),
+        scopes: event.scopes.map((scope) => sanitizeMemoryScope(scope, redactString)),
+      };
+    case "memory:workflow-write-candidate":
+      return {
+        ...event,
+        summary: redactedSummary,
+        scope: sanitizeMemoryScope(event.scope, redactString),
+      };
     default:
       return {
         ...event,
@@ -96,9 +112,12 @@ export function auditEventTouchesScope(
 ): boolean {
   switch (event.kind) {
     case "memory:retrieved":
+    case "memory:workflow-omitted":
       return event.scopes.some((scope) => allowedScopeKeys.has(memoryScopeKey(scope)));
     case "memory:workflow-used":
       return false;
+    case "memory:workflow-write-candidate":
+      return allowedScopeKeys.has(memoryScopeKey(event.scope));
     default:
       return allowedScopeKeys.has(memoryScopeKey(event.scope));
   }

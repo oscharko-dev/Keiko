@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { DETERMINISTIC_BASELINE_PROVENANCE_TAG } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   createInMemoryQualityIntelligenceLocalStore,
   type QualityIntelligenceEvidenceManifest,
@@ -92,6 +93,19 @@ function makeDeps(
   };
 }
 
+function makeDepsWithCandidateCap(
+  evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
+  maxCandidatesPerRun: number,
+): QualityIntelligenceModelRoutedTestDesignDeps {
+  return {
+    ...makeDeps(evidenceStore),
+    limits: {
+      ...QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS,
+      maxCandidatesPerRun,
+    },
+  };
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", () => {
@@ -109,8 +123,14 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
       ingestedAtoms,
       provenanceRefs: PROVENANCE,
     };
-    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, makeDeps(store));
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(
+      input,
+      makeDepsWithCandidateCap(store, 2),
+    );
     expect(summary.status).toBe("succeeded");
+    // A non-degraded (model-backed) run carries no degradation reason — the wire `done` frame must
+    // not flag it as degraded.
+    expect(summary.reasonSummary).toBeUndefined();
 
     const manifest = store.load(String(PLAN.id));
     expect(manifest).toBeDefined();
@@ -139,7 +159,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
       ingestedAtoms,
       provenanceRefs: PROVENANCE,
     };
-    await runQualityIntelligenceModelRoutedTestDesign(input, makeDeps(store));
+    await runQualityIntelligenceModelRoutedTestDesign(input, makeDepsWithCandidateCap(store, 2));
 
     const manifest = store.load(String(PLAN.id));
     expect(manifest?.coverageMatrix).toBeDefined();
@@ -166,6 +186,122 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     // The fake generation port reports modelId "test-model"; no seed is plumbed → seedUsed null.
     expect(manifest?.modelId).toBe("test-model");
     expect(manifest?.seedUsed).toBeNull();
+  });
+
+  it("keeps deterministic baseline candidates and appends model output as an attributed delta", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement atom 1"),
+      makeIngestedAtom("atom-2", "Requirement atom 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, {
+      ...makeDeps(store),
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
+    });
+
+    expect(summary.status).toBe("succeeded");
+    expect(recorded).toHaveLength(4);
+    expect(
+      recorded.slice(0, 2).map((candidate) => candidate.derivedFromAtomIds.map(String)),
+    ).toEqual([["atom-1"], ["atom-2"]]);
+    expect(recorded.slice(2).map((candidate) => candidate.title)).toEqual([
+      "Test atom 1 behavior",
+      "Test atom 2 behavior",
+    ]);
+    // Provenance discriminator: only the deterministic baseline (slice 0..2) carries the tag;
+    // the appended model-delta candidates (slice 2..) never do. This is what lets the render layer
+    // sort baselines to the end while the PERSISTED order above stays [...baseline, ...delta].
+    for (const baseline of recorded.slice(0, 2)) {
+      expect(baseline.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    }
+    for (const delta of recorded.slice(2)) {
+      expect(delta.tags).not.toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    }
+    const manifest = store.load(String(PLAN.id));
+    expect(manifest?.modelId).toBe("test-model");
+    expect(manifest?.totals.candidates).toBe(4);
+  });
+
+  it("bounds the model-delta request below the persisted run candidate limit", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    let requestedMaxCandidates = 0;
+    let requestedInstruction = "";
+    const ingestedAtoms = Array.from({ length: 9 }, (_, index) =>
+      makeIngestedAtom(`atom-${String(index + 1)}`, `Requirement atom ${String(index + 1)}`),
+    );
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, {
+      ...makeDeps(store),
+      generate: {
+        generate: (args) => {
+          requestedMaxCandidates = args.maxCandidates;
+          requestedInstruction = args.instruction;
+          return Promise.resolve({
+            rawText: MODEL_OUTPUT_COVERING_TWO,
+            modelCallCount: 1,
+            modelId: "test-model",
+          });
+        },
+      },
+    });
+
+    expect(summary.status).toBe("succeeded");
+    expect(requestedMaxCandidates).toBe(16);
+    expect(requestedInstruction).toContain("Entwirf bis zu 16 Testfälle");
+    expect(store.load(String(PLAN.id))?.totals.candidates).toBeGreaterThan(0);
+  });
+
+  // Issue #763 (Epic #761) AC2: a numeric applied seed (and its modelParameters) must thread from
+  // the generation result through persistRun into the manifest. The test above only exercises the
+  // `seedUsed ?? null` fallback (no seed), leaving the positive-integer branch and the
+  // modelParameters threading mutation-blind at the workflow-unit level.
+  it("records a numeric applied seed and modelParameters in evidence (Epic #761)", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [makeIngestedAtom("atom-1", "Requirement atom 1")];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    await runQualityIntelligenceModelRoutedTestDesign(input, {
+      sink: { emit: () => undefined },
+      evidenceStore: store,
+      candidatesSink: { record: () => undefined },
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText: MODEL_OUTPUT_COVERING_TWO,
+            modelCallCount: 1,
+            modelId: "seeded-model",
+            seedUsed: 42,
+            modelParameters: { responseFormat: "json_schema", seed: 42 },
+          }),
+      },
+      clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+    });
+
+    const manifest = store.load(String(PLAN.id));
+    expect(manifest?.modelId).toBe("seeded-model");
+    expect(manifest?.seedUsed).toBe(42);
+    expect(manifest?.modelParameters).toEqual({ responseFormat: "json_schema", seed: 42 });
   });
 
   it("uses the deterministic structural baseline when generation is model-free", async () => {
@@ -229,9 +365,12 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
       ["atom-2"],
     ]);
     expect(recorded.map((candidate) => candidate.title)).toEqual([
-      "#001 audit / determinism — requirement",
-      "#002 audit / determinism — requirement",
+      "#001 Prüfe REQ-DETERMINISM-001: A payment approval screen must require a second approver.",
+      "#002 Prüfe REQ-DETERMINISM-002: The approval screen must reject same-user approval.",
     ]);
+    expect(recorded[0]?.preconditions).toContain(
+      "Quellanforderung: REQ-DETERMINISM-001: A payment approval screen must require a second approver.",
+    );
 
     const manifest = store.load(String(plan.id));
     expect(manifest?.modelId).toBeUndefined();
@@ -298,8 +437,12 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
   });
 
   it("does not emit coverage-gap findings when all atoms are covered", async () => {
+    // T1 — strengthened: prove ZERO gap findings AND every coverageMatrix row is "covered".
+    // Mutation target: the gap loop guard `s.status !== "covered"` in modelRoutedTestDesign.ts.
+    // Flipping it to `true` causes every atom to emit a gap entry → toHaveLength(0) fails.
     const store = createInMemoryQualityIntelligenceLocalStore();
-    // Only 2 atoms, model covers both
+    // Only 2 atoms; MODEL_OUTPUT_COVERING_TWO cites each with a single-atom index list
+    // → bestFocus=1 ≤ FOCUS_COVERED_MAX(3) → both atoms are "covered".
     const ingestedAtoms = [
       makeIngestedAtom("atom-1", "Requirement atom 1"),
       makeIngestedAtom("atom-2", "Requirement atom 2"),
@@ -318,12 +461,93 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
 
     const manifest = store.load(String(plan.id));
     expect(manifest).toBeDefined();
-    // Atom-1 and atom-2 are cited — coverage-gap count depends on confidence threshold
-    // but the 3rd-atom gap that was the focus of this epic is absent
-    const gapFindings = (manifest?.findings ?? []).filter((f) => f.kind === "coverage-gap");
-    // No atom-3 row in a 2-atom run
-    const hasAtom3Gap = gapFindings.some((f) => f.summaryRedacted.includes("atom-3"));
-    expect(hasAtom3Gap).toBe(false);
+    if (manifest === undefined) throw new Error("manifest not found");
+
+    // Deliverable: a fully-covered run produces ZERO coverage-gap findings.
+    const gapFindings = manifest.findings.filter((f) => f.kind === "coverage-gap");
+    expect(gapFindings).toHaveLength(0);
+
+    // Deliverable: every coverageMatrix row must be "covered" (not "weakly-covered" / "uncovered").
+    const matrix = manifest.coverageMatrix ?? [];
+    expect(matrix.length).toBe(2);
+    expect(matrix.every((row) => row.status === "covered")).toBe(true);
+  });
+
+  it("computes coverage from the persisted candidate set, not only the model delta", async () => {
+    // The user receives baseline + model-delta candidates. Coverage must assess that same
+    // persisted set; otherwise the manifest can report gaps for atoms that are actually covered by
+    // delivered baseline candidates.
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
+    const plan: QualityIntelligence.QualityIntelligenceRunPlan = {
+      ...PLAN,
+      id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-cov-test-003"),
+    };
+
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement atom 1"),
+      makeIngestedAtom("atom-2", "Requirement atom 2"),
+      makeIngestedAtom("atom-3", "Requirement atom 3"),
+      makeIngestedAtom("atom-4", "Requirement atom 4 — broad citer only"),
+    ];
+
+    // One candidate citing all 4 atoms → bestFocus=4 > FOCUS_COVERED_MAX(3) → weakly-covered.
+    const rawTextBroadCoverage = JSON.stringify([
+      {
+        title: "Broad integration test touching all requirements",
+        steps: ["Trigger the combined flow"],
+        expectedResults: ["All requirements satisfied"],
+        priority: "P2",
+        riskClass: "regression",
+        derivedFromEvidenceIndexes: [1, 2, 3, 4],
+      },
+    ]);
+
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      sink: { emit: () => undefined },
+      evidenceStore: store,
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText: rawTextBroadCoverage,
+            modelCallCount: 1,
+            modelId: "test-model",
+          }),
+      },
+      clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+    };
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+
+    const manifest = store.load(String(plan.id));
+    expect(manifest).toBeDefined();
+    if (manifest === undefined) throw new Error("manifest not found");
+
+    expect(manifest.totals.candidates).toBe(5);
+    expect(recorded).toHaveLength(5);
+
+    const gapFindings = manifest.findings.filter((f) => f.kind === "coverage-gap");
+    expect(gapFindings).toHaveLength(0);
+
+    const matrix = manifest.coverageMatrix ?? [];
+    expect(matrix).toHaveLength(4);
+    expect(matrix.every((row) => row.status === "covered")).toBe(true);
+    const atom4Row = matrix.find((row) => row.atomId === "atom-4");
+    expect(atom4Row).toBeDefined();
+    expect(atom4Row?.coveringCandidateIds.some((id) => recorded.some((c) => c.id === id))).toBe(
+      true,
+    );
   });
 });
 
@@ -351,6 +575,17 @@ const STRONG_VERDICT = {
   overallRationale: "strong test",
 };
 
+const MEDIUM_WEAK_VERDICT = {
+  verdict: "weak" as const,
+  dimensions: [
+    { name: "verifiability" as const, score: 55, rationale: "expected result is vague" },
+    { name: "atomicity" as const, score: 55, rationale: "multiple concerns are mixed" },
+    { name: "determinism" as const, score: 55, rationale: "timing-sensitive wait remains" },
+    { name: "ac-fidelity" as const, score: 55, rationale: "only partially matches the AC" },
+  ],
+  overallRationale: "medium severity weak test",
+};
+
 const DISTINCT_WEAK_RATIONALE_VERDICT = {
   verdict: "weak" as const,
   dimensions: [
@@ -364,6 +599,17 @@ const DISTINCT_WEAK_RATIONALE_VERDICT = {
     },
   ],
   overallRationale: "weak because it misses the originating AC and remains timing-sensitive",
+};
+
+const WEAK_DIMENSION_STRONG_AVERAGE_VERDICT = {
+  verdict: "strong" as const,
+  dimensions: [
+    { name: "verifiability" as const, score: 90, rationale: "clear" },
+    { name: "atomicity" as const, score: 28, rationale: "bundles independent checks" },
+    { name: "determinism" as const, score: 90, rationale: "deterministic" },
+    { name: "ac-fidelity" as const, score: 90, rationale: "matches" },
+  ],
+  overallRationale: "average is high but one mandatory dimension is weak",
 };
 
 function makeDepsWithJudge(
@@ -422,7 +668,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     if (manifest === undefined) throw new Error("manifest not found");
 
     const qualityFindings = manifest.findings.filter((f) => f.kind === "test-quality");
-    // Both candidates are weak → 2 test-quality findings
+    // Both model-delta candidates are weak → 2 test-quality findings.
     expect(qualityFindings.length).toBe(2);
     // Each test-quality finding is candidate-scoped so the UI can flag the exact test (#748).
     expect(qualityFindings.every((f) => typeof f.candidateId === "string")).toBe(true);
@@ -482,6 +728,164 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(qualityFindings.length).toBe(1);
   });
 
+  it("normalizes a strong judge verdict to weak when a mandatory dimension is below threshold", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-dimension-gate"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (_input) =>
+        Promise.resolve(WEAK_DIMENSION_STRONG_AVERAGE_VERDICT),
+      ),
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBe(0);
+    const manifest = store.load(String(input.plan.id));
+    const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
+    expect(qualityFindings).toHaveLength(2);
+    const persistedModelCandidate = recorded.find((candidate) =>
+      candidate.title.includes("Test atom 1 behavior"),
+    ) as
+      | (QualityIntelligence.QualityIntelligenceTestCaseCandidate & {
+          readonly qualityVerdict?: { readonly verdict: "weak" | "strong"; readonly score: number };
+        })
+      | undefined;
+    expect(persistedModelCandidate?.qualityVerdict).toEqual(
+      expect.objectContaining({ verdict: "weak", score: 74.5 }),
+    );
+  });
+
+  it("passes candidate preconditions into the judge prompt", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [makeIngestedAtom("atom-1", "AC-1: Admins can approve refunds.")];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-preconditions"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const rawText = JSON.stringify([
+      {
+        title: "Approve refund as an admin",
+        preconditions: ["User has admin role", "Refund request is pending"],
+        steps: ["Open the refund request", "Click approve"],
+        expectedResults: ["The refund is approved"],
+        priority: "P1",
+        riskClass: "functional",
+        derivedFromEvidenceIndexes: [1],
+      },
+    ]);
+    const judgeCalls: QualityIntelligenceJudgeInput[] = [];
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (judgeInput) => {
+        judgeCalls.push(judgeInput);
+        return Promise.resolve(STRONG_VERDICT);
+      }),
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText,
+            modelCallCount: 1,
+            modelId: "test-model",
+          }),
+      },
+    };
+
+    await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    const modelCall = judgeCalls.find((call) =>
+      call.candidateText.includes("Titel: Approve refund as an admin"),
+    );
+    expect(modelCall?.candidateText).toContain(
+      "Vorbedingungen: User has admin role; Refund request is pending",
+    );
+  });
+
+  it("passes per-candidate quality verdicts to candidate persistence for strong and weak tests", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-verdict-persist"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (judgeInput) =>
+        Promise.resolve(
+          judgeInput.candidateText.includes("Test atom 1 behavior") ? STRONG_VERDICT : WEAK_VERDICT,
+        ),
+      ),
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    expect(summary.status).toBe("succeeded");
+    expect(recorded).toHaveLength(4);
+    const withVerdicts =
+      recorded as readonly (QualityIntelligence.QualityIntelligenceTestCaseCandidate & {
+        readonly qualityVerdict?: QualityIntelligence.TestQualityJudgeVerdict & {
+          readonly score: number;
+        };
+      })[];
+    const strongCandidate = withVerdicts.find((candidate) =>
+      candidate.title.includes("Test atom 1 behavior"),
+    );
+    const weakCandidate = withVerdicts.find((candidate) =>
+      candidate.title.includes("Test atom 2 behavior"),
+    );
+    expect(strongCandidate?.qualityVerdict).toEqual(
+      expect.objectContaining({
+        verdict: "strong",
+        score: 87.5,
+        overallRationale: "strong test",
+      }),
+    );
+    expect(weakCandidate?.qualityVerdict).toEqual(
+      expect.objectContaining({
+        verdict: "weak",
+        score: 20,
+        overallRationale: "weak test",
+      }),
+    );
+    expect(strongCandidate?.qualityVerdict?.dimensions).toEqual(STRONG_VERDICT.dimensions);
+    expect(weakCandidate?.qualityVerdict?.dimensions).toEqual(WEAK_VERDICT.dimensions);
+  });
+
   it("does not emit test-quality findings for strong candidates", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [
@@ -530,13 +934,17 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     await runQualityIntelligenceModelRoutedTestDesign(input, deps);
 
     expect(judgeCalls).toHaveLength(2);
-    const firstJudgeCall = judgeCalls[0];
-    const secondJudgeCall = judgeCalls[1];
-    expect(firstJudgeCall?.candidateText).toContain("Title: Test atom 1 behavior");
+    const firstJudgeCall = judgeCalls.find((call) =>
+      call.candidateText.includes("Titel: Test atom 1 behavior"),
+    );
+    const secondJudgeCall = judgeCalls.find((call) =>
+      call.candidateText.includes("Titel: Test atom 2 behavior"),
+    );
+    expect(firstJudgeCall?.candidateText).toContain("Titel: Test atom 1 behavior");
     expect(firstJudgeCall?.sourceContext).toEqual([
       { atomId: "atom-1", text: "AC-1: Clicking Help opens the help center." },
     ]);
-    expect(secondJudgeCall?.candidateText).toContain("Title: Test atom 2 behavior");
+    expect(secondJudgeCall?.candidateText).toContain("Titel: Test atom 2 behavior");
     expect(secondJudgeCall?.sourceContext).toEqual([
       { atomId: "atom-2", text: "AC-2: The Help center focuses the search field." },
     ]);
@@ -566,12 +974,70 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     const manifest = store.load(String(input.plan.id));
     const qualityFinding = manifest?.findings.find((finding) => finding.kind === "test-quality");
     expect(qualityFinding?.summaryRedacted).toContain(
-      "AC fidelity: Misses the stated acceptance criteria.",
+      "AC-Treue: Misses the stated acceptance criteria.",
     );
     expect(qualityFinding?.summaryRedacted).toContain(
-      "Determinism: Relies on timing-sensitive behavior.",
+      "Determinismus: Relies on timing-sensitive behavior.",
     );
     expect(qualityFinding?.summaryRedacted).not.toContain("Test quality score");
+  });
+
+  it("preserves weak-test findings ahead of same-severity validator findings when the cap is hit", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const plan: QualityIntelligence.QualityIntelligenceRunPlan = {
+      ...JUDGE_PLAN,
+      id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-cap-quality"),
+    };
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+      makeIngestedAtom("atom-3", "Requirement 3"),
+    ];
+    const rawText = JSON.stringify(
+      [1, 2, 3].map((n) => ({
+        title: `Cap saturation candidate ${String(n)}`,
+        preconditions: ["User is approved"],
+        steps: ["Open the review page", "Open the review page"],
+        expectedResults: ["User is not approved"],
+        priority: "P2",
+        riskClass: "regression",
+        derivedFromEvidenceIndexes: [n],
+      })),
+    );
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (_input) => Promise.resolve(MEDIUM_WEAK_VERDICT)),
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText,
+            modelCallCount: 1,
+            modelId: "test-model",
+          }),
+      },
+      limits: {
+        ...QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS,
+        maxFindingsPerRun: 4,
+      },
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBe(0);
+
+    const manifest = store.load(String(plan.id));
+    expect(manifest).toBeDefined();
+    if (manifest === undefined) throw new Error("manifest not found");
+    expect(manifest.findings).toHaveLength(4);
+    const qualityFindings = manifest.findings.filter((finding) => finding.kind === "test-quality");
+    expect(qualityFindings).toHaveLength(3);
+    expect(qualityFindings.every((finding) => finding.severity === "medium")).toBe(true);
+    expect(qualityFindings.every((finding) => finding.candidateId !== undefined)).toBe(true);
   });
 
   it("returns qualityScore: null when no judge is configured", async () => {
@@ -612,13 +1078,41 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     };
     const deps = makeDepsWithJudge(store, (_input) => Promise.resolve(WEAK_VERDICT));
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
-    // 1 generation call + 2 judge calls (one per candidate) = 3 gateway dispatches.
+    // 1 generation call + 2 judge calls (one per model-delta candidate) = 3 gateway dispatches.
     expect(summary.modelGatewayCallCount).toBe(3);
     const manifest = store.load(String(input.plan.id));
     expect(manifest?.modelGatewayCallCount).toBe(3);
   });
 
-  it("is fail-soft: a transient judge error leaves the run succeeded with candidates intact", async () => {
+  it("does not count locally guarded judge verdicts as gateway dispatches", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-local-guard"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps = makeDepsWithJudge(store, (_input) =>
+      Promise.resolve({ ...WEAK_VERDICT, gatewayCallCount: 0 }),
+    );
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBe(0);
+    // 1 generation call + 0 real judge gateway dispatches.
+    expect(summary.modelGatewayCallCount).toBe(1);
+    const manifest = store.load(String(input.plan.id));
+    expect(manifest?.modelGatewayCallCount).toBe(1);
+    expect((manifest?.findings ?? []).filter((f) => f.kind === "test-quality")).toHaveLength(2);
+  });
+
+  it("is fail-soft: a transient judge error becomes an explicit weak finding", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
     const ingestedAtoms = [
@@ -634,7 +1128,8 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
       ingestedAtoms,
       provenanceRefs: JUDGE_PROVENANCE,
     };
-    // The judge errors on candidate 1 (transient gateway failure) but scores candidate 2 strong.
+    // The judge errors on one model-delta candidate (transient gateway failure) but scores the
+    // remaining model candidate strong.
     const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
       ...makeDepsWithJudge(store, (judgeInput) => {
         if (judgeInput.candidateText.includes("Test atom 1 behavior")) {
@@ -649,21 +1144,24 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
       },
     };
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
-    // The run survives the judge error and persists both candidates.
+    // The run survives the judge error and persists baseline plus model-delta candidates.
     expect(summary.status).toBe("succeeded");
-    expect(recorded).toHaveLength(2);
+    expect(recorded).toHaveLength(4);
     const manifest = store.load(String(input.plan.id));
-    expect(manifest?.totals.candidates).toBe(2);
-    // Only the successfully judged candidate counts toward the score (1 strong of 1 judged = 100);
-    // the unjudged candidate is excluded rather than counted as weak, and yields no finding.
-    expect(summary.qualityScore).toBe(100);
+    expect(manifest?.totals.candidates).toBe(4);
+    // The failed judge call is represented as an explicit weak verdict so it cannot look strong.
+    expect(summary.qualityScore).toBe(50);
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
-    expect(qualityFindings).toHaveLength(0);
-    // Both dispatches are still counted for an honest audit trail.
+    expect(qualityFindings).toHaveLength(1);
+    expect(qualityFindings[0]?.summaryRedacted).toContain(
+      "konnte diesen Kandidaten nicht bewerten",
+    );
+    expect(qualityFindings[0]?.summaryRedacted).not.toContain("HTTP 429");
+    // Both model-delta judge dispatches are still counted for an honest audit trail.
     expect(summary.modelGatewayCallCount).toBe(3);
   });
 
-  it("is fail-soft when EVERY judge call errors: run succeeds, score null, candidates intact", async () => {
+  it("is fail-soft when EVERY judge call errors: run succeeds with weak findings", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [
       makeIngestedAtom("atom-1", "Requirement 1"),
@@ -683,14 +1181,18 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     );
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
     expect(summary.status).toBe("succeeded");
-    expect(summary.qualityScore).toBeNull();
+    expect(summary.qualityScore).toBe(0);
     const manifest = store.load(String(input.plan.id));
-    expect(manifest?.totals.candidates).toBe(2);
+    expect(manifest?.totals.candidates).toBe(4);
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
-    expect(qualityFindings).toHaveLength(0);
+    expect(qualityFindings).toHaveLength(2);
+    expect(qualityFindings.map((f) => f.summaryRedacted)).toEqual(
+      expect.arrayContaining([expect.stringContaining("konnte diesen Kandidaten nicht bewerten")]),
+    );
+    expect(qualityFindings.map((f) => f.summaryRedacted).join("\n")).not.toContain("gateway 503");
   });
 
-  it("bounds the judge by maxJudgeCallsPerRun (judges a prefix, scores only the judged)", async () => {
+  it("bounds gateway calls by maxJudgeCallsPerRun and marks overflow candidates weak", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [
       makeIngestedAtom("atom-1", "Requirement 1"),
@@ -709,19 +1211,21 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
       ...makeDepsWithJudge(store, (_input) => {
         judgeCallCount += 1;
-        return Promise.resolve(WEAK_VERDICT);
+        return Promise.resolve(STRONG_VERDICT);
       }),
       limits: { ...QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS, maxJudgeCallsPerRun: 1 },
     };
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
     expect(summary.status).toBe("succeeded");
-    // Only one of the two candidates is judged under the budget of 1.
+    // Only one of the two model-delta candidates is judged under the budget of 1.
     expect(judgeCallCount).toBe(1);
     // 1 generation + 1 judge call.
     expect(summary.modelGatewayCallCount).toBe(2);
+    expect(summary.qualityScore).toBe(50);
     const manifest = store.load(String(input.plan.id));
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     expect(qualityFindings).toHaveLength(1);
+    expect(qualityFindings[0]?.summaryRedacted).toContain("Budget war vor der Bewertung");
   });
 
   it("classifies a run cancelled when the judge is aborted mid-stage (not failed)", async () => {
@@ -761,6 +1265,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
   async function runWithAtoms(
     store: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
     ingestedAtoms: QualityIntelligenceModelRoutedTestDesignInput["ingestedAtoms"],
+    maxCandidatesPerRun?: number,
   ): Promise<void> {
     const input: QualityIntelligenceModelRoutedTestDesignInput = {
       plan: { ...PLAN, id: RUN_ID },
@@ -768,7 +1273,12 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
       ingestedAtoms,
       provenanceRefs: PROVENANCE,
     };
-    await runQualityIntelligenceModelRoutedTestDesign(input, makeDeps(store));
+    await runQualityIntelligenceModelRoutedTestDesign(
+      input,
+      maxCandidatesPerRun === undefined
+        ? makeDeps(store)
+        : makeDepsWithCandidateCap(store, maxCandidatesPerRun),
+    );
   }
 
   it("persists a redacted requirement excerpt on every coverage matrix row", async () => {
@@ -793,28 +1303,36 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
 
   it("names the requirement in the gap-finding summary, not just the atom id", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
-    await runWithAtoms(store, [
-      makeIngestedAtom("atom-1", "Requirement atom 1"),
-      makeIngestedAtom("atom-2", "Requirement atom 2"),
-      makeIngestedAtom("atom-3", "Reject a checkout when the cart is empty."),
-    ]);
+    await runWithAtoms(
+      store,
+      [
+        makeIngestedAtom("atom-1", "Requirement atom 1"),
+        makeIngestedAtom("atom-2", "Requirement atom 2"),
+        makeIngestedAtom("atom-3", "Reject a checkout when the cart is empty."),
+      ],
+      2,
+    );
     const manifest = store.load(String(RUN_ID));
     const gap = (manifest?.findings ?? []).find(
       (f) => f.kind === "coverage-gap" && f.summaryRedacted.includes("atom-3"),
     );
     expect(gap?.summaryRedacted).toBe(
-      'Atom atom-3 ("Reject a checkout when the cart is empty.") has no tracing test (uncovered).',
+      'Atom atom-3 ("Reject a checkout when the cart is empty.") hat keinen zugeordneten Test (uncovered).',
     );
   });
 
   it("redacts a planted secret out of the excerpt and the gap summary", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const secretText = `Use key AKIA${"C".repeat(16)} to call the payments API.`;
-    await runWithAtoms(store, [
-      makeIngestedAtom("atom-1", "Requirement atom 1"),
-      makeIngestedAtom("atom-2", "Requirement atom 2"),
-      makeIngestedAtom("atom-3", secretText),
-    ]);
+    await runWithAtoms(
+      store,
+      [
+        makeIngestedAtom("atom-1", "Requirement atom 1"),
+        makeIngestedAtom("atom-2", "Requirement atom 2"),
+        makeIngestedAtom("atom-3", secretText),
+      ],
+      2,
+    );
     const manifest = store.load(String(RUN_ID));
     const row = (manifest?.coverageMatrix ?? []).find((r) => r.atomId === "atom-3");
     expect(row?.requirementExcerptRedacted).toContain("[REDACTED]");
@@ -827,11 +1345,15 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
 
   it("omits the excerpt field (and keeps the id-only summary) for empty canonical text", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
-    await runWithAtoms(store, [
-      makeIngestedAtom("atom-1", "Requirement atom 1"),
-      makeIngestedAtom("atom-2", "Requirement atom 2"),
-      makeIngestedAtom("atom-3", "   \n\t "),
-    ]);
+    await runWithAtoms(
+      store,
+      [
+        makeIngestedAtom("atom-1", "Requirement atom 1"),
+        makeIngestedAtom("atom-2", "Requirement atom 2"),
+        makeIngestedAtom("atom-3", "   \n\t "),
+      ],
+      2,
+    );
     const manifest = store.load(String(RUN_ID));
     const row = (manifest?.coverageMatrix ?? []).find((r) => r.atomId === "atom-3");
     expect(row).toBeDefined();
@@ -839,7 +1361,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
     const gap = (manifest?.findings ?? []).find(
       (f) => f.kind === "coverage-gap" && f.summaryRedacted.includes("atom-3"),
     );
-    expect(gap?.summaryRedacted).toBe("Atom atom-3 has no tracing test (uncovered).");
+    expect(gap?.summaryRedacted).toBe("Atom atom-3 hat keinen zugeordneten Test (uncovered).");
   });
 });
 
@@ -856,8 +1378,9 @@ describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (
 // guards the opposite direction — the deterministic (model-free) port must NOT be over-counted.
 
 describe("runQualityIntelligenceModelRoutedTestDesign — generation gateway-call audit (#273)", () => {
-  it("counts a REJECTED generation dispatch as one gateway call in the summary AND the failed manifest", async () => {
+  it("falls back to deterministic candidates and counts a rejected generation dispatch", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
     const ingestedAtoms = [
       makeIngestedAtom("atom-1", "Requirement 1"),
       makeIngestedAtom("atom-2", "Requirement 2"),
@@ -874,7 +1397,11 @@ describe("runQualityIntelligenceModelRoutedTestDesign — generation gateway-cal
     const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
       sink: { emit: () => undefined },
       evidenceStore: store,
-      candidatesSink: { record: () => undefined },
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
       // The gateway dispatch rejects (Azure 503): one call was attempted, none succeeded.
       generate: { generate: () => Promise.reject(new Error("HTTP 503 Service Unavailable")) },
       clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
@@ -882,15 +1409,25 @@ describe("runQualityIntelligenceModelRoutedTestDesign — generation gateway-cal
 
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
 
-    // The run fails (no candidates parsed) but the audit trail must show the attempted dispatch.
-    expect(summary.status).toBe("failed");
+    // The model delta failed, but valid evidence still produces deterministic baseline candidates.
+    expect(summary.status).toBe("succeeded");
+    // QI-DEG-01: the degradation must be visible on the SUMMARY (which the BFF surfaces on the wire
+    // `done` frame as degraded+reasonSummary), not buried only in the offline manifest. Without this a
+    // provider failure looks like a fully successful model-backed run.
+    expect(summary.reasonSummary).toBe("qi-run-error");
     expect(summary.modelGatewayCallCount).toBeGreaterThanOrEqual(1);
-    // The persisted "failed" manifest must carry the same honest call count (not 0).
+    expect(recorded).toHaveLength(2);
+    for (const candidate of recorded) {
+      expect(candidate.tags).toContain(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+    }
+    // The persisted manifest must carry the same honest call count (not 0) and fallback reason.
     const manifest = store.load(String(input.plan.id));
-    expect(manifest?.status).toBe("failed");
+    expect(manifest?.status).toBe("succeeded");
+    expect(manifest?.totals.candidates).toBe(2);
     expect(manifest?.modelGatewayCallCount).toBeGreaterThanOrEqual(1);
+    expect(manifest?.modelParameters).toEqual({ generationFallbackReason: "qi-run-error" });
     // The raw provider message must never leak into the persisted/summary reason.
-    expect(summary.reasonSummary).not.toContain("503");
+    expect(JSON.stringify(manifest)).not.toContain("503");
   });
 
   it("does NOT over-count the deterministic model-free baseline (modelCallCount 0 → 0 dispatches)", async () => {

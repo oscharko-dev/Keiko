@@ -3,9 +3,10 @@
 // The hash is the drift identity: same unchanged design ⇒ byte-identical hash, regardless of when
 // it was fetched. We therefore canonicalise to a stable key order and EXCLUDE the wall-clock
 // `fetchedAt`. The snapshot identity is the pinned Figma `version` + the sorted per-screen
-// identities (each = screenId + structural IR + image content sha256). `version` and the IR are
-// deterministic outputs of #751/#752; the image sha is included so an unexpected render-byte change
-// surfaces as drift too.
+// identities (each = screenId + structural IR + image content sha256, or a structural-only marker
+// for screens whose PNG render was deliberately skipped/could not be fetched). `version` and the IR
+// are deterministic outputs of #751/#752; the image sha is included so an unexpected render-byte
+// change surfaces as drift too, while structural-only screens still participate in drift detection.
 
 import { createHash } from "node:crypto";
 import type { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligence";
@@ -69,6 +70,10 @@ const hashStableIr = (ir: ScreenIr): Record<string, unknown> => ({
 /** sha256 over the canonical per-screen identity: {screenId, ir, imageSha256}. */
 export const hashScreen = (screenId: string, ir: ScreenIr, imageSha256: string): string =>
   sha256Hex(canonical({ imageSha256, ir: hashStableIr(ir), screenId }));
+
+/** sha256 over a structural-only screen identity: {screenId, ir, structuralOnly:true}. */
+export const hashStructuralScreen = (screenId: string, ir: ScreenIr): string =>
+  sha256Hex(canonical({ ir: hashStableIr(ir), screenId, structuralOnly: true }));
 
 /**
  * sha256 over the canonical snapshot identity: schema version + pinned Figma version + the

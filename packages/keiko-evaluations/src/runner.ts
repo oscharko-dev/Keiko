@@ -22,7 +22,10 @@ import { canonicalise, HARNESS_VERSION, type TaskType } from "@oscharko-dev/keik
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
-import { createEvaluationModelProvider } from "./model-provider.js";
+import {
+  createEvaluationModelProvider,
+  type EvaluationConfigLoader,
+} from "./model-provider.js";
 import { aggregateScorecard, scoreFixture, summarizeScorecard } from "./scorer.js";
 import { checkSurfaceParity, type SurfaceParityDeps } from "./surface-parity.js";
 import {
@@ -62,6 +65,8 @@ export interface EvalRunnerDeps {
   // Higher-layer adapters used by the surface-parity check. Injected by the CLI so the evaluations
   // package does not reach up into keiko-cli or keiko-server on its own.
   readonly surfaceParity?: SurfaceParityDeps | undefined;
+  // Optional live-config loader injected by higher layers that own local credential vault access.
+  readonly configLoader?: EvaluationConfigLoader | undefined;
 }
 
 export interface EvalRunOptions {
@@ -106,6 +111,7 @@ function resolveModelPort(
     modelId,
     ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
     ...(deps.env === undefined ? {} : { env: deps.env }),
+    ...(deps.configLoader === undefined ? {} : { configLoader: deps.configLoader }),
   });
 }
 

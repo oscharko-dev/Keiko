@@ -351,16 +351,17 @@ describe("ReviewWidget", () => {
     });
   });
 
-  it("Evidence is aria-disabled when manifest 404s", async () => {
+  // CW-01: disabled Evidence must be a native <button disabled>, not role="link"
+  // with no keyboard path (WCAG 4.1.2 Name/Role/Value).
+  it("Evidence is a disabled button (not role=link) when manifest 404s", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
     mockEvidenceNotFound();
 
     render(<ReviewWidget runId="r-123" />);
 
     await waitFor(() => {
-      const span = screen.getByText("Evidence");
-      expect(span).toHaveAttribute("role", "link");
-      expect(span).toHaveAttribute("aria-disabled", "true");
+      const btn = screen.getByRole("button", { name: /^evidence$/i });
+      expect(btn).toBeDisabled();
     });
   });
 
@@ -375,9 +376,10 @@ describe("ReviewWidget", () => {
     await waitFor(() => {
       // uiux-fix F023 C379 — the message is rendered inline (visible to sighted
       // keyboard users), not hidden in title/aria-label only (WCAG 1.4.13).
-      const status = screen.getByText(/evidence error/i);
-      expect(status).toHaveAttribute("role", "status");
-      expect(status).toHaveTextContent("Evidence error: manifest could not be read");
+      // CW-02: errors use role="alert" (assertive) not role="status" (WCAG 4.1.3).
+      const alert = screen.getByText(/evidence error/i);
+      expect(alert).toHaveAttribute("role", "alert");
+      expect(alert).toHaveTextContent("Evidence error: manifest could not be read");
     });
   });
 

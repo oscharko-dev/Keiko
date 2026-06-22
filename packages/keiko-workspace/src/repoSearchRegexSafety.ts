@@ -1,6 +1,7 @@
 const MAX_REGEX_LENGTH = 200;
 const DANGEROUS_GROUP_OR_CLASS_REPETITION = /\([^)]*\)[+*{]|\[[^\]]*\][+*{]/;
-const ADJACENT_QUANTIFIED_ATOMS = /(?:\\.|[^\\()[\]{}+*?|])(?:[+*]|\{\d+(?:,\d*)?\})(?:\\.|[^\\()[\]{}+*?|])(?:[+*]|\{\d+(?:,\d*)?\})/;
+const ADJACENT_QUANTIFIED_ATOMS =
+  /(?:\\.|[^\\()[\]{}+*?|])(?:[+*]|\{\d+(?:,\d*)?\})(?:\\.|[^\\()[\]{}+*?|])(?:[+*]|\{\d+(?:,\d*)?\})/;
 
 export function regexSafetyIssue(source: string): string | undefined {
   if (source.length > MAX_REGEX_LENGTH) {

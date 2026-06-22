@@ -11,7 +11,6 @@
 import {
   QualityIntelligence as MgQI,
   findConfiguredCapability,
-  listConfiguredCapabilities,
   selectConfiguredModel,
   QualityIntelligenceSafeErrorException,
   type ModelSelectionQuery,
@@ -22,13 +21,12 @@ import { QiGenerationError } from "./generationPort.js";
 
 type QiProfileId = MgQI.QualityIntelligenceTaskProfileId;
 
-const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
-
 function buildSelectionQuery(profileId: QiProfileId): ModelSelectionQuery {
   const profile = MgQI.getQualityIntelligenceTaskProfile(profileId);
-  const base: ModelSelectionQuery = { kind: "chat" };
-  const needsStructuredOutput = profile.requiredCapabilities.includes("structured-output");
-  return needsStructuredOutput ? { ...base, structuredOutput: true } : base;
+  // Single source of truth: the gateway derives the selection query from the profile's required
+  // capabilities using the SAME mapping the capability gate enforces, so the auto-selector and the
+  // gate cannot diverge on any capability (text/structured-output/function-calling/vision) (#762).
+  return MgQI.buildSelectionQueryForCapabilities(profile.requiredCapabilities);
 }
 
 function isRequestedModelCompatible(
@@ -58,18 +56,16 @@ function configuredChatCapability(
   return capability?.kind === "chat" ? capability : undefined;
 }
 
-function pickLowestCostChat(
-  capabilities: readonly ModelCapability[],
-  predicate: (capability: ModelCapability) => boolean,
-): ModelCapability | undefined {
-  let best: ModelCapability | undefined;
-  for (const capability of capabilities) {
-    if (capability.kind !== "chat" || !predicate(capability)) continue;
-    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
-      best = capability;
-    }
-  }
-  return best;
+function selectCapabilityByGatewayQuery(
+  deps: UiHandlerDeps,
+  query: ModelSelectionQuery,
+): { readonly modelId: string; readonly capability: ModelCapability } | undefined {
+  if (deps.config === undefined) return undefined;
+  const modelId = selectConfiguredModel(deps.config, query);
+  if (modelId === undefined) return undefined;
+  const capability = findConfiguredCapability(deps.config, modelId);
+  if (capability === undefined) return undefined;
+  return { modelId, capability };
 }
 
 export type QiTestDesignSelection =
@@ -105,15 +101,17 @@ export function resolveQiTestDesignSelection(
     return { kind: "baseline" };
   }
 
-  const configured = listConfiguredCapabilities(deps.config);
-  const structured = pickLowestCostChat(configured, (capability) => capability.structuredOutput);
+  const structured = selectCapabilityByGatewayQuery(deps, {
+    kind: "chat",
+    structuredOutput: true,
+  });
   if (structured !== undefined) {
-    return { kind: "model", modelId: structured.id, capability: structured };
+    return { kind: "model", ...structured };
   }
 
-  const anyChat = pickLowestCostChat(configured, () => true);
+  const anyChat = selectCapabilityByGatewayQuery(deps, { kind: "chat" });
   if (anyChat !== undefined) {
-    return { kind: "model", modelId: anyChat.id, capability: anyChat };
+    return { kind: "model", ...anyChat };
   }
 
   return { kind: "baseline" };
@@ -127,28 +125,76 @@ export type QiMultimodalSelection =
       readonly capability: ModelCapability;
     };
 
+export type QiStrictCapabilitySelection =
+  | {
+      readonly kind: "model";
+      readonly modelId: string;
+    }
+  | {
+      readonly kind: "unavailable";
+      readonly code: "QI_CAPABILITY_UNAVAILABLE";
+      readonly message: string;
+    };
+
 /**
- * Resolve the image-input (multimodal) model for a vision-augmented stage (Issue #810).
+ * Resolve the image-input model for a vision-augmented stage (Issue #810).
  *
- * Selection is capability-driven: the cheapest configured chat model that advertises
- * supportsImageInput is chosen by `selectConfiguredModel`. When no configured model offers
- * image input, this returns a TYPED "unavailable" so the caller degrades gracefully to the
- * deterministic IR-only baseline — never a silent text-model substitution that would pretend
- * to have seen the image. No model id is hard-coded.
+ * Selection is capability-driven: prefer the cheapest configured chat model that advertises
+ * supportsImageInput, then fall back to the cheapest configured pure `ocr-vision` model with the
+ * same image-input capability. When no configured model offers image input, this returns a TYPED
+ * "unavailable" so callers degrade honestly — never a silent text-model substitution that would
+ * pretend to have seen the image. No model id is hard-coded and model ids are never parsed by name.
  */
 export function resolveQiMultimodalSelection(deps: UiHandlerDeps): QiMultimodalSelection {
+  const selectedChat = selectCapabilityByGatewayQuery(deps, {
+    kind: "chat",
+    supportsImageInput: true,
+  });
+  const selected =
+    selectedChat ??
+    selectCapabilityByGatewayQuery(deps, {
+      kind: "ocr-vision",
+      supportsImageInput: true,
+    });
+  if (selected === undefined) {
+    return { kind: "unavailable" };
+  }
+  return { kind: "model", ...selected };
+}
+
+function unavailableCapabilitySelection(profileId: QiProfileId): QiStrictCapabilitySelection {
+  return {
+    kind: "unavailable",
+    code: "QI_CAPABILITY_UNAVAILABLE",
+    message: `No configured model satisfies the ${profileId} capability requirements.`,
+  };
+}
+
+/**
+ * Resolve a strict profile-compatible model without throwing for a missing capability. Callers that
+ * treat the profile as optional can degrade on the typed unavailable result; callers that require
+ * the capability should use selectModelForQiCapability below.
+ */
+export function resolveModelForQiCapability(
+  deps: UiHandlerDeps,
+  profileId: QiProfileId,
+  requested?: string,
+): QiStrictCapabilitySelection {
+  const trimmed = requested?.trim();
+  if (trimmed !== undefined && trimmed.length > 0) {
+    if (isRequestedModelCompatible(deps, trimmed, profileId)) {
+      return { kind: "model", modelId: trimmed };
+    }
+  }
   if (deps.config === undefined) {
-    return { kind: "unavailable" };
+    return unavailableCapabilitySelection(profileId);
   }
-  const modelId = selectConfiguredModel(deps.config, { kind: "chat", supportsImageInput: true });
-  if (modelId === undefined) {
-    return { kind: "unavailable" };
+  const query = buildSelectionQuery(profileId);
+  const selected = selectConfiguredModel(deps.config, query);
+  if (selected === undefined) {
+    return unavailableCapabilitySelection(profileId);
   }
-  const capability = findConfiguredCapability(deps.config, modelId);
-  if (capability === undefined) {
-    return { kind: "unavailable" };
-  }
-  return { kind: "model", modelId, capability };
+  return { kind: "model", modelId: selected };
 }
 
 /**
@@ -160,23 +206,7 @@ export function selectModelForQiCapability(
   profileId: QiProfileId,
   requested?: string,
 ): string {
-  const trimmed = requested?.trim();
-  if (trimmed !== undefined && trimmed.length > 0) {
-    if (isRequestedModelCompatible(deps, trimmed, profileId)) return trimmed;
-  }
-  if (deps.config === undefined) {
-    throw new QiGenerationError(
-      "QI_CAPABILITY_UNAVAILABLE",
-      `No configured model satisfies the ${profileId} capability requirements.`,
-    );
-  }
-  const query = buildSelectionQuery(profileId);
-  const selected = selectConfiguredModel(deps.config, query);
-  if (selected === undefined) {
-    throw new QiGenerationError(
-      "QI_CAPABILITY_UNAVAILABLE",
-      `No configured model satisfies the ${profileId} capability requirements.`,
-    );
-  }
-  return selected;
+  const selection = resolveModelForQiCapability(deps, profileId, requested);
+  if (selection.kind === "model") return selection.modelId;
+  throw new QiGenerationError(selection.code, selection.message);
 }

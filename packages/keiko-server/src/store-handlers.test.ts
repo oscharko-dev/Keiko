@@ -1432,6 +1432,41 @@ describe("GET /api/chats/messages", () => {
     expect(body.messages[0]?.content).toBe("hello");
   });
 
+  it("filters legacy empty-response placeholders from persisted chat history", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    store.createMessage({
+      chatId: c.id,
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    store.createMessage({
+      chatId: c.id,
+      role: "assistant",
+      content: "The model returned an empty response.",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const res = await fetch(
+      url(
+        `/api/chats/messages?chatId=${encodeURIComponent(c.id)}&projectPath=${encodeURIComponent(projDir)}`,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { messages: { content: string }[] };
+    expect(body.messages.map((message) => message.content)).toEqual(["hello"]);
+  });
+
   it("applies the limit query", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");

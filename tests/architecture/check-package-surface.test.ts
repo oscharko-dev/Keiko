@@ -39,6 +39,13 @@ describe("check-package-surface script", () => {
     expect(source).toContain("findForbiddenPaths");
   });
 
+  it("keeps the editor package as an explicit non-bundled workspace exclusion", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    expect(source).toContain("EXPECTED_BUNDLE_EXCLUSIONS");
+    expect(source).toContain("@oscharko-dev/keiko-editor");
+    expect(source).toContain("Issue #1191");
+  });
+
   it("rejects bundled optional native canvas payloads and any native addon binary", () => {
     // The forbidden-path rules live in scripts/package-surface-rules.mjs (extracted so they are
     // unit-testable without running `npm pack` or importing the BFF).

@@ -31,6 +31,12 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "durable.ui",
   },
+  memoria: {
+    lifecycle: ["live", "needs-review", "archived"],
+    trustBoundary: ["ui", "memory"],
+    authority: "user-confirm",
+    persistence: "memory-reference",
+  },
   files: {
     lifecycle: ["connecting", "connected", "degraded", "disconnected", "error"],
     trustBoundary: ["ui", "fs"],
@@ -158,6 +164,15 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "evidence-reference",
   },
+  // Epic #1307, Issue #1314 — Prompt Enhancer tool: routes through the Model Gateway for readiness,
+  // surfaces content-light evidence, and produces a reviewable artifact the user confirms before any
+  // downstream use. The BFF returns a transient result (it persists nothing).
+  promptEnhancer: {
+    lifecycle: ["idle", "running", "results", "error"],
+    trustBoundary: ["ui", "model", "evidence"],
+    authority: "user-confirm",
+    persistence: "transient",
+  },
   // Epic #270 — QI run result card: shows an evidence-backed run; review/export are user-confirmed.
   qiRun: {
     lifecycle: ["running", "final", "needs-review", "verified", "failed", "cancelled"],
@@ -180,6 +195,24 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
   figma: {
     lifecycle: ["idle", "running", "results", "error"],
     trustBoundary: ["ui", "evidence", "network"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
+  figmaView: {
+    lifecycle: ["idle", "results", "error"],
+    trustBoundary: ["ui", "evidence"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
+  figmaJson: {
+    lifecycle: ["idle", "results", "error"],
+    trustBoundary: ["ui", "evidence"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
+  figmaImage: {
+    lifecycle: ["idle", "results", "error"],
+    trustBoundary: ["ui", "evidence", "model"],
     authority: "user-confirm",
     persistence: "evidence-reference",
   },

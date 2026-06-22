@@ -27,12 +27,43 @@ import type {
   FilesContentResponse,
   FilesPreviewResponse,
   FilesTreeResponse,
+  EditorDocumentVersion,
+  EditorCompletionContextSelectors,
+  EditorCompletionWireRequest,
+  EditorCompletionWireResponse,
+  EditorCompletionWireTriggerKind,
+  EditorInlineCompletionWireRequest,
+  EditorInlineCompletionWireResponse,
+  EditorInlineCompletionWireTriggerKind,
+  EditorInlineCompletionTelemetryReport,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationWireResponse,
+  EditorTestGenerationWireTarget,
+  EditorPatchApplyDecision,
+  EditorPatchApplyWireRequest,
+  EditorPatchApplyWireResponse,
+  LanguageDiagnosticsResult,
+  LanguageServiceCapabilities,
+  LanguageHoverResult,
+  LanguageSymbolResult,
+  LanguageFormattingResult,
+  LanguageFormattingOptions,
+  EditorAgentAction,
+  EditorAgentActionQueuedResponse,
+  EditorAgentActionResultRequest,
+  EditorAgentSessionSnapshot,
+  EditorAgentSessionsResponse,
+  EditorAgentSnapshotRequest,
+  EditorAgentSnapshotResponse,
+  CostClass,
   GroundingLimits,
   MessageResponse,
   MessagesResponse,
   ModelCapability,
   PatchChatMessageBody,
   PatchMessageResponse,
+  PromptEnhancementWireRequest,
+  PromptEnhancementWireResponse,
   ProjectResponse,
   ProjectsResponse,
   RunReport,
@@ -40,7 +71,14 @@ import type {
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
-import { DEFAULT_GROUNDING_LIMITS } from "./types";
+import {
+  DEFAULT_GROUNDING_LIMITS,
+  EDITOR_COMPLETION_SCHEMA_VERSION,
+  EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
+  EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+  EDITOR_TEST_GENERATION_SCHEMA_VERSION,
+  EDITOR_PATCH_APPLY_SCHEMA_VERSION,
+} from "./types";
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -63,12 +101,13 @@ export class ApiError extends Error {
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
+  const isStateChanging = method !== "GET" && method !== "HEAD";
   const res = await fetch(path, {
     ...init,
     headers: {
       Accept: "application/json",
-      ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(method === "GET" || method === "HEAD" ? {} : { "X-Keiko-CSRF": "1" }),
+      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
+      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
       ...(init?.headers ?? {}),
     },
   });
@@ -143,16 +182,20 @@ export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
 }
 
 export interface GatewaySetupInput {
-  readonly baseUrl: string;
-  readonly apiKey: string;
+  readonly baseUrl?: string | undefined;
+  readonly apiKey?: string | undefined;
   readonly apiKeyHeaderName?: string | undefined;
   readonly deploymentNames?: readonly string[] | undefined;
+  readonly imageInputModelIds?: readonly string[] | undefined;
+  readonly figmaAccessToken?: string | undefined;
+  readonly preserveExisting?: boolean | undefined;
 }
 
 export interface GatewaySetupResponse {
   readonly ok: true;
   readonly testedModelId: string;
   readonly testedModelIds: readonly string[];
+  readonly skippedModelIds?: readonly string[] | undefined;
   readonly providerCount: number;
   readonly models: ModelCapability[];
   readonly config: SafeGatewayConfig;
@@ -194,6 +237,20 @@ export async function startRun(
   return fetchJson("/api/runs", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+// Epic #1307 / Issue #1314 — generate a governed, reviewable Enhanced Prompt. Deterministic and
+// provider-neutral; the result is data for review, never executed. The optional AbortSignal lets the
+// panel cancel an in-flight request when the user edits the draft again.
+export async function enhancePrompt(
+  body: PromptEnhancementWireRequest,
+  signal?: AbortSignal,
+): Promise<PromptEnhancementWireResponse> {
+  return fetchJson<PromptEnhancementWireResponse>("/api/prompt-enhancement", {
+    method: "POST",
+    body: JSON.stringify(body),
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -710,15 +767,26 @@ async function consumeSseStream(
   const decoder = new TextDecoder();
   let lineBuffer = "";
   let pendingEvent: string | undefined;
+  let reachedEof = false;
 
   try {
     while (!signal.aborted) {
       const read = await reader.read();
-      if (read.done) break;
+      if (read.done) {
+        reachedEof = true;
+        break;
+      }
       lineBuffer += decoder.decode(read.value, { stream: true });
       const lines = lineBuffer.split("\n");
       lineBuffer = lines.pop() ?? "";
       pendingEvent = processSseLines(lines, pendingEvent, handlers);
+    }
+    // Flush any residual content left in lineBuffer when the stream ends
+    // naturally (EOF). A proxy or buffer that drops the terminal \n\n would
+    // otherwise silently lose the final SSE frame. Skipped on abort because
+    // the contract is "stop reading without dispatching further events".
+    if (reachedEof && lineBuffer !== "") {
+      processSseLines([lineBuffer], pendingEvent, handlers);
     }
   } finally {
     reader.releaseLock();
@@ -812,10 +880,340 @@ export async function saveFilesContent(input: {
   readonly path: string;
   readonly content: string;
   readonly expectedModifiedAt?: number | undefined;
+  // Issue #1197: version-aware optimistic-concurrency token. Supersedes expectedModifiedAt.
+  readonly baseVersion?: EditorDocumentVersion | undefined;
 }): Promise<FilesContentResponse> {
   return fetchJson("/api/files/content", {
     method: "PATCH",
     body: JSON.stringify(input),
+  });
+}
+
+// Issue #1199 — governed editor completion gateway. Posts the overlay buffer + cursor to the BFF,
+// which runs deterministic language-service completion and (when a governed model is configured)
+// gated model-assisted completion. The browser never reaches a model directly. `signal` lets the
+// editor cancel a superseded request.
+export interface EditorCompletionRequestInput {
+  readonly root: string;
+  readonly path: string;
+  readonly languageId: string;
+  readonly text: string;
+  readonly position: { readonly line: number; readonly character: number };
+  readonly triggerKind: EditorCompletionWireTriggerKind;
+  readonly triggerCharacter?: string | undefined;
+  readonly contextBudgetBytes: number;
+  readonly context?: EditorCompletionContextSelectors | undefined;
+  readonly maxCostClass?: CostClass | undefined;
+}
+
+export async function requestEditorCompletion(
+  input: EditorCompletionRequestInput,
+  signal?: AbortSignal,
+): Promise<EditorCompletionWireResponse> {
+  const requestBody: EditorCompletionWireRequest = {
+    schemaVersion: EDITOR_COMPLETION_SCHEMA_VERSION,
+    root: input.root,
+    document: { path: input.path, languageId: input.languageId, text: input.text },
+    position: input.position,
+    triggerKind: input.triggerKind,
+    ...(input.triggerCharacter === undefined ? {} : { triggerCharacter: input.triggerCharacter }),
+    contextBudgetBytes: input.contextBudgetBytes,
+    ...(input.context === undefined ? {} : { context: input.context }),
+    ...(input.maxCostClass === undefined ? {} : { maxCostClass: input.maxCostClass }),
+  };
+  return fetchJson("/api/editor/completion", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// Issue #1200 — governed editor inline completion (ghost text). Posts the overlay buffer + cursor to
+// the BFF, which runs a gated aligned suffix-aware (FIM) model over coding context and returns a
+// single ghost-text continuation (or zero items when degraded/disabled/rate-limited). The browser
+// never reaches a model directly. `signal` lets the editor cancel a superseded request.
+export interface EditorInlineCompletionRequestInput {
+  readonly root: string;
+  readonly path: string;
+  readonly languageId: string;
+  readonly text: string;
+  readonly position: { readonly line: number; readonly character: number };
+  readonly triggerKind: EditorInlineCompletionWireTriggerKind;
+  readonly contextBudgetBytes: number;
+  readonly context?: EditorCompletionContextSelectors | undefined;
+  readonly maxCostClass?: CostClass | undefined;
+  readonly maxOutputTokens?: number | undefined;
+}
+
+export async function requestEditorInlineCompletion(
+  input: EditorInlineCompletionRequestInput,
+  signal?: AbortSignal,
+): Promise<EditorInlineCompletionWireResponse> {
+  const requestBody: EditorInlineCompletionWireRequest = {
+    schemaVersion: EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
+    root: input.root,
+    document: { path: input.path, languageId: input.languageId, text: input.text },
+    position: input.position,
+    triggerKind: input.triggerKind,
+    contextBudgetBytes: input.contextBudgetBytes,
+    ...(input.context === undefined ? {} : { context: input.context }),
+    ...(input.maxCostClass === undefined ? {} : { maxCostClass: input.maxCostClass }),
+    ...(input.maxOutputTokens === undefined ? {} : { maxOutputTokens: input.maxOutputTokens }),
+  };
+  return fetchJson("/api/editor/inline-completion", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// Issue #1200 — content-free inline-completion acceptance/rejection telemetry. Best-effort, fire and
+// forget: the editor reports cumulative counts (no code content) which the BFF records as evidence.
+export interface EditorInlineCompletionTelemetryInput {
+  readonly root: string;
+  readonly offered: number;
+  readonly shown: number;
+  readonly accepted: number;
+  readonly rejected: number;
+  readonly ignored: number;
+  readonly partiallyAccepted: number;
+  readonly requestCount: number;
+  readonly requestLatencyMsP50: number;
+  readonly requestLatencyMsP95: number;
+}
+
+export async function reportEditorInlineCompletionTelemetry(
+  input: EditorInlineCompletionTelemetryInput,
+): Promise<void> {
+  const report: EditorInlineCompletionTelemetryReport = {
+    schemaVersion: EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+    root: input.root,
+    offered: input.offered,
+    shown: input.shown,
+    accepted: input.accepted,
+    rejected: input.rejected,
+    ignored: input.ignored,
+    partiallyAccepted: input.partiallyAccepted,
+    requestCount: input.requestCount,
+    requestLatencyMsP50: input.requestLatencyMsP50,
+    requestLatencyMsP95: input.requestLatencyMsP95,
+  };
+  await fetchJson("/api/editor/inline-completion/telemetry", {
+    method: "POST",
+    body: JSON.stringify(report),
+  });
+}
+
+// Issue #1202 — governed editor-driven test generation (ADR-0042 D7). Posts the editor target (the
+// overlay buffer + scope coordinates) to the wave-2 BFF, which returns a `disabled`/`deferred` outcome
+// in v1 (no candidate; the feature ships switched off) or, once an enforced egress boundary unlocks it,
+// a reviewable candidate patch. The browser never reaches a model directly. `signal` cancels a run.
+export interface EditorTestGenerationRequestInput {
+  readonly root: string;
+  readonly target: EditorTestGenerationWireTarget;
+  readonly contextBudgetBytes: number;
+  readonly context?: EditorCompletionContextSelectors | undefined;
+}
+
+export async function requestEditorTestGeneration(
+  input: EditorTestGenerationRequestInput,
+  signal?: AbortSignal,
+): Promise<EditorTestGenerationWireResponse> {
+  const requestBody: EditorTestGenerationWireRequest = {
+    schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,
+    root: input.root,
+    target: input.target,
+    contextBudgetBytes: input.contextBudgetBytes,
+    ...(input.context === undefined ? {} : { context: input.context }),
+  };
+  return fetchJson("/api/editor/test-generation", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// Issue #1204 — governed editor-driven patch apply + post-apply verification. Applies (or rejects) a
+// reviewed candidate patch only on an explicit user decision; the BFF validates scope/conflict/overwrite,
+// applies atomically, then re-confirms the applied test under an enforced egress boundary. The browser
+// never writes files or runs tests directly; the response is content-free apart from a guarded revert
+// diff. `signal` lets the editor cancel a superseded request.
+export interface EditorPatchApplyRequestInput {
+  readonly root: string;
+  readonly patchId: string;
+  readonly decision: EditorPatchApplyDecision;
+  readonly diff: string;
+  readonly allowOverwrite?: boolean | undefined;
+}
+
+export async function requestEditorPatchApply(
+  input: EditorPatchApplyRequestInput,
+  signal?: AbortSignal,
+): Promise<EditorPatchApplyWireResponse> {
+  const requestBody: EditorPatchApplyWireRequest = {
+    schemaVersion: EDITOR_PATCH_APPLY_SCHEMA_VERSION,
+    root: input.root,
+    patchId: input.patchId,
+    decision: input.decision,
+    diff: input.diff,
+    ...(input.allowOverwrite === undefined ? {} : { allowOverwrite: input.allowOverwrite }),
+  };
+  return fetchJson("/api/editor/patch-apply", {
+    method: "POST",
+    body: JSON.stringify(requestBody),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// Issue #1201 — deterministic language intelligence (diagnostics, hover, document symbols,
+// formatting). All four reuse the governed `POST /api/editor/language` route (#1198): a single
+// model-free, workspace-contained, bounded analysis over the in-editor overlay. The browser never
+// reaches a model. `signal` lets the editor cancel a superseded or in-flight request.
+export interface EditorLanguageRequestInput {
+  readonly root: string;
+  readonly path: string;
+  readonly languageId: string;
+  readonly text: string;
+}
+
+interface LanguageOperationEnvelope<TResult> {
+  readonly operation: string;
+  readonly result: TResult;
+}
+
+function languageDocument(input: EditorLanguageRequestInput): {
+  readonly path: string;
+  readonly languageId: string;
+  readonly text: string;
+} {
+  return { path: input.path, languageId: input.languageId, text: input.text };
+}
+
+export async function fetchEditorLanguageCapabilities(): Promise<LanguageServiceCapabilities> {
+  return fetchJson("/api/editor/language/capabilities");
+}
+
+export async function requestEditorDiagnostics(
+  input: EditorLanguageRequestInput,
+  signal?: AbortSignal,
+): Promise<LanguageDiagnosticsResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageDiagnosticsResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "diagnostics",
+        root: input.root,
+        document: languageDocument(input),
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorHover(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageHoverResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageHoverResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "hover",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorSymbols(
+  input: EditorLanguageRequestInput,
+  signal?: AbortSignal,
+): Promise<LanguageSymbolResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageSymbolResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "symbols",
+        root: input.root,
+        document: languageDocument(input),
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorFormatting(
+  input: EditorLanguageRequestInput & { readonly options?: LanguageFormattingOptions | undefined },
+  signal?: AbortSignal,
+): Promise<LanguageFormattingResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageFormattingResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "formatting",
+        root: input.root,
+        document: languageDocument(input),
+        ...(input.options === undefined ? {} : { options: input.options }),
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function fetchEditorAgentSessions(): Promise<EditorAgentSessionsResponse> {
+  return fetchJson("/api/editor/agent/sessions");
+}
+
+export async function requestEditorAgentSnapshot(
+  input: EditorAgentSnapshotRequest,
+): Promise<EditorAgentSnapshotResponse> {
+  return fetchJson("/api/editor/agent/snapshot", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function postEditorAgentSessionSnapshot(
+  snapshot: EditorAgentSessionSnapshot,
+): Promise<EditorAgentSnapshotResponse> {
+  return fetchJson("/api/editor/agent/snapshot", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: snapshot.schemaVersion,
+      kind: "snapshot",
+      snapshot,
+    }),
+  });
+}
+
+export async function queueEditorAgentAction(
+  action: EditorAgentAction,
+): Promise<EditorAgentActionQueuedResponse> {
+  return fetchJson("/api/editor/agent/actions", {
+    method: "POST",
+    body: JSON.stringify(action),
+  });
+}
+
+export async function postEditorAgentActionResult(
+  result: EditorAgentActionResultRequest,
+): Promise<EditorAgentActionQueuedResponse> {
+  return fetchJson("/api/editor/agent/actions", {
+    method: "POST",
+    body: JSON.stringify(result),
   });
 }
 

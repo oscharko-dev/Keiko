@@ -28,6 +28,50 @@ function makeRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
 }
 
 describe("MemoryActions", () => {
+  it("approves proposed memories from the detail action group", async () => {
+    const approved = makeRecord({ status: "accepted" });
+    const acceptImpl = vi.fn().mockResolvedValue({ memory: approved });
+    const onRecordChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <MemoryActions
+        record={makeRecord({ status: "proposed" })}
+        onRecordChange={onRecordChange}
+        acceptImpl={acceptImpl}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /approve this memory proposal/i }));
+
+    await waitFor(() => {
+      expect(acceptImpl).toHaveBeenCalledWith("mem-actions-1");
+      expect(onRecordChange).toHaveBeenCalledWith(approved);
+    });
+  });
+
+  it("rejects proposed memories from the detail action group", async () => {
+    const rejected = makeRecord({ status: "rejected" });
+    const rejectImpl = vi.fn().mockResolvedValue({ memory: rejected });
+    const onRecordChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <MemoryActions
+        record={makeRecord({ status: "proposed" })}
+        onRecordChange={onRecordChange}
+        rejectImpl={rejectImpl}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /reject this memory proposal/i }));
+
+    await waitFor(() => {
+      expect(rejectImpl).toHaveBeenCalledWith("mem-actions-1", "rejected by user in MemoriaViva");
+      expect(onRecordChange).toHaveBeenCalledWith(rejected);
+    });
+  });
+
   it("renders the Correct action for non-forgotten memories", () => {
     render(<MemoryActions record={makeRecord()} onRecordChange={vi.fn()} />);
     expect(
@@ -75,13 +119,16 @@ describe("MemoryActions", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /hard-delete this memory record/i }));
+    await user.click(screen.getByRole("button", { name: /delete this memory record/i }));
     expect(deleteImpl).not.toHaveBeenCalled();
     expect(screen.getByRole("heading", { name: /delete this memory/i })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /delete permanently/i }));
     await waitFor(() => {
-      expect(deleteImpl).toHaveBeenCalledWith("mem-actions-1");
+      expect(deleteImpl).toHaveBeenCalledWith(
+        "mem-actions-1",
+        "user-initiated delete from MemoriaViva",
+      );
       expect(onRecordChange).toHaveBeenCalledWith(null);
     });
   });

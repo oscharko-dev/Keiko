@@ -4,6 +4,7 @@ import { basename, dirname } from "node:path";
 import type { IncomingMessage } from "node:http";
 import {
   addSourceToCapsule,
+  checkpointToProgress,
   composeCapsules,
   CompositionError,
   createSqliteAuditSink,
@@ -14,6 +15,8 @@ import {
   listCapsuleSets,
   listCapsuleSources,
   listCapsules,
+  listExtractionCheckpoints,
+  listResumableDocuments,
   openKnowledgeStore,
   removeSourceFromCapsule,
   resolveKnowledgeStorePath,
@@ -24,19 +27,27 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   CapsuleHealth,
+  CapsuleLargeDocumentHealth,
+  CapsuleReindexMode,
   DocumentId,
   IndexingJobRecord,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceId,
+  LargeDocumentJobProgress,
+  LargeDocumentResourcePolicy,
   ParserDiagnostic,
   KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
+import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
+  DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   isSafeDisplaySummary,
+  isSafeQualityWarning,
   validateCapsuleReindexRequest,
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
@@ -46,10 +57,13 @@ import { errorBody } from "./routes.js";
 import {
   findConfiguredCapability,
   requestOpenAIEmbedding,
+  requestOpenAIEmbeddingBatch,
   verifyEmbeddingCapability,
   type GatewayConfig,
   type ModelProviderConfig,
   type OpenAIEmbeddingAdapter,
+  type OpenAIEmbeddingBatchOutcome,
+  type OpenAIEmbeddingBatchRequest,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -253,7 +267,8 @@ function openStoreForDeps(deps: UiHandlerDeps): {
     throw new KnowledgeStoreError("UI runtime-state path is unavailable.");
   }
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
-  const store = openKnowledgeStore({ dbPath });
+  const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
+  const store = openKnowledgeStore(protection === undefined ? { dbPath } : { dbPath, protection });
   recoverAbandonedIndexingJobs(store);
   return {
     store,
@@ -285,7 +300,7 @@ function configuredCapabilityForModel(
   config: EmbeddingSelectionConfig,
   modelId: string,
 ): ReturnType<typeof findConfiguredCapability> {
-  return findConfiguredCapability(config as GatewayConfig, modelId);
+  return findConfiguredCapability(config, modelId);
 }
 
 function isConfiguredEmbeddingModel(config: EmbeddingSelectionConfig, modelId: string): boolean {
@@ -621,6 +636,81 @@ function lastIndexedAt(
   return row.finished_at ?? undefined;
 }
 
+// Bounded large-document ingestion (Epic #1160, Issue #1286). The active resource policy layers an
+// optional operator-configured large-file threshold over the contract defaults.
+function resolveLargeDocumentPolicy(): LargeDocumentResourcePolicy {
+  const raw = process.env.KEIKO_LK_LARGE_DOC_THRESHOLD_BYTES;
+  const threshold = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
+  if (!Number.isFinite(threshold) || threshold <= 0) {
+    return DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY;
+  }
+  return {
+    ...DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+    largeFileThresholdBytes: Math.min(
+      threshold,
+      DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY.maxRawFileBytes,
+    ),
+  };
+}
+
+function countPartialCoverageDocuments(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsuleId,
+): number {
+  const row = store._internal.db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM extraction_checkpoints WHERE capsule_id = :c AND coverage <> 'complete'",
+    )
+    .get({ c: capsuleId }) as { readonly n: number };
+  return row.n;
+}
+
+// Distinct, browser-safe warning-severity diagnostic messages. The SELECT carries no paths or
+// secrets (parser diagnostics are redacted at write time) and is bounded.
+function loadQualityWarnings(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsuleId,
+): readonly string[] {
+  const rows = store._internal.db
+    .prepare(
+      "SELECT DISTINCT message FROM parser_diagnostics WHERE capsule_id = :c AND severity = 'warning' ORDER BY message ASC LIMIT 50",
+    )
+    .all({ c: capsuleId }) as unknown as readonly { readonly message: string }[];
+  return rows.map((row) => row.message).filter((message) => isSafeQualityWarning(message));
+}
+
+function documentDisplayName(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): string {
+  const row = store._internal.db
+    .prepare("SELECT safe_display_name AS n FROM documents WHERE capsule_id = :c AND id = :d")
+    .get({ c: capsuleId, d: String(documentId) }) as { readonly n: string } | undefined;
+  return row?.n ?? String(documentId);
+}
+
+function buildLargeDocumentHealth(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  policy: LargeDocumentResourcePolicy,
+): CapsuleLargeDocumentHealth {
+  const progress: LargeDocumentJobProgress[] = listExtractionCheckpoints(
+    store._internal.db,
+    capsule.id,
+  ).map((checkpoint) =>
+    checkpointToProgress(checkpoint, documentDisplayName(store, capsule.id, checkpoint.documentId)),
+  );
+  return {
+    resourcePolicy: policy,
+    capabilities: DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+    progress,
+    resumableDocuments: listResumableDocuments(store, capsule.id),
+    partialCoverageDocuments: countPartialCoverageDocuments(store, capsule.id),
+    qualityWarnings: loadQualityWarnings(store, capsule.id),
+  };
+}
+
 function buildCapsuleHealth(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
@@ -658,30 +748,37 @@ function buildCapsuleHealth(
           ]
         : unsupportedGuidance,
     staleReasons: compatibility.staleReasons,
+    partialCoverageDocuments: countPartialCoverageDocuments(store, capsule.id),
+    qualityWarnings: loadQualityWarnings(store, capsule.id),
+    resumableDocuments: listResumableDocuments(store, capsule.id).length,
   };
 }
 
 function createEmbeddingAdapter(
   provider: ModelProviderConfig,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
+  batchImpl?: (request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>,
 ): OpenAIEmbeddingAdapter {
-  return {
+  const providerCreds = {
     endpoint: provider.baseUrl,
     apiKey: provider.apiKey,
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
     ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-    request: (request) =>
-      requestImpl({
-        ...request,
-        endpoint: provider.baseUrl,
-        apiKey: provider.apiKey,
-        ...(provider.apiKeyHeaderName !== undefined
-          ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-          : {}),
-        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-      }),
+  };
+  return {
+    ...providerCreds,
+    request: (request) => requestImpl({ ...request, ...providerCreds }),
+    // #189 GRD-004: the indexing batcher prefers this array-batch port when present, turning
+    // up to batchSize per-chunk HTTPS round-trips into a single array call. Omitted when no
+    // batch impl is wired (scalar-stub tests) so those keep the one-request-per-chunk path.
+    ...(batchImpl !== undefined
+      ? {
+          requestBatch: (request: OpenAIEmbeddingBatchRequest) =>
+            batchImpl({ ...request, ...providerCreds }),
+        }
+      : {}),
   };
 }
 
@@ -689,6 +786,18 @@ function requestEmbeddingImpl(
   deps: UiHandlerDeps,
 ): (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
   return deps.localKnowledgeEmbeddingRequest ?? requestOpenAIEmbedding;
+}
+
+// #189 GRD-004: returns the array-batch impl, or undefined to fall back to per-chunk scalar
+// embedding. A test that stubs only the scalar request (localKnowledgeEmbeddingRequest) gets
+// no batch port unless it also stubs the batch request — keeping existing call-count tests valid.
+function requestEmbeddingBatchImpl(
+  deps: UiHandlerDeps,
+): ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>) | undefined {
+  if (deps.localKnowledgeEmbeddingRequest !== undefined) {
+    return deps.localKnowledgeEmbeddingBatchRequest;
+  }
+  return requestOpenAIEmbeddingBatch;
 }
 
 function canonicalizeScopeRoot(scope: KnowledgeSourceScope): KnowledgeSourceScope {
@@ -763,6 +872,7 @@ function buildCapsuleResponseBody(
   return {
     capsule,
     health: buildCapsuleHealth(deps, store, dbPath, capsule),
+    largeDocumentHealth: buildLargeDocumentHealth(store, capsule, resolveLargeDocumentPolicy()),
     sources: loadSourceStats(store, capsule.id),
     parserDiagnostics: diagnostics.items,
     parserDiagnosticsTotal: diagnostics.total,
@@ -875,7 +985,11 @@ async function verifiedNewCapsuleEmbeddingIdentity(
   | { readonly ok: true; readonly identity: KnowledgeCapsule["embeddingModelIdentity"] }
   | { readonly ok: false; readonly result: RouteResult }
 > {
-  const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
+  const adapter = createEmbeddingAdapter(
+    provider,
+    requestEmbeddingImpl(deps),
+    requestEmbeddingBatchImpl(deps),
+  );
   try {
     const result = await verifyEmbeddingCapability(adapter, {
       modelId: provider.modelId,
@@ -993,7 +1107,7 @@ type IndexingTerminal =
   | { readonly kind: "job-failed"; readonly jobId: string };
 
 interface RunCapsuleIndexingJobOptions {
-  readonly mode: "changed-files" | "repair-failed" | undefined;
+  readonly mode: CapsuleReindexMode | undefined;
   // O2-GAP-1 (Epic #189): reindex callers can request a full re-embed when the embedding
   // model has rotated. Start-indexing keeps force=false so a first-pass run never wipes
   // a partially-built index.
@@ -1039,6 +1153,31 @@ function indexingCompletionResponse(
   return actionResponse(capsuleId);
 }
 
+function buildIndexingOptions(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  adapter: OpenAIEmbeddingAdapter,
+  options: RunCapsuleIndexingJobOptions,
+  sourceSelection: IndexingSourceSelection,
+  signal: AbortSignal,
+): Parameters<typeof runIndexingJob>[0] {
+  return {
+    capsuleId: capsule.id,
+    ...(sourceSelection.shouldRun && sourceSelection.sourceIds !== undefined
+      ? { sourceIds: sourceSelection.sourceIds }
+      : {}),
+    parserRegistry: createDefaultParserRegistry(),
+    workspaceFs: nodeWorkspaceFs,
+    embeddingAdapter: adapter,
+    auditSink: createSqliteAuditSink(store),
+    store,
+    force: options.force,
+    largeDocumentPolicy: resolveLargeDocumentPolicy(),
+    ...(options.mode === "resume" ? { resume: true } : {}),
+    signal,
+  };
+}
+
 async function runCapsuleIndexingJob(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
@@ -1050,7 +1189,11 @@ async function runCapsuleIndexingJob(
     return { kind: "job-failed", jobId: "" };
   }
   canonicalizeCapsuleSourceRoots(store, capsule);
-  const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
+  const adapter = createEmbeddingAdapter(
+    provider,
+    requestEmbeddingImpl(deps),
+    requestEmbeddingBatchImpl(deps),
+  );
   const sourceSelection = resolveIndexingSourceSelection(store, capsule, options.mode);
   if (!sourceSelection.shouldRun) {
     return undefined;
@@ -1058,17 +1201,9 @@ async function runCapsuleIndexingJob(
   const controller = localKnowledgeIndexingRegistry.start(String(capsule.id));
   let terminal: IndexingTerminal | undefined;
   try {
-    for await (const event of runIndexingJob({
-      capsuleId: capsule.id,
-      ...(sourceSelection.sourceIds !== undefined ? { sourceIds: sourceSelection.sourceIds } : {}),
-      parserRegistry: createDefaultParserRegistry(),
-      workspaceFs: nodeWorkspaceFs,
-      embeddingAdapter: adapter,
-      auditSink: createSqliteAuditSink(store),
-      store,
-      force: options.force,
-      signal: controller.signal,
-    })) {
+    for await (const event of runIndexingJob(
+      buildIndexingOptions(store, capsule, adapter, options, sourceSelection, controller.signal),
+    )) {
       if (event.kind === "job-started") {
         localKnowledgeIndexingRegistry.attachJobId(String(capsule.id), event.jobId);
       }

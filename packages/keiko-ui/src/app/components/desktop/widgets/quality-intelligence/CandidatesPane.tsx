@@ -14,9 +14,38 @@ import type {
   QualityIntelligenceCandidateEditableFields,
 } from "@oscharko-dev/keiko-contracts";
 import { CandidateEditForm } from "./CandidateEditForm";
-import { REVIEW_LABEL, WeakTestFlag } from "./qiShared";
+import {
+  CandidateQualityVerdictNote,
+  ReviewBadge,
+  WeakTestFlag,
+  type CandidateQualityVerdict,
+} from "./qiShared";
 
 const INITIAL_VISIBLE = 25;
+
+// The persisted QI run lists candidates as [...deterministic-baseline, ...model-delta] — the
+// determinism floor leads the manifest (contractually pinned by #763). For display we surface the
+// judged model candidates first and trail the generic determinism-floor stubs, WITHOUT mutating the
+// persisted order. Baseline candidates carry the explicit provenance tag
+// `source:deterministic-baseline` (a null qualityVerdict is not a stable discriminator — it is also
+// null whenever the judge stage was skipped). Array.prototype.sort is stable in V8, so keying on a
+// 0/1 baseline flag moves baselines to the end while preserving the relative order of every other
+// candidate.
+const DETERMINISTIC_BASELINE_PROVENANCE_TAG = "source:deterministic-baseline";
+
+const isBaselineCandidate = (candidate: QualityIntelligenceUiCandidate): boolean =>
+  candidate.tags.includes(DETERMINISTIC_BASELINE_PROVENANCE_TAG);
+
+const orderForDisplay = (
+  candidates: readonly QualityIntelligenceUiCandidate[],
+): readonly QualityIntelligenceUiCandidate[] =>
+  [...candidates].sort(
+    (left, right) => (isBaselineCandidate(left) ? 1 : 0) - (isBaselineCandidate(right) ? 1 : 0),
+  );
+
+type CandidateWithQualityVerdict = QualityIntelligenceUiCandidate & {
+  readonly qualityVerdict?: CandidateQualityVerdict;
+};
 
 export type QiReviewAction = "approve" | "reject" | "request-changes" | "reopen";
 
@@ -31,24 +60,15 @@ export interface QiPendingReview {
   readonly action: QiReviewAction;
 }
 
-const REVIEW_CLASS: Readonly<Record<QualityIntelligenceReviewState, string>> = {
-  open: "qi-review-open",
-  approved: "qi-review-approved",
-  "changes-requested": "qi-review-changes",
-  rejected: "qi-review-rejected",
-  withdrawn: "qi-review-withdrawn",
-};
-
-// No aria-label here: naming is prohibited on a generic <span> (ARIA 1.2), so assistive tech ignores
-// it. The "Review:" context is supplied via a screen-reader-only prefix instead.
-function ReviewBadge({ state }: { readonly state: QualityIntelligenceReviewState }): ReactNode {
-  return (
-    <span className={`qi-review-badge ${REVIEW_CLASS[state]}`}>
-      <span className="sr-only">Review: </span>
-      {REVIEW_LABEL[state]}
-    </span>
-  );
-}
+// Terminal states: once a candidate reaches one of these, the ONLY legal action is "reopen".
+// The server enforces this with 409 QI_REVIEW_TRANSITION_NOT_ALLOWED; the UI pre-empts the
+// error by disabling Approve/Reject/Request-changes and surfacing a Reopen button instead
+// (Issue #282 FIX A-UI / A11y-4).
+const TERMINAL_STATES = new Set<QualityIntelligenceReviewState>([
+  "approved",
+  "rejected",
+  "withdrawn",
+]);
 
 function StringList({
   items,
@@ -67,6 +87,93 @@ function StringList({
         ))}
       </ol>
     </div>
+  );
+}
+
+function CandidateMeta({
+  candidate,
+}: {
+  readonly candidate: CandidateWithQualityVerdict;
+}): ReactNode {
+  return (
+    <dl className="qi-cand-meta" aria-label="Test case metadata">
+      <div>
+        <dt>Steps</dt>
+        <dd>{candidate.steps.length.toString()}</dd>
+      </div>
+      <div>
+        <dt>Expected</dt>
+        <dd>{candidate.expectedResults.length.toString()}</dd>
+      </div>
+      {candidate.qualityVerdict !== undefined ? (
+        <div>
+          <dt>Quality</dt>
+          <dd>{Math.round(candidate.qualityVerdict.score).toString()}</dd>
+        </div>
+      ) : null}
+    </dl>
+  );
+}
+
+function CandidateAccordion({
+  title,
+  children,
+}: {
+  readonly title: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <details className="qi-cand-accordion">
+      <summary className="qi-cand-accordion-summary">
+        <span>{title}</span>
+      </summary>
+      <div className="qi-cand-accordion-body">{children}</div>
+    </details>
+  );
+}
+
+function CandidateScenario({
+  candidate,
+}: {
+  readonly candidate: QualityIntelligenceUiCandidate;
+}): ReactNode {
+  return (
+    <CandidateAccordion title="Scenario">
+      <StringList items={candidate.preconditions} label="Preconditions" />
+      <StringList items={candidate.steps} label="Steps" />
+      <StringList items={candidate.expectedResults} label="Expected results" />
+    </CandidateAccordion>
+  );
+}
+
+function CandidateEvidence({
+  candidate,
+}: {
+  readonly candidate: CandidateWithQualityVerdict;
+}): ReactNode {
+  if (
+    candidate.tags.length === 0 &&
+    candidate.qualityVerdict === undefined &&
+    candidate.weakTestFlag === undefined
+  ) {
+    return null;
+  }
+  return (
+    <CandidateAccordion title="Evidence">
+      {candidate.weakTestFlag !== undefined ? <WeakTestFlag flag={candidate.weakTestFlag} /> : null}
+      {candidate.qualityVerdict !== undefined ? (
+        <CandidateQualityVerdictNote verdict={candidate.qualityVerdict} />
+      ) : null}
+      {candidate.tags.length > 0 ? (
+        <ul className="qi-cand-tags" aria-label="Tags">
+          {candidate.tags.map((t) => (
+            <li key={t} className="qi-cand-tag">
+              {t}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </CandidateAccordion>
   );
 }
 
@@ -126,14 +233,31 @@ function ReviewControls({
   const reviewBusy = pendingReview !== null && pendingReview !== undefined;
   const isSaving = (action: QiReviewAction): boolean =>
     reviewBusy && pendingReview.candidateId === candidateId && pendingReview.action === action;
+
+  // Terminal states: Approve/Reject/Request-changes are governance-illegal; only Reopen is legal.
+  // Render a final-note that explains WHY so keyboard/SR users can understand via aria-describedby.
+  const isTerminal = TERMINAL_STATES.has(state);
+  const finalNoteId = useId();
+
+  // Compose the describedBy for the three primary buttons: terminal reason takes precedence when
+  // in a terminal state; otherwise fall back to the outer governance describedBy (reviewer label).
+  const primaryDescribedBy = isTerminal ? finalNoteId : describedBy;
+
   return (
     <div className="qi-cand-actions" role="group" aria-label="Review decision">
+      {/* Final-state note: always mounted when terminal so aria-describedby resolves reliably.
+          Visually reuses the governance-note style (same role="note", same padding/colour token). */}
+      {isTerminal ? (
+        <p id={finalNoteId} className="qi-cand-governance-note" role="note">
+          This review decision is final — reopen to change it.
+        </p>
+      ) : null}
       <GovernedActionButton
         className="qi-btn qi-btn-approve"
         label={isSaving("approve") ? "Saving…" : "Approve"}
         pressed={state === "approved"}
-        disabled={disabled || reviewBusy}
-        describedBy={describedBy}
+        disabled={disabled || reviewBusy || isTerminal}
+        describedBy={primaryDescribedBy}
         onActivate={() => {
           onReview(candidateId, "approve");
         }}
@@ -142,8 +266,8 @@ function ReviewControls({
         className="qi-btn qi-btn-reject"
         label={isSaving("reject") ? "Saving…" : "Reject"}
         pressed={state === "rejected"}
-        disabled={disabled || reviewBusy}
-        describedBy={describedBy}
+        disabled={disabled || reviewBusy || isTerminal}
+        describedBy={primaryDescribedBy}
         onActivate={() => {
           onReview(candidateId, "reject");
         }}
@@ -152,12 +276,26 @@ function ReviewControls({
         className="qi-btn qi-btn-secondary"
         label={isSaving("request-changes") ? "Saving…" : "Request changes"}
         pressed={state === "changes-requested"}
-        disabled={disabled || reviewBusy}
-        describedBy={describedBy}
+        disabled={disabled || reviewBusy || isTerminal}
+        describedBy={primaryDescribedBy}
         onActivate={() => {
           onReview(candidateId, "request-changes");
         }}
       />
+      {/* Reopen: rendered only in terminal states — the one legal action to return to "open".
+          It is NOT disabled by isTerminal (that's the whole point). Still respects the outer
+          governance gate (disabled) and the in-flight busy lock (reviewBusy). */}
+      {isTerminal ? (
+        <GovernedActionButton
+          className="qi-btn qi-btn-secondary"
+          label={isSaving("reopen") ? "Saving…" : "Reopen"}
+          disabled={disabled || reviewBusy}
+          describedBy={disabled ? describedBy : undefined}
+          onActivate={() => {
+            onReview(candidateId, "reopen");
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -167,67 +305,78 @@ function CandidateView({
   onReview,
   onStartEdit,
   actionsDisabled = false,
+  actionsDisabledReason,
   describedBy,
   editButtonRef,
   pendingReview,
 }: {
-  readonly candidate: QualityIntelligenceUiCandidate;
+  readonly candidate: CandidateWithQualityVerdict;
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onStartEdit?: (() => void) | undefined;
   readonly actionsDisabled?: boolean;
+  readonly actionsDisabledReason?: string | undefined;
   readonly describedBy?: string | undefined;
   readonly editButtonRef?: Ref<HTMLButtonElement> | undefined;
   readonly pendingReview?: QiPendingReview | null | undefined;
 }): ReactNode {
+  const localDisabledReasonId = useId();
+  const actionDescribedBy =
+    actionsDisabled && actionsDisabledReason !== undefined
+      ? [describedBy, localDisabledReasonId].filter(Boolean).join(" ")
+      : describedBy;
   return (
     <>
       <div className="qi-cand-header">
-        <h3 className="qi-cand-title">{candidate.title}</h3>
-        <div className="qi-cand-badges">
-          <span className="qi-cand-pri">{candidate.priority}</span>
-          <span className="qi-cand-risk">{candidate.riskClass}</span>
-          <ReviewBadge state={candidate.reviewState} />
+        <div className="qi-cand-title-wrap">
+          <h3 className="qi-cand-title">{candidate.title}</h3>
+        </div>
+        <div className="qi-cand-status">
+          <div className="qi-cand-badges">
+            <span className="qi-cand-risk">{candidate.riskClass}</span>
+            {candidate.reviewState !== "open" ? (
+              <ReviewBadge state={candidate.reviewState} />
+            ) : null}
+          </div>
+          <CandidateMeta candidate={candidate} />
         </div>
       </div>
-      {candidate.weakTestFlag !== undefined ? <WeakTestFlag flag={candidate.weakTestFlag} /> : null}
-      <StringList items={candidate.preconditions} label="Preconditions" />
-      <StringList items={candidate.steps} label="Steps" />
-      <StringList items={candidate.expectedResults} label="Expected results" />
-      {candidate.tags.length > 0 ? (
-        <ul className="qi-cand-tags" aria-label="Tags">
-          {candidate.tags.map((t) => (
-            <li key={t} className="qi-cand-tag">
-              {t}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <div className="qi-cand-accordion-stack">
+        <CandidateScenario candidate={candidate} />
+        <CandidateEvidence candidate={candidate} />
+      </div>
       <div className="qi-cand-actions-row">
-        {onStartEdit !== undefined ? (
-          <button
-            ref={editButtonRef}
-            type="button"
-            className="qi-btn qi-btn-secondary qi-cand-edit"
-            aria-disabled={actionsDisabled || undefined}
-            aria-describedby={actionsDisabled ? describedBy : undefined}
-            onClick={() => {
-              if (actionsDisabled) return;
-              onStartEdit();
-            }}
-          >
-            Edit
-          </button>
+        {actionsDisabled && actionsDisabledReason !== undefined ? (
+          <p id={localDisabledReasonId} className="qi-cand-action-note" role="note">
+            {actionsDisabledReason}
+          </p>
         ) : null}
-        {onReview !== undefined ? (
-          <ReviewControls
-            candidateId={candidate.id}
-            state={candidate.reviewState}
-            onReview={onReview}
-            disabled={actionsDisabled}
-            describedBy={describedBy}
-            pendingReview={pendingReview}
-          />
-        ) : null}
+        <div className="qi-cand-action-buttons">
+          {onStartEdit !== undefined ? (
+            <button
+              ref={editButtonRef}
+              type="button"
+              className="qi-btn qi-btn-secondary qi-cand-edit"
+              aria-disabled={actionsDisabled || undefined}
+              aria-describedby={actionsDisabled ? actionDescribedBy : undefined}
+              onClick={() => {
+                if (actionsDisabled) return;
+                onStartEdit();
+              }}
+            >
+              Edit
+            </button>
+          ) : null}
+          {onReview !== undefined ? (
+            <ReviewControls
+              candidateId={candidate.id}
+              state={candidate.reviewState}
+              onReview={onReview}
+              disabled={actionsDisabled}
+              describedBy={actionDescribedBy}
+              pendingReview={pendingReview}
+            />
+          ) : null}
+        </div>
       </div>
     </>
   );
@@ -238,13 +387,15 @@ function CandidateCard({
   onReview,
   onEdit,
   actionsDisabled = false,
+  actionsDisabledReason,
   describedBy,
   pendingReview,
 }: {
-  readonly candidate: QualityIntelligenceUiCandidate;
+  readonly candidate: CandidateWithQualityVerdict;
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onEdit?: QiCandidateEdit | undefined;
   readonly actionsDisabled?: boolean;
+  readonly actionsDisabledReason?: string | undefined;
   readonly describedBy?: string | undefined;
   readonly pendingReview?: QiPendingReview | null | undefined;
 }): ReactNode {
@@ -276,6 +427,7 @@ function CandidateCard({
           candidate={candidate}
           onReview={onReview}
           actionsDisabled={actionsDisabled}
+          actionsDisabledReason={actionsDisabledReason}
           describedBy={describedBy}
           pendingReview={pendingReview}
           editButtonRef={editButtonRef}
@@ -321,7 +473,9 @@ export function CandidatesPane({
       </div>
     );
   }
-  const shown = candidates.slice(0, visible);
+  // Render order only: judged model candidates first, deterministic-baseline stubs last. The
+  // persisted candidate order (and `candidates.length` used by the "show more" control) is untouched.
+  const shown = orderForDisplay(candidates).slice(0, visible);
   return (
     <div className="qi-cand-pane">
       {showGovernanceNote ? (
@@ -339,6 +493,7 @@ export function CandidatesPane({
             onReview={onReview}
             onEdit={onEdit}
             actionsDisabled={actionsDisabled}
+            actionsDisabledReason={actionsDisabledReason}
             describedBy={showGovernanceNote ? governanceNoteId : undefined}
             pendingReview={pendingReview}
           />

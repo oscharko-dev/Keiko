@@ -23,7 +23,7 @@ export const KEIKO_CONTRACTS_VERSION = "0.8.0" as const;
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.0-beta.4" as const;
+export const KEIKO_PRODUCT_VERSION = "0.2.0" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -103,13 +103,275 @@ export {
   DEFAULT_CONTEXT_REQUEST,
 } from "./workspace.js";
 
+// ─── Editor session (Issue #1197) ─────────────────────────────────────────────────
+// Content-free editor-session/file-state correlation metadata + stable error codes. Owned by
+// #1197, disjoint from the language-service namespace (#1198).
+export type {
+  EditorDocumentVersion,
+  EditorSessionAiProvenance,
+  EditorDocumentSession,
+  EditorSessionErrorCode,
+  EditorSessionValidation,
+  EditorSessionValidationOk,
+  EditorSessionValidationFail,
+} from "./editor-session.js";
+export {
+  EDITOR_SESSION_SCHEMA_VERSION,
+  EDITOR_SESSION_ERROR_CODES,
+  isEditorDocumentVersion,
+  parseEditorDocumentVersion,
+} from "./editor-session.js";
+
+// ─── Editor layout / dirty-close / hot-exit contracts (Issues #1375 + #1376) ────
+export type {
+  CreateEditorLayoutStateV2Input,
+  EditorLayoutAction,
+  EditorLayoutNode,
+  EditorLayoutPaneNode,
+  EditorLayoutSplitNode,
+  EditorLayoutStateV2,
+  EditorPaneStateV2,
+  EditorSplitDirection,
+  EditorSplitDropZone,
+  EditorTabDragIntent,
+} from "./editor-layout.js";
+export {
+  EDITOR_LAYOUT_SCHEMA_VERSION,
+  activeEditorPane,
+  createEditorLayoutStateV2,
+  editorLayoutOpenFiles,
+  editorLayoutPaneIds,
+  editorLayoutPanes,
+  editorLayoutReducer,
+  serializeEditorLayoutStateV2,
+} from "./editor-layout.js";
+export type {
+  EditorDirtyCloseDecision,
+  EditorDirtyCloseIntent,
+  EditorDirtyCloseReason,
+  EditorDirtyCloseResolution,
+} from "./editor-dirty-close.js";
+export { createEditorDirtyCloseIntent } from "./editor-dirty-close.js";
+export type { EditorHotExitSnapshotV1 } from "./editor-hot-exit.js";
+export {
+  EDITOR_HOT_EXIT_SCHEMA_VERSION,
+  EDITOR_HOT_EXIT_TTL_MS,
+  editorHotExitSnapshotExpired,
+  isEditorHotExitSnapshotV1,
+} from "./editor-hot-exit.js";
+
+// ─── Editor agent API (Issue #1391) ─────────────────────────────────────────────
+export type {
+  EditorAgentAction,
+  EditorAgentActionQueuedResponse,
+  EditorAgentActionResult,
+  EditorAgentActionResultRequest,
+  EditorAgentActionStatus,
+  EditorAgentActionType,
+  EditorAgentActionsPostBody,
+  EditorAgentBridgeSnapshotRequest,
+  EditorAgentEvent,
+  EditorAgentPaneSnapshot,
+  EditorAgentParse,
+  EditorAgentParseFail,
+  EditorAgentParseOk,
+  EditorAgentSessionSnapshot,
+  EditorAgentSessionsResponse,
+  EditorAgentSnapshotRequest,
+  EditorAgentSnapshotResponse,
+  EditorAgentSnapshotTextMode,
+} from "./editor-agent.js";
+export {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  isEditorAgentAction,
+  isEditorAgentActionResult,
+  isEditorAgentSessionSnapshot,
+  parseEditorAgentActionsPostBody,
+  parseEditorAgentSnapshotRequest,
+} from "./editor-agent.js";
+
+// ─── Language service (Issue #1198) ───────────────────────────────────────────────
+// Provider-pluggable, language-agnostic deterministic language-intelligence contracts
+// (completion, diagnostics, hover, document symbols). Owned by #1198, disjoint from the
+// editor-session namespace (#1197). The TS/JS provider is first; the LSP expansion is staged (#1213).
+export type {
+  LanguageServiceOperation,
+  LanguageServiceErrorCode,
+  LanguagePosition,
+  LanguageRange,
+  LanguageDocumentOverlay,
+  LanguageDiagnosticSeverity,
+  LanguageDiagnostic,
+  LanguageDiagnosticsResult,
+  LanguageCompletionItemKind,
+  LanguageCompletionItem,
+  LanguageCompletionResult,
+  LanguageHoverResult,
+  LanguageSymbolKind,
+  LanguageDocumentSymbol,
+  LanguageSymbolResult,
+  LanguageTextEdit,
+  LanguageFormattingOptions,
+  LanguageFormattingResult,
+  LanguageProviderAvailability,
+  LanguageProviderDescriptor,
+  LanguageServiceCapabilities,
+  LanguageServiceLimits,
+  LanguageDiagnosticsRequest,
+  LanguageCompletionRequest,
+  LanguageHoverRequest,
+  LanguageSymbolsRequest,
+  LanguageFormattingRequest,
+  LanguageServiceRequest,
+  LanguageServiceParseOk,
+  LanguageServiceParseFail,
+  LanguageServiceParse,
+} from "./language-service.js";
+export {
+  LANGUAGE_SERVICE_SCHEMA_VERSION,
+  LANGUAGE_SERVICE_OPERATIONS,
+  LANGUAGE_SERVICE_ERROR_CODES,
+  MAX_LANGUAGE_FORMATTING_TAB_SIZE,
+  DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  isLanguagePosition,
+  isLanguageDocumentOverlay,
+  isLanguageFormattingOptions,
+  parseLanguageServiceRequest,
+} from "./language-service.js";
+
+// ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
+// Wire request/response for the governed `POST /api/editor/completion` route: deterministic
+// language-service completion (#1198) merged with gated model-assisted completion (#1210) over
+// coding context (#1211). Content-free apart from reviewable `insertText` (ADR-0042 D4/D5/D6).
+export type {
+  EditorCompletionWireTriggerKind,
+  EditorCompletionItemOrigin,
+  EditorCompletionWireItem,
+  EditorCompletionSource,
+  EditorCompletionWireProvenance,
+  EditorCompletionWireResponse,
+  EditorCompletionContextSelectors,
+  EditorCompletionWireRequest,
+  EditorCompletionParseOk,
+  EditorCompletionParseFail,
+  EditorCompletionParse,
+} from "./editor-completion.js";
+export {
+  EDITOR_COMPLETION_SCHEMA_VERSION,
+  EDITOR_COMPLETION_WIRE_TRIGGER_KINDS,
+  EDITOR_COMPLETION_ITEM_ORIGINS,
+  EDITOR_COMPLETION_SOURCES,
+  parseEditorCompletionRequest,
+} from "./editor-completion.js";
+
+// ─── Editor inline completion (ghost text) (Issue #1200) ───────────────────────────
+// Wire request/response for the governed `POST /api/editor/inline-completion` route (model-only,
+// suffix-aware FIM via #1210 over coding context #1211) plus the content-free acceptance/rejection
+// telemetry report for `POST /api/editor/inline-completion/telemetry`. Content-free apart from
+// reviewable `insertText` (ADR-0042 D5/D6).
+export type {
+  EditorInlineCompletionWireTriggerKind,
+  EditorInlineCompletionWireItem,
+  EditorInlineCompletionWireProvenance,
+  EditorInlineCompletionWireResponse,
+  EditorInlineCompletionWireRequest,
+  EditorInlineCompletionTelemetryReport,
+  EditorInlineCompletionParseOk,
+  EditorInlineCompletionParseFail,
+  EditorInlineCompletionParse,
+  EditorInlineCompletionTelemetryParseOk,
+  EditorInlineCompletionTelemetryParseFail,
+  EditorInlineCompletionTelemetryParse,
+} from "./editor-inline-completion.js";
+export {
+  EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
+  EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS,
+  EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
+  parseEditorInlineCompletionRequest,
+  parseEditorInlineCompletionTelemetry,
+} from "./editor-inline-completion.js";
+
+// ─── Editor test generation (Issue #1202) ─────────────────────────────────────────
+// Wire request/response for the governed `POST /api/editor/test-generation` route. Wave-2 surface,
+// shipped switched off (ADR-0042 D7): generation/execution/verification execute untrusted model code
+// and are deferred behind a default-off flag enabled only once a deny-by-default egress boundary is
+// enforced. Content-free apart from reviewable patch `newText`; the assured pre-filter funnel is
+// always reported and is `not-run` in v1.
+export type {
+  EditorTestGenerationTargetKind,
+  EditorTestGenerationWireSymbol,
+  EditorTestGenerationWireTarget,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationStatus,
+  EditorTestGenerationAssurance,
+  EditorTestGenerationGateState,
+  EditorTestGenerationFunnel,
+  EditorTestGenerationWireChangeKind,
+  EditorTestGenerationWireEdit,
+  EditorTestGenerationWireFileChange,
+  EditorTestGenerationWirePatch,
+  EditorTestGenerationWireProvenance,
+  EditorTestGenerationWireResponse,
+  EditorTestGenerationParseOk,
+  EditorTestGenerationParseFail,
+  EditorTestGenerationParse,
+} from "./editor-test-generation.js";
+export {
+  EDITOR_TEST_GENERATION_SCHEMA_VERSION,
+  EDITOR_TEST_GENERATION_STABILITY_RUNS,
+  EDITOR_TEST_GENERATION_TARGET_KINDS,
+  EDITOR_TEST_GENERATION_STATUSES,
+  EDITOR_TEST_GENERATION_ASSURANCES,
+  EDITOR_TEST_GENERATION_GATE_STATES,
+  notRunTestGenerationFunnel,
+  parseEditorTestGenerationRequest,
+} from "./editor-test-generation.js";
+
+// ─── Editor patch apply + post-apply verification (Issue #1204) ───────────────────
+// Wire request/response for the governed `POST /api/editor/patch-apply` route. Wave-2 surface, shipped
+// switched off (ADR-0042 D7): patch apply and the verification that follows execute untrusted model
+// code in an enforced, deny-by-default egress boundary (ADR-0043). Content-free apart from the
+// reviewable diff the user explicitly applies and a guarded revert proposal's inverse diff.
+export type {
+  EditorPatchApplyDecision,
+  EditorPatchApplyWireRequest,
+  EditorPatchApplyStatus,
+  EditorPatchRejectionReason,
+  EditorPatchApplyRejection,
+  EditorPatchApplyChangeCounts,
+  EditorPatchVerificationOutcome,
+  EditorPatchVerificationBounds,
+  EditorPatchVerificationSummary,
+  EditorPatchRevertProposal,
+  EditorPatchApplyEvidenceRefs,
+  EditorPatchApplyWireResponse,
+  EditorPatchApplyParseOk,
+  EditorPatchApplyParseFail,
+  EditorPatchApplyParse,
+} from "./editor-patch-apply.js";
+export {
+  EDITOR_PATCH_APPLY_SCHEMA_VERSION,
+  EDITOR_PATCH_APPLY_DECISIONS,
+  EDITOR_PATCH_APPLY_STATUSES,
+  EDITOR_PATCH_REJECTION_REASONS,
+  EDITOR_PATCH_VERIFICATION_OUTCOMES,
+  parseEditorPatchApplyRequest,
+} from "./editor-patch-apply.js";
+
 // ─── Gateway (wire-safe subset only — credential-bearing shapes stay in src/gateway/types.ts) ──
 export type {
   ModelKind,
   CostClass,
   LatencyClass,
+  InfillingAlignment,
   ModelCapability,
+  CompletionInteractionMode,
+  CompletionDegradeReason,
+  CompletionModelSelection,
   ChatMessage,
+  ChatMessageContentPart,
+  ChatMessageImageUrlContentPart,
+  ChatMessageTextContentPart,
   ToolDefinition,
   ResponseFormat,
   GatewayRequest,
@@ -120,14 +382,23 @@ export type {
   StreamDelta,
   StreamEvent,
 } from "./gateway.js";
-export { CONVERSATION_CAPABILITY_CONTRACT_VERSION } from "./gateway.js";
+export { CONVERSATION_CAPABILITY_CONTRACT_VERSION, INFILLING_ALIGNMENTS } from "./gateway.js";
 export type { ConversationIneligibilityReason } from "./gateway.js";
-export { isConversationEligibleModel, explainConversationIneligibility } from "./gateway.js";
+export {
+  isConversationEligibleModel,
+  explainConversationIneligibility,
+  modelSupportsInfilling,
+  isAlignedInfillingModel,
+  isAsYouTypeCompletionModel,
+} from "./gateway.js";
 
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {
   NetworkPolicy,
+  FilesystemPolicy,
   SandboxPolicy,
+  SandboxBackend,
+  SandboxAttestation,
   CommandRule,
   CommandRunInput,
   CommandResult,
@@ -150,6 +421,7 @@ export type {
 export {
   DEFAULT_ENV_ALLOWLIST,
   DEFAULT_SANDBOX_POLICY,
+  SANDBOX_BACKENDS,
   DEFAULT_COMMAND_RULES,
   DEFAULT_PATCH_LIMITS,
   DEFAULT_TOOL_HOST_CONFIG,
@@ -295,6 +567,9 @@ export {
   resolveGroundingLimits,
 } from "./bff-wire.js";
 
+// ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
+export { stripUnsafeFormatChars } from "./text-safety.js";
+
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {
   SelectedScopeKind,
@@ -344,6 +619,38 @@ export {
   validateRetrievalQuery,
   validateConnectedContextPack,
 } from "./connected-context.js";
+
+// ─── Governed coding-context retrieval (Issue #1211 / Epic #1189, ADR-0042 D6) ──
+export type {
+  CodingContextPurpose,
+  CodingContextSourceKind,
+  CodingContextSourceTier,
+  CodingContextOmissionReason,
+  CodingContextOmission,
+  CodingContextCitation,
+  CodingContextExcerpt,
+  CodingContextPack,
+  CodingContextWirePack,
+  CodingContextBudget,
+  CodingContextScopeKind,
+  CodingContextRequest,
+  CodingContextValidationResult,
+} from "./coding-context.js";
+export {
+  CODING_CONTEXT_SCHEMA_VERSION,
+  CODING_CONTEXT_PURPOSES,
+  CODING_CONTEXT_SOURCE_KINDS,
+  CODING_CONTEXT_SOURCE_TIERS,
+  CODING_CONTEXT_SOURCE_TIER_BY_KIND,
+  CODING_CONTEXT_OMISSION_REASONS,
+  CODING_CONTEXT_BUDGETS,
+  isCodingContextPurpose,
+  tierForCodingContextSource,
+  embeddingProvidersAllowed,
+  isCodingContextCitation,
+  toCodingContextWirePack,
+  validateCodingContextRequest,
+} from "./coding-context.js";
 
 // ─── Workflow handoff & patch-scope (Issue #186 / Epic #177) ────────────────────
 // NOTE: `WorkflowKind` and `ValidationResult` are NOT re-exported here because both names
@@ -467,6 +774,47 @@ export {
   validateConnectorGraphState,
 } from "./local-knowledge-validation.js";
 
+// ─── Bounded large-document ingestion (Epic #1160 / Issue #1286) ────────────────
+export type {
+  LargeDocumentResourcePolicy,
+  LargeDocumentExtractionStrategy,
+  LargeDocumentPreflightDecision,
+  LargeDocumentPreflight,
+  ExtractionPhase,
+  CoverageQuality,
+  ExtractionCapabilityStatus,
+  ExtractionCapabilityAvailability,
+  LargeDocumentDiagnosticCode,
+  CheckpointFingerprint,
+  ExtractionCheckpointRecord,
+  CheckpointIncompatibilityReason,
+  CheckpointCompatibility,
+  LargeDocumentJobProgress,
+  LargeDocumentResumeChoice,
+  CapsuleLargeDocumentHealth,
+} from "./local-knowledge-large-document.js";
+export {
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+  largeDocumentPolicyFingerprint,
+  LARGE_DOCUMENT_EXTRACTION_STRATEGIES,
+  EXTRACTION_PHASES,
+  TERMINAL_EXTRACTION_PHASES,
+  isTerminalExtractionPhase,
+  COVERAGE_QUALITIES,
+  EXTRACTION_CAPABILITY_STATUSES,
+  DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+  capabilityContributesCoverage,
+  LARGE_DOCUMENT_DIAGNOSTIC_CODES,
+  CHECKPOINT_INCOMPATIBILITY_REASONS,
+  checkpointCompatibility,
+  LARGE_DOCUMENT_RESUME_CHOICES,
+} from "./local-knowledge-large-document.js";
+export {
+  validateLargeDocumentResourcePolicy,
+  validateExtractionCheckpointRecord,
+  isSafeQualityWarning,
+} from "./local-knowledge-large-document-validation.js";
+
 // ─── Local Knowledge Capsule persistent schema (Issue #265 / Epic #189) ─────────
 // Static SQL DDL manifest + scoped indexes + migration manifest for the on-disk capsule
 // store. The runtime that *applies* the DDL ships in #193; this package only carries the
@@ -493,7 +841,7 @@ export {
 // Pure contract surface for durable, scoped, governed memory: scopes, sensitivity,
 // status lifecycle, provenance, validity intervals, edges, operation envelopes, and
 // pure validators. Storage (#206), capture (#207), consolidation (#208), conflict and
-// forget (#209), retrieval (#210), Memory Center UI (#211), Conversation Center
+// forget (#209), retrieval (#210), MemoriaViva UI (#211), Conversation Center
 // integration (#212), workflow integration (#213), audit (#214), evaluation (#215),
 // and final verification (#216) all pin against `MEMORY_SCHEMA_VERSION` and the types
 // re-exported here. A breaking change to the contract introduces a NEW literal member
@@ -651,6 +999,7 @@ export type {
   QualityIntelligenceCapsuleSource,
   QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceRunStreamAccepted,
@@ -675,6 +1024,10 @@ export type {
   TestQualityDimensionName,
   TestQualityRubricDimension,
   TestQualityJudgeVerdict,
+} from "./qualityIntelligence/index.js";
+export {
+  TEST_QUALITY_RUBRIC_DIMENSIONS,
+  TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
 } from "./qualityIntelligence/index.js";
 export {
   assertExportBundleInvariant,
@@ -789,3 +1142,169 @@ export {
   assertRelationshipTypeAllowsKinds,
   validateRelationship,
 } from "./relationships-validation.js";
+
+// ─── Prompt Enhancer (Epic #1307 / Issue #1309) ─────────────────────────────────
+// Wire-safe contracts, task taxonomy (≥10 classes), generation-profile metadata, and the
+// deterministic analyzer-result shape, plus the pure deterministic `analyzePrompt` and the pure
+// Ok|Fail validators. Provider-neutral by construction (no credentials, hidden prompts, or tool
+// authority — ADR-0044 §5). Governed by ADR-0044 and the prompt-enhancer architecture blueprint.
+export type {
+  PromptEnhancementRequestId,
+  EnhancedPromptId,
+  PromptTaskClass,
+  PromptDomain,
+  PromptCriticality,
+  PromptRiskClass,
+  GroundingNeedKind,
+  GroundingSignal,
+  GroundingNeed,
+  GroundingStrategy,
+  RetrievalMode,
+  GroundingSourceKind,
+  GroundingSourcePolicy,
+  CitationDiscipline,
+  CitationGranularity,
+  CitationRequirement,
+  RecencyExpectation,
+  ContradictionPolicy,
+  NoAnswerCondition,
+  GroundingDirective,
+  RagEvaluationDimension,
+  RagEvaluationHint,
+  GroundingPlan,
+  OutputFormat,
+  OutputFormatHint,
+  OutputSchemaDescriptor,
+  MissingContextTopic,
+  PromptClarification,
+  PromptAssumption,
+  ClarificationOrAssumption,
+  MissingInformationStrategy,
+  PromptSignalStrength,
+  PromptSignalDimension,
+  PromptClassificationSignal,
+  PromptEnhancementProfileId,
+  PromptEnhancementProfile,
+  RawPromptInput,
+  PromptEnhancementRequest,
+  PromptTaskAnalysis,
+  EnhancedPrompt,
+} from "./prompt-enhancer.js";
+export {
+  PROMPT_ENHANCER_SCHEMA_VERSION,
+  PROMPT_ANALYSIS_MAX_SCAN_CHARS,
+  PROMPT_MISSING_CONTEXT_MAX_CHARS,
+  PROMPT_TASK_CLASSES,
+  PROMPT_DOMAINS,
+  SAFETY_CRITICAL_DOMAINS,
+  PROMPT_CRITICALITIES,
+  PROMPT_RISK_CLASSES,
+  GROUNDING_NEED_KINDS,
+  GROUNDING_SIGNALS,
+  GROUNDING_STRATEGIES,
+  RETRIEVAL_MODES,
+  GROUNDING_SOURCE_KINDS,
+  CITATION_DISCIPLINES,
+  CITATION_GRANULARITIES,
+  CONTRADICTION_POLICIES,
+  NO_ANSWER_CONDITIONS,
+  GROUNDING_DIRECTIVES,
+  RAG_EVALUATION_DIMENSIONS,
+  PROMPT_OUTPUT_FORMATS,
+  OUTPUT_FORMAT_HINTS,
+  MISSING_CONTEXT_TOPICS,
+  MISSING_INFORMATION_STRATEGIES,
+  PROMPT_SIGNAL_STRENGTHS,
+  PROMPT_SIGNAL_DIMENSIONS,
+  PROMPT_ENHANCEMENT_PROFILE_IDS,
+  PROMPT_ENHANCEMENT_PROFILES,
+  isSafetyCriticalDomain,
+  asPromptEnhancementRequestId,
+  asEnhancedPromptId,
+  validatePromptEnhancerIdString,
+  assertNeverTaskClass,
+  normalizePromptDraft,
+} from "./prompt-enhancer.js";
+export { analyzePrompt } from "./prompt-enhancer-analyzer.js";
+export { planGrounding } from "./prompt-enhancer-grounding.js";
+export type { PlanGroundingOptions } from "./prompt-enhancer-grounding.js";
+export type {
+  ValidationOk as PromptEnhancerValidationOk,
+  ValidationFail as PromptEnhancerValidationFail,
+  PromptEnhancerValidation,
+} from "./prompt-enhancer-validation.js";
+export {
+  PROMPT_REQUEST_TEXT_MAX_CHARS,
+  validatePromptEnhancementRequest,
+  validatePromptTaskAnalysis,
+  validateEnhancedPrompt,
+  validateGroundingPlan,
+  validatePromptCandidateScorecard,
+  validatePromptCandidateSelection,
+} from "./prompt-enhancer-validation.js";
+// Prompt Enhancer candidate-critic contract surface (#1312; ADR-0044 §6).
+export type {
+  PromptCriticDimension,
+  PromptCriticDimensionScore,
+  PromptCandidateScorecard,
+  PromptCandidateRejection,
+  PromptCandidateRejectionReason,
+  PromptOptimizationBounds,
+  PromptCandidateSelection,
+} from "./prompt-enhancer-critic.js";
+export {
+  PROMPT_CRITIC_DIMENSIONS,
+  PROMPT_CANDIDATE_REJECTION_REASONS,
+  isPromptCriticDimension,
+  isPromptCandidateRejectionReason,
+} from "./prompt-enhancer-critic.js";
+// Prompt Enhancer safety annotations + validate-stage rule model (#1313; ADR-0044 §4/§5/§7).
+export type {
+  PromptSafetyRuleId,
+  PromptSafetyViolationCode,
+  PromptSafetySeverity,
+  LeastPrivilegeConstraint,
+  PromptSafetyDecision,
+  PromptSafetyVerificationStatus,
+  PromptSafetyFinding,
+  PromptSafetyAssessment,
+} from "./prompt-enhancer-safety.js";
+export {
+  PROMPT_SAFETY_RULE_IDS,
+  PROMPT_SAFETY_VIOLATION_CODES,
+  PROMPT_SAFETY_SEVERITIES,
+  LEAST_PRIVILEGE_CONSTRAINTS,
+  PROMPT_SAFETY_DECISIONS,
+  PROMPT_SAFETY_VERIFICATION_STATUSES,
+  PROMPT_SAFETY_VIOLATION_DETAILS,
+  isPromptSafetyViolationCode,
+  requiresHumanReviewForAnalysis,
+  leastPrivilegeForAnalysis,
+  summarizePromptSafety,
+  assessEnhancedPromptStructuralSafety,
+  validatePromptSafetyAssessment,
+} from "./prompt-enhancer-safety.js";
+// Prompt Enhancer BFF wire surface (#1314; ADR-0044 §1 "BFF /api/prompt-enhancer/* routes"). The
+// request/response envelope the governed API, CLI, and UI surfaces exchange, plus the pure request
+// validator. Also re-exported from `./bff-wire.js` for the `@oscharko-dev/keiko-contracts/bff-wire`
+// subpath the UI imports.
+export type {
+  PromptEnhancementWireRequest,
+  PromptEnhancementModelAvailability,
+  PromptEnhancementModelRoutingReason,
+  PromptEnhancementModelRouting,
+  PromptEnhancementCandidateComparison,
+  PromptEnhancementGroundingReadiness,
+  PromptEnhancementGroundingReadinessStatus,
+  PromptEnhancementGroundingReadinessReason,
+  PromptEnhancementEvidenceReference,
+  PromptEnhancementWireResponse,
+} from "./prompt-enhancer-bff.js";
+export {
+  PROMPT_ENHANCEMENT_LOCALE_MAX_CHARS,
+  PROMPT_ENHANCEMENT_MODEL_ID_MAX_CHARS,
+  PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_MODEL_AVAILABILITIES,
+  validatePromptEnhancementWireRequest,
+} from "./prompt-enhancer-bff.js";

@@ -9,9 +9,18 @@
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
-import { normaliseText } from "../domain/assertions.js";
+import { normaliseCandidateText } from "../domain/assertions.js";
 import type { PolicyProfile } from "../domain/policyProfile.js";
 import { regressionDefault } from "../domain/policyProfile.js";
+import {
+  GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS,
+  GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS,
+  GENERATED_CANDIDATE_STEP_MAX_ITEMS,
+  GENERATED_CANDIDATE_TAG_MAX_CHARS,
+  GENERATED_CANDIDATE_TAG_MAX_ITEMS,
+  GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS,
+  GENERATED_CANDIDATE_TITLE_MAX_CHARS,
+} from "./candidateBounds.js";
 
 type Candidate = QualityIntelligence.QualityIntelligenceTestCaseCandidate;
 type RunId = QualityIntelligence.QualityIntelligenceRunId;
@@ -45,6 +54,8 @@ export interface ParseGeneratedCandidatesResult {
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const CANDIDATE_ARRAY_KEYS = ["testCases", "test_cases", "tests", "cases"] as const;
+
 // Strip a single ```json … ``` or ``` … ``` fence if the whole payload is fenced.
 const stripCodeFence = (raw: string): string => {
   const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/u.exec(raw.trim());
@@ -56,6 +67,12 @@ interface StringScan {
   readonly escaped: boolean;
 }
 
+interface JsonBalanceStep {
+  readonly depth: number;
+  readonly scan: StringScan;
+  readonly closed: boolean;
+}
+
 // Advance the in-string scanner one character (honours backslash escapes).
 const consumeStringChar = (ch: string, escaped: boolean): StringScan => {
   if (escaped) return { inString: true, escaped: false };
@@ -64,68 +81,153 @@ const consumeStringChar = (ch: string, escaped: boolean): StringScan => {
   return { inString: true, escaped: false };
 };
 
-// Scan for the first balanced JSON value (object or array) honouring string literals + escapes,
-// so a `}` inside a quoted step does not terminate the scan early.
-const extractFirstJsonValue = (text: string): string | undefined => {
-  const open = firstOpenIndex(text);
-  if (open === -1) return undefined;
+const isJsonOpen = (ch: string | undefined): ch is "{" | "[" => ch === "{" || ch === "[";
+
+const advanceJsonBalance = (
+  ch: string,
+  openChar: "{" | "[",
+  closeChar: "}" | "]",
+  scan: StringScan,
+  depth: number,
+): JsonBalanceStep => {
+  if (scan.inString) {
+    return { depth, scan: consumeStringChar(ch, scan.escaped), closed: false };
+  }
+  if (ch === '"') return { depth, scan: { inString: true, escaped: false }, closed: false };
+  if (ch === openChar) return { depth: depth + 1, scan, closed: false };
+  if (ch !== closeChar) return { depth, scan, closed: false };
+  const nextDepth = depth - 1;
+  return { depth: nextDepth, scan, closed: nextDepth === 0 };
+};
+
+// Scan a balanced JSON value (object or array) at `open`, honouring string literals + escapes, so a
+// `}` inside a quoted step does not terminate the scan early.
+const extractJsonValueAt = (text: string, open: number): string | undefined => {
   const openChar = text[open];
+  if (!isJsonOpen(openChar)) return undefined;
   const closeChar = openChar === "{" ? "}" : "]";
   let depth = 0;
   let scan: StringScan = { inString: false, escaped: false };
   for (let i = open; i < text.length; i += 1) {
     const ch = text[i] ?? "";
-    if (scan.inString) {
-      scan = consumeStringChar(ch, scan.escaped);
-      continue;
-    }
-    if (ch === '"') scan = { inString: true, escaped: false };
-    else if (ch === openChar) depth += 1;
-    else if (ch === closeChar) {
-      depth -= 1;
-      if (depth === 0) return text.slice(open, i + 1);
-    }
+    const next = advanceJsonBalance(ch, openChar, closeChar, scan, depth);
+    depth = next.depth;
+    scan = next.scan;
+    if (next.closed) return text.slice(open, i + 1);
   }
   return undefined;
 };
 
-const firstOpenIndex = (text: string): number => {
-  const obj = text.indexOf("{");
-  const arr = text.indexOf("[");
-  if (obj === -1) return arr;
-  if (arr === -1) return obj;
-  return Math.min(obj, arr);
+const hasCandidateContainer = (parsed: unknown): boolean =>
+  Array.isArray(parsed) ||
+  (isObject(parsed) && CANDIDATE_ARRAY_KEYS.some((key) => Array.isArray(parsed[key])));
+
+// Accept either a bare array of test cases, the documented `{ testCases: [...] }` wrapper, or a
+// small set of common chat-model aliases used when response-format schemas are unavailable.
+const toRawItems = (parsed: unknown): readonly unknown[] => {
+  if (Array.isArray(parsed)) return parsed;
+  if (isObject(parsed)) {
+    for (const key of CANDIDATE_ARRAY_KEYS) {
+      const value = parsed[key];
+      if (Array.isArray(value)) return value;
+    }
+  }
+  return [];
 };
 
-const parseJsonLoose = (raw: string): unknown => {
-  const stripped = stripCodeFence(raw);
-  const slice = extractFirstJsonValue(stripped);
+const candidateContainerItemCount = (parsed: unknown): number =>
+  hasCandidateContainer(parsed) ? toRawItems(parsed).length : -1;
+
+interface ParsedJsonSlice {
+  readonly parsed: unknown;
+  readonly itemCount: number;
+}
+
+const parseJsonSliceAt = (text: string, index: number): ParsedJsonSlice | undefined => {
+  if (!isJsonOpen(text[index])) return undefined;
+  const slice = extractJsonValueAt(text, index);
   if (slice === undefined) return undefined;
   try {
-    return JSON.parse(slice);
+    const parsed: unknown = JSON.parse(slice);
+    return { parsed, itemCount: candidateContainerItemCount(parsed) };
   } catch {
     return undefined;
   }
 };
 
-// Accept either a bare array of test cases or the documented `{ testCases: [...] }` wrapper.
-const toRawItems = (parsed: unknown): readonly unknown[] => {
-  if (Array.isArray(parsed)) return parsed;
-  if (isObject(parsed) && Array.isArray(parsed.testCases)) return parsed.testCases;
+// Parse the first useful JSON candidate payload. If a chat model emits an invalid bracket fragment
+// before the real JSON, keep scanning; if it emits only a wrong-shape JSON value, preserve the old
+// `recovered:true, candidates:[]` behaviour by returning the first successfully parsed value.
+const parseFirstUsefulJsonValue = (text: string): unknown => {
+  let firstParsed: unknown;
+  let firstEmptyCandidateContainer: unknown;
+  for (let i = 0; i < text.length; i += 1) {
+    const parsedSlice = parseJsonSliceAt(text, i);
+    if (parsedSlice === undefined) continue;
+    const { parsed, itemCount } = parsedSlice;
+    if (firstParsed === undefined) firstParsed = parsed;
+    if (itemCount > 0) return parsed;
+    if (itemCount === 0 && firstEmptyCandidateContainer === undefined) {
+      firstEmptyCandidateContainer = parsed;
+    }
+  }
+  return firstEmptyCandidateContainer ?? firstParsed;
+};
+
+const parseJsonLoose = (raw: string): unknown => {
+  const stripped = stripCodeFence(raw);
+  return parseFirstUsefulJsonValue(stripped);
+};
+
+const truncateText = (value: string, limit: number): string =>
+  value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 3))}...`;
+
+interface StringListLimits {
+  readonly maxItems: number;
+  readonly maxChars: number;
+}
+
+const toBoundedText = (value: unknown, maxChars: number): string =>
+  truncateText(normaliseCandidateText(typeof value === "string" ? value : ""), maxChars);
+
+const toRawStringListSource = (value: unknown): readonly unknown[] => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") return value.split(/\r?\n/u);
   return [];
 };
 
-const toStringList = (value: unknown): readonly string[] => {
-  const source = Array.isArray(value)
-    ? value
-    : typeof value === "string"
-      ? value.split(/\r?\n/u)
-      : [];
+const toStringList = (value: unknown, limits: StringListLimits): readonly string[] => {
   const out: string[] = [];
-  for (const entry of source) {
+  for (const entry of toRawStringListSource(value)) {
+    if (out.length >= limits.maxItems) break;
     if (typeof entry !== "string") continue;
-    const text = normaliseText(entry);
+    const text = toBoundedText(entry, limits.maxChars);
     if (text.length > 0) out.push(text);
+  }
+  return out;
+};
+
+const textList = (value: unknown, maxItems: number): readonly string[] =>
+  toStringList(value, {
+    maxItems,
+    maxChars: GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS,
+  });
+
+const canonicalStepText = (value: string): string =>
+  normaliseCandidateText(value).toLowerCase().replace(/\s+/gu, " ").trim();
+
+const stepList = (value: unknown): readonly string[] => {
+  const out: string[] = [];
+  let previousCanonical = "";
+  for (const entry of toRawStringListSource(value)) {
+    if (typeof entry !== "string") continue;
+    const text = toBoundedText(entry, GENERATED_CANDIDATE_TEXT_ITEM_MAX_CHARS);
+    if (text.length === 0) continue;
+    const canonical = canonicalStepText(text);
+    if (canonical === previousCanonical) continue;
+    out.push(text);
+    previousCanonical = canonical;
+    if (out.length >= GENERATED_CANDIDATE_STEP_MAX_ITEMS) break;
   }
   return out;
 };
@@ -162,8 +264,13 @@ const resolveDerivedAtomIds = (
   return fallback === undefined ? Object.freeze([]) : Object.freeze([fallback]);
 };
 
-const deriveCandidateId = (runId: RunId, index: number, title: string): string => {
-  const digest = sha256Hex(`qi-cand-v1|${String(runId)}|${String(index)}|${title}`).slice(0, 32);
+const deriveCandidateId = (
+  index: number,
+  title: string,
+  derivedFromAtomIds: readonly AtomId[],
+): string => {
+  const atomRefs = derivedFromAtomIds.map(String).join("|");
+  const digest = sha256Hex(`qi-cand-v2|${String(index)}|${title}|${atomRefs}`).slice(0, 32);
   return `qi-candidate-${digest}`;
 };
 
@@ -173,19 +280,30 @@ const buildCandidate = (
   input: ParseGeneratedCandidatesInput,
   profile: PolicyProfile,
 ): Candidate | undefined => {
-  const title = normaliseText(typeof raw.title === "string" ? raw.title : "");
-  const steps = toStringList(raw.steps);
+  const title = toBoundedText(raw.title, GENERATED_CANDIDATE_TITLE_MAX_CHARS);
+  const steps = stepList(raw.steps);
   if (title.length === 0 || steps.length === 0) return undefined;
-  const expectedResults = toStringList(raw.expectedResults);
-  const tags = toStringList(raw.tags);
+  const expectedResults = textList(
+    raw.expectedResults,
+    GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS,
+  );
+  const tags = toStringList(raw.tags, {
+    maxItems: GENERATED_CANDIDATE_TAG_MAX_ITEMS,
+    maxChars: GENERATED_CANDIDATE_TAG_MAX_CHARS,
+  });
+  const derivedFromAtomIds = resolveDerivedAtomIds(
+    raw.derivedFromEvidenceIndexes,
+    input.atomIds,
+    index,
+  );
   return Object.freeze<Candidate>({
     id: QualityIntelligence.asQualityIntelligenceTestCaseId(
-      deriveCandidateId(input.runId, index, title),
+      deriveCandidateId(index, title, derivedFromAtomIds),
     ),
     runId: input.runId,
-    derivedFromAtomIds: resolveDerivedAtomIds(raw.derivedFromEvidenceIndexes, input.atomIds, index),
+    derivedFromAtomIds,
     title,
-    preconditions: toStringList(raw.preconditions),
+    preconditions: textList(raw.preconditions, GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS),
     steps,
     expectedResults:
       expectedResults.length > 0

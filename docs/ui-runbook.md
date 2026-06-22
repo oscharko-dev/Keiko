@@ -11,6 +11,11 @@ npx keiko init
 npm run keiko:start
 ```
 
+Prefer the local `npm run keiko:start` script or a package-manager equivalent in IDE run
+configurations. Do not point WebStorm or Windows terminal shortcuts at a bare global `keiko`
+binary when validating a freshly pulled checkout; an older global install on `PATH` can start a
+stale UI build instead of the project-local package.
+
 Open:
 
 ```text
@@ -26,6 +31,12 @@ npm run keiko:stop
 The default port is `1983`. Override it with `KEIKO_UI_PORT` or `keiko start --port <port>`.
 
 The UI runs on loopback only. The `--host` option can validate a loopback host value; the server always binds `127.0.0.1`.
+
+Keiko sets the runtime process title and supported child-process launch metadata to `Keiko`.
+On Windows, npm-based launches still execute through Node.js, so Task Manager surfaces that use
+the executable image name can continue to show `node.exe` until Keiko ships a native Windows
+launcher executable. Process-manager surfaces that read the process title or original argv label
+should show `Keiko`.
 
 ## First-Run Setup
 

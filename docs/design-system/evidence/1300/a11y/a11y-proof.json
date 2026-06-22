@@ -1,0 +1,5192 @@
+{
+  "issue": 1300,
+  "epic": 1290,
+  "tool": "axe-core 4.12.0",
+  "postCssSha256": "f6c7c4e56f268460573292f919291ebb2fd890204f65ce7eaf37a3e7a7947c8d",
+  "run": {
+    "generatedAt": "2026-06-22T05:48:31.852Z",
+    "repoHeadSha": "6ff3116eb00c2fd83ee697ab62dd8c1f5718262e"
+  },
+  "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
+  "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",
+  "incompleteDispositions": {
+    "color-contrast": {
+      "disposition": "axe cannot fully resolve every CSS variable/color-mix/forced-colors pair in headless Chromium; computed contrast-sensitive selectors are covered by the rendered token parity gate and manual visual inspection notes.",
+      "owner": "#1300 evidence gate"
+    }
+  },
+  "unresolvedIncomplete": [],
+  "deterministicChecksByMode": {
+    "01-dark": {
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      },
+      "noPositiveTabIndex": true,
+      "namedControlCount": 16,
+      "unnamedControls": [],
+      "focusResults": [
+        {
+          "tag": "input",
+          "role": null,
+          "ariaLabel": "Opacity",
+          "outlineStyle": "solid",
+          "boxShadow": "oklch(0.17 0.004 160) 0px 0px 0px 2px, rgb(78, 186, 135) 0px 0px 0px 4px",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "input",
+          "role": "combobox",
+          "ariaLabel": "Model",
+          "outlineStyle": "none",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": "tab",
+          "ariaLabel": null,
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": null,
+          "ariaLabel": "Page 1",
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        }
+      ],
+      "allFocusTargetsVisible": true,
+      "reducedMotionDurations": [
+        {
+          "selector": "c-check",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-radio",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-slider",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-combo",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        }
+      ],
+      "forcedColorProbe": {
+        "color": "oklch(0.74 0.004 160)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopColor": "rgba(0, 0, 0, 0)"
+      }
+    },
+    "02-light": {
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      },
+      "noPositiveTabIndex": true,
+      "namedControlCount": 16,
+      "unnamedControls": [],
+      "focusResults": [
+        {
+          "tag": "input",
+          "role": null,
+          "ariaLabel": "Opacity",
+          "outlineStyle": "solid",
+          "boxShadow": "oklch(0.955 0.004 160) 0px 0px 0px 2px, oklch(0.48 0.13 160) 0px 0px 0px 4px",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "input",
+          "role": "combobox",
+          "ariaLabel": "Model",
+          "outlineStyle": "none",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": "tab",
+          "ariaLabel": null,
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": null,
+          "ariaLabel": "Page 1",
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        }
+      ],
+      "allFocusTargetsVisible": true,
+      "reducedMotionDurations": [
+        {
+          "selector": "c-check",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-radio",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-slider",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-combo",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        }
+      ],
+      "forcedColorProbe": {
+        "color": "oklch(0.42 0.011 160)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopColor": "rgba(0, 0, 0, 0)"
+      }
+    },
+    "03-dark-hc": {
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      },
+      "noPositiveTabIndex": true,
+      "namedControlCount": 16,
+      "unnamedControls": [],
+      "focusResults": [
+        {
+          "tag": "input",
+          "role": null,
+          "ariaLabel": "Opacity",
+          "outlineStyle": "solid",
+          "boxShadow": "oklch(0.11 0.004 160) 0px 0px 0px 2px, oklch(0.86 0.16 160) 0px 0px 0px 4px",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "input",
+          "role": "combobox",
+          "ariaLabel": "Model",
+          "outlineStyle": "none",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": "tab",
+          "ariaLabel": null,
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": null,
+          "ariaLabel": "Page 1",
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        }
+      ],
+      "allFocusTargetsVisible": true,
+      "reducedMotionDurations": [
+        {
+          "selector": "c-check",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-radio",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-slider",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-combo",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        }
+      ],
+      "forcedColorProbe": {
+        "color": "oklch(0.88 0.004 160)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopColor": "rgba(0, 0, 0, 0)"
+      }
+    },
+    "04-light-hc": {
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": false
+      },
+      "noPositiveTabIndex": true,
+      "namedControlCount": 16,
+      "unnamedControls": [],
+      "focusResults": [
+        {
+          "tag": "input",
+          "role": null,
+          "ariaLabel": "Opacity",
+          "outlineStyle": "solid",
+          "boxShadow": "oklch(1 0 0) 0px 0px 0px 2px, oklch(0.42 0.14 160) 0px 0px 0px 4px",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "input",
+          "role": "combobox",
+          "ariaLabel": "Model",
+          "outlineStyle": "none",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": "tab",
+          "ariaLabel": null,
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": null,
+          "ariaLabel": "Page 1",
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        }
+      ],
+      "allFocusTargetsVisible": true,
+      "reducedMotionDurations": [
+        {
+          "selector": "c-check",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-radio",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-slider",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-combo",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        }
+      ],
+      "forcedColorProbe": {
+        "color": "oklch(0.3 0.012 160)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopColor": "rgba(0, 0, 0, 0)"
+      }
+    },
+    "05-prefers-contrast": {
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": false,
+        "prefersContrast": true
+      },
+      "noPositiveTabIndex": true,
+      "namedControlCount": 16,
+      "unnamedControls": [],
+      "focusResults": [
+        {
+          "tag": "input",
+          "role": null,
+          "ariaLabel": "Opacity",
+          "outlineStyle": "solid",
+          "boxShadow": "oklch(0.11 0.004 160) 0px 0px 0px 2px, oklch(0.86 0.16 160) 0px 0px 0px 4px",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "input",
+          "role": "combobox",
+          "ariaLabel": "Model",
+          "outlineStyle": "none",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": "tab",
+          "ariaLabel": null,
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": null,
+          "ariaLabel": "Page 1",
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        }
+      ],
+      "allFocusTargetsVisible": true,
+      "reducedMotionDurations": [
+        {
+          "selector": "c-check",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-radio",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-slider",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-combo",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        }
+      ],
+      "forcedColorProbe": {
+        "color": "oklch(0.88 0.004 160)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopColor": "rgba(0, 0, 0, 0)"
+      }
+    },
+    "06-forced-colors": {
+      "mediaProbe": {
+        "reducedMotion": false,
+        "forcedColors": true,
+        "prefersContrast": false
+      },
+      "noPositiveTabIndex": true,
+      "namedControlCount": 16,
+      "unnamedControls": [],
+      "focusResults": [
+        {
+          "tag": "input",
+          "role": null,
+          "ariaLabel": "Opacity",
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "input",
+          "role": "combobox",
+          "ariaLabel": "Model",
+          "outlineStyle": "none",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": "tab",
+          "ariaLabel": null,
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": null,
+          "ariaLabel": "Page 1",
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        }
+      ],
+      "allFocusTargetsVisible": true,
+      "reducedMotionDurations": [
+        {
+          "selector": "c-check",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-radio",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-slider",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-combo",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        }
+      ],
+      "forcedColorProbe": {
+        "color": "rgb(255, 255, 255)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopColor": "rgb(255, 255, 255)"
+      }
+    },
+    "07-reduced-motion": {
+      "mediaProbe": {
+        "reducedMotion": true,
+        "forcedColors": false,
+        "prefersContrast": false
+      },
+      "noPositiveTabIndex": true,
+      "namedControlCount": 16,
+      "unnamedControls": [],
+      "focusResults": [
+        {
+          "tag": "input",
+          "role": null,
+          "ariaLabel": "Opacity",
+          "outlineStyle": "solid",
+          "boxShadow": "oklch(0.17 0.004 160) 0px 0px 0px 2px, rgb(78, 186, 135) 0px 0px 0px 4px",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "input",
+          "role": "combobox",
+          "ariaLabel": "Model",
+          "outlineStyle": "none",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": "tab",
+          "ariaLabel": null,
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        },
+        {
+          "tag": "button",
+          "role": null,
+          "ariaLabel": "Page 1",
+          "outlineStyle": "solid",
+          "boxShadow": "none",
+          "wrapperFocus": true,
+          "hasVisibleFocus": true
+        }
+      ],
+      "allFocusTargetsVisible": true,
+      "reducedMotionDurations": [
+        {
+          "selector": "c-check",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-radio",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-slider",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-combo",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "c-utab",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        },
+        {
+          "selector": "button",
+          "transitionDuration": "0s",
+          "animationDuration": "0s"
+        }
+      ],
+      "forcedColorProbe": {
+        "color": "oklch(0.74 0.004 160)",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "borderTopColor": "rgba(0, 0, 0, 0)"
+      }
+    }
+  },
+  "seriousCriticalTotal": 0,
+  "seriousCritical": [],
+  "byMode": {
+    "01-dark": {
+      "seriousCriticalCount": 0,
+      "violationCount": 0,
+      "passCount": 40,
+      "incompleteCount": 1,
+      "passRules": [
+        {
+          "id": "aria-allowed-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-allowed-role",
+          "impact": null,
+          "tags": ["cat.aria", "best-practice"],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-conditional-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-deprecated-role",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-hidden-body",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 1,
+          "targets": ["body"]
+        },
+        {
+          "id": "aria-hidden-focus",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 10,
+          "targets": [".ic", ".n", ".track", ".bx"]
+        },
+        {
+          "id": "aria-prohibited-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-required-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-children",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 6,
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-parent",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 16,
+          "targets": [
+            "thead > tr",
+            "th:nth-child(1)",
+            "th:nth-child(2)",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-roles",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-toggle-field-name",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 2,
+          "targets": [
+            ".c-combo-opt[role=\"option\"]:nth-child(1)",
+            ".c-combo-opt[role=\"option\"]:nth-child(2)"
+          ]
+        },
+        {
+          "id": "aria-valid-attr-value",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-valid-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "button-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.9.1"
+          ],
+          "nodes": 7,
+          "targets": [
+            "button[aria-label=\"Remove backend\"]",
+            ".c-utab[role=\"tab\"]:nth-child(1)",
+            ".c-utab[role=\"tab\"]:nth-child(2)",
+            "button[aria-label=\"Previous page\"]"
+          ]
+        },
+        {
+          "id": "bypass",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag241",
+            "section508",
+            "section508.22.o",
+            "TTv5",
+            "TT9.a",
+            "EN-301-549",
+            "EN-9.2.4.1",
+            "RGAAv4",
+            "RGAA-12.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 34,
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
+        },
+        {
+          "id": "document-title",
+          "impact": null,
+          "tags": [
+            "cat.text-alternatives",
+            "wcag2a",
+            "wcag242",
+            "TTv5",
+            "TT12.a",
+            "EN-301-549",
+            "EN-9.2.4.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.5.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "duplicate-id-aria",
+          "impact": null,
+          "tags": [
+            "cat.parsing",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-8.2.1"
+          ],
+          "nodes": 1,
+          "targets": ["#ev-list"]
+        },
+        {
+          "id": "empty-heading",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "empty-table-header",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "form-field-multiple-labels",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag332",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.3.3.2",
+            "RGAAv4",
+            "RGAA-11.2.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "heading-order",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "html-has-lang",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.3.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "html-lang-valid",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.4.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "label-title-only",
+          "impact": null,
+          "tags": ["cat.forms", "best-practice"],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "label",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.n",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.1.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "landmark-main-is-top-level",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-no-duplicate-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-one-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "landmark-unique",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 7,
+          "targets": [
+            "main",
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "section[aria-label=\"Inputs\"]"
+          ]
+        },
+        {
+          "id": "link-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag244",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.2.4.4",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-6.2.1"
+          ],
+          "nodes": 2,
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
+        },
+        {
+          "id": "nested-interactive",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 12,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            ".c-combo-opt[role=\"option\"]:nth-child(1)"
+          ]
+        },
+        {
+          "id": "page-has-heading-one",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "region",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
+          "nodes": 72,
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
+        },
+        {
+          "id": "scope-attr-valid",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "tabindex",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice"],
+          "nodes": 1,
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
+        },
+        {
+          "id": "table-duplicate-name",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "td-headers-attr",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.4"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "th-has-data-cells",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        }
+      ],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 6,
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
+        }
+      ],
+      "violations": []
+    },
+    "02-light": {
+      "seriousCriticalCount": 0,
+      "violationCount": 0,
+      "passCount": 40,
+      "incompleteCount": 1,
+      "passRules": [
+        {
+          "id": "aria-allowed-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-allowed-role",
+          "impact": null,
+          "tags": ["cat.aria", "best-practice"],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-conditional-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-deprecated-role",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-hidden-body",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 1,
+          "targets": ["body"]
+        },
+        {
+          "id": "aria-hidden-focus",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 10,
+          "targets": [".ic", ".n", ".track", ".bx"]
+        },
+        {
+          "id": "aria-prohibited-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-required-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-children",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 6,
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-parent",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 16,
+          "targets": [
+            "thead > tr",
+            "th:nth-child(1)",
+            "th:nth-child(2)",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-roles",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-toggle-field-name",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 2,
+          "targets": [
+            ".c-combo-opt[role=\"option\"]:nth-child(1)",
+            ".c-combo-opt[role=\"option\"]:nth-child(2)"
+          ]
+        },
+        {
+          "id": "aria-valid-attr-value",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-valid-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "button-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.9.1"
+          ],
+          "nodes": 7,
+          "targets": [
+            "button[aria-label=\"Remove backend\"]",
+            ".c-utab[role=\"tab\"]:nth-child(1)",
+            ".c-utab[role=\"tab\"]:nth-child(2)",
+            "button[aria-label=\"Previous page\"]"
+          ]
+        },
+        {
+          "id": "bypass",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag241",
+            "section508",
+            "section508.22.o",
+            "TTv5",
+            "TT9.a",
+            "EN-301-549",
+            "EN-9.2.4.1",
+            "RGAAv4",
+            "RGAA-12.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 34,
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
+        },
+        {
+          "id": "document-title",
+          "impact": null,
+          "tags": [
+            "cat.text-alternatives",
+            "wcag2a",
+            "wcag242",
+            "TTv5",
+            "TT12.a",
+            "EN-301-549",
+            "EN-9.2.4.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.5.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "duplicate-id-aria",
+          "impact": null,
+          "tags": [
+            "cat.parsing",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-8.2.1"
+          ],
+          "nodes": 1,
+          "targets": ["#ev-list"]
+        },
+        {
+          "id": "empty-heading",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "empty-table-header",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "form-field-multiple-labels",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag332",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.3.3.2",
+            "RGAAv4",
+            "RGAA-11.2.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "heading-order",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "html-has-lang",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.3.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "html-lang-valid",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.4.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "label-title-only",
+          "impact": null,
+          "tags": ["cat.forms", "best-practice"],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "label",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.n",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.1.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "landmark-main-is-top-level",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-no-duplicate-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-one-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "landmark-unique",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 7,
+          "targets": [
+            "main",
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "section[aria-label=\"Inputs\"]"
+          ]
+        },
+        {
+          "id": "link-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag244",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.2.4.4",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-6.2.1"
+          ],
+          "nodes": 2,
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
+        },
+        {
+          "id": "nested-interactive",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 12,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            ".c-combo-opt[role=\"option\"]:nth-child(1)"
+          ]
+        },
+        {
+          "id": "page-has-heading-one",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "region",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
+          "nodes": 72,
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
+        },
+        {
+          "id": "scope-attr-valid",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "tabindex",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice"],
+          "nodes": 1,
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
+        },
+        {
+          "id": "table-duplicate-name",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "td-headers-attr",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.4"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "th-has-data-cells",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        }
+      ],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 6,
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
+        }
+      ],
+      "violations": []
+    },
+    "03-dark-hc": {
+      "seriousCriticalCount": 0,
+      "violationCount": 0,
+      "passCount": 40,
+      "incompleteCount": 1,
+      "passRules": [
+        {
+          "id": "aria-allowed-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-allowed-role",
+          "impact": null,
+          "tags": ["cat.aria", "best-practice"],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-conditional-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-deprecated-role",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-hidden-body",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 1,
+          "targets": ["body"]
+        },
+        {
+          "id": "aria-hidden-focus",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 10,
+          "targets": [".ic", ".n", ".track", ".bx"]
+        },
+        {
+          "id": "aria-prohibited-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-required-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-children",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 6,
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-parent",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 16,
+          "targets": [
+            "thead > tr",
+            "th:nth-child(1)",
+            "th:nth-child(2)",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-roles",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-toggle-field-name",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 2,
+          "targets": [
+            ".c-combo-opt[role=\"option\"]:nth-child(1)",
+            ".c-combo-opt[role=\"option\"]:nth-child(2)"
+          ]
+        },
+        {
+          "id": "aria-valid-attr-value",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-valid-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "button-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.9.1"
+          ],
+          "nodes": 7,
+          "targets": [
+            "button[aria-label=\"Remove backend\"]",
+            ".c-utab[role=\"tab\"]:nth-child(1)",
+            ".c-utab[role=\"tab\"]:nth-child(2)",
+            "button[aria-label=\"Previous page\"]"
+          ]
+        },
+        {
+          "id": "bypass",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag241",
+            "section508",
+            "section508.22.o",
+            "TTv5",
+            "TT9.a",
+            "EN-301-549",
+            "EN-9.2.4.1",
+            "RGAAv4",
+            "RGAA-12.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 34,
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
+        },
+        {
+          "id": "document-title",
+          "impact": null,
+          "tags": [
+            "cat.text-alternatives",
+            "wcag2a",
+            "wcag242",
+            "TTv5",
+            "TT12.a",
+            "EN-301-549",
+            "EN-9.2.4.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.5.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "duplicate-id-aria",
+          "impact": null,
+          "tags": [
+            "cat.parsing",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-8.2.1"
+          ],
+          "nodes": 1,
+          "targets": ["#ev-list"]
+        },
+        {
+          "id": "empty-heading",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "empty-table-header",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "form-field-multiple-labels",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag332",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.3.3.2",
+            "RGAAv4",
+            "RGAA-11.2.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "heading-order",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "html-has-lang",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.3.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "html-lang-valid",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.4.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "label-title-only",
+          "impact": null,
+          "tags": ["cat.forms", "best-practice"],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "label",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.n",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.1.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "landmark-main-is-top-level",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-no-duplicate-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-one-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "landmark-unique",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 7,
+          "targets": [
+            "main",
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "section[aria-label=\"Inputs\"]"
+          ]
+        },
+        {
+          "id": "link-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag244",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.2.4.4",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-6.2.1"
+          ],
+          "nodes": 2,
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
+        },
+        {
+          "id": "nested-interactive",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 12,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            ".c-combo-opt[role=\"option\"]:nth-child(1)"
+          ]
+        },
+        {
+          "id": "page-has-heading-one",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "region",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
+          "nodes": 72,
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
+        },
+        {
+          "id": "scope-attr-valid",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "tabindex",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice"],
+          "nodes": 1,
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
+        },
+        {
+          "id": "table-duplicate-name",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "td-headers-attr",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.4"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "th-has-data-cells",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        }
+      ],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 6,
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
+        }
+      ],
+      "violations": []
+    },
+    "04-light-hc": {
+      "seriousCriticalCount": 0,
+      "violationCount": 0,
+      "passCount": 40,
+      "incompleteCount": 1,
+      "passRules": [
+        {
+          "id": "aria-allowed-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-allowed-role",
+          "impact": null,
+          "tags": ["cat.aria", "best-practice"],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-conditional-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-deprecated-role",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-hidden-body",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 1,
+          "targets": ["body"]
+        },
+        {
+          "id": "aria-hidden-focus",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 10,
+          "targets": [".ic", ".n", ".track", ".bx"]
+        },
+        {
+          "id": "aria-prohibited-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-required-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-children",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 6,
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-parent",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 16,
+          "targets": [
+            "thead > tr",
+            "th:nth-child(1)",
+            "th:nth-child(2)",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-roles",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-toggle-field-name",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 2,
+          "targets": [
+            ".c-combo-opt[role=\"option\"]:nth-child(1)",
+            ".c-combo-opt[role=\"option\"]:nth-child(2)"
+          ]
+        },
+        {
+          "id": "aria-valid-attr-value",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-valid-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "button-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.9.1"
+          ],
+          "nodes": 7,
+          "targets": [
+            "button[aria-label=\"Remove backend\"]",
+            ".c-utab[role=\"tab\"]:nth-child(1)",
+            ".c-utab[role=\"tab\"]:nth-child(2)",
+            "button[aria-label=\"Previous page\"]"
+          ]
+        },
+        {
+          "id": "bypass",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag241",
+            "section508",
+            "section508.22.o",
+            "TTv5",
+            "TT9.a",
+            "EN-301-549",
+            "EN-9.2.4.1",
+            "RGAAv4",
+            "RGAA-12.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 34,
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
+        },
+        {
+          "id": "document-title",
+          "impact": null,
+          "tags": [
+            "cat.text-alternatives",
+            "wcag2a",
+            "wcag242",
+            "TTv5",
+            "TT12.a",
+            "EN-301-549",
+            "EN-9.2.4.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.5.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "duplicate-id-aria",
+          "impact": null,
+          "tags": [
+            "cat.parsing",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-8.2.1"
+          ],
+          "nodes": 1,
+          "targets": ["#ev-list"]
+        },
+        {
+          "id": "empty-heading",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "empty-table-header",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "form-field-multiple-labels",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag332",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.3.3.2",
+            "RGAAv4",
+            "RGAA-11.2.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "heading-order",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "html-has-lang",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.3.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "html-lang-valid",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.4.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "label-title-only",
+          "impact": null,
+          "tags": ["cat.forms", "best-practice"],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "label",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.n",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.1.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "landmark-main-is-top-level",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-no-duplicate-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-one-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "landmark-unique",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 7,
+          "targets": [
+            "main",
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "section[aria-label=\"Inputs\"]"
+          ]
+        },
+        {
+          "id": "link-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag244",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.2.4.4",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-6.2.1"
+          ],
+          "nodes": 2,
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
+        },
+        {
+          "id": "nested-interactive",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 12,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            ".c-combo-opt[role=\"option\"]:nth-child(1)"
+          ]
+        },
+        {
+          "id": "page-has-heading-one",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "region",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
+          "nodes": 72,
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
+        },
+        {
+          "id": "scope-attr-valid",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "tabindex",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice"],
+          "nodes": 1,
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
+        },
+        {
+          "id": "table-duplicate-name",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "td-headers-attr",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.4"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "th-has-data-cells",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        }
+      ],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 6,
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
+        }
+      ],
+      "violations": []
+    },
+    "05-prefers-contrast": {
+      "seriousCriticalCount": 0,
+      "violationCount": 0,
+      "passCount": 40,
+      "incompleteCount": 1,
+      "passRules": [
+        {
+          "id": "aria-allowed-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-allowed-role",
+          "impact": null,
+          "tags": ["cat.aria", "best-practice"],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-conditional-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-deprecated-role",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-hidden-body",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 1,
+          "targets": ["body"]
+        },
+        {
+          "id": "aria-hidden-focus",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 10,
+          "targets": [".ic", ".n", ".track", ".bx"]
+        },
+        {
+          "id": "aria-prohibited-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-required-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-children",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 6,
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-parent",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 16,
+          "targets": [
+            "thead > tr",
+            "th:nth-child(1)",
+            "th:nth-child(2)",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-roles",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-toggle-field-name",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 2,
+          "targets": [
+            ".c-combo-opt[role=\"option\"]:nth-child(1)",
+            ".c-combo-opt[role=\"option\"]:nth-child(2)"
+          ]
+        },
+        {
+          "id": "aria-valid-attr-value",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-valid-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "button-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.9.1"
+          ],
+          "nodes": 7,
+          "targets": [
+            "button[aria-label=\"Remove backend\"]",
+            ".c-utab[role=\"tab\"]:nth-child(1)",
+            ".c-utab[role=\"tab\"]:nth-child(2)",
+            "button[aria-label=\"Previous page\"]"
+          ]
+        },
+        {
+          "id": "bypass",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag241",
+            "section508",
+            "section508.22.o",
+            "TTv5",
+            "TT9.a",
+            "EN-301-549",
+            "EN-9.2.4.1",
+            "RGAAv4",
+            "RGAA-12.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 34,
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
+        },
+        {
+          "id": "document-title",
+          "impact": null,
+          "tags": [
+            "cat.text-alternatives",
+            "wcag2a",
+            "wcag242",
+            "TTv5",
+            "TT12.a",
+            "EN-301-549",
+            "EN-9.2.4.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.5.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "duplicate-id-aria",
+          "impact": null,
+          "tags": [
+            "cat.parsing",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-8.2.1"
+          ],
+          "nodes": 1,
+          "targets": ["#ev-list"]
+        },
+        {
+          "id": "empty-heading",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "empty-table-header",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "form-field-multiple-labels",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag332",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.3.3.2",
+            "RGAAv4",
+            "RGAA-11.2.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "heading-order",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "html-has-lang",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.3.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "html-lang-valid",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.4.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "label-title-only",
+          "impact": null,
+          "tags": ["cat.forms", "best-practice"],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "label",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.n",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.1.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "landmark-main-is-top-level",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-no-duplicate-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-one-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "landmark-unique",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 7,
+          "targets": [
+            "main",
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "section[aria-label=\"Inputs\"]"
+          ]
+        },
+        {
+          "id": "link-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag244",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.2.4.4",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-6.2.1"
+          ],
+          "nodes": 2,
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
+        },
+        {
+          "id": "nested-interactive",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 12,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            ".c-combo-opt[role=\"option\"]:nth-child(1)"
+          ]
+        },
+        {
+          "id": "page-has-heading-one",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "region",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
+          "nodes": 72,
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
+        },
+        {
+          "id": "scope-attr-valid",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "tabindex",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice"],
+          "nodes": 1,
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
+        },
+        {
+          "id": "table-duplicate-name",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "td-headers-attr",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.4"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "th-has-data-cells",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        }
+      ],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 6,
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
+        }
+      ],
+      "violations": []
+    },
+    "06-forced-colors": {
+      "seriousCriticalCount": 0,
+      "violationCount": 0,
+      "passCount": 40,
+      "incompleteCount": 1,
+      "passRules": [
+        {
+          "id": "aria-allowed-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-allowed-role",
+          "impact": null,
+          "tags": ["cat.aria", "best-practice"],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-conditional-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-deprecated-role",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-hidden-body",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 1,
+          "targets": ["body"]
+        },
+        {
+          "id": "aria-hidden-focus",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 10,
+          "targets": [".ic", ".n", ".track", ".bx"]
+        },
+        {
+          "id": "aria-prohibited-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-required-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-children",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 6,
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-parent",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 16,
+          "targets": [
+            "thead > tr",
+            "th:nth-child(1)",
+            "th:nth-child(2)",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-roles",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-toggle-field-name",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 2,
+          "targets": [
+            ".c-combo-opt[role=\"option\"]:nth-child(1)",
+            ".c-combo-opt[role=\"option\"]:nth-child(2)"
+          ]
+        },
+        {
+          "id": "aria-valid-attr-value",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-valid-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "button-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.9.1"
+          ],
+          "nodes": 7,
+          "targets": [
+            "button[aria-label=\"Remove backend\"]",
+            ".c-utab[role=\"tab\"]:nth-child(1)",
+            ".c-utab[role=\"tab\"]:nth-child(2)",
+            "button[aria-label=\"Previous page\"]"
+          ]
+        },
+        {
+          "id": "bypass",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag241",
+            "section508",
+            "section508.22.o",
+            "TTv5",
+            "TT9.a",
+            "EN-301-549",
+            "EN-9.2.4.1",
+            "RGAAv4",
+            "RGAA-12.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 34,
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
+        },
+        {
+          "id": "document-title",
+          "impact": null,
+          "tags": [
+            "cat.text-alternatives",
+            "wcag2a",
+            "wcag242",
+            "TTv5",
+            "TT12.a",
+            "EN-301-549",
+            "EN-9.2.4.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.5.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "duplicate-id-aria",
+          "impact": null,
+          "tags": [
+            "cat.parsing",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-8.2.1"
+          ],
+          "nodes": 1,
+          "targets": ["#ev-list"]
+        },
+        {
+          "id": "empty-heading",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "empty-table-header",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "form-field-multiple-labels",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag332",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.3.3.2",
+            "RGAAv4",
+            "RGAA-11.2.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "heading-order",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "html-has-lang",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.3.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "html-lang-valid",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.4.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "label-title-only",
+          "impact": null,
+          "tags": ["cat.forms", "best-practice"],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "label",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.n",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.1.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "landmark-main-is-top-level",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-no-duplicate-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-one-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "landmark-unique",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 7,
+          "targets": [
+            "main",
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "section[aria-label=\"Inputs\"]"
+          ]
+        },
+        {
+          "id": "link-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag244",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.2.4.4",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-6.2.1"
+          ],
+          "nodes": 2,
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
+        },
+        {
+          "id": "nested-interactive",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 12,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            ".c-combo-opt[role=\"option\"]:nth-child(1)"
+          ]
+        },
+        {
+          "id": "page-has-heading-one",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "region",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
+          "nodes": 72,
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
+        },
+        {
+          "id": "scope-attr-valid",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "tabindex",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice"],
+          "nodes": 1,
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
+        },
+        {
+          "id": "table-duplicate-name",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "td-headers-attr",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.4"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "th-has-data-cells",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        }
+      ],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 6,
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
+        }
+      ],
+      "violations": []
+    },
+    "07-reduced-motion": {
+      "seriousCriticalCount": 0,
+      "violationCount": 0,
+      "passCount": 40,
+      "incompleteCount": 1,
+      "passRules": [
+        {
+          "id": "aria-allowed-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-allowed-role",
+          "impact": null,
+          "tags": ["cat.aria", "best-practice"],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-conditional-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-deprecated-role",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-hidden-body",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 1,
+          "targets": ["body"]
+        },
+        {
+          "id": "aria-hidden-focus",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-10.8.1"
+          ],
+          "nodes": 10,
+          "targets": [".ic", ".n", ".track", ".bx"]
+        },
+        {
+          "id": "aria-prohibited-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-required-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-children",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 6,
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
+        },
+        {
+          "id": "aria-required-parent",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag131",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-9.3.1"
+          ],
+          "nodes": 16,
+          "targets": [
+            "thead > tr",
+            "th:nth-child(1)",
+            "th:nth-child(2)",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-roles",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 21,
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
+        },
+        {
+          "id": "aria-toggle-field-name",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 2,
+          "targets": [
+            ".c-combo-opt[role=\"option\"]:nth-child(1)",
+            ".c-combo-opt[role=\"option\"]:nth-child(2)"
+          ]
+        },
+        {
+          "id": "aria-valid-attr-value",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "aria-valid-attr",
+          "impact": null,
+          "tags": [
+            "cat.aria",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 24,
+          "targets": [
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "table",
+            "th[aria-sort=\"descending\"]"
+          ]
+        },
+        {
+          "id": "button-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.9.1"
+          ],
+          "nodes": 7,
+          "targets": [
+            "button[aria-label=\"Remove backend\"]",
+            ".c-utab[role=\"tab\"]:nth-child(1)",
+            ".c-utab[role=\"tab\"]:nth-child(2)",
+            "button[aria-label=\"Previous page\"]"
+          ]
+        },
+        {
+          "id": "bypass",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag241",
+            "section508",
+            "section508.22.o",
+            "TTv5",
+            "TT9.a",
+            "EN-301-549",
+            "EN-9.2.4.1",
+            "RGAAv4",
+            "RGAA-12.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 34,
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
+        },
+        {
+          "id": "document-title",
+          "impact": null,
+          "tags": [
+            "cat.text-alternatives",
+            "wcag2a",
+            "wcag242",
+            "TTv5",
+            "TT12.a",
+            "EN-301-549",
+            "EN-9.2.4.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.5.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "duplicate-id-aria",
+          "impact": null,
+          "tags": [
+            "cat.parsing",
+            "wcag2a",
+            "wcag412",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-8.2.1"
+          ],
+          "nodes": 1,
+          "targets": ["#ev-list"]
+        },
+        {
+          "id": "empty-heading",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "empty-table-header",
+          "impact": null,
+          "tags": ["cat.name-role-value", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "form-field-multiple-labels",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag332",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.3.3.2",
+            "RGAAv4",
+            "RGAA-11.2.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "heading-order",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["h1"]
+        },
+        {
+          "id": "html-has-lang",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.3.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "html-lang-valid",
+          "impact": null,
+          "tags": [
+            "cat.language",
+            "wcag2a",
+            "wcag311",
+            "TTv5",
+            "TT11.a",
+            "EN-301-549",
+            "EN-9.3.1.1",
+            "ACT",
+            "RGAAv4",
+            "RGAA-8.4.1"
+          ],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "label-title-only",
+          "impact": null,
+          "tags": ["cat.forms", "best-practice"],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "label",
+          "impact": null,
+          "tags": [
+            "cat.forms",
+            "wcag2a",
+            "wcag412",
+            "section508",
+            "section508.22.n",
+            "TTv5",
+            "TT5.c",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-11.1.1"
+          ],
+          "nodes": 5,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            "input[placeholder=\"Search\"]"
+          ]
+        },
+        {
+          "id": "landmark-main-is-top-level",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-no-duplicate-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["main"]
+        },
+        {
+          "id": "landmark-one-main",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "landmark-unique",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 7,
+          "targets": [
+            "main",
+            "section[aria-label=\"AI components\"]",
+            "section[aria-label=\"Data grid\"]",
+            "section[aria-label=\"Inputs\"]"
+          ]
+        },
+        {
+          "id": "link-name",
+          "impact": null,
+          "tags": [
+            "cat.name-role-value",
+            "wcag2a",
+            "wcag244",
+            "wcag412",
+            "section508",
+            "section508.22.a",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.2.4.4",
+            "EN-9.4.1.2",
+            "ACT",
+            "RGAAv4",
+            "RGAA-6.2.1"
+          ],
+          "nodes": 2,
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
+        },
+        {
+          "id": "nested-interactive",
+          "impact": null,
+          "tags": [
+            "cat.keyboard",
+            "wcag2a",
+            "wcag412",
+            "TTv5",
+            "TT6.a",
+            "EN-301-549",
+            "EN-9.4.1.2",
+            "RGAAv4",
+            "RGAA-7.1.1"
+          ],
+          "nodes": 12,
+          "targets": [
+            "input[type=\"checkbox\"]",
+            "input[type=\"radio\"]",
+            "input[type=\"range\"]",
+            ".c-combo-opt[role=\"option\"]:nth-child(1)"
+          ]
+        },
+        {
+          "id": "page-has-heading-one",
+          "impact": null,
+          "tags": ["cat.semantics", "best-practice"],
+          "nodes": 1,
+          "targets": ["html"]
+        },
+        {
+          "id": "region",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
+          "nodes": 72,
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
+        },
+        {
+          "id": "scope-attr-valid",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice"],
+          "nodes": 3,
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
+        },
+        {
+          "id": "tabindex",
+          "impact": null,
+          "tags": ["cat.keyboard", "best-practice"],
+          "nodes": 1,
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
+        },
+        {
+          "id": "table-duplicate-name",
+          "impact": null,
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "td-headers-attr",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.4"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        },
+        {
+          "id": "th-has-data-cells",
+          "impact": null,
+          "tags": [
+            "cat.tables",
+            "wcag2a",
+            "wcag131",
+            "section508",
+            "section508.22.g",
+            "TTv5",
+            "TT14.b",
+            "EN-301-549",
+            "EN-9.1.3.1",
+            "RGAAv4",
+            "RGAA-5.7.1"
+          ],
+          "nodes": 1,
+          "targets": ["table"]
+        }
+      ],
+      "incomplete": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "tags": [
+            "cat.color",
+            "wcag2aa",
+            "wcag143",
+            "TTv5",
+            "TT13.c",
+            "EN-301-549",
+            "EN-9.1.4.3",
+            "ACT",
+            "RGAAv4",
+            "RGAA-3.2.1"
+          ],
+          "nodes": 6,
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
+        }
+      ],
+      "violations": []
+    }
+  },
+  "verdict": "PASS"
+}

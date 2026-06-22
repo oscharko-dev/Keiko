@@ -28,6 +28,7 @@ import type {
   QualityIntelligenceTestCaseStatus,
 } from "./testCaseCandidate.js";
 import type { QualityIntelligenceReviewState } from "./reviewRecord.js";
+import type { TestQualityRubricDimension } from "./testQualityRubric.js";
 
 /** Counts-only totals carried on both the list-view and the detail view. */
 export interface QualityIntelligenceUiRunTotals {
@@ -45,6 +46,8 @@ export interface QualityIntelligenceUiRunSummary {
   /** ISO 8601 timestamp, or null when the run has not yet completed. */
   readonly completedAt: string | null;
   readonly totals: QualityIntelligenceUiRunTotals;
+  /** Overall human-review state for the run (Issue #282); "open" until a reviewer acts. */
+  readonly reviewState: QualityIntelligenceReviewState;
 }
 
 /**
@@ -108,6 +111,13 @@ export interface QualityIntelligenceUiWeakTestFlag {
   readonly rationale: string;
 }
 
+export interface QualityIntelligenceUiCandidateQualityVerdict {
+  readonly verdict: "strong" | "weak";
+  readonly score: number;
+  readonly dimensions: readonly TestQualityRubricDimension[];
+  readonly overallRationale: string;
+}
+
 export interface QualityIntelligenceUiDriftMetadata {
   /**
    * GET run detail is read-only: it reports whether drift tracking metadata exists, but never
@@ -153,9 +163,9 @@ export interface QualityIntelligenceUiRunDetail {
   /** Per-atom coverage classification (refs + status; empty when no matrix is available). */
   readonly coverageByAtom: readonly QualityIntelligenceUiAtomCoverage[];
   /**
-   * Run quality score: the percentage of judged candidates the adversarial judge rated "strong"
-   * [0-100] (Epic #736) — 100 = every judged test is strong, 0 = every judged test is weak. Null
-   * when the judge stage was skipped, unavailable, or no candidate was judged.
+   * Run quality score: the percentage of candidates with a strong adversarial judge outcome [0-100]
+   * (Epic #736) — 100 = every judged test is strong, 0 = every judged test is weak. Null when the
+   * judge stage was skipped, unavailable, or there were no candidates to judge.
    */
   readonly qualityScore: number | null;
   /** Browser-safe Living Tests drift metadata; never contains raw source text, paths, or hashes. */
@@ -182,10 +192,26 @@ export interface QualityIntelligenceUiCandidate {
   readonly reviewState: QualityIntelligenceReviewState;
   readonly derivedFromAtomIds: readonly string[];
   /**
+   * Present when the adversarial test-quality judge evaluated this candidate. Additive and absent
+   * on legacy runs or when the judge stage was skipped.
+   */
+  readonly qualityVerdict?: QualityIntelligenceUiCandidateQualityVerdict;
+  /**
    * Present only when the adversarial test-quality judge (Epic #736) flagged this candidate as
-   * weak. Omitted entirely when the candidate was rated strong or was never judged.
+   * weak. Omitted entirely when the candidate was rated strong or the judge stage was skipped.
    */
   readonly weakTestFlag?: QualityIntelligenceUiWeakTestFlag;
+  /**
+   * Candidate body fields shortened only for the browser-facing BFF projection. Persisted evidence
+   * and export semantics remain full-fidelity.
+   */
+  readonly truncatedFields?: readonly (
+    | "title"
+    | "preconditions"
+    | "steps"
+    | "expectedResults"
+    | "tags"
+  )[];
 }
 
 // ─── Living Tests drift report (Epic #735, Issue #743/#744) ──────────────────────
@@ -230,7 +256,8 @@ export type QualityIntelligenceInlineSourceKind =
   | "file"
   | "capsule"
   | "capsule-set"
-  | "figma-snapshot";
+  | "figma-snapshot"
+  | "image";
 
 /** A pasted free-text requirement blob the server splits into requirement atoms. */
 export interface QualityIntelligenceRequirementsSource {
@@ -290,13 +317,31 @@ export interface QualityIntelligenceCapsuleSetSource {
  * structural test baseline per screen from its Screen-IR (fields/controls/screens/states), enriched
  * by capability-routed vision only when a multimodal model is available. This source never contacts
  * Figma — it reads ONLY the previously built snapshot. An unknown / unreadable snapshot is rejected
- * with QI_FIGMA_SNAPSHOT_UNAVAILABLE. The contract mirrors the capsule source so the connector
- * picker can bind a snapshot to the QI hub.
+ * with QI_FIGMA_SNAPSHOT_UNAVAILABLE. `screenIds`, when present, scopes ingestion to one or more
+ * specific masks from the snapshot so large boards do not flood QI with unrelated screens. The
+ * contract mirrors the capsule source so the connector picker can bind a snapshot to the QI hub.
  */
 export interface QualityIntelligenceFigmaSnapshotSource {
   readonly kind: "figma-snapshot";
   readonly label: string;
   readonly snapshotRunId: string;
+  /** Optional Screen-IR ids to ingest from the stored snapshot; absent means whole snapshot. */
+  readonly screenIds?: readonly string[];
+}
+
+/**
+ * A connected image source. The current producer is a stored Figma Snapshot screen render, but the
+ * source kind is intentionally generic: QI consumes it by generating a model-derived textual image
+ * description through an image-input-capable model, then treating that description as evidence.
+ * When no image-capable model is configured the source is rejected/skipped with a user-actionable
+ * code instead of pretending the image was understood.
+ */
+export interface QualityIntelligenceImageSource {
+  readonly kind: "image";
+  readonly label: string;
+  readonly sourceKind: "figma-snapshot-screen";
+  readonly snapshotRunId: string;
+  readonly screenId: string;
 }
 
 export type QualityIntelligenceInlineSource =
@@ -305,7 +350,8 @@ export type QualityIntelligenceInlineSource =
   | QualityIntelligenceFileSource
   | QualityIntelligenceCapsuleSource
   | QualityIntelligenceCapsuleSetSource
-  | QualityIntelligenceFigmaSnapshotSource;
+  | QualityIntelligenceFigmaSnapshotSource
+  | QualityIntelligenceImageSource;
 
 /** Body of `POST /api/quality-intelligence/runs`. */
 export interface QualityIntelligenceStartRunRequest {
@@ -368,6 +414,21 @@ export interface QualityIntelligenceRunStreamDone {
   readonly runId: string;
   readonly status: "succeeded" | "failed" | "cancelled";
   readonly totals: QualityIntelligenceUiRunTotals;
+  /**
+   * Redaction-safe reason for terminal failed runs AND for succeeded-but-degraded runs (see
+   * `degraded`). This mirrors the bounded reasonSummary emitted by stage/run failure events so
+   * clients that only inspect the terminal frame can still present an actionable message without
+   * exposing provider details.
+   */
+  readonly reasonSummary?: string;
+  /**
+   * True when the run completed (status "succeeded") but model generation/judging fell back to the
+   * deterministic baseline because the provider or parser failed. The run still produced usable
+   * baseline test cases, but the model output is absent — clients MUST surface this so a degraded
+   * run is never presented as an authoritative model-backed result (regulated-delivery audit). The
+   * redacted cause is carried in `reasonSummary`. Additive on the wire.
+   */
+  readonly degraded?: boolean;
 }
 
 export interface QualityIntelligenceRunStreamError {

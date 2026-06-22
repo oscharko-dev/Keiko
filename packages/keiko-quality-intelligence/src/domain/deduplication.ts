@@ -5,6 +5,7 @@
 // considered equivalent iff their canonical equivalence signature collides.
 // The signature is computed from
 //   * the NFKC-normalised + lower-cased + whitespace-collapsed title
+//   * the canonicalised precondition sequence (each entry normalised the same way)
 //   * the canonicalised step sequence (each step normalised the same way)
 //   * the canonicalised expected-result sequence
 //   * the priority and risk-class fields
@@ -23,12 +24,14 @@
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
-import { normaliseText } from "./assertions.js";
+import { normaliseCandidateText } from "./assertions.js";
 
 const collapseWhitespace = (value: string): string => value.replace(/\s+/gu, " ").trim();
 
+// Use normaliseCandidateText (NFKC + bidi/zero-width strip + trim) so that two candidates
+// differing only by injected bidi or zero-width spoofing chars produce the same signature.
 const canonicaliseLine = (value: string): string =>
-  collapseWhitespace(normaliseText(value).toLowerCase());
+  collapseWhitespace(normaliseCandidateText(value).toLowerCase());
 
 const canonicaliseSequence = (values: readonly string[]): readonly string[] => {
   const out: string[] = [];
@@ -63,6 +66,7 @@ export const computeCandidateEquivalenceSignature = (
   const projection = JSON.stringify({
     v: "1",
     title: canonicaliseLine(candidate.title),
+    preconditions: canonicaliseSequence(candidate.preconditions),
     steps: canonicaliseSequence(candidate.steps),
     expectedResults: canonicaliseSequence(candidate.expectedResults),
     priority: candidate.priority,

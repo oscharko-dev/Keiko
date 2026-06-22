@@ -2,15 +2,29 @@
 
 import {
   useCallback,
+  useEffect,
+  useRef,
+  useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
 } from "react";
+import type {
+  QualityIntelligenceFigmaSnapshotSource,
+  QualityIntelligenceImageSource,
+} from "@oscharko-dev/keiko-contracts";
 import { Icons, type IconName } from "../Icons";
+import {
+  acquireGrabbingBodyStyle,
+  isInteractiveControlTarget,
+  isPrimaryActivationPointer,
+  isWindowDragPointer,
+} from "../interactionGuards";
 import { hasConnectablePeer, subText } from "./connectionUtils";
-import { CHAT_MINI_W, CHAT_MINI_H, WIN_TYPES, type WindowType } from "./WindowsRegistry";
+import { CHAT_MINI_W, WIN_TYPES, type WindowType } from "./WindowsRegistry";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 
@@ -26,6 +40,9 @@ const MIN_W_FALLBACK = 240;
 const MIN_H_FALLBACK = 150;
 const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
+const HEADER_CONTROL_GUTTER_PX = 210;
+const HEADER_ZOOM_MIN_WIDTH_PX = 340;
+const AUTO_GROW_EPSILON_PX = 8;
 
 interface WindowFrameProps {
   readonly win: AppWindow;
@@ -74,12 +91,21 @@ function clampContentZoom(z: number): number {
   return Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, Math.round(z * 10) / 10));
 }
 
+function shouldMaximizeFromHeaderDoubleClick(event: ReactMouseEvent<HTMLElement>): boolean {
+  const target = event.target;
+  if (target instanceof Element && target.closest("button,[role='button']") !== null) return false;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const controlGutter = Math.min(HEADER_CONTROL_GUTTER_PX, rect.width / 2);
+  return event.clientX < rect.right - controlGutter;
+}
+
 interface BodySelection {
   readonly mode: "full" | "mini" | "tiny";
   readonly node: ReactNode;
 }
 
 function selectBody(
+  windowId: string,
   type: WindowType,
   ew: number,
   eh: number,
@@ -90,22 +116,38 @@ function selectBody(
   linkedCapsuleIds: readonly string[],
   linkedCapsuleSetIds: readonly string[],
   linkedFigmaSnapshotRunIds: readonly string[],
-  updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void,
-  openWindow: (type: WindowType, cfg?: Record<string, string | number | boolean>) => string | null,
+  linkedFigmaSnapshotSources: readonly QualityIntelligenceFigmaSnapshotSource[] | undefined,
+  linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined,
+  updateCfg: (patch: AppWindow["cfg"]) => void,
+  openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null,
 ): BodySelection {
   const def = WIN_TYPES[type];
   if (type === "chat") {
-    const mini = ew < CHAT_MINI_W || eh < CHAT_MINI_H;
+    const compact = ew < 640;
+    const barCompact = ew < 520;
+    const minimalChat = ew < 360 || eh < 320;
+    const footerControlsCompact = ew < 520;
+    const controlsNarrow = footerControlsCompact;
+    const workflowCompact = footerControlsCompact;
+    const mini = ew < CHAT_MINI_W;
     return {
       mode: mini ? "mini" : "full",
       node: def.render(cfg, {
+        windowId,
         mini,
+        minimalChat,
+        compact,
+        controlsNarrow,
+        barCompact,
+        workflowCompact,
         linkedRoot,
         linkedFilePath,
         linkedRoots,
         linkedCapsuleIds,
         linkedCapsuleSetIds,
         linkedFigmaSnapshotRunIds,
+        linkedFigmaSnapshotSources,
+        linkedImageSources,
         updateCfg,
         openWindow,
       }),
@@ -117,16 +159,27 @@ function selectBody(
   return {
     mode: "full",
     node: def.render(cfg, {
+      windowId,
       linkedRoot,
       linkedFilePath,
       linkedRoots,
       linkedCapsuleIds,
       linkedCapsuleSetIds,
       linkedFigmaSnapshotRunIds,
+      linkedFigmaSnapshotSources,
+      linkedImageSources,
       updateCfg,
       openWindow,
     }),
   };
+}
+
+function shouldAutoGrowWindow(type: WindowType, cfg: Record<string, unknown>): boolean {
+  return (
+    type === "figmaView" &&
+    typeof cfg["selectedScreenIdsJson"] === "string" &&
+    cfg["selectedScreenIdsJson"].length > 0
+  );
 }
 
 interface DragGeometry {
@@ -181,7 +234,12 @@ interface DragSession {
   readonly W: number;
 }
 
-function attachDragListeners(api: WorkspaceApi, geo: DragGeometry, session: DragSession): void {
+function attachDragListeners(
+  api: WorkspaceApi,
+  geo: DragGeometry,
+  session: DragSession,
+  onDragEnd?: (() => void) | undefined,
+): void {
   const threshold = SNAP / geo.z;
   const move = (ev: PointerEvent): void => {
     const px = geo.toWX(ev.clientX);
@@ -196,15 +254,19 @@ function attachDragListeners(api: WorkspaceApi, geo: DragGeometry, session: Drag
   const up = (): void => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
     api.commitSnap(session.winId);
-    document.body.style.cursor = "";
+    releaseBodyStyle();
+    onDragEnd?.();
   };
   // Audit C362 — the move listeners run on window without pointer capture, so a
   // fast drag leaves the header and the cursor flickered to default/text over
-  // other surfaces. Pin the grabbing cursor globally for the gesture (up() resets).
-  document.body.style.cursor = "grabbing";
+  // other surfaces. Pin the grabbing cursor globally for the gesture via the shared ref-counted
+  // helper so a concurrent pan/drag does not clobber the restore order (up() releases).
+  const releaseBodyStyle = acquireGrabbingBodyStyle();
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 function resizeCursor(dir: Handle): string {
@@ -219,6 +281,10 @@ interface ResizeStart {
   readonly y: number;
   readonly w: number;
   readonly h: number;
+}
+
+function sameResizeGeometry(a: ResizeStart, b: ResizeStart): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
 function applyResizeDelta(
@@ -264,40 +330,48 @@ export function WindowFrame({
   const def = WIN_TYPES[win.type];
   const canStartConnection = hasConnectablePeer(win.type);
   const Icon = Icons[def.icon];
+  const [draggingWindow, setDraggingWindow] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const zoom = win.zoom ?? 1;
-  const linkedRoot =
-    win.type === "chat" || win.type === "agents" || win.type === "quality"
-      ? api.linkedFilesRoot(win.id)
-      : null;
-  const linkedFilePath =
-    win.type === "agents" || win.type === "quality"
-      ? api.linkedFilesContext(win.id)?.activeFilePath
-      : undefined;
+  const receivesFilesContext =
+    win.type === "chat" || win.type === "agents" || win.type === "quality" || win.type === "editor";
+  const receivesFocusedFileContext =
+    win.type === "agents" || win.type === "quality" || win.type === "editor";
+  const receivesConnectorContext = win.type === "quality" || win.type === "editor";
+  const linkedRoot = receivesFilesContext ? api.linkedFilesRoot(win.id) : null;
+  const linkedFilePath = receivesFocusedFileContext
+    ? api.linkedFilesContext(win.id)?.activeFilePath
+    : undefined;
   const linkedRoots =
     win.type === "quality"
       ? api.linkedAllFilesRoots(win.id)
       : linkedRoot !== null
         ? [linkedRoot]
         : [];
-  const linkedCapsuleIds = win.type === "quality" ? api.linkedConnectorCapsuleIds(win.id) : [];
-  const linkedCapsuleSetIds =
-    win.type === "quality" ? api.linkedConnectorCapsuleSetIds(win.id) : [];
+  const linkedCapsuleIds = receivesConnectorContext ? api.linkedConnectorCapsuleIds(win.id) : [];
+  const linkedCapsuleSetIds = receivesConnectorContext
+    ? api.linkedConnectorCapsuleSetIds(win.id)
+    : [];
   const linkedFigmaSnapshotRunIds =
     win.type === "quality" ? api.linkedFigmaSnapshotRunIds(win.id) : [];
+  const linkedFigmaSnapshotSources =
+    win.type === "quality" ? api.linkedFigmaSnapshotSources?.(win.id) : undefined;
+  const linkedImageSources = win.type === "quality" ? api.linkedImageSources?.(win.id) : undefined;
   const ew = win.w / zoom;
   const eh = win.h / zoom;
   const updateCfg = useCallback(
-    (patch: Record<string, string | number | boolean | undefined>): void => {
+    (patch: AppWindow["cfg"]): void => {
       api.update(win.id, { cfg: { ...win.cfg, ...patch } });
     },
     [api, win.cfg, win.id],
   );
   const openWindow = useCallback(
-    (type: WindowType, cfg?: Record<string, string | number | boolean>): string | null =>
-      api.add(type, cfg),
+    (type: WindowType, cfg?: AppWindow["cfg"]): string | null => api.add(type, cfg),
     [api],
   );
   const { mode: bodyMode, node: body } = selectBody(
+    win.id,
     win.type,
     ew,
     eh,
@@ -308,6 +382,8 @@ export function WindowFrame({
     linkedCapsuleIds,
     linkedCapsuleSetIds,
     linkedFigmaSnapshotRunIds,
+    linkedFigmaSnapshotSources,
+    linkedImageSources,
     updateCfg,
     openWindow,
   );
@@ -317,16 +393,72 @@ export function WindowFrame({
     [api, win.id],
   );
 
+  useEffect(() => {
+    if (!shouldAutoGrowWindow(win.type, win.cfg) || win.max || bodyMode !== "full") return;
+    const body = bodyRef.current;
+    if (body === null) return;
+    let frame: number | null = null;
+    const measure = (): void => {
+      frame = null;
+      const overflow = body.scrollHeight - body.clientHeight;
+      if (overflow <= AUTO_GROW_EPSILON_PX) return;
+      const nextHeight = Math.ceil(win.h + overflow);
+      if (nextHeight <= win.h + AUTO_GROW_EPSILON_PX) return;
+      api.update(win.id, { h: nextHeight });
+    };
+    const schedule = (): void => {
+      if (frame !== null) return;
+      frame =
+        typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame(measure)
+          : window.setTimeout(measure, 0);
+    };
+    schedule();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(schedule) : null;
+    observer?.observe(body);
+    const firstChild = body.firstElementChild;
+    if (firstChild !== null) observer?.observe(firstChild);
+    return () => {
+      if (frame !== null) {
+        if (typeof window.cancelAnimationFrame === "function") {
+          window.cancelAnimationFrame(frame);
+        } else {
+          window.clearTimeout(frame);
+        }
+      }
+      observer?.disconnect();
+    };
+  }, [api, bodyMode, win.cfg, win.h, win.id, win.max, win.type]);
+
+  useEffect(
+    () => () => {
+      resizeCleanupRef.current?.();
+      resizeCleanupRef.current = null;
+    },
+    [],
+  );
+
+  const focusWindowForTarget = useCallback(
+    (target: EventTarget | null): void => {
+      if (isInteractiveControlTarget(target)) {
+        window.setTimeout(() => api.focus(win.id), 0);
+        return;
+      }
+      api.focus(win.id);
+    },
+    [api, win.id],
+  );
+
   const onHeaderPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLElement>): void => {
-      if (e.button !== 0) return;
+      if (!isWindowDragPointer(e)) return;
       // When this window is a valid drop target for an in-flight connect, the
       // bubbling onPointerDown on <section> below confirms the link — don't
       // also start a header-drag, which would tear the window away from the
       // user's cursor mid-click.
       if (connState === "valid") return;
       e.preventDefault();
-      api.focus(win.id);
+      focusWindowForTarget(e.target);
       const el = wsRef.current;
       if (el === null) return;
       const rect = el.getBoundingClientRect();
@@ -337,35 +469,75 @@ export function WindowFrame({
       const offX = wasMax ? restoredW / 2 : geo.toWX(e.clientX) - win.x;
       const offY = wasMax ? 18 : geo.toWY(e.clientY) - win.y;
       if (wasMax) api.update(win.id, { max: false, w: restoredW, h: restoredH });
-      attachDragListeners(api, geo, { winId: win.id, offX, offY, W: restoredW });
+      setDraggingWindow(true);
+      attachDragListeners(api, geo, { winId: win.id, offX, offY, W: restoredW }, () =>
+        setDraggingWindow(false),
+      );
     },
-    [api, win.id, win.x, win.y, win.w, win.h, win.max, win.prev, view, wsRef, connState],
+    [
+      api,
+      win.id,
+      win.x,
+      win.y,
+      win.w,
+      win.h,
+      win.max,
+      win.prev,
+      view,
+      wsRef,
+      connState,
+      focusWindowForTarget,
+    ],
   );
 
   const startResize = useCallback(
     (dir: Handle) =>
       (e: ReactPointerEvent<HTMLDivElement>): void => {
+        if (!isPrimaryActivationPointer(e)) return;
         e.preventDefault();
         e.stopPropagation();
+        resizeCleanupRef.current?.();
+        resizeCleanupRef.current = null;
         api.focus(win.id);
         const start: ResizeStart = { x: win.x, y: win.y, w: win.w, h: win.h };
+        let last = start;
         const sx = e.clientX;
         const sy = e.clientY;
         const z = view.zoom;
+        const previousCursor = document.body.style.cursor;
+        let active = true;
+        const cleanup = (): void => {
+          if (!active) return;
+          active = false;
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", end);
+          window.removeEventListener("pointercancel", end);
+          window.removeEventListener("blur", end);
+          document.body.style.cursor = previousCursor;
+          if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
+        };
+        const end = (): void => {
+          cleanup();
+        };
         const move = (ev: PointerEvent): void => {
+          if (!active) return;
+          if (ev.buttons === 0) {
+            cleanup();
+            return;
+          }
           const dx = (ev.clientX - sx) / z;
           const dy = (ev.clientY - sy) / z;
           const next = applyResizeDelta(start, dir, dx, dy, win.type);
+          if (sameResizeGeometry(last, next)) return;
+          last = next;
           api.update(win.id, { ...next, max: false });
-        };
-        const up = (): void => {
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", up);
-          document.body.style.cursor = "";
         };
         document.body.style.cursor = resizeCursor(dir);
         window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", up);
+        window.addEventListener("pointerup", end);
+        window.addEventListener("pointercancel", end);
+        window.addEventListener("blur", end);
+        resizeCleanupRef.current = cleanup;
       },
     [api, win.id, win.x, win.y, win.w, win.h, win.type, view.zoom],
   );
@@ -374,8 +546,8 @@ export function WindowFrame({
   // (focus + drag) cannot race with the port-initiated connect handshake.
   const startPortConnect = useCallback(
     (
-      target: HTMLDivElement,
-      event: ReactPointerEvent<HTMLDivElement> | ReactKeyboardEvent<HTMLDivElement>,
+      target: HTMLButtonElement,
+      event: ReactPointerEvent<HTMLButtonElement> | ReactKeyboardEvent<HTMLButtonElement>,
     ): void => {
       const rect = target.getBoundingClientRect();
       api.startConnect(win.id, {
@@ -389,7 +561,8 @@ export function WindowFrame({
   );
 
   const onPortPointerDown = useCallback(
-    (e: ReactPointerEvent<HTMLDivElement>): void => {
+    (e: ReactPointerEvent<HTMLButtonElement>): void => {
+      if (!isPrimaryActivationPointer(e)) return;
       e.preventDefault();
       e.stopPropagation();
       startPortConnect(e.currentTarget, e);
@@ -398,7 +571,7 @@ export function WindowFrame({
   );
 
   const onPortKeyDown = useCallback(
-    (e: ReactKeyboardEvent<HTMLDivElement>): void => {
+    (e: ReactKeyboardEvent<HTMLButtonElement>): void => {
       if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
       // Keyboard completion of click-to-connect (WCAG 2.1.1, audit C004):
       // when this window is a valid target of an in-flight connect, Enter or
@@ -435,7 +608,18 @@ export function WindowFrame({
     });
   }, [api, win.id]);
 
+  const minimizeWithFocusRestore = useCallback((): void => {
+    api.minimize(win.id);
+    requestAnimationFrame(() => {
+      const next =
+        document.querySelector<HTMLElement>('.window[data-top="true"]') ??
+        document.querySelector<HTMLElement>(".ws-fab");
+      next?.focus({ preventScroll: true });
+    });
+  }, [api, win.id]);
+
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
+  const showHeaderZoom = bodyMode === "full" && ew >= HEADER_ZOOM_MIN_WIDTH_PX;
   const bodyStyle: CSSProperties = bodyMode === "tiny" ? {} : { zoom };
   const sectionStyle: CSSProperties = {
     left: win.x,
@@ -456,12 +640,13 @@ export function WindowFrame({
       data-top={top ? "true" : "false"}
       data-max={win.max ? "true" : "false"}
       data-conn={connState ?? undefined}
+      data-dragging={draggingWindow ? "true" : undefined}
       data-window-id={win.id}
       style={sectionStyle}
       tabIndex={-1}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
-        api.focus(win.id);
+        focusWindowForTarget(e.target);
       }}
       // Audit C061 / WCAG 2.4.11 — tabbing into a lower, overlapped window must
       // raise it, or the focused control (and its focus ring) stays fully hidden
@@ -469,7 +654,7 @@ export function WindowFrame({
       // The !top guard matters: makeFocus bumps z unconditionally, so without it
       // every Tab step inside the top window would trigger a state update.
       onFocusCapture={() => {
-        if (!top) api.focus(win.id);
+        if (!top) window.setTimeout(() => api.focus(win.id), 0);
       }}
     >
       {/* Header is a drag surface; keyboard equivalent is ⌘+Arrows handled by useKeyboardCtrls. */}
@@ -477,7 +662,9 @@ export function WindowFrame({
       <header
         className="win-head"
         onPointerDown={onHeaderPointerDown}
-        onDoubleClick={() => api.maximize(win.id)}
+        onDoubleClick={(e) => {
+          if (shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
+        }}
       >
         <span
           className="win-ico"
@@ -490,7 +677,7 @@ export function WindowFrame({
             path/URL reachable for mouse users. */}
         {sub !== null ? (
           <span className="win-sub mono" title={sub}>
-            {sub}
+            <span className="win-sub-text">{sub}</span>
           </span>
         ) : null}
         <span className="spacer" />
@@ -498,62 +685,94 @@ export function WindowFrame({
             several windows open, screen-reader and voice-control users could not
             tell WHICH window a Close/Zoom/Connect control acts on (WCAG 2.4.6).
             def.title scopes each label; the visible chrome is unchanged. */}
-        <div className="win-zoom">
+        {showHeaderZoom ? (
+          <div className="win-zoom">
+            <button
+              type="button"
+              className="win-zbtn ui-tip"
+              data-tip="Zoom content out"
+              aria-label={`Zoom ${def.title} content out`}
+              disabled={zoom <= CONTENT_MIN_ZOOM}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+              }}
+              onClick={() => setZoom(zoom - 0.1)}
+            >
+              <Icons.zoomOut size={13} />
+            </button>
+            <button
+              type="button"
+              className="win-zpct ui-tip"
+              data-tip="Reset content zoom to 100%"
+              aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+              }}
+              onClick={() => api.update(win.id, { zoom: 1 })}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              className="win-zbtn ui-tip"
+              data-tip="Zoom content in"
+              aria-label={`Zoom ${def.title} content in`}
+              disabled={zoom >= CONTENT_MAX_ZOOM}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+              }}
+              onClick={() => setZoom(zoom + 0.1)}
+            >
+              <Icons.zoomIn size={13} />
+            </button>
+          </div>
+        ) : null}
+        <div className="win-traffic" role="group" aria-label={`${def.title} window controls`}>
           <button
             type="button"
-            className="win-zbtn"
-            title="Zoom content out"
-            aria-label={`Zoom ${def.title} content out`}
-            disabled={zoom <= CONTENT_MIN_ZOOM}
+            className="win-traffic-btn win-traffic-minimize ui-tip"
+            data-tip="Minimize"
+            aria-label={`Minimize ${def.title} window`}
             onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => setZoom(zoom - 0.1)}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+            }}
+            onClick={minimizeWithFocusRestore}
           >
-            <Icons.zoomOut size={13} />
+            <Icons.minimize size={17} />
           </button>
           <button
             type="button"
-            className="win-zpct"
-            title="Reset content zoom to 100%"
-            aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
+            className="win-traffic-btn win-traffic-maximize ui-tip"
+            data-tip={win.max ? "Restore" : "Full screen"}
+            aria-label={win.max ? `Restore ${def.title} window` : `Full screen ${def.title} window`}
             onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => api.update(win.id, { zoom: 1 })}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+            }}
+            onClick={() => api.maximize(win.id)}
           >
-            {Math.round(zoom * 100)}%
+            {win.max ? <Icons.restore size={17} /> : <Icons.maximize size={17} />}
           </button>
           <button
             type="button"
-            className="win-zbtn"
-            title="Zoom content in"
-            aria-label={`Zoom ${def.title} content in`}
-            disabled={zoom >= CONTENT_MAX_ZOOM}
+            className="win-traffic-btn win-traffic-close ui-tip"
+            data-tip="Close"
+            aria-label={`Close ${def.title} window`}
             onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => setZoom(zoom + 0.1)}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+            }}
+            onClick={closeWithFocusRestore}
           >
-            <Icons.zoomIn size={13} />
+            <Icons.close size={17} />
           </button>
         </div>
-        <button
-          type="button"
-          className="win-btn"
-          title={win.max ? "Restore" : "Maximize"}
-          aria-label={win.max ? `Restore ${def.title} window` : `Maximize ${def.title} window`}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => api.maximize(win.id)}
-        >
-          {win.max ? <Icons.restore size={13} /> : <Icons.maximize size={13} />}
-        </button>
-        <button
-          type="button"
-          className="win-btn win-close"
-          title="Close"
-          aria-label={`Close ${def.title} window`}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={closeWithFocusRestore}
-        >
-          <Icons.close size={14} />
-        </button>
       </header>
-      <div className="win-body" data-mode={bodyMode} style={bodyStyle}>
+      <div ref={bodyRef} className="win-body" data-mode={bodyMode} style={bodyStyle}>
         {body}
       </div>
       {!win.max
@@ -563,13 +782,12 @@ export function WindowFrame({
         : null}
       {!win.max && canStartConnection
         ? PORTS.map((d: Port) => (
-            <div
+            <button
               key={`p${d}`}
+              type="button"
               className={`win-port wp-${d}`}
               title="Click to connect to another window"
               aria-label={`Connect ${def.title} from ${d === "t" ? "top" : d === "r" ? "right" : d === "b" ? "bottom" : "left"} edge`}
-              role="button"
-              tabIndex={0}
               onPointerDown={onPortPointerDown}
               onKeyDown={onPortKeyDown}
             />

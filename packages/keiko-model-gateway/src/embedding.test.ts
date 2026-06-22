@@ -8,9 +8,11 @@ import {
 } from "./embedding.js";
 import {
   requestOpenAIEmbedding,
+  requestOpenAIEmbeddingBatch,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "./openai-embedding-adapter.js";
+import { OutboundHttpEgressError } from "./http.js";
 
 const SECRET_API_KEY = ["sk-", "test-keiko-embedding-1234567890abcdef"].join("");
 const PROVIDER_ENDPOINT = "https://internal.example.invalid/v1";
@@ -187,6 +189,19 @@ describe("verifyEmbeddingCapability", () => {
     }
   });
 
+  it("maps outbound egress adapter outcomes to distinct safe reasons", async () => {
+    const result = await verifyEmbeddingCapability(
+      adapterReturning({ ok: false, kind: "proxy-blocked-by-policy" }),
+      PROBE,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("proxy-blocked-by-policy");
+      expect(result.safeMessage).toContain("proxy");
+      assertSafeMessage(result.safeMessage);
+    }
+  });
+
   it("maps invalid-response adapter outcomes to invalid-response", async () => {
     const result = await verifyEmbeddingCapability(
       adapterReturning({ ok: false, kind: "invalid-response" }),
@@ -262,6 +277,11 @@ describe("verifyEmbeddingCapability", () => {
       "unsupported-model",
       "timeout",
       "transport",
+      "proxy-unreachable",
+      "proxy-auth-required",
+      "proxy-egress-failed",
+      "proxy-blocked-by-policy",
+      "tls-ca-failure",
       "invalid-response",
     ] as const;
     const results = await Promise.all(
@@ -517,6 +537,23 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     if (!outcome.ok) expect(outcome.kind).toBe("invalid-response");
   });
 
+  it("classifies outbound egress transport errors distinctly", async () => {
+    const fetchImpl = mockFetch(() =>
+      Promise.reject(
+        new OutboundHttpEgressError("TLS_CA_FAILURE", "custom CA secret was not trusted"),
+      ),
+    );
+    const outcome = await requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      input: "ping",
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("tls-ca-failure");
+  });
+
   it("returns 'cancelled' when the caller's signal aborts (#192 Copilot)", async () => {
     const controller = new AbortController();
     const fetchImpl = mockFetch(
@@ -542,5 +579,251 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     const outcome = await promise;
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.kind).toBe("cancelled");
+  });
+});
+
+describe("requestOpenAIEmbeddingBatch (array transport, #189 GRD-004)", () => {
+  type NarrowFetch = (url: string, init?: RequestInit) => Promise<Response>;
+  function mockFetch(
+    handler: (url: string, init: RequestInit) => Promise<Response> | Response,
+  ): typeof fetch {
+    const f: NarrowFetch = async (url, init) => handler(url, init ?? {});
+    return f as unknown as typeof fetch;
+  }
+  function arrayBody(items: { index: number; embedding: readonly number[] }[]): string {
+    return JSON.stringify({ data: items, model: "text-embedding-3-large" });
+  }
+
+  it("posts an array `input` and maps data[i].embedding back to value[i] in order", async () => {
+    let sentBody: unknown = null;
+    const fetchImpl = mockFetch((_url, init) => {
+      sentBody = JSON.parse(init.body as string);
+      return new Response(
+        arrayBody([
+          { index: 0, embedding: [1, 0, 0] },
+          { index: 1, embedding: [0, 1, 0] },
+          { index: 2, embedding: [0, 0, 1] },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "text-embedding-3-large",
+      inputs: ["a", "b", "c"],
+      fetchImpl,
+    });
+    expect((sentBody as { input: unknown }).input).toEqual(["a", "b", "c"]);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.map((v) => Array.from(v.vector))).toEqual([
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+      ]);
+    }
+  });
+
+  it("re-aligns by declared `index` even when the provider returns items out of order", async () => {
+    const fetchImpl = mockFetch(
+      () =>
+        new Response(
+          arrayBody([
+            { index: 2, embedding: [3, 3, 3] },
+            { index: 0, embedding: [1, 1, 1] },
+            { index: 1, embedding: [2, 2, 2] },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["x", "y", "z"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.map((v) => v.vector[0])).toEqual([1, 2, 3]);
+    }
+  });
+
+  it("rejects a response whose data length does not match inputs (invalid-response)", async () => {
+    const fetchImpl = mockFetch(
+      () =>
+        new Response(arrayBody([{ index: 0, embedding: [1, 2, 3] }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["a", "b"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("invalid-response");
+  });
+
+  it("rejects a duplicate / out-of-range index (invalid-response)", async () => {
+    const fetchImpl = mockFetch(
+      () =>
+        new Response(
+          arrayBody([
+            { index: 0, embedding: [1, 1] },
+            { index: 0, embedding: [2, 2] },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["a", "b"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("invalid-response");
+  });
+
+  it("returns an empty result without issuing a request for empty inputs", async () => {
+    let called = 0;
+    const fetchImpl = mockFetch(() => {
+      called += 1;
+      return new Response("{}", { status: 200 });
+    });
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: [],
+      fetchImpl,
+    });
+    expect(called).toBe(0);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.value).toEqual([]);
+  });
+
+  it("classifies HTTP status (429 → rate-limited)", async () => {
+    const fetchImpl = mockFetch(() => new Response("", { status: 429 }));
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["a"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("rate-limited");
+  });
+});
+
+describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () => {
+  type NarrowFetch = (url: string, init?: RequestInit) => Promise<Response>;
+  function mockFetch(
+    handler: (url: string, init: RequestInit) => Promise<Response> | Response,
+  ): typeof fetch {
+    const f: NarrowFetch = async (url, init) => handler(url, init ?? {});
+    return f as unknown as typeof fetch;
+  }
+  function ok(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("uses a custom apiKeyHeaderName and forwards the caller signal", async () => {
+    let header: string | null = null;
+    let hadSignal = false;
+    const fetchImpl = mockFetch((_url, init) => {
+      header = (init.headers as Record<string, string>)["api-key"] ?? null;
+      hadSignal = init.signal != null;
+      return ok({ data: [{ index: 0, embedding: [1, 2] }] });
+    });
+    const out = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "raw-key",
+      apiKeyHeaderName: "api-key",
+      modelId: "m",
+      inputs: ["a"],
+      signal: new AbortController().signal,
+      fetchImpl,
+    });
+    expect(out.ok).toBe(true);
+    expect(header).toBe("raw-key");
+    expect(hadSignal).toBe(true);
+  });
+
+  it("resolves modelId per item, then top-level model, then the request modelId", async () => {
+    // item-level model wins
+    const a = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      fetchImpl: mockFetch(() => ok({ data: [{ index: 0, embedding: [1], model: "item-model" }] })),
+    });
+    expect(a.ok && a.value[0]?.modelId).toBe("item-model");
+    // top-level model when no item model
+    const b = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      fetchImpl: mockFetch(() => ok({ model: "top-model", data: [{ index: 0, embedding: [1] }] })),
+    });
+    expect(b.ok && b.value[0]?.modelId).toBe("top-model");
+    // request modelId when neither present
+    const c = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      fetchImpl: mockFetch(() => ok({ data: [{ index: 0, embedding: [1] }] })),
+    });
+    expect(c.ok && c.value[0]?.modelId).toBe("req-model");
+  });
+
+  it("carries model_revision when the payload provides one", async () => {
+    const out = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+      fetchImpl: mockFetch(() => ok({ model_revision: "rev-9", data: [{ index: 0, embedding: [1] }] })),
+    });
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.value[0]?.modelRevision).toBe("rev-9");
+  });
+
+  it("rejects a non-record data item, a missing index, and a non-array embedding", async () => {
+    for (const data of [[42], [{ embedding: [1] }], [{ index: 0, embedding: "nope" }]]) {
+      const out = await requestOpenAIEmbeddingBatch({
+        endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+        fetchImpl: mockFetch(() => ok({ data })),
+      });
+      expect(out.ok).toBe(false);
+      if (!out.ok) expect(out.kind).toBe("invalid-response");
+    }
+  });
+
+  it("rejects when the payload is not an object or has no data array", async () => {
+    for (const body of ["[]", JSON.stringify({ data: "x" })]) {
+      const out = await requestOpenAIEmbeddingBatch({
+        endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+        fetchImpl: mockFetch(() => new Response(body, { status: 200, headers: { "content-type": "application/json" } })),
+      });
+      expect(out.ok).toBe(false);
+      if (!out.ok) expect(out.kind).toBe("invalid-response");
+    }
+  });
+
+  it("maps a transport failure and a 500 status to error kinds", async () => {
+    const thrown = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+      fetchImpl: mockFetch(() => { throw new Error("socket hang up"); }),
+    });
+    expect(thrown.ok).toBe(false);
+    if (!thrown.ok) expect(thrown.kind).toBe("transport");
+    const server = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+      fetchImpl: mockFetch(() => new Response("", { status: 500 })),
+    });
+    expect(server.ok).toBe(false);
+    if (!server.ok) expect(server.kind).toBe("transport");
   });
 });

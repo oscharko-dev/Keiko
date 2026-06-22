@@ -37,6 +37,34 @@ const buildSubject = (candidate: QualityIntelligenceTestCaseCandidate): string =
   return `Subject/${candidate.riskClass}`;
 };
 
+// Build the ALM rows for a single candidate. One row per (step, expected) pair — the row count is
+// the longer of `steps`/`expectedResults` so a trailing expected result is never dropped (Issue
+// #283); a candidate with neither yields one empty-step row.
+function almRowsFor(candidate: QualityIntelligenceTestCaseCandidate): string {
+  const head: readonly string[] = [
+    candidate.title,
+    buildDescription(candidate),
+    "MANUAL",
+    ALM_DESIGNER,
+    buildSubject(candidate),
+  ];
+  const rowCount = Math.max(candidate.steps.length, candidate.expectedResults.length);
+  if (rowCount === 0) {
+    return encodeSpreadsheetSafeRow([...head, "", "", ""]);
+  }
+  let rows = "";
+  for (let i = 0; i < rowCount; i += 1) {
+    const stepName = i < candidate.steps.length ? `Step ${String(i + 1)}` : "";
+    rows += encodeSpreadsheetSafeRow([
+      ...head,
+      stepName,
+      candidate.steps[i] ?? "",
+      candidate.expectedResults[i] ?? "",
+    ]);
+  }
+  return rows;
+}
+
 export function adaptToAlm(
   bundle: QualityIntelligenceExportBundle,
   candidates: readonly QualityIntelligenceTestCaseCandidate[],
@@ -53,36 +81,8 @@ export function adaptToAlm(
   let body = encodeSpreadsheetSafeRow(ALM_CSV_HEADERS);
   for (const id of sortedIds) {
     const candidate = byId.get(id);
-    if (candidate === undefined) {
-      continue;
-    }
-    if (candidate.steps.length === 0) {
-      body += encodeSpreadsheetSafeRow([
-        candidate.title,
-        buildDescription(candidate),
-        "MANUAL",
-        ALM_DESIGNER,
-        buildSubject(candidate),
-        "",
-        "",
-        "",
-      ]);
-      continue;
-    }
-    for (let i = 0; i < candidate.steps.length; i += 1) {
-      const stepName = `Step ${String(i + 1)}`;
-      const stepDescription = candidate.steps[i] ?? "";
-      const expected = candidate.expectedResults[i] ?? "";
-      body += encodeSpreadsheetSafeRow([
-        candidate.title,
-        buildDescription(candidate),
-        "MANUAL",
-        ALM_DESIGNER,
-        buildSubject(candidate),
-        stepName,
-        stepDescription,
-        expected,
-      ]);
+    if (candidate !== undefined) {
+      body += almRowsFor(candidate);
     }
   }
   return body;

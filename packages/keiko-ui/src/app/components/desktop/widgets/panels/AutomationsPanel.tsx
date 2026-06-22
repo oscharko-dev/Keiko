@@ -47,7 +47,11 @@ export function AutomationsPanel(): ReactNode {
     setState((prev) => {
       const next = { ...prev, [id]: !(prev[id] ?? false) };
       if (typeof window !== "undefined") {
-        localStorage.setItem(STORE_KEY, JSON.stringify(next));
+        try {
+          localStorage.setItem(STORE_KEY, JSON.stringify(next));
+        } catch {
+          // Keep the in-memory toggle responsive when storage is unavailable.
+        }
       }
       return next;
     });

@@ -2,25 +2,38 @@ name: CI
 
 on:
   push:
-    branches: [dev]
+    branches:
+      - dev
+      - feat/keiko-editor
+      - feat/prompt-enhancer-1307
+      - "release/**"
   pull_request:
-    branches: [dev]
+    branches:
+      - dev
+      - feat/keiko-editor
+      - feat/prompt-enhancer-1307
+      - "release/**"
+  workflow_dispatch:
 
 permissions: {}
 
 jobs:
-  main-dev-gate:
-    name: Only dev may merge to main
+  protected-branch-gate:
+    name: Protected branch gate
     runs-on: ubuntu-latest
     permissions: {}
     steps:
       - name: Confirm dev branch gate
         run: |
-          if [ "${{ github.ref }}" != "refs/heads/dev" ] && [ "${{ github.base_ref }}" != "dev" ]; then
-            echo "This gate is only valid for the protected dev branch."
-            exit 1
-          fi
-          echo "Protected dev branch gate satisfied."
+          case "${{ github.ref }}:${{ github.base_ref }}" in
+            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:feat/prompt-enhancer-1307 | *:release/*)
+              echo "Protected or integration branch gate satisfied."
+              ;;
+            *)
+              echo "This gate is only valid for protected dev, integration, and release branches."
+              exit 1
+              ;;
+          esac
 
   ci:
     runs-on: ubuntu-latest
@@ -33,6 +46,24 @@ jobs:
           node-version: "22.x"
           cache: "npm"
       - run: npm ci
+      - name: Install sandbox isolation backend (bubblewrap)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap (and the
+          # unshare fallback) need them to create the network namespace. Relax it for the runner so
+          # the enforced-egress proof below actually exercises the isolation boundary (ADR-0043).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Enforced sandbox egress proof (ADR-0043 / #1202)
+        # NOT gated by the feat/keiko-editor branch skip: the assured pre-filter executes untrusted
+        # model-generated code, so the deny-by-default egress boundary must be proven on every run.
+        # The egress test fails the job if an outbound connection from inside network:"none" succeeds.
+        run: npm --workspace @oscharko-dev/keiko-sandbox test
+      - name: Verify Keiko Editor package
+        run: |
+          npm --workspace @oscharko-dev/keiko-editor run build
+          npm --workspace @oscharko-dev/keiko-editor run typecheck
+          npm --workspace @oscharko-dev/keiko-editor test
       - run: npm run typecheck
       - run: npm run check:version-consistency
       - run: npm run lint
@@ -40,7 +71,20 @@ jobs:
       - run: npm run arch:check:negative
       - name: Quality Intelligence supply-chain gate
         run: npm run check:qi-supply-chain
-      - run: npm test
+      - name: Keiko Editor static-export bundle gate
+        run: |
+          npm run build:ui
+          npm run check:editor-bundle-size -- --require-static-export
+      - name: Package surface and installable smoke
+        run: |
+          npm run build
+          npm run prepare:bin
+          npm run prune:package-native-optionals
+          npm run check:package-surface
+          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1 npm run smoke:install
+      - name: Coverage quality gates
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run test:coverage:quality
 
   actionlint:
     name: actionlint
@@ -81,6 +125,9 @@ jobs:
 
   build-scan-sbom-smoke:
     name: Build, scan, SBOM, smoke
+    # Keep early feature-branch PRs fast. These release/package gates still run on merges to
+    # feat/keiko-editor, on dev/release PRs, and on manual workflow_dispatch runs.
+    if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -133,6 +180,49 @@ jobs:
           path: sbom/
           retention-days: 90
 
+  cross-platform-smoke:
+    name: Cross-platform smoke (${{ matrix.os }})
+    if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+    # Issue #284 AC4: the packed Keiko artifact must work on macOS, Windows, and Linux via the
+    # normal start path. Linux is already exercised by `build-scan-sbom-smoke`; this job runs the
+    # same installable-package smoke (pack -> install -> CLI -> packaged `keiko ui` -> health,
+    # launch project, QI runs read route, home shell) on Windows and macOS so AC4 portability is
+    # EXECUTED, not only portable by construction. Intentionally NOT a required/gating check yet —
+    # the `ci` job remains the merge gate; promote this to a required check once it has proven
+    # stable across several runs (native optional deps + the Next static export are the parts most
+    # likely to need per-OS attention). fail-fast:false so one OS result never masks the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.x"
+          cache: "npm"
+      - run: npm ci
+      - name: Build
+        run: npm run build
+      # Two separate steps (not one multi-line run): on the Windows runner the default shell is
+      # PowerShell, which only surfaces the exit code of the LAST line of a multi-line `run`; as
+      # discrete steps each command's failure fails the job on every OS.
+      - name: Prepare packaged CLI
+        run: npm run prepare:bin
+      - name: Build UI (static export)
+        run: npm run build:ui
+      - name: Installable-package smoke (Issue #169 AC2 / #284 AC4 cross-platform)
+        env:
+          # Pack the dist already built by the steps above instead of re-running the Linux-oriented
+          # `prepack` publish gate (arch-check / package-surface / supply-chain shell out to npx/npm
+          # in ways that are not Windows-portable — a separate concern from artifact portability).
+          # The gating `build-scan-sbom-smoke` job keeps the full prepack pack on Linux.
+          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
+        run: npm run smoke:install
+
   ui:
     name: ui
     runs-on: ubuntu-latest
@@ -157,18 +247,30 @@ jobs:
       - name: Build UI (static export)
         run: npm run build --workspace @oscharko-dev/keiko-ui
       - name: Generate UI CycloneDX SBOM
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui > ui-sbom.cdx.json
-      - name: Test UI (jsdom + axe a11y)
-        run: npm run test --workspace @oscharko-dev/keiko-ui
+      - name: Test UI with coverage (jsdom + axe a11y)
+        run: npm run test:coverage:ui
+      - name: UI coverage ratchet
+        run: npm run check:coverage:ui
+      - name: Install Playwright browser
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npx playwright install --with-deps chromium
+      - name: Release smoke E2E
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run test:e2e:smoke
       - name: Build package and UI assets
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: |
           npm run build
           npm run prepare:bin
           npm run build:ui
           npm run prune:package-native-optionals
       - name: Verify package surface
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run check:package-surface
       - name: Smoke - keiko ui serves /api/health
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: |
           set -euo pipefail
           node dist/cli/index.js ui --port 4399 &
@@ -178,6 +280,7 @@ jobs:
           echo "health: $body"
           echo "$body" | grep -q '"status":"ok"'
       - name: Upload UI SBOM
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ui-sbom-cyclonedx

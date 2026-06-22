@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
+import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
 import {
@@ -24,9 +25,18 @@ import {
   normalizeDiscoveryPayload,
   smokeTestCandidates,
 } from "./gateway-setup.js";
+import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
 import type { RouteContext } from "./routes.js";
 
 const tmpDirs: string[] = [];
+
+// Issue #1320: pin both local vaults (provider credentials + Figma PAT) to the explicit env-key tier
+// so tests never touch the real macOS keychain — deterministic, side-effect-free, and identical on
+// CI (Linux keyfile tier) and developer machines. The values are throwaway 32-byte base64 keys.
+const VAULT_ENV: Readonly<Record<string, string>> = {
+  KEIKO_PROVIDER_CREDENTIALS_KEY: Buffer.alloc(32, 0x21).toString("base64"),
+  KEIKO_FIGMA_KEY: Buffer.alloc(32, 0x42).toString("base64"),
+};
 
 afterEach(() => {
   for (const dir of tmpDirs.splice(0)) {
@@ -54,6 +64,13 @@ function fetchInputUrl(url: Parameters<typeof fetch>[0]): string {
   return url instanceof URL ? url.href : url.url;
 }
 
+// Reads the first provider's resolved apiKey from the in-memory runtime config (Issue #1320 keeps the
+// real credential live in memory while the persisted file holds only a reference). Extracted so the
+// optional-chain access does not inflate the calling test's cyclomatic complexity.
+function firstProviderApiKey(deps: Parameters<typeof currentGatewayConfig>[0]): string | undefined {
+  return currentGatewayConfig(deps)?.providers[0]?.apiKey;
+}
+
 describe("handleGatewaySetup", () => {
   it("tests, stores, and activates a local gateway config without returning secrets", async () => {
     const uiDir = await tempDir("keiko-gw-ui-");
@@ -64,7 +81,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () =>
         Promise.resolve([
@@ -89,16 +106,274 @@ describe("handleGatewaySetup", () => {
     expect(savedPath).toBeDefined();
     expect(existsSync(savedPath ?? "")).toBe(true);
     const saved = readFileSync(savedPath ?? "", "utf8");
-    expect(saved).toContain("example-secret-token");
+    // Issue #1320: the persisted config holds only non-secret metadata + a stable secret reference.
+    expect(saved).not.toContain("example-secret-token");
+    expect(saved).toContain("apiKeySecretRef");
+    expect(saved).toContain("cred:example-chat-model-large");
     expect(saved).toContain("example-chat-model-large");
     expect(saved).not.toContain("example-chat-model-fast");
     expect(saved).not.toContain("example-vision-model");
+    // The credential lives in the encrypted vault next to the config — sealed, never plaintext.
+    const vaultStore = readFileSync(
+      join(uiDir, "credentials", "provider-credentials.vault"),
+      "utf8",
+    );
+    expect(vaultStore).not.toContain("example-secret-token");
+    expect(vaultStore).toContain("cred:example-chat-model-large");
+    // The in-memory runtime config still carries the real, resolved credential for live calls.
+    expect(firstProviderApiKey(deps)).toBe("example-secret-token");
     expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
     expect(JSON.stringify(result.body)).not.toContain("https://llm-gateway.example.com");
     if (process.platform !== "win32") {
       expect(statSync(savedPath ?? "").mode & 0o777).toBe(0o600);
       expect(statSync(savedPath ?? "").ino).not.toBe(initialStat.ino);
     }
+    deps.store.close();
+  });
+
+  it("stores an optional Figma PAT submitted through browser gateway setup", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-figma-");
+    const evidenceDir = await tempDir("keiko-gw-ev-figma-");
+    const figmaSmokeCalls: { readonly token: string; readonly egress: unknown }[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+      figmaCredentialTester: (token, egress) => {
+        figmaSmokeCalls.push({ token, egress });
+        return Promise.resolve();
+      },
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        figmaAccessToken: " figd_setup-config-token ",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(figmaSmokeCalls).toEqual([{ token: "figd_setup-config-token", egress: undefined }]);
+    expect(currentGatewayConfig(deps)?.figma?.accessToken).toBe("figd_setup-config-token");
+    expect(JSON.stringify(result.body)).not.toContain("figd_setup-config-token");
+    const savedPath = deps.gatewayConfig?.storagePath;
+    expect(savedPath).toBeDefined();
+    // Issue #1320: the PAT is routed into the encrypted Figma token vault, never written to JSON.
+    expect(readFileSync(savedPath ?? "", "utf8")).not.toContain("figd_setup-config-token");
+    const figmaVault = readFileSync(join(evidenceDir, "figma", "figma-token.vault"), "utf8");
+    expect(figmaVault).not.toContain("figd_setup-config-token");
+    expect(figmaVault.startsWith("kv1.")).toBe(true);
+    deps.store.close();
+  });
+
+  it("smoke-tests submitted Figma PATs with the default /v1/me request before saving", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-figma-default-smoke-");
+    const evidenceDir = await tempDir("keiko-gw-ev-figma-default-smoke-");
+    const originalFetch = globalThis.fetch;
+    const seen: { readonly url: string; readonly token: string | null }[] = [];
+    const fakeFetch: typeof fetch = (url, init) => {
+      const href = fetchInputUrl(url);
+      const headers = new Headers(init?.headers);
+      seen.push({ url: href, token: headers.get("x-figma-token") });
+      return Promise.resolve(
+        new Response(JSON.stringify({ id: "figma-user", email: "user@example.invalid" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm-gateway.example.com",
+          apiKey: "example-secret-token",
+          figmaAccessToken: "figd_default-smoke-token",
+        }),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      expect(seen).toEqual([
+        { url: "https://api.figma.com/v1/me", token: "figd_default-smoke-token" },
+      ]);
+      expect(currentGatewayConfig(deps)?.figma?.accessToken).toBe("figd_default-smoke-token");
+      expect(JSON.stringify(result.body)).not.toContain("figd_default-smoke-token");
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
+  it("updates only the optional Figma PAT while preserving existing gateway credentials", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-figma-update-");
+    const evidenceDir = await tempDir("keiko-gw-ev-figma-update-");
+    let smokeCalls = 0;
+    const figmaSmokeCalls: string[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => {
+        smokeCalls += 1;
+        return Promise.resolve([modelIds[0] ?? "example-chat-model"]);
+      },
+      figmaCredentialTester: (token) => {
+        figmaSmokeCalls.push(token);
+        return Promise.resolve();
+      },
+    });
+
+    const first = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+    expect(smokeCalls).toBe(1);
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, figmaAccessToken: " figd_updated-config-token " }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    expect(smokeCalls).toBe(1);
+    expect(figmaSmokeCalls).toEqual(["figd_updated-config-token"]);
+    const config = currentGatewayConfig(deps);
+    expect(config?.providers[0]?.baseUrl).toBe("https://llm-gateway.example.com");
+    expect(config?.providers[0]?.apiKey).toBe("example-secret-token");
+    expect(config?.figma?.accessToken).toBe("figd_updated-config-token");
+    expect(JSON.stringify(updated.body)).not.toContain("figd_updated-config-token");
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    // Issue #1320: preserve-existing re-persists only references — never the plaintext credential
+    // or the Figma PAT, which is routed into the encrypted token vault.
+    expect(saved).not.toContain("example-secret-token");
+    expect(saved).not.toContain("figd_updated-config-token");
+    expect(saved).toContain("apiKeySecretRef");
+    const figmaVault = readFileSync(join(evidenceDir, "figma", "figma-token.vault"), "utf8");
+    expect(figmaVault).not.toContain("figd_updated-config-token");
+    expect(figmaVault.startsWith("kv1.")).toBe(true);
+    deps.store.close();
+  });
+
+  it("rejects an invalid Figma PAT update without overwriting the stored gateway config", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-figma-invalid-");
+    const evidenceDir = await tempDir("keiko-gw-ev-figma-invalid-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+      figmaCredentialTester: () => Promise.reject(new FigmaConnectorError("FIGMA_TOKEN_INVALID")),
+    });
+
+    const first = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+    const savedBefore = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, figmaAccessToken: "figd_invalid-config-token" }),
+      deps,
+    );
+
+    expect(updated.status).toBe(400);
+    expect(JSON.stringify(updated.body)).toContain("FIGMA_TOKEN_INVALID");
+    expect(JSON.stringify(updated.body)).not.toContain("figd_invalid-config-token");
+    expect(currentGatewayConfig(deps)?.figma?.accessToken).toBeUndefined();
+    expect(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")).toBe(savedBefore);
+    deps.store.close();
+  });
+
+  it("stores selected image-input capabilities only for tested model ids", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-image-input-");
+    const evidenceDir = await tempDir("keiko-gw-ev-image-input-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        imageInputModelIds: " vision-chat \n vision-chat ",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+      readonly providers: readonly {
+        readonly modelId: string;
+        readonly capability: { readonly supportsImageInput: boolean };
+      }[];
+    };
+    expect(
+      saved.providers.map((provider) => ({
+        modelId: provider.modelId,
+        supportsImageInput: provider.capability.supportsImageInput,
+      })),
+    ).toEqual([
+      { modelId: "text-chat", supportsImageInput: false },
+      { modelId: "vision-chat", supportsImageInput: true },
+    ]);
+    expect(JSON.stringify(result.body)).toContain('"supportsImageInput":true');
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    deps.store.close();
+  });
+
+  it("does not store image-input capability claims for models that fail setup testing", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-image-input-fail-");
+    const evidenceDir = await tempDir("keiko-gw-ev-image-input-fail-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
+      gatewaySetupTester: () => Promise.resolve(["text-chat"]),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        imageInputModelIds: ["vision-chat"],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(502);
+    expect(deps.gatewayConfig?.present()).toBe(false);
+    expect(existsSync(deps.gatewayConfig?.storagePath ?? "")).toBe(false);
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
     deps.store.close();
   });
 
@@ -144,6 +419,58 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("passes config-file-only egress to discovery and smoke tests without configured providers", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-file-egress-");
+    const evidenceDir = await tempDir("keiko-gw-ev-file-egress-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        egress: {
+          httpsProxy: "http://proxy.config.internal.example:8443",
+          noProxy: "localhost,.corp.example",
+          caBundlePath: "/etc/keiko/config-ca.pem",
+        },
+      }),
+      "utf8",
+    );
+    let discoveryEgress: unknown;
+    let testerEgress: unknown;
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: (_baseUrl, _apiKey, _apiKeyHeaderName, egress) => {
+        discoveryEgress = egress;
+        return Promise.resolve(["example-chat-model"]);
+      },
+      gatewaySetupTester: (config, modelIds) => {
+        testerEgress = config.egress;
+        return Promise.resolve(modelIds);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    const expectedEgress = {
+      httpsProxy: "http://proxy.config.internal.example:8443/",
+      noProxy: ["localhost", ".corp.example"],
+      caBundlePath: "/etc/keiko/config-ca.pem",
+    };
+    expect(result.status).toBe(200);
+    expect(deps.config).toBeUndefined();
+    expect(discoveryEgress).toEqual(expectedEgress);
+    expect(testerEgress).toEqual(expectedEgress);
+    expect(currentGatewayConfig(deps)?.egress).toEqual(expectedEgress);
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    expect(saved).not.toContain("proxy.config.internal.example");
+    expect(saved).not.toContain("config-ca.pem");
+    expect(saved).not.toContain("egress");
+    deps.store.close();
+  });
+
   it("rejects a symlinked final gateway config target", async () => {
     const uiDir = await tempDir("keiko-gw-ui-link-target-");
     const evidenceDir = await tempDir("keiko-gw-ev-link-target-");
@@ -154,7 +481,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (_config, modelIds) =>
@@ -180,7 +507,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(workspaceDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (_config, modelIds) =>
@@ -206,7 +533,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (config, modelIds) => {
@@ -234,7 +561,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: () => Promise.reject(new Error("provider rejected credentials")),
@@ -257,7 +584,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
@@ -282,7 +609,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
@@ -300,7 +627,7 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("uses supplied deployment names instead of Azure model catalog discovery", async () => {
+  it("preserves Azure embedding deployments for Knowledge Connector", async () => {
     const uiDir = await tempDir("keiko-gw-ui-azure-deployments-");
     const evidenceDir = await tempDir("keiko-gw-ev-azure-deployments-");
     const originalFetch = globalThis.fetch;
@@ -336,7 +663,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -354,12 +681,110 @@ describe("handleGatewaySetup", () => {
         "phi-4",
         "gpt-oss-120b",
       ]);
-      expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
+      const config = currentGatewayConfig(deps);
+      expect(config?.providers.map((provider) => provider.modelId)).toEqual([
         "phi-4",
         "gpt-oss-120b",
+        "text-embedding-3-large",
       ]);
+      expect(selectEmbeddingModelId(config)).toBe("text-embedding-3-large");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
-      expect(saved).not.toContain("text-embedding-3-large");
+      expect(saved).toContain("text-embedding-3-large");
+      expect(saved).toContain('"kind": "embedding"');
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
+  it("normalizes Foundry project URLs and stores only Keiko-compatible chat deployments", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-azure-project-url-");
+    const evidenceDir = await tempDir("keiko-gw-ev-azure-project-url-");
+    const originalFetch = globalThis.fetch;
+    const seen: {
+      readonly url: string;
+      readonly model: string | undefined;
+      readonly firstRole: string | undefined;
+    }[] = [];
+    const fakeFetch: typeof fetch = (url, init) => {
+      const href = fetchInputUrl(url);
+      expect(href).not.toContain("api/projects/proj-oscharko-dev");
+      if (init?.body !== undefined && typeof init.body !== "string") {
+        throw new Error("expected JSON string request body");
+      }
+      const body = JSON.parse(init?.body ?? "{}") as {
+        readonly model?: string;
+        readonly messages?: readonly { readonly role?: string }[];
+      };
+      seen.push({ url: href, model: body.model, firstRole: body.messages?.[0]?.role });
+      if (body.model === "Mistral-Large-3" || body.model === "text-embedding-3-large") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ error: { message: "not Keiko conversation compatible" } }),
+            {
+              status: 400,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 32, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://workspace.example.services.ai.azure.com/api/projects/proj-oscharko-dev",
+          apiKey: "example-secret-token",
+          deploymentNames: ["Mistral-Large-3", "gpt-5.4", "text-embedding-3-large"],
+          imageInputModelIds: ["gpt-5.4"],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(seen.map((call) => call.model)).toEqual([
+        "Mistral-Large-3",
+        "gpt-5.4",
+        "text-embedding-3-large",
+      ]);
+      expect(seen.every((call) => call.firstRole === "system")).toBe(true);
+      expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
+        "gpt-5.4",
+      ]);
+      expect((result.body as { skippedModelIds?: readonly string[] }).skippedModelIds).toEqual([
+        "Mistral-Large-3",
+      ]);
+      const config = currentGatewayConfig(deps);
+      expect(config?.providers.map((provider) => provider.modelId)).toEqual([
+        "gpt-5.4",
+        "text-embedding-3-large",
+      ]);
+      expect(config?.providers.every((provider) => provider.baseUrl.endsWith("/openai/v1"))).toBe(
+        true,
+      );
+      const gptCapability = config?.capabilities?.find((capability) => capability.id === "gpt-5.4");
+      expect(gptCapability?.kind).toBe("chat");
+      expect(gptCapability?.supportsImageInput).toBe(true);
+      expect(selectEmbeddingModelId(config)).toBe("text-embedding-3-large");
+      const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+      expect(saved).not.toContain("Mistral-Large-3");
+      expect(saved).toContain("gpt-5.4");
+      expect(saved).toContain("text-embedding-3-large");
+      expect(saved).toContain('"kind": "embedding"');
     } finally {
       globalThis.fetch = originalFetch;
       deps.store.close();
@@ -418,7 +843,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -502,7 +927,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -538,7 +963,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
@@ -563,7 +988,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
@@ -589,7 +1014,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
@@ -614,7 +1039,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
@@ -685,7 +1110,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {

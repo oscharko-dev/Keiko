@@ -49,7 +49,11 @@ export function adaptToXray(
     if (candidate === undefined) {
       continue;
     }
-    if (candidate.steps.length === 0) {
+    // `steps` and `expectedResults` are independent arrays with no co-length contract invariant, so
+    // the row count is the longer of the two — bounding the loop by `steps.length` alone would
+    // silently drop trailing expected results (and ALL of them when there are zero steps).
+    const rowCount = Math.max(candidate.steps.length, candidate.expectedResults.length);
+    if (rowCount === 0) {
       body += encodeSpreadsheetSafeRow([
         candidate.id,
         candidate.title,
@@ -61,7 +65,7 @@ export function adaptToXray(
       ]);
       continue;
     }
-    for (let i = 0; i < candidate.steps.length; i += 1) {
+    for (let i = 0; i < rowCount; i += 1) {
       const action = candidate.steps[i] ?? "";
       const result = candidate.expectedResults[i] ?? "";
       body += encodeSpreadsheetSafeRow([

@@ -75,6 +75,43 @@ describe("validateCandidates", () => {
     expect(defect?.severity).toBe("medium");
   });
 
+  it("detects a step repeat even when one copy has an injected bidi char (U+200E LRM)", () => {
+    // canonicaliseLine uses normaliseCandidateText which strips bidi chars before comparison.
+    // Without the fix (normaliseText instead of normaliseCandidateText), the two steps
+    // would appear distinct and the repeat would not be caught.
+    const findings = validateCandidates(RUN_ID, [
+      baseCandidate({
+        steps: [
+          "Open login page",
+          "Open‎ login page", // U+200E LEFT-TO-RIGHT MARK injected — canonically identical after strip
+          "Submit",
+        ],
+      }),
+    ]);
+    const repeatDefect = findings.find(
+      (f) => f.kind === "logic-defect" && f.summary.includes("repeat"),
+    );
+    expect(repeatDefect).toBeDefined();
+  });
+
+  it("does not flag a repeated action after a context-changing step", () => {
+    const findings = validateCandidates(RUN_ID, [
+      baseCandidate({
+        steps: [
+          "Enter amount 500 EUR",
+          "Submit",
+          "Reset the form for a second boundary check",
+          "Enter amount 80,000 EUR",
+          "Submit",
+        ],
+      }),
+    ]);
+    const repeatDefect = findings.find(
+      (f) => f.kind === "logic-defect" && f.summary.includes("repeat"),
+    );
+    expect(repeatDefect).toBeUndefined();
+  });
+
   // ─── Contradiction XOR parity — true-positive (strengthen existing test) ──
 
   it("emits a MEDIUM semantic-defect on a trivial precondition-vs-result contradiction", () => {

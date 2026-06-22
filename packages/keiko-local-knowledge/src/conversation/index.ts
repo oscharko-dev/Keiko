@@ -5,8 +5,6 @@
 
 export { runGroundedAnswer, type GroundedAnswerDependencies } from "./grounded-answer-runner.js";
 
-export { ScriptedAnswerGenerator, buildScriptedAnswer } from "./scripted-answer-generator.js";
-
 export {
   ModelGatewayAnswerGenerator,
   AnswerGroundingRejectedError,

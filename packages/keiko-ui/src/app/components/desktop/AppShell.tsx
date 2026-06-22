@@ -51,11 +51,26 @@ import type { AppWindow } from "./windows/types";
 import { InstallBanner } from "./install/InstallBanner";
 import { registerSw } from "./install/registerSw";
 
+const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
+
+function clearAppBootRecoveryReloadMarker(): void {
+  try {
+    window.sessionStorage.removeItem(APP_BOOT_RECOVERY_RELOAD_KEY);
+  } catch {
+    // Session storage can be blocked; successful mount should still proceed.
+  }
+}
+
 function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
   if (wins === null || wins.length === 0) return null;
-  let best = wins[0] as AppWindow;
-  for (let i = 1; i < wins.length; i++) {
+  let best: AppWindow | null = null;
+  for (let i = 0; i < wins.length; i++) {
     const next = wins[i] as AppWindow;
+    if (next.minimized === true) continue;
+    if (best === null) {
+      best = next;
+      continue;
+    }
     if (next.z > best.z) best = next;
   }
   return best;
@@ -149,33 +164,102 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-const CARD_TYPES: readonly WindowType[] = [
-  "chat",
-  "connector",
-  // Epic #750 #756 — the Figma Snapshot window was registered (WindowsRegistry + render + TYPE_ORDER)
-  // but omitted here, so it never appeared in the New-Window palette or the "New …" command list,
-  // i.e. a user could not open it at all (an unreachable surface). Listed here (ordered as in
-  // TYPE_ORDER) so it is launchable like every other card.
-  "figma",
-  "files",
-  "editor",
-  "browser",
-  "terminal",
-  "review",
-  "agents",
-  "integ",
-];
+function normalizeComparablePath(path: string): string {
+  return path.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
+}
+
+function editorRelativePath(root: string, file: string): string | null {
+  const normalizedRoot = normalizeComparablePath(root);
+  const normalizedFile = normalizeComparablePath(file);
+  if (normalizedFile.length === 0) return "";
+  if (normalizedRoot.length === 0) {
+    return /^\/+$/u.test(root.trim().replace(/\\/gu, "/"))
+      ? normalizedFile.replace(/^\/+/u, "")
+      : "";
+  }
+  const rootCmp = normalizedRoot.toLowerCase();
+  const fileCmp = normalizedFile.toLowerCase();
+  if (fileCmp === rootCmp) return "";
+  if (fileCmp.startsWith(`${rootCmp}/`)) {
+    return normalizedFile.slice(normalizedRoot.length + 1).replace(/^\/+/u, "");
+  }
+  return null;
+}
+
+function isAbsoluteEditorPath(path: string): boolean {
+  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/u.test(path);
+}
+
+function normalizeEditorCfgPath(root: string, path: string): string | null {
+  const raw = path.trim();
+  if (raw.length === 0) return "";
+  const relative = editorRelativePath(root, raw);
+  if (relative !== null) return relative;
+  return isAbsoluteEditorPath(raw) ? null : raw.replace(/\\/gu, "/").replace(/^\/+/u, "");
+}
+
+function normalizeEditorOpenFiles(
+  root: string,
+  openFiles: unknown,
+  activeFile: string,
+): readonly string[] {
+  const out: string[] = [];
+  const add = (path: string): void => {
+    const relative = normalizeEditorCfgPath(root, path);
+    if (relative === null || relative.length === 0 || out.includes(relative)) return;
+    out.push(relative);
+  };
+  if (Array.isArray(openFiles)) {
+    for (const item of openFiles) {
+      if (typeof item === "string") add(item);
+    }
+  }
+  if (activeFile.length > 0) add(activeFile);
+  return out;
+}
+
+export function normalizeEditorWindowCfg(cfg: Cfg): Cfg {
+  const root = typeof cfg.root === "string" ? cfg.root.trim() : "";
+  const file = typeof cfg.file === "string" ? cfg.file.trim() : "";
+  if (root.length === 0) return cfg;
+  const relativeFile = editorRelativePath(root, file);
+  const next: Cfg = { ...cfg, root };
+  const normalizedOpenFiles = normalizeEditorOpenFiles(
+    root,
+    cfg.openFiles,
+    relativeFile !== null ? relativeFile : file,
+  );
+  if (relativeFile === null) {
+    if (file.length > 0) next.file = file;
+    if (normalizedOpenFiles.length > 0) {
+      next.openFiles = normalizedOpenFiles;
+    } else {
+      delete next.openFiles;
+    }
+    return next;
+  }
+  if (relativeFile.length > 0) {
+    next.file = relativeFile;
+  } else {
+    delete next.file;
+  }
+  if (normalizedOpenFiles.length > 0) {
+    next.openFiles = normalizedOpenFiles;
+  } else {
+    delete next.openFiles;
+  }
+  return next;
+}
+
+const CARD_TYPES: readonly WindowType[] = ["chat", "connector", "files", "editor", "agents"];
 const TOOL_TYPES: readonly WindowType[] = [
-  // uiux-fix F008 C222 — keiko, settings, quality and relationships are registered tool windows
-  // with LeftRail buttons but were missing here, so the command palette could not open them
-  // (same forgotten-WindowType pattern as #756/"figma" in CARD_TYPES above). Ordered as in
-  // the WindowsRegistry declaration.
+  // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
+  // with rail buttons but were missing here, so the command palette could not open them
+  // (same forgotten-WindowType pattern as the Figma Snapshot manager). Ordered as in the
+  // WindowsRegistry declaration.
   "chatHistory",
-  "keiko",
+  "memoria",
   "settings",
-  "project",
-  "search",
-  "plugins",
   "automations",
   "mobile",
   "inspector",
@@ -183,7 +267,9 @@ const TOOL_TYPES: readonly WindowType[] = [
   "notifications",
   "resources",
   "localKnowledge",
+  "figma",
   "quality",
+  "promptEnhancer",
   "relationships",
 ];
 
@@ -472,6 +558,7 @@ function AppShellInner(): ReactNode {
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
   const [cmdkOpen, setCmdkOpen] = useState(false);
+  const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
 
   const winCount = ws.wins?.length ?? 0;
   const active = topWindow(ws.wins);
@@ -483,16 +570,15 @@ function AppShellInner(): ReactNode {
 
   const openPalette = useCallback((): void => setPalOpen(true), []);
   const closePalette = useCallback((): void => setPalOpen(false), []);
-  // uiux-fix F013 C023 — the header's window buttons act on the front (highest-z)
-  // window via the existing maximize toggle: expand maximizes a windowed front
-  // window, restore returns a maximized one to its previous geometry (the toggle's
-  // restore branch keeps w.prev intact). No-op when no window is open.
-  const onExpandFront = useCallback((): void => {
-    if (active !== null && !active.max) ws.api.maximize(active.id);
-  }, [active, ws.api]);
-  const onRestoreFront = useCallback((): void => {
-    if (active !== null && active.max) ws.api.maximize(active.id);
-  }, [active, ws.api]);
+  const toggleWindowPalette = useCallback((): void => setWindowPaletteOpen((open) => !open), []);
+  const closeWindowPalette = useCallback((): void => setWindowPaletteOpen(false), []);
+  const selectFooterWindow = useCallback(
+    (id: string): void => {
+      ws.api.restore(id);
+      setWindowPaletteOpen(false);
+    },
+    [ws.api],
+  );
   const pick = useCallback((type: WindowType): void => {
     setPalOpen(false);
     setPending(type);
@@ -505,7 +591,8 @@ function AppShellInner(): ReactNode {
       const current = pending;
       setPending(null);
       if (current === null) return;
-      const { __connectFilesId, ...windowCfg } = cfg;
+      const normalizedCfg = current === "editor" ? normalizeEditorWindowCfg(cfg) : cfg;
+      const { __connectFilesId, ...windowCfg } = normalizedCfg;
       const createdId = ws.api.add(current, windowCfg);
       if (
         current === "agents" &&
@@ -603,14 +690,26 @@ function AppShellInner(): ReactNode {
   useKeyboardShortcuts({ bindings: SHELL_SHORTCUT_BINDINGS, dispatch: dispatchShortcut });
 
   useEffect(() => {
-    const h = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
-        e.preventDefault();
-        setCmdkOpen((o) => !o);
-      }
+    const root = document.documentElement;
+    const setPointerModality = (): void => {
+      root.setAttribute("data-input-modality", "pointer");
     };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
+    const setKeyboardModality = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key !== "Tab") return;
+      root.setAttribute("data-input-modality", "keyboard");
+    };
+
+    root.setAttribute("data-input-modality", "pointer");
+    window.addEventListener("pointerdown", setPointerModality, true);
+    window.addEventListener("mousedown", setPointerModality, true);
+    window.addEventListener("keydown", setKeyboardModality, true);
+    return () => {
+      window.removeEventListener("pointerdown", setPointerModality, true);
+      window.removeEventListener("mousedown", setPointerModality, true);
+      window.removeEventListener("keydown", setKeyboardModality, true);
+      root.removeAttribute("data-input-modality");
+    };
   }, []);
 
   const commands = useMemo(
@@ -629,15 +728,6 @@ function AppShellInner(): ReactNode {
     projectAvailable,
     noEligibleModels: session.noEligibleModels,
   });
-  // uiux-fix F008 C043/C118 — the header pill mirrors the same session state as the footer
-  // (it used to be a hardcoded green "connected" that contradicted the footer during outages).
-  const headerStatusValue = headerStatus({
-    loading: session.loading,
-    error: session.error,
-    hasProject,
-    projectAvailable,
-    noEligibleModels: session.noEligibleModels,
-  });
   const footerEvidenceStatusLabel = evidenceStatusLabel(ws.wins);
   const branchLabel = branchLabelOrFallback(session.activeChat?.branchLabel);
 
@@ -649,31 +739,31 @@ function AppShellInner(): ReactNode {
     <ChatSessionProvider value={session}>
       <WsContext.Provider value={wsContextValue}>
         <div className="app">
+          {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
+              users past the header/rail straight to the workspace (design/accessibility.html §04). */}
+          <a className="skip-link" href="#main">
+            Skip to content
+          </a>
           {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
           <h1 className="visually-hidden">Keiko workspace</h1>
           <Header
-            mode={twin.mode}
-            projectName={projectName}
-            statusLabel={headerStatusValue.label}
-            statusTone={headerStatusValue.tone}
-            onModeChange={twin.setMode}
             openPalette={openPalette}
             openCommandPalette={openCmdk}
             onTileAll={ws.api.tileAll}
             onSplitFront={ws.api.splitFront}
             onCascade={ws.api.cascade}
-            onExpandFront={onExpandFront}
-            onRestoreFront={onRestoreFront}
           />
           <div className="mid">
-            <LeftRail
-              openTools={openTools}
-              onTool={onTool}
-              onNewChat={onNewChat}
-              theme={theme}
-              onToggleTheme={toggleTheme}
-            />
-            <div className="stage">
+            {needsGatewaySetup ? null : (
+              <LeftRail
+                openTools={openTools}
+                onTool={onTool}
+                onNewChat={onNewChat}
+                theme={theme}
+                onToggleTheme={toggleTheme}
+              />
+            )}
+            <div className="stage" id="main" tabIndex={-1}>
               <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
               {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
@@ -691,10 +781,15 @@ function AppShellInner(): ReactNode {
                 </div>
               )}
             </div>
-            <RightRail openTools={openTools} onTool={onTool} />
+            {needsGatewaySetup ? null : <RightRail openTools={openTools} onTool={onTool} />}
           </div>
           <Footer
             winCount={winCount}
+            windows={ws.wins ?? []}
+            windowPaletteOpen={windowPaletteOpen}
+            onToggleWindowPalette={toggleWindowPalette}
+            onSelectWindow={selectFooterWindow}
+            onCloseWindowPalette={closeWindowPalette}
             mode={twin.mode}
             selectedModel={session.selectedModel}
             projectName={projectName}
@@ -731,6 +826,7 @@ export function AppShell(): ReactNode {
   // swaps in the live shell after mount — eliminating every hydration mismatch at once.
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
+    clearAppBootRecoveryReloadMarker();
     setMounted(true);
   }, []);
   // Register the PWA service worker exactly once per client mount (issue #126, ADR-0024 D6).

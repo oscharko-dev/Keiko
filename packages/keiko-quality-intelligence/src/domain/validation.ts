@@ -7,7 +7,8 @@
 //
 // v1 covers four deterministic checks per candidate:
 //   1. schema-completeness — title/steps/expectedResults must be non-empty.
-//   2. step-acyclicity     — no canonical-line repeats in the step sequence.
+//   2. consecutive-step-repeat — an adjacent step must not canonically repeat the one before it
+//      (a context-changing step between two identical actions is allowed by design).
 //   3. expected-presence    — at least one expected result must be present.
 //   4. trivial-contradiction — a precondition and an expected result share the
 //      same negation-stripped core but have opposite negation parity (XOR):
@@ -22,14 +23,16 @@
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
-import { normaliseText } from "./assertions.js";
+import { normaliseCandidateText, normaliseText } from "./assertions.js";
 
 const NEGATION_PATTERN = /\b(not|never|no longer|cannot|isn't|aren't|won't|doesn't|do not)\b/iu;
 
 const collapseWhitespace = (value: string): string => value.replace(/\s+/gu, " ").trim();
 
+// Use normaliseCandidateText (NFKC + bidi/zero-width strip + trim) so that two candidates
+// differing only by injected bidi or zero-width spoofing chars produce the same equivalence key.
 const canonicaliseLine = (value: string): string =>
-  collapseWhitespace(normaliseText(value).toLowerCase());
+  collapseWhitespace(normaliseCandidateText(value).toLowerCase());
 
 const stripNegation = (value: string): string =>
   value.replace(NEGATION_PATTERN, " ").replace(/\s+/gu, " ").trim();
@@ -112,28 +115,28 @@ const checkExpectedResultsPresence = (
   return [];
 };
 
-const checkStepAcyclicity = (
+const checkConsecutiveStepRepeat = (
   runId: QualityIntelligence.QualityIntelligenceRunId,
   candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
 ): readonly QualityIntelligence.QualityIntelligenceValidationFinding[] => {
-  const seen = new Set<string>();
+  let previousCanonical = "";
   for (const step of candidate.steps) {
     const canonical = canonicaliseLine(step);
     if (canonical.length === 0) {
       continue;
     }
-    if (seen.has(canonical)) {
+    if (canonical === previousCanonical) {
       return [
         buildLogicDefect(
           runId,
           candidate,
           3,
           "medium",
-          "Candidate step sequence contains a canonical-line repeat.",
+          "Candidate step sequence contains a consecutive canonical-line repeat.",
         ),
       ];
     }
-    seen.add(canonical);
+    previousCanonical = canonical;
   }
   return [];
 };
@@ -195,7 +198,7 @@ export const validateCandidates = (
     for (const finding of checkExpectedResultsPresence(runId, candidate)) {
       out.push(finding);
     }
-    for (const finding of checkStepAcyclicity(runId, candidate)) {
+    for (const finding of checkConsecutiveStepRepeat(runId, candidate)) {
       out.push(finding);
     }
     for (const finding of checkTrivialContradictions(runId, candidate)) {

@@ -26,6 +26,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icons } from "./Icons";
+import KeikoSelect from "./KeikoSelect";
 import { CHAT_WORKFLOW_CATALOG, findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
 import type {
@@ -46,6 +47,7 @@ import type {
 
 export interface LaunchWorkflowButtonProps {
   readonly selectedModel: ModelCapability | undefined;
+  readonly compact?: boolean;
   readonly launch: (
     input: LaunchWorkflowFromConversationInput,
   ) => Promise<LaunchWorkflowFromConversationResult>;
@@ -53,6 +55,7 @@ export interface LaunchWorkflowButtonProps {
 
 export function LaunchWorkflowButton({
   selectedModel,
+  compact = false,
   launch,
 }: LaunchWorkflowButtonProps): ReactNode {
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -67,14 +70,15 @@ export function LaunchWorkflowButton({
       <button
         ref={triggerRef}
         type="button"
-        className="cmp-mode"
-        title="Launch a governed workflow with the current model"
+        className={`cmp-mode${compact ? " cmp-mode-compact" : " cmp-pill-standard"} ui-tip`}
+        aria-label="Launch workflow"
         aria-haspopup="dialog"
-        aria-expanded={pickerOpen}
+        data-tip={compact ? "Launch workflow" : undefined}
         onClick={() => setPickerOpen(true)}
       >
-        <Icons.spark size={14} style={{ color: "var(--accent)" }} /> Launch workflow
-        <Icons.chevron size={12} />
+        <Icons.spark size={compact ? 16 : 14} style={{ color: "var(--accent)" }} />
+        {compact ? <span className="sr-only">Launch workflow</span> : "Launch workflow"}
+        {compact ? null : <Icons.chevron size={12} />}
       </button>
       {pickerOpen ? (
         <WorkflowPickerDialog
@@ -121,11 +125,13 @@ function WorkflowPickerDialog({ modelId, launch, onClose }: WorkflowPickerDialog
   const dialogRef = useRef<HTMLDivElement>(null);
   const entry = workflowId === undefined ? undefined : findChatWorkflow(workflowId);
 
-  // Focus the dialog container on mount so screen-reader users land inside the modal. The first
-  // focusable child receives focus on tab.
+  // Focus the dialog container on mount AND on every step transition (list → form via a workflow
+  // choice, form → list via Back), so keyboard/screen-reader users land inside the new view instead
+  // of on <body> when the previously-focused choice/Back button unmounts (WCAG 2.4.3). The first
+  // focusable child receives focus on the next Tab.
   useEffect(() => {
     dialogRef.current?.focus();
-  }, []);
+  }, [workflowId]);
 
   // Close on Escape (WCAG 2.1.2) and trap Tab focus within the dialog (WH-03,
   // WCAG 2.1.2 "No Keyboard Trap" applied as a modal focus loop): Tab past the
@@ -419,6 +425,7 @@ export function LaunchGroundedWorkflowButton({
 }: LaunchGroundedWorkflowButtonProps): ReactNode {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const busyHintId = useId();
   if (
     answer === undefined ||
     answer.groundingKind !== "connected-context" ||
@@ -427,21 +434,34 @@ export function LaunchGroundedWorkflowButton({
   ) {
     return null;
   }
+  // WCAG 4.1.2: when a run is in flight the trigger stays in the tab order (aria-disabled, not the
+  // native `disabled` attribute) and points at an sr-only hint, so a keyboard/screen-reader user can
+  // reach it and hear WHY it is unavailable instead of a silent "dimmed" button. The onClick guard
+  // enforces the blocked state.
+  const isBusy = busy === true;
   return (
     <>
       <button
         ref={triggerRef}
         type="button"
-        className="cmp-mode"
-        title="Launch a governed workflow from this grounded answer"
+        className="cmp-mode ui-tip"
+        data-tip="Launch grounded workflow"
         aria-haspopup="dialog"
-        aria-expanded={open}
-        disabled={busy === true}
-        onClick={() => setOpen(true)}
+        aria-disabled={isBusy || undefined}
+        aria-describedby={isBusy ? busyHintId : undefined}
+        onClick={() => {
+          if (isBusy) return;
+          setOpen(true);
+        }}
       >
         <Icons.spark size={14} style={{ color: "var(--accent)" }} /> Launch grounded workflow
         <Icons.chevron size={12} />
       </button>
+      {isBusy ? (
+        <span className="sr-only" id={busyHintId}>
+          A run is in progress. Wait for it to complete before launching another grounded workflow.
+        </span>
+      ) : null}
       {open ? (
         <GroundedWorkflowDialog
           answer={answer}
@@ -486,9 +506,11 @@ function GroundedWorkflowDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>();
 
+  // Focus the dialog container on mount AND on every step transition (choice → form, Back → choice)
+  // so focus is never dropped onto <body> when the previously-focused control unmounts (WCAG 2.4.3).
   useEffect(() => {
     dialogRef.current?.focus();
-  }, []);
+  }, [workflowKind]);
 
   useEffect(() => {
     if (workflowKind !== undefined) {
@@ -606,20 +628,28 @@ function GroundedWorkflowDialog({
             <p className="wf-dialog-form-desc">{choice.description}</p>
             {workflowKind === "unit-test-generation" ? (
               <>
-                <label className="wf-dialog-field">
-                  Target mode
-                  <select
-                    className="wf-dialog-input mono"
+                <div className="wf-dialog-field">
+                  <span>Target mode</span>
+                  <KeikoSelect
+                    triggerClassName="wf-dialog-input mono"
                     value={unitTargetMode}
-                    onChange={(event) =>
-                      setUnitTargetMode(event.target.value as "file" | "module" | "changedFiles")
+                    ariaLabel="Target mode"
+                    menuTitle="Target mode"
+                    mono
+                    sections={[
+                      {
+                        options: [
+                          { value: "file", label: "File" },
+                          { value: "module", label: "Module" },
+                          { value: "changedFiles", label: "Changed files" },
+                        ],
+                      },
+                    ]}
+                    onValueChange={(next) =>
+                      setUnitTargetMode(next as "file" | "module" | "changedFiles")
                     }
-                  >
-                    <option value="file">File</option>
-                    <option value="module">Module</option>
-                    <option value="changedFiles">Changed files</option>
-                  </select>
-                </label>
+                  />
+                </div>
                 <label className="wf-dialog-field">
                   {unitTargetMode === "module"
                     ? "Module directory"
@@ -692,16 +722,28 @@ function GroundedWorkflowDialog({
               <legend>Expected checks</legend>
               <div className="wf-dialog-form" style={{ gap: 8 }}>
                 {GROUNDED_CHECK_CHOICES.map((check) => (
-                  <label
-                    key={check}
-                    className="wf-dialog-choice-desc"
-                    style={{ display: "flex", gap: 8 }}
-                  >
+                  // Issue #1298 — adopt the governed .c-check primitive. Presentation only:
+                  // the native <input> stays the control (role, checked state, onChange and the
+                  // accessible name from the trailing text span are unchanged); the .bx span is a
+                  // decorative, aria-hidden check glyph driven by the input's :checked state.
+                  <label key={check} className="c-check">
                     <input
                       type="checkbox"
                       checked={expectedChecks.includes(check)}
                       onChange={() => toggleCheck(check)}
                     />
+                    <span className="bx" aria-hidden="true">
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={3}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M5 12.5 L10 17.5 L19 6.5" />
+                      </svg>
+                    </span>
                     <span>{check}</span>
                   </label>
                 ))}
@@ -762,6 +804,7 @@ function GroundedWorkflowDialog({
 
 export interface RunSummaryCardProps {
   readonly message: ChatMessage;
+  readonly onOpenResult?: ((message: ChatMessage) => void) | undefined;
 }
 
 // A system message qualifies as a "run summary" when it carries a runId. Without one we keep
@@ -770,16 +813,32 @@ export function isRunSummaryMessage(message: ChatMessage): boolean {
   return message.role === "system" && typeof message.runId === "string";
 }
 
-export function RunSummaryCard({ message }: RunSummaryCardProps): ReactNode {
+export function RunSummaryCard({ message, onOpenResult }: RunSummaryCardProps): ReactNode {
   const status = message.workflowStatus ?? "queued";
   const workflowLabel = message.workflowId ?? message.taskType ?? "workflow";
   const runIdShort = message.runId === undefined ? "" : message.runId.slice(0, 8);
+  const evidenceHref =
+    message.runId === undefined ? undefined : `/api/evidence/${encodeURIComponent(message.runId)}`;
+
+  // WCAG 4.1.3: the card's aria-label changes when the run completes (running → succeeded/failed),
+  // but AT does not re-read a static container on re-render, so a screen-reader user never hears the
+  // run finish. An always-mounted polite live region carries the announcement. It stays EMPTY until
+  // the status actually changes after mount, so loading a chat log full of historical cards does not
+  // fire a burst of stale announcements (same gating idea as RunLauncher's progress region).
+  const [announcement, setAnnouncement] = useState("");
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    if (prevStatusRef.current !== status) {
+      prevStatusRef.current = status;
+      setAnnouncement(`Workflow ${workflowLabel}: ${status}`);
+    }
+  }, [status, workflowLabel]);
+
   return (
     <article
       className="run-summary-card"
       data-testid="run-summary-card"
       data-status={status}
-      role="group"
       aria-label={`Workflow run ${workflowLabel} — ${status}`}
     >
       <header className="run-summary-card-head">
@@ -806,7 +865,33 @@ export function RunSummaryCard({ message }: RunSummaryCardProps): ReactNode {
             </span>
           </p>
         ) : null}
+        {message.runId !== undefined ? (
+          <div className="run-summary-card-actions" aria-label="Workflow result actions">
+            {onOpenResult !== undefined ? (
+              <button
+                type="button"
+                className="run-summary-card-action"
+                onClick={() => onOpenResult(message)}
+              >
+                Open result
+              </button>
+            ) : null}
+            {evidenceHref !== undefined ? (
+              <a
+                className="run-summary-card-action run-summary-card-action-secondary"
+                href={evidenceHref}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Evidence
+              </a>
+            ) : null}
+          </div>
+        ) : null}
       </div>
+      <p className="sr-only" role="status" aria-live="polite" data-testid="run-summary-card-sr">
+        {announcement}
+      </p>
     </article>
   );
 }

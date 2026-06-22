@@ -55,6 +55,10 @@ const OMITTED_COUNTS_ZERO = {
   "redacted-only": 0,
   "budget-exhausted": 0,
   "tool-unavailable": 0,
+  "unsupported-format": 0,
+  "no-text-layer": 0,
+  "malformed-document": 0,
+  "encrypted-document": 0,
 } as const;
 
 function contextPack(
@@ -118,7 +122,9 @@ describe("GroundedAnswer", () => {
     // uiux-fix F012 C163: source-neutral wording — the panel also serves
     // capsule/connector-only chats where no repository is involved.
     render(<GroundedAnswer answer={undefined} busy={true} />);
-    expect(screen.getByText(/Searching connected sources/)).toBeInTheDocument();
+    const status = screen.getByRole("status");
+    expect(status).toHaveAttribute("aria-busy", "true");
+    expect(status).toHaveTextContent(/Searching connected sources/);
   });
 
   it("does not duplicate the assistant content (the persisted chat bubble is canonical)", () => {
@@ -143,6 +149,57 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
     expect(screen.getByText(/3 larger than 2 MB/)).toBeInTheDocument();
     expect(screen.getByText(/2 binary or an unsupported format/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Repository Search reads text, code, and small DOCX, XLSX, and text-layer PDF/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("surfaces skipped-document diagnostics in the coverage notice (Issue #1285)", () => {
+    const a = answer({
+      contextPack: contextPack({
+        omittedCounts: {
+          ...OMITTED_COUNTS_ZERO,
+          "no-text-layer": 1,
+          "encrypted-document": 1,
+          "unsupported-format": 2,
+          "malformed-document": 1,
+        },
+      }),
+    });
+    render(<GroundedAnswer answer={a} busy={false} />);
+    expect(screen.getByText(/Partial coverage/)).toBeInTheDocument();
+    expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
+    expect(screen.getByText(/1 a scanned document with no text layer/)).toBeInTheDocument();
+    expect(screen.getByText(/1 a password-protected document/)).toBeInTheDocument();
+    expect(screen.getByText(/2 an unsupported document format/)).toBeInTheDocument();
+    expect(screen.getByText(/1 a malformed document/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Repository Search reads text, code, and small DOCX, XLSX, and text-layer PDF/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("tags a document-evidence citation with its format badge (Issue #1285)", () => {
+    const a = answer({
+      citations: [
+        citation({
+          scopePath: "docs/report.docx",
+          lineRange: { startLine: 1, endLine: 4 },
+          documentFormat: "docx",
+          stableId: "atom-doc",
+        }),
+      ],
+    });
+    render(<GroundedAnswer answer={a} busy={false} />);
+    const badge = screen.getByText("DOCX");
+    const range = screen.getByText("docs/report.docx:1-4");
+    expect(badge).toBeInTheDocument();
+    expect(badge).not.toHaveAttribute("aria-hidden");
+    expect(screen.getByText(/document evidence extracted text/)).toHaveClass("sr-only");
+    expect(range).toHaveClass("grounded-citation-range");
   });
 
   it("does not warn about coverage when omissions are only relevance or noise filtering", () => {
@@ -493,6 +550,21 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText(/src\/hi-0\.ts/)).toBeInTheDocument();
   });
 
+  it("deduplicates folder citations by stable id before rendering", () => {
+    const citations = [
+      citation({ stableId: "dup", scopePath: "src/weak.ts", score: 0.1 }),
+      citation({ stableId: "dup", scopePath: "src/strong.ts", score: 0.9 }),
+      citation({ stableId: "unique", scopePath: "src/unique.ts", score: 0.5 }),
+    ];
+
+    const { container } = render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
+
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(2);
+    expect(screen.getByText(/src\/strong\.ts/)).toBeInTheDocument();
+    expect(screen.getByText(/src\/unique\.ts/)).toBeInTheDocument();
+    expect(screen.queryByText(/src\/weak\.ts/)).not.toBeInTheDocument();
+  });
+
   it("renders no disclosure button when the citation list is within the cap", () => {
     const citations = Array.from({ length: 8 }, (_, i) =>
       citation({ stableId: `atom-${String(i)}`, scopePath: `src/f-${String(i)}.ts` }),
@@ -536,6 +608,57 @@ describe("GroundedAnswer", () => {
     expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(8);
     fireEvent.click(screen.getByRole("button", { name: "Show all 10 sources" }));
     expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(10);
+  });
+
+  it("deduplicates knowledge citations by stable id before rendering", () => {
+    const a: GroundedAnswerType = {
+      groundingKind: "local-knowledge",
+      userMessageId: "lk-u",
+      assistantMessageId: "lk-a",
+      content: "Answer [1].",
+      citations: [
+        knowledgeCitation({
+          stableId: "dup",
+          marker: "[1]",
+          label: "weak.md",
+          score: 0.1,
+        }),
+        knowledgeCitation({
+          stableId: "dup",
+          marker: "[2]",
+          label: "strong.md",
+          score: 0.9,
+        }),
+        knowledgeCitation({
+          stableId: "unique",
+          marker: "[3]",
+          label: "unique.md",
+          score: 0.5,
+        }),
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 5,
+      noEvidence: false,
+      contextPack: {
+        kind: "local-knowledge",
+        scopeKind: "capsule",
+        scopeId: "lk-1",
+        scopeLabel: "Caps",
+        capsuleCount: 1,
+        sourceCount: 1,
+        citationCount: 3,
+        referenceBudget: 10,
+        referencesUsed: 3,
+      },
+    };
+
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(2);
+    expect(screen.getByText(/\[2\] strong\.md/)).toBeInTheDocument();
+    expect(screen.getByText(/\[3\] unique\.md/)).toBeInTheDocument();
+    expect(screen.queryByText(/\[1\] weak\.md/)).not.toBeInTheDocument();
   });
 
   it("never renders answer.content into the panel — neither as text nor as markup", () => {

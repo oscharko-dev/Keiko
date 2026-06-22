@@ -1,9 +1,9 @@
 "use client";
 
-// Issue #211 — MemoriaViva review queue: proposed + conflicted records needing action.
+// Issue #211 — MemoriaViva review queue: proposed, conflicted, and stale records needing action.
 //
 // WCAG: role="status" aria-live="polite" on the count badge.
-// Accept/Reject action buttons inline per row (≥ 24px target via lk-btn).
+// Approve/Reject action buttons inline per row (≥ 24px target via lk-btn).
 // Empty state when queue is clear. motion-safe on any animated element.
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -12,6 +12,7 @@ import Link from "next/link";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import {
   acceptMemoryProposal,
+  archiveMemory,
   fetchMemoryReviewQueue,
   rejectMemoryProposal,
   type MemoryReviewQueueResponse,
@@ -21,10 +22,12 @@ import { SCOPE_LABELS, TYPE_LABELS } from "./MemoryFilters";
 
 interface ReviewRowProps {
   readonly record: MemoryRecord;
-  readonly busyAction: "accept" | "reject" | null;
+  readonly busyAction: "accept" | "reject" | "archive" | null;
   readonly rowError: string | null;
   readonly onAccept: (record: MemoryRecord) => void;
   readonly onReject: (record: MemoryRecord) => void;
+  readonly onArchive: (record: MemoryRecord) => void;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
 }
 
 function ReviewRow({
@@ -33,8 +36,12 @@ function ReviewRow({
   rowError,
   onAccept,
   onReject,
+  onArchive,
+  onOpenDetail,
 }: ReviewRowProps): ReactNode {
   const labelId = `memory-review-body-${record.id}`;
+  const detailLinkLabel = `View details for memory ${record.id}: ${record.body.slice(0, 80)}`;
+  const isStale = record.staleReason !== undefined || record.status === "expired";
   return (
     <li data-review-row-id={record.id}>
       <article className="mc-review-row">
@@ -51,14 +58,31 @@ function ReviewRow({
             {/* static metadata label — role="status" would create one live
                 region per row (uiux-fix F005) */}
             <span className={`mc-badge mc-badge-${record.status}`}>{record.status}</span>
+            {isStale ? (
+              <span className="mc-row-stale">
+                Stale{record.staleReason !== undefined ? `: ${record.staleReason}` : ""}
+              </span>
+            ) : null}
             {/* full text + provenance/conflict context before deciding —
                 unlike the list, queue rows are not links (uiux-fix F035) */}
-            <Link
-              href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`}
-              className="mc-row-detail-link"
-            >
-              View details
-            </Link>
+            {onOpenDetail !== undefined ? (
+              <button
+                type="button"
+                className="mc-row-detail-link mc-link-button"
+                aria-label={detailLinkLabel}
+                onClick={() => onOpenDetail(record.id)}
+              >
+                View details
+              </button>
+            ) : (
+              <Link
+                href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`}
+                className="mc-row-detail-link"
+                aria-label={detailLinkLabel}
+              >
+                View details
+              </Link>
+            )}
           </div>
           {rowError !== null ? (
             <p role="alert" className="mc-action-error">
@@ -82,7 +106,7 @@ function ReviewRow({
                   onAccept(record);
                 }}
               >
-                {busyAction === "accept" ? "Accepting…" : "Accept"}
+                {busyAction === "accept" ? "Approving…" : "Approve"}
               </button>
               <button
                 type="button"
@@ -97,7 +121,7 @@ function ReviewRow({
                 {busyAction === "reject" ? "Rejecting…" : "Reject"}
               </button>
             </>
-          ) : (
+          ) : record.status === "conflicted" ? (
             // Honest label: this action permanently sets status=rejected (no
             // UI path back) — "Dismiss" suggested a mere hide (uiux-fix F035).
             <button
@@ -112,6 +136,19 @@ function ReviewRow({
             >
               {busyAction === "reject" ? "Rejecting…" : "Reject conflict"}
             </button>
+          ) : (
+            <button
+              type="button"
+              className="lk-btn lk-btn-ghost"
+              aria-disabled={busyAction !== null}
+              aria-busy={busyAction === "archive"}
+              onClick={() => {
+                if (busyAction !== null) return;
+                onArchive(record);
+              }}
+            >
+              {busyAction === "archive" ? "Archiving…" : "Archive stale"}
+            </button>
           )}
         </div>
       </article>
@@ -123,17 +160,25 @@ interface ReviewQueueProps {
   readonly fetchQueueImpl?: typeof fetchMemoryReviewQueue;
   readonly acceptImpl?: typeof acceptMemoryProposal;
   readonly rejectImpl?: typeof rejectMemoryProposal;
+  readonly archiveImpl?: typeof archiveMemory;
+  readonly onBack?: (() => void) | undefined;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
 }
 
 export function ReviewQueue({
   fetchQueueImpl = fetchMemoryReviewQueue,
   acceptImpl = acceptMemoryProposal,
   rejectImpl = rejectMemoryProposal,
+  archiveImpl = archiveMemory,
+  onBack,
+  onOpenDetail,
 }: ReviewQueueProps): ReactNode {
   const [records, setRecords] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busyById, setBusyById] = useState<Partial<Record<string, "accept" | "reject">>>({});
+  const [busyById, setBusyById] = useState<
+    Partial<Record<string, "accept" | "reject" | "archive">>
+  >({});
   const [rowErrorsById, setRowErrorsById] = useState<Partial<Record<string, string>>>({});
   // Result announcement + focus management after a row is removed: the pressed
   // button unmounts with its row, which would drop focus to <body> and leave
@@ -207,7 +252,7 @@ export function ReviewQueue({
   }, [records]);
 
   const runRowAction = useCallback(
-    async (record: MemoryRecord, action: "accept" | "reject"): Promise<void> => {
+    async (record: MemoryRecord, action: "accept" | "reject" | "archive"): Promise<void> => {
       const id = record.id as MemoryId;
       setBusyById((prev) => ({ ...prev, [id]: action }));
       setRowErrorsById((prev) => {
@@ -219,6 +264,8 @@ export function ReviewQueue({
       try {
         if (action === "accept") {
           await acceptImpl(id);
+        } else if (action === "archive") {
+          await archiveImpl(id, "archived stale memory from review queue");
         } else {
           await rejectImpl(
             id,
@@ -228,7 +275,13 @@ export function ReviewQueue({
           );
         }
         removeRecord(id);
-        setActionStatus(action === "accept" ? "Memory accepted" : "Memory rejected");
+        setActionStatus(
+          action === "accept"
+            ? "Memory approved"
+            : action === "archive"
+              ? "Memory archived"
+              : "Memory rejected",
+        );
       } catch (err) {
         setRowErrorsById((prev) => ({ ...prev, [id]: formatError(err) }));
         setBusyById((prev) => {
@@ -238,12 +291,12 @@ export function ReviewQueue({
         });
       }
     },
-    [acceptImpl, rejectImpl, removeRecord],
+    [acceptImpl, archiveImpl, rejectImpl, removeRecord],
   );
 
   return (
     <>
-      <header className="lk-header">
+      <header className="lk-header mc-review-header">
         {/* tabIndex -1: programmatic focus target when the queue empties
             (uiux-fix F035) */}
         <h1 className="lk-title" tabIndex={-1} ref={headingRef}>
@@ -254,9 +307,24 @@ export function ReviewQueue({
         <span role="status" aria-live="polite" className="mc-badge-count">
           {records.length.toString()} awaiting review
         </span>
-        <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
-          Back to MemoriaViva
-        </Link>
+        {onBack !== undefined ? (
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost lk-btn-lg"
+            aria-label="Back to MemoriaViva"
+            onClick={onBack}
+          >
+            Back
+          </button>
+        ) : (
+          <Link
+            href="/memoriaviva"
+            className="lk-btn lk-btn-ghost lk-btn-lg"
+            aria-label="Back to MemoriaViva"
+          >
+            Back
+          </Link>
+        )}
       </header>
 
       {/* Dedicated live region: row removals are not announced by the list
@@ -295,7 +363,8 @@ export function ReviewQueue({
             <div>
               <p className="lk-empty-title">Queue is clear</p>
               <p className="lk-empty-body">
-                No memories are waiting for review. Proposed and conflicted memories appear here.
+                No memories are waiting for review. Proposed, conflicted, and stale memories appear
+                here.
               </p>
             </div>
           </div>
@@ -324,6 +393,10 @@ export function ReviewQueue({
                 onReject={(row) => {
                   void runRowAction(row, "reject");
                 }}
+                onArchive={(row) => {
+                  void runRowAction(row, "archive");
+                }}
+                onOpenDetail={onOpenDetail}
               />
             ))}
           </ul>

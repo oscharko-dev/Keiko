@@ -15,13 +15,23 @@ import {
   filesChatBindRoot,
   filesVisibleScope,
   makeConnectActions,
+  makeLayoutActions,
   makeMutations,
+  makeSnapActions,
   removeConnectorScope,
+  removeConnectedScope,
   removeScope,
   resolvedFilesRoot,
+  boundScopeOf,
+  appendConnectedScope,
+  isRootConnected,
+  isScopeConnected,
+  totalSourceCap,
 } from "./workspaceActions";
 import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
+import { WIN_TYPES } from "../windows/WindowsRegistry";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
   return { id, type, x: 0, y: 0, w: 10, h: 10, z: 1, cfg, max: false };
@@ -360,6 +370,17 @@ describe("connectorChatBind", () => {
     expect(connectorChatBind(connector, win("chat"))).toBeNull();
   });
 
+  it("returns null when the connector has a whitespace-only selectedId", () => {
+    const connector = win("connector", { selectedKind: "capsule", selectedId: "   " });
+    expect(connectorChatBind(connector, win("chat"))).toBeNull();
+  });
+
+  it("trims the selectedId before binding a connector to chat", () => {
+    const connector = win("connector", { selectedKind: "capsule", selectedId: " cap-abc " });
+    const result = connectorChatBind(connector, win("chat"));
+    expect(result).toMatchObject({ kind: "capsule", capsuleId: "cap-abc" });
+  });
+
   it("returns null when the connector cfg is missing selectedKind", () => {
     const connector = win("connector", { selectedId: "cap-abc" });
     expect(connectorChatBind(connector, win("chat"))).toBeNull();
@@ -414,6 +435,254 @@ function makeConnectHarness(
 function conn(a: string, b: string): Connection {
   return { id: `${a}~${b}`, a, b };
 }
+
+function applyState<T>(store: { value: T }, update: SetStateAction<T>): void {
+  store.value = typeof update === "function" ? (update as (previous: T) => T)(store.value) : update;
+}
+
+const layoutViewport = { x: 10, y: 20, w: 900, h: 600 };
+
+describe("layout and snap actions", () => {
+  it("tiles all windows into a deterministic grid and clears stale maximize geometry", () => {
+    const store = {
+      value: [
+        { ...win("files", {}, "files-1"), prev: { x: 1, y: 1, w: 2, h: 2 }, max: true },
+        { ...win("chat", {}, "chat-1"), minimized: true },
+        win("quality", {}, "quality-1"),
+      ] as AppWindow[],
+    };
+    const actions = makeLayoutActions({
+      setWins: (update) => applyState(store, update),
+      worldVP: () => layoutViewport,
+    });
+
+    actions.tileAll();
+
+    expect(store.value).toHaveLength(3);
+    expect(store.value.map((w) => w.max)).toEqual([false, false, false]);
+    expect(store.value.map((w) => w.minimized)).toEqual([false, false, false]);
+    expect(store.value[0]).toMatchObject({ x: 22, y: 32 });
+    expect(store.value[1]?.x).toBeGreaterThan(store.value[0]?.x ?? 0);
+    expect("prev" in store.value[0]!).toBe(false);
+  });
+
+  it("splits the two frontmost visible windows and leaves minimized windows untouched", () => {
+    const minimized = { ...win("terminal", {}, "terminal-1"), minimized: true, z: 20 };
+    const store = {
+      value: [
+        { ...win("files", {}, "files-1"), z: 5 },
+        { ...win("chat", {}, "chat-1"), z: 10 },
+        { ...win("quality", {}, "quality-1"), z: 1 },
+        minimized,
+      ] as AppWindow[],
+    };
+    const actions = makeLayoutActions({
+      setWins: (update) => applyState(store, update),
+      worldVP: () => layoutViewport,
+    });
+
+    actions.splitFront();
+
+    expect(store.value.find((w) => w.id === "chat-1")).toMatchObject({
+      x: layoutViewport.x,
+      y: layoutViewport.y,
+      w: layoutViewport.w / 2,
+      h: layoutViewport.h,
+    });
+    expect(store.value.find((w) => w.id === "files-1")).toMatchObject({
+      x: layoutViewport.x + layoutViewport.w / 2,
+      y: layoutViewport.y,
+      w: layoutViewport.w / 2,
+      h: layoutViewport.h,
+    });
+    expect(store.value.find((w) => w.id === "terminal-1")).toBe(minimized);
+  });
+
+  it("cascades floating windows inside the current viewport with increasing z-order", () => {
+    const store = {
+      value: [
+        { ...win("files", {}, "files-1"), max: true },
+        { ...win("chat", {}, "chat-1"), minimized: true },
+      ] as AppWindow[],
+    };
+    const actions = makeLayoutActions({
+      setWins: (update) => applyState(store, update),
+      worldVP: () => layoutViewport,
+    });
+
+    actions.cascade();
+
+    expect(store.value[0]).toMatchObject({ x: 34, y: 44, w: 560, h: 420, z: 1 });
+    expect(store.value[1]).toMatchObject({ x: 64, y: 74, w: 560, h: 420, z: 2 });
+    expect(store.value.every((w) => w.max === false && w.minimized === false)).toBe(true);
+  });
+
+  it("previews and commits a maximize snap with a restore rectangle", () => {
+    let preview: unknown = undefined;
+    const snapZone = ref<"maxi" | null>(null);
+    const updates: Array<{ id: string; patch: Partial<AppWindow> }> = [];
+    const actions = makeSnapActions({
+      setSnapPrev: (update) => {
+        const store = { value: preview };
+        applyState(store, update as SetStateAction<unknown>);
+        preview = store.value;
+      },
+      snapZone,
+      worldVP: () => layoutViewport,
+      update: (id, patch) => {
+        updates.push({ id, patch });
+      },
+    });
+
+    actions.setSnap("maxi");
+    expect(preview).toMatchObject(layoutViewport);
+    actions.commitSnap("chat-1");
+
+    expect(snapZone.current).toBeNull();
+    expect(updates).toEqual([
+      {
+        id: "chat-1",
+        patch: expect.objectContaining({
+          max: true,
+          x: layoutViewport.x,
+          y: layoutViewport.y,
+          w: layoutViewport.w,
+          h: layoutViewport.h,
+          prev: { x: layoutViewport.x + 40, y: layoutViewport.y + 40, w: 480, h: 360 },
+        }),
+      },
+    ]);
+  });
+});
+
+describe("connected workspace source readers", () => {
+  it("chooses the highest-z linked Files window with an active file for single-source context", () => {
+    const harness = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("files", { resolvedRoot: "/repo-a" }, "files-a"),
+        win("files", { resolvedRoot: "/repo-b", activeFilePath: "src/main.ts" }, "files-b"),
+        win("files", { resolvedRoot: "/repo-c", activeFilePath: "docs/spec.md" }, "files-c"),
+      ].map((w) =>
+        w.id === "files-b" ? { ...w, z: 20 } : w.id === "files-c" ? { ...w, z: 10 } : w,
+      ),
+      [conn("quality", "files-a"), conn("quality", "files-b"), conn("quality", "files-c")],
+    );
+
+    expect(harness.linkedFilesContext("quality")).toEqual({
+      id: "files-b",
+      root: "/repo-b",
+      activeFilePath: "src/main.ts",
+    });
+  });
+
+  it("dedupes and caps linked file roots at the release source limit", () => {
+    const files = Array.from({ length: MAX_SCOPES + 4 }, (_unused, i) =>
+      win("files", { resolvedRoot: i === 3 ? "/repo-2/" : `/repo-${String(i)}` }, `files-${i}`),
+    );
+    const harness = makeConnectHarness(
+      [win("quality", {}, "quality"), ...files],
+      files.map((w) => conn("quality", w.id)),
+    );
+
+    expect(harness.linkedAllFilesRoots("quality")).toHaveLength(MAX_SCOPES);
+    expect(harness.linkedAllFilesRoots("quality")).toContain("/repo-2");
+  });
+
+  it("falls back from a missing linked file to the active Files window context", () => {
+    const harness = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        {
+          ...win("files", { resolvedRoot: "/active", activeFilePath: "notes.md" }, "files-a"),
+          z: 9,
+        },
+        { ...win("files", { resolvedRoot: "/other" }, "files-b"), z: 1 },
+      ],
+      [],
+    );
+
+    expect(harness.currentFilesContext()).toEqual({
+      id: "files-a",
+      root: "/active",
+      activeFilePath: "notes.md",
+    });
+  });
+
+  it("dedupes and caps connected Figma snapshot run ids", () => {
+    const figmas = Array.from({ length: MAX_SCOPES + 3 }, (_unused, i) =>
+      win("figma", { snapshotRunId: i === 2 ? "run-1" : `run-${String(i)}` }, `figma-${i}`),
+    );
+    const harness = makeConnectHarness(
+      [win("quality", {}, "quality"), ...figmas, win("figma", { snapshotRunId: "   " }, "blank")],
+      [...figmas.map((w) => conn("quality", w.id)), conn("quality", "blank")],
+    );
+
+    const ids = harness.linkedFigmaSnapshotRunIds("quality");
+    expect(ids).toHaveLength(MAX_SCOPES);
+    expect(ids.filter((id) => id === "run-1")).toHaveLength(1);
+    expect(ids).not.toContain("   ");
+  });
+});
+
+describe("scope normalization helpers", () => {
+  it("normalizes connected file scopes by path kind, relative path and Windows separators", () => {
+    const current = [
+      {
+        kind: "files",
+        relativePaths: ["src/main.ts"],
+        root: "C:\\repo\\",
+        connectedAtMs: 1,
+      } satisfies ChatConnectedScope,
+    ];
+    const duplicate: ChatConnectedScope = {
+      kind: "files",
+      relativePaths: ["/src\\main.ts/"],
+      root: "C:/repo",
+      connectedAtMs: 2,
+    };
+
+    expect(isScopeConnected(current, duplicate)).toBe(true);
+    expect(appendConnectedScope(current, duplicate)).toBe(current);
+    expect(removeConnectedScope(current, duplicate)).toEqual([]);
+  });
+
+  it("rejects invalid connected scopes and preserves total source-cap parity", () => {
+    expect(
+      appendConnectedScope([], { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 }),
+    ).toBeNull();
+    expect(isRootConnected([scope("C:/repo/")], "C:\\repo")).toBe(true);
+    expect(
+      totalSourceCap({
+        maxConnectedSources: 12,
+        maxLocalKnowledgeSources: 16,
+      }),
+    ).toBe(16);
+  });
+
+  it("reconstructs bind-time file snapshots for workspace roots, directories and files", () => {
+    expect(boundScopeOf({ boundRoot: "/repo" })).toMatchObject({
+      kind: "workspace-root",
+      root: "/repo",
+      relativePaths: [],
+    });
+    expect(
+      boundScopeOf({
+        boundRoot: "/repo/",
+        boundScopeKind: "directory",
+        boundRelativePath: "/src/",
+      }),
+    ).toMatchObject({ kind: "directory", root: "/repo", relativePaths: ["src"] });
+    expect(
+      boundScopeOf({
+        boundRoot: "/repo",
+        boundScopeKind: "files",
+        boundRelativePath: "\\src\\main.ts",
+      }),
+    ).toMatchObject({ kind: "files", root: "/repo", relativePaths: ["src/main.ts"] });
+    expect(boundScopeOf({ boundRoot: "/repo", boundScopeKind: "files" })).toBeNull();
+  });
+});
 
 describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
   it("returns empty when the quality window has no connections", () => {
@@ -480,6 +749,19 @@ describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
     expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
   });
 
+  it("excludes a connector with a whitespace-only selectedId (parity with the server's trim guard)", () => {
+    // A blank id would reach the server and be rejected with a QI_BAD_REQUEST 400; the reader treats
+    // it as "no selection" and skips it so Generate never sends an unusable capsule source.
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "   " }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
+  });
+
   it("deduplicates the same capsuleId from two connectors", () => {
     const { linkedConnectorCapsuleIds } = makeConnectHarness(
       [
@@ -498,6 +780,25 @@ describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
       [conn("quality", "files-1")],
     );
     expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
+  });
+
+  it("caps the capsule list at MAX_SCOPES when more than 16 capsule connectors are bound", () => {
+    // The reader caps at MAX_SCOPES so the QI Generate request never exceeds the server's source
+    // limit (mirrors the linkedAllFilesRoots cap). Without this test an off-by-one regression in the
+    // `ids.length >= MAX_SCOPES` break would silently let 17+ capsule sources through.
+    const connectors = Array.from({ length: 20 }, (_unused, i) =>
+      win(
+        "connector",
+        { selectedKind: "capsule", selectedId: `cap-${String(i)}` },
+        `conn-${String(i)}`,
+      ),
+    );
+    const conns = connectors.map((w) => conn("quality", w.id));
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...connectors],
+      conns,
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toHaveLength(MAX_SCOPES);
   });
 });
 
@@ -536,6 +837,406 @@ describe("linkedConnectorCapsuleSetIds (Epic #710 #718)", () => {
     );
     expect(linkedConnectorCapsuleSetIds("quality")).toEqual(["set-1", "set-2"]);
   });
+
+  it("works when the quality window is on the b-side of the connection", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "set-xyz" }, "conn-1"),
+      ],
+      [conn("conn-1", "quality")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual(["set-xyz"]);
+  });
+
+  it("excludes a connector with an empty selectedId", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "" }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual([]);
+  });
+
+  it("ignores connections to non-connector windows", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("files", { resolvedRoot: "/data" }, "files-1")],
+      [conn("quality", "files-1")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual([]);
+  });
+
+  it("caps the capsule-set list at MAX_SCOPES when more than 16 capsule-set connectors are bound", () => {
+    const connectors = Array.from({ length: 20 }, (_unused, i) =>
+      win(
+        "connector",
+        { selectedKind: "capsule-set", selectedId: `set-${String(i)}` },
+        `conn-${String(i)}`,
+      ),
+    );
+    const conns = connectors.map((w) => conn("quality", w.id));
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...connectors],
+      conns,
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toHaveLength(MAX_SCOPES);
+  });
+});
+
+// ─── Epic #750 #756 — linkedFigmaSnapshotRunIds ──────────────────────────────
+//
+// The Figma Snapshot reader is the direct parallel of the connector capsule reader above (same
+// dedupe / cap / window-type-exclusion / blank-skip semantics) but reads cfg.snapshotRunId from
+// "figma" windows. It previously had ZERO coverage, so a regression in the window-type filter, the
+// blank guard, the dedupe set, or the MAX_SCOPES cap was invisible.
+describe("linkedFigmaSnapshotRunIds (Epic #750 #756)", () => {
+  it("returns empty when the quality window has no connections", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness([win("quality", {}, "quality")], []);
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("returns the snapshotRunId from a connected Figma Snapshot window", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-abc" }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-abc"]);
+  });
+
+  it("does not expose scoped Figma View cards through the legacy whole-snapshot run-id fallback", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaView",
+          {
+            snapshotRunId: "fig-view",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Login mask",
+          },
+          "fig-view-1",
+        ),
+      ],
+      [conn("quality", "fig-view-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("works when the quality window is on the b-side of the connection", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-xyz" }, "fig-1")],
+      [conn("fig-1", "quality")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-xyz"]);
+  });
+
+  it("returns multiple snapshot run ids for multiple connected Figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figma", { snapshotRunId: "fig-1" }, "f1"),
+        win("figma", { snapshotRunId: "fig-2" }, "f2"),
+      ],
+      [conn("quality", "f1"), conn("quality", "f2")],
+    );
+    const ids = linkedFigmaSnapshotRunIds("quality");
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain("fig-1");
+    expect(ids).toContain("fig-2");
+  });
+
+  it("ignores connections to non-figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-1" }, "conn-1"),
+        win("files", { resolvedRoot: "/data" }, "files-1"),
+      ],
+      [conn("quality", "conn-1"), conn("quality", "files-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("excludes a figma window with an empty snapshotRunId", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "" }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("excludes a figma window with a whitespace-only snapshotRunId (parity with the capsule reader's trim guard)", () => {
+    // A blank run id would reach the server and be rejected; the reader trims and treats it as "no
+    // selection" so Generate never sends an unusable figma-snapshot source.
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "   " }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
+  it("deduplicates the same snapshotRunId from two whole-snapshot Figma windows", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figma", { snapshotRunId: "fig-dup" }, "fig-1"),
+        win("figma", { snapshotRunId: "fig-dup" }, "fig-2"),
+      ],
+      [conn("quality", "fig-1"), conn("quality", "fig-2")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-dup"]);
+  });
+
+  it("caps the snapshot list at MAX_SCOPES when more than 16 whole-snapshot Figma windows are bound", () => {
+    // Mirrors the capsule reader cap: without this an off-by-one regression in the
+    // `ids.length >= MAX_SCOPES` break would let 17+ figma sources through to Generate.
+    const figmas = Array.from({ length: 20 }, (_unused, i) =>
+      win("figma", { snapshotRunId: `fig-${String(i)}` }, `fig-${String(i)}`),
+    );
+    const conns = figmas.map((w) => conn("quality", w.id));
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...figmas],
+      conns,
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toHaveLength(MAX_SCOPES);
+  });
+});
+
+describe("linkedFigmaSnapshotSources — scoped screen sources", () => {
+  it("returns a figma-snapshot source scoped to the selected screen ids", () => {
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaView",
+          {
+            snapshotRunId: "fig-abc",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Login mask",
+          },
+          "fig-1",
+        ),
+      ],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([
+      {
+        kind: "figma-snapshot",
+        label: "Login mask",
+        snapshotRunId: "fig-abc",
+        screenIds: ["screen-1"],
+      },
+    ]);
+  });
+
+  it("returns a JSON-labelled figma-snapshot source from a standalone Figma JSON window", () => {
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaJson",
+          {
+            snapshotRunId: "fig-abc",
+            screenId: "screen-1",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Login mask",
+          },
+          "fig-json-1",
+        ),
+      ],
+      [conn("quality", "fig-json-1")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([
+      {
+        kind: "figma-snapshot",
+        label: "JSON · Login mask",
+        snapshotRunId: "fig-abc",
+        screenIds: ["screen-1"],
+      },
+    ]);
+  });
+
+  it("keeps a whole snapshot and a scoped screen from the same run as separate sources", () => {
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figma", { snapshotRunId: "fig-abc" }, "fig-whole"),
+        win(
+          "figmaView",
+          {
+            snapshotRunId: "fig-abc",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Login mask",
+          },
+          "fig-scoped",
+        ),
+      ],
+      [conn("quality", "fig-whole"), conn("quality", "fig-scoped")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([
+      { kind: "figma-snapshot", label: "fig-abc", snapshotRunId: "fig-abc" },
+      {
+        kind: "figma-snapshot",
+        label: "Login mask",
+        snapshotRunId: "fig-abc",
+        screenIds: ["screen-1"],
+      },
+    ]);
+  });
+
+  it("drops a scoped Figma View card whose selected-screen cfg is malformed (fail-safe — never widens to the whole board)", () => {
+    // A window opened via "Add to workspace" is SCOPED (it carries selectedScreenName and a
+    // selectedScreenIdsJson key). When that JSON is corrupt the scope cannot be resolved, so the
+    // window must contribute NOTHING rather than silently degrading to a whole-snapshot ingestion —
+    // the scoped-snapshot no-leak invariant. (Previously this fell back to the whole board, leaking
+    // every unrelated screen into the QI run.) Only a genuinely unscoped figma window ingests the
+    // full snapshot.
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaView",
+          {
+            snapshotRunId: "fig-abc",
+            selectedScreenIdsJson: "{not-json",
+            selectedScreenName: "Ignored mask",
+          },
+          "fig-1",
+        ),
+      ],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([]);
+  });
+
+  it("still ingests the whole snapshot for an UNSCOPED figma window (no scope markers)", () => {
+    // The fail-safe above must NOT regress the legacy path: a plain figma window connected directly
+    // (no selectedScreenIdsJson, no selectedScreenName) is intentionally a whole-snapshot source.
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-abc" }, "fig-1")],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([
+      { kind: "figma-snapshot", label: "fig-abc", snapshotRunId: "fig-abc" },
+    ]);
+  });
+
+  it("drops a scoped Figma View card whose selectedScreenIdsJson was lost on reload (name kept, ids gone)", () => {
+    // Persistence drops an over-cap/invalid selectedScreenIdsJson but keeps selectedScreenName. On
+    // reload such a window is still a SCOPED window with an unresolvable scope → it must contribute
+    // nothing, never the whole board.
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("figmaView", { snapshotRunId: "fig-abc", selectedScreenName: "Login mask" }, "fig-1"),
+      ],
+      [conn("quality", "fig-1")],
+    );
+    expect(linkedFigmaSnapshotSources("quality")).toEqual([]);
+  });
+
+  it("dedupes two scoped windows selecting the same screens in a different order", () => {
+    const { linkedFigmaSnapshotSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaView",
+          {
+            snapshotRunId: "fig-abc",
+            selectedScreenIdsJson: JSON.stringify(["screen-2", "screen-1"]),
+            selectedScreenName: "A",
+          },
+          "fig-1",
+        ),
+        win(
+          "figmaView",
+          {
+            snapshotRunId: "fig-abc",
+            selectedScreenIdsJson: JSON.stringify(["screen-1", "screen-2"]),
+            selectedScreenName: "B",
+          },
+          "fig-2",
+        ),
+      ],
+      [conn("quality", "fig-1"), conn("quality", "fig-2")],
+    );
+    const sources = linkedFigmaSnapshotSources("quality");
+    expect(sources).toHaveLength(1);
+    // Canonical (sorted) screen ids regardless of selection order.
+    expect(sources[0]?.screenIds).toEqual(["screen-1", "screen-2"]);
+  });
+});
+
+describe("linkedImageSources — standalone image sources", () => {
+  it("returns an image source for a connected Figma Image window", () => {
+    const { linkedImageSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaImage",
+          {
+            snapshotRunId: "fig-abc",
+            screenId: "screen-1",
+            selectedScreenName: "Login mask",
+            imageSrc: "/api/figma/snapshots/fig-abc/screens/0/image",
+          },
+          "fig-image-1",
+        ),
+      ],
+      [conn("quality", "fig-image-1")],
+    );
+
+    expect(linkedImageSources("quality")).toEqual([
+      {
+        kind: "image",
+        label: "Image · Login mask",
+        sourceKind: "figma-snapshot-screen",
+        snapshotRunId: "fig-abc",
+        screenId: "screen-1",
+      },
+    ]);
+  });
+
+  it("dedupes repeated image windows for the same run and screen", () => {
+    const { linkedImageSources } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaImage",
+          { snapshotRunId: "fig-abc", screenId: "screen-1", selectedScreenName: "A" },
+          "fig-image-1",
+        ),
+        win(
+          "figmaImage",
+          { snapshotRunId: "fig-abc", screenId: "screen-1", selectedScreenName: "B" },
+          "fig-image-2",
+        ),
+      ],
+      [conn("quality", "fig-image-1"), conn("quality", "fig-image-2")],
+    );
+
+    expect(linkedImageSources("quality")).toHaveLength(1);
+    expect(linkedImageSources("quality")[0]?.label).toBe("Image · A");
+  });
+
+  it("does not expose image windows through figma-snapshot JSON source readers", () => {
+    const harness = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaImage",
+          { snapshotRunId: "fig-abc", screenId: "screen-1", selectedScreenName: "Login mask" },
+          "fig-image-1",
+        ),
+      ],
+      [conn("quality", "fig-image-1")],
+    );
+
+    expect(harness.linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+    expect(harness.linkedFigmaSnapshotSources("quality")).toEqual([]);
+  });
 });
 
 describe("makeMutations.add — QI run-card dedup (#270)", () => {
@@ -566,11 +1267,162 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
     expect(h.cards()).toHaveLength(1);
   });
 
+  it("merges incoming cfg into the existing card when the same runId is reopened", () => {
+    const h = harness();
+    const id1 = h.add("qiRun", { runId: "qi-run-1" });
+    const id2 = h.add("qiRun", {
+      runId: "qi-run-1",
+      connectedSourcesJson: JSON.stringify([
+        { kind: "workspace", label: "specs", path: "/abs/specs" },
+      ]),
+    });
+    expect(id2).toBe(id1);
+    expect(h.cards()).toHaveLength(1);
+    expect(h.cards()[0]?.cfg).toMatchObject({
+      runId: "qi-run-1",
+      connectedSourcesJson: JSON.stringify([
+        { kind: "workspace", label: "specs", path: "/abs/specs" },
+      ]),
+    });
+  });
+
+  it("overwrites carried source handles with an explicit empty set when a run row is reopened", () => {
+    const h = harness();
+    const staleHandles = JSON.stringify([
+      { kind: "workspace", label: "specs", path: "/abs/specs" },
+    ]);
+    const id1 = h.add("qiRun", {
+      runId: "qi-run-1",
+      connectedSourcesJson: staleHandles,
+    });
+    const id2 = h.add("qiRun", { runId: "qi-run-1", connectedSourcesJson: "[]" });
+    expect(id2).toBe(id1);
+    expect(h.cards()).toHaveLength(1);
+    expect(h.cards()[0]?.cfg).toMatchObject({
+      runId: "qi-run-1",
+      connectedSourcesJson: "[]",
+    });
+  });
+
   it("opens a separate card for a different runId", () => {
     const h = harness();
     h.add("qiRun", { runId: "qi-run-1" });
     h.add("qiRun", { runId: "qi-run-2" });
     expect(h.cards()).toHaveLength(2);
+  });
+});
+
+describe("makeMutations.maximize", () => {
+  function harness(
+    initial: AppWindow[],
+    vp = { x: 0, y: 0, w: 1000, h: 800 },
+  ): {
+    maximize: ReturnType<typeof makeMutations>["maximize"];
+    windows: () => readonly AppWindow[];
+  } {
+    let wins: AppWindow[] | null = initial;
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { maximize } = makeMutations({
+      setWins,
+      zc: { current: 10 },
+      worldVP: () => vp,
+    });
+    return { maximize, windows: () => wins ?? [] };
+  }
+
+  it("restores a maximized window to its previous frame", () => {
+    const h = harness([
+      {
+        ...win("files", {}, "files-1"),
+        x: 20,
+        y: 30,
+        w: 300,
+        h: 340,
+      },
+    ]);
+
+    h.maximize("files-1");
+    expect(h.windows()[0]).toMatchObject({
+      max: true,
+      prev: { x: 20, y: 30, w: 300, h: 340 },
+      x: 0,
+      y: 0,
+      w: 1000,
+      h: 800,
+    });
+
+    h.maximize("files-1");
+    expect(h.windows()[0]).toMatchObject({
+      max: false,
+      x: 20,
+      y: 30,
+      w: 300,
+      h: 340,
+    });
+    expect(h.windows()[0]?.prev).toBeUndefined();
+  });
+
+  it("recovers a maximized window without prev to the type default frame", () => {
+    const type = "files";
+    const h = harness([
+      {
+        ...win(type, {}, "files-1"),
+        x: 0,
+        y: 0,
+        w: 1000,
+        h: 800,
+        max: true,
+      },
+    ]);
+
+    h.maximize("files-1");
+
+    expect(h.windows()[0]).toMatchObject({
+      max: false,
+      w: WIN_TYPES[type].w,
+      h: WIN_TYPES[type].h,
+    });
+    expect(h.windows()[0]?.x).toBeGreaterThan(0);
+    expect(h.windows()[0]?.y).toBeGreaterThan(0);
+    expect(h.windows()[0]?.prev).toBeUndefined();
+  });
+});
+
+describe("makeMutations.minimize/restore", () => {
+  function harness(initial: AppWindow[]): {
+    minimize: ReturnType<typeof makeMutations>["minimize"];
+    restore: ReturnType<typeof makeMutations>["restore"];
+    windows: () => readonly AppWindow[];
+  } {
+    let wins: AppWindow[] | null = initial;
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { minimize, restore } = makeMutations({
+      setWins,
+      zc: { current: 10 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+    return { minimize, restore, windows: () => wins ?? [] };
+  }
+
+  it("marks a window minimized without removing it", () => {
+    const h = harness([win("files", {}, "files-1")]);
+
+    h.minimize("files-1");
+
+    expect(h.windows()).toHaveLength(1);
+    expect(h.windows()[0]).toMatchObject({ id: "files-1", minimized: true });
+  });
+
+  it("restores a minimized window and raises it", () => {
+    const h = harness([{ ...win("files", {}, "files-1"), minimized: true, z: 3 }]);
+
+    h.restore("files-1");
+
+    expect(h.windows()[0]).toMatchObject({ id: "files-1", minimized: false, z: 11 });
   });
 });
 
@@ -796,6 +1648,37 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     harness.confirmConnect("chat-1", evt);
     await flushAsyncBind();
     expect(store.conns).toHaveLength(0);
+  });
+
+  it("draws a quality↔connector edge WITHOUT firing the chat onConnectorBind callback (#710 #718)", async () => {
+    // The QI hub reads a connected connector's capsule per-render (linkedConnectorCapsuleIds); it must
+    // NOT go through the chat localKnowledgeScopes bind path. connectorChatBind requires one side to be
+    // a chat window, so for a quality↔connector pair it returns null, chatWindowId stays null, and
+    // onConnectorBind is never invoked — yet the relationship edge is still drawn so the reader sees it.
+    const store = { conns: [] as Connection[] };
+    let connectorBindCalls = 0;
+    const harness = makeConnectHarness(
+      [
+        win("quality", {}, "quality-1"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-abc" }, "conn-1"),
+      ],
+      [],
+      {
+        connecting: { from: "quality-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onConnectorBind: () => {
+          connectorBindCalls += 1;
+          return true;
+        },
+      },
+    );
+    harness.confirmConnect("conn-1", evt);
+    await flushAsyncBind();
+    expect(connectorBindCalls).toBe(0);
+    expect(store.conns).toHaveLength(1);
+    // The edge carries no chat-bind snapshot fields — it is a plain relationship edge the QI hub reads.
+    expect(store.conns[0]?.boundConnectorId).toBeUndefined();
+    expect(store.conns[0]?.boundChatWindowId).toBeUndefined();
   });
 
   it("draws the edge with a boundRoot snapshot when onScopeBind accepts", async () => {
@@ -1058,5 +1941,26 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
       relativePaths: ["a.ts"],
       root: "/data/docs",
     });
+  });
+});
+
+// ─── AC2 Chat-parity drift guard (Issue #731 / Epic #729) ────────────────────
+//
+// MAX_SCOPES (the QI hub's connected-source cap, workspaceActions.ts) and
+// DEFAULT_GROUNDING_LIMITS.maxConnectedSources (Chat's grounding cap from
+// @oscharko-dev/keiko-contracts) must stay in sync. A change to one without
+// updating the other silently breaks the parity contract: Chat users would see
+// a different source limit than QI users.
+//
+// Server-side precedent: runIngestion.test.ts pins the same invariant against
+// DEFAULT_GROUNDING_LIMITS.maxConnectedSources (Issue #730 / #731 audit).
+// This test extends that guard to the UI layer.
+describe("MAX_SCOPES — AC2 Chat-parity drift guard (Issue #731 / Epic #729)", () => {
+  it("matches DEFAULT_GROUNDING_LIMITS.maxConnectedSources so the QI hub cap stays in sync with Chat", () => {
+    // If Chat's grounding default changes, this test will fail and force an intentional
+    // decision about whether MAX_SCOPES should change too. The alternative — silently
+    // leaving the values misaligned — would mean QI accepts a different number of sources
+    // than Chat, violating the N+1 parity AC.
+    expect(MAX_SCOPES).toBe(DEFAULT_GROUNDING_LIMITS.maxConnectedSources);
   });
 });

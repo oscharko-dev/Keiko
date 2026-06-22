@@ -17,7 +17,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow, sendStatusLabel } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import { useChatSession, type ChatSessionApi } from "./hooks/useChatSession";
+import {
+  EMPTY_MODEL_RESPONSE_USER_MESSAGE,
+  useChatSession,
+  type ChatSessionApi,
+} from "./hooks/useChatSession";
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, DesktopChatSendResponse, ModelCapability } from "@/lib/types";
 import type { StreamHandlers } from "@/lib/api";
@@ -307,6 +311,42 @@ describe("ChatWindow streaming typing indicator (Issue #152)", () => {
     // Mutation guard: reverting the `sendStatus !== "streaming"` condition makes the
     // typing bubble reappear alongside the live assistant text, failing this.
     expect(screen.queryByLabelText("Keiko is responding")).toBeNull();
+  });
+
+  // Issue #1296 — the DS 0.4.0 streaming caret marks the live edge of the growing
+  // assistant turn while tokens arrive. It is decorative (aria-hidden); the polite
+  // role="status" region carries the announcement.
+  it("renders the DS streaming caret on the live assistant turn while tokens stream", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi"), assistantMessage("a-stream", "The TCP/IP stack")],
+        sendStatus: "streaming",
+        sending: true,
+      }),
+    );
+    const caret = document.querySelector(".ai-stream-cursor");
+    expect(caret).not.toBeNull();
+    expect(caret?.getAttribute("aria-hidden")).toBe("true");
+    // It sits inside the (last) assistant turn, not the user message.
+    const lastAssistant = document.querySelectorAll('article[data-role="assistant"]');
+    expect(
+      lastAssistant[lastAssistant.length - 1]?.querySelector(".ai-stream-cursor"),
+    ).not.toBeNull();
+  });
+
+  it("does not render the streaming caret on a settled (non-streaming) turn", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi"), assistantMessage("a-done", "Final answer.")],
+        sendStatus: "idle",
+        sending: false,
+      }),
+    );
+    // Mutation guard: dropping the `sendStatus === "streaming"` condition renders the
+    // caret on every settled assistant turn, failing this.
+    expect(document.querySelector(".ai-stream-cursor")).toBeNull();
   });
 
   it("hides the empty pre-token assistant bubble, keeping only non-empty turns", () => {
@@ -692,6 +732,10 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
           "redacted-only": 0,
           "budget-exhausted": 0,
           "tool-unavailable": 0,
+          "unsupported-format": 0,
+          "no-text-layer": 0,
+          "malformed-document": 0,
+          "encrypted-document": 0,
         },
         uncertaintyCount: 0,
         elapsedMs: 1,
@@ -829,6 +873,10 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
           "redacted-only": 0,
           "budget-exhausted": 0,
           "tool-unavailable": 0,
+          "unsupported-format": 0,
+          "no-text-layer": 0,
+          "malformed-document": 0,
+          "encrypted-document": 0,
         },
         uncertaintyCount: 1,
         elapsedMs: 1,
@@ -1294,6 +1342,30 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     const users = view.result.current.messages.filter((m) => m.role === "user");
     expect(users).toHaveLength(0);
     // No partial assistant content persisted.
+    const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(0);
+  });
+
+  it("maps an empty provider stream error to a user-facing frontend message", async () => {
+    vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
+      async (_input, _signal, handlers): Promise<void> => {
+        handlers.onError({
+          code: "GATEWAY_PROVIDER_ERROR",
+          message: "model 'streaming-model' returned an empty assistant response",
+        });
+      },
+    );
+
+    const view = await bootStreamingHook();
+    act(() => view.result.current.setDraft("trigger empty response"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(view.result.current.sendStatus).toBe("failed");
+    expect(view.result.current.error).toBe(
+      `${EMPTY_MODEL_RESPONSE_USER_MESSAGE} (GATEWAY_PROVIDER_ERROR)`,
+    );
     const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
     expect(assistants).toHaveLength(0);
   });

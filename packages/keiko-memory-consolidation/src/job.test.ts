@@ -12,6 +12,9 @@ function emptyCompletedResult(): ConsolidationResult {
     staleFlags: [],
     reviewItems: [],
     clustersInspected: 0,
+    conflictPairsDetected: 0,
+    recordsInspected: 0,
+    truncated: false,
     elapsedMs: 0,
   };
 }

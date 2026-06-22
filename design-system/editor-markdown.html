@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <title>Editor · Markdown Views · Keiko Design System</title>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="keiko-editor-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="keiko-editor-views.css" />
+    <style>
+      /* view switch (top-right of the markdown editor) */
+      .vsw { display: inline-flex; gap: 2px; background: var(--inset); border: 1px solid var(--line-soft); border-radius: 8px; padding: 3px; }
+      .vsw button { display: grid; place-items: center; width: 30px; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-faint); cursor: pointer; }
+      .vsw button:hover { color: var(--fg); }
+      .vsw button[aria-pressed="true"] { background: var(--card); color: var(--accent-text); box-shadow: 0 1px 0 0 rgba(0,0,0,.18); }
+
+      /* markdown editor frame: two content blocks toggled by [data-view] */
+      .mdframe .mdbody { display: flex; min-height: 380px; background: var(--ed-bg); }
+      .mdframe .mdcode, .mdframe .mdrender { display: none; min-width: 0; }
+      .mdframe[data-view="code"] .mdcode { display: flex; flex: 1; }
+      .mdframe[data-view="preview"] .mdrender { display: block; flex: 1; }
+      .mdframe[data-view="split"] .mdcode { display: flex; flex: 1; border-right: 1px solid var(--line); }
+      .mdframe[data-view="split"] .mdrender { display: block; flex: 1; }
+
+      /* markdown source tokens (code view) */
+      .mdh { color: var(--ed-syn-keyword); font-weight: 600; }
+      .mdb { color: var(--ed-fg); font-weight: 700; }
+      .mdi { color: var(--ed-syn-type); font-style: italic; }
+      .mdc { color: var(--ed-syn-string); }
+      .mdl { color: var(--ed-syn-function); }
+      .mdm { color: var(--ed-syn-punct); }
+
+      /* rendered markdown */
+      .mdr { padding: 22px 28px; font: 400 14px/1.62 var(--font-ui); color: var(--fg-muted); overflow: auto; }
+      .mdr > :first-child { margin-top: 0; }
+      .mdr h1, .mdr .h1 { font-size: 25px; font-weight: 700; color: var(--fg); margin: 4px 0 16px; letter-spacing: -0.01em; line-height: 1.2; }
+      .mdr h2, .mdr .h2 { font-size: 18px; font-weight: 650; color: var(--fg); margin: 26px 0 11px; padding-bottom: 6px; border-bottom: 1px solid var(--line-soft); }
+      .mdr h3, .mdr .h3 { font-size: 15px; font-weight: 650; color: var(--fg); margin: 20px 0 8px; }
+      .mdr p { margin: 11px 0; text-wrap: pretty; }
+      .mdr ul, .mdr ol { margin: 11px 0; padding-left: 22px; }
+      .mdr li { margin: 5px 0; }
+      .mdr a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
+      .mdr strong { color: var(--fg); font-weight: 650; }
+      .mdr em { font-style: italic; }
+      .mdr code { font: 500 12.5px var(--font-mono); background: var(--inset); border: 1px solid var(--line-soft); border-radius: 5px; padding: 1px 6px; color: var(--accent-text); }
+      .mdr pre { background: var(--ed-bg); border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px 14px; overflow: auto; margin: 14px 0; }
+      .mdr pre code { background: none; border: 0; padding: 0; color: var(--ed-fg); font-size: 12.5px; line-height: 1.6; }
+      .mdr blockquote { margin: 14px 0; padding: 3px 16px; border-left: 3px solid var(--accent-line); color: var(--fg-dim); }
+      .mdr hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0; }
+      .mdr table { border-collapse: collapse; margin: 14px 0; font-size: 13px; width: 100%; }
+      .mdr th, .mdr td { border: 1px solid var(--line-soft); padding: 6px 12px; text-align: left; }
+      .mdr th { color: var(--fg); background: var(--surface); font-weight: 600; }
+      .mdr .task { list-style: none; margin-left: -22px; }
+      .mdr .task li { display: flex; align-items: center; gap: 9px; }
+      .mdr .ck { width: 16px; height: 16px; border: 1.5px solid var(--line-strong); border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; flex: none; color: var(--ink-inverse); line-height: 0; }
+      .mdr .ck .ico { display: flex; }
+      .mdr .ck.on { background: var(--accent); border-color: var(--accent); }
+    </style>
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Guidelines · 15 · Editor</div>
+        <h1>Markdown views</h1>
+        <p class="lead">Markdown is half the files in an agent repo — prompts, specs, AGENTS.md, docs. So a <code style="font-family:var(--font-mono);color:var(--accent-text)">.md</code> file opens with a three-way view switch: <b style="color:var(--fg)">Code</b> (raw source), <b style="color:var(--fg)">Split</b> (source beside a live preview), and <b style="color:var(--fg)">Preview</b> (the rendered document). One toggle, top-right, that remembers your choice per file.</p>
+      </header>
+
+      <!-- 01 SHOWCASE / INTERACTIVE -->
+      <section class="sec" id="switch">
+        <div class="sec-head"><div class="num">01 — THE VIEW SWITCH</div><h2>One file, three views</h2><p>The switch lives at the trailing edge of the editor toolbar — three segments, the active one accent-marked. Click through them: the file below is live.</p></div>
+        <div class="ev-frame mdframe" id="mdDemo" data-view="split">
+          <div class="ev-tabs">
+            <div class="ev-tab on"><span class="ev-ft md">MD</span>epic-1319-prompt.md</div>
+            <span class="grow"></span>
+            <span style="display:flex;align-items:center;padding:0 10px">
+              <span class="vsw" role="group" aria-label="Markdown view">
+                <button type="button" data-view="code" aria-pressed="false" aria-label="Code"><span class="ico" data-licon="code" data-size="16"></span></button>
+                <button type="button" data-view="split" aria-pressed="true" aria-label="Split"><span class="ico" data-licon="split" data-size="16"></span></button>
+                <button type="button" data-view="preview" aria-pressed="false" aria-label="Preview"><span class="ico" data-licon="eye" data-size="16"></span></button>
+              </span>
+            </span>
+          </div>
+          <div class="mdbody">
+            <div class="ev-code mdcode" style="padding:12px 0">
+              <div class="ev-gutter"><span class="ev-gln">1</span><span class="ev-gln">2</span><span class="ev-gln">3</span><span class="ev-gln">4</span><span class="ev-gln">5</span><span class="ev-gln">6</span><span class="ev-gln">7</span><span class="ev-gln">8</span><span class="ev-gln">9</span><span class="ev-gln">10</span><span class="ev-gln">11</span><span class="ev-gln">12</span><span class="ev-gln">13</span><span class="ev-gln">14</span></div>
+              <div class="ev-lines"><span class="ev-line"><span class="mdh"># Ship Epic #1319 autonomously</span></span><span class="ev-line"> </span><span class="ev-line"><span class="mdh">## Task</span></span><span class="ev-line"> </span><span class="ev-line">Resolve GitHub Epic <span class="mdc">`#1319`</span> end-to-end from</span><span class="ev-line"><span class="mdc">`origin/release/0.2.0`</span> to a green PR.</span><span class="ev-line"> </span><span class="ev-line"><span class="mdh">## Role</span></span><span class="ev-line"> </span><span class="ev-line">You are the <span class="mdb">**coordinator**</span> for the agent</span><span class="ev-line">cluster. Prefer these sources:</span><span class="ev-line"> </span><span class="ev-line"><span class="mdm">-</span> read <span class="mdc">`.claude/agents/`</span></span><span class="ev-line"><span class="mdm">-</span> repository <span class="mdl">[epic templates](./epics)</span></span></div>
+            </div>
+            <div class="mdr mdrender">
+              <div class="h1">Ship Epic #1319 autonomously</div>
+              <div class="h2">Task</div>
+              <p>Resolve GitHub Epic <code>#1319</code> end-to-end from <code>origin/release/0.2.0</code> to a green PR.</p>
+              <div class="h2">Role</div>
+              <p>You are the <strong>coordinator</strong> for the agent cluster. Prefer these sources:</p>
+              <ul>
+                <li>read <code>.claude/agents/</code></li>
+                <li>repository <a href="#">epic templates</a></li>
+              </ul>
+            </div>
+          </div>
+          <div class="ev-status">
+            <span class="br"><span class="ico" data-licon="branch" data-size="13"></span>release/0.2.0</span>
+            <span class="sp"></span>
+            <span class="it">Markdown</span>
+            <span class="it">UTF-8</span>
+            <span class="it">LF</span>
+          </div>
+        </div>
+        <p class="muted-cap" style="margin-top:14px">The switch is the same segmented grammar as the rest of the system — active segment on <code>--card</code> with an accent glyph. View choice persists per file, so a spec you always read rendered reopens rendered.</p>
+      </section>
+
+      <!-- 02 CODE VIEW -->
+      <section class="sec" id="code">
+        <div class="sec-head"><div class="num">02 — CODE VIEW</div><h2>Markdown as source</h2><p>The raw view is a normal code surface with a Markdown grammar: structural marks stay visible and quietly coloured so you edit the document <em>and</em> see its shape. It reuses the syntax palette — no new hues.</p></div>
+        <div class="ev-grid2">
+          <div class="ev-frame flat">
+            <div class="ev-code" style="padding:12px 0">
+              <div class="ev-gutter"><span class="ev-gln">1</span><span class="ev-gln">2</span><span class="ev-gln">3</span><span class="ev-gln">4</span><span class="ev-gln">5</span><span class="ev-gln">6</span></div>
+              <div class="ev-lines"><span class="ev-line"><span class="mdh"># Heading one</span></span><span class="ev-line"><span class="mdh">## Heading two</span></span><span class="ev-line">Body with <span class="mdb">**bold**</span>, <span class="mdi">*italic*</span>, <span class="mdc">`code`</span>.</span><span class="ev-line"><span class="mdm">&gt;</span> a blockquote line</span><span class="ev-line"><span class="mdm">-</span> a list item</span><span class="ev-line">A <span class="mdl">[link](https://keiko.dev)</span> inline.</span></div>
+            </div>
+          </div>
+          <div class="stack">
+            <table class="ev-spec">
+              <thead><tr><th>Mark</th><th>Token</th></tr></thead>
+              <tbody>
+                <tr><td><span class="mdh"># ##</span> heading</td><td class="scope">--ed-syn-keyword</td></tr>
+                <tr><td><span class="mdb">**bold**</span></td><td class="scope">--ed-fg · 700</td></tr>
+                <tr><td><span class="mdi">*italic*</span></td><td class="scope">--ed-syn-type</td></tr>
+                <tr><td><span class="mdc">`code`</span></td><td class="scope">--ed-syn-string</td></tr>
+                <tr><td><span class="mdl">[link]()</span></td><td class="scope">--ed-syn-function</td></tr>
+                <tr><td><span class="mdm">- &gt; #</span> markers</td><td class="scope">--ed-syn-punct</td></tr>
+              </tbody>
+            </table>
+            <div class="note"><span class="tag" style="color:var(--fg-faint)">Reuse</span><div>Markdown gets <b>zero</b> net-new colours. Headings borrow the keyword hue, code spans the string hue — the same legend as a TypeScript file.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 03 SPLIT VIEW -->
+      <section class="sec" id="split">
+        <div class="sec-head"><div class="num">03 — SPLIT VIEW</div><h2>Source beside preview</h2><p>The working view for writing: edit on the left, watch it render on the right. Scrolling is synced by source position, and a thin divider — the same accent group-edge as a code split — marks the seam.</p></div>
+        <div class="ev-frame mdframe" data-view="split">
+          <div class="ev-tabs"><div class="ev-tab on"><span class="ev-ft md">MD</span>AGENTS.md</div><span class="grow"></span><span style="display:flex;align-items:center;padding:0 10px"><span class="vsw"><button type="button" data-view="code" aria-pressed="false" aria-label="Code" disabled><span class="ico" data-licon="code" data-size="16"></span></button><button type="button" data-view="split" aria-pressed="true" aria-label="Split" disabled><span class="ico" data-licon="split" data-size="16"></span></button><button type="button" data-view="preview" aria-pressed="false" aria-label="Preview" disabled><span class="ico" data-licon="eye" data-size="16"></span></button></span></span></div>
+          <div class="mdbody">
+            <div class="ev-code mdcode" style="padding:12px 0">
+              <div class="ev-gutter"><span class="ev-gln">1</span><span class="ev-gln">2</span><span class="ev-gln">3</span><span class="ev-gln">4</span><span class="ev-gln">5</span><span class="ev-gln">6</span><span class="ev-gln">7</span></div>
+              <div class="ev-lines"><span class="ev-line"><span class="mdh"># Agent conventions</span></span><span class="ev-line"> </span><span class="ev-line">Run <span class="mdc">`npm test`</span> before every PR.</span><span class="ev-line"> </span><span class="ev-line"><span class="mdm">-</span> <span class="mdm">[x]</span> typecheck passes</span><span class="ev-line"><span class="mdm">-</span> <span class="mdm">[ ]</span> coverage &gt; 80%</span><span class="ev-line"><span class="mdm">-</span> <span class="mdm">[ ]</span> changelog updated</span></div>
+            </div>
+            <div class="mdr mdrender">
+              <div class="h1">Agent conventions</div>
+              <p>Run <code>npm test</code> before every PR.</p>
+              <ul class="task">
+                <li><span class="ck on"><span class="ico" data-licon="check" data-size="11"></span></span> typecheck passes</li>
+                <li><span class="ck"></span> coverage &gt; 80%</li>
+                <li><span class="ck"></span> changelog updated</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        <p class="muted-cap" style="margin-top:14px">Task-list checkboxes render as real, tickable controls (the one accent moment in the preview). GitHub-flavoured extras — tables, task lists, fenced code — all render; the source stays the source of truth.</p>
+      </section>
+
+      <!-- 04 PREVIEW VIEW -->
+      <section class="sec" id="preview">
+        <div class="sec-head"><div class="num">04 — PREVIEW VIEW</div><h2>The rendered document</h2><p>Reading mode: the source disappears and the document reads like a doc. This is the same renderer used everywhere Keiko shows Markdown — chat answers, run summaries, PR bodies — so a prompt looks identical wherever it surfaces.</p></div>
+        <div class="ev-frame">
+          <div class="ev-tabs"><div class="ev-tab on"><span class="ev-ft md">MD</span>epic-1319-prompt.md</div><span class="grow"></span><span style="display:flex;align-items:center;padding:0 10px"><span class="vsw"><button type="button" aria-pressed="false" aria-label="Code" disabled><span class="ico" data-licon="code" data-size="16"></span></button><button type="button" aria-pressed="false" aria-label="Split" disabled><span class="ico" data-licon="split" data-size="16"></span></button><button type="button" aria-pressed="true" aria-label="Preview" disabled><span class="ico" data-licon="eye" data-size="16"></span></button></span></span></div>
+          <div class="mdr" style="max-height:440px">
+            <div class="h1">Create an agent team to ship Epic #1319</div>
+            <div class="h2">Task</div>
+            <p>Resolve GitHub Epic <code>#1319</code> end-to-end from the current state of <code>origin/release/0.2.0</code> to a green PR targeting <code>release/0.2.0</code>.</p>
+            <div class="h2">Role</div>
+            <p>You are the <strong>coordinator</strong> for the project-scoped Claude agent cluster. Before delegating, read the repository's active agent instructions:</p>
+            <ul>
+              <li><code>.claude/agents/</code> — team &amp; memory roots</li>
+              <li>repository epic templates</li>
+              <li>architecture decision records</li>
+            </ul>
+            <blockquote>If the Epic scope is ambiguous or conflicts with governance, stop and report the blocker. Do not invent product scope.</blockquote>
+            <div class="h3">Definition of done</div>
+            <table>
+              <thead><tr><th>Gate</th><th>State</th></tr></thead>
+              <tbody>
+                <tr><td>CI check <code>ci</code></td><td>green on PR head</td></tr>
+                <tr><td>Security / CSP gates</td><td>≥ as strict as before</td></tr>
+                <tr><td>Epic <code>#1319</code></td><td>closed · completed</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <p class="muted-cap" style="margin-top:14px">Rendered Markdown is pure UI type — <code>--font-ui</code>, the neutral ramp, one accent for links and inline code. Headings, lists, blockquotes, tables and fenced code all map to the spec in the next section.</p>
+      </section>
+
+      <!-- 05 RENDER SPEC -->
+      <section class="sec" id="render">
+        <div class="sec-head"><div class="num">05 — RENDER SPEC</div><h2>Rendered Markdown styling</h2><p>The complete element map for the preview. Defined once here, applied by every Keiko surface that renders Markdown — so docs, prompts and chat all read as one voice.</p></div>
+        <div class="card" style="padding:8px 22px">
+          <table class="ev-spec">
+            <thead><tr><th>Element</th><th>Spec</th><th>Token</th></tr></thead>
+            <tbody>
+              <tr><td class="tok">h1</td><td>25px / 700 / -0.01em</td><td class="scope">--fg</td></tr>
+              <tr><td class="tok">h2</td><td>18px / 650 · hairline underline</td><td class="scope">--fg · --line-soft</td></tr>
+              <tr><td class="tok">h3</td><td>15px / 650</td><td class="scope">--fg</td></tr>
+              <tr><td class="tok">paragraph</td><td>14px / 1.62</td><td class="scope">--fg-muted</td></tr>
+              <tr><td class="tok">inline code</td><td>mono · inset chip</td><td class="scope">--inset · --accent-text</td></tr>
+              <tr><td class="tok">code block</td><td>mono · editor-well bg</td><td class="scope">--ed-bg · --ed-fg</td></tr>
+              <tr><td class="tok">link</td><td>underlined</td><td class="scope">--accent-text</td></tr>
+              <tr><td class="tok">blockquote</td><td>3px accent left rule</td><td class="scope">--accent-line · --fg-dim</td></tr>
+              <tr><td class="tok">table</td><td>hairline grid · surface header</td><td class="scope">--line-soft · --surface</td></tr>
+              <tr><td class="tok">task checkbox</td><td>tickable · accent when done</td><td class="scope">--accent</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--accent-text)">One renderer</span><div>This spec is the single Markdown renderer for the whole product. The editor's Preview is not a special case — it's the same component the <a href="editor-agent.html" style="color:var(--accent-text)">agent</a> uses to show an answer, rendered into the editor frame.</div></div>
+      </section>
+
+      <section class="sec" id="principle">
+        <div class="sec-head"><div class="num">06 — PRINCIPLE</div><h2>Source is truth, preview is a lens</h2></div>
+        <div class="card" style="padding:8px 22px">
+          <table class="tbl">
+            <tbody>
+              <tr><td class="fgw">Three views, one file</td><td>Code, Split and Preview are lenses on the same buffer — never separate documents. Edits in Split's source pane are the edits; the preview is read-only output.</td></tr>
+              <tr><td class="fgw">Choice persists</td><td>The view mode is remembered per file (and per file-type default), so the editor opens the way you last read that document.</td></tr>
+              <tr><td class="fgw">No new colours</td><td>Code view reuses the syntax palette; Preview reuses the UI ramp + one accent. Markdown adds structure, not a new spectrum.</td></tr>
+              <tr><td class="fgw">One renderer everywhere</td><td>The preview renderer is shared with chat, run summaries and PR bodies — a prompt looks the same in the editor as it does when the agent quotes it back.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="lift-glyphs.js"></script>
+    <script>
+      (function () {
+        var demo = document.getElementById("mdDemo");
+        if (demo) {
+          demo.querySelectorAll(".vsw button").forEach(function (b) {
+            b.addEventListener("click", function () {
+              demo.querySelectorAll(".vsw button").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+              b.setAttribute("aria-pressed", "true");
+              demo.dataset.view = b.dataset.view;
+            });
+          });
+        }
+      })();
+    </script>
+    <script src="theme-control.js"></script>
+  </body>
+</html>

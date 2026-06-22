@@ -8,14 +8,13 @@ export interface ConsolidationJobSettings {
   readonly staleConfidenceThreshold: number;
   readonly maxAgeMs: number;
   readonly maxClustersPerRun: number;
+  readonly maxRecordsPerRun: number;
 }
 
 export interface ConsolidationJobSelection {
   readonly scopes: readonly import("@oscharko-dev/keiko-contracts").MemoryScope[];
   readonly types?: readonly import("@oscharko-dev/keiko-contracts").MemoryType[] | undefined;
-  readonly statuses?:
-    | readonly import("@oscharko-dev/keiko-contracts").MemoryStatus[]
-    | undefined;
+  readonly statuses?: readonly import("@oscharko-dev/keiko-contracts").MemoryStatus[] | undefined;
   readonly includeExpired: boolean;
 }
 
@@ -92,9 +91,7 @@ function enforceCapacity(state: RegistryState): void {
 function updateRecord(
   state: RegistryState,
   jobId: string,
-  patch: Partial<
-    Pick<ConsolidationJobRecord, "job" | "memoryCount" | "cancelRequested">
-  >,
+  patch: Partial<Pick<ConsolidationJobRecord, "job" | "memoryCount" | "cancelRequested">>,
 ): ConsolidationJobRecord | undefined {
   const record = state.records.get(jobId);
   if (record === undefined) return undefined;
@@ -103,7 +100,11 @@ function updateRecord(
   return next;
 }
 
-function withElapsedMs(result: ConsolidationResult, startedAt: number, completedAt: number): ConsolidationResult {
+function withElapsedMs(
+  result: ConsolidationResult,
+  startedAt: number,
+  completedAt: number,
+): ConsolidationResult {
   return { ...result, elapsedMs: Math.max(0, completedAt - startedAt) };
 }
 

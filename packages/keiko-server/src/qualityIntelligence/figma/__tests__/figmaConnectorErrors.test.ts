@@ -17,6 +17,7 @@ const ALL_CODES: readonly FigmaConnectorErrorCode[] = [
   "FIGMA_TOKEN_EXPIRED",
   "FIGMA_TOKEN_REVOKED",
   "FIGMA_NOT_FOUND",
+  "FIGMA_NOT_READY",
   "FIGMA_INSUFFICIENT_SCOPE",
   "FIGMA_RENDER_FAILED",
   "FIGMA_PROXY_EGRESS_FAILED",
@@ -31,6 +32,7 @@ const ALL_CODES: readonly FigmaConnectorErrorCode[] = [
   "FIGMA_NETWORK_UNREACHABLE",
   "FIGMA_EGRESS_TIMEOUT",
   "FIGMA_EGRESS_FAILED",
+  "FIGMA_BUILD_TIMEOUT",
   "FIGMA_INTERNAL",
 ];
 
@@ -41,6 +43,7 @@ const REQUIRED_TAXONOMY_CODES: readonly FigmaConnectorErrorCode[] = [
   "FIGMA_INSUFFICIENT_SCOPE", // scope
   "FIGMA_RATE_LIMITED", // rate-limit
   "FIGMA_NOT_FOUND", // not-found
+  "FIGMA_NOT_READY", // release-readiness
   "FIGMA_OVERSIZED_SCOPE", // oversized (node-count guard)
   "FIGMA_RESPONSE_TOO_LARGE", // oversized (response body cap)
   "FIGMA_RENDER_FAILED", // render-failed
@@ -93,6 +96,12 @@ describe("FigmaConnectorError", () => {
       // User-actionable: a non-trivial instruction, not a bare status word.
       expect(body.error.message.length).toBeGreaterThan(20);
     }
+  });
+
+  it("gives an operator-safe remediation for Figma rate limits", () => {
+    const body = figmaConnectorErrorBody("FIGMA_RATE_LIMITED");
+    expect(body.error.message).toContain("narrower Release section");
+    expect(body.error.message).toContain("Figma fetch limits");
   });
 });
 

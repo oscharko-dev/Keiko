@@ -1,0 +1,208 @@
+/* ============================================================
+   keiko-editor-tokens.css — Keiko Editor theme token set
+   Issue #1212 · design-first dependency for the Monaco work (#1193).
+
+   EXTENDS the base palette (keiko-tokens.css) — it does NOT fork it.
+   Editor chrome reuses --bg / --fg / --danger / --warn / --info wherever
+   the app surface already answers the need; only the syntax palette and
+   the editor-specific chrome / diff / ghost-text are net-new here.
+
+   Three variants:
+     • dark            (default, :root)
+     • light           ([data-theme="light"])
+     • high-contrast   (@media prefers-contrast: more  AND  [data-hc="more"]
+                        so the spec page can demo it on demand)
+
+   Code-readability contrast targets (token vs. editor background):
+     • dark / light normal …… ≥ 4.5:1 for every coloured token
+       (comment is intentionally the quietest, held at ≥ 4.5 not lower)
+     • high-contrast …………… ≥ 7:1 for every coloured token
+   Measured values are documented in editor-theme.html.
+
+   Naming: --ed-*  (editor).  Syntax: --ed-syn-*.
+   ============================================================ */
+
+:root {
+  /* ---- editor surface (reuses the inset tone as the code well) ---- */
+  --ed-bg: oklch(0.16 0.004 160);
+  --ed-bg-gutter: oklch(0.16 0.004 160);
+  --ed-fg: #c5cdd9;                 /* default identifier / plain text */
+
+  /* ---- syntax palette — TS/JS first, semantic types reused by all langs ---- */
+  --ed-syn-comment:  #7d8ba5;       /* italic, quietest legible tone   */
+  --ed-syn-string:   #c3e88d;
+  --ed-syn-number:   #f78c6c;
+  --ed-syn-constant: #f78c6c;       /* true/false/null + numeric kin    */
+  --ed-syn-keyword:  #c792ea;       /* control flow, import, declarators */
+  --ed-syn-type:     #ffcb6b;       /* class / interface / type names   */
+  --ed-syn-function: #82aaff;       /* calls + definitions              */
+  --ed-syn-property: #80cbc4;       /* object keys, member access       */
+  --ed-syn-variable: #c5cdd9;       /* plain identifiers (= default)    */
+  --ed-syn-operator: #89ddff;
+  --ed-syn-punct:    #89ddff;       /* braces, commas, semicolons       */
+  --ed-syn-regexp:   #e9a3a3;       /* regex + escape sequences         */
+
+  /* ---- editor chrome ---- */
+  --ed-gutter-fg:        color-mix(in oklch, var(--fg) 38%, transparent);
+  --ed-gutter-fg-active: var(--fg-muted);
+  --ed-line-active:      color-mix(in oklch, var(--fg) 5%, transparent);
+  --ed-cursor:           var(--fg);
+  --ed-selection:        color-mix(in oklch, var(--accent) 26%, transparent);
+  --ed-selection-blur:   color-mix(in oklch, var(--fg) 13%, transparent);
+  --ed-find-match:       color-mix(in oklch, var(--warn) 34%, transparent);
+  --ed-find-match-active:color-mix(in oklch, var(--warn) 60%, transparent);
+  --ed-bracket-match:    var(--accent-line);
+  --ed-indent-guide:     var(--line-soft);
+  --ed-indent-guide-active: var(--line-strong);
+  --ed-whitespace:       color-mix(in oklch, var(--fg) 22%, transparent);
+
+  /* ---- focus ring / keyboard-visible chrome ---- *
+     Two-tone ring (matches the base :focus-visible model): an inner separator
+     in the editor well + the accent ring outside it, so it stays ≥3:1 visible
+     on ANY editor surface — including over the green selection/active line. */
+  --ed-focus:            var(--accent-text);
+  --ed-focus-inner:      var(--ed-bg);
+
+  /* ---- diff (patch-review surface) ---- */
+  --ed-diff-ins-line: color-mix(in oklch, oklch(0.72 0.16 150) 15%, transparent);
+  --ed-diff-ins-text: color-mix(in oklch, oklch(0.72 0.16 150) 30%, transparent);
+  --ed-diff-rem-line: color-mix(in oklch, var(--danger) 15%, transparent);
+  --ed-diff-rem-text: color-mix(in oklch, var(--danger) 30%, transparent);
+  --ed-diff-ins-gutter: oklch(0.72 0.13 150);
+  --ed-diff-rem-gutter: var(--danger);
+  /* changed / modified line (3-way merge + word-diff middle state) — info hue,
+     kept distinct from the green/red ins/rem pair */
+  --ed-diff-chg-line:   color-mix(in oklch, var(--info) 13%, transparent);
+  --ed-diff-chg-text:   color-mix(in oklch, var(--info) 26%, transparent);
+  --ed-diff-chg-gutter: var(--info);
+
+  /* ---- diagnostics (map straight onto the status palette) ---- */
+  --ed-error: var(--danger);
+  --ed-warn:  var(--warn);
+  --ed-info:  var(--info);
+  --ed-hint:  var(--fg-faint);
+  --ed-error-bg: color-mix(in oklch, var(--danger) 12%, transparent);
+  --ed-warn-bg:  color-mix(in oklch, var(--warn) 12%, transparent);
+
+  /* ---- inline ghost text / AI suggestion + suggest widget ---- */
+  --ed-ghost:        var(--fg-dim);     /* dimmed, italic; clearly below code */
+  --ed-suggest-bg:   var(--card);
+  --ed-suggest-sel:  var(--accent-dim);
+  --ed-suggest-match:var(--accent-text);
+
+  /* ---- editor card: tabs, status bar, minimap ---- */
+  --ed-tab-bg:          var(--surface);
+  --ed-tab-active-bg:   var(--ed-bg);
+  --ed-tab-active-fg:   var(--fg);
+  --ed-tab-inactive-fg: var(--fg-faint);
+  --ed-tab-accent:      var(--accent);    /* 2px active top-border */
+  --ed-statusbar-bg:    var(--surface);
+  --ed-statusbar-fg:    var(--fg-muted);
+  --ed-statusbar-accent:var(--accent-text);
+  --ed-minimap-bg:      var(--ed-bg);
+  --ed-minimap-slider:  color-mix(in oklch, var(--fg) 10%, transparent);
+
+  /* ---- gutter columns · run/debug · breakpoints (editor-gutter.html) ---- */
+  --ed-run-glyph:           var(--accent-text);    /* runnable-line play arrow   */
+  --ed-breakpoint:          var(--danger);         /* verified line breakpoint   */
+  --ed-breakpoint-disabled: color-mix(in oklch, var(--danger) 42%, transparent);
+  --ed-breakpoint-ring:     color-mix(in oklch, var(--danger) 30%, transparent);
+  --ed-logpoint:            var(--info);            /* logpoint / tracepoint      */
+
+  /* ---- VCS change bar (left of the line numbers) ---- */
+  --ed-vcs-added:    var(--ed-diff-ins-gutter);
+  --ed-vcs-modified: var(--info);
+  --ed-vcs-removed:  var(--danger);
+  --ed-vcs-staged:   var(--accent-text);
+
+  /* ---- code folding ---- */
+  --ed-fold-arrow:        var(--fg-faint);
+  --ed-fold-bg:           color-mix(in oklch, var(--fg) 7%, transparent);
+  --ed-fold-placeholder:  var(--fg-faint);
+
+  /* ---- inlay hints · inline (debug) values ---- */
+  --ed-inlay-fg:        var(--fg-dim);
+  --ed-inlay-bg:        color-mix(in oklch, var(--fg) 8%, transparent);
+  --ed-inlay-value-fg:  var(--info);
+  --ed-inlay-value-bg:  color-mix(in oklch, var(--info) 14%, transparent);
+
+  /* ---- annotations (blame) ---- */
+  --ed-blame-fg: var(--fg-faint);
+  --ed-blame-bg: var(--surface);
+
+  /* ---- agent-in-editor surfaces — governed, accent-based (editor-agent.html) ---- */
+  --ed-agent-line:      color-mix(in oklch, var(--accent) 12%, transparent);
+  --ed-agent-gutter:    var(--accent-text);
+  --ed-agent-ghost:     var(--ed-ghost);
+  --ed-agent-accept:    var(--ed-diff-ins-gutter);
+  --ed-agent-reject:    var(--danger);
+  --ed-agent-chip-bg:   var(--accent-dim);
+  --ed-agent-chip-line: var(--accent-line);
+}
+
+/* ===== LIGHT — refined so every coloured token clears 4.5:1 on the
+   near-white code well (punct/type/number/comment were below in the
+   shipping preview palette and are darkened here). ===== */
+[data-theme="light"] {
+  --ed-bg: oklch(0.985 0.003 160);
+  --ed-bg-gutter: oklch(0.985 0.003 160);
+  --ed-fg: #2b3440;
+
+  --ed-syn-comment:  #5a6675;
+  --ed-syn-string:   #2c7430;
+  --ed-syn-number:   #a8480a;
+  --ed-syn-constant: #a8480a;
+  --ed-syn-keyword:  #8b2bb8;
+  --ed-syn-type:     #856000;
+  --ed-syn-function: #235fc0;
+  --ed-syn-property: #0e6b66;
+  --ed-syn-variable: #2b3440;
+  --ed-syn-operator: #0f7491;
+  --ed-syn-punct:    #0f7491;
+  --ed-syn-regexp:   #a33b3b;
+
+  --ed-diff-ins-line: color-mix(in oklch, oklch(0.6 0.15 150) 14%, transparent);
+  --ed-diff-ins-text: color-mix(in oklch, oklch(0.6 0.15 150) 26%, transparent);
+  --ed-diff-rem-line: color-mix(in oklch, var(--danger) 12%, transparent);
+  --ed-diff-rem-text: color-mix(in oklch, var(--danger) 24%, transparent);
+  --ed-diff-ins-gutter: oklch(0.5 0.13 150);
+  --ed-diff-rem-gutter: var(--danger);
+
+  --ed-whitespace: color-mix(in oklch, var(--fg) 28%, transparent);
+  --ed-minimap-slider: color-mix(in oklch, var(--fg) 12%, transparent);
+
+  /* ghost text needs darkening on the near-white well: --fg-dim alone lands
+     at ~3:1, below the 4.5 code-readability floor. Held just past 4.5 so it
+     still reads clearly secondary to live code. */
+  --ed-ghost: oklch(0.55 0.02 160);
+}
+
+/* ===== HIGH-CONTRAST — every coloured token ≥ 7:1 on a near-black /
+   pure-white code well; chrome lines and guides step up too.
+   Applied for real users (prefers-contrast) AND on demand via [data-hc]. ===== */
+@media (prefers-contrast: more) {
+  :root { --ed-bg: oklch(0.07 0.004 160); --ed-bg-gutter: oklch(0.07 0.004 160); --ed-fg: #ffffff;
+    --ed-syn-comment:#9bb0c9; --ed-syn-string:#b6f08a; --ed-syn-number:#ffb38a; --ed-syn-constant:#ffb38a;
+    --ed-syn-keyword:#d8b6ff; --ed-syn-type:#ffd479; --ed-syn-function:#9fc1ff; --ed-syn-property:#8fe0d8;
+    --ed-syn-variable:#e8edf3; --ed-syn-operator:#a6e9ff; --ed-syn-punct:#a6e9ff; --ed-syn-regexp:#f3b0b0;
+    --ed-line-active: color-mix(in oklch, var(--fg) 10%, transparent);
+    --ed-indent-guide: var(--line); --ed-whitespace: color-mix(in oklch, var(--fg) 34%, transparent);
+    --ed-ghost: oklch(0.74 0.004 160); }
+  [data-theme="light"] { --ed-bg: oklch(1 0 0); --ed-bg-gutter: oklch(1 0 0); --ed-fg: #000000;
+    --ed-syn-comment:#46525f; --ed-syn-string:#1a5d1d; --ed-syn-number:#8a3600; --ed-syn-constant:#8a3600;
+    --ed-syn-keyword:#6f1b96; --ed-syn-type:#5f4200; --ed-syn-function:#143f8f; --ed-syn-property:#0a5c57;
+    --ed-syn-variable:#000000; --ed-syn-operator:#0a5e75; --ed-syn-punct:#0a5e75; --ed-syn-regexp:#8a2020;
+    --ed-ghost: oklch(0.42 0.01 160); }
+}
+[data-hc="more"] { --ed-bg: oklch(0.07 0.004 160); --ed-bg-gutter: oklch(0.07 0.004 160); --ed-fg: #ffffff;
+  --ed-syn-comment:#9bb0c9; --ed-syn-string:#b6f08a; --ed-syn-number:#ffb38a; --ed-syn-constant:#ffb38a;
+  --ed-syn-keyword:#d8b6ff; --ed-syn-type:#ffd479; --ed-syn-function:#9fc1ff; --ed-syn-property:#8fe0d8;
+  --ed-syn-variable:#e8edf3; --ed-syn-operator:#a6e9ff; --ed-syn-punct:#a6e9ff; --ed-syn-regexp:#f3b0b0;
+  --ed-line-active: color-mix(in oklch, var(--fg) 10%, transparent);
+  --ed-indent-guide: var(--line); --ed-whitespace: color-mix(in oklch, var(--fg) 34%, transparent);
+  --ed-ghost: oklch(0.74 0.004 160); }
+[data-hc="more"][data-theme="light"] { --ed-bg: oklch(1 0 0); --ed-bg-gutter: oklch(1 0 0); --ed-fg: #000000;
+  --ed-syn-comment:#46525f; --ed-syn-string:#1a5d1d; --ed-syn-number:#8a3600; --ed-syn-constant:#8a3600;
+  --ed-syn-keyword:#6f1b96; --ed-syn-type:#5f4200; --ed-syn-function:#143f8f; --ed-syn-property:#0a5c57;
+  --ed-syn-variable:#000000; --ed-syn-operator:#0a5e75; --ed-syn-punct:#0a5e75; --ed-syn-regexp:#8a2020;
+  --ed-ghost: oklch(0.42 0.01 160); }

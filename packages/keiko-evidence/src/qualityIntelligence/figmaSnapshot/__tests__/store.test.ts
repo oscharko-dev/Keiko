@@ -1,4 +1,14 @@
-import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,13 +25,8 @@ const RUN_ID = "00000000-0000-4000-8000-000000000001";
 const RUN_ID_2 = "00000000-0000-4000-8000-000000000002";
 const RUN_ID_3 = "00000000-0000-4000-8000-000000000003";
 
-// Correct integrity hash for the baseInput fixture: sha256 of canonical(
-//   { screens: [{integrityHash:"b"*64, screenId:"1:1"},{integrityHash:"c"*64, screenId:"1:2"}],
-//     snapshotSchemaVersion:1, version:"v-pinned-1" })
-// Pre-computed to keep tests deterministic without depending on crypto at describe time.
-const BASE_INTEGRITY_HASH = "fd7a4f5be941a3d16d98379b51a2f43f577420f2402db028b846700cd8e44ab4";
-// Hash for zero screens, same provenance (version:"v-pinned-1").
-const EMPTY_INTEGRITY_HASH = "5439a337ebe6807307c9c0728da47f801073462d4bfcdb446cfedd858bb12af3";
+const STALE_INTEGRITY_HASH = "0".repeat(64);
+const STALE_SCREEN_HASH = "b".repeat(64);
 
 const loadOrThrow = (store: FigmaSnapshotStore, runId: string): FigmaSnapshotRecord => {
   const record = store.load(runId);
@@ -50,6 +55,42 @@ afterEach(() => {
 
 const png = (seed: number): Uint8Array => new Uint8Array([0x89, 0x50, seed, seed + 1]);
 
+const node = (
+  id: string,
+  name: string,
+  children: readonly Record<string, unknown>[] = [],
+): Record<string, unknown> => ({
+  id,
+  name,
+  type: "FRAME",
+  interactionHint: "container",
+  imageFills: [],
+  children,
+});
+
+const screenIr = (id: string, name: string, text?: string): Record<string, unknown> => ({
+  id,
+  name,
+  root: node(`${id}:root`, name, text === undefined ? [] : [node(`${id}:text`, text)]),
+});
+
+const snapshotFile = (runId = RUN_ID): string => join(dir, "qi", `${runId}.figma-snapshot.json`);
+const snapshotManagementFile = (runId = RUN_ID): string =>
+  join(dir, "qi", `${runId}.figma-snapshot.management.json`);
+
+const readSnapshotFile = (runId = RUN_ID): Record<string, unknown> =>
+  JSON.parse(readFileSync(snapshotFile(runId), "utf8")) as Record<string, unknown>;
+
+const writeSnapshotFile = (raw: Record<string, unknown>, runId = RUN_ID): void => {
+  writeFileSync(snapshotFile(runId), JSON.stringify(raw), "utf8");
+};
+
+const rawScreens = (raw: Record<string, unknown>): Record<string, unknown>[] =>
+  raw.screens as Record<string, unknown>[];
+
+const rawImage = (screen: Record<string, unknown>): Record<string, unknown> =>
+  screen.image as Record<string, unknown>;
+
 const baseInput = (): RecordFigmaSnapshotInput => ({
   runId: RUN_ID,
   provenance: {
@@ -58,22 +99,32 @@ const baseInput = (): RecordFigmaSnapshotInput => ({
     version: "v-pinned-1",
     fetchedAt: "2026-06-09T00:00:00.000Z",
   },
-  integrityHash: BASE_INTEGRITY_HASH,
+  integrityHash: STALE_INTEGRITY_HASH,
   screens: [
     {
       screenId: "1:1",
-      irJson: { id: "1:1", name: "Home", note: `leaked key ${PLANTED_SECRET} in a text node` },
-      integrityHash: "b".repeat(64),
+      irJson: screenIr("1:1", "Home", `leaked key ${PLANTED_SECRET} in a text node`),
+      integrityHash: STALE_SCREEN_HASH,
       image: { mimeType: "image/png", bytes: png(10) },
     },
     {
       screenId: "1:2",
-      irJson: { id: "1:2", name: "Detail" },
-      integrityHash: "c".repeat(64),
+      irJson: screenIr("1:2", "Detail"),
+      integrityHash: STALE_SCREEN_HASH,
       image: { mimeType: "image/png", bytes: png(20) },
     },
   ],
   skippedScreens: [{ screenId: "1:3", reason: "render-url-missing" }],
+});
+
+const metrics = (): NonNullable<RecordFigmaSnapshotInput["metrics"]> => ({
+  reductionRatio: 0.4,
+  screenCount: 2,
+  renderCount: 2,
+  designTokenCount: 3,
+  augmentation: { deterministic: 4, modelAugmented: 1, modelAugmentedShare: 0.2 },
+  navGraph: { screens: 2, transitions: 1 },
+  a11y: { findings: 0 },
 });
 
 describe("createNodeFigmaSnapshotStore", () => {
@@ -84,13 +135,64 @@ describe("createNodeFigmaSnapshotStore", () => {
     const loaded = loadOrThrow(store, RUN_ID);
 
     expect(loaded.figmaSnapshotSchemaVersion).toBe(1);
-    expect(loaded.integrityHash).toBe(BASE_INTEGRITY_HASH);
+    expect(loaded.integrityHash).toMatch(/^[0-9a-f]{64}$/u);
+    expect(loaded.integrityHash).not.toBe(STALE_INTEGRITY_HASH);
     expect(loaded.provenance.fileKey).toBe("KEY123");
     expect(loaded.provenance.version).toBe("v-pinned-1");
     expect(loaded.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2"]);
-    expect(firstScreen(loaded).integrityHash).toBe("b".repeat(64));
+    expect(firstScreen(loaded).integrityHash).toMatch(/^[0-9a-f]{64}$/u);
+    expect(firstScreen(loaded).integrityHash).not.toBe(STALE_SCREEN_HASH);
     expect(firstScreen(loaded).image.relativePath).toMatch(/\.png$/);
     expect(loaded.skippedScreens).toEqual([{ screenId: "1:3", reason: "render-url-missing" }]);
+  });
+
+  it("persists and verifies structural-only screen IR without writing an image side-file", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    const result = store.record({
+      ...baseInput(),
+      structuralScreens: [
+        {
+          screenId: "1:3",
+          reason: "render-screen-cap-exceeded",
+          irJson: screenIr("1:3", "Search", "Query"),
+          integrityHash: STALE_SCREEN_HASH,
+        },
+      ],
+    });
+    const loaded = loadOrThrow(store, RUN_ID);
+
+    expect(
+      loaded.structuralScreens?.map((s) => ({ screenId: s.screenId, reason: s.reason })),
+    ).toEqual([{ screenId: "1:3", reason: "render-screen-cap-exceeded" }]);
+    expect(loaded.structuralScreens?.[0]?.irJson).toMatchObject({ id: "1:3", name: "Search" });
+    expect(loaded.structuralScreens?.[0]?.integrityHash).toMatch(/^[0-9a-f]{64}$/u);
+    expect(loaded.structuralScreens?.[0]?.integrityHash).not.toBe(STALE_SCREEN_HASH);
+    expect(readdirSync(result.sideFileDir).filter((name) => name.endsWith(".png"))).toHaveLength(2);
+  });
+
+  it("rejects tampered structural-only screen IR on load", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    store.record({
+      ...baseInput(),
+      structuralScreens: [
+        {
+          screenId: "1:3",
+          reason: "render-screen-cap-exceeded",
+          irJson: screenIr("1:3", "Search", "Query"),
+          integrityHash: STALE_SCREEN_HASH,
+        },
+      ],
+    });
+    const raw = readSnapshotFile();
+    const structuralRows = raw.structuralScreens as Record<string, unknown>[];
+    const first = structuralRows[0];
+    if (first === undefined) throw new Error("expected a structural-only screen row");
+    first.irJson = screenIr("1:3", "Tampered", "Query");
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
   });
 
   it("writes the render bytes as a side-file whose sha256 matches the bytes", () => {
@@ -103,6 +205,47 @@ describe("createNodeFigmaSnapshotStore", () => {
     const onDisk = readFileSync(join(result.sideFileDir, ref.relativePath));
     expect(Array.from(new Uint8Array(onDisk))).toEqual(Array.from(png(10)));
     expect(ref.byteLength).toBe(png(10).length);
+    const expectedSha256 = createHash("sha256")
+      .update(Buffer.from(png(10)))
+      .digest("hex");
+    expect(ref.sha256).toBe(expectedSha256);
+  });
+
+  it("loads verified render bytes for a stored image ref", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    store.record(baseInput());
+    const loaded = loadOrThrow(store, RUN_ID);
+    const image = store.loadImage(RUN_ID, firstScreen(loaded).image);
+
+    expect(image.mimeType).toBe("image/png");
+    expect(Array.from(image.bytes)).toEqual(Array.from(png(10)));
+    expect(image.byteLength).toBe(png(10).length);
+    expect(image.sha256).toBe(firstScreen(loaded).image.sha256);
+  });
+
+  it("loads metadata without verifying every image side-file, then verifies the requested image", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const result = store.record(baseInput());
+    const loaded = loadOrThrow(store, RUN_ID);
+    const second = loaded.screens[1];
+    if (second === undefined) throw new Error("expected a second screen");
+    writeFileSync(join(result.sideFileDir, second.image.relativePath), png(99));
+
+    const metadata = store.loadMetadata(RUN_ID);
+    expect(metadata?.screens).toHaveLength(2);
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+    expect(Array.from(store.loadImage(RUN_ID, firstScreen(loaded).image).bytes)).toEqual(
+      Array.from(png(10)),
+    );
+  });
+
+  it("rejects invalid JSON when loading metadata only", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    writeFileSync(snapshotFile(), "{", "utf8");
+
+    expect(() => store.loadMetadata(RUN_ID)).toThrow(EvidenceReadError);
   });
 
   it("is WRITE-ONCE: a second record for the same runId is refused", () => {
@@ -110,6 +253,178 @@ describe("createNodeFigmaSnapshotStore", () => {
     store.record(baseInput());
 
     expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
+  });
+
+  it("stores mutable display metadata without mutating the immutable snapshot record", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const immutableBefore = readFileSync(snapshotFile(), "utf8");
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+    expect(readFileSync(snapshotFile(), "utf8")).toBe(immutableBefore);
+    expect(readSnapshotFile().integrityHash).toBe(loadOrThrow(store, RUN_ID).integrityHash);
+  });
+
+  it("clears the mutable display name when an empty name is stored", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    store.updateUserMetadata(RUN_ID, {
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      displayName: "   ",
+      updatedAt: "2026-06-19T11:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({ updatedAt: "2026-06-19T11:00:00.000Z" });
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+  });
+
+  it("preserves an existing display name when only updatedAt changes", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    store.updateUserMetadata(RUN_ID, {
+      displayName: "  Release   baseline  ",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      updatedAt: "2026-06-19T11:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T11:00:00.000Z",
+    });
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+  });
+
+  it("rejects invalid mutable display names", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    expect(() =>
+      store.updateUserMetadata(RUN_ID, {
+        displayName: "x".repeat(121),
+        updatedAt: "2026-06-19T10:00:00.000Z",
+      }),
+    ).toThrow(EvidenceWriteError);
+    expect(() =>
+      store.updateUserMetadata(RUN_ID, {
+        displayName: "bad\u0007name",
+        updatedAt: "2026-06-19T10:00:00.000Z",
+      }),
+    ).toThrow(EvidenceWriteError);
+  });
+
+  it("ignores malformed mutable management sidecars on read", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const invalidRecords: readonly unknown[] = [
+      null,
+      [],
+      { figmaSnapshotManagementSchemaVersion: 0, runId: RUN_ID, updatedAt: "2026-06-19T10:00:00Z" },
+      {
+        figmaSnapshotManagementSchemaVersion: 1,
+        runId: RUN_ID_2,
+        updatedAt: "2026-06-19T10:00:00Z",
+      },
+      { figmaSnapshotManagementSchemaVersion: 1, runId: RUN_ID },
+      {
+        figmaSnapshotManagementSchemaVersion: 1,
+        runId: RUN_ID,
+        updatedAt: "2026-06-19T10:00:00Z",
+        displayName: 42,
+      },
+      {
+        figmaSnapshotManagementSchemaVersion: 1,
+        runId: RUN_ID,
+        updatedAt: "2026-06-19T10:00:00Z",
+        displayName: "bad\u0007name",
+      },
+    ];
+
+    for (const invalidRecord of invalidRecords) {
+      writeFileSync(snapshotManagementFile(), JSON.stringify(invalidRecord), "utf8");
+      expect(store.loadUserMetadata(RUN_ID)).toBeUndefined();
+    }
+    writeFileSync(snapshotManagementFile(), "{", "utf8");
+    expect(store.loadUserMetadata(RUN_ID)).toBeUndefined();
+  });
+
+  it("rejects metadata updates for missing snapshots", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    expect(() =>
+      store.updateUserMetadata(RUN_ID, {
+        displayName: "Release baseline",
+        updatedAt: "2026-06-19T10:00:00.000Z",
+      }),
+    ).toThrow(EvidenceWriteError);
+  });
+
+  it("deletes the snapshot record, side-files, and mutable management metadata together", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const result = store.record(baseInput());
+    store.updateUserMetadata(RUN_ID, {
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    const deleted = store.deleteSnapshot(RUN_ID);
+
+    expect(deleted).toEqual({
+      runId: RUN_ID,
+      recordDeleted: true,
+      sideFileDirDeleted: true,
+      metadataDeleted: true,
+    });
+    expect(store.load(RUN_ID)).toBeUndefined();
+    expect(lstatSync(snapshotFile(), { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(result.sideFileDir, { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(snapshotManagementFile(), { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  it("reports no deleted artifacts when deleting a missing snapshot", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    expect(store.deleteSnapshot(RUN_ID)).toEqual({
+      runId: RUN_ID,
+      recordDeleted: false,
+      sideFileDirDeleted: false,
+      metadataDeleted: false,
+    });
+  });
+
+  it("does not overwrite a record that appears between the write-once precheck and final commit", () => {
+    const existing = "existing snapshot written by a concurrent recorder";
+    const store = createNodeFigmaSnapshotStore(dir, {
+      randomSuffix: () => {
+        writeFileSync(snapshotFile(), existing, { encoding: "utf8", flag: "wx" });
+        return "race";
+      },
+    });
+
+    expect(() =>
+      store.record({
+        ...baseInput(),
+        screens: [],
+        skippedScreens: [],
+        integrityHash: STALE_INTEGRITY_HASH,
+      }),
+    ).toThrow(EvidenceWriteError);
+    expect(readFileSync(snapshotFile(), "utf8")).toBe(existing);
   });
 
   it("redacts secrets out of the persisted IR content (token never on disk)", () => {
@@ -149,7 +464,7 @@ describe("createNodeFigmaSnapshotStore", () => {
       ...baseInput(),
       screens: [],
       skippedScreens: [],
-      integrityHash: EMPTY_INTEGRITY_HASH,
+      integrityHash: STALE_INTEGRITY_HASH,
     });
 
     const loaded = loadOrThrow(store, RUN_ID);
@@ -170,6 +485,28 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(loaded.links).toEqual([
       { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" },
     ]);
+    expect(loaded.artifactHashes?.links).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("filters external URL targets out of persisted inter-screen links", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      links: [
+        { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" },
+        { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "I4:99" },
+        { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "url:https://example.com" },
+        { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "https://example.com" },
+        { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "mailto:user@example.com" },
+      ],
+    });
+
+    const loaded = loadOrThrow(store, RUN_ID);
+    expect(loaded.links).toEqual([
+      { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" },
+      { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "I4:99" },
+    ]);
+    expect(JSON.stringify(loaded)).not.toContain("https://example.com");
   });
 
   it("omits `links` from the persisted record when none are provided (older snapshot)", () => {
@@ -205,6 +542,117 @@ describe("createNodeFigmaSnapshotStore", () => {
       rmSync(other, { recursive: true, force: true });
     }
   });
+
+  it("round-trips optional design tokens with an artifact hash when provided", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const tokens = {
+      colors: [{ id: "color:#000000", kind: "color", value: "#000000" }],
+      typography: [],
+      spacing: [],
+      radius: [],
+    };
+    store.record({ ...baseInput(), tokens });
+
+    const loaded = loadOrThrow(store, RUN_ID);
+    expect(loaded.tokens).toEqual(tokens);
+    expect(loaded.artifactHashes?.tokens).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("round-trips optional numeric metrics with an artifact hash when provided", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const m = metrics();
+    store.record({ ...baseInput(), metrics: m });
+
+    const loaded = loadOrThrow(store, RUN_ID);
+    expect(loaded.metrics).toEqual(m);
+    expect(loaded.artifactHashes?.metrics).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("rejects a record whose links artifact was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      links: [{ sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" }],
+    });
+
+    const raw = readSnapshotFile();
+    raw.links = [{ sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:999" }];
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose tokens artifact was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      tokens: { colors: [], typography: [], spacing: [], radius: [] },
+    });
+
+    const raw = readSnapshotFile();
+    raw.tokens = { colors: [{ id: "color:#ff0000", kind: "color", value: "#ff0000" }] };
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose metrics artifact was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({ ...baseInput(), metrics: metrics() });
+
+    const raw = readSnapshotFile();
+    raw.metrics = { ...(raw.metrics as Record<string, unknown>), renderCount: 999 };
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("omits old optional links/tokens/metrics when artifact hashes are missing", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      links: [{ sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" }],
+      tokens: { colors: [], typography: [], spacing: [], radius: [] },
+      metrics: metrics(),
+    });
+
+    const raw = readSnapshotFile();
+    const legacy = Object.fromEntries(
+      Object.entries(raw).filter(([key]) => key !== "artifactHashes"),
+    );
+    writeSnapshotFile(legacy);
+
+    const loaded = loadOrThrow(store, RUN_ID);
+    expect(loaded.links).toBeUndefined();
+    expect(loaded.tokens).toBeUndefined();
+    expect(loaded.metrics).toBeUndefined();
+  });
+
+  it("loads a snapshot whose screens were recorded in reversed screenId order (sort invariant #753)", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const base = baseInput();
+    const other = mkdtempSync(join(tmpdir(), "figma-snapshot-reversed-"));
+    try {
+      const reference = createNodeFigmaSnapshotStore(other);
+      reference.record(base);
+      const referenceHash = loadOrThrow(reference, RUN_ID).integrityHash;
+
+      // Record the same two screens as baseInput but in DESCENDING screenId order. The
+      // snapshot-level integrityHash is order-independent (recompute sorts by screenId), so the
+      // loaded hash must match the reference while the persisted screen order stays reversed.
+      // RED if the .sort() is dropped from recomputeSnapshotIntegrityHash in store.ts.
+      store.record({
+        ...base,
+        screens: [...base.screens].reverse(),
+        integrityHash: STALE_INTEGRITY_HASH,
+      });
+      const loaded = loadOrThrow(store, RUN_ID);
+      expect(loaded.integrityHash).toBe(referenceHash);
+      expect(loaded.screens.map((s) => s.screenId)).toEqual(["1:2", "1:1"]);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── Integrity check on load (#3) ────────────────────────────────────────────────────────────
@@ -226,11 +674,64 @@ describe("createNodeFigmaSnapshotStore — integrity check on load", () => {
     const qiDir = join(dir, "qi");
     const file = join(qiDir, `${RUN_ID}.figma-snapshot.json`);
     const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-    const screens = raw.screens as Record<string, unknown>[];
+    const screens = rawScreens(raw);
     if (screens[0] !== undefined) {
       screens[0] = { ...screens[0], integrityHash: "d".repeat(64) };
     }
     writeFileSync(file, JSON.stringify(raw), "utf8");
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose persisted screen IR was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    const raw = readSnapshotFile();
+    const screens = rawScreens(raw);
+    if (screens[0] !== undefined) {
+      screens[0] = { ...screens[0], irJson: screenIr("1:1", "Tampered") };
+    }
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose persisted image sha256 was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    const raw = readSnapshotFile();
+    const first = rawScreens(raw)[0];
+    if (first !== undefined) {
+      first.image = { ...rawImage(first), sha256: "f".repeat(64) };
+    }
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose image side-file path was tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    const raw = readSnapshotFile();
+    const first = rawScreens(raw)[0];
+    if (first !== undefined) {
+      first.image = { ...rawImage(first), relativePath: "missing.png" };
+    }
+    writeSnapshotFile(raw);
+
+    expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
+  it("rejects a record whose image side-file bytes were tampered after persist", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const result = store.record(baseInput());
+    const raw = readSnapshotFile();
+    const first = rawScreens(raw)[0];
+    if (first === undefined) throw new Error("expected screen");
+    writeFileSync(join(result.sideFileDir, String(rawImage(first).relativePath)), png(99));
 
     expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
   });
@@ -345,6 +846,87 @@ describe("createNodeFigmaSnapshotStore — listByScope", () => {
     // Only the valid record is returned.
     expect(store.listByScope("KEY123", "0:1")).toHaveLength(1);
   });
+
+  it("skips symlinked record files when scanning a scope", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const qiDir = join(dir, "qi");
+    const outsideRecord = join(dir, "outside-snapshot.json");
+    writeFileSync(
+      outsideRecord,
+      JSON.stringify({
+        runId: RUN_ID_2,
+        provenance: {
+          fileKey: "KEY123",
+          nodeId: "0:1",
+          version: "v-linked",
+          fetchedAt: "2026-06-20T00:00:00.000Z",
+        },
+        integrityHash: "f".repeat(64),
+      }),
+      "utf8",
+    );
+    try {
+      symlinkSync(outsideRecord, join(qiDir, `${RUN_ID_2}.figma-snapshot.json`));
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    const results = store.listByScope("KEY123", "0:1");
+
+    expect(results.map((entry) => entry.runId)).toEqual([RUN_ID]);
+  });
+});
+
+describe("createNodeFigmaSnapshotStore — listRecent", () => {
+  it("returns recent run ids newest first across all scopes", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID,
+      provenance: {
+        fileKey: "KEY123",
+        nodeId: "0:1",
+        version: "v1",
+        fetchedAt: "2026-06-01T00:00:00.000Z",
+      },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_2,
+      provenance: {
+        fileKey: "KEY999",
+        nodeId: "9:9",
+        version: "v2",
+        fetchedAt: "2026-06-10T00:00:00.000Z",
+      },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_3,
+      provenance: {
+        fileKey: "KEY123",
+        nodeId: "0:2",
+        version: "v3",
+        fetchedAt: "2026-06-05T00:00:00.000Z",
+      },
+    });
+
+    expect(store.listRecent()).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
+    expect(store.listRecent(2)).toEqual([RUN_ID_2, RUN_ID_3]);
+    expect(store.listRecent(0)).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
+  });
+
+  it("skips unparseable snapshot files silently", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const qiDir = join(dir, "qi");
+    writeFileSync(join(qiDir, `${RUN_ID_2}.figma-snapshot.json`), "not json", "utf8");
+
+    expect(store.listRecent()).toEqual([RUN_ID]);
+  });
 });
 
 // ─── Retention enforcement (#4) ──────────────────────────────────────────────────────────────
@@ -384,10 +966,195 @@ describe("enforceFigmaSnapshotRetention", () => {
     expect(lstatSync(sideDir, { throwIfNoEntry: false })).toBeUndefined();
   });
 
+  it("refuses a symlinked side-file root before deleting snapshot records", () => {
+    if (process.platform === "win32") return;
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-01T00:00:00.000Z" },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_2,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-10T00:00:00.000Z" },
+    });
+    const sideFileBase = join(dir, "qi", "figma-snapshots");
+    const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-outside-"));
+    try {
+      rmSync(sideFileBase, { recursive: true, force: true });
+      mkdirSync(join(outside, RUN_ID), { recursive: true });
+      symlinkSync(outside, sideFileBase, "dir");
+
+      expect(() => {
+        enforceFigmaSnapshotRetention(dir, { maxRecords: 1 });
+      }).toThrow(EvidenceWriteError);
+      expect(lstatSync(snapshotFile(RUN_ID), { throwIfNoEntry: false })?.isFile()).toBe(true);
+      expect(lstatSync(join(outside, RUN_ID), { throwIfNoEntry: false })?.isDirectory()).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a symlinked per-run side-file dir before deleting that snapshot record", () => {
+    if (process.platform === "win32") return;
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-01T00:00:00.000Z" },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_2,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-10T00:00:00.000Z" },
+    });
+    const sideFileBase = join(dir, "qi", "figma-snapshots");
+    const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-run-outside-"));
+    const runSideDir = join(sideFileBase, RUN_ID);
+    try {
+      rmSync(runSideDir, { recursive: true, force: true });
+      mkdirSync(join(outside, RUN_ID), { recursive: true });
+      symlinkSync(join(outside, RUN_ID), runSideDir, "dir");
+
+      expect(() => {
+        enforceFigmaSnapshotRetention(dir, { maxRecords: 1 });
+      }).toThrow(EvidenceWriteError);
+      expect(lstatSync(snapshotFile(RUN_ID), { throwIfNoEntry: false })?.isFile()).toBe(true);
+      expect(lstatSync(join(outside, RUN_ID), { throwIfNoEntry: false })?.isDirectory()).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("is a no-op when the evidence dir does not exist yet", () => {
     const nonExistent = join(dir, "does-not-exist");
     expect(() => {
       enforceFigmaSnapshotRetention(nonExistent, { maxRecords: 1 });
     }).not.toThrow();
+  });
+});
+
+// Issue #1323 AC4 — retention is now OPERATIONAL: `enforceFigmaSnapshotRetention` runs once per
+// store instance from the `ensureSwept` seam. Figma snapshot records carry no retention policy id;
+// retention is count-based on `maxRecords`, configurable via store options. The default is a
+// generous 500 (matches the QI `qi:standard-90d` profile's maxRunArtifacts) so a normal local
+// fixture set is NEVER silently purged; deployments raise/lower it explicitly.
+describe("figma snapshot store-init retention (Issue #1323 AC4)", () => {
+  // Seed N records directly on disk (one store instance, whose own ensureSwept has already fired)
+  // so a FRESH store instance is what triggers the retention pass under test.
+  const seedRecords = (count: number, startEpochMs: number): void => {
+    const writer = createNodeFigmaSnapshotStore(dir);
+    for (let i = 0; i < count; i += 1) {
+      const runId = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      writer.record({
+        ...baseInput(),
+        runId,
+        provenance: {
+          ...baseInput().provenance,
+          fetchedAt: new Date(startEpochMs + i * 1000).toISOString(),
+        },
+      });
+    }
+  };
+
+  it("runs retention on a fresh store instance and evicts the oldest beyond an explicit cap", () => {
+    seedRecords(3, Date.parse("2026-06-01T00:00:00.000Z"));
+
+    // A fresh instance with an explicit small cap must evict the two oldest on first touch.
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent(); // any op fires ensureSwept once
+
+    const oldest = "00000000-0000-4000-8000-000000000000";
+    const middle = "00000000-0000-4000-8000-000000000001";
+    const newest = "00000000-0000-4000-8000-000000000002";
+    expect(lstatSync(snapshotFile(oldest), { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(snapshotFile(middle), { throwIfNoEntry: false })).toBeUndefined();
+    expect(store.load(oldest)).toBeUndefined();
+    expect(store.load(middle)).toBeUndefined();
+    expect(loadOrThrow(store, newest).runId).toBe(newest);
+  });
+
+  it("runs retention for listByScope-only callers", () => {
+    seedRecords(3, Date.parse("2026-06-01T00:00:00.000Z"));
+
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    const results = store.listByScope("KEY123", "0:1");
+
+    expect(results.map((entry) => entry.runId)).toEqual(["00000000-0000-4000-8000-000000000002"]);
+    expect(
+      lstatSync(snapshotFile("00000000-0000-4000-8000-000000000000"), {
+        throwIfNoEntry: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("retains records with missing fetchedAt instead of evicting them as oldest", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const uncertain = "00000000-0000-4000-8000-000000000000";
+    const raw = readSnapshotFile(uncertain);
+    raw.provenance = { ...(raw.provenance as Record<string, unknown>), fetchedAt: undefined };
+    writeSnapshotFile(raw, uncertain);
+
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent();
+
+    expect(lstatSync(snapshotFile(uncertain), { throwIfNoEntry: false })?.isFile()).toBe(true);
+    expect(
+      lstatSync(snapshotFile("00000000-0000-4000-8000-000000000001"), {
+        throwIfNoEntry: false,
+      })?.isFile(),
+    ).toBe(true);
+  });
+
+  it("retains records with invalid fetchedAt instead of evicting them as oldest", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const uncertain = "00000000-0000-4000-8000-000000000000";
+    const raw = readSnapshotFile(uncertain);
+    raw.provenance = { ...(raw.provenance as Record<string, unknown>), fetchedAt: "not-a-date" };
+    writeSnapshotFile(raw, uncertain);
+
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent();
+
+    expect(lstatSync(snapshotFile(uncertain), { throwIfNoEntry: false })?.isFile()).toBe(true);
+    expect(
+      lstatSync(snapshotFile("00000000-0000-4000-8000-000000000001"), {
+        throwIfNoEntry: false,
+      })?.isFile(),
+    ).toBe(true);
+  });
+
+  it("the conservative DEFAULT cap (500) does NOT delete a small fixture set", () => {
+    seedRecords(3, Date.parse("2026-06-01T00:00:00.000Z"));
+
+    const store = createNodeFigmaSnapshotStore(dir); // no retention option → default 500
+    store.listRecent();
+
+    // All three survive under the generous default.
+    for (let i = 0; i < 3; i += 1) {
+      const runId = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      expect(loadOrThrow(store, runId).runId).toBe(runId);
+    }
+  });
+
+  it("runs retention only once per store instance (idempotent ensureSwept)", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent();
+    const newest = "00000000-0000-4000-8000-000000000001";
+    // A second op on the SAME instance does not re-run retention (no throw, newest intact).
+    store.listRecent();
+    expect(loadOrThrow(store, newest).runId).toBe(newest);
+  });
+
+  it("a non-positive configured cap disables retention (no deletion)", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 0 } });
+    store.listRecent();
+    for (let i = 0; i < 2; i += 1) {
+      const runId = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      expect(loadOrThrow(store, runId).runId).toBe(runId);
+    }
   });
 });

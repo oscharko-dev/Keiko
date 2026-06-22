@@ -1,0 +1,449 @@
+/* ============================================================
+   KEIKO design tokens — lifted 1:1 from packages/keiko-ui globals.css
+   (dark theme). Brand: #4EBA87 "orca green".
+   ============================================================ */
+:root {
+  --bg: oklch(0.17 0.004 160);
+  --surface: oklch(0.205 0.004 160);
+  --card: oklch(0.235 0.004 160);
+  --card-2: oklch(0.265 0.004 160);
+  --inset: oklch(0.155 0.004 160);
+
+  --line: oklch(0.3 0.004 160);
+  --line-soft: oklch(0.26 0.004 160);
+  --line-strong: oklch(0.38 0.005 160);
+  --grid-dot: oklch(0.34 0.005 160);
+  --focus-w: 2px;
+
+  --fg: oklch(0.97 0.003 160);
+  --fg-muted: oklch(0.74 0.004 160);
+  --fg-dim: oklch(0.66 0.004 160);
+  --fg-faint: oklch(0.64 0.004 160);
+
+  --accent: oklch(0.72 0.124 160); /* brand "orca green" — was #4eba87, now oklch so the whole token system is single-space */
+  --accent-bright: oklch(0.78 0.13 160);
+  --accent-dim: color-mix(in oklch, #4eba87 18%, transparent);
+  --accent-line: color-mix(in oklch, #4eba87 40%, transparent);
+  --accent-glow: color-mix(in oklch, #4eba87 26%, transparent);
+  /* text-tone alias — equals --accent in dark; darkened to ≥4.5:1 on white in light */
+  --accent-text: var(--accent);
+  /* accessibility-tuned accent roles (measured live on a11y-audit.html) */
+  --accent-solid: var(--accent);          /* accent FILL with no text (checkbox/slider/step dot) — ≥3:1 vs surface */
+  --accent-solid-ink: var(--ink-inverse); /* the mark/glyph sitting on --accent-solid */
+  --accent-on-tint: var(--accent-text);   /* accent TEXT on an accent tint (chips, citations) — ≥4.5:1 */
+  --ink-inverse: oklch(0.18 0.005 160);
+
+  --warn: oklch(0.78 0.13 75);
+  --danger: oklch(0.68 0.16 25);
+  --ok: oklch(0.74 0.13 146);      /* success — its own status green (hue 146), separable from the interactive accent (160) */
+  --info: oklch(0.74 0.1 240);
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  --radius-lg: 18px;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* elevation — now defined for the DARK base too (was previously only set in
+     light/HC, leaving --shadow-card/-pop undefined in the default dark theme). */
+  --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.03) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 18px 50px -18px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--line);
+}
+
+/* ===== LIGHT THEME — warm-neutral, same orca-green accent (from globals.css) ===== */
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: oklch(0.955 0.004 160);
+  --surface: oklch(0.978 0.003 160);
+  --card: oklch(1 0 0);
+  --card-2: oklch(0.96 0.004 160);
+  --inset: oklch(0.945 0.005 160);
+  --line: oklch(0.88 0.006 160);
+  --line-soft: oklch(0.915 0.005 160);
+  --line-strong: oklch(0.8 0.008 160);
+  --grid-dot: oklch(0.78 0.012 160);
+  --fg: oklch(0.26 0.012 160);
+  --fg-muted: oklch(0.42 0.011 160);
+  --fg-dim: oklch(0.48 0.01 160);
+  --fg-faint: oklch(0.52 0.01 160);
+  --accent-text: oklch(0.48 0.13 160);
+  --accent-solid: oklch(0.52 0.15 160);  /* darker green: 4.96:1 vs white, room for a white mark */
+  --accent-solid-ink: oklch(1 0 0);
+  --accent-on-tint: oklch(0.43 0.13 160); /* 6.3:1 on the pale accent tint */
+  --ink-inverse: oklch(0.18 0.005 160);
+  --accent-bright: oklch(0.52 0.13 160);
+  --danger: oklch(0.5 0.18 25);
+  --warn: oklch(0.43 0.14 75);
+  --info: oklch(0.45 0.15 240);
+  --ok: oklch(0.5 0.13 146);
+  --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -12px rgba(20, 30, 25, 0.22);
+  --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);
+}
+
+/* ===== a11y base ===== */
+:focus-visible {
+  outline: var(--focus-w, 2px) solid transparent; /* surfaces the ring in forced-colors / Windows High Contrast */
+  outline-offset: 2px;
+  border-radius: 3px;
+  /* two-tone ring: a neutral separator hugging the control + the accent ring outside it.
+     Stays visible on ANY surface — including the green primary button, where a same-hue
+     ring would otherwise vanish (measured 1.0:1 dark / 2.46:1 light). */
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 calc(var(--focus-w, 2px) + 2px) var(--accent-text);
+}
+.skip-link {
+  position: fixed; top: 10px; left: 10px; z-index: 200;
+  padding: 10px 15px; background: var(--card); color: var(--fg);
+  border: 1px solid var(--accent-line); border-radius: var(--radius-sm);
+  font-family: var(--font-ui); font-size: 13px; text-decoration: none;
+  transform: translateY(-180%); transition: transform 0.15s;
+}
+.skip-link:focus { transform: none; }
+/* ============================================================
+   HIGH CONTRAST — a first-class, selectable third mode (not just a
+   bright-room nudge). Lifts EVERY text tone to WCAG AAA (≥7:1) and every
+   UI line to ≥3:1, thickens the focus ring, and brightens status + accent.
+   Pairs with BOTH appearances → four resolved palettes:
+     dark+HC · light+HC.
+
+   Resolution order (enterprise-correct — the OS can raise contrast,
+   an explicit in-app choice can raise it too; neither silently lowers it):
+     1. @media (prefers-contrast: more)  — follow the operating system
+     2. [data-hc="more"]                 — explicit in-app override (wins via specificity)
+   Measured (token vs --card), see accessibility.html:
+     dark+HC  fg 18.6 · muted 13.0 · dim 11.4 · faint 10.7 · accent 12.9 · line 5.1
+     light+HC fg 20.1 · muted 13.6 · dim 11.7 · faint 10.8 · accent 7.5  · line 7.4
+   ============================================================ */
+
+/* --- dark + high-contrast --- */
+/* Single-source HC palettes — the raw values live here exactly once (inert
+   until promoted), so the OS media query and the explicit in-app attribute
+   below both read from the same place. Change a value once, both paths follow. */
+:root {
+  /* HC · DARK palette */
+  --hc-d-bg: oklch(0.11 0.004 160);
+  --hc-d-surface: oklch(0.145 0.004 160);
+  --hc-d-card: oklch(0.185 0.004 160);
+  --hc-d-card-2: oklch(0.225 0.004 160);
+  --hc-d-inset: oklch(0.09 0.004 160);
+  --hc-d-line: oklch(0.62 0.006 160);
+  --hc-d-line-soft: oklch(0.5 0.005 160);
+  --hc-d-line-strong: oklch(0.74 0.006 160);
+  --hc-d-grid-dot: oklch(0.52 0.006 160);
+  --hc-d-fg: oklch(1 0 0);
+  --hc-d-fg-muted: oklch(0.88 0.004 160);
+  --hc-d-fg-dim: oklch(0.84 0.004 160);
+  --hc-d-fg-faint: oklch(0.82 0.004 160);
+  --hc-d-accent-bright: oklch(0.88 0.15 160);
+  --hc-d-accent-text: oklch(0.86 0.16 160);
+  --hc-d-accent-dim: color-mix(in oklch, var(--accent) 28%, transparent);
+  --hc-d-accent-line: color-mix(in oklch, var(--accent) 72%, transparent);
+  --hc-d-accent-glow: color-mix(in oklch, var(--accent) 42%, transparent);
+  --hc-d-warn: oklch(0.88 0.14 80);
+  --hc-d-danger: oklch(0.78 0.17 25);
+  --hc-d-ok: oklch(0.82 0.15 146);
+  --hc-d-info: oklch(0.84 0.12 240);
+  --hc-d-shadow-card: 0 0 0 1px var(--hc-d-line), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  --hc-d-shadow-pop: 0 0 0 1px var(--hc-d-line-strong), 0 18px 50px -18px rgba(0, 0, 0, 0.85);
+
+  /* HC · LIGHT palette */
+  --hc-l-bg: oklch(1 0 0);
+  --hc-l-surface: oklch(0.99 0.002 160);
+  --hc-l-card: oklch(1 0 0);
+  --hc-l-card-2: oklch(0.965 0.004 160);
+  --hc-l-inset: oklch(0.95 0.004 160);
+  --hc-l-line: oklch(0.45 0.008 160);
+  --hc-l-line-soft: oklch(0.6 0.006 160);
+  --hc-l-line-strong: oklch(0.35 0.01 160);
+  --hc-l-grid-dot: oklch(0.6 0.01 160);
+  --hc-l-fg: oklch(0.13 0.01 160);
+  --hc-l-fg-muted: oklch(0.3 0.012 160);
+  --hc-l-fg-dim: oklch(0.34 0.012 160);
+  --hc-l-fg-faint: oklch(0.36 0.012 160);
+  --hc-l-accent-text: oklch(0.42 0.14 160);
+  --hc-l-accent-bright: oklch(0.42 0.14 160);
+  --hc-l-accent-dim: color-mix(in oklch, var(--accent) 22%, transparent);
+  --hc-l-accent-line: color-mix(in oklch, var(--hc-l-accent-text) 78%, transparent);
+  --hc-l-accent-glow: color-mix(in oklch, var(--hc-l-accent-text) 32%, transparent);
+  --hc-l-danger: oklch(0.42 0.19 25);
+  --hc-l-warn: oklch(0.38 0.14 75);
+  --hc-l-info: oklch(0.4 0.16 240);
+  --hc-l-ok: oklch(0.4 0.14 146);
+  --hc-l-shadow-card: 0 0 0 1px var(--hc-l-line-strong);
+  --hc-l-shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.32), 0 0 0 1px var(--hc-l-line-strong);
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    color-scheme: dark;
+    --bg: var(--hc-d-bg); --surface: var(--hc-d-surface); --card: var(--hc-d-card); --card-2: var(--hc-d-card-2); --inset: var(--hc-d-inset);
+    --line: var(--hc-d-line); --line-soft: var(--hc-d-line-soft); --line-strong: var(--hc-d-line-strong); --grid-dot: var(--hc-d-grid-dot);
+    --focus-w: 3px;
+    --fg: var(--hc-d-fg); --fg-muted: var(--hc-d-fg-muted); --fg-dim: var(--hc-d-fg-dim); --fg-faint: var(--hc-d-fg-faint);
+    --accent-bright: var(--hc-d-accent-bright); --accent-text: var(--hc-d-accent-text);
+    --accent-dim: var(--hc-d-accent-dim); --accent-line: var(--hc-d-accent-line); --accent-glow: var(--hc-d-accent-glow);
+    --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
+    --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
+  }
+  /* --- light + high-contrast --- */
+  [data-theme="light"] {
+    color-scheme: light;
+    --bg: var(--hc-l-bg); --surface: var(--hc-l-surface); --card: var(--hc-l-card); --card-2: var(--hc-l-card-2); --inset: var(--hc-l-inset);
+    --line: var(--hc-l-line); --line-soft: var(--hc-l-line-soft); --line-strong: var(--hc-l-line-strong); --grid-dot: var(--hc-l-grid-dot);
+    --focus-w: 3px;
+    --fg: var(--hc-l-fg); --fg-muted: var(--hc-l-fg-muted); --fg-dim: var(--hc-l-fg-dim); --fg-faint: var(--hc-l-fg-faint);
+    --accent-text: var(--hc-l-accent-text); --accent-bright: var(--hc-l-accent-bright);
+    --accent-dim: var(--hc-l-accent-dim); --accent-line: var(--hc-l-accent-line); --accent-glow: var(--hc-l-accent-glow);
+    --danger: var(--hc-l-danger); --warn: var(--hc-l-warn); --info: var(--hc-l-info); --ok: var(--hc-l-ok);
+    --shadow-card: var(--hc-l-shadow-card); --shadow-pop: var(--hc-l-shadow-pop);
+  }
+}
+
+/* explicit in-app override — identical palettes, higher specificity so an
+   in-app "High" choice raises contrast even when the OS hasn't asked. */
+[data-hc="more"] {
+  color-scheme: dark;
+  --bg: var(--hc-d-bg); --surface: var(--hc-d-surface); --card: var(--hc-d-card); --card-2: var(--hc-d-card-2); --inset: var(--hc-d-inset);
+  --line: var(--hc-d-line); --line-soft: var(--hc-d-line-soft); --line-strong: var(--hc-d-line-strong); --grid-dot: var(--hc-d-grid-dot);
+  --focus-w: 3px;
+  --fg: var(--hc-d-fg); --fg-muted: var(--hc-d-fg-muted); --fg-dim: var(--hc-d-fg-dim); --fg-faint: var(--hc-d-fg-faint);
+  --accent-bright: var(--hc-d-accent-bright); --accent-text: var(--hc-d-accent-text);
+  --accent-dim: var(--hc-d-accent-dim); --accent-line: var(--hc-d-accent-line); --accent-glow: var(--hc-d-accent-glow);
+  --warn: var(--hc-d-warn); --danger: var(--hc-d-danger); --ok: var(--hc-d-ok); --info: var(--hc-d-info);
+  --shadow-card: var(--hc-d-shadow-card); --shadow-pop: var(--hc-d-shadow-pop);
+}
+[data-hc="more"][data-theme="light"] {
+  color-scheme: light;
+  --bg: var(--hc-l-bg); --surface: var(--hc-l-surface); --card: var(--hc-l-card); --card-2: var(--hc-l-card-2); --inset: var(--hc-l-inset);
+  --line: var(--hc-l-line); --line-soft: var(--hc-l-line-soft); --line-strong: var(--hc-l-line-strong); --grid-dot: var(--hc-l-grid-dot);
+  --focus-w: 3px;
+  --fg: var(--hc-l-fg); --fg-muted: var(--hc-l-fg-muted); --fg-dim: var(--hc-l-fg-dim); --fg-faint: var(--hc-l-fg-faint);
+  --accent-text: var(--hc-l-accent-text); --accent-bright: var(--hc-l-accent-bright);
+  --accent-dim: var(--hc-l-accent-dim); --accent-line: var(--hc-l-accent-line); --accent-glow: var(--hc-l-accent-glow);
+  --danger: var(--hc-l-danger); --warn: var(--hc-l-warn); --info: var(--hc-l-info); --ok: var(--hc-l-ok);
+  --shadow-card: var(--hc-l-shadow-card); --shadow-pop: var(--hc-l-shadow-pop);
+}
+
+/* Windows / forced-colors High Contrast — defer to the OS palette and make
+   sure the focus ring and card edges survive the colour override. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+  .kx-win,
+  .card { border: 1px solid CanvasText; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ===== board shells ===================================================== */
+.kx {
+  height: 100%;
+  font-family: var(--font-ui);
+  color: var(--fg);
+  box-sizing: border-box;
+}
+.kx *,
+.kx *::before,
+.kx *::after { box-sizing: border-box; }
+
+.kx-bg      { background: var(--bg); }
+.kx-surface { background: var(--surface); }
+.kx-card    { background: var(--card); }
+
+/* board header label */
+.kx-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.kx-tag {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  color: var(--accent-text);
+}
+.kx-sub {
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+
+/* ===== window mock ====================================================== */
+.kx-win {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: 0 1px 0 0 oklch(1 0 0 / 0.03) inset, 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.kx-winhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.kx-winhead .kx-ico { display: grid; place-items: center; color: var(--fg-dim); }
+.kx-wintitle { font-size: 13.5px; font-weight: 650; color: var(--fg); }
+.kx-winsub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  background: var(--inset);
+  padding: 2px 7px;
+  border-radius: 6px;
+}
+.kx-grow { flex: 1; }
+.kx-winbody { padding: 15px; display: flex; flex-direction: column; gap: 9px; }
+.kx-skel { height: 8px; border-radius: 5px; background: var(--inset); }
+.kx-skel.s1 { width: 64%; }
+.kx-skel.s2 { width: 86%; }
+.kx-skel.s3 { width: 40%; }
+
+/* ===== window controls ================================================== */
+.kx-controls { display: flex; align-items: center; gap: 3px; }
+.kx-ctl {
+  position: relative;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--fg-faint);
+  transition: color 0.12s;
+}
+.kx-ctl svg { position: relative; z-index: 1; overflow: visible; }
+.kx-chip {
+  position: absolute;
+  inset: 3px;
+  border-radius: 7px;
+  opacity: 0;
+  transition: opacity 0.12s, transform 0.12s;
+}
+
+/* rest -> hover reveal (real :hover OR forced via data-force) */
+.kx-ctl:hover,
+.kx-ctl[data-force="hover"] { color: var(--fg); }
+.kx-ctl:hover .kx-chip,
+.kx-ctl[data-force="hover"] .kx-chip { opacity: 1; }
+
+/* semantic tint — only on interaction, the "whisper" */
+.kx-ctl[data-act="max"]:hover,
+.kx-ctl[data-act="max"][data-force="hover"]   { color: var(--accent-text); }
+.kx-ctl[data-act="close"]:hover,
+.kx-ctl[data-act="close"][data-force="hover"] { color: var(--danger); }
+
+/* — Kerf: chamfered chip, the cut-corner signature — */
+.kx-ctl[data-dir="kerf"] .kx-chip {
+  background: var(--card-2);
+  clip-path: polygon(0 0, 70% 0, 100% 32%, 100% 100%, 0 100%);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.kx-ctl[data-dir="kerf"][data-act="max"] .kx-chip   { box-shadow: inset 0 0 0 1px var(--accent-line); }
+.kx-ctl[data-dir="kerf"][data-act="close"] .kx-chip { box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--danger) 55%, transparent); }
+
+/* — Ductus: soft round chip — */
+.kx-ctl[data-dir="ductus"] .kx-chip { background: var(--card-2); border-radius: 50%; }
+.kx-ctl[data-dir="ductus"][data-act="max"] .kx-chip   { background: color-mix(in oklch, var(--accent) 14%, var(--card-2)); }
+.kx-ctl[data-dir="ductus"][data-act="close"] .kx-chip { background: color-mix(in oklch, var(--danger) 14%, var(--card-2)); }
+
+/* — Lift: ring halo — */
+.kx-ctl[data-dir="lift"] .kx-chip {
+  background: transparent;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--line-soft) inset;
+}
+.kx-ctl[data-dir="lift"]:hover .kx-chip,
+.kx-ctl[data-dir="lift"][data-force="hover"] .kx-chip {
+  box-shadow: 0 0 0 1px var(--line) inset, 0 0 0 4px var(--accent-glow);
+}
+.kx-ctl[data-dir="lift"][data-act="close"]:hover .kx-chip,
+.kx-ctl[data-dir="lift"][data-act="close"][data-force="hover"] .kx-chip {
+  box-shadow: 0 0 0 1px var(--line) inset, 0 0 0 4px color-mix(in oklch, var(--danger) 26%, transparent);
+}
+.kx-ctl[data-act="min"]:active .kx-chip,
+.kx-ctl[data-act="max"]:active .kx-chip,
+.kx-ctl[data-act="close"]:active .kx-chip { transform: scale(0.92); }
+
+/* forced "active/pressed" state (used in the spec state table) */
+.kx-ctl[data-force="active"] { color: var(--fg); }
+.kx-ctl[data-force="active"] .kx-chip { opacity: 1; transform: scale(0.9); }
+.kx-ctl[data-force="active"][data-act="max"]   { color: var(--accent-text); }
+.kx-ctl[data-force="active"][data-act="close"] { color: var(--danger); }
+.kx-ctl[data-dir="lift"][data-force="active"] .kx-chip {
+  box-shadow: 0 0 0 1px var(--line) inset, 0 0 0 4px var(--accent-glow);
+}
+.kx-ctl[data-dir="lift"][data-act="close"][data-force="active"] .kx-chip {
+  box-shadow: 0 0 0 1px var(--line) inset, 0 0 0 4px color-mix(in oklch, var(--danger) 26%, transparent);
+}
+
+/* ===== state comparison strip =========================================== */
+.kx-states { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.kx-state {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  padding: 13px 12px 14px;
+}
+.kx-state-h {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin-bottom: 12px;
+}
+.kx-state-row { display: flex; align-items: center; gap: 18px; }
+.kx-state-cell { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.kx-state-cell .kx-cap { font-size: 10px; color: var(--fg-faint); font-family: var(--font-mono); }
+
+/* ===== icon grid ======================================================== */
+.kx-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-auto-rows: 1fr;
+  gap: 12px;
+}
+.kx-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+}
+.kx-cell .kx-cap { font-size: 10.5px; color: var(--fg-faint); font-family: var(--font-mono); letter-spacing: 0.02em; }
+
+/* ===== rule card ======================================================== */
+.kx-rule { display: flex; flex-direction: column; gap: 16px; }
+.kx-rule-name { font-size: 25px; font-weight: 600; letter-spacing: -0.01em; margin-top: 2px; }
+.kx-rule-hero {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background:
+    radial-gradient(circle at 1px 1px, var(--line-soft) 1px, transparent 0) 0 0 / 18px 18px,
+    var(--surface);
+  color: var(--fg);
+}
+.kx-rule-desc { font-size: 12.5px; line-height: 1.5; color: var(--fg-muted); }
+.kx-specs { display: flex; flex-direction: column; gap: 7px; }
+.kx-spec { display: flex; gap: 12px; font-size: 11.5px; color: var(--fg-dim); align-items: baseline; }
+.kx-spec b { color: var(--fg); font-weight: 600; font-family: var(--font-mono); font-size: 10.5px; min-width: 58px; letter-spacing: 0.02em; }

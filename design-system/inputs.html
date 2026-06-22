@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inputs &amp; Forms · Keiko Design System</title>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <link rel="stylesheet" href="keiko-inputs.css" />
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Components · Forms</div>
+        <h1>Inputs &amp; <span class="dim">forms.</span></h1>
+        <p class="lead">The field, select, toggle and search in Components, completed: checkbox, radio, slider, stepper, combobox, tag input, file upload and a segmented date field. One <code style="font-family:var(--font-mono);color:var(--accent-text)">--input-*</code> token set and one two-tone focus ring underneath all of them.</p>
+      </header>
+
+      <!-- CHOICE -->
+      <section class="sec" id="choice">
+        <div class="sec-head"><div class="num">01 — CHOICE</div><h2>Checkbox &amp; radio</h2><p>Custom marks, accent fill on selection, real <code>:focus-visible</code> rings, indeterminate and disabled.</p></div>
+        <div class="card demo-card" style="display:grid;grid-template-columns:1fr 1fr;gap:30px">
+          <div class="demo-stack">
+            <div class="sub-head">Checkbox</div>
+            <label class="c-check"><input type="checkbox" checked /><span class="bx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5" /></svg></span>Run on every push</label>
+            <label class="c-check"><input type="checkbox" id="indet" /><span class="bx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5" /></svg></span>Notify reviewers (some)</label>
+            <label class="c-check is-disabled"><input type="checkbox" disabled /><span class="bx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5" /></svg></span>Require 2 approvals (locked)</label>
+          </div>
+          <div class="demo-stack">
+            <div class="sub-head">Radio</div>
+            <label class="c-radio"><input type="radio" name="vis" checked /><span class="rb"></span>Private</label>
+            <label class="c-radio"><input type="radio" name="vis" /><span class="rb"></span>Team</label>
+            <label class="c-radio"><input type="radio" name="vis" /><span class="rb"></span>Public</label>
+          </div>
+        </div>
+      </section>
+
+      <!-- RANGE -->
+      <section class="sec" id="range">
+        <div class="sec-head"><div class="num">02 — RANGE &amp; NUMBER</div><h2>Slider &amp; stepper</h2><p>Accent track fill and a haloed thumb; the stepper pairs nudge buttons with a monospace value.</p></div>
+        <div class="card demo-card" style="display:grid;grid-template-columns:1.4fr 1fr;gap:30px;align-items:center">
+          <div class="demo-stack" style="gap:22px">
+            <div><div class="c-label" id="temperature-label">Temperature</div><div class="c-slider"><input type="range" min="0" max="100" value="35" id="sl1" aria-labelledby="temperature-label" /><span class="val" id="sv1">0.35</span></div></div>
+            <div><div class="c-label" id="max-tokens-label">Max tokens</div><div class="c-slider"><input type="range" min="256" max="8192" step="256" value="4096" id="sl2" aria-labelledby="max-tokens-label" /><span class="val" id="sv2">4096</span></div></div>
+          </div>
+          <div class="demo-stack">
+            <div class="c-label" id="parallel-runs-label">Parallel runs</div>
+            <div class="c-stepper">
+              <button aria-label="Decrease" data-step="-1"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 12 h12" /></svg></button>
+              <input id="step" value="4" inputmode="numeric" aria-labelledby="parallel-runs-label" />
+              <button aria-label="Increase" data-step="1"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 6 v12 M6 12 h12" /></svg></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- COMBO + TAGS -->
+      <section class="sec" id="combo">
+        <div class="sec-head"><div class="num">03 — SEARCH &amp; MULTI</div><h2>Combobox &amp; tag input</h2><p>Type-ahead with a token-styled listbox, and a free-entry tag field. Both share the field's focus ring.</p></div>
+        <div class="card demo-card" style="display:grid;grid-template-columns:1fr 1fr;gap:30px;align-items:start">
+          <div>
+            <div class="c-label">Model</div>
+            <div class="c-combo" id="combo">
+              <div class="c-combo-input"><input type="text" placeholder="Search models…" id="combo-in" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="combo-list" aria-autocomplete="list" aria-label="Model" /><span class="chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9 l6 6 6-6" /></svg></span></div>
+              <div class="c-combo-list" id="combo-list" role="listbox" aria-label="Models" hidden></div>
+            </div>
+          </div>
+          <div>
+            <div class="c-label" id="reviewers-label">Reviewers</div>
+            <div class="c-tagfield" id="tagfield">
+              <span class="c-tag">@maya<button aria-label="Remove @maya">✕</button></span>
+              <span class="c-tag">@theo<button aria-label="Remove @theo">✕</button></span>
+              <input type="text" placeholder="Add…" id="taginput" aria-labelledby="reviewers-label" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FILE + DATE -->
+      <section class="sec" id="file">
+        <div class="sec-head"><div class="num">04 — UPLOAD &amp; DATE</div><h2>File upload &amp; date field</h2><p>A dashed dropzone that lights up on hover/drag, an uploaded-file row with progress, and a segmented date input.</p></div>
+        <div class="card demo-card" style="display:grid;grid-template-columns:1.2fr 1fr;gap:30px;align-items:start">
+          <div class="demo-stack">
+            <button class="c-drop" id="drop" type="button" aria-describedby="drop-help">
+              <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16 V4 M7 9 l5-5 5 5" /><path d="M5 16 v3 a1 1 0 0 0 1 1 h12 a1 1 0 0 0 1-1 v-3" /></svg></span>
+              <div class="tt"><b>Click to upload</b> or drag &amp; drop</div>
+              <div class="ts" id="drop-help">PNG, SVG or PDF · up to 10 MB</div>
+            </button>
+            <div class="c-fileitem">
+              <span class="fi"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3 h7 l5 5 v13 H7 Z" /><path d="M14 3 v5 h5" /></svg></span>
+              <div style="flex:1"><div class="nm">keiko-tokens.css <span class="mt">· 16.3 KB · 72%</span></div><div class="bar"><i style="width:72%"></i></div></div>
+            </div>
+          </div>
+          <div class="demo-stack">
+            <div class="c-label">Schedule</div>
+            <div class="c-datefield">
+              <span class="seg" tabindex="0" role="spinbutton" aria-label="Day" aria-valuemin="1" aria-valuemax="31" aria-valuenow="21">21</span><span class="sep">/</span><span class="seg" tabindex="0" role="spinbutton" aria-label="Month" aria-valuemin="1" aria-valuemax="12" aria-valuenow="6">06</span><span class="sep">/</span><span class="seg" tabindex="0" role="spinbutton" aria-label="Year" aria-valuemin="2026" aria-valuemax="2030" aria-valuenow="2026">2026</span>
+              <button class="cal" aria-label="Open calendar"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5.5" width="16" height="15" rx="2" /><path d="M4 9.5 H20 M8 3.5 V7 M16 3.5 V7" /></svg></button>
+            </div>
+            <div class="c-field-hint">Runs at 09:00 in the workspace timezone.</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      // slider readouts
+      var sl1 = document.getElementById("sl1"), sv1 = document.getElementById("sv1");
+      sl1.addEventListener("input", function () { sv1.textContent = (sl1.value / 100).toFixed(2); });
+      var sl2 = document.getElementById("sl2"), sv2 = document.getElementById("sv2");
+      sl2.addEventListener("input", function () { sv2.textContent = sl2.value; });
+      // stepper
+      var stepEl = document.getElementById("step");
+      document.querySelectorAll("[data-step]").forEach(function (b) {
+        b.addEventListener("click", function () {
+          var v = Math.max(1, Math.min(32, (parseInt(stepEl.value, 10) || 0) + parseInt(b.dataset.step, 10)));
+          stepEl.value = v;
+        });
+      });
+      // indeterminate
+      document.getElementById("indet").indeterminate = true;
+      // combobox — full WAI-ARIA combobox + listbox keyboard pattern
+      var MODELS = ["gpt-oss-120b", "gpt-oss-20b", "claude-sonnet", "claude-haiku", "claude-opus", "llama-3.1-70b"];
+      var ci = document.getElementById("combo-in"), cl = document.getElementById("combo-list"), sel = "", active = -1, filtered = [];
+      function openList(o) { cl.hidden = !o; ci.setAttribute("aria-expanded", o ? "true" : "false"); if (!o) { active = -1; ci.removeAttribute("aria-activedescendant"); } }
+      function paintCombo() {
+        var q = ci.value.toLowerCase();
+        filtered = MODELS.filter(function (m) { return m.toLowerCase().includes(q); });
+        if (active >= filtered.length) active = filtered.length - 1;
+        cl.innerHTML = filtered.length ? filtered.map(function (m, i) {
+          return '<div class="c-combo-opt' + (i === active ? ' active' : '') + '" id="copt-' + i + '" role="option" aria-selected="' + (m === sel ? 'true' : 'false') + '" data-v="' + m + '">' + m + '<span class="ck"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5"/></svg></span></div>';
+        }).join("") : '<div class="c-combo-empty">No models match.</div>';
+        cl.querySelectorAll(".c-combo-opt").forEach(function (o) {
+          o.addEventListener("mousedown", function (e) { e.preventDefault(); choose(o.dataset.v); });
+        });
+        ci.setAttribute("aria-activedescendant", active >= 0 && filtered[active] ? "copt-" + active : "");
+      }
+      function choose(v) { sel = v; ci.value = v; openList(false); }
+      function move(d) {
+        if (cl.hidden) { openList(true); paintCombo(); }
+        if (!filtered.length) return;
+        active = (active + d + filtered.length) % filtered.length;
+        paintCombo();
+        var el = document.getElementById("copt-" + active); if (el) el.scrollIntoView({ block: "nearest" });
+      }
+      ci.addEventListener("focus", function () { openList(true); paintCombo(); });
+      ci.addEventListener("input", function () { active = -1; openList(true); paintCombo(); });
+      ci.addEventListener("blur", function () { setTimeout(function () { openList(false); }, 120); });
+      ci.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+        else if (e.key === "Enter") { if (!cl.hidden && active >= 0 && filtered[active]) { e.preventDefault(); choose(filtered[active]); } }
+        else if (e.key === "Escape") { if (!cl.hidden) { e.preventDefault(); openList(false); } }
+        else if (e.key === "Home" && !cl.hidden) { e.preventDefault(); active = 0; paintCombo(); }
+        else if (e.key === "End" && !cl.hidden) { e.preventDefault(); active = filtered.length - 1; paintCombo(); }
+      });
+      // tag input
+      var tf = document.getElementById("tagfield"), ti = document.getElementById("taginput");
+      tf.addEventListener("click", function (e) { var b = e.target.closest(".c-tag button"); if (b) b.parentNode.remove(); else ti.focus(); });
+      ti.addEventListener("keydown", function (e) {
+        if ((e.key === "Enter" || e.key === ",") && ti.value.trim()) {
+          e.preventDefault();
+          var t = document.createElement("span"); t.className = "c-tag";
+          var v = ti.value.trim().replace(/^@?/, "@");
+          var remove = document.createElement("button"); remove.setAttribute("aria-label", "Remove " + v); remove.textContent = "✕";
+          t.append(document.createTextNode(v), remove);
+          tf.insertBefore(t, ti); ti.value = "";
+        } else if (e.key === "Backspace" && !ti.value) {
+          var last = ti.previousElementSibling; if (last) last.remove();
+        }
+      });
+      // dropzone
+      var dz = document.getElementById("drop");
+      ["dragover", "dragenter"].forEach(function (ev) { dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add("is-over"); }); });
+      ["dragleave", "drop"].forEach(function (ev) { dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove("is-over"); }); });
+    </script>
+    <script src="theme-control.js"></script>
+  </body>
+</html>

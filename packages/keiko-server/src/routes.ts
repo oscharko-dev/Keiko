@@ -49,8 +49,10 @@ import {
   handleUnpinMemory,
   handleArchiveMemory,
   handleForgetMemory,
+  handleForgetMemories,
   handleDeleteMemory,
   handleCorrectMemory,
+  handleResolveMemoryConflict,
   handleAcceptMemoryProposal,
   handleRejectMemoryProposal,
 } from "./memory-handlers.js";
@@ -80,6 +82,25 @@ import {
   handleFilesPreview,
   handleFilesTree,
 } from "./files.js";
+import { handleEditorLanguage, handleEditorLanguageCapabilities } from "./editor/languageRoutes.js";
+import {
+  handleEditorContext,
+  handleEditorLocalKnowledgeRetrieve,
+  handleEditorRepoSearch,
+} from "./editor/contextRoutes.js";
+import { handleEditorCompletion } from "./editor/completionRoutes.js";
+import {
+  handleEditorInlineCompletion,
+  handleEditorInlineCompletionTelemetry,
+} from "./editor/inlineCompletionRoutes.js";
+import { handleEditorTestGeneration } from "./editor/testGenerationRoutes.js";
+import { handleEditorPatchApply } from "./editor/patchApplyRoutes.js";
+import {
+  handleEditorAgentActions,
+  handleEditorAgentEvents,
+  handleEditorAgentSessions,
+  handleEditorAgentSnapshot,
+} from "./editor/agentRoutes.js";
 import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
@@ -129,15 +150,25 @@ import {
   QI_REVIEW_ROUTE_GROUP,
   QI_EXPORT_ROUTE_GROUP,
   QI_EDIT_ROUTE_GROUP,
+  QI_RETENTION_ROUTE_GROUP,
   QI_TRACEABILITY_ROUTE_GROUP,
   QI_RECHECK_ROUTE_GROUP,
 } from "./qualityIntelligence/index.js";
 import {
+  handleFigmaListSnapshots,
+  handleFigmaInspectSnapshotScreenJson,
+  handleFigmaDeleteSnapshot,
   handleFigmaTriggerSnapshot,
   handleFigmaLoadSnapshot,
+  handleFigmaLoadSnapshotImage,
   handleFigmaRevokeToken,
+  handleFigmaUpdateSnapshotMetadata,
 } from "./qualityIntelligence/figmaSnapshotRoutes.js";
 import { handleFigmaGenerateCode } from "./qualityIntelligence/figmaCodegenRoutes.js";
+import {
+  handlePromptEnhancement,
+  handlePromptEnhancementEvidence,
+} from "./promptEnhancer/index.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -244,6 +275,88 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
   { method: "GET", pattern: "/api/files/content", handler: handleFilesContent },
   { method: "PATCH", pattern: "/api/files/content", handler: handleFilesContent },
+  // Issue #1198 — deterministic, model-free language intelligence (completion, diagnostics, hover,
+  // symbols) over an editor overlay (ADR-0042 D4). Capabilities advertises the registered providers.
+  {
+    method: "GET",
+    pattern: "/api/editor/language/capabilities",
+    handler: handleEditorLanguageCapabilities,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/language",
+    handler: (ctx, deps) => handleEditorLanguage(ctx, deps, deps.editorLanguageRouteOptions),
+  },
+  // Issue #1211 — governed coding-context retrieval (ADR-0042 D6). The context route assembles a
+  // bounded, redacted pack (repo-search always; Local Knowledge + memory only for explicit,
+  // embedding-eligible purposes) and returns the content-free wire pack; the repo-search and
+  // local-knowledge routes expose the governed building blocks (EvidenceAtom[] and query-only
+  // retrieval references). No browser-side retrieval, embedding, or model access.
+  { method: "POST", pattern: "/api/editor/context", handler: handleEditorContext },
+  { method: "POST", pattern: "/api/editor/repo-search", handler: handleEditorRepoSearch },
+  // Issue #1199 — governed completion gateway (ADR-0042 D4/D5/D6). Deterministic language-service
+  // completion (#1198) always, plus gated model-assisted completion (#1210) over coding context
+  // (#1211). Content-free response apart from reviewable insertText; the browser never reaches a model.
+  { method: "POST", pattern: "/api/editor/completion", handler: handleEditorCompletion },
+  // Issue #1200 — governed inline completion (ghost text, ADR-0042 D5/D6). Model-only, gated on an
+  // aligned FIM model (#1210) over coding context (#1211, purpose:inline); degrades to zero items
+  // (falling back to #1199) when unavailable, disabled by policy, or rate-limited. The telemetry
+  // route records content-free acceptance/rejection counts. The browser never reaches a model.
+  {
+    method: "POST",
+    pattern: "/api/editor/inline-completion",
+    handler: handleEditorInlineCompletion,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/inline-completion/telemetry",
+    handler: handleEditorInlineCompletionTelemetry,
+  },
+  // Issue #1202 — governed editor-driven test generation (ADR-0042 D7). Wave-2 surface shipped
+  // switched OFF: default → `disabled` (no retrieval/model/execution); enabled → `deferred` (governed
+  // #1211 discovery for provenance, but NO model call) until an enforced egress boundary unlocks
+  // candidate generation. No v1 flow executes model-generated code; the browser never reaches a model.
+  {
+    method: "POST",
+    pattern: "/api/editor/test-generation",
+    handler: handleEditorTestGeneration,
+  },
+  // Issue #1204 — governed editor-driven patch apply + post-apply verification (ADR-0042 D7, ADR-0043).
+  // Wave-2 surface shipped switched OFF: default → `disabled` (no validation/write/execution). When
+  // enabled, a reviewed candidate patch is applied only on an explicit user decision and only after
+  // keiko-tools validation (scope, conflict, no-silent-overwrite, limits); post-apply verification then
+  // re-confirms the applied test under an enforced, deny-by-default egress boundary (keiko-sandbox), and
+  // a failed verification surfaces a guarded revert proposal (never a silent rollback).
+  {
+    method: "POST",
+    pattern: "/api/editor/patch-apply",
+    handler: handleEditorPatchApply,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/agent/sessions",
+    handler: handleEditorAgentSessions,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/agent/snapshot",
+    handler: handleEditorAgentSnapshot,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/agent/actions",
+    handler: handleEditorAgentActions,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/agent/events",
+    handler: handleEditorAgentEvents,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/local-knowledge/retrieve",
+    handler: handleEditorLocalKnowledgeRetrieve,
+  },
   // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
   {
     method: "GET",
@@ -305,9 +418,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
     handler: handleReindexLocalKnowledgeCapsule,
   },
-  // Issue #211 — Memory Center governance routes (Epic #204).
+  // Issues #209/#211 — MemoriaViva governance routes (Epic #204).
   { method: "GET", pattern: "/api/memory", handler: handleListMemories },
   { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
+  { method: "POST", pattern: "/api/memory/forget", handler: handleForgetMemories },
+  {
+    method: "POST",
+    pattern: "/api/memory/conflicts/resolve",
+    handler: handleResolveMemoryConflict,
+  },
   { method: "GET", pattern: "/api/memory/:id", handler: handleGetMemory },
   { method: "PATCH", pattern: "/api/memory/:id", handler: handleEditMemory },
   { method: "POST", pattern: "/api/memory/:id/pin", handler: handlePinMemory },
@@ -333,7 +452,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/memory/capture-from-conversation",
     handler: handleMemoryCaptureFromConversation,
   },
-  // Issue #208 — explicit consolidation jobs for the Memory Center review surface.
+  // Issue #208 — explicit consolidation jobs for the MemoriaViva review surface.
   {
     method: "POST",
     pattern: "/api/memory/consolidation/jobs",
@@ -407,6 +526,14 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/quality-intelligence/sources/capabilities",
     handler: handleQiCapabilities,
   },
+  // Epic #1307 / Issue #1314 — Prompt Enhancer governed BFF route (additive). Composes the
+  // deterministic enhancer core (#1309–#1313) through the Model Gateway; never dispatches a model.
+  { method: "POST", pattern: "/api/prompt-enhancement", handler: handlePromptEnhancement },
+  {
+    method: "GET",
+    pattern: "/api/prompt-enhancement/evidence/:runId",
+    handler: handlePromptEnhancementEvidence,
+  },
   // Issue #280 (Epic #270) — Quality Intelligence UI read routes (additive). Composed from
   // keiko-evidence UNCHANGED (ADR-0023 D8).
   { method: "GET", pattern: "/api/quality-intelligence/runs", handler: handleListQiRuns },
@@ -422,6 +549,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Issue #726 (Epic #712) — inline candidate editing. Literal-suffix POST /runs/:id/edit
   // disambiguates against /runs/:id/cancel just like /review and /export above.
   ...QI_EDIT_ROUTE_GROUP,
+  // Issue #282 follow-up (Epic #270) — run-deletion control. DELETE /runs/:id is method-distinct
+  // from GET /runs/:id and sweeps every server-owned companion (ADR-0023 D8).
+  ...QI_RETENTION_ROUTE_GROUP,
   // Issue #740 (Epic #734) — requirement↔test traceability matrix export.
   ...QI_TRACEABILITY_ROUTE_GROUP,
   // Issue #743 (Epic #735) — drift re-check + targeted regeneration. Literal-suffix POST routes
@@ -449,9 +579,26 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/relationships/:id/explain", handler: handleRelationshipExplain },
   // Epic #750, Issue #756 — Figma Snapshot UI routes. PAT stays server-side; UI-safe projection only.
   // POST triggers a bounded snapshot-build from a board link; GET loads the stored summary.
-  // Token: resolved server-side from FIGMA_ACCESS_TOKEN env or vault; never in request or response.
+  // Token: resolved server-side from vault, config, or FIGMA_ACCESS_TOKEN env; never in response.
   { method: "POST", pattern: "/api/figma/snapshots", handler: handleFigmaTriggerSnapshot },
+  { method: "GET", pattern: "/api/figma/snapshots", handler: handleFigmaListSnapshots },
   { method: "GET", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaLoadSnapshot },
+  {
+    method: "PATCH",
+    pattern: "/api/figma/snapshots/:runId",
+    handler: handleFigmaUpdateSnapshotMetadata,
+  },
+  { method: "DELETE", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaDeleteSnapshot },
+  {
+    method: "GET",
+    pattern: "/api/figma/snapshots/:runId/screens/:screenId/json",
+    handler: handleFigmaInspectSnapshotScreenJson,
+  },
+  {
+    method: "GET",
+    pattern: "/api/figma/snapshots/:runId/screens/:screenIndex/image",
+    handler: handleFigmaLoadSnapshotImage,
+  },
   // Epic #750 #758/#760 — operator revokes the stored encrypted PAT (audited key removal).
   { method: "DELETE", pattern: "/api/figma/token", handler: handleFigmaRevokeToken },
   // Epic #750 #755 — design-to-code: emit reviewable HTML/CSS from a stored snapshot.

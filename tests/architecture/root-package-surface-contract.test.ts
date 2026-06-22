@@ -37,7 +37,9 @@ describe("root package surface contract", () => {
     expect(Array.isArray(contract.runtimeExports)).toBe(true);
     expect(Array.isArray(contract.declarationExports)).toBe(true);
     expect(contract.runtimeExports.length).toBeGreaterThan(0);
-    expect(contract.declarationExports.length).toBeGreaterThanOrEqual(contract.runtimeExports.length);
+    expect(contract.declarationExports.length).toBeGreaterThanOrEqual(
+      contract.runtimeExports.length,
+    );
   });
 
   it("keeps the root runtime allowlist sorted and duplicate-free", () => {

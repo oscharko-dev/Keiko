@@ -1,0 +1,210 @@
+/* ============================================================
+   components.css — Keiko component library (live demos).
+   Recreates the app's components, now CONSUMING the tier-2/3 token
+   layer (keiko-semantic-tokens.css) instead of reaching past it to raw
+   primitives. Every declaration resolves to the same primitive it did
+   before, so the rendered result is unchanged — but each component now
+   reads an intent/component token (button.* · input.* · surface.* …),
+   which is the contract product code should follow.
+   Exceptions, by design: success now uses --feedback-success (its own
+   status green) rather than the interactive accent; control heights read
+   the density tokens so [data-density="compact"] reflows the set.
+   ============================================================ */
+.ico { display: inline-grid; place-items: center; }
+
+/* demo scaffolding */
+.demo-card { padding: 26px 28px; }
+.demo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.demo-stack { display: flex; flex-direction: column; gap: 12px; }
+.demo-label { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 14px; }
+.cls { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-accent); }
+.muted-cap { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+
+/* ── buttons ─────────────────────────────────────────────── */
+.c-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: var(--control-height); padding: 0 var(--control-pad-x);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--button-secondary-border);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  font: var(--weight-medium) 13px var(--font-ui);
+  cursor: pointer;
+  transition: border-color 0.13s, background 0.13s, transform 0.06s;
+}
+.c-btn:hover { border-color: var(--border-strong); }
+.c-btn:active { transform: translateY(0.5px); }
+.c-btn--primary { background: var(--button-primary-surface); border-color: transparent; color: var(--button-primary-text); font-weight: var(--weight-semibold); }
+.c-btn--primary:hover { background: var(--button-primary-surface-hover); border-color: transparent; }
+.c-btn--accent { background: var(--surface-accent-subtle); border-color: var(--border-accent); color: var(--accent-on-tint); }
+.c-btn--accent:hover { background: var(--surface-accent-glow); border-color: var(--action-primary); }
+.c-btn--ghost { background: transparent; border-color: transparent; color: var(--action-tertiary-text); }
+.c-btn--ghost:hover { background: var(--surface-secondary); color: var(--text-primary); border-color: transparent; }
+.c-btn--danger { background: transparent; border-color: color-mix(in oklch, var(--feedback-danger) 45%, transparent); color: var(--feedback-danger); }
+.c-btn--danger:hover { background: color-mix(in oklch, var(--feedback-danger) 14%, transparent); }
+.c-btn--sm { height: var(--control-height-sm); padding: 0 10px; font-size: 12px; }
+.c-iconbtn {
+  width: 32px; height: 32px; display: grid; place-items: center;
+  border-radius: var(--radius-control); border: 1px solid transparent;
+  background: transparent; color: var(--text-secondary); cursor: pointer; transition: background 0.13s, color 0.13s;
+}
+.c-iconbtn:hover { background: var(--surface-secondary); color: var(--text-primary); }
+
+/* ── form controls ───────────────────────────────────────── */
+.c-field {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-subtle);
+  background: var(--input-surface);
+  color: var(--input-text);
+  font: 13px var(--font-ui);
+  outline: none;
+  transition: border-color 0.13s, box-shadow 0.13s;
+}
+.c-field::placeholder { color: var(--input-placeholder); }
+.c-field:focus { border-color: var(--input-border-focus); box-shadow: 0 0 0 3px var(--input-ring-focus); }
+.c-field--area { resize: vertical; min-height: 88px; line-height: 1.5; }
+.c-search { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-radius: var(--radius-control); background: var(--input-surface); border: 1px solid var(--border-subtle); color: var(--text-faint); }
+.c-search:focus-within { border-color: var(--input-border-focus); box-shadow: 0 0 0 3px var(--input-ring-focus); }
+.c-search input { flex: 1; min-width: 0; border: 0; background: none; outline: none; color: var(--input-text); font: 13px var(--font-ui); }
+.c-select { position: relative; display: inline-flex; align-items: center; }
+.c-select select {
+  appearance: none; -webkit-appearance: none;
+  padding: 9px 36px 9px 12px;
+  border-radius: var(--radius-control); border: 1px solid var(--input-border); background: var(--surface-primary); color: var(--text-primary);
+  font: 13px var(--font-ui); cursor: pointer; outline: none;
+}
+.c-select select:focus { border-color: var(--input-border-focus); box-shadow: 0 0 0 3px var(--input-ring-focus); }
+.c-select .chev { position: absolute; right: 11px; pointer-events: none; color: var(--text-faint); }
+.c-label { display: block; font-size: 11px; font-weight: var(--weight-semibold); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 8px; }
+
+/* ── toggle ──────────────────────────────────────────────── */
+.c-toggle { width: 42px; height: 24px; border-radius: var(--radius-pill); background: var(--surface-inset); border: 1px solid var(--border-default); position: relative; cursor: pointer; padding: 0; flex: none; transition: background 0.15s, border-color 0.15s; }
+.c-toggle span { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--text-primary); transition: left 0.16s, background 0.15s; }
+.c-toggle[aria-checked="true"] { background: var(--surface-accent-subtle); border-color: var(--border-accent); }
+.c-toggle[aria-checked="true"] span { left: 20px; background: var(--accent-bright); }
+.c-switchrow { display: flex; align-items: center; gap: 12px; }
+.c-switchrow .t { font-size: 13px; color: var(--text-primary); }
+
+/* ── tabs (segmented) ────────────────────────────────────── */
+.c-tabs { display: inline-flex; align-items: center; gap: 4px; }
+.c-tab { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: var(--radius-control); font: 13px var(--font-ui); color: var(--nav-item-text); border: 1px solid transparent; background: transparent; cursor: pointer; }
+.c-tab:hover { color: var(--nav-item-text-active); }
+.c-tab[aria-selected="true"] { background: var(--nav-item-surface-active); color: var(--nav-item-text-active); border-color: var(--border-subtle); }
+.c-seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--surface-inset); border: 1px solid var(--border-subtle); border-radius: var(--radius-control); }
+.c-seg button { padding: 5px 12px; border: 0; background: transparent; color: var(--text-secondary); border-radius: 6px; font: 12.5px var(--font-ui); cursor: pointer; }
+.c-seg button[aria-selected="true"] { background: var(--surface-secondary); color: var(--text-primary); }
+
+/* ── chips / badges / status ─────────────────────────────── */
+.c-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: var(--radius-control); font-size: 12.5px; color: var(--text-secondary); background: var(--surface-primary); border: 1px solid var(--border-subtle); }
+.c-chip:hover { border-color: var(--border-default); color: var(--text-primary); }
+.c-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--radius-pill); font: var(--weight-semibold) 11px var(--font-ui); border: 1px solid var(--border-subtle); color: var(--text-secondary); background: var(--surface-inset); }
+.c-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); }
+.c-badge--ok { color: var(--feedback-success); border-color: color-mix(in oklch, var(--feedback-success) 40%, transparent); background: color-mix(in oklch, var(--feedback-success) 12%, transparent); }
+.c-badge--ok .dot { background: var(--feedback-success); }
+.c-badge--warn { color: var(--feedback-warning); border-color: color-mix(in oklch, var(--feedback-warning) 40%, transparent); background: color-mix(in oklch, var(--feedback-warning) 12%, transparent); }
+.c-badge--warn .dot { background: var(--feedback-warning); }
+.c-badge--info { color: var(--feedback-info); border-color: color-mix(in oklch, var(--feedback-info) 40%, transparent); background: color-mix(in oklch, var(--feedback-info) 12%, transparent); }
+.c-badge--info .dot { background: var(--feedback-info); }
+.c-badge--danger { color: var(--feedback-danger); border-color: color-mix(in oklch, var(--feedback-danger) 40%, transparent); background: color-mix(in oklch, var(--feedback-danger) 12%, transparent); }
+.c-badge--danger .dot { background: var(--feedback-danger); }
+.c-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: var(--radius-pill); border: 1px solid var(--border-subtle); font-size: 11.5px; color: var(--text-secondary); white-space: nowrap; }
+
+/* ── tool rail ───────────────────────────────────────────── */
+.c-rail { width: 50px; background: var(--nav-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-surface); display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 5px; }
+.c-rail-btn { position: relative; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; color: var(--text-tertiary); border: 0; background: transparent; cursor: pointer; }
+.c-rail-btn:hover { background: var(--nav-item-surface-active); color: var(--text-primary); }
+.c-rail-btn[aria-current="true"] { background: var(--nav-item-surface-active); color: var(--nav-item-indicator); }
+.c-rail-btn[aria-current="true"]::before { content: ""; position: absolute; left: -6px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--nav-item-indicator); }
+.c-rail-new { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; color: var(--accent-on-tint); border: 1px solid var(--border-accent); background: var(--surface-accent-subtle); cursor: pointer; }
+.c-rail-new:hover { background: var(--surface-accent-glow); border-color: var(--action-primary); }
+.c-rail-div { width: 22px; height: 1px; background: var(--border-subtle); margin: 6px 0; }
+.c-rail-avatar { width: 28px; height: 28px; margin-top: 4px; border-radius: 50%; background: var(--surface-accent-subtle); color: var(--accent-on-tint); display: grid; place-items: center; font: 700 11px var(--font-ui); border: 1px solid var(--border-accent); }
+
+/* ── file tree ───────────────────────────────────────────── */
+.c-tree { padding: 8px; min-width: 240px; }
+.c-tree-row { display: flex; align-items: center; gap: 7px; width: 100%; padding: var(--row-pad-y) var(--row-pad-x); border-radius: 7px; font: 13.5px var(--font-ui); color: var(--text-secondary); text-align: left; border: 0; background: transparent; cursor: pointer; }
+.c-tree-row:hover { background: var(--surface-secondary); color: var(--text-primary); }
+.c-tree-row[aria-current="true"] { background: var(--surface-accent-subtle); color: var(--text-primary); }
+.c-tree-row .caret { color: var(--text-faint); transition: transform 0.12s; display: inline-grid; place-items: center; }
+.c-tree-row.open .caret { transform: rotate(90deg); }
+.c-tree-row.folder { color: var(--text-primary); font-weight: var(--weight-semibold); }
+.c-tree-row .sz { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.c-tree-indent { padding-left: 24px; }
+
+/* ── menu / dropdown ─────────────────────────────────────── */
+.c-menu { width: 220px; background: var(--popover-surface); border: 1px solid var(--popover-border); border-radius: var(--radius-surface); box-shadow: var(--popover-shadow); padding: 6px; }
+.c-menu-head { font-size: 10.5px; color: var(--text-secondary); padding: 6px 8px 8px; font-family: var(--font-mono); letter-spacing: 0.04em; }
+.c-menu-item { display: flex; align-items: center; gap: 11px; width: 100%; padding: 8px 9px; border-radius: var(--radius-control); text-align: left; font: 13.5px var(--font-ui); color: var(--text-secondary); border: 0; background: transparent; cursor: pointer; }
+.c-menu-item:hover { background: var(--menu-item-surface-hover); color: var(--text-primary); }
+.c-menu-item .k { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.c-menu-sep { height: 1px; background: var(--border-subtle); margin: 4px 2px; }
+
+/* ── toast / alert ───────────────────────────────────────── */
+.c-toast { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius-surface); background: var(--toast-surface); border: 1px solid var(--toast-border); box-shadow: var(--toast-shadow); max-width: 420px; }
+.c-toast .tx { flex: 1; min-width: 0; }
+.c-toast .tt { display: block; font-size: 13px; font-weight: var(--weight-semibold); color: var(--text-primary); }
+.c-toast .ts { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 1px; }
+.c-toast .ic { width: 30px; height: 30px; border-radius: var(--radius-control); display: grid; place-items: center; flex: none; background: var(--surface-accent-subtle); color: var(--accent-on-tint); border: 1px solid var(--border-accent); }
+.c-alert { display: flex; align-items: center; gap: 11px; padding: 11px 13px; border-radius: var(--radius-control); font-size: 12.5px; line-height: 1.45; color: var(--text-primary); }
+.c-alert--danger { border: 1px solid color-mix(in oklch, var(--feedback-danger) 48%, transparent); background: color-mix(in oklch, var(--feedback-danger) 18%, var(--surface-primary)); }
+.c-alert--ok { border: 1px solid color-mix(in oklch, var(--feedback-success) 42%, transparent); background: color-mix(in oklch, var(--feedback-success) 12%, transparent); }
+
+/* ── composer ────────────────────────────────────────────── */
+.c-composer { background: var(--card-surface); border: 1px solid var(--card-border); border-radius: var(--radius-floating); padding: 13px 14px 10px; box-shadow: var(--card-shadow); }
+.c-composer:focus-within { border-color: var(--input-border-focus); box-shadow: 0 0 0 3px var(--input-ring-focus), var(--card-shadow); }
+.c-composer textarea { width: 100%; border: 0; background: none; resize: none; outline: none; color: var(--text-primary); font: 15px/1.5 var(--font-ui); }
+.c-composer textarea::placeholder { color: var(--input-placeholder); }
+.c-composer-bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.c-composer-send { width: var(--control-height); height: var(--control-height); margin-left: auto; border-radius: 10px; display: grid; place-items: center; border: 0; cursor: pointer; color: var(--button-primary-text); background: var(--button-primary-surface); }
+.c-composer-send:hover { background: var(--button-primary-surface-hover); }
+
+/* ── messages & feedback ─────────────────────────────────── */
+/* severity is carried by a --sev custom prop, so one set of rules
+   styles every level. --ok now uses --feedback-success (its own status
+   green), so success reads as a status — not the interactive accent. */
+.c-msg { --sev: var(--text-tertiary); display: flex; gap: 12px; align-items: flex-start; padding: 13px 15px; border-radius: var(--radius-control); border: 1px solid var(--border-default); background: var(--surface-primary); }
+.c-msg--danger { --sev: var(--feedback-danger); }
+.c-msg--warn   { --sev: var(--feedback-warning); }
+.c-msg--info   { --sev: var(--feedback-info); }
+.c-msg--ok     { --sev: var(--feedback-success); }
+.c-msg--danger, .c-msg--warn, .c-msg--info, .c-msg--ok {
+  border-color: color-mix(in oklch, var(--sev) 40%, var(--border-default));
+  background: color-mix(in oklch, var(--sev) 8%, var(--surface-primary));
+}
+.c-msg-ico { flex: none; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; color: var(--sev); background: color-mix(in oklch, var(--sev) 15%, transparent); }
+.c-msg-bd { flex: 1; min-width: 0; }
+.c-msg-tt { font: var(--weight-semibold) 13px var(--font-ui); color: var(--text-primary); }
+.c-msg-tx { font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); margin-top: 2px; }
+.c-msg-tx code { font-family: var(--font-mono); font-size: 12px; color: var(--text-accent); }
+.c-msg-act { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
+.c-msg-close { flex: none; width: 26px; height: 26px; margin: -2px -5px 0 0; display: grid; place-items: center; border: 0; background: transparent; color: var(--text-faint); border-radius: 7px; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.c-msg-close:hover { background: color-mix(in oklch, var(--text-primary) 9%, transparent); color: var(--text-primary); }
+
+/* full-width banner — top of a window/surface */
+.c-banner { --sev: var(--feedback-info); display: flex; align-items: center; gap: 11px; padding: 11px 15px; border: 0; border-bottom: 1px solid color-mix(in oklch, var(--sev) 42%, var(--border-default)); background: color-mix(in oklch, var(--sev) 10%, var(--surface-primary)); font-size: 13px; color: var(--text-primary); }
+.c-banner--danger { --sev: var(--feedback-danger); }
+.c-banner--warn   { --sev: var(--feedback-warning); }
+.c-banner--info   { --sev: var(--feedback-info); }
+.c-banner--ok     { --sev: var(--feedback-success); }
+.c-banner .c-msg-ico { width: 20px; height: 20px; background: transparent; border-radius: 0; }
+.c-banner .gw { flex: 1; min-width: 0; }
+
+/* toast severities — tint the icon chip (default toast stays accent) */
+.c-toast--danger { --sev: var(--feedback-danger); }
+.c-toast--warn   { --sev: var(--feedback-warning); }
+.c-toast--info   { --sev: var(--feedback-info); }
+.c-toast--ok     { --sev: var(--feedback-success); }
+.c-toast--danger .ic, .c-toast--warn .ic, .c-toast--info .ic, .c-toast--ok .ic {
+  background: color-mix(in oklch, var(--sev) 14%, var(--surface-primary));
+  border-color: color-mix(in oklch, var(--sev) 40%, transparent);
+  color: var(--sev);
+}
+
+/* inline form validation */
+.c-field--invalid { border-color: color-mix(in oklch, var(--input-border-error) 60%, transparent); background: color-mix(in oklch, var(--input-border-error) 6%, var(--input-surface)); }
+.c-field--invalid:focus { border-color: var(--input-border-error); box-shadow: 0 0 0 3px color-mix(in oklch, var(--input-border-error) 24%, transparent); }
+.c-field-error { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 12px; color: var(--feedback-danger); }
+.c-field-error .ico { flex: none; }
+.c-field-hint { margin-top: 7px; font-size: 12px; color: var(--text-secondary); }

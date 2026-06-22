@@ -5,7 +5,11 @@ import type { VectorId } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
 import { KnowledgeStoreError } from "../errors.js";
 import type { KnowledgeStore } from "../store.js";
-import { deterministicVector, seedCapsuleSourceAndDocument, seedDocumentWithChunks } from "./_support.js";
+import {
+  deterministicVector,
+  seedCapsuleSourceAndDocument,
+  seedDocumentWithChunks,
+} from "./_support.js";
 import {
   composeVectorRecord,
   countVectorsForDocument,
@@ -21,12 +25,14 @@ interface Fixture {
 }
 
 function toBytes(vector: Float32Array): Uint8Array {
-  return new Uint8Array(vector.buffer.slice(vector.byteOffset, vector.byteOffset + vector.byteLength));
+  return new Uint8Array(
+    vector.buffer.slice(vector.byteOffset, vector.byteOffset + vector.byteLength),
+  );
 }
 
 function buildRow(fixture: Fixture, overrides: Partial<VectorInsertRow> = {}): VectorInsertRow {
   return {
-    id: ("vec:test-1" as string) as VectorId,
+    id: "vec:test-1" as string as VectorId,
     capsuleId: fixture.seeded.capsuleId,
     sourceId: fixture.seeded.sourceId,
     documentId: fixture.seeded.documentId,
@@ -62,7 +68,11 @@ afterEach(() => {
 
 describe("insertVectorRow", () => {
   it("persists a vector row for an existing chunk lineage", () => {
-    insertVectorRow(fixture.store._internal.db, buildRow(fixture));
+    insertVectorRow(
+      fixture.store._internal.db,
+      fixture.store._internal.contentCipher,
+      buildRow(fixture),
+    );
 
     expect(
       countVectorsForDocument(
@@ -79,7 +89,11 @@ describe("insertVectorRow", () => {
     });
 
     expect(() => {
-      insertVectorRow(fixture.store._internal.db, mismatched);
+      insertVectorRow(
+        fixture.store._internal.db,
+        fixture.store._internal.contentCipher,
+        mismatched,
+      );
     }).toThrow(KnowledgeStoreError);
     expect(
       countVectorsForDocument(

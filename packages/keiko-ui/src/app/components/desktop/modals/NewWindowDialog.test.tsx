@@ -1,8 +1,17 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@/lib/types";
 import { isAgentWorkflowModel, directoryPickerError, NewWindowDialog } from "./NewWindowDialog";
-import { ApiError } from "@/lib/api";
+import {
+  ApiError,
+  createProject,
+  fetchFilesDirectories,
+  fetchFilesTree,
+  fetchModels,
+  fetchProjects,
+  startRun,
+} from "@/lib/api";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 
 vi.mock("@/lib/api", () => ({
@@ -21,7 +30,12 @@ vi.mock("@/lib/api", () => ({
   createProject: vi.fn(),
   updateProject: vi.fn(),
   fetchFilesDirectories: vi.fn(async () => ({ entries: [] })),
+  fetchFilesTree: vi.fn(async () => ({ root: "/repo", path: "", entries: [], truncated: false })),
 }));
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 function model(patch: Partial<ModelCapability>): ModelCapability {
   return {
@@ -42,6 +56,61 @@ function model(patch: Partial<ModelCapability>): ModelCapability {
     knownLimitations: [],
     ...patch,
   };
+}
+
+function project(path = "/repo", name = "Repo", available = true) {
+  return { path, name, favorite: false, createdAt: 1, lastOpenedAt: 2, available };
+}
+
+function mockAgentDependencies(): void {
+  vi.mocked(fetchModels).mockResolvedValue({
+    models: [model({ id: "example-chat-model" })],
+  });
+  vi.mocked(fetchProjects).mockResolvedValue({
+    projects: [project()],
+  });
+  vi.mocked(startRun).mockResolvedValue({ runId: "run 1", fingerprint: "fp 1" });
+  vi.mocked(fetchFilesTree).mockResolvedValue({
+    root: "/repo",
+    path: "",
+    entries: [],
+    truncated: false,
+  });
+}
+
+async function chooseComboboxOption(
+  user: ReturnType<typeof userEvent.setup>,
+  trigger: HTMLElement,
+  optionName: string,
+): Promise<void> {
+  await user.click(trigger);
+  await user.click(await screen.findByRole("option", { name: optionName }));
+}
+
+async function renderAgentDialog(
+  onConfirm = vi.fn(),
+  filesContext: { readonly id: string; readonly root: string; readonly activeFilePath?: string } = {
+    id: "files-1",
+    root: "/repo",
+    activeFilePath: "/repo/src/app.ts",
+  },
+): Promise<typeof onConfirm> {
+  mockAgentDependencies();
+  render(
+    <NewWindowDialog
+      type="agents"
+      types={WIN_TYPES}
+      filesContext={filesContext}
+      onConfirm={onConfirm}
+      onClose={vi.fn()}
+    />,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
+      "example-chat-model",
+    ),
+  );
+  return onConfirm;
 }
 
 describe("isAgentWorkflowModel", () => {
@@ -73,6 +142,479 @@ describe("NewWindowDialog: no Keiko-Mode coming-soon toggle (#146 GAP-C3)", () =
       <NewWindowDialog type="agents" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
     );
     expect(screen.queryByText(/coming soon/i)).toBeNull();
+  });
+});
+
+// MD-05 (WCAG 2.4.3): focus-restoration fallback must always reach a focusable
+// target — document.body is the guaranteed last resort when neither the top
+// window nor the FAB is present in the DOM.
+describe("NewWindowDialog: focus-restoration guaranteed fallback (MD-05)", () => {
+  it("focuses document.body when no top-window or FAB is available on close", () => {
+    // Ensure no stray .window[data-top=true] or .ws-fab elements exist.
+    expect(document.querySelector('.window[data-top="true"]')).toBeNull();
+    expect(document.querySelector(".ws-fab")).toBeNull();
+
+    const { unmount } = render(
+      <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+    // Detach the trigger reference by putting focus on body before unmount.
+    document.body.focus();
+    unmount();
+    // Without the guaranteed fallback, focus would land in limbo (null activeElement
+    // on some browsers); with it, document.body is always the fallback.
+    expect(document.activeElement).toBe(document.body);
+  });
+});
+
+// FE-05 (WCAG 4.1.2) + FE-03 (WCAG 3.3.4): Start agent button in the agents
+// dialog must expose aria-busy reflecting the pending state, and aria-describedby
+// pointing to the visible validation reason when the button is disabled.
+describe("NewWindowDialog agents: Start agent a11y attributes (FE-05/FE-03)", () => {
+  it("Start agent button has aria-busy=false when not submitting", () => {
+    render(
+      <NewWindowDialog type="agents" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+    const btn = screen.getByRole("button", { name: /start .*agent/i });
+    // Not yet submitting — aria-busy must be false, not absent.
+    expect(btn).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("Start agent button has aria-describedby pointing to the validation status span when disabled", () => {
+    render(
+      <NewWindowDialog type="agents" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+    const btn = screen.getByRole("button", { name: /start .*agent/i });
+    // Button is disabled (models still loading) — aria-describedby must point at
+    // the validation/loading span so AT users know why it cannot be activated (FE-03).
+    expect(btn).toHaveAttribute("aria-describedby", "agent-start-validation");
+    const desc = document.getElementById("agent-start-validation");
+    expect(desc).not.toBeNull();
+    expect(desc?.getAttribute("role")).toBe("status");
+  });
+});
+
+describe("NewWindowDialog agents: start-run contract", () => {
+  it("starts the Unit Test Agent with the connected Files window context and persists the window cfg", async () => {
+    const onConfirm = await renderAgentDialog();
+
+    const startButton = screen.getByRole("button", { name: "Start Unit Test Agent" });
+    fireEvent.click(startButton);
+
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith({
+        workflowId: "unit-test-generation",
+        modelId: "example-chat-model",
+        input: {
+          workspaceRoot: "/repo",
+          target: { kind: "file", filePath: "src/app.ts" },
+        },
+      }),
+    );
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflow: "unit-test-generation",
+        model: "example-chat-model",
+        runId: "run 1",
+        fingerprint: "fp 1",
+        workspaceRoot: "/repo",
+        inputJson: JSON.stringify({
+          workspaceRoot: "/repo",
+          target: { kind: "file", filePath: "src/app.ts" },
+        }),
+        __connectFilesId: "files-1",
+      }),
+    );
+  });
+
+  it("offers the production agents without exposing task utilities as agent choices", async () => {
+    const user = userEvent.setup();
+    await renderAgentDialog();
+
+    await user.click(screen.getByRole("combobox", { name: "Agent" }));
+
+    expect(await screen.findByRole("option", { name: "Unit Test Agent" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Bugfix Agent" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Verify" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "Explain plan" })).toBeNull();
+  });
+
+  it("starts unit-test-generation for one normalized source file", async () => {
+    const user = userEvent.setup();
+    await renderAgentDialog();
+
+    await chooseComboboxOption(
+      user,
+      screen.getByRole("combobox", { name: "Agent" }),
+      "Unit Test Agent",
+    );
+    expect(screen.queryByRole("combobox", { name: "Target" })).toBeNull();
+
+    const sourceFile = screen.getByLabelText("Source file");
+    fireEvent.change(sourceFile, {
+      target: { value: "/repo/src/app.ts" },
+    });
+    fireEvent.blur(sourceFile);
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith({
+        workflowId: "unit-test-generation",
+        modelId: "example-chat-model",
+        input: {
+          workspaceRoot: "/repo",
+          target: { kind: "file", filePath: "src/app.ts" },
+        },
+      }),
+    );
+  });
+
+  it("lets the Unit Test Agent source file be selected from the repository file picker", async () => {
+    const user = userEvent.setup();
+    await renderAgentDialog(vi.fn(), { id: "files-1", root: "/repo" });
+    vi.mocked(fetchFilesTree)
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "",
+        truncated: false,
+        entries: [
+          {
+            name: "src",
+            path: "src",
+            kind: "directory",
+            sizeBytes: 0,
+            modifiedAt: 1,
+            extension: null,
+            symlink: false,
+            readable: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "src",
+        truncated: false,
+        entries: [
+          {
+            name: "app.ts",
+            path: "src/app.ts",
+            kind: "file",
+            sizeBytes: 42,
+            modifiedAt: 2,
+            extension: "ts",
+            symlink: false,
+            readable: true,
+          },
+        ],
+      });
+
+    await user.click(screen.getByRole("button", { name: "Browse source file" }));
+
+    const picker = await screen.findByRole("group", { name: "File picker" });
+    expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "");
+
+    await user.click(within(picker).getByRole("button", { name: "src" }));
+    await waitFor(() => expect(fetchFilesTree).toHaveBeenLastCalledWith("/repo", "src"));
+
+    await user.click(await within(picker).findByRole("button", { name: /app\.ts/i }));
+    await user.click(within(picker).getByRole("button", { name: "Use file" }));
+
+    expect(screen.getByLabelText("Source file")).toHaveValue("src/app.ts");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith({
+        workflowId: "unit-test-generation",
+        modelId: "example-chat-model",
+        input: {
+          workspaceRoot: "/repo",
+          target: { kind: "file", filePath: "src/app.ts" },
+        },
+      }),
+    );
+  });
+
+  it("keeps bug-investigation disabled until evidence exists and then starts with the full report", async () => {
+    const user = userEvent.setup();
+    await renderAgentDialog(vi.fn(), { id: "files-1", root: "/repo" });
+
+    await chooseComboboxOption(
+      user,
+      screen.getByRole("combobox", { name: "Agent" }),
+      "Bugfix Agent",
+    );
+    expect(screen.getByText(/Bugfix Agent requires an observed behavior/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Bugfix Agent" })).toHaveAttribute(
+      "disabled",
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the observed bug."), {
+      target: { value: "Answer ignores the attached PDF." },
+    });
+    const textareas = screen
+      .getAllByRole("textbox")
+      .filter((element): element is HTMLTextAreaElement => element instanceof HTMLTextAreaElement);
+    fireEvent.change(textareas[1] as HTMLTextAreaElement, {
+      target: { value: "expected citation missing" },
+    });
+    fireEvent.change(textareas[2] as HTMLTextAreaElement, {
+      target: { value: "GroundingError: missing evidence" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("src/file.ts, src/other.ts"), {
+      target: { value: "/repo/src/rag.ts" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Bugfix Agent" }));
+
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith({
+        workflowId: "bug-investigation",
+        modelId: "example-chat-model",
+        input: {
+          workspaceRoot: "/repo",
+          report: {
+            description: "Answer ignores the attached PDF.",
+            failingOutput: "expected citation missing",
+            stackTrace: "GroundingError: missing evidence",
+            targetFiles: ["src/rag.ts"],
+          },
+        },
+      }),
+    );
+  });
+
+  it("registers an unavailable repository before starting a run", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "example-chat-model" })],
+    });
+    vi.mocked(fetchProjects)
+      .mockResolvedValueOnce({ projects: [] })
+      .mockResolvedValueOnce({
+        projects: [project("/external", "External")],
+      });
+    vi.mocked(createProject).mockResolvedValue({
+      project: project("/external", "External"),
+    });
+    vi.mocked(startRun).mockResolvedValue({ runId: "run 2", fingerprint: "fp 2" });
+    const onConfirm = vi.fn();
+
+    render(
+      <NewWindowDialog
+        type="agents"
+        types={WIN_TYPES}
+        filesContext={null}
+        onConfirm={onConfirm}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => screen.getByText("Repository is required."));
+    fireEvent.change(screen.getByPlaceholderText("/absolute/repository/path"), {
+      target: { value: "/external" },
+    });
+
+    await waitFor(() => screen.getByText("Repository is not registered."));
+    fireEvent.click(screen.getByRole("button", { name: "Register repository" }));
+
+    await waitFor(() => expect(createProject).toHaveBeenCalledWith({ path: "/external" }));
+    await waitFor(() =>
+      expect(screen.queryByText("Repository is not registered.")).not.toBeInTheDocument(),
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("src/file.ts"), {
+      target: { value: "src/app.ts" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith({
+        workflowId: "unit-test-generation",
+        modelId: "example-chat-model",
+        input: {
+          workspaceRoot: "/external",
+          target: { kind: "file", filePath: "src/app.ts" },
+        },
+      }),
+    );
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceRoot: "/external", runId: "run 2" }),
+    );
+  });
+
+  it("refreshes project registration and surfaces a guarded message when start rejects an unregistered repository", async () => {
+    mockAgentDependencies();
+    vi.mocked(fetchProjects).mockResolvedValueOnce({
+      projects: [project()],
+    });
+    vi.mocked(startRun).mockRejectedValue(new ApiError("WORKSPACE_NOT_REGISTERED", "/repo", 409));
+    const onConfirm = vi.fn();
+
+    render(
+      <NewWindowDialog
+        type="agents"
+        types={WIN_TYPES}
+        filesContext={{ id: "files-1", root: "/repo", activeFilePath: "/repo/src/app.ts" }}
+        onConfirm={onConfirm}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Start Unit Test Agent" })).not.toHaveAttribute(
+        "disabled",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Repository is not registered."),
+    );
+    expect(fetchProjects).toHaveBeenCalledTimes(2);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+});
+
+describe("NewWindowDialog directory picker", () => {
+  it("loads registered projects for Files windows and selects a browsed root", async () => {
+    vi.mocked(fetchProjects).mockResolvedValue({
+      projects: [
+        project(),
+        project("/offline", "Offline", false),
+      ],
+    });
+    vi.mocked(fetchFilesDirectories).mockResolvedValueOnce({
+      path: "/repo",
+      parent: "/Users",
+      roots: [{ label: "Workspace", path: "/repo-root" }],
+      entries: [{ name: "src", path: "/repo/src" }],
+    });
+    const onConfirm = vi.fn();
+
+    render(
+      <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />,
+    );
+
+    const rootInput = await screen.findByDisplayValue("/repo");
+    fireEvent.click(rootInput);
+
+    const picker = await screen.findByRole("group", { name: "Directory picker" });
+    expect(fetchFilesDirectories).toHaveBeenCalledWith("/repo", "/repo");
+    expect(within(picker).getByText("Parent directory")).toBeInTheDocument();
+    expect(within(picker).getByText("src")).toBeInTheDocument();
+
+    fireEvent.click(within(picker).getByRole("button", { name: "Use directory" }));
+    expect(rootInput).toHaveValue("/repo-root");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Files" }));
+    expect(onConfirm).toHaveBeenCalledWith({ root: "/repo-root" });
+  });
+
+  it("keeps Enter local to the directory picker and shows mapped browse errors", async () => {
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+    vi.mocked(fetchFilesDirectories)
+      .mockRejectedValueOnce(new ApiError("BAD_ROOT", "relative", 400))
+      .mockResolvedValueOnce({ path: "/tmp", parent: null, roots: [], entries: [] });
+    const onConfirm = vi.fn();
+
+    render(
+      <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />,
+    );
+
+    const rootInput = screen.getByPlaceholderText("Folder");
+    fireEvent.change(rootInput, { target: { value: "/tmp" } });
+    fireEvent.click(rootInput);
+
+    const picker = await screen.findByRole("group", { name: "Directory picker" });
+    await screen.findByRole("alert");
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter an absolute folder path.");
+
+    const pickerInput = within(picker).getByLabelText("Folder path");
+    fireEvent.change(pickerInput, { target: { value: "/tmp" } });
+    fireEvent.keyDown(pickerInput, { key: "Enter" });
+
+    await waitFor(() => expect(fetchFilesDirectories).toHaveBeenLastCalledWith("/tmp", "/tmp"));
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(within(picker).getByText("No child directories.")).toBeInTheDocument();
+  });
+});
+
+describe("NewWindowDialog dialog controls and Files defaults", () => {
+  it("prefills the first available Files project without using offline roots", async () => {
+    vi.mocked(fetchProjects).mockResolvedValue({
+      projects: [
+        project("/offline", "Offline", false),
+        project(),
+      ],
+    });
+
+    render(
+      <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+
+    expect(await screen.findByDisplayValue("/repo")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("/offline")).not.toBeInTheDocument();
+  });
+
+  it("does not overwrite a manually entered Files root when project loading resolves later", async () => {
+    let resolveProjects: ((value: Awaited<ReturnType<typeof fetchProjects>>) => void) | undefined;
+    vi.mocked(fetchProjects).mockReturnValue(
+      new Promise((resolve) => {
+        resolveProjects = resolve;
+      }),
+    );
+
+    render(
+      <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+
+    const rootInput = screen.getByPlaceholderText("Folder");
+    fireEvent.change(rootInput, { target: { value: "/manual" } });
+    resolveProjects?.({ projects: [project()] });
+
+    await waitFor(() => expect(rootInput).toHaveValue("/manual"));
+  });
+
+  it("surfaces project-loading errors in the Files dialog", async () => {
+    vi.mocked(fetchProjects).mockRejectedValue(new Error("project index unavailable"));
+
+    render(
+      <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("project index unavailable");
+  });
+
+  it("submits a one-field dialog with plain Enter from the input", () => {
+    const onConfirm = vi.fn();
+    render(
+      <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />,
+    );
+
+    const titleInput = screen.getByPlaceholderText("Name this conversation");
+    fireEvent.change(titleInput, { target: { value: "Release grounding review" } });
+    fireEvent.keyDown(titleInput, { key: "Enter" });
+
+    expect(onConfirm).toHaveBeenCalledWith({ title: "Release grounding review" });
+  });
+
+  it("supports global Escape and traps Tab inside the modal buttons", () => {
+    const onClose = vi.fn();
+    render(
+      <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={vi.fn()} onClose={onClose} />,
+    );
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    const dialog = screen.getByRole("dialog");
+    const closeButton = within(dialog).getAllByRole("button", { name: "Cancel" })[0] as HTMLButtonElement;
+    const openButton = within(dialog).getByRole("button", { name: "Open Chat" });
+
+    closeButton.focus();
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(openButton);
+
+    openButton.focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(closeButton);
   });
 });
 

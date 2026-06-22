@@ -141,7 +141,7 @@ type Validation = ValidatedEnvelope | ValidationError;
 
 const fail = (code: QiHandoffErrorCode = "QI_HANDOFF_BAD_REQUEST"): ValidationError => ({
   kind: "err",
-  result: errResult(code === "QI_HANDOFF_FORBIDDEN_PAYLOAD" ? 400 : 400, code),
+  result: errResult(400, code),
 });
 
 const hasOnlyAllowedKeys = (
@@ -268,18 +268,34 @@ const buildHandoffMessage = (
 });
 
 // For a "design-tests" handoff, start a model-routed QI run in the BACKGROUND from the chat's
-// connected workspace folder. Fire-and-forget: the run registers with the in-flight registry (so it
+// connected workspace context. Fire-and-forget: the run registers with the in-flight registry (so it
 // surfaces in the run list) and persists to evidence on completion; the handoff returns the run id
 // immediately so the Conversation Center can link + poll it. The run goes through the Keiko Model
 // Gateway + Harness like any QI run — this is the governed workflow handoff (Issue #281), not a
 // parallel chat/agent/model path.
-const startHandoffRun = (deps: UiHandlerDeps, root: string): string => {
+//
+// Multi-source (Epic #532/#729): a chat may connect more than one folder. The run ingests EVERY
+// connected workspace root so the QI run covers the full context the user connected — not just the
+// first folder. `executeQiRun` already applies the per-run source cap, deny-list guard, and byte
+// budget over the source list.
+//
+// `envelope.payloadRef.sourceEnvelopeIds` are reserved for a future capability that narrows the run
+// to a user-selected SUBSET of the connected context; until that resolver exists the run faithfully
+// ingests the chat's whole connected workspace context, so an empty (or any) id list is honoured by
+// using the connected scopes.
+const startHandoffRun = (deps: UiHandlerDeps, roots: readonly string[]): string => {
   const runId = `qi-run-${randomUUID()}`;
   const registeredAt = new Date().toISOString();
   const controller = qiRunRegistry.register(runId, registeredAt);
   const totals = { candidates: 0, findings: 0, exports: 0 };
   void executeQiRun({
-    request: { sources: [{ kind: "workspace", label: "Conversation Center", path: root }] },
+    request: {
+      sources: roots.map((path) => ({
+        kind: "workspace",
+        label: "Conversation Center",
+        path,
+      })),
+    },
     runId,
     deps,
     registeredAt,
@@ -300,8 +316,28 @@ const startHandoffRun = (deps: UiHandlerDeps, root: string): string => {
   return runId;
 };
 
+// Collect the distinct, non-empty absolute roots of a chat's connected workspace context. Prefers
+// the canonical multi-source `connectedScopes` list (Epic #532); falls back to the legacy singular
+// `connectedScope` for older chats. Non-folder scopes (no `root`) are skipped — the handoff run
+// ingests workspace folders only. Order-preserving exact-string de-duplication.
+const collectConnectedRoots = (
+  chat: ReturnType<UiHandlerDeps["store"]["findChatById"]>,
+): readonly string[] => {
+  const scopes =
+    chat?.connectedScopes ?? (chat?.connectedScope !== undefined ? [chat.connectedScope] : []);
+  const roots: string[] = [];
+  for (const scope of scopes) {
+    const root = scope.root;
+    if (typeof root === "string" && root.length > 0 && !roots.includes(root)) {
+      roots.push(root);
+    }
+  }
+  return roots;
+};
+
 // Resolve the run id linked to a handoff: a "design-tests" handoff over a chat with a connected
-// folder starts a background run; otherwise it falls back to any run id the envelope already carried.
+// workspace context starts a background run; otherwise it falls back to any run id the envelope
+// already carried.
 const resolveHandoffRunId = (
   deps: UiHandlerDeps,
   envelope: QualityIntelligence.QualityIntelligenceConversationCenterHandoff,
@@ -309,8 +345,8 @@ const resolveHandoffRunId = (
 ): string | undefined => {
   if (envelope.promptedAction !== "design-tests") return envelope.runId;
   const chat = deps.store.findChatById(chatId);
-  const root = chat?.connectedScope?.root;
-  if (root !== undefined && root.length > 0) return startHandoffRun(deps, root);
+  const roots = collectConnectedRoots(chat);
+  if (roots.length > 0) return startHandoffRun(deps, roots);
   return envelope.runId;
 };
 
@@ -337,7 +373,7 @@ export const createHandleQiHandoff = (
       raw = await readBody(ctx.req);
     } catch (e) {
       if (e instanceof BodyTooLargeError) {
-        return errResult(413, "QI_HANDOFF_BAD_REQUEST");
+        return errResult(413, "QI_HANDOFF_PAYLOAD_TOO_LARGE");
       }
       return errResult(400, "QI_HANDOFF_BAD_REQUEST");
     }

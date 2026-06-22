@@ -3,10 +3,39 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { fetchConfig, fetchModels } from "@/lib/api";
-import type { ConversationIneligibilityReason, ModelCapability } from "@/lib/types";
+import type {
+  ConversationIneligibilityReason,
+  ModelCapability,
+  SafeGatewayConfig,
+} from "@/lib/types";
 import { explainConversationIneligibility, isConversationEligibleModel } from "@/lib/types";
 import { Icons } from "../../Icons";
 import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
+import { Toggle } from "../shared/Toggle";
+import {
+  WALLPAPER_ENABLED_EVENT,
+  WALLPAPER_ENABLED_KEY,
+  WALLPAPER_OPACITY_EVENT,
+  WALLPAPER_OPACITY_KEY,
+  FRAME_INNER_GLOW_STRENGTH_EVENT,
+  FRAME_INNER_GLOW_STRENGTH_KEY,
+  FRAME_BORDER_STRENGTH_EVENT,
+  FRAME_BORDER_STRENGTH_KEY,
+  applyFrameInnerGlowStrength,
+  WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT,
+  WORKSPACE_BACKGROUND_BRIGHTNESS_KEY,
+  WORKSPACE_GRID_STRENGTH_EVENT,
+  WORKSPACE_GRID_STRENGTH_KEY,
+  applyFrameBorderStrength,
+  applyWorkspaceBackgroundBrightness,
+  applyWorkspaceGridStrength,
+  readFrameBorderStrength,
+  readFrameInnerGlowStrength,
+  readWallpaperEnabled,
+  readWallpaperOpacity,
+  readWorkspaceBackgroundBrightness,
+  readWorkspaceGridStrength,
+} from "../../workspace-appearance";
 
 function kindLabel(kind: ModelCapability["kind"]): string {
   if (kind === "ocr-vision") return "OCR";
@@ -23,12 +52,13 @@ function conversationIneligibilityLabel(reason: ConversationIneligibilityReason)
   return "Not a chat model — not selectable for text conversation";
 }
 
-// uiux-fix C359/C057: short visible badge copy — the full explanation above
-// already ends with "not selectable …", so prefixing it produced the redundant
-// 71-char "Not selectable: … — not selectable for text conversation" that also
-// overflowed the settings window. The long form stays in aria-label/title.
+function embeddingAvailabilityLabel(): string {
+  return "Available for embeddings; not shown in the chat model picker";
+}
+
+// uiux-fix C359/C057: short visible badge copy — the long form stays in
+// aria-label/title so the model list does not read like a transport warning.
 function conversationIneligibilityShortLabel(reason: ConversationIneligibilityReason): string {
-  if (reason === "embedding-only") return "embedding model";
   if (reason === "ocr-vision-only") return "OCR/vision-only";
   return "not a chat model";
 }
@@ -47,6 +77,19 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
       </span>
     );
   }
+  if (reason === "embedding-only") {
+    return (
+      <span
+        className="ml-elig ml-elig-embed"
+        data-testid="embedding-elig-ok"
+        role="status"
+        aria-label={"Model eligibility: " + embeddingAvailabilityLabel()}
+        title={embeddingAvailabilityLabel()}
+      >
+        Embedding-ready
+      </span>
+    );
+  }
   return (
     <span
       className="ml-elig ml-elig-no"
@@ -61,9 +104,14 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
 }
 
 function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): ReactNode {
-  const eligible = isConversationEligibleModel(model);
-  const statusClass = eligible ? "connected" : "ineligible";
-  const statusTitle = eligible ? "conversation-eligible" : "not selectable for conversation";
+  const conversationEligible = isConversationEligibleModel(model);
+  const embeddingReady = model.kind === "embedding";
+  const statusClass = conversationEligible || embeddingReady ? "connected" : "ineligible";
+  const statusTitle = conversationEligible
+    ? "conversation-eligible"
+    : embeddingReady
+      ? "available for embeddings"
+      : "not selectable for conversation";
   return (
     <div className="ml-row">
       <span className="ml-ico">
@@ -85,19 +133,25 @@ function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): Rea
   );
 }
 
-const WALLPAPER_OPACITY_KEY = "keiko.wallpaper.opacity";
-
-function readWallpaperOpacity(): number {
-  if (typeof window === "undefined") return 100;
-  const raw = window.localStorage.getItem(WALLPAPER_OPACITY_KEY);
-  if (raw === null) return 100;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) return 100;
-  return Math.max(0, Math.min(100, parsed));
-}
-
 function GeneralPrefs(): ReactNode {
+  const [wallpaperEnabled, setWallpaperEnabled] = useState<boolean>(readWallpaperEnabled);
   const [wp, setWp] = useState<number>(readWallpaperOpacity);
+  const [bgBrightness, setBgBrightness] = useState<number>(readWorkspaceBackgroundBrightness);
+  const [gridStrength, setGridStrength] = useState<number>(readWorkspaceGridStrength);
+  const [frameBorderStrength, setFrameBorderStrength] = useState<number>(readFrameBorderStrength);
+  const [frameInnerGlowStrength, setFrameInnerGlowStrength] =
+    useState<number>(readFrameInnerGlowStrength);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(WALLPAPER_ENABLED_KEY, wallpaperEnabled ? "true" : "false");
+    } catch {
+      /* ignore quota / private mode */
+    }
+    window.dispatchEvent(new CustomEvent(WALLPAPER_ENABLED_EVENT, { detail: wallpaperEnabled }));
+  }, [wallpaperEnabled]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -105,10 +159,69 @@ function GeneralPrefs(): ReactNode {
     } catch {
       /* ignore quota / private mode */
     }
-    window.dispatchEvent(new CustomEvent("keiko:wallpaper-opacity", { detail: wp }));
+    window.dispatchEvent(new CustomEvent(WALLPAPER_OPACITY_EVENT, { detail: wp }));
   }, [wp]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(WORKSPACE_BACKGROUND_BRIGHTNESS_KEY, String(bgBrightness));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    applyWorkspaceBackgroundBrightness(bgBrightness);
+    window.dispatchEvent(
+      new CustomEvent(WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT, { detail: bgBrightness }),
+    );
+  }, [bgBrightness]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(WORKSPACE_GRID_STRENGTH_KEY, String(gridStrength));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    applyWorkspaceGridStrength(gridStrength);
+    window.dispatchEvent(new CustomEvent(WORKSPACE_GRID_STRENGTH_EVENT, { detail: gridStrength }));
+  }, [gridStrength]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(FRAME_BORDER_STRENGTH_KEY, String(frameBorderStrength));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    applyFrameBorderStrength(frameBorderStrength);
+    window.dispatchEvent(
+      new CustomEvent(FRAME_BORDER_STRENGTH_EVENT, { detail: frameBorderStrength }),
+    );
+  }, [frameBorderStrength]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(FRAME_INNER_GLOW_STRENGTH_KEY, String(frameInnerGlowStrength));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    applyFrameInnerGlowStrength(frameInnerGlowStrength);
+    window.dispatchEvent(
+      new CustomEvent(FRAME_INNER_GLOW_STRENGTH_EVENT, { detail: frameInnerGlowStrength }),
+    );
+  }, [frameInnerGlowStrength]);
+
   // CSS uses --p to fill the track; React's CSSProperties doesn't know custom props.
   const fill: CSSProperties = { ["--p"]: `${String(wp)}%` } as CSSProperties;
+  const bgFill: CSSProperties = { ["--p"]: `${String(bgBrightness)}%` } as CSSProperties;
+  const gridFill: CSSProperties = { ["--p"]: `${String(gridStrength)}%` } as CSSProperties;
+  const frameBorderFill: CSSProperties = {
+    ["--p"]: `${String(frameBorderStrength)}%`,
+  } as CSSProperties;
+  const frameInnerGlowFill: CSSProperties = {
+    ["--p"]: `${String(frameInnerGlowStrength)}%`,
+  } as CSSProperties;
   return (
     <>
       <div className="set-sec-h">
@@ -116,11 +229,18 @@ function GeneralPrefs(): ReactNode {
           <div className="set-sec-t">Workspace wallpaper</div>
           <div className="set-sec-d">
             Liquid Chrome — a subtle metallic flow behind the grid that reacts to your cursor and
-            clicks. Set to 0% for the plain workspace background.
+            clicks. Turn it off to stop the WebGL animation completely.
           </div>
         </div>
       </div>
       <div className="gpref">
+        <div className="gpref-row">
+          <div>
+            <div className="gpref-label">Liquid wallpaper</div>
+            <div className="gpref-help">{wallpaperEnabled ? "Running" : "Stopped"}</div>
+          </div>
+          <Toggle on={wallpaperEnabled} onChange={setWallpaperEnabled} label="Liquid wallpaper" />
+        </div>
         <div className="gpref-row">
           <label className="gpref-label" htmlFor="wp-op">
             Wallpaper opacity
@@ -135,6 +255,7 @@ function GeneralPrefs(): ReactNode {
           max={100}
           step={1}
           value={wp}
+          disabled={!wallpaperEnabled}
           onChange={(e) => setWp(Number.parseInt(e.target.value, 10))}
           style={fill}
           aria-label="Wallpaper opacity"
@@ -142,6 +263,102 @@ function GeneralPrefs(): ReactNode {
         <div className="gpref-scale">
           <span>Off</span>
           <span>Full</span>
+        </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <label className="gpref-label" htmlFor="ws-bg-bright">
+            Workspace background brightness
+          </label>
+          <span className="gpref-val mono">{bgBrightness}%</span>
+        </div>
+        <input
+          id="ws-bg-bright"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={bgBrightness}
+          onChange={(e) => setBgBrightness(Number.parseInt(e.target.value, 10))}
+          style={bgFill}
+          aria-label="Workspace background brightness"
+        />
+        <div className="gpref-scale">
+          <span>Base</span>
+          <span>Lighter</span>
+        </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <label className="gpref-label" htmlFor="ws-grid-strength">
+            Workspace grid strength
+          </label>
+          <span className="gpref-val mono">{gridStrength}%</span>
+        </div>
+        <input
+          id="ws-grid-strength"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={gridStrength}
+          onChange={(e) => setGridStrength(Number.parseInt(e.target.value, 10))}
+          style={gridFill}
+          aria-label="Workspace grid strength"
+        />
+        <div className="gpref-scale">
+          <span>Subtle</span>
+          <span>Strong</span>
+        </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <label className="gpref-label" htmlFor="frame-border-strength">
+            Workspace border strength
+          </label>
+          <span className="gpref-val mono">{frameBorderStrength}%</span>
+        </div>
+        <input
+          id="frame-border-strength"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={frameBorderStrength}
+          onChange={(e) => setFrameBorderStrength(Number.parseInt(e.target.value, 10))}
+          style={frameBorderFill}
+          aria-label="Workspace border strength"
+        />
+        <div className="gpref-scale">
+          <span>Subtle</span>
+          <span>Strong</span>
+        </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <label className="gpref-label" htmlFor="frame-inner-glow-strength">
+            Workspace inner glow
+          </label>
+          <span className="gpref-val mono">{frameInnerGlowStrength}%</span>
+        </div>
+        <input
+          id="frame-inner-glow-strength"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={frameInnerGlowStrength}
+          onChange={(e) => setFrameInnerGlowStrength(Number.parseInt(e.target.value, 10))}
+          style={frameInnerGlowFill}
+          aria-label="Workspace inner glow"
+        />
+        <div className="gpref-scale">
+          <span>Off</span>
+          <span>Strong</span>
         </div>
       </div>
     </>
@@ -172,6 +389,7 @@ function describeSettingsLoadError(error: unknown): string {
 export function SettingsPanel(): ReactNode {
   const [tab, setTab] = useState<Tab>("models");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
+  const [config, setConfig] = useState<SafeGatewayConfig | null>(null);
   const [configPresent, setConfigPresent] = useState(false);
   const [loadingModels, setLoadingModels] = useState(true);
   const [modelError, setModelError] = useState<string | undefined>();
@@ -188,6 +406,7 @@ export function SettingsPanel(): ReactNode {
       try {
         const [configPayload, modelPayload] = await Promise.all([fetchConfig(), fetchModels()]);
         if (cancelled) return;
+        setConfig(configPayload.config);
         setConfigPresent(configPayload.configPresent);
         setModels(modelPayload.models);
       } catch (error) {
@@ -244,6 +463,7 @@ export function SettingsPanel(): ReactNode {
             // toggle-button pattern, same as the density buttons in
             // RelationshipListPanel (state was previously CSS-only via data-on).
             aria-pressed={tab === id}
+            onPointerDown={() => setTab(id)}
             onClick={() => setTab(id)}
           >
             {/* uiux-fix C147: the tab shows the remote model gateway, not local models */}
@@ -322,7 +542,14 @@ export function SettingsPanel(): ReactNode {
               </div>
             )}
 
-            {setupOpen ? <GatewaySetupDialog onCancel={() => setSetupOpen(false)} /> : null}
+            {setupOpen ? (
+              <GatewaySetupDialog
+                onCancel={() => setSetupOpen(false)}
+                preserveExisting={gatewayConfigured}
+                storedApiKeyHeaderName={config?.providers[0]?.credentialHeaderName}
+                storedModels={models}
+              />
+            ) : null}
           </>
         )}
         {tab === "general" && <GeneralPrefs />}

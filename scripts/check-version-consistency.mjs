@@ -23,7 +23,7 @@ const failures = [];
 const APPROVED_ROOT_SRC_FILES = ["src/cli/index.ts", "src/index.ts"];
 const APPROVED_ROOT_SRC_SHA256 = new Map([
   ["src/index.ts", "751c1c0fae45a8bf68ba099ecd0706a74d64661f8fc1b9bd7f05d4abd1beb20b"],
-  ["src/cli/index.ts", "35b598c19db4adcd9fe40618f289200463d361d109f951c9e70b99db8db25863"],
+  ["src/cli/index.ts", "d11e2627872fe9df09d85ea3a463131e279782868d3d45d22dde0c13558c2519"],
 ]);
 
 function readJson(path) {
@@ -50,7 +50,9 @@ function listFilesRecursively(rootDir, prefix = "") {
 }
 
 function sha256(relativePath) {
-  return createHash("sha256").update(readFileSync(join(repoRoot, relativePath))).digest("hex");
+  return createHash("sha256")
+    .update(readFileSync(join(repoRoot, relativePath)))
+    .digest("hex");
 }
 
 function fail(message) {
@@ -103,8 +105,8 @@ for (const target of REMOVED_PATHS) {
   }
 }
 
-const rootSrcFiles = listFilesRecursively(join(repoRoot, "src")).map((relativePath) =>
-  `src/${relativePath}`,
+const rootSrcFiles = listFilesRecursively(join(repoRoot, "src")).map(
+  (relativePath) => `src/${relativePath}`,
 );
 if (JSON.stringify(rootSrcFiles) !== JSON.stringify(APPROVED_ROOT_SRC_FILES)) {
   fail(
@@ -131,7 +133,9 @@ if (
       "@oscharko-dev/keiko-contracts.",
   );
 }
-if (!/^export\s+const\s+SDK_VERSION(?:\s*:\s*string)?\s*=\s*KEIKO_PRODUCT_VERSION;$/m.test(sdkIndex)) {
+if (
+  !/^export\s+const\s+SDK_VERSION(?:\s*:\s*string)?\s*=\s*KEIKO_PRODUCT_VERSION;$/m.test(sdkIndex)
+) {
   fail(
     "packages/keiko-sdk/src/index.ts: SDK_VERSION does not directly re-export " +
       "KEIKO_PRODUCT_VERSION.",

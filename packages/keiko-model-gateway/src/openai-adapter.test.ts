@@ -4,12 +4,15 @@ import {
   AuthenticationError,
   CancelledError,
   ContextOverflowError,
+  ERROR_CODES,
+  GatewayEgressError,
   ModelRefusalError,
   ProviderError,
   RateLimitError,
   TimeoutError,
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import { OutboundHttpEgressError } from "./http.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 
 const CONFIG: ModelProviderConfig = {
@@ -101,6 +104,48 @@ describe("OpenAiAdapter.call", () => {
     expect(seenCustom).toBe(CONFIG.apiKey);
   });
 
+  it("serializes image content parts in OpenAI-compatible message payloads", async () => {
+    let seenBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      seenBody = JSON.parse(body) as unknown;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      {
+        modelId: "example-chat-model",
+        messages: [
+          {
+            role: "user",
+            content: "Inspect this screen",
+            contentParts: [
+              { type: "text", text: "Inspect this screen" },
+              {
+                type: "image_url",
+                image_url: { url: "data:image/png;base64,iVBORw0KGgo=" },
+              },
+            ],
+          },
+        ],
+      },
+      CONFIG,
+    );
+
+    expect(seenBody).toMatchObject({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Inspect this screen" },
+            { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgo=" } },
+          ],
+        },
+      ],
+    });
+  });
+
   it("throws AuthenticationError on HTTP 401", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(jsonResponse({ error: "bad key" }, { status: 401 })),
@@ -179,6 +224,21 @@ describe("OpenAiAdapter.call", () => {
   it("throws TransportError when fetch rejects with a network TypeError", async () => {
     const adapter = adapterWith(() => Promise.reject(new TypeError("network down")));
     await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(TransportError);
+  });
+
+  it("maps outbound egress failures to distinct non-retryable gateway errors", async () => {
+    const adapter = adapterWith(() =>
+      Promise.reject(new OutboundHttpEgressError("PROXY_AUTH_REQUIRED", "proxy password was bad")),
+    );
+    try {
+      await adapter.call(REQUEST, CONFIG);
+      expect.unreachable("should throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(GatewayEgressError);
+      expect((error as GatewayEgressError).code).toBe(ERROR_CODES.PROXY_AUTH_REQUIRED);
+      expect((error as GatewayEgressError).retryable).toBe(false);
+      expect((error as Error).message).not.toContain("password");
+    }
   });
 
   it("throws CancelledError when the cancellation signal is already aborted", async () => {
@@ -288,7 +348,7 @@ describe("OpenAiAdapter.call", () => {
       const raw = init?.body;
       sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
       return Promise.resolve(
-        jsonResponse({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }),
+        jsonResponse({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] }),
       );
     });
     await adapter.call(
@@ -313,11 +373,67 @@ describe("OpenAiAdapter.call", () => {
       const raw = init?.body;
       sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
       return Promise.resolve(
-        jsonResponse({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }),
+        jsonResponse({ choices: [{ message: { content: "seeded" }, finish_reason: "stop" }] }),
       );
     });
     await adapter.call({ ...REQUEST, seed: 13 }, CONFIG);
     expect((sentBody as { seed?: number }).seed).toBe(13);
+  });
+
+  // Issue #763 (Epic #761): determinism parameters must NOT leak into the provider payload when the
+  // gateway request does not carry them. A regression that always spreads `{ seed: 0 }` (or a
+  // response_format) would send an unrequested deterministic seed to every call and falsely record
+  // reproducibility. Assert the keys are absent, not merely undefined.
+  it("omits seed and response_format from the request body when the gateway request provides neither", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "plain" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(REQUEST, CONFIG);
+    const body = sentBody as Record<string, unknown>;
+    expect("seed" in body).toBe(false);
+    expect("response_format" in body).toBe(false);
+  });
+
+  it("normalises assistant text-part arrays from OpenAI-compatible providers", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: [
+                  { type: "text", text: "Hello " },
+                  { type: "text", text: "from parts" },
+                ],
+              },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await adapter.call(REQUEST, CONFIG);
+
+    expect(result.content).toBe("Hello from parts");
+  });
+
+  it("rejects an empty assistant response instead of normalising it to success", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [{ message: { role: "assistant", content: "" }, finish_reason: "stop" }],
+        }),
+      ),
+    );
+
+    await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(ProviderError);
   });
 
   it("serialises assistant tool_calls and tool response tool_call_id on continuation turns", async () => {
@@ -425,12 +541,40 @@ describe("OpenAiAdapter.callStream", () => {
     const adapter = adapterWith((_url, init) => {
       const raw = init?.body;
       sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
-      return Promise.resolve(sseResponse(["data: [DONE]\n"]));
+      return Promise.resolve(sseResponse([deltaLine("ok"), "data: [DONE]\n"]));
     });
     await collectStream(adapter.callStream(REQUEST, CONFIG));
     const body = sentBody as { stream?: boolean; stream_options?: { include_usage?: boolean } };
     expect(body.stream).toBe(true);
     expect(body.stream_options?.include_usage).toBe(true);
+  });
+
+  it("yields text from streamed content-part arrays", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        sseResponse([
+          `data: ${JSON.stringify({
+            choices: [{ delta: { content: [{ type: "text", text: "part" }] } }],
+          })}\n`,
+          "data: [DONE]\n",
+        ]),
+      ),
+    );
+
+    const chunks = await collectStream(adapter.callStream(REQUEST, CONFIG));
+
+    expect(chunks[0]).toEqual({ type: "delta", token: "part" });
+    const done = chunks[1];
+    if (done?.type !== "done") throw new Error("expected a done chunk");
+    expect(done.response.content).toBe("part");
+  });
+
+  it("rejects a stream that finishes without assistant content", async () => {
+    const adapter = adapterWith(() => Promise.resolve(sseResponse(["data: [DONE]\n"])));
+
+    await expect(collectStream(adapter.callStream(REQUEST, CONFIG))).rejects.toBeInstanceOf(
+      ProviderError,
+    );
   });
 
   it("redacts a configured secret leaked inside a streamed delta token", async () => {
@@ -445,6 +589,33 @@ describe("OpenAiAdapter.callStream", () => {
     if (delta?.type !== "delta") throw new Error("expected a delta chunk");
     expect(delta.token).not.toContain(customSecret);
     expect(delta.token).toContain("[REDACTED]");
+    const serialized = JSON.stringify(chunks);
+    expect(serialized).not.toContain(customSecret);
+  });
+
+  it("redacts a configured secret that is split across two SSE deltas", async () => {
+    // RED reasoning: the old per-delta redact(content, secrets) only saw each raw delta
+    // in isolation, so a secret split at a delta boundary was never matched by the regex
+    // and leaked in the concatenated output. The fix redacts against the accumulated buffer.
+    const customSecret = "opaque-split-secret-value-xyz";
+    const half = Math.floor(customSecret.length / 2);
+    const part1 = customSecret.slice(0, half); // first half
+    const part2 = customSecret.slice(half); // second half
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        sseResponse([deltaLine(`prefix-${part1}`), deltaLine(`${part2}-suffix`), "data: [DONE]\n"]),
+      ),
+    );
+    const chunks = await collectStream(
+      adapter.callStream(REQUEST, { ...CONFIG, apiKey: customSecret }),
+    );
+    // The concatenated delta tokens must not contain the secret.
+    const deltaTokens = chunks
+      .filter((c): c is Extract<typeof c, { type: "delta" }> => c.type === "delta")
+      .map((c) => c.token)
+      .join("");
+    expect(deltaTokens).not.toContain(customSecret);
+    // Nor must the done chunk's assembled content.
     const serialized = JSON.stringify(chunks);
     expect(serialized).not.toContain(customSecret);
   });

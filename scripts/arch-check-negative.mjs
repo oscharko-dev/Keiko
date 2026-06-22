@@ -33,6 +33,9 @@ const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./|src|package
 // direction-8 (ui) fires three times because it pins three distinct Node-domain boundaries the
 // browser tier must not value-import: keiko-tools, keiko-quality-intelligence, and
 // keiko-local-knowledge (the two latter added for the native QI UI surface, issue #280). The
+// editor browser-tier rule (adr-0042-editor-not-node-domain-values) fires eight times against its
+// dedicated editor-browser fixture, pinning model-gateway plus the ADR-0042 audit gap targets:
+// the five existing keiko-memory-* packages, keiko-verification, and keiko-ui internals. The
 // import-policy expectations below cover literal import specifiers dependency-cruiser does not
 // expose as source graph edges in this repository configuration.
 const EXPECTED_DEPCRUISER_RULE_COUNTS = {
@@ -41,6 +44,7 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0019-direction-3a-model-gateway-only-contracts-security": 1,
   "adr-0019-direction-3b-workspace-only-contracts-security": 1,
   "adr-0019-direction-3c-tools-only-contracts-security-workspace": 1,
+  "adr-0043-sandbox-only-contracts": 1,
   "adr-0019-direction-3d-evidence-only-contracts-security-workspace": 1,
   "adr-0019-direction-3e-local-knowledge-only-contracts": 1,
   "adr-0019-direction-3k-verification-only-contracts-security-workspace-tools": 1,
@@ -58,6 +62,7 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0019-direction-6-domain-not-server": 1,
   "adr-0019-direction-7-domain-not-cli": 1,
   "adr-0019-direction-8-ui-not-node-domain-values": 3,
+  "adr-0042-editor-not-node-domain-values": 8,
   "adr-0019-direction-9-root-product-composition-only": 1,
   "adr-0019-trust-2-ui-no-provider-config": 1,
   "adr-0019-trust-3-ui-no-gateway-internals": 1,
@@ -70,6 +75,7 @@ const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "adr-0019-trust-1-provider-sdk-isolation": 1,
   "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
   "adr-0019-trust-5-patch-routes-through-tools": 1,
+  "adr-0019-trust-9-local-knowledge-no-egress": 1,
 };
 
 // `npx --no-install` keeps CI hermetic by refusing to fetch from the registry when the

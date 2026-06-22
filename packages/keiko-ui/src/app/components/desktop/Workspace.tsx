@@ -4,16 +4,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   DragEvent as ReactDragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
   RefObject,
 } from "react";
+import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
+import {
+  acquireGrabbingBodyStyle,
+  isCanvasPanPointer,
+  isHandToolKeyIgnoredTarget,
+  isInteractiveSurfaceTarget,
+  isPrimaryActivationPointer,
+  isTextEntryTarget,
+  workspaceInteractionLocked,
+} from "./interactionGuards";
 import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
-import { canConnect, relLabel } from "./windows/connectionUtils";
+import { canConnect, relLabel, subText } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
@@ -23,6 +34,24 @@ import {
   type LocalKnowledgeConnectorDragPayload,
   type LocalKnowledgeConnectorDropDetail,
 } from "../../local-knowledge/connector-drag";
+import {
+  FIGMA_VIEW_DROP_EVENT,
+  parseFigmaViewDrag,
+  type FigmaViewDragPayload,
+  type FigmaViewDropDetail,
+} from "./figma-view-drag";
+import {
+  FIGMA_JSON_DROP_EVENT,
+  parseFigmaJsonDrag,
+  type FigmaJsonDragPayload,
+  type FigmaJsonDropDetail,
+} from "./figma-json-drag";
+import {
+  FIGMA_IMAGE_DROP_EVENT,
+  parseFigmaImageDrag,
+  type FigmaImageDragPayload,
+  type FigmaImageDropDetail,
+} from "./figma-image-drag";
 
 interface WorkspaceProps {
   readonly ws: UseWorkspaceResult;
@@ -32,20 +61,25 @@ interface WorkspaceProps {
 }
 
 export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
+export const FIGMA_VIEW_NODE_SIZE = { w: 360, h: 360 } as const;
+export const FIGMA_JSON_NODE_SIZE = { w: 520, h: 540 } as const;
+export const FIGMA_IMAGE_NODE_SIZE = { w: 560, h: 420 } as const;
 
 export function workspaceDropPointToWindowOrigin({
   clientX,
   clientY,
   rect,
   view,
+  size = KNOWLEDGE_CONNECTOR_NODE_SIZE,
 }: {
   readonly clientX: number;
   readonly clientY: number;
   readonly rect: DOMRect;
   readonly view: UseWorkspaceResult["view"];
+  readonly size?: { readonly w: number; readonly h: number };
 }): { x: number; y: number } {
   return {
-    x: Math.round((clientX - rect.left - view.x) / view.zoom - KNOWLEDGE_CONNECTOR_NODE_SIZE.w / 2),
+    x: Math.round((clientX - rect.left - view.x) / view.zoom - size.w / 2),
     y: Math.round((clientY - rect.top - view.y) / view.zoom - 28),
   };
 }
@@ -62,14 +96,50 @@ function isLocalKnowledgeConnectorDropDetail(
   return payloadRecord["kind"] === "capsule" && typeof payloadRecord["id"] === "string";
 }
 
-function isInteractive(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
+function isFigmaViewDropDetail(detail: unknown): detail is FigmaViewDropDetail {
+  if (typeof detail !== "object" || detail === null) return false;
+  const record = detail as Record<string, unknown>;
+  const payload = record["payload"];
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
+  if (typeof payload !== "object" || payload === null) return false;
+  const payloadRecord = payload as Record<string, unknown>;
   return (
-    target.closest(".window") !== null ||
-    target.closest(".ws-zoom") !== null ||
-    target.closest(".ws-fab") !== null ||
-    target.closest(".ws-empty-btn") !== null ||
-    target.closest(".conn-badge") !== null
+    typeof payloadRecord["snapshotRunId"] === "string" &&
+    typeof payloadRecord["screenId"] === "string" &&
+    typeof payloadRecord["name"] === "string"
+  );
+}
+
+function isFigmaJsonDropDetail(detail: unknown): detail is FigmaJsonDropDetail {
+  if (typeof detail !== "object" || detail === null) return false;
+  const record = detail as Record<string, unknown>;
+  const payload = record["payload"];
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
+  if (typeof payload !== "object" || payload === null) return false;
+  const payloadRecord = payload as Record<string, unknown>;
+  return (
+    typeof payloadRecord["snapshotRunId"] === "string" &&
+    typeof payloadRecord["screenId"] === "string" &&
+    typeof payloadRecord["name"] === "string" &&
+    (payloadRecord["sourceWindowId"] === undefined ||
+      typeof payloadRecord["sourceWindowId"] === "string")
+  );
+}
+
+function isFigmaImageDropDetail(detail: unknown): detail is FigmaImageDropDetail {
+  if (typeof detail !== "object" || detail === null) return false;
+  const record = detail as Record<string, unknown>;
+  const payload = record["payload"];
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
+  if (typeof payload !== "object" || payload === null) return false;
+  const payloadRecord = payload as Record<string, unknown>;
+  return (
+    typeof payloadRecord["snapshotRunId"] === "string" &&
+    typeof payloadRecord["screenId"] === "string" &&
+    typeof payloadRecord["name"] === "string" &&
+    typeof payloadRecord["imageSrc"] === "string" &&
+    (payloadRecord["sourceWindowId"] === undefined ||
+      typeof payloadRecord["sourceWindowId"] === "string")
   );
 }
 
@@ -84,9 +154,14 @@ function stepViewZoom(current: number, delta: number): number {
 
 function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
   if (wins === null || wins.length === 0) return null;
-  let best = wins[0] as AppWindow;
-  for (let i = 1; i < wins.length; i++) {
+  let best: AppWindow | null = null;
+  for (let i = 0; i < wins.length; i++) {
     const next = wins[i] as AppWindow;
+    if (next.minimized === true) continue;
+    if (best === null) {
+      best = next;
+      continue;
+    }
     if (next.z > best.z) best = next;
   }
   return best;
@@ -95,10 +170,15 @@ function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
 function startBgPan(
   panBy: (dx: number, dy: number) => void,
   event: ReactPointerEvent<HTMLDivElement>,
+  setPanning: (panning: boolean) => void,
 ): void {
+  event.preventDefault();
+  const target = event.currentTarget;
+  target.setPointerCapture?.(event.pointerId);
   let lastX = event.clientX;
   let lastY = event.clientY;
-  document.body.style.cursor = "grabbing";
+  const releaseBodyStyle = acquireGrabbingBodyStyle();
+  setPanning(true);
   const move = (moveEvent: PointerEvent): void => {
     panBy(moveEvent.clientX - lastX, moveEvent.clientY - lastY);
     lastX = moveEvent.clientX;
@@ -107,10 +187,16 @@ function startBgPan(
   const up = (): void => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
-    document.body.style.cursor = "";
+    window.removeEventListener("pointercancel", up);
+    setPanning(false);
+    if (target.hasPointerCapture?.(event.pointerId) === true) {
+      target.releasePointerCapture?.(event.pointerId);
+    }
+    releaseBodyStyle();
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
 }
 
 function windowIdFromEventTarget(target: EventTarget | null): string | undefined {
@@ -166,12 +252,24 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
   );
 }
 
-export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
+export function Workspace({
+  ws,
+  wsRef,
+  openPalette,
+  palette,
+}: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
-  const top = topWindow(wins);
+  const [panning, setPanning] = useState(false);
+  const [handTool, setHandTool] = useState(false);
+  const handToolRef = useRef(false);
+  const visibleWins = useMemo(
+    () => (wins === null ? null : wins.filter((w) => w.minimized !== true)),
+    [wins],
+  );
+  const top = topWindow(visibleWins);
   const connFrom: AppWindow | null =
-    connecting !== null && wins !== null
-      ? (wins.find((w) => w.id === connecting.from) ?? null)
+    connecting !== null && visibleWins !== null
+      ? (visibleWins.find((w) => w.id === connecting.from) ?? null)
       : null;
 
   const connStateFor = (w: AppWindow): ConnState => {
@@ -181,13 +279,69 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   };
 
   const onBgPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0) return;
-    if (isInteractive(event.target)) return;
+    if (workspaceInteractionLocked()) return;
+    if (isInteractiveSurfaceTarget(event.target)) return;
     if (connecting !== null) {
-      api.cancelConnect();
+      if (isPrimaryActivationPointer(event)) {
+        api.cancelConnect();
+      }
       return;
     }
-    startBgPan(api.panBy, event);
+    if (!isCanvasPanPointer(event)) return;
+    startBgPan(api.panBy, event, setPanning);
+  };
+
+  useEffect(() => {
+    const setHandToolActive = (active: boolean): void => {
+      handToolRef.current = active;
+      setHandTool(active);
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.code !== "Space" || isHandToolKeyIgnoredTarget(event.target)) return;
+      event.preventDefault();
+      if (!handToolRef.current) setHandToolActive(true);
+    };
+    const onKeyUp = (event: KeyboardEvent): void => {
+      if (event.code !== "Space") return;
+      setHandToolActive(false);
+    };
+    const onBlur = (): void => {
+      setHandToolActive(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
+  // WCAG 2.1.1 (WC-01): keyboard pan when the workspace surface itself is
+  // focused. Guard event.target === event.currentTarget so arrow keys inside a
+  // focused window child are not captured here (those are handled by WindowFrame).
+  const onSurfaceKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
+    if (event.target !== event.currentTarget) return;
+    const base = 48;
+    const step = event.shiftKey ? base * 4 : base;
+    switch (event.key) {
+      case "ArrowLeft":
+        api.panBy(step, 0);
+        break;
+      case "ArrowRight":
+        api.panBy(-step, 0);
+        break;
+      case "ArrowUp":
+        api.panBy(0, step);
+        break;
+      case "ArrowDown":
+        api.panBy(0, -step);
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
   };
 
   const bgStyle: CSSProperties = useMemo(
@@ -202,13 +356,14 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   // so children re-layout (and text/SVG re-rasterize) at the new pixel grid —
   // otherwise the browser samples a once-rasterized bitmap of the scene at its
   // natural size and upscales it, blurring widget content at zoom > 1 (#305).
-  // Translation stays in `transform`; `transform` values are in outer pixels
-  // and are not themselves affected by the element's own `zoom`, so the visual
-  // mapping (worldPt -> workspaceLeft + view.x + worldPt * view.zoom) and the
-  // pan/zoom/drag math in useWorkspace/WindowFrame are preserved.
+  // Chrome applies CSS `zoom` to the transform translation as well. Divide the
+  // stored outer-pixel pan by the zoom so the visual mapping stays:
+  // worldPt -> workspaceLeft + view.x + worldPt * view.zoom.
+  // Without this compensation, maximized windows at non-100% workspace zoom are
+  // placed outside the workspace because worldVP math and rendered geometry diverge.
   const sceneStyle: CSSProperties = useMemo(
     () => ({
-      transform: `translate(${String(view.x)}px, ${String(view.y)}px)`,
+      transform: `translate(${String(view.x / view.zoom)}px, ${String(view.y / view.zoom)}px)`,
       transformOrigin: "0 0",
       zoom: view.zoom,
     }),
@@ -216,10 +371,23 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   );
 
   const onWorkspacePointerDownCapture = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0 || connecting === null || connFrom === null || wins === null) return;
+    if (workspaceInteractionLocked()) return;
+    if (
+      handToolRef.current &&
+      isPrimaryActivationPointer(event) &&
+      connecting === null &&
+      !isTextEntryTarget(event.target) &&
+      !isInteractiveSurfaceTarget(event.target)
+    ) {
+      startBgPan(api.panBy, event, setPanning);
+      event.stopPropagation();
+      return;
+    }
+    if (event.button !== 0 || connecting === null || connFrom === null || visibleWins === null)
+      return;
     const targetId = windowIdFromEventTarget(event.target);
     if (targetId === undefined || targetId === connFrom.id) return;
-    const target = wins.find((w) => w.id === targetId);
+    const target = visibleWins.find((w) => w.id === targetId);
     if (target !== undefined && canConnect(connFrom.type, target.type)) {
       api.confirmConnect(target.id, event);
     }
@@ -253,6 +421,108 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     [api, view],
   );
 
+  const addFigmaViewNode = useCallback(
+    (payload: FigmaViewDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
+      const id = api.add("figmaView", {
+        snapshotRunId: payload.snapshotRunId,
+        selectedScreenIdsJson: JSON.stringify([payload.screenId]),
+        selectedScreenName: payload.name,
+      });
+      if (id === null) return;
+      api.update(id, {
+        ...workspaceDropPointToWindowOrigin({
+          clientX,
+          clientY,
+          rect,
+          view,
+          size: FIGMA_VIEW_NODE_SIZE,
+        }),
+        ...FIGMA_VIEW_NODE_SIZE,
+      });
+    },
+    [api, view],
+  );
+
+  const qualityConnectionsForSource = useCallback(
+    (
+      sourceWindowId: string,
+    ): readonly { readonly connId: string; readonly qualityId: string }[] => {
+      if (wins === null) return [];
+      const byId = new Map(wins.map((win) => [win.id, win]));
+      const result: { connId: string; qualityId: string }[] = [];
+      for (const conn of conns) {
+        const otherId =
+          conn.a === sourceWindowId ? conn.b : conn.b === sourceWindowId ? conn.a : null;
+        if (otherId === null) continue;
+        const other = byId.get(otherId);
+        if (other?.type !== "quality") continue;
+        result.push({ connId: conn.id, qualityId: other.id });
+      }
+      return result;
+    },
+    [conns, wins],
+  );
+
+  const addFigmaJsonNode = useCallback(
+    (payload: FigmaJsonDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
+      const id = api.add("figmaJson", {
+        snapshotRunId: payload.snapshotRunId,
+        screenId: payload.screenId,
+        selectedScreenIdsJson: JSON.stringify([payload.screenId]),
+        selectedScreenName: payload.name,
+      });
+      if (id === null) return;
+      api.update(id, {
+        ...workspaceDropPointToWindowOrigin({
+          clientX,
+          clientY,
+          rect,
+          view,
+          size: FIGMA_JSON_NODE_SIZE,
+        }),
+        ...FIGMA_JSON_NODE_SIZE,
+      });
+      if (payload.sourceWindowId === undefined) return;
+      const migrated = qualityConnectionsForSource(payload.sourceWindowId);
+      if (migrated.length === 0) return;
+      for (const edge of migrated) api.removeConn(edge.connId);
+      window.setTimeout(() => {
+        for (const edge of migrated) api.connect(id, edge.qualityId);
+      }, 0);
+    },
+    [api, qualityConnectionsForSource, view],
+  );
+
+  const addFigmaImageNode = useCallback(
+    (payload: FigmaImageDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
+      const id = api.add("figmaImage", {
+        snapshotRunId: payload.snapshotRunId,
+        screenId: payload.screenId,
+        selectedScreenName: payload.name,
+        imageSrc: payload.imageSrc,
+      });
+      if (id === null) return;
+      api.update(id, {
+        ...workspaceDropPointToWindowOrigin({
+          clientX,
+          clientY,
+          rect,
+          view,
+          size: FIGMA_IMAGE_NODE_SIZE,
+        }),
+        ...FIGMA_IMAGE_NODE_SIZE,
+      });
+      if (payload.sourceWindowId === undefined) return;
+      const migrated = qualityConnectionsForSource(payload.sourceWindowId);
+      if (migrated.length === 0) return;
+      for (const edge of migrated) api.removeConn(edge.connId);
+      window.setTimeout(() => {
+        for (const edge of migrated) api.connect(id, edge.qualityId);
+      }, 0);
+    },
+    [api, qualityConnectionsForSource, view],
+  );
+
   useEffect(() => {
     const handleConnectorDrop = (event: Event): void => {
       if (!(event instanceof CustomEvent)) return;
@@ -260,7 +530,12 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       const rect = wsRef.current?.getBoundingClientRect();
       if (rect === undefined) return;
       const { clientX, clientY, payload } = event.detail;
-      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
         return;
       }
       addKnowledgeConnectorNode(payload, clientX, clientY, rect);
@@ -271,38 +546,145 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     };
   }, [addKnowledgeConnectorNode, wsRef]);
 
+  useEffect(() => {
+    const handleFigmaViewDrop = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      if (!isFigmaViewDropDetail(event.detail)) return;
+      const rect = wsRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const { clientX, clientY, payload } = event.detail;
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        return;
+      }
+      addFigmaViewNode(payload, clientX, clientY, rect);
+    };
+    window.addEventListener(FIGMA_VIEW_DROP_EVENT, handleFigmaViewDrop);
+    return () => {
+      window.removeEventListener(FIGMA_VIEW_DROP_EVENT, handleFigmaViewDrop);
+    };
+  }, [addFigmaViewNode, wsRef]);
+
+  useEffect(() => {
+    const handleFigmaJsonDrop = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      if (!isFigmaJsonDropDetail(event.detail)) return;
+      const rect = wsRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const { clientX, clientY, payload } = event.detail;
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        return;
+      }
+      addFigmaJsonNode(payload, clientX, clientY, rect);
+    };
+    window.addEventListener(FIGMA_JSON_DROP_EVENT, handleFigmaJsonDrop);
+    return () => {
+      window.removeEventListener(FIGMA_JSON_DROP_EVENT, handleFigmaJsonDrop);
+    };
+  }, [addFigmaJsonNode, wsRef]);
+
+  useEffect(() => {
+    const handleFigmaImageDrop = (event: Event): void => {
+      if (!(event instanceof CustomEvent)) return;
+      if (!isFigmaImageDropDetail(event.detail)) return;
+      const rect = wsRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const { clientX, clientY, payload } = event.detail;
+      if (
+        clientX < rect.left ||
+        clientX > rect.right ||
+        clientY < rect.top ||
+        clientY > rect.bottom
+      ) {
+        return;
+      }
+      addFigmaImageNode(payload, clientX, clientY, rect);
+    };
+    window.addEventListener(FIGMA_IMAGE_DROP_EVENT, handleFigmaImageDrop);
+    return () => {
+      window.removeEventListener(FIGMA_IMAGE_DROP_EVENT, handleFigmaImageDrop);
+    };
+  }, [addFigmaImageNode, wsRef]);
+
   const onDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
-    if (parseLocalKnowledgeConnectorDrag(event.dataTransfer) === null) return;
+    if (
+      parseLocalKnowledgeConnectorDrag(event.dataTransfer) === null &&
+      parseFigmaViewDrag(event.dataTransfer) === null &&
+      parseFigmaJsonDrag(event.dataTransfer) === null &&
+      parseFigmaImageDrag(event.dataTransfer) === null
+    ) {
+      return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   };
 
   const onDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
-    const payload = parseLocalKnowledgeConnectorDrag(event.dataTransfer);
-    if (payload === null) return;
+    const connectorPayload = parseLocalKnowledgeConnectorDrag(event.dataTransfer);
+    const figmaPayload = parseFigmaViewDrag(event.dataTransfer);
+    const figmaJsonPayload = parseFigmaJsonDrag(event.dataTransfer);
+    const figmaImagePayload = parseFigmaImageDrag(event.dataTransfer);
+    if (
+      connectorPayload === null &&
+      figmaPayload === null &&
+      figmaJsonPayload === null &&
+      figmaImagePayload === null
+    ) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     const rect = event.currentTarget.getBoundingClientRect();
-    addKnowledgeConnectorNode(payload, event.clientX, event.clientY, rect);
+    if (connectorPayload !== null) {
+      addKnowledgeConnectorNode(connectorPayload, event.clientX, event.clientY, rect);
+      return;
+    }
+    if (figmaPayload !== null) {
+      addFigmaViewNode(figmaPayload, event.clientX, event.clientY, rect);
+      return;
+    }
+    if (figmaJsonPayload !== null) {
+      addFigmaJsonNode(figmaJsonPayload, event.clientX, event.clientY, rect);
+      return;
+    }
+    if (figmaImagePayload !== null) {
+      addFigmaImageNode(figmaImagePayload, event.clientX, event.clientY, rect);
+    }
   };
 
   const empty = wins !== null && wins.length === 0;
+  const hasMaximizedWindow = wins?.some((win) => win.max) ?? false;
 
+  /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- the workspace landmark is also the OS-style drop target for connector payloads.
     <main
       className="workspace"
       ref={wsRef}
       aria-label="Workspace surface"
+      tabIndex={0}
+      data-window-maxed={hasMaximizedWindow ? "true" : undefined}
+      data-canvas-overlays-hidden={hasMaximizedWindow ? "true" : "false"}
       data-connecting={connecting !== null ? "true" : undefined}
+      data-panning={panning ? "true" : undefined}
+      data-hand-tool={handTool ? "true" : undefined}
       onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
+      onKeyDown={onSurfaceKeyDown}
       onDragOver={onDragOver}
       onDrop={onDrop}
     >
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
-      <ConnectAnnouncer wins={wins} connecting={connecting} conns={conns} />
+      <ConnectAnnouncer wins={visibleWins} connecting={connecting} conns={conns} />
       {connecting !== null ? (
         // Visible counterpart to ConnectAnnouncer for sighted users — connect
         // mode otherwise only signals via cursor/dimming, leaving the exits
@@ -314,13 +696,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       ) : null}
       {empty ? (
         <div className="ws-empty">
-          {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG directly */}
-          <img className="ws-empty-logo" src="/assets/keiko-logo.svg" alt="" />
-          <div className="ws-empty-title">Empty workspace</div>
-          <div className="ws-empty-sub">Open a window to start working</div>
-          <button type="button" className="ws-empty-btn" onClick={openPalette}>
-            <Icons.add size={15} /> New window
-          </button>
+          <EmptyWorkspaceBlob onNewWindow={openPalette} />
         </div>
       ) : null}
 
@@ -331,11 +707,11 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
             style={{ left: snapPrev.x, top: snapPrev.y, width: snapPrev.w, height: snapPrev.h }}
           />
         ) : null}
-        {wins !== null ? (
-          <ConnectionsLayer wins={wins} conns={conns} connecting={connecting} api={api} />
+        {visibleWins !== null ? (
+          <ConnectionsLayer wins={visibleWins} conns={conns} connecting={connecting} api={api} />
         ) : null}
-        {wins !== null
-          ? wins.map((w) => (
+        {visibleWins !== null
+          ? visibleWins.map((w) => (
               <WindowFrame
                 key={w.id}
                 win={w}
@@ -352,30 +728,40 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       <div className="ws-zoom">
         <button
           type="button"
-          className="ws-zoom-btn"
+          className="ws-zoom-btn ui-tip cmp-tip-start"
           onClick={() => api.zoomTo(stepViewZoom(view.zoom, -0.2))}
           disabled={view.zoom <= MIN_ZOOM}
           aria-label="Zoom out"
-          title="Zoom out"
+          data-tip="Zoom out"
         >
           <Icons.zoomOut size={15} />
         </button>
         <button
           type="button"
-          className="ws-zoom-pct mono"
+          className="ws-zoom-btn ui-tip cmp-tip-start"
+          onClick={api.fitView}
+          disabled={visibleWins === null || visibleWins.length === 0}
+          aria-label="Fit workspace to windows"
+          data-tip="Fit workspace to windows"
+        >
+          <Icons.expand size={15} />
+        </button>
+        <button
+          type="button"
+          className="ws-zoom-pct mono ui-tip"
           onClick={api.resetView}
-          aria-label={`${String(Math.round(view.zoom * 100))}% — reset view`}
-          title="Reset view to 100%"
+          aria-label={`${String(Math.round(view.zoom * 100))}% — reset`}
+          data-tip="Reset"
         >
           {Math.round(view.zoom * 100)}%
         </button>
         <button
           type="button"
-          className="ws-zoom-btn"
+          className="ws-zoom-btn ui-tip cmp-tip-end"
           onClick={() => api.zoomTo(stepViewZoom(view.zoom, 0.2))}
           disabled={view.zoom >= MAX_ZOOM}
           aria-label="Zoom in"
-          title="Zoom in"
+          data-tip="Zoom in"
         >
           <Icons.zoomIn size={15} />
         </button>
@@ -383,16 +769,17 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
 
       <button
         type="button"
-        className="ws-fab"
+        className="ws-fab ui-tip cmp-tip-end"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={openPalette}
         aria-label="New window"
-        title="New window"
+        data-tip="New window"
       >
         <Icons.add size={20} />
       </button>
 
-      {palette ?? null}
+      {hasMaximizedWindow ? null : (palette ?? null)}
     </main>
   );
+  /* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
 }
