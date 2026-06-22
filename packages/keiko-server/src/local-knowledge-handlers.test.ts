@@ -1,4 +1,5 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -71,6 +72,12 @@ function gatewayConfig(modelId: string): GatewayConfig {
       halfOpenProbes: 1,
     },
   };
+}
+
+function embeddingProviderIdentityForTest(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/+$/, "");
+  const fingerprint = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+  return `openai-compatible:${fingerprint}`;
 }
 
 function embeddingDimensionsForTestModel(modelId: string): number {
@@ -1705,6 +1712,110 @@ describe("local-knowledge handlers", () => {
     };
     expect(body.capsule.embeddingModelIdentity.modelId).toBe(healthyModelId);
     expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
+  });
+
+  it("repairs a LiteLLM upstream embedding alias before indexing an existing capsule", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "policy.md"), "# Policy\n\nKeiko indexes this file.\n", "utf8");
+
+    const routeModelId = "Qwen3-Embedding-8B";
+    const upstreamModelId = "RedHatAI/Qwen3-Embedding-8B";
+    const baseUrl = "https://gateway.example.test/v1";
+    const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: tmp });
+    const store = openKnowledgeStore({ dbPath });
+    createCapsule(store, {
+      id: "cap-litellm-alias" as KnowledgeCapsuleId,
+      displayName: "LiteLLM Alias Capsule",
+      tags: [],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      embeddingModelIdentity: {
+        provider: embeddingProviderIdentityForTest(baseUrl),
+        modelId: upstreamModelId,
+        vectorDimensions: 4096,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "ready",
+      storageReference: "capsules/cap-litellm-alias",
+    });
+    addSourceToCapsule(store, "cap-litellm-alias" as KnowledgeCapsuleId, {
+      id: "src-litellm-alias" as KnowledgeSourceId,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "files", rootPath: docsRoot, files: ["policy.md"] },
+    });
+    store.close();
+
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp),
+      config: {
+        providers: [
+          {
+            modelId: routeModelId,
+            baseUrl,
+            apiKey: "redacted",
+            timeoutMs: 30_000,
+            maxRetries: 1,
+            retryBaseDelayMs: 100,
+          },
+        ],
+        capabilities: [embeddingCapability(routeModelId)],
+        circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      },
+      localKnowledgeEmbeddingRequest: vi.fn(
+        (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+          expect(request.modelId).toBe(routeModelId);
+          return Promise.resolve({
+            ok: true as const,
+            value: {
+              vector: Float32Array.from({ length: 4096 }, (_, index) => index / 1000),
+              modelId: upstreamModelId,
+            },
+          });
+        },
+      ),
+    };
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      {
+        ...baseCtx(tmp, "POST", { confirm: true }),
+        params: { capsuleId: "cap-litellm-alias" },
+      },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const verify = openKnowledgeStore({ dbPath });
+    const capsule = getCapsule(verify, "cap-litellm-alias" as KnowledgeCapsuleId);
+    const vectors = verify._internal.db
+      .prepare(
+        "SELECT embedding_model_id, embedding_model_revision, vector_dimensions FROM vectors WHERE capsule_id = :c",
+      )
+      .all({ c: "cap-litellm-alias" }) as unknown as readonly {
+      readonly embedding_model_id: string;
+      readonly embedding_model_revision: string | null;
+      readonly vector_dimensions: number;
+    }[];
+    verify.close();
+
+    expect(capsule?.embeddingModelIdentity).toMatchObject({
+      modelId: routeModelId,
+      modelRevision: upstreamModelId,
+      vectorDimensions: 4096,
+    });
+    expect(vectors.length).toBeGreaterThan(0);
+    expect(
+      vectors.every(
+        (row) =>
+          row.embedding_model_id === routeModelId &&
+          row.embedding_model_revision === upstreamModelId &&
+          row.vector_dimensions === 4096,
+      ),
+    ).toBe(true);
   });
 
   it("surfaces parserDiagnostics and indexingJobs truncation totals on the detail response (#189 F4)", async () => {

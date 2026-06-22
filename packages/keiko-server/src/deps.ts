@@ -92,6 +92,7 @@ export interface GatewayDiscoveredModels {
   readonly modelIds: readonly string[];
   readonly chatModelIds: readonly string[];
   readonly embeddingModelIds: readonly string[];
+  readonly imageInputModelIds?: readonly string[];
 }
 
 export type GatewayModelDiscoveryOutput = readonly string[] | GatewayDiscoveredModels;

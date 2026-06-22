@@ -89,7 +89,7 @@ describe("verifyEmbeddingCapability", () => {
     }
   });
 
-  it("records the gateway-reported model id when the provider canonicalizes the requested alias", async () => {
+  it("keeps the request model id stable and records provider canonicalization as modelRevision", async () => {
     const result = await verifyEmbeddingCapability(
       adapterReturning({
         ok: true,
@@ -102,7 +102,8 @@ describe("verifyEmbeddingCapability", () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.identity.modelId).toBe("text-embedding-3-small@2026-06");
+      expect(result.identity.modelId).toBe(PROBE.modelId);
+      expect(result.identity.modelRevision).toBe("text-embedding-3-small@2026-06");
     }
   });
 

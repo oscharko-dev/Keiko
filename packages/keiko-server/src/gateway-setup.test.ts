@@ -872,6 +872,10 @@ describe("handleGatewaySetup", () => {
             JSON.stringify({
               data: [
                 { model_name: "litellm-chat-large", model_info: { mode: "chat" } },
+                {
+                  model_name: "litellm-vision-chat",
+                  model_info: { mode: "chat", supports_vision: true },
+                },
                 { model_name: "litellm-embedding", model_info: { mode: "embedding" } },
                 { model_name: "litellm-image", model_info: { mode: "image_generation" } },
                 { model_name: "litellm-unknown-mode" },
@@ -920,9 +924,14 @@ describe("handleGatewaySetup", () => {
       expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model/info");
       expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
       expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(false);
-      expect(seenModels).toEqual(["litellm-chat-large", "litellm-unknown-mode"]);
+      expect(seenModels).toEqual([
+        "litellm-chat-large",
+        "litellm-vision-chat",
+        "litellm-unknown-mode",
+      ]);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
         "litellm-chat-large",
+        "litellm-vision-chat",
         "litellm-unknown-mode",
       ]);
       expect(
@@ -932,13 +941,18 @@ describe("handleGatewaySetup", () => {
       ).toBe(true);
       expect(
         currentGatewayConfig(deps)?.providers.map((provider) => provider.apiKeyHeaderName),
-      ).toEqual(["x-litellm-key", "x-litellm-key", "x-litellm-key"]);
+      ).toEqual(["x-litellm-key", "x-litellm-key", "x-litellm-key", "x-litellm-key"]);
       const config = currentGatewayConfig(deps);
       expect(config?.providers.map((provider) => provider.modelId)).toEqual([
         "litellm-chat-large",
+        "litellm-vision-chat",
         "litellm-unknown-mode",
         "litellm-embedding",
       ]);
+      expect(
+        config?.capabilities?.find((capability) => capability.id === "litellm-vision-chat")
+          ?.supportsImageInput,
+      ).toBe(true);
       expect(selectEmbeddingModelId(config)).toBe("litellm-embedding");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
@@ -1227,6 +1241,25 @@ describe("normalizeDiscoveryPayload", () => {
     expect(normalizeDiscoveryPayloadForSetup(payload)).toMatchObject({
       chatModelIds: ["x"],
       embeddingModelIds: ["y"],
+    });
+  });
+
+  it("detects LiteLLM image-input chat models from metadata without keeping image generators", () => {
+    const payload = {
+      data: [
+        { model_name: "plain-chat", model_info: { mode: "chat" } },
+        {
+          model_name: "vision-chat",
+          model_info: { mode: "chat", input_modalities: ["text", "image"] },
+        },
+        { model_name: "generated-image", model_info: { mode: "image_generation" } },
+      ],
+    };
+
+    expect(normalizeDiscoveryPayloadForSetup(payload)).toMatchObject({
+      chatModelIds: ["plain-chat", "vision-chat"],
+      embeddingModelIds: [],
+      imageInputModelIds: ["vision-chat"],
     });
   });
 

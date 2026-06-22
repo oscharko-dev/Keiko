@@ -21,6 +21,7 @@ import {
   removeSourceFromCapsule,
   resolveKnowledgeStorePath,
   runIndexingJob,
+  updateCapsuleEmbeddingModelIdentity,
   updateCapsuleDetails,
   updateCapsuleState,
   type CapsuleDetailsPatch,
@@ -30,6 +31,7 @@ import type {
   CapsuleLargeDocumentHealth,
   CapsuleReindexMode,
   DocumentId,
+  EmbeddingModelIdentity,
   IndexingJobRecord,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
@@ -329,6 +331,80 @@ function configuredProviderForCapsule(
   return storedProviderMatchesConfiguredProvider(capsule.embeddingModelIdentity.provider, provider)
     ? provider
     : undefined;
+}
+
+interface ResolvedCapsuleEmbeddingProvider {
+  readonly capsule: KnowledgeCapsule;
+  readonly provider: ModelProviderConfig;
+}
+
+function embeddingIdentityMatchesCapsuleAlias(
+  stored: EmbeddingModelIdentity,
+  current: EmbeddingModelIdentity,
+): boolean {
+  if (
+    stored.provider !== current.provider ||
+    stored.vectorDimensions !== current.vectorDimensions ||
+    stored.vectorMetric !== current.vectorMetric
+  ) {
+    return false;
+  }
+  if (stored.modelId === current.modelId) {
+    return true;
+  }
+  return current.modelRevision !== undefined && stored.modelId === current.modelRevision;
+}
+
+async function probeConfiguredProviderForCapsule(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+  capsule: KnowledgeCapsule,
+): Promise<EmbeddingModelIdentity | undefined> {
+  const adapter = createEmbeddingAdapter(
+    provider,
+    requestEmbeddingImpl(deps),
+    requestEmbeddingBatchImpl(deps),
+  );
+  try {
+    const result = await verifyEmbeddingCapability(adapter, {
+      modelId: provider.modelId,
+      provider: embeddingProviderIdentity(provider),
+      vectorMetric: capsule.embeddingModelIdentity.vectorMetric,
+      expectedDimensions: capsule.embeddingModelIdentity.vectorDimensions,
+      timeoutMs: provider.timeoutMs,
+    });
+    return result.ok ? result.identity : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveIndexingProviderForCapsule(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+): Promise<ResolvedCapsuleEmbeddingProvider | undefined> {
+  const exact = configuredProviderForCapsule(deps, capsule);
+  if (exact !== undefined) {
+    return { capsule, provider: exact };
+  }
+  const providers = configuredEmbeddingProviders(currentGatewayConfig(deps));
+  for (const provider of providers) {
+    if (
+      !storedProviderMatchesConfiguredProvider(capsule.embeddingModelIdentity.provider, provider)
+    ) {
+      continue;
+    }
+    const identity = await probeConfiguredProviderForCapsule(deps, provider, capsule);
+    if (
+      identity !== undefined &&
+      embeddingIdentityMatchesCapsuleAlias(capsule.embeddingModelIdentity, identity)
+    ) {
+      const repaired = updateCapsuleEmbeddingModelIdentity(store, capsule.id, identity);
+      return { capsule: repaired, provider };
+    }
+  }
+  return undefined;
 }
 
 function embeddingCompatibilityReason(
@@ -1174,6 +1250,18 @@ function indexingCompletionResponse(
   return actionResponse(capsuleId);
 }
 
+function runningIndexingJobConflict(
+  capsuleId: KnowledgeCapsule["id"],
+  runningJobId: string,
+): RouteResult {
+  return indexingConflict(
+    "indexing-already-running",
+    "An indexing job is already running for this capsule.",
+    capsuleId,
+    runningJobId,
+  );
+}
+
 function buildIndexingOptions(
   store: ReturnType<typeof openKnowledgeStore>,
   capsule: KnowledgeCapsule,
@@ -1532,7 +1620,8 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
       if (capsule.sourceIds.length === 0) {
         return emptyCapsuleIndexingConflict();
       }
-      if (configuredProviderForCapsule(deps, capsule) === undefined) {
+      const resolved = await resolveIndexingProviderForCapsule(deps, env.store, capsule);
+      if (resolved === undefined) {
         return conflict(
           "No configured embedding-capable model matches this capsule. Update the Model Gateway configuration before indexing it.",
         );
@@ -1540,21 +1629,16 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
       // LK-003 (Epic #189): refuse to start a second concurrent indexer for the same
       // capsule — the orchestrator persists running jobs, so a duplicate POST would
       // race the in-flight one and corrupt vector counts.
-      const runningJobId = latestRunningJobId(env.store, capsule.id);
+      const runningJobId = latestRunningJobId(env.store, resolved.capsule.id);
       if (runningJobId !== undefined) {
-        return indexingConflict(
-          "indexing-already-running",
-          "An indexing job is already running for this capsule.",
-          capsule.id,
-          runningJobId,
-        );
+        return runningIndexingJobConflict(resolved.capsule.id, runningJobId);
       }
-      const terminal = await runCapsuleIndexingJob(deps, env.store, capsule, {
+      const terminal = await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
         mode: undefined,
         force: false,
       });
       return indexingCompletionResponse(
-        capsule.id,
+        resolved.capsule.id,
         terminal,
         "Capsule indexing failed. Review the capsule health diagnostics and job history for details.",
       );
@@ -1779,27 +1863,23 @@ export async function handleReindexLocalKnowledgeCapsule(
       if (capsule.sourceIds.length === 0) {
         return emptyCapsuleIndexingConflict();
       }
-      if (configuredProviderForCapsule(deps, capsule) === undefined) {
+      const resolved = await resolveIndexingProviderForCapsule(deps, env.store, capsule);
+      if (resolved === undefined) {
         return conflict(
           "No configured embedding-capable model matches this capsule. Update the Model Gateway configuration before refreshing it.",
         );
       }
       // LK-003 (Epic #189): same concurrent-run guard as the start handler.
-      const runningJobId = latestRunningJobId(env.store, capsule.id);
+      const runningJobId = latestRunningJobId(env.store, resolved.capsule.id);
       if (runningJobId !== undefined) {
-        return indexingConflict(
-          "indexing-already-running",
-          "An indexing job is already running for this capsule.",
-          capsule.id,
-          runningJobId,
-        );
+        return runningIndexingJobConflict(resolved.capsule.id, runningJobId);
       }
-      const terminal = await runCapsuleIndexingJob(deps, env.store, capsule, {
+      const terminal = await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
         mode,
         force,
       });
       return indexingCompletionResponse(
-        capsule.id,
+        resolved.capsule.id,
         terminal,
         "Capsule refresh failed. Review the capsule health diagnostics and job history for details.",
       );
