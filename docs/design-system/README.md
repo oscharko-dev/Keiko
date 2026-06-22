@@ -107,6 +107,24 @@ As child issues land, their component-level usage notes (states + accessibility 
 alongside this blueprint:
 
 - [ai-components.md](ai-components.md) — AI/agent component set ([#1296](https://github.com/oscharko-dev/Keiko/issues/1296)): tokens, states, accessibility, product-surface mapping, and the deferred authority-bearing primitives.
+- [data-display-migration.md](data-display-migration.md) — table/data-grid + dataviz foundation ([#1297](https://github.com/oscharko-dev/Keiko/issues/1297)): `--table-*`/`--viz-*` tokens, states, adopters, and reuse analysis.
+- [input-nav-migration.md](input-nav-migration.md) — input/form + navigation coverage ([#1298](https://github.com/oscharko-dev/Keiko/issues/1298)): the 13 input/nav token families, breakpoint + density behaviour, and adopters.
+
+## Governance and component standards ([#1299](https://github.com/oscharko-dev/Keiko/issues/1299))
+
+The acceptance contract that closes the component work ([#1292](https://github.com/oscharko-dev/Keiko/issues/1292)–[#1298](https://github.com/oscharko-dev/Keiko/issues/1298)) — what states a component must define, how each component page is documented, who owns it, and how a change enters or leaves the system — is governed by [ADR-0050](../adr/ADR-0050-component-state-and-governance-contract.md) and lives in four documents:
+
+| #   | Deliverable (issue [#1299](https://github.com/oscharko-dev/Keiko/issues/1299))                                                            | Document                                       |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1   | Eleven-state vocabulary + applicability matrix mapped to implemented components, token sources, a11y, and screenshot evidence             | [state-matrix.md](state-matrix.md)             |
+| 2   | The ten-section per-component documentation template + worked examples (Button, Input / field, Table)                                     | [component-template.md](component-template.md) |
+| 3   | Component register (status / owner / since), contribution + deprecation rules, migration + variance-note expectations, evidence hierarchy | [governance.md](governance.md)                 |
+| 4   | Editor-fidelity governance: the eight editor surfaces, token sources, required evidence, and the #1373 / #1390 ownership boundary         | [editor-governance.md](editor-governance.md)   |
+
+Browser evidence cross-checking the state matrix against the live `states.html` proof across all 7 modes:
+[`evidence/1299/`](evidence/1299/README.md). The state matrix is pinned cell-for-cell against
+`design-system/states.html` by the `Issue #1299` drift gate in
+`packages/keiko-ui/src/app/globals.css.test.ts`.
 
 ## Reuse and no-duplication posture (epic gate)
 
