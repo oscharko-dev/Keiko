@@ -3452,7 +3452,6 @@ interface Issue1300ConsolidatedProof {
   readonly postCssSha256: string;
   readonly referenceFiles: readonly string[];
   readonly groupR: { readonly totalProbes: number; readonly gatedDiffCount: number };
-  readonly missingSelectors: readonly string[];
   readonly accentDerived: { readonly byMode: Record<string, unknown> };
   readonly accessibilityProof: {
     readonly focusProof: { readonly activeIsBack: boolean; readonly hasFocusRing: boolean };
