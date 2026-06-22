@@ -136,7 +136,7 @@ blocks in `globals.css`. Anchored by `WorkspaceShell.a11y.test.tsx`.
 > (value-preserving — the TSX files carry only documented exceptions: WebGL shader uniforms, SVG mask endpoints,
 > window-type metadata). Gated by the `Issue #1293` describe block in `globals.css.test.ts` (window-card tokens,
 > surface tokens, `--focus-ring`, named z/space/radius scales, raw-primitive drift guard) + the extended
-> Dark/Light `WorkspaceShell.a11y.test.tsx`. Browser evidence: [evidence/1293](evidence/1293/) — 826
+> Dark/Light `WorkspaceShell.a11y.test.tsx`. Browser evidence: [evidence/1293](evidence/1293/) — 840
 > computed-value probes, 0 differences across 7 modes. The three `required` Light-Mode shell shadow rows
 > (Table A: `.hd-tool-cta`, `.ws-zoom`, `.ws-fab`/C415) stay with **#1295** (shadow/scrim tokenisation is a
 > Light visual change, out of scope for this no-visual-change migration); the eight `[data-theme="light"]` shell

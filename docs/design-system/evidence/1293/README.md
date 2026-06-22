@@ -29,8 +29,8 @@ shell surfaces route through `--surface-*`/`--background-*`/`--nav-*` (AC2), and
   in [light-mode-deviation-register.md](../../light-mode-deviation-register.md) and are explicitly owned by
   **#1295** ("resolve the Light Mode `required` rows by tokenising shadows/scrims"), not #1293. #1293 is a
   no-visual-change migration; tokenising those shadows is a Light-Mode _visual change_, so it is left to #1295.
-- **The eight `[data-theme="light"]` shell-override rules** (`.ws-fab` colour at globals.css:1185 _and_ the
-  separate C415 `.ws-fab` shadow at :16258, `.ft-you`, `.install-banner-btn-dismiss/-desc`, `.win-close:hover`,
+- **The eight `[data-theme="light"]` shell-override rules** (`.ws-fab` colour _and_ the separate C415
+  `.ws-fab` shadow, `.ft-you`, `.install-banner-btn-dismiss/-desc`, `.win-close:hover`,
   `.conn-path`, `.conn-dot`/`.conn-particle`, `.win-port`) are genuine per-mode WCAG corrections (1.4.3 text /
   1.4.11 non-text) — approved deviations. Per ADR-0049 gate 4 approved deviations are never removed; they are
   kept verbatim. (The C415 `.ws-fab` shadow row is also the deferred-to-#1295 shadow correction above — one
@@ -116,8 +116,9 @@ project — permanent pixel visual-regression is scoped to #1300):
 node docs/design-system/evidence/1293/equivalence-harness.mjs
 ```
 
-The harness derives the **pre-migration** stylesheet from `git show origin/release/0.2.0:…/globals.css` and the
-**post-migration** stylesheet from the working tree, sets `data-theme` / `data-hc` on the document, emulates
+The harness derives the comparison stylesheet from `BASE_REF` (default `origin/release/0.2.0`; use the PR base
+SHA for an immutable pre-migration replay) and the **post-migration** stylesheet from the working tree, sets
+`data-theme` / `data-hc` on the document, emulates
 `prefers-contrast`, `forced-colors`, and `prefers-reduced-motion` via Playwright `page.emulateMedia`, then reads
 `getComputedStyle` for each shell element under both stylesheets, writes the proof JSON + the seven screenshots
 next to itself, and exits non-zero if any computed value differs. (Set `BASE_REF` to compare against a different

@@ -27,7 +27,7 @@ new `--overlay-scrim`/`--shadow-*`) so light values flow automatically. This wor
 [#1293](https://github.com/oscharko-dev/Keiko/issues/1293)/[#1295](https://github.com/oscharko-dev/Keiko/issues/1295) (surface migration).
 
 > **#1293 disposition (shipped).** The #1293 shell/chrome migration is a value-preserving consumer migration
-> (no Light-Mode visual change — proven by the 826-probe, 0-diff computed-value harness in
+> (no Light-Mode visual change — proven by the 840-probe, 0-diff computed-value harness in
 > [evidence/1293](evidence/1293/)). It therefore **kept all eight `[data-theme="light"]` shell overrides
 > verbatim** — they are genuine per-mode WCAG corrections (rows A7, B "Link/focus/control ink", "Status-badge
 > ink flips", "Connection-edge colours"), approved deviations that ADR-0049 gate 4 forbids removing. The three
@@ -102,7 +102,7 @@ These components hardcode a dark-biased shadow/inset/glow and have **no** correc
 | A9  | Window frame inset highlight `.win` frame                        | `globals.css:1503-1510`                     | inset `oklch(1 0 0/0.025)` top-bevel assumes dark surface; invisible (dead style) in light                                                 | approved deviation | theme=light; inspect a workspace window frame top edge                                                                             |
 | A10 | Workflow log wells + Figma image preview                         | `globals.css:12845,12901,12983,12998,13006` | `color-mix()` over `--bg`/`--card` (88-92%) darkened with black is theme-blind → flat light-gray well in light                             | approved deviation | theme=light; open a workflow run log well / Figma image window                                                                     |
 | A11 | Strong danger fill `color-mix(--danger 75%, black)`              | `globals.css:10980-10981`                   | black-mix darken on `--danger`; stays legible (dark on light); direction happens to be correct                                             | approved deviation | theme=light; trigger strong/active danger button state                                                                             |
-| A12 | Product chrome — forced-colors / Windows HCM                     | `globals.css` (entire file)                 | **zero** `@media (forced-colors: active)` blocks; only the Monaco editor adapts via JS (`useEditorThemeVariant.ts:36,59`)                  | required           | enable OS forced-colors (Windows HC or devtools Rendering → forced-colors: active); product chrome has no app-controlled treatment |
+| A12 | Product chrome — forced-colors / Windows HCM                     | `globals.css:1321-1337`                     | originally **zero** product `@media (forced-colors: active)` blocks; #1292 added the product forced-colors block and #1293 proves shell/chrome parity in forced-colors mode | resolved required  | enable OS forced-colors (Windows HC or devtools Rendering → forced-colors: active); product chrome uses system colours for focus and frame edges |
 
 ## Table B — the one-off `[data-theme="light"]` override layer (49 component-scoped rules)
 
@@ -135,8 +135,8 @@ scale under #1292.
 
 ## Acceptance criterion B — coverage statement
 
-Every known Light Mode mismatch is classified: Table A (12 visible defects: 8 required incl. forced-colors,
-4 approved deviations) and Table B (all 49 component-scoped `[data-theme="light"]` overrides: 10 required,
+Every known Light Mode mismatch is classified: Table A (12 visible defects: 8 required at audit time incl. the
+now-resolved forced-colors gap, 4 approved deviations) and Table B (all 49 component-scoped `[data-theme="light"]` overrides: 10 required,
 39 approved deviations), plus the related blocking `z-index` governance item. No `[data-theme="light"]` rule and
 no hardcoded-dark-shadow surface is left unclassified. Reproduction steps are provided for every row in Table A;
 Table B rows reproduce via the same theme-toggle harness and the cited selector.

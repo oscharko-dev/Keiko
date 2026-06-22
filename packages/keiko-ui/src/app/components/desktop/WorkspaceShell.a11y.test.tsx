@@ -1,4 +1,5 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { Footer } from "./Footer";
@@ -220,5 +221,101 @@ describe("Workspace shell accessibility", () => {
 
     const results = await axe(container);
     expect(results).toHaveNoViolations();
+  });
+
+  it("preserves #1293 shell focus order and keyboard activation across chrome regions", async () => {
+    const user = userEvent.setup();
+    const onTileAll = vi.fn();
+    const onSplitFront = vi.fn();
+    const onCascade = vi.fn();
+    const onNewChat = vi.fn();
+    const onTool = vi.fn();
+    const onToggleTheme = vi.fn();
+    const openPalette = vi.fn();
+    const wsApi = api();
+
+    render(
+      <div className="app">
+        <Header
+          openPalette={openPalette}
+          openCommandPalette={vi.fn()}
+          onTileAll={onTileAll}
+          onSplitFront={onSplitFront}
+          onCascade={onCascade}
+        />
+        <div className="mid">
+          <LeftRail
+            openTools={new Set(["chatHistory"])}
+            onTool={onTool}
+            onNewChat={onNewChat}
+            theme="dark"
+            onToggleTheme={onToggleTheme}
+          />
+          <div className="stage">
+            <Workspace
+              ws={workspace({ wins: [], api: wsApi })}
+              wsRef={{ current: null }}
+              openPalette={openPalette}
+            />
+          </div>
+        </div>
+      </div>,
+    );
+
+    const tabTo = async (element: HTMLElement): Promise<void> => {
+      await user.tab();
+      expect(element).toHaveFocus();
+    };
+
+    await tabTo(screen.getByRole("button", { name: "Tile all windows" }));
+    await user.keyboard("{Enter}");
+    expect(onTileAll).toHaveBeenCalledTimes(1);
+
+    await tabTo(screen.getByRole("button", { name: "Split front windows" }));
+    await tabTo(screen.getByRole("button", { name: "Cascade windows" }));
+    await user.keyboard("{Enter}");
+    expect(onCascade).toHaveBeenCalledTimes(1);
+
+    await tabTo(screen.getByRole("button", { name: "New chat" }));
+    await user.keyboard(" ");
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+
+    await tabTo(screen.getByRole("button", { name: "Chat History" }));
+    await user.keyboard("{Enter}");
+    expect(onTool).toHaveBeenCalledWith("chatHistory");
+
+    await tabTo(screen.getByRole("button", { name: "MemoriaViva" }));
+    await tabTo(screen.getByRole("button", { name: "Quality Intelligence" }));
+    await tabTo(screen.getByRole("button", { name: "Prompt Enhancer" }));
+    await tabTo(screen.getByRole("button", { name: "Local Knowledge" }));
+    await tabTo(screen.getByRole("button", { name: "Figma Snapshot" }));
+
+    await tabTo(screen.getByRole("button", { name: "Light mode" }));
+    await user.keyboard("{Enter}");
+    expect(onToggleTheme).toHaveBeenCalledTimes(1);
+
+    await tabTo(screen.getByRole("button", { name: "Settings" }));
+    await tabTo(screen.getByRole("main", { name: "Workspace surface" }));
+    await tabTo(screen.getByRole("button", { name: "Open a new window" }));
+    await user.keyboard("{Enter}");
+    expect(openPalette).toHaveBeenCalledTimes(1);
+
+    await tabTo(screen.getByRole("button", { name: "Zoom out" }));
+    await user.keyboard("{Enter}");
+    expect(wsApi.zoomTo).toHaveBeenNthCalledWith(1, 0.8);
+
+    await tabTo(screen.getByRole("button", { name: /100%.*reset/u }));
+    await user.keyboard("{Enter}");
+    expect(wsApi.resetView).toHaveBeenCalledTimes(1);
+
+    await tabTo(screen.getByRole("button", { name: "Zoom in" }));
+    await user.keyboard("{Enter}");
+    expect(wsApi.zoomTo).toHaveBeenNthCalledWith(2, 1.2);
+
+    await tabTo(screen.getByRole("button", { name: "New window" }));
+    await user.keyboard("{Enter}");
+    expect(openPalette).toHaveBeenCalledTimes(2);
+
+    expect(onSplitFront).not.toHaveBeenCalled();
   });
 });

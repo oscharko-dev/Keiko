@@ -136,7 +136,7 @@ Deferred surfaces (D1–D6 in [fidelity-matrix.md](fidelity-matrix.md)) are excl
 disposition is resolved.
 
 ¹ #1293 shell/chrome migration: each mode cell is engineering-verified by the 7-mode computed-value-equivalence
-proof and screenshots in [evidence/1293](evidence/1293/) — 826 `getComputedStyle` probes, **0** differing values
+proof and screenshots in [evidence/1293](evidence/1293/) — 840 `getComputedStyle` probes, **0** differing values
 between the pre- and post-migration stylesheet (the migration is value-preserving, so it carries the #1292
 designer-reviewed foundation forward unchanged across every viewport). The migration introduces no Light-Mode
 visual change; the three `required` Light shadow rows (Table A: `.hd-tool-cta`, `.ws-zoom`, `.ws-fab`) remain
