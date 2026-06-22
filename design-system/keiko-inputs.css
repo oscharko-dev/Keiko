@@ -33,7 +33,7 @@
 .c-radio .rb::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--radio-dot); transform: scale(0); transition: transform 0.12s; }
 .c-radio input:checked + .rb { border-color: var(--radio-border-selected); }
 .c-radio input:checked + .rb::after { transform: none; }
-.c-radio input:focus-visible + .rb { box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--focus-ring); }
+.c-radio input:focus-visible + .rb { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--focus-ring); }
 
 /* ── slider ──────────────────────────────────────────────────── */
 .c-slider { display: flex; align-items: center; gap: 14px; }
@@ -49,7 +49,7 @@
 }
 .c-slider input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--slider-thumb); border: 3px solid var(--slider-thumb-border); box-shadow: 0 0 0 1px var(--slider-thumb-ring); cursor: pointer; }
 .c-slider input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.12); }
-.c-slider input[type="range"]:focus-visible { box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--focus-ring); }
+.c-slider input[type="range"]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 4px; box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--focus-ring); }
 .c-slider .val { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ── stepper / number ────────────────────────────────────────── */
@@ -63,7 +63,7 @@
 /* ── combobox ────────────────────────────────────────────────── */
 .c-combo { position: relative; width: 280px; }
 .c-combo-input { display: flex; align-items: center; gap: 8px; min-height: var(--control-height); padding: 0 10px 0 12px; border-radius: var(--radius-control); border: 1px solid var(--combobox-border); background: var(--combobox-surface); }
-.c-combo-input:focus-within { border-color: var(--input-border-focus); box-shadow: 0 0 0 3px var(--input-ring-focus); }
+.c-combo-input:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-color: var(--input-border-focus); box-shadow: 0 0 0 3px var(--input-ring-focus); }
 .c-combo-input input { flex: 1; min-width: 0; border: 0; background: none; outline: none; color: var(--input-text); font: 13px var(--font-ui); }
 .c-combo-input .chev { color: var(--text-faint); flex: none; }
 .c-combo-list { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: var(--z-dropdown); background: var(--combobox-list-surface); border: 1px solid var(--combobox-list-border); border-radius: var(--radius-surface); box-shadow: var(--popover-shadow); padding: 6px; max-height: 240px; overflow: auto; }
@@ -78,12 +78,12 @@
 .c-tagfield:focus-within { border-color: var(--input-border-focus); box-shadow: 0 0 0 3px var(--input-ring-focus); }
 .c-tagfield input { flex: 1; min-width: 80px; border: 0; background: none; outline: none; color: var(--input-text); font: 13px var(--font-ui); padding: 3px 2px; }
 .c-tag { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 9px; border-radius: var(--radius-control); font-size: 12px; color: var(--tag-text); background: var(--tag-surface); border: 1px solid var(--tag-border); }
-.c-tag button { width: 16px; height: 16px; border: 0; background: transparent; color: var(--tag-text); cursor: pointer; display: grid; place-items: center; border-radius: 4px; opacity: 0.7; }
+.c-tag button { width: 24px; height: 24px; margin: -4px -2px -4px 0; border: 0; background: transparent; color: var(--tag-text); cursor: pointer; display: grid; place-items: center; border-radius: 6px; line-height: 1; opacity: 0.7; }
 .c-tag button:hover { opacity: 1; background: color-mix(in oklch, var(--accent) 18%, transparent); }
 .c-tag button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; opacity: 1; }
 
 /* ── file upload / dropzone ──────────────────────────────────── */
-.c-drop { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 30px 24px; border-radius: var(--radius-surface); border: 1.5px dashed var(--file-dropzone-border); background: var(--file-dropzone-surface); text-align: center; cursor: pointer; transition: border-color 0.14s, background 0.14s; }
+.c-drop { width: 100%; appearance: none; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 30px 24px; border-radius: var(--radius-surface); border: 1.5px dashed var(--file-dropzone-border); background: var(--file-dropzone-surface); color: var(--text-primary); font: inherit; text-align: center; cursor: pointer; transition: border-color 0.14s, background 0.14s; }
 .c-drop:hover, .c-drop.is-over { border-color: var(--file-dropzone-border-active); background: color-mix(in oklch, var(--accent) 6%, var(--file-dropzone-surface)); }
 .c-drop:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .c-drop .ic { width: 40px; height: 40px; border-radius: var(--radius-control); display: grid; place-items: center; background: var(--surface-accent-subtle); color: var(--text-accent); border: 1px solid var(--border-accent); }

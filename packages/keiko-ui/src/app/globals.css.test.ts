@@ -23,6 +23,40 @@ const evidenceHarness1297 = readFileSync(
   resolve(here, "../../../..", "docs/design-system/evidence/1297/equivalence-harness.mjs"),
   "utf8",
 );
+const evidenceHarness1298 = readFileSync(
+  resolve(here, "../../../..", "docs/design-system/evidence/1298/equivalence-harness.mjs"),
+  "utf8",
+);
+const designSystemInputsHtml = readFileSync(
+  resolve(here, "../../../..", "design-system/inputs.html"),
+  "utf8",
+);
+const designSystemNavHtml = readFileSync(
+  resolve(here, "../../../..", "design-system/nav-components.html"),
+  "utf8",
+);
+interface Issue1298ComputedProof {
+  readonly keyboardFocus: {
+    readonly targetCount: number;
+    readonly targets: Record<string, { readonly ok: boolean }>;
+  };
+  readonly screenshots: {
+    readonly compactDensity: string;
+    readonly focusVisible: string;
+    readonly responsiveViewports: readonly {
+      readonly fileName: string;
+      readonly width: number;
+      readonly height: number;
+      readonly label: string;
+    }[];
+  };
+}
+const computedProof1298 = JSON.parse(
+  readFileSync(
+    resolve(here, "../../../..", "docs/design-system/evidence/1298/computed-value-proof.json"),
+    "utf8",
+  ),
+) as unknown as Issue1298ComputedProof;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -3047,6 +3081,88 @@ describe("Issue #1298 — input + navigation components (Design System 0.4.0)", 
     expect(cssBlock("\n.c-stepper input {")).toContain("height: var(--control-height)");
     expect(cssBlock("\n.c-datefield {")).toContain("height: var(--control-height)");
     expect(cssBlock("\n.c-combo-input {")).toContain("min-height: var(--control-height)");
+  });
+
+  it("keeps tag remove buttons at the WCAG 2.2 target-size floor", () => {
+    const button = cssBlock("\n.c-tag button {");
+    expect(button).toContain("width: 24px");
+    expect(button).toContain("height: 24px");
+    expect(button).toContain("line-height: 1");
+  });
+
+  it("keeps the file dropzone keyboard-focusable as a real button primitive", () => {
+    const drop = cssBlock("\n.c-drop {");
+    expect(drop).toContain("appearance: none");
+    expect(drop).toContain("font: inherit");
+    expect(drop).toContain("width: 100%");
+    expect(designSystemInputsHtml).toContain(
+      '<button class="c-drop" id="drop" type="button" aria-describedby="drop-help">',
+    );
+  });
+
+  it("pins the reference input demo name/role/value repairs", () => {
+    expect(designSystemInputsHtml).toContain('aria-labelledby="temperature-label"');
+    expect(designSystemInputsHtml).toContain('aria-labelledby="max-tokens-label"');
+    expect(designSystemInputsHtml).toContain('aria-labelledby="parallel-runs-label"');
+    expect(designSystemInputsHtml).toContain('aria-labelledby="reviewers-label"');
+    expect(designSystemInputsHtml).toContain('aria-label="Remove @maya"');
+    expect(designSystemInputsHtml).toContain('"Remove " + v');
+    expect(designSystemInputsHtml).toContain(
+      'role="spinbutton" aria-label="Day" aria-valuemin="1" aria-valuemax="31" aria-valuenow="21"',
+    );
+    expect(designSystemInputsHtml).toContain(
+      'role="spinbutton" aria-label="Month" aria-valuemin="1" aria-valuemax="12" aria-valuenow="6"',
+    );
+    expect(designSystemInputsHtml).toContain(
+      'role="spinbutton" aria-label="Year" aria-valuemin="2026" aria-valuemax="2030" aria-valuenow="2026"',
+    );
+  });
+
+  it("pins context-menu keyboard entry in the navigation reference demo", () => {
+    expect(designSystemNavHtml).toContain('role="menu" aria-label="Row actions"');
+    expect(designSystemNavHtml).toContain('aria-orientation="vertical"');
+    expect(designSystemNavHtml).toContain('role="menuitem" tabindex="0"');
+  });
+
+  it("makes the #1298 evidence harness prove focus and responsive viewport coverage", () => {
+    expect(evidenceHarness1298).toContain("const FOCUS_TARGETS = [");
+    expect(evidenceHarness1298).toContain("collectFocusProof");
+    expect(evidenceHarness1298).toContain('contrast: "no-preference"');
+    expect(evidenceHarness1298).toContain('forcedColors: "none"');
+    expect(evidenceHarness1298).toContain('reducedMotion: "no-preference"');
+    expect(evidenceHarness1298).toContain('"10-tablet.png"');
+    expect(evidenceHarness1298).toContain('"11-ultrawide.png"');
+    expect(evidenceHarness1298).toContain('"12-focus-visible.png"');
+    expect(evidenceHarness1298).toContain("Keyboard Tab proof");
+  });
+
+  it("pins the regenerated #1298 proof manifest for focus and viewport evidence", () => {
+    const focusTargetIds = [
+      "checkbox",
+      "radio",
+      "slider",
+      "stepper",
+      "combobox",
+      "tag-remove",
+      "dropzone",
+      "date-calendar",
+      "breadcrumb",
+      "back",
+      "tab",
+      "pagination",
+      "context-menu",
+    ];
+    expect(computedProof1298.keyboardFocus.targetCount).toBe(focusTargetIds.length);
+    for (const id of focusTargetIds) {
+      expect(computedProof1298.keyboardFocus.targets[id]?.ok, `${id} focus proof`).toBe(true);
+    }
+    expect(computedProof1298.screenshots.compactDensity).toBe("08-compact-density.png");
+    expect(computedProof1298.screenshots.focusVisible).toBe("12-focus-visible.png");
+    expect(computedProof1298.screenshots.responsiveViewports).toEqual([
+      { fileName: "09-responsive.png", width: 560, height: 1700, label: "mobile responsive" },
+      { fileName: "10-tablet.png", width: 900, height: 1700, label: "tablet" },
+      { fileName: "11-ultrawide.png", width: 1920, height: 1700, label: "ultrawide" },
+    ]);
   });
 
   // ── 8. Purity gate for the ported canonical layer: parse every .c-* input/nav rule and assert
