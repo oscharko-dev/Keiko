@@ -249,6 +249,7 @@ function currentImageInputModelIds(config: GatewayConfig | undefined): readonly 
 function rawConfigFromCurrent(
   config: GatewayConfig,
   figmaAccessToken: string | undefined,
+  timeoutMs?: number,
 ): Record<string, unknown> {
   return {
     providers: config.providers.map((provider) => {
@@ -258,7 +259,7 @@ function rawConfigFromCurrent(
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-        timeoutMs: provider.timeoutMs,
+        timeoutMs: timeoutMs ?? provider.timeoutMs,
         maxRetries: provider.maxRetries,
         retryBaseDelayMs: provider.retryBaseDelayMs,
         ...(capability === undefined ? {} : { capability }),
@@ -705,6 +706,7 @@ interface SetupRequest {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
   readonly figmaAccessToken: string | undefined;
@@ -755,6 +757,19 @@ function optionalSetupSecret(value: unknown, path: string): string | RouteResult
   }
   const trimmed = value.trim();
   return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function optionalSetupPositiveInt(
+  value: unknown,
+  path: string,
+): number | RouteResult | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", `${path} must be a positive integer.`) };
+  }
+  return value;
 }
 
 function hasNonBlankStringField(raw: Record<string, unknown>, key: string): boolean {
@@ -877,6 +892,10 @@ function readSetupRequest(
   if (isRouteResult(credentials)) {
     return credentials;
   }
+  const timeoutMs = optionalSetupPositiveInt(raw.timeoutMs, "timeoutMs");
+  if (isRouteResult(timeoutMs)) {
+    return timeoutMs;
+  }
   const modelLists = readSetupModelLists(raw);
   if (isRouteResult(modelLists)) {
     return modelLists;
@@ -888,6 +907,7 @@ function readSetupRequest(
   const resolvedModelLists = resolveSetupModelLists(modelLists, current, preserveExisting);
   return {
     ...credentials,
+    timeoutMs,
     deploymentNames: resolvedModelLists.deploymentNames,
     imageInputModelIds: resolvedModelLists.imageInputModelIds,
     figmaAccessToken: figmaAccessToken ?? current?.figma?.accessToken,
@@ -915,6 +935,7 @@ interface SetupVerificationInput {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
   readonly tester: GatewaySetupTester;
@@ -946,6 +967,7 @@ function validationConfigForSetup(input: SetupVerificationInput): GatewayConfig 
   const validationRawConfig = buildRawConfig(input.baseUrl, input.apiKey, ["setup-validation"], {
     apiKeyHeaderName: input.apiKeyHeaderName,
     imageInputModelIds: input.imageInputModelIds,
+    timeoutMs: input.timeoutMs,
   });
   return parseGatewayConfig(withInheritedEgress(validationRawConfig, input.egress), input.env);
 }
@@ -1024,6 +1046,7 @@ function finalRawConfigForSetup(
     apiKeyHeaderName: input.apiKeyHeaderName,
     imageInputModelIds: input.imageInputModelIds,
     embeddingModelIds,
+    timeoutMs: input.timeoutMs,
   });
   return {
     ...rawConfig,
@@ -1225,6 +1248,7 @@ async function trySetupCandidate(
     baseUrl,
     apiKey: request.apiKey,
     apiKeyHeaderName: request.apiKeyHeaderName,
+    timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
     tester,
@@ -1249,7 +1273,7 @@ function saveExistingConfigUpdate(
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
 ): RouteResult {
-  const rawConfig = rawConfigFromCurrent(current, request.figmaAccessToken);
+  const rawConfig = rawConfigFromCurrent(current, request.figmaAccessToken, request.timeoutMs);
   const config = parseGatewayConfig(
     withInheritedEgress(rawConfig, currentGatewayEgressConfig(deps)),
     deps.env,

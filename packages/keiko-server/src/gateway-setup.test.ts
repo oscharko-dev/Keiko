@@ -132,6 +132,69 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("persists an optional gateway request timeout for slow OpenAI-compatible deployments", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-timeout-");
+    const evidenceDir = await tempDir("keiko-gw-ev-timeout-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "example-secret-token",
+        timeoutMs: 120_000,
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.providers[0]?.timeoutMs).toBe(120_000);
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    expect(saved).toContain('"timeoutMs": 120000');
+    deps.store.close();
+  });
+
+  it("updates only the gateway request timeout without re-running setup smoke tests", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-timeout-update-");
+    const evidenceDir = await tempDir("keiko-gw-ev-timeout-update-");
+    let smokeCalls = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => {
+        smokeCalls += 1;
+        return Promise.resolve([modelIds[0] ?? "example-chat-model"]);
+      },
+    });
+
+    const first = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+    expect(smokeCalls).toBe(1);
+
+    const updated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, timeoutMs: 120_000 }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    expect(smokeCalls).toBe(1);
+    expect(currentGatewayConfig(deps)?.providers[0]?.timeoutMs).toBe(120_000);
+    deps.store.close();
+  });
+
   it("stores an optional Figma PAT submitted through browser gateway setup", async () => {
     const uiDir = await tempDir("keiko-gw-ui-figma-");
     const evidenceDir = await tempDir("keiko-gw-ev-figma-");

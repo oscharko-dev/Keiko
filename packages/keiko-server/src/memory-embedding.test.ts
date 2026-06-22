@@ -225,6 +225,54 @@ describe("embedMemoryText (#204)", () => {
     expect(await embedMemoryText(deps, "text")).toBeNull();
   });
 
+  it("falls back to a later configured embedding provider when the first one fails", async () => {
+    const unhealthyModelId = "text-embedding-3-small";
+    const healthyModelId = "Qwen3-Embedding-8B";
+    const seenModelIds: string[] = [];
+    const adapter = vi.fn(
+      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+        seenModelIds.push(request.modelId);
+        if (request.modelId === unhealthyModelId) {
+          return Promise.resolve({ ok: false as const, kind: "unsupported-model" as const });
+        }
+        return Promise.resolve({
+          ok: true as const,
+          value: { vector: fakeVector(1536), modelId: request.modelId },
+        });
+      },
+    );
+    const deps = makeDeps({
+      config: {
+        providers: [
+          {
+            modelId: unhealthyModelId,
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "redacted",
+            timeoutMs: 30_000,
+            maxRetries: 1,
+            retryBaseDelayMs: 100,
+          },
+          {
+            modelId: healthyModelId,
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "redacted",
+            timeoutMs: 30_000,
+            maxRetries: 1,
+            retryBaseDelayMs: 100,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      },
+      embeddingRequest: adapter,
+    });
+
+    const input = await embedMemoryText(deps, "semantic memory probe");
+
+    expect(seenModelIds).toEqual([unhealthyModelId, healthyModelId]);
+    expect(input?.modelId).toBe(healthyModelId);
+    expect(input?.vector.length).toBe(1536);
+  });
+
   it("returns null (never throws) when the adapter throws", async () => {
     const throwing = vi.fn(() => Promise.reject(new Error("boom")));
     const deps = makeDeps({ embeddingRequest: throwing });
