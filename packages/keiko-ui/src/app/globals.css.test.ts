@@ -3221,3 +3221,155 @@ describe("Issue #1298 — input + navigation components (Design System 0.4.0)", 
     ).toEqual([]);
   });
 });
+
+// ─── Issue #1299 — component state matrix drift gate ──────────────────────────
+//
+// Pins the docs/design-system/state-matrix.md applicability matrix cell-for-cell against the
+// canonical ROWS array in design-system/states.html. A single flipped cell in either source
+// causes the "cell for cell" test to fail on the exact row, naming the component.
+//
+// Parser: the ROWS array is extracted from the slice of states.html between 'var ROWS =' and
+// its closing '];' using an anchored regex — any mutation to a component name or bitstring
+// lands outside the pattern and fails the exact-row assertion below.
+//
+// The state-matrix.md table parser mirrors the harness in
+// docs/design-system/evidence/1299/equivalence-harness.mjs so the two gates stay in sync.
+
+describe("Issue #1299 — component state matrix", () => {
+  const statesHtmlPath = resolve(here, "../../../../design-system/states.html");
+  const stateMatrixPath = resolve(here, "../../../../docs/design-system/state-matrix.md");
+  const statesHtml = readFileSync(statesHtmlPath, "utf8");
+  const stateMatrixMd = readFileSync(stateMatrixPath, "utf8");
+
+  // ── Parse ROWS out of states.html ────────────────────────────────────────────
+  // Slice from 'var ROWS =' to the closing '];' to anchor the regex so it cannot
+  // match rows that appear elsewhere in the file.
+  function parseRows(): Array<readonly [string, string]> {
+    const start = statesHtml.indexOf("var ROWS =");
+    const end = statesHtml.indexOf("];", start);
+    expect(start, "var ROWS = not found in states.html").toBeGreaterThan(-1);
+    expect(end, "closing ]; for ROWS not found in states.html").toBeGreaterThan(-1);
+    const slice = statesHtml.slice(start, end + 2);
+    const rowRe = /\[\s*"([^"]+)"\s*,\s*"([01]{11})"\s*\]/g;
+    const rows: Array<readonly [string, string]> = [];
+    let m: RegExpExecArray | null;
+    while ((m = rowRe.exec(slice)) !== null) {
+      const name = m[1];
+      const bits = m[2];
+      if (name !== undefined && bits !== undefined) rows.push([name, bits]);
+    }
+    return rows;
+  }
+
+  // ── Parse applicability table out of state-matrix.md ─────────────────────────
+  // The header row has 12 cells (Component + 11 state columns). The separator row
+  // has cells matching /^[-:\s]+$/. Data rows: cell[0] is the component name,
+  // cells[1..11] are "1" if the trimmed cell contains "✓", else "0".
+  function parseMatrixMd(): Array<readonly [string, string]> {
+    const lines = stateMatrixMd.split("\n");
+    const rows: Array<readonly [string, string]> = [];
+    for (const line of lines) {
+      if (!line.startsWith("|")) continue;
+      const cells = line
+        .split("|")
+        .slice(1, -1)
+        .map((c) => c.trim());
+      if (cells.length !== 12) continue;
+      const first = cells[0];
+      if (first === undefined) continue;
+      if (first === "Component") continue;
+      const second = cells[1];
+      if (second !== undefined && /^[-:\s]+$/.test(second)) continue;
+      const bits = cells
+        .slice(1)
+        .map((c) => (c.includes("✓") ? "1" : "0"))
+        .join("");
+      rows.push([first, bits]);
+    }
+    return rows;
+  }
+
+  // ── 1. Canonical state keys in order ─────────────────────────────────────────
+  // Mutation-robust: inverting or reordering any key in the STATES array re-fails.
+  it("states.html declares the 11 canonical state keys in order", () => {
+    // The STATES line in states.html must contain the exact keys in the exact order.
+    const statesLineMatch = statesHtml.match(/var STATES\s*=\s*(\[[^\]]+\])/);
+    expect(statesLineMatch, "var STATES line not found in states.html").toBeTruthy();
+    const statesLine = statesLineMatch![0]!;
+    const expected = ["d", "h", "f", "a", "s", "x", "l", "e", "m", "y", "c"];
+    // Extract quoted single-char keys in order from the array literal.
+    const found = [...statesLine.matchAll(/"([a-z])"/g)].map((m) => m[1]);
+    expect(found).toEqual(expected);
+  });
+
+  // ── 2. Cell-for-cell equivalence between states.html ROWS and state-matrix.md ─
+  // The test fails on the exact failing row, naming the component — a single flipped
+  // "1"→"0" or "0"→"1" in either source is caught with a per-row failure message.
+  it("documented matrix matches the live states.html ROWS, cell for cell", () => {
+    const rows = parseRows();
+    expect(rows, "expected exactly 11 ROWS in states.html").toHaveLength(11);
+
+    const docRows = parseMatrixMd();
+    expect(docRows, "expected exactly 11 rows in state-matrix.md table").toHaveLength(11);
+
+    // Build a name→bits lookup from the markdown table so name order doesn't matter.
+    const docMap = new Map(docRows);
+
+    // Reverse direction: every documented component must be a real states.html ROWS family.
+    // A renamed/phantom markdown row that keeps the count at 11 is caught here (not just by length).
+    const htmlNames = new Set(rows.map(([name]) => name));
+    for (const [name] of docRows) {
+      expect(
+        htmlNames.has(name),
+        `state-matrix.md documents component "${name}" which is not a states.html ROWS family`,
+      ).toBe(true);
+    }
+
+    for (const [name, bits] of rows) {
+      const docBits = docMap.get(name);
+      expect(
+        docBits,
+        `state-matrix.md is missing a row for component "${name}" (found in states.html ROWS)`,
+      ).toBeDefined();
+      expect(
+        docBits,
+        `component "${name}": states.html ROWS bitstring is "${bits}" but state-matrix.md has "${docBits ?? "undefined"}" — a cell is out of sync`,
+      ).toBe(bits);
+    }
+  });
+
+  // ── 3. Every component family defines the Default state (column 0) ────────────
+  // Mutation-robust: zeroing any Default bit re-fails on that component row.
+  it("every component family defines the Default state", () => {
+    const rows = parseRows();
+    expect(rows.length).toBeGreaterThan(0);
+    for (const [name, bits] of rows) {
+      expect(
+        bits[0],
+        `component "${name}" must define the Default state (column 0 must be "1")`,
+      ).toBe("1");
+    }
+  });
+
+  // ── 4. The four data-state token rules are documented ─────────────────────────
+  // Removing or misspelling any of the four token/keyword references in state-matrix.md
+  // re-fails on that specific assertion — purely additive checks on the doc text.
+  it("the four data-state token rules are documented", () => {
+    expect(
+      stateMatrixMd,
+      "state-matrix.md must document the --feedback-danger token (Error state rule)",
+    ).toContain("--feedback-danger");
+    expect(
+      stateMatrixMd,
+      "state-matrix.md must document the --feedback-info token (Syncing state rule)",
+    ).toContain("--feedback-info");
+    expect(
+      stateMatrixMd,
+      "state-matrix.md must document the --feedback-warning token (Conflict state rule)",
+    ).toContain("--feedback-warning");
+    expect(
+      stateMatrixMd,
+      "state-matrix.md must document the skeleton token rule (Loading state)",
+    ).toContain("skeleton");
+  });
+});
