@@ -4,11 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Content &amp; Voice · Keiko Design System</title>
-    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="ds.css" />
     <link rel="stylesheet" href="components.css" />
     <style>
@@ -26,28 +25,8 @@
   </head>
   <body class="ds">
     <a class="skip-link" href="#main">Skip to content</a>
-    <nav class="nav" aria-label="Design system">
-      <a class="nav-brand" href="index.html"><img src="assets/keiko-logo.svg" alt="Keiko logo" /><span><span class="bt">Keiko</span><span class="bs">Design System</span></span></a>
-      <div class="nav-label">Overview</div>
-      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
-      <div class="nav-label">Guidelines</div>
-      <a class="nav-item" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
-      <a class="nav-item" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
-      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
-      <a class="nav-item" href="messages.html"><span class="ni-dot"></span>Messages &amp; Feedback</a>
-      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
-      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
-      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
-      <a class="nav-item on" href="content.html" aria-current="page"><span class="ni-dot"></span>Content &amp; Voice</a>
-      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
-        <span class="ti">
-          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
-          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
-        </span>
-        <span class="tspace">Theme</span><span data-theme-label>Dark</span>
-      </button>
-      <div class="nav-foot">Keiko · v0.2.0</div>
-    </nav>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
 
     <main class="main" id="main">
       <header class="phero">
@@ -118,13 +97,43 @@
           </table>
         </div>
       </section>
+      <section class="sec" id="ai-copy">
+        <div class="sec-head"><div class="num">05 — AI DISCLOSURE &amp; PRIVACY</div><h2>Writing for the agent</h2><p>Agentic copy carries extra duty: say what the agent is doing, what it remembers, what it can't be sure of, and what leaves the device. Plain, present-tense, no euphemisms.</p></div>
+
+        <div class="vt" style="margin-bottom:18px">
+          <div class="card vt-col vt-do">
+            <div class="vt-tag"><span class="ico" data-licon="check" data-size="15"></span>Do</div>
+            <div class="vt-row"><div class="vt-ex">Reading 3 files in src/ to answer.</div><div class="vt-why">Names the action and the scope as it happens.</div></div>
+            <div class="vt-row"><div class="vt-ex">Based on your last 5 chats in this workspace.</div><div class="vt-why">Memory disclosure — what it drew on, and the boundary.</div></div>
+            <div class="vt-row"><div class="vt-ex">I'm not certain — verify against the source.</div><div class="vt-why">Names low confidence and points to grounding.</div></div>
+            <div class="vt-row"><div class="vt-ex">This sends your selection to the model provider.</div><div class="vt-why">States plainly what leaves the device, before it does.</div></div>
+          </div>
+          <div class="card vt-col vt-dont">
+            <div class="vt-tag"><span class="ico" data-licon="close" data-size="15"></span>Don't</div>
+            <div class="vt-row"><div class="vt-ex">Working on it…</div><div class="vt-why">Hides what the agent is actually touching.</div></div>
+            <div class="vt-row"><div class="vt-ex">I remember everything about you.</div><div class="vt-why">Vague and faintly menacing; states no boundary.</div></div>
+            <div class="vt-row"><div class="vt-ex">Here's the answer.</div><div class="vt-why">Projects false certainty on a low-confidence result.</div></div>
+            <div class="vt-row"><div class="vt-ex">Don't worry about your data.</div><div class="vt-why">Reassurance instead of disclosure — erodes trust.</div></div>
+          </div>
+        </div>
+
+        <div class="card" style="padding:8px 24px">
+          <table class="tbl">
+            <thead><tr><th>Moment</th><th>Pattern</th><th>Why</th></tr></thead>
+            <tbody>
+              <tr><td class="fgw">Acting</td><td>“[Verb]-ing [object] in [scope]” — present continuous, named target.</td><td>The user can always see what the agent touches.</td></tr>
+              <tr><td class="fgw">Memory</td><td>“Based on [what], in [boundary].” Offer “Forget this”.</td><td>Discloses recall and gives control.</td></tr>
+              <tr><td class="fgw">Uncertainty</td><td>“I'm not certain — [how to verify].” Pair with the confidence component.</td><td>Hallucination risk is named, not hidden.</td></tr>
+              <tr><td class="fgw">Privacy</td><td>“This sends [what] to [where].” Before the send, not after.</td><td>Consent is informed and timely.</td></tr>
+              <tr><td class="fgw">Permission</td><td>“Allow [scope]?” with the exact grants listed.</td><td>Matches the AI permission component.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </main>
 
     <script src="lift-glyphs.js"></script>
-    <script>
-      function dsSyncToggle() { var l = document.documentElement.dataset.theme === "light"; document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; }); }
-      function dsToggleTheme() { var h = document.documentElement; var n = h.dataset.theme === "light" ? "dark" : "light"; h.dataset.theme = n; try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {} dsSyncToggle(); }
-      dsSyncToggle();
-    </script>
-  </body>
+    
+      <script src="theme-control.js"></script>
+</body>
 </html>

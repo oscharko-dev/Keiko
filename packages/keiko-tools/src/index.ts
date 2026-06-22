@@ -10,6 +10,7 @@ export type {
   CommandResult,
   CommandRule,
   CommandRunInput,
+  FilesystemPolicy,
   NetworkPolicy,
   PatchApplyResult,
   PatchChangeKind,
@@ -75,6 +76,8 @@ export {
 // ─── Patch workflow ─────────────────────────────────────────────────────────────────
 export {
   applyPatch,
+  buildRestorePatch,
+  invertPatch,
   renderDryRun,
   validatePatch,
   type ApplyDeps,

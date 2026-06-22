@@ -1,0 +1,178 @@
+{
+  "issue": 1297,
+  "baseRef": "afd2c7af18f269459893363d2380fc6bccd0dd77",
+  "baseSha": "afd2c7af18f269459893363d2380fc6bccd0dd77",
+  "immutableBaseSha": "afd2c7af18f269459893363d2380fc6bccd0dd77",
+  "postSha": "4d8d787256f10095cc82d3235c40c3b47f0553580020367c4361dead6c2cd103",
+  "postCssSha256": "4d8d787256f10095cc82d3235c40c3b47f0553580020367c4361dead6c2cd103",
+  "run": {
+    "startedAt": "2026-06-21T20:58:37.376Z",
+    "generatedAt": "2026-06-21T20:58:40.470Z",
+    "repoHeadSha": "13e08d1b0270deca2f9160e8edf9fab781f99fd1",
+    "baseRefIsImmutableSha": true
+  },
+  "groupA": {
+    "description": "Value-preserving migration: .sm-table routed onto --table-* tokens. Computed value identical PRE vs POST in every mode (0-diff gate).",
+    "totalProbes": 49,
+    "diffCount": 0,
+    "diffs": []
+  },
+  "groupR": {
+    "description": "Reference fidelity: ported .c-table*/.viz* primitives resolve identically to the DS 0.4.0 reference (keiko-tokens + keiko-semantic-tokens + keiko-data + keiko-dataviz). Gated to 0-diff in dark + light; HC/forced-colors/reduced-motion recorded only.",
+    "totalProbes": 112,
+    "gatedDiffCount": 0,
+    "recordedDiffCount": 0,
+    "gatedDiffs": [],
+    "recordedDiffs": []
+  },
+  "groupD": {
+    "description": "Deliberate adoption (recorded, not gated): .pe-scorecards was UA-default-unstyled PRE and adopts the .c-table component POST → computed value EXPECTED to differ.",
+    "probes": {
+      ".pe-scorecards tbody tr.pe-winner::backgroundColor": {
+        "label": "scorecards winner row: UA default (PRE) → --table-row-surface-selected (POST)",
+        "darkPre": "rgba(0, 0, 0, 0)",
+        "darkPost": "oklch(0.712291 0.125417 160.091 / 0.18)",
+        "lightPre": "rgba(0, 0, 0, 0)",
+        "lightPost": "oklch(0.712291 0.125417 160.091 / 0.18)"
+      }
+    }
+  },
+  "additiveAndAccentDerived": {
+    "description": "Recorded (not gated), rendered as sRGB (r,g,b,a). (1) Product-additive .s4/.s5/.s6 + .viz-seq i:nth-child() helpers — not in the bare reference, which applies these tokens via inline style per series. (2) Accent-derived .viz-bar (--viz-1) + selected row (--table-row-surface-selected) — resolve through the brand --accent, which the product defines as hex #4eba87 vs the reference's oklch(0.72 0.124 160): a ~1.5% pre-existing primitive delta outside #1297; the token chain is identical in both.",
+    "byMode": {
+      "01-dark": {
+        ".viz-bar.s4": {
+          "product": {
+            "backgroundColor": "203,115,196,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".viz-seq i:nth-child(3)": {
+          "product": {
+            "backgroundColor": "46,128,90,255"
+          },
+          "reference": {
+            "backgroundColor": "0,0,0,0"
+          }
+        },
+        ".viz-bar": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-table tbody tr[aria-selected=\"true\"]": {
+          "product": {
+            "backgroundColor": "78,188,133,46"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46"
+          }
+        }
+      },
+      "02-light": {
+        ".viz-bar.s4": {
+          "product": {
+            "backgroundColor": "153,63,148,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".viz-seq i:nth-child(3)": {
+          "product": {
+            "backgroundColor": "83,173,129,255"
+          },
+          "reference": {
+            "backgroundColor": "0,0,0,0"
+          }
+        },
+        ".viz-bar": {
+          "product": {
+            "backgroundColor": "78,186,135,255"
+          },
+          "reference": {
+            "backgroundColor": "82,188,138,255"
+          }
+        },
+        ".c-table tbody tr[aria-selected=\"true\"]": {
+          "product": {
+            "backgroundColor": "78,188,133,46"
+          },
+          "reference": {
+            "backgroundColor": "78,188,133,46"
+          }
+        }
+      }
+    }
+  },
+  "accessibilityProof": {
+    "rowFocus": {
+      "activeElementId": "focus-row",
+      "tabIndex": "0",
+      "outlineStyle": "solid",
+      "outlineWidth": "3px",
+      "outlineColor": "rgba(26, 235, 255, 0.8)",
+      "outlineOffset": "-2px"
+    },
+    "sortAnnouncement": {
+      "activeHeader": "Runs ▾",
+      "activeSort": "descending",
+      "liveRegionRole": "status",
+      "liveRegionAriaLive": "polite",
+      "liveRegionAriaAtomic": "true",
+      "liveRegionText": "Sorted by Runs descending."
+    }
+  },
+  "boundedRowSmoke": {
+    "ok": true,
+    "rowCount": 250,
+    "durationMs": 0.10000038146972656,
+    "afterScrollTop": 8363,
+    "scrollHeight": 8783,
+    "clientHeight": 420,
+    "stickyHeaderDeltaPx": 0
+  },
+  "missingSelectors": [],
+  "byMode": {
+    "01-dark": {
+      "groupA_diffs": 0,
+      "groupR_diffs": 0,
+      "groupR_gated": true
+    },
+    "02-light": {
+      "groupA_diffs": 0,
+      "groupR_diffs": 0,
+      "groupR_gated": true
+    },
+    "03-dark-hc": {
+      "groupA_diffs": 0,
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "04-light-hc": {
+      "groupA_diffs": 0,
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "05-prefers-contrast": {
+      "groupA_diffs": 0,
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "06-forced-colors": {
+      "groupA_diffs": 0,
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    },
+    "07-reduced-motion": {
+      "groupA_diffs": 0,
+      "groupR_diffs": 0,
+      "groupR_gated": false
+    }
+  }
+}

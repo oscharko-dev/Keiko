@@ -7,43 +7,18 @@
     <script>
       try {
         var t = localStorage.getItem("keiko-ds-theme");
-        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more";
       } catch (e) { document.documentElement.dataset.theme = "dark"; }
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="ds.css" />
   </head>
   <body class="ds">
     <a class="skip-link" href="#main">Skip to content</a>
-    <nav class="nav" aria-label="Design system">
-      <a class="nav-brand" href="index.html">
-        <img src="assets/keiko-logo.svg" alt="Keiko logo" />
-        <span><span class="bt">Keiko</span><span class="bs">Design System</span></span>
-      </a>
-      <div class="nav-label">Overview</div>
-      <a class="nav-item" href="index.html"><span class="ni-dot"></span>Start here</a>
-      <div class="nav-label">Guidelines</div>
-      <a class="nav-item on" href="foundations.html" aria-current="page"><span class="ni-dot"></span>Foundations</a>
-      <a class="nav-item done" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
-      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
-      <a class="nav-item" href="messages.html"><span class="ni-dot"></span>Messages &amp; Feedback</a>
-      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
-      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
-      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
-      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
-      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
-        <span class="ti">
-          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
-          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
-        </span>
-        <span class="tspace">Theme</span>
-        <span data-theme-label>Dark</span>
-      </button>
-      <div class="nav-foot">Keiko · v0.2.0</div>
-    </nav>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
 
     <main class="main" id="main">
       <header class="phero">
@@ -103,6 +78,14 @@
           <span class="tag">Note</span>
           <div><b>Never colour alone.</b> Status is always paired with an icon, label or shape — and in light theme the chromatic tokens darken (e.g. <code>--accent-text</code> → oklch(0.48 0.13 160)) so green/red/amber text clears 4.5:1 on white. <code>--fg-dim</code> (0.66) and <code>--fg-faint</code> (0.64) sit deliberately close: both are WCAG-checked and kept monotonic, not a duplication.</div>
         </div>
+
+        <div class="sub-head" style="margin-top:32px">Three modes — one palette</div>
+        <div class="demo-grid" style="grid-template-columns:repeat(3,1fr)">
+          <div class="card demo" style="padding:18px"><div style="height:64px;border-radius:9px;border:1px solid oklch(0.3 0.004 160);background:oklch(0.235 0.004 160);display:flex;align-items:center;justify-content:center;color:oklch(0.97 0.003 160);font-weight:600;font-size:14px">Dark</div><div class="cap"><b>default</b>near-black 0.17 · text to 15:1 · AA/AAA</div></div>
+          <div class="card demo" style="padding:18px"><div style="height:64px;border-radius:9px;border:1px solid oklch(0.88 0.006 160);background:oklch(1 0 0);display:flex;align-items:center;justify-content:center;color:oklch(0.26 0.012 160);font-weight:600;font-size:14px">Light</div><div class="cap"><b>off-white</b>0.955 ground · chromatic tones darken · AA/AAA</div></div>
+          <div class="card demo" style="padding:18px"><div style="height:64px;border-radius:9px;border:1px solid oklch(0.62 0.006 160);background:oklch(0.185 0.004 160);display:flex;align-items:center;justify-content:center;color:oklch(1 0 0);font-weight:600;font-size:14px">High contrast</div><div class="cap"><b>selectable</b>every text tone ≥ 7:1 · lines ≥ 3:1 · AAA</div></div>
+        </div>
+        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--fg-faint)">How</span><div>Appearance (<code>data-theme</code>) and contrast (<code>data-hc</code>) are independent axes that compose into four resolved palettes. High contrast follows the OS (<code>prefers-contrast</code>) and can be forced on per device. See <a href="accessibility.html#high-contrast" style="color:var(--accent-text)">Accessibility → High contrast</a> for the measured ratios.</div></div>
       </section>
 
       <!-- TYPOGRAPHY -->
@@ -233,23 +216,18 @@
   /* …full set in the file… */
 }
 
-[data-theme="light"] { /* same hue, inverted lightness */ }</pre></div>
+[data-theme="light"] { /* same hue, inverted lightness */ }
+
+/* High contrast — selectable third mode, AAA. Follows the OS, or
+   forced from the sidebar (Contrast → High). Pairs with both
+   appearances → dark+HC and light+HC. */
+@media (prefers-contrast: more) { :root { /* dark+HC */ } [data-theme="light"] { /* light+HC */ } }
+[data-hc="more"]                 { /* dark+HC, explicit override  */ }
+[data-hc="more"][data-theme="light"] { /* light+HC */ }</pre></div>
       </section>
     </main>
 
-    <script>
-      function dsSyncToggle() {
-        var l = document.documentElement.dataset.theme === "light";
-        document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; });
-      }
-      function dsToggleTheme() {
-        var h = document.documentElement;
-        var n = h.dataset.theme === "light" ? "dark" : "light";
-        h.dataset.theme = n;
-        try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {}
-        dsSyncToggle();
-      }
-      dsSyncToggle();
-    </script>
-  </body>
+    
+      <script src="theme-control.js"></script>
+</body>
 </html>

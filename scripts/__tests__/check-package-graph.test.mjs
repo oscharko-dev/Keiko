@@ -126,4 +126,34 @@ describe("checkWorkspacePackageGraph", () => {
       ]),
     );
   });
+
+  it("guards keiko-ui workspace dependencies without requiring package project references", async () => {
+    root = makeRoot("pkg-graph-ui-");
+    writeCleanRoot(root);
+    writeJson(root, "packages/keiko-ui/package.json", {
+      name: "@oscharko-dev/keiko-ui",
+      private: true,
+      dependencies: {
+        "@oscharko-dev/keiko-contracts": "*",
+        "@oscharko-dev/keiko-editor": "*",
+        "@oscharko-dev/keiko-harness": "*",
+      },
+    });
+
+    const failures = await checkWorkspacePackageGraph(root);
+
+    expect(failures).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "@oscharko-dev/keiko-ui: workspace dependencies @oscharko-dev/keiko-harness",
+        ),
+      ]),
+    );
+    expect(failures).not.toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("@oscharko-dev/keiko-ui: tsconfig references"),
+        expect.stringContaining("@oscharko-dev/keiko-ui: compilerOptions.rootDir"),
+      ]),
+    );
+  });
 });

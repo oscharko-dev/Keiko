@@ -1,0 +1,65 @@
+{
+  "providers": [
+    {
+      "modelId": "e2e-chat-model",
+      "baseUrl": "http://127.0.0.1:42186/v1",
+      "apiKey": "e2e-test-token-1234567890",
+      "timeoutMs": 30000,
+      "maxRetries": 1,
+      "retryBaseDelayMs": 100
+    },
+    {
+      "modelId": "e2e-embedding-model",
+      "baseUrl": "http://127.0.0.1:42186/v1",
+      "apiKey": "e2e-test-token-1234567890",
+      "timeoutMs": 30000,
+      "maxRetries": 1,
+      "retryBaseDelayMs": 100
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "e2e-chat-model",
+      "kind": "chat",
+      "contextWindow": 8192,
+      "maxOutputTokens": 1024,
+      "toolCalling": true,
+      "structuredOutput": true,
+      "streaming": true,
+      "supportsImageInput": false,
+      "supportsDocumentInput": true,
+      "workflowEligible": true,
+      "costClass": "low",
+      "latencyClass": "fast",
+      "throughputHint": "E2E fixture model used only for UI smoke validation.",
+      "preferredUseCases": ["Release smoke tests"],
+      "knownLimitations": ["The Local Knowledge E2E suite uses a loopback fixture gateway."]
+    },
+    {
+      "id": "e2e-embedding-model",
+      "kind": "embedding",
+      "contextWindow": 8192,
+      "maxOutputTokens": 0,
+      "toolCalling": false,
+      "structuredOutput": false,
+      "streaming": false,
+      "supportsImageInput": false,
+      "supportsDocumentInput": false,
+      "workflowEligible": false,
+      "costClass": "low",
+      "latencyClass": "fast",
+      "throughputHint": "Loopback deterministic embeddings for Local Knowledge E2E.",
+      "preferredUseCases": ["Local Knowledge E2E embeddings"],
+      "knownLimitations": ["Fixture-only deterministic vectors; never used outside tests."]
+    }
+  ],
+  "circuitBreaker": {
+    "failureThreshold": 5,
+    "cooldownMs": 30000,
+    "halfOpenProbes": 2
+  },
+  "grounding": {
+    "maxConnectedSources": 16,
+    "maxLocalKnowledgeSources": 16
+  }
+}

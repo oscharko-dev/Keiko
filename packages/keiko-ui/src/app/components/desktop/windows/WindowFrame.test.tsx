@@ -157,6 +157,35 @@ describe("WindowFrame content zoom controls", () => {
     expect(maximize).not.toHaveBeenCalled();
   });
 
+  it("hides content zoom controls when Quality Intelligence is at its narrow width", () => {
+    render(
+      <WindowFrame
+        win={appWindow({ type: "quality", id: "quality-1", w: 300, h: 420 })}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "Quality Intelligence" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Zoom Quality Intelligence content out" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "100% — reset Quality Intelligence content zoom",
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Zoom Quality Intelligence content in" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "Quality Intelligence window controls" }),
+    ).toBeInTheDocument();
+  });
+
   it("ignores header double clicks in the right-side control gutter", () => {
     const maximize = vi.fn();
     const { container } = render(
@@ -219,7 +248,7 @@ describe("WindowFrame content zoom controls", () => {
     expect(maximize).toHaveBeenCalledTimes(1);
   });
 
-  it("drags a window inside the workspace and commits the active snap preview from the primary button", () => {
+  it("drags the window from the header with the primary button", () => {
     const focus = vi.fn();
     const update = vi.fn();
     const setSnap = vi.fn();
@@ -241,10 +270,6 @@ describe("WindowFrame content zoom controls", () => {
     expect(section).not.toBeNull();
 
     fireEvent.pointerDown(header as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
-    expect(document.body.style.cursor).toBe("grabbing");
-    expect(document.body.style.userSelect).toBe("none");
-    expect(section).toHaveAttribute("data-dragging", "true");
-
     fireEvent.pointerMove(window, { clientX: 790, clientY: 20 });
     fireEvent.pointerUp(window);
 

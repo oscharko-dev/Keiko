@@ -4,6 +4,7 @@ import {
   isCanvasPanPointer,
   isMacContextClick,
   isPrimaryActivationPointer,
+  isWindowDragPointer,
 } from "./interactionGuards";
 
 afterEach(() => {
@@ -21,6 +22,13 @@ describe("pointer guards", () => {
     expect(isCanvasPanPointer({ button: 1, ctrlKey: true })).toBe(true);
     // The secondary (right) button never pans.
     expect(isCanvasPanPointer({ button: 2, ctrlKey: false })).toBe(false);
+  });
+
+  it("allows window header dragging with the primary and middle mouse buttons", () => {
+    expect(isWindowDragPointer({ button: 0, ctrlKey: false })).toBe(true);
+    expect(isWindowDragPointer({ button: 0, ctrlKey: true })).toBe(false);
+    expect(isWindowDragPointer({ button: 1, ctrlKey: false })).toBe(true);
+    expect(isWindowDragPointer({ button: 2, ctrlKey: false })).toBe(false);
   });
 });
 

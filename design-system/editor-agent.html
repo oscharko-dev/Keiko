@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <title>Editor · Agent in Editor · Keiko Design System</title>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="keiko-editor-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="keiko-editor-views.css" />
+    <style>
+      .ev-stage { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 36px; display: flex; justify-content: center; background-image: radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 0); background-size: 22px 22px; }
+      .difg { display:grid; grid-template-columns: 22px 30px 1fr; align-items:center; height:1.7em; font:400 13px/1.7 var(--font-mono); }
+      .difg .sgn { display:grid; place-items:center; }
+      .difg .n { text-align:right; padding-right:10px; color:var(--ed-gutter-fg); }
+      .difg .c { white-space:pre; padding-left:10px; color:var(--ed-fg); }
+      .difg.ins { background: var(--ed-diff-ins-line); }
+      .difg.ins .sgn { color: var(--ed-vcs-added); }
+      .difg.rem { background: var(--ed-diff-rem-line); }
+      .difg.rem .sgn { color: var(--ed-vcs-removed); }
+      .difg.ag { box-shadow: inset 2px 0 0 var(--ed-agent-gutter); }
+    </style>
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Guidelines · 14 · Editor</div>
+        <h1>Agent in the editor</h1>
+        <p class="lead">Keiko is a coding agent, so its strongest surface lives <em>inside</em> the editor — not in a side chat. This page defines how agent output appears in the code: suggested, reviewable, attributable and governed. The rule throughout: <b style="color:var(--fg)">the agent proposes, the developer disposes</b>. Nothing the agent writes is committed without a human accept, and every change carries its provenance.</p>
+      </header>
+
+      <!-- 01 PRINCIPLE -->
+      <section class="sec" id="principle">
+        <div class="sec-head"><div class="num">01 — STANCE</div><h2>Proposed, never imposed</h2><p>Four rules separate Keiko's in-editor agent from an autocomplete that just types for you. They are the contract the visual language enforces.</p></div>
+        <div class="hub" style="grid-template-columns:repeat(2,1fr)">
+          <div class="card hub-card"><div class="hc-top"><div class="hc-ico"><span class="ico" data-licon="brain" data-size="22"></span></div><h3>Always a proposal</h3></div><p>Agent edits arrive as a diff you accept or reject — per hunk. Until then the file on disk is untouched.</p></div>
+          <div class="card hub-card"><div class="hc-top"><div class="hc-ico"><span class="ico" data-licon="inspect" data-size="22"></span></div><h3>Always attributable</h3></div><p>Every agent-authored range can be traced to the prompt, model and policy that produced it — provenance on hover.</p></div>
+          <div class="card hub-card"><div class="hc-top"><div class="hc-ico"><span class="ico" data-licon="spark" data-size="22"></span></div><h3>One accent, reserved</h3></div><p>Agent surfaces use brand green and nothing else. If it's green in the editor, Keiko did it — green never means syntax.</p></div>
+          <div class="card hub-card"><div class="hc-top"><div class="hc-ico"><span class="ico" data-licon="shield" data-size="22"></span></div><h3>Always governed</h3></div><p>Suggestions that touch policy-controlled code are flagged before they're shown, linked to the rule that applies.</p></div>
+        </div>
+      </section>
+
+      <!-- 02 GHOST TEXT -->
+      <section class="sec" id="ghost">
+        <div class="sec-head"><div class="num">02 — INLINE COMPLETION</div><h2>Ghost text</h2><p>The lightest touch: a dimmed, italic continuation of what you're typing. Multi-line is allowed but indented to read as a suggestion, not committed code. Accept with Tab, dismiss with Esc — the hint is always on screen.</p></div>
+        <div class="ev-grid2">
+          <div class="ev-frame flat">
+            <div class="ev-code" style="padding:12px 0">
+              <div class="ev-gutter"><span class="ev-gln">5</span><span class="ev-gln cur">6</span><span class="ev-gln">7</span><span class="ev-gln">8</span></div>
+              <div class="ev-lines"><span class="ev-line"><span class="t-key">export</span> <span class="t-key">function</span> <span class="t-fn">runningAgents</span><span class="t-pun">(</span><span class="t-var">all</span><span class="t-pun">)</span> <span class="t-pun">{</span></span><span class="ev-line active">  <span class="t-key">return</span> <span class="t-var">all</span><span class="t-op">.</span><span class="ev-ghost">filter((a) =&gt; a.status === "running");<span class="ev-caret"></span></span></span><span class="ev-line"><span class="ev-ghost" style="padding-left:0">}</span></span><span class="ev-line"> </span></div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;padding:8px 14px;border-top:1px solid var(--line-soft)"><span class="ev-btn"><span class="k">Tab</span> accept</span></div>
+          </div>
+          <div class="stack">
+            <div class="note"><span class="tag" style="color:var(--fg-faint)">Token</span><div>Ghost text is <code>--ed-agent-ghost</code> (= <code>--ed-ghost</code>): italic, dimmed, held just above the 4.5:1 legibility floor so it reads as a hint, never as live code.</div></div>
+            <div class="note"><span class="tag" style="color:var(--fg-faint)">Accept partial</span><div><span class="ev-kbd" style="font-size:10px">⌘→</span> accepts a word at a time; Tab accepts the whole suggestion. The affordance hint lives at the editor's trailing edge, never blocking the caret.</div></div>
+            <div class="note flag"><span class="tag">Distinct</span><div>Ghost text must never be confused with <a href="editor-gutter.html" style="color:var(--accent-text)">inlay hints</a>. Inlay = a compiler fact in a pill; ghost = a proposal in italics. Different shapes, different meanings.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 03 INLINE DIFF -->
+      <section class="sec" id="diff">
+        <div class="sec-head"><div class="num">03 — INLINE DIFF</div><h2>Agent edits as a reviewable diff</h2><p>When the agent rewrites more than a line, it doesn't silently retype — it shows the change as an inline diff with a banner and per-hunk controls. Removed lines use the diff-remove tint, added lines the diff-insert tint, and the whole range carries the accent agent marker.</p></div>
+        <div class="ev-frame flat">
+          <div class="ev-agent-banner">
+            <span class="ico"><span class="ico" data-licon="brain" data-size="17"></span></span>
+            <span><b style="color:var(--fg)">Keiko</b> proposed an edit · 1 hunk · “use the v2 endpoint and handle errors”</span>
+            <span class="grow"></span>
+            <span class="ev-hunk-actions"><span class="ev-btn reject"><span class="ico" data-licon="close" data-size="13"></span>Reject <span class="k">⌥⌫</span></span><span class="ev-btn accept"><span class="ico" data-licon="check" data-size="13"></span>Accept <span class="k">⌥↵</span></span></span>
+          </div>
+          <div style="background:var(--ed-bg);padding:10px 0">
+            <div class="difg ag rem"><span class="sgn">−</span><span class="n">14</span><span class="c">  <span class="t-key">const</span> <span class="t-var">res</span> <span class="t-op">=</span> <span class="t-key">await</span> <span class="t-fn">fetch</span><span class="t-pun">(</span><span class="t-str">`/api/agents`</span><span class="t-pun">);</span></span></div>
+            <div class="difg ag ins"><span class="sgn">+</span><span class="n">14</span><span class="c">  <span class="t-key">const</span> <span class="t-var">res</span> <span class="t-op">=</span> <span class="t-key">await</span> <span class="t-fn">fetch</span><span class="t-pun">(</span><span class="t-str">`/api/v2/agents`</span><span class="t-pun">);</span></span></div>
+            <div class="difg ag ins"><span class="sgn">+</span><span class="n">15</span><span class="c">  <span class="t-key">if</span> <span class="t-pun">(</span><span class="t-op">!</span><span class="t-var">res</span><span class="t-op">.</span><span class="t-prop">ok</span><span class="t-pun">)</span> <span class="t-key">throw</span> <span class="t-key">new</span> <span class="t-typ">HttpError</span><span class="t-pun">(</span><span class="t-var">res</span><span class="t-pun">);</span></span></div>
+            <div class="difg ag"><span class="sgn"></span><span class="n">16</span><span class="c">  <span class="t-key">return</span> <span class="t-var">res</span><span class="t-op">.</span><span class="t-fn">json</span><span class="t-pun">();</span></span></div>
+          </div>
+        </div>
+        <p class="muted-cap" style="margin-top:14px">The accent left-edge (<code>--ed-agent-gutter</code>) brackets the whole agent range; within it, red/green are the <em>same</em> diff tints used on the patch-review surface. Accept is the one filled green button on the page — the single highest-intent action.</p>
+      </section>
+
+      <!-- 04 REVIEW -->
+      <section class="sec" id="review">
+        <div class="sec-head"><div class="num">04 — CHANGE REVIEW</div><h2>Reviewing a multi-file agent run</h2><p>For a task that spans files, accepted hunks leave a quiet agent marker in the gutter until the run is reviewed and committed. A run summary lets you step through every change, accept all, or send the lot back.</p></div>
+        <div class="ev-grid2">
+          <div class="ev-frame flat">
+            <div class="ev-agent-banner" style="background:var(--surface);border-bottom:1px solid var(--line-soft)">
+              <span class="ico"><span class="ico" data-licon="brain" data-size="17"></span></span>
+              <span><b style="color:var(--fg)">Keiko changed 3 files</b> · 24 insertions · 6 deletions</span>
+            </div>
+            <div class="ev-tree" style="padding:8px 0">
+              <div class="ev-row add"><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">client.ts</span><span class="tag" style="color:var(--ed-vcs-added)">+12 −2</span></div>
+              <div class="ev-row add"><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">runtime.ts</span><span class="tag" style="color:var(--ed-vcs-added)">+9 −1</span></div>
+              <div class="ev-row mod"><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">client.test.ts</span><span class="tag" style="color:var(--ed-vcs-modified)">+3 −3</span></div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;padding:10px 14px;border-top:1px solid var(--line-soft)">
+              <span class="ev-btn reject">Discard run</span>
+              <span class="ev-btn">Review next <span class="k">⌥]</span></span>
+              <span class="ev-btn accept"><span class="ico" data-licon="check" data-size="13"></span>Accept all</span>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="ev-frame flat" style="padding:0">
+              <div style="background:var(--ed-bg);padding:10px 0">
+                <div class="difg ag"><span class="sgn"><span class="ico" data-licon="brain" data-size="12" style="color:var(--ed-agent-gutter)"></span></span><span class="n">8</span><span class="c"><span class="t-key">export</span> <span class="t-key">function</span> <span class="t-fn">pause</span><span class="t-pun">(</span><span class="t-var">id</span><span class="t-pun">)</span> <span class="t-pun">{</span></span></div>
+                <div class="difg ag" style="background:var(--ed-agent-line)"><span class="sgn"></span><span class="n">9</span><span class="c">  <span class="t-key">return</span> <span class="t-fn">post</span><span class="t-pun">(</span><span class="t-str">`/v2/pause`</span><span class="t-pun">,</span> <span class="t-pun">{</span> <span class="t-prop">id</span> <span class="t-pun">});</span></span></div>
+                <div class="difg ag"><span class="sgn"></span><span class="n">10</span><span class="c"><span class="t-pun">}</span></span></div>
+              </div>
+            </div>
+            <div class="note"><span class="tag" style="color:var(--fg-faint)">Marker</span><div>Accepted-but-uncommitted agent lines keep a faint <code>--ed-agent-line</code> wash and a <code>brain</code> gutter glyph, so a reviewer can always see what the agent touched this session.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 05 INLINE CHAT -->
+      <section class="sec" id="chat">
+        <div class="sec-head"><div class="num">05 — INLINE PROMPT</div><h2>Ask at the caret</h2><p>Press the shortcut and a prompt opens exactly where you're working — scoped to the selection. The answer comes back as an inline diff (section 03), so the conversation never leaves the code.</p></div>
+        <div class="ev-stage">
+          <div class="ev-inlinechat">
+            <div style="background:var(--ed-bg);padding:8px 0;border-bottom:1px solid var(--accent-line)">
+              <div class="ev-code" style="padding:0"><div class="ev-gutter"><span class="ev-gln">13</span><span class="ev-gln">14</span></div><div class="ev-lines"><span class="ev-line ev-sel"><span class="t-key">const</span> <span class="t-var">res</span> <span class="t-op">=</span> <span class="t-key">await</span> <span class="t-fn">fetch</span><span class="t-pun">(</span><span class="t-var">url</span><span class="t-pun">);</span></span><span class="ev-line"><span class="t-key">return</span> <span class="t-var">res</span><span class="t-op">.</span><span class="t-fn">json</span><span class="t-pun">();</span></span></div></div>
+            </div>
+            <div class="ic-field"><span class="ico"><span class="ico" data-licon="brain" data-size="18"></span></span><div class="q">add error handling for non-2xx<span class="ph"> responses…</span></div></div>
+            <div class="ic-foot"><span><span class="ev-kbd">↵</span> send</span><span><span class="ev-kbd">⌘↵</span> send + run</span><span style="margin-left:auto;color:var(--fg-faint)">model: keiko-coder · scoped to selection</span></div>
+          </div>
+        </div>
+        <p class="muted-cap" style="margin-top:14px">The prompt box is the one place agent chrome borrows the accent border — it's a live agent surface. Its footer always names the model and the scope, so you know what Keiko can see before you ask.</p>
+      </section>
+
+      <!-- 06 PROVENANCE + QUICKFIX -->
+      <section class="sec" id="provenance">
+        <div class="sec-head"><div class="num">06 — PROVENANCE &amp; QUICK-FIX</div><h2>Why this change · governed fixes</h2><p>Two governance surfaces. Hovering an agent range reveals its provenance — prompt, model, policy. And agent quick-fixes live in the standard lightbulb, tagged, so a suggested fix is one keystroke away but never automatic.</p></div>
+        <div class="ev-grid2">
+          <div class="ev-stage" style="padding:28px"><div class="ev-prov">
+            <div class="ph"><span class="ico"><span class="ico" data-licon="brain" data-size="16"></span></span>Keiko authored these 2 lines</div>
+            Rewrote the fetch to the v2 endpoint and added an <code style="font-family:var(--font-mono);color:var(--accent-text)">HttpError</code> guard for non-2xx responses.
+            <div class="meta">
+              <span><b>prompt</b> “use the v2 endpoint and handle errors”</span>
+              <span><b>model</b> keiko-coder · 0.3.1</span>
+              <span><b>policy</b> ✓ network-egress reviewed</span>
+              <span><b>run</b> #4f2a · 2 min ago</span>
+            </div>
+          </div></div>
+          <div class="ev-stage" style="padding:28px;align-items:flex-start"><div>
+            <div class="ev-frame flat" style="margin-bottom:0">
+              <div class="ev-code" style="padding:10px 0"><div class="ev-gutter"><span class="ev-gln cur">28</span></div><div class="ev-lines"><span class="ev-line active"><span class="ev-lightbulb"><span class="ico" data-licon="spark" data-size="14"></span></span> <span class="t-var">res</span><span class="t-op">.</span><span class="ev-sq t-prop">stastusText</span><span class="ev-caret"></span></span></div></div>
+            </div>
+            <div class="ev-menu" style="width:260px;margin-top:8px">
+              <div class="ev-mlabel">Quick fixes</div>
+              <div class="ev-mi on"><span class="mic" style="color:var(--accent-text)"><span class="ico" data-licon="spark" data-size="14"></span></span><span class="mt">Keiko: fix typo → statusText</span><span class="badge-ai" style="margin-left:0">AI</span></div>
+              <div class="ev-mi"><span class="mic"><span class="ico" data-licon="edit" data-size="14"></span></span><span class="mt">Rename to statusText</span><span class="key">⇧F6</span></div>
+              <div class="ev-mi"><span class="mic"><span class="ico" data-licon="eye" data-size="14"></span></span><span class="mt">Suppress for line</span></div>
+            </div>
+          </div></div>
+        </div>
+      </section>
+
+      <!-- 07 TOKENS -->
+      <section class="sec" id="tokens">
+        <div class="sec-head"><div class="num">07 — TOKENS</div><h2>Agent surface tokens</h2><p>Agent surfaces are governed and few. Brand green carries every one of them; red appears only where it overlaps the shared diff-remove tint.</p></div>
+        <div class="card" style="padding:8px 22px">
+          <table class="ev-spec">
+            <thead><tr><th>Surface</th><th>Token</th><th>Role</th></tr></thead>
+            <tbody>
+              <tr><td class="tok">agent range</td><td class="scope">--ed-agent-line</td><td>faint accent wash over agent-authored lines</td></tr>
+              <tr><td class="tok">agent marker</td><td class="scope">--ed-agent-gutter</td><td>accent left-edge + brain gutter glyph</td></tr>
+              <tr><td class="tok">ghost text</td><td class="scope">--ed-agent-ghost</td><td>dimmed italic inline completion</td></tr>
+              <tr><td class="tok">accept</td><td class="scope">--ed-agent-accept · --accent</td><td>the one filled-green action</td></tr>
+              <tr><td class="tok">reject</td><td class="scope">--ed-agent-reject</td><td>danger, hover-only — never pre-loaded</td></tr>
+              <tr><td class="tok">prompt chrome</td><td class="scope">--ed-agent-chip-bg · -line</td><td>accent border for live agent surfaces</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--accent-text)">Governance</span><div>Every agent surface here ties back to the same provenance record the <a href="audit.html" style="color:var(--accent-text)">System Audit</a> and policy engine read. The editor is just the most convenient place to review it — the trust model is the product's, not the editor's.</div></div>
+      </section>
+    </main>
+
+    <script src="lift-glyphs.js"></script>
+    
+    <script src="theme-control.js"></script>
+  </body>
+</html>

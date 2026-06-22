@@ -13,6 +13,7 @@ import { isTestPath } from "./conventions.js";
 import { parseModelOutput } from "./parse.js";
 import { buildPrompt } from "./prompt.js";
 import type { AcceptedPatch, ModelLoopResult, RunState } from "./internal.js";
+import type { TestStrategy } from "./frontend.js";
 import type { TestConventions } from "./types.js";
 
 // The production-code guard (D6): every changed path must satisfy isTestPath. Returns "out-of-scope"
@@ -78,11 +79,12 @@ async function attemptOnce(
   state: RunState,
   workspace: WorkspaceInfo,
   conventions: TestConventions,
+  strategy: TestStrategy,
   pack: ContextPack,
   attempt: number,
   rejectionReason: string | undefined,
 ): Promise<AttemptResult> {
-  const messages = buildPrompt(state.input, conventions, pack, rejectionReason);
+  const messages = buildPrompt(state.input, conventions, strategy, pack, rejectionReason);
   const content = await callModel(state, messages, attempt, pack.usedBytes);
   const parsed = parseModelOutput(content);
   const validation = validatePatch(workspace, parsed.diff, {
@@ -111,6 +113,7 @@ export async function runModelLoop(
   state: RunState,
   workspace: WorkspaceInfo,
   conventions: TestConventions,
+  strategy: TestStrategy,
   pack: ContextPack,
 ): Promise<ModelLoopResult> {
   let modelCallCount = 0;
@@ -125,6 +128,7 @@ export async function runModelLoop(
       state,
       workspace,
       conventions,
+      strategy,
       pack,
       modelCallCount,
       rejectionReason,

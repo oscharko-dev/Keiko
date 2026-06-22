@@ -61,11 +61,18 @@ describe("fitWindowToViewport — capture windows on viewport shrink (audit C132
   });
 
   it("respects a panned/zoomed viewport origin", () => {
-    const panned: ViewportWorld = { x: 300, y: 200, w: 600, h: 400 };
+    const panned: ViewportWorld = { x: 300, y: 200, w: 600, h: 500 };
     const win = appWindow({ x: -1000, y: 0 });
     const next = fitWindowToViewport(win, panned);
     expect(next.x).toBe(panned.x - (win.w - 120));
     expect(next.y).toBe(panned.y);
+  });
+
+  it("anchors floating windows fully inside compact workspaces", () => {
+    const compact: ViewportWorld = { x: 100, y: 50, w: 300, h: 360 };
+    const win = appWindow({ x: 900, y: 900 });
+    const next = fitWindowToViewport(win, compact);
+    expect(next).toMatchObject({ x: 108, y: 58 });
   });
 });
 
@@ -116,10 +123,10 @@ describe("workspace view fitting", () => {
   });
 
   it("zooms out and keeps large window groups inside padded workspace bounds", () => {
-    const view = fitWorkspaceViewToWindows(
-      [appWindow({ x: 0, y: 0, w: 2000, h: 1000 })],
-      { width: 1000, height: 800 },
-    );
+    const view = fitWorkspaceViewToWindows([appWindow({ x: 0, y: 0, w: 2000, h: 1000 })], {
+      width: 1000,
+      height: 800,
+    });
 
     expect(view.zoom).toBeCloseTo(0.428, 3);
     expect(view.x).toBe(72);

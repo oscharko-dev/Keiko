@@ -12,6 +12,8 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent,
 } from "react";
 import type { ReactNode } from "react";
 import type {
@@ -28,6 +30,7 @@ import {
   displayLocalPath,
   LocalFileBrowserDialog,
 } from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
+import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
 import { startQiRun } from "@/lib/quality-intelligence-api";
 import {
   fetchCapsules,
@@ -35,6 +38,8 @@ import {
   type CapsuleListEntry,
   type CapsuleSetListEntry,
 } from "@/lib/local-knowledge-api";
+import { Icons } from "@/app/components/desktop/Icons";
+import KeikoSelect from "../../KeikoSelect";
 import { formatCodedError, formatError } from "./qiShared";
 import { buildConnectedRunSources } from "./connectedSources";
 import type { ConnectedRunSource } from "./connectedSources";
@@ -58,6 +63,19 @@ const SOURCE_KIND_OPTIONS: ReadonlyArray<{ id: ManualSourceKind; label: string; 
   { id: "capsule", label: "Capsule", hint: "Local Knowledge" },
   { id: "capsule-set", label: "Capsule set", hint: "Local Knowledge" },
 ];
+
+function SourceKindIcon({ kind }: { readonly kind: ManualSourceKind }): ReactNode {
+  if (kind === "requirements") return <Icons.review size={15} />;
+  if (kind === "workspace") return <Icons.folder size={15} />;
+  if (kind === "file") return <Icons.file size={15} />;
+  if (kind === "capsule-set") return <Icons.layers size={15} />;
+
+  return (
+    <svg aria-hidden="true" className="qi-source-kind-icon-svg" viewBox="0 0 24 24">
+      <path d="M12 3.8 19 7.7v8.6L12 20.2 5 16.3V7.7z" />
+    </svg>
+  );
+}
 
 interface Progress {
   readonly phase: string;
@@ -154,6 +172,40 @@ function progressAnnouncement(running: boolean, progress: Progress): string {
       ? `, ${progress.findings.toString()} finding${progress.findings !== 1 ? "s" : ""}`
       : "";
   return `${stage}${cases}${findings}`;
+}
+
+function skippedSourceDetail(source: QualityIntelligenceSkippedSource): string {
+  switch (source.code) {
+    case "QI_IMAGE_DESCRIPTION_UNAVAILABLE":
+      return `${source.label} (image was readable, but the image model produced no usable description)`;
+    case "QI_IMAGE_UNAVAILABLE":
+      return `${source.label} (stored image could not be found or read)`;
+    case "QI_FIGMA_SNAPSHOT_UNAVAILABLE":
+      return `${source.label} (stored Figma snapshot could not be found or read)`;
+    case "QI_SOURCE_EMPTY":
+      return `${source.label} (source produced no usable evidence)`;
+    case "QI_SOURCE_DENIED":
+      return `${source.label} (source is in a protected location)`;
+    case "QI_SOURCE_TOO_LARGE":
+      return `${source.label} (source is too large for this run)`;
+    case "QI_SOURCE_UNSUPPORTED":
+      return `${source.label} (source format is not supported)`;
+    case "QI_WORKSPACE_NOT_FOUND":
+      return `${source.label} (workspace path could not be read)`;
+    case "QI_CAPSULE_UNAVAILABLE":
+      return `${source.label} (knowledge source is unavailable)`;
+    default:
+      return `${source.label} (could not be read)`;
+  }
+}
+
+function skippedSourcesNotice(
+  skippedSources: readonly QualityIntelligenceSkippedSource[],
+): string | null {
+  if (skippedSources.length === 0) return null;
+  const count = skippedSources.length.toString();
+  const noun = skippedSources.length !== 1 ? "sources were" : "source was";
+  return `${count} connected ${noun} skipped: ${skippedSources.map(skippedSourceDetail).join(", ")}.`;
 }
 
 function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage): Progress {
@@ -361,6 +413,18 @@ export function RunLauncher({
         : Number.NaN;
   const seedValid =
     parsedSeed === undefined || (Number.isSafeInteger(parsedSeed) && Number.isFinite(parsedSeed));
+  const stepSeed = (delta: number): void => {
+    const current = Number.parseInt(seed.trim(), 10);
+    const base = Number.isFinite(current) ? current : 0;
+    setSeed(String(Math.max(0, base + delta)));
+    setError(null);
+  };
+  const handleSeedWheel = (event: WheelEvent<HTMLInputElement>): void => {
+    if (running || event.deltaY === 0) return;
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    stepSeed(direction);
+  };
   // Generate stays focusable when blocked (aria-disabled, not native disabled) so keyboard and
   // screen-reader users can reach it and hear WHY it is inactive via aria-describedby — the same
   // governance pattern as GovernedActionButton in CandidatesPane (Epic #712).
@@ -379,6 +443,14 @@ export function RunLauncher({
     setError(null);
     setConnectorError(null);
   }, []);
+
+  const onSourceKindPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>, next: ManualSourceKind): void => {
+      if (running || event.button !== 0) return;
+      chooseSourceKind(next);
+    },
+    [chooseSourceKind, running],
+  );
 
   // APG radiogroup keyboard model (WCAG 2.1.1): arrow keys move the selection and roving focus
   // across the source-type radios — the native <select> this replaced had this for free.
@@ -670,10 +742,7 @@ export function RunLauncher({
     progress.droppedSourceCount > 0
       ? `${progress.droppedSourceCount.toString()} source${progress.droppedSourceCount !== 1 ? "s" : ""} over the 16-source limit ${progress.droppedSourceCount !== 1 ? "were" : "was"} not included.`
       : null;
-  const skippedNotice =
-    progress.skippedSources.length > 0
-      ? `${progress.skippedSources.length.toString()} connected source${progress.skippedSources.length !== 1 ? "s" : ""} could not be read and ${progress.skippedSources.length !== 1 ? "were" : "was"} skipped: ${progress.skippedSources.map((s) => s.label).join(", ")}.`
-      : null;
+  const skippedNotice = skippedSourcesNotice(progress.skippedSources);
   const coverageAnnouncement = [droppedNotice, skippedNotice]
     .filter((line): line is string => line !== null)
     .join(" ");
@@ -759,14 +828,21 @@ export function RunLauncher({
                   type="button"
                   className="qi-source-kind-option"
                   role="radio"
+                  aria-label={option.label}
+                  data-tip={option.label}
                   aria-checked={sourceKind === option.id}
                   tabIndex={sourceKind === option.id ? 0 : -1}
                   disabled={running}
+                  onPointerDown={(event) => {
+                    onSourceKindPointerDown(event, option.id);
+                  }}
                   onClick={() => chooseSourceKind(option.id)}
                   onKeyDown={onSourceKindKeyDown}
                 >
-                  <span>{option.label}</span>
-                  <span>{option.hint}</span>
+                  <span className="qi-source-kind-label">{option.label}</span>
+                  <span className="qi-source-kind-icon" aria-hidden="true">
+                    <SourceKindIcon kind={option.id} />
+                  </span>
                 </button>
               ))}
             </div>
@@ -779,40 +855,52 @@ export function RunLauncher({
           </p>
         ) : null}
         <div className="qi-launcher-controls">
-          <label className="qi-field qi-field-inline">
+          <div className="qi-field qi-field-inline qi-policy-profile-field">
             <span className="qi-field-label">Policy profile</span>
-            <select
-              className="qi-select"
+            <KeikoSelect
+              triggerClassName="qi-select"
               value={profileId}
+              ariaLabel="Policy profile"
               disabled={running}
-              onChange={(e) => {
-                setProfileId(e.target.value);
-              }}
-            >
-              {PROFILES.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              menuTitle="Policy"
+              menuClassName="qi-policy-profile-menu"
+              sections={[
+                {
+                  options: PROFILES.map((profile) => ({
+                    value: profile.id,
+                    label: profile.label,
+                  })),
+                },
+              ]}
+              onValueChange={setProfileId}
+            />
+          </div>
           <label className="qi-field qi-field-inline">
             <span className="qi-field-label">Seed (optional)</span>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              className="qi-input"
-              value={seed}
-              placeholder="e.g. 42"
-              disabled={running}
-              aria-invalid={seedValid ? undefined : true}
-              aria-describedby={seedValid ? undefined : seedErrorId}
-              onChange={(e) => {
-                setSeed(e.target.value);
-                setError(null);
-              }}
-            />
+            <span className="number-control qi-number-control">
+              <input
+                type="number"
+                min={0}
+                step={1}
+                className="qi-input number-control-input"
+                value={seed}
+                placeholder="e.g. 42"
+                disabled={running}
+                aria-invalid={seedValid ? undefined : true}
+                aria-describedby={seedValid ? undefined : seedErrorId}
+                onChange={(e) => {
+                  setSeed(e.target.value);
+                  setError(null);
+                }}
+                onWheel={handleSeedWheel}
+              />
+              <NumberControlStepper
+                label="seed"
+                disabled={running}
+                onStepUp={() => stepSeed(1)}
+                onStepDown={() => stepSeed(-1)}
+              />
+            </span>
             {!seedValid ? (
               <span className="qi-field-error" id={seedErrorId}>
                 Seed must be a non-negative integer.

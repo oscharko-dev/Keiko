@@ -118,7 +118,7 @@ function ImpactDirection({
                       style={{
                         display: "flex",
                         width: "100%",
-                        gap: 6,
+                        gap: "var(--space-3)",
                         alignItems: "center",
                         textAlign: "left",
                         fontSize: 12,

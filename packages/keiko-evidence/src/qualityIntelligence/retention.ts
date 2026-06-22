@@ -12,11 +12,12 @@
 // the `.qi.json` suffix, so a half-written run is never surfaced. There is no recovery procedure
 // to call — recovery IS the absence of a code path that surfaces partials.
 
-import { lstatSync, renameSync, rmSync } from "node:fs";
+import { lstatSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { CANDIDATES_SUFFIX } from "./candidatesArtifact.js";
 import { deleteQualityIntelligenceCompanionArtifact } from "./companionStore.js";
+import type { QualityIntelligenceEvidenceManifest } from "./manifestSchema.js";
 import {
   getQualityIntelligenceRetentionProfile,
   type QualityIntelligenceRetentionProfile,
@@ -205,18 +206,56 @@ function resolveDeleteStore(
   throw new Error("deleteQualityIntelligenceRun requires options.store or options.evidenceDir");
 }
 
-// Recursively removes a per-run side-file directory if it exists. Missing dir → no-op.
-// A symlink at the run-dir path is refused (defence against a planted symlink redirecting the
-// rm into an unrelated tree).
-function removeSideFileDirIfPresent(runId: string, sideFileRoot: string): void {
-  const root = resolve(sideFileRoot);
+function containedPath(path: string, root: string): boolean {
+  return path === root || path.startsWith(root + sep);
+}
+
+function realDirectoryForDeletion(path: string, label: string): string | undefined {
+  const lexical = resolve(path);
+  const stat = lstatSync(lexical, { throwIfNoEntry: false });
+  if (stat === undefined) {
+    return undefined;
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`${label} is not a real directory, refusing to delete: ${lexical}`);
+  }
+  return realpathSync(lexical);
+}
+
+function realEvidenceRootForContainment(evidenceDir: string): string | undefined {
+  try {
+    return realpathSync(resolve(evidenceDir));
+  } catch {
+    return undefined;
+  }
+}
+
+// Recursively removes a per-run side-file directory if it exists. Missing dir → no-op. Symlinked
+// side-file roots or run dirs are refused before the manifest is deleted so retention cannot rm
+// outside the evidence tree or emit a false successful deletion receipt. The evidence root itself
+// may be a workspace-approved symlink; canonicalize it for containment instead of rejecting it.
+function removeSideFileDirIfPresent(
+  runId: string,
+  sideFileRoot: string,
+  evidenceDir: string | undefined,
+): void {
+  const root = realDirectoryForDeletion(sideFileRoot, "QI side-file root");
+  if (root === undefined) {
+    return;
+  }
+  if (evidenceDir !== undefined) {
+    const evidenceRoot = realEvidenceRootForContainment(evidenceDir);
+    if (evidenceRoot === undefined || !containedPath(root, evidenceRoot)) {
+      throw new Error(
+        `QI side-file root escapes the evidence directory, refusing to delete: ${root}`,
+      );
+    }
+  }
   const runDir = join(root, runId);
   // Defence-in-depth: runId is already `assertValidRunId`-checked (no separators, no `..`, no
-  // leading dot) before this is reached, so `runDir` cannot escape `root`. Assert it lexically so
-  // a future refactor that relaxes the validation order fails loudly here instead of `rm`-ing an
-  // unrelated tree — the one #274 FS op that did not previously route through the containment
-  // discipline used by the manifest/companion stores.
-  if (!runDir.startsWith(root + sep)) {
+  // leading dot) before this is reached. Assert containment against the canonical side-file root so
+  // symlinked roots or future validation drift cannot redirect recursive deletion outside evidence.
+  if (!containedPath(runDir, root)) {
     throw new Error(`QI side-file dir escapes the side-file root, refusing to delete: ${runDir}`);
   }
   const stat = lstatSync(runDir, { throwIfNoEntry: false });
@@ -225,6 +264,9 @@ function removeSideFileDirIfPresent(runId: string, sideFileRoot: string): void {
   }
   if (stat.isSymbolicLink()) {
     throw new Error(`QI side-file dir is a symlink, refusing to delete: ${runDir}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`QI side-file dir is not a real directory, refusing to delete: ${runDir}`);
   }
   rmSync(runDir, { recursive: true, force: true });
 }
@@ -260,6 +302,9 @@ export function deleteQualityIntelligenceRun(
 ): QualityIntelligenceDeletionReceipt {
   assertValidRunId(runId);
   const store = resolveDeleteStore(options);
+  if (options.sideFileRoot !== undefined) {
+    removeSideFileDirIfPresent(runId, options.sideFileRoot, options.evidenceDir);
+  }
   const removed = store.delete(runId);
   // Sweep companion artifacts so a deleted run leaves no orphaned customer-derived content on disk
   // (Issue #274 AC4). On-disk only — skipped when just an in-memory store is supplied.
@@ -267,9 +312,6 @@ export function deleteQualityIntelligenceRun(
     options.evidenceDir === undefined
       ? []
       : removeRunCompanions(options.evidenceDir, runId, options.companionSuffixes);
-  if (options.sideFileRoot !== undefined) {
-    removeSideFileDirIfPresent(runId, options.sideFileRoot);
-  }
   const at = new Date(options.now?.() ?? Date.now()).toISOString();
   const status: QualityIntelligenceDeletionStatus = removed ? "deleted" : "absent";
   return {
@@ -278,6 +320,113 @@ export function deleteQualityIntelligenceRun(
     removedCompanionSuffixes,
     auditEvent: { type: "qi:run:deleted", runId, status, removedCompanionSuffixes, at },
   };
+}
+
+// ─── Retention enforcement orchestration (Issue #1323 AC4) ──────────────────────────
+
+// Wires the pure decision (`applyQualityIntelligenceRetention`) to the hardened deletion primitive
+// (`deleteQualityIntelligenceRun`) over a real on-disk store, so retention policy ids become
+// OPERATIONAL — short-lived runs are purged deterministically rather than the id staying passive
+// metadata. This function performs side effects (it lists + loads + deletes) but stays leaf-clean:
+// it never calls the audit ledger. Each deletion receipt carries a `qi:run:deleted` audit event the
+// CALLER (the server bootstrap seam) forwards to its audit sink — keiko-evidence does not.
+//
+// Fail-safe by construction: a run only enters the retention snapshot when its manifest LOADS and
+// carries a PARSEABLE timestamp. A corrupt manifest, an integrity-gate failure (EvidenceReadError),
+// or an unparseable `completedAt ?? planAt` is SKIPPED — never purged on doubt. Unknown-policy and
+// newest-N retention are handled inside the pure decision.
+
+export interface QualityIntelligenceRetentionEnforcementOptions {
+  readonly evidenceDir: string;
+  // Injectable wall-clock seam for deterministic tests; defaults to Date.now at call time.
+  readonly now?: (() => number) | undefined;
+  // Server-owned companion suffixes forwarded to each deletion (e.g. `.review.json`); the
+  // evidence-owned `.candidates.json` is always swept by the primitive.
+  readonly companionSuffixes?: readonly string[] | undefined;
+  // Per-run side-file root (`<evidenceDir>/qi/`); when set, each purged run's `<root>/<runId>/` is
+  // removed by the primitive alongside the manifest.
+  readonly sideFileRoot?: string | undefined;
+}
+
+export interface QualityIntelligenceRetentionEnforcementResult {
+  readonly receipts: readonly QualityIntelligenceDeletionReceipt[];
+  readonly failures: readonly QualityIntelligenceRetentionDeletionFailure[];
+  readonly result: QualityIntelligenceRetentionResult;
+}
+
+export interface QualityIntelligenceRetentionDeletionFailure {
+  readonly runId: string;
+  readonly message: string;
+}
+
+// Load one run's manifest and project it onto a retention snapshot entry. Returns undefined when the
+// run MUST be skipped: load returned absent/corrupt (undefined or EvidenceReadError) or the
+// manifest's `completedAt ?? planAt` is not a parseable timestamp. Skipping means the run never
+// reaches the decision and is therefore never purged — the destructive-path fail-safe.
+function snapshotEntryForRun(
+  store: QualityIntelligenceLocalStore,
+  runId: string,
+): QualityIntelligenceRunSnapshotEntry | undefined {
+  let manifest: QualityIntelligenceEvidenceManifest | undefined;
+  try {
+    manifest = store.load(runId);
+  } catch {
+    // A corrupt / tampered / unreadable manifest fails closed: skip, never delete.
+    return undefined;
+  }
+  if (manifest === undefined) {
+    return undefined;
+  }
+  const recordedAt = Date.parse(manifest.completedAt ?? manifest.planAt);
+  if (Number.isNaN(recordedAt)) {
+    // No usable timestamp → cannot age the run out safely → retain.
+    return undefined;
+  }
+  return { runId, recordedAt, retentionPolicyId: manifest.retentionPolicyId };
+}
+
+function buildRetentionSnapshot(
+  store: QualityIntelligenceLocalStore,
+): readonly QualityIntelligenceRunSnapshotEntry[] {
+  const snapshot: QualityIntelligenceRunSnapshotEntry[] = [];
+  for (const runId of store.list()) {
+    const entry = snapshotEntryForRun(store, runId);
+    if (entry !== undefined) {
+      snapshot.push(entry);
+    }
+  }
+  return snapshot;
+}
+
+export function enforceQualityIntelligenceRetentionPolicy(
+  options: QualityIntelligenceRetentionEnforcementOptions,
+): QualityIntelligenceRetentionEnforcementResult {
+  const store = createNodeQualityIntelligenceLocalStore(options.evidenceDir);
+  const snapshot = buildRetentionSnapshot(store);
+  const result = applyQualityIntelligenceRetention({
+    snapshot,
+    now: options.now?.() ?? Date.now(),
+  });
+  const receipts: QualityIntelligenceDeletionReceipt[] = [];
+  const failures: QualityIntelligenceRetentionDeletionFailure[] = [];
+  for (const runId of result.expiredRunIds) {
+    try {
+      receipts.push(
+        deleteQualityIntelligenceRun(runId, {
+          evidenceDir: options.evidenceDir,
+          now: options.now,
+          companionSuffixes: options.companionSuffixes,
+          sideFileRoot: options.sideFileRoot,
+        }),
+      );
+    } catch (error) {
+      failures.push({
+        runId,
+        message: error instanceof Error ? error.message : "unknown deletion failure",
+      });
+    }
+  }
+  return { receipts, failures, result };
 }
 
 // ─── Corrupt-manifest quarantine ───────────────────────────────────────────────────

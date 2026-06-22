@@ -1,11 +1,28 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 const ROOT_PACKAGE_NAME = "@oscharko-dev/keiko";
 
 export interface PreferredInstallLayout {
   readonly binPath: string;
   readonly staticRoot: string;
+}
+
+export interface LocalPackageInstallLayout extends PreferredInstallLayout {
+  readonly packageRoot: string;
+}
+
+export type KeikoBinarySource =
+  | "local-build"
+  | "local-package"
+  | "env-override"
+  | "argv"
+  | "path";
+
+export interface KeikoBinaryResolution {
+  readonly binPath: string;
+  readonly source: KeikoBinarySource;
 }
 
 interface RootPackageJson {
@@ -23,10 +40,6 @@ function readRootPackageName(cwd: string): string | undefined {
   }
 }
 
-// The single predicate for "this root is a usable Keiko layout `keiko start`
-// will actually launch": both the built CLI entry and the built UI static asset
-// must exist. doctor.ts shares this so it never reports a local install that
-// `keiko start` would skip for missing static assets.
 export function hasBuiltKeikoLayout(root: string): boolean {
   return (
     existsSync(resolve(root, "dist", "cli", "index.js")) &&
@@ -46,21 +59,66 @@ function builtLayoutAt(root: string): PreferredInstallLayout | undefined {
   };
 }
 
-// The rung-1 monorepo built checkout only (cwd is the `@oscharko-dev/keiko`
-// package root). doctor.ts uses this to distinguish a built checkout from a
-// node_modules install, which it reports separately.
 export function builtCheckoutLayout(cwd: string): PreferredInstallLayout | undefined {
   if (readRootPackageName(cwd) !== ROOT_PACKAGE_NAME) return undefined;
   return builtLayoutAt(cwd);
 }
 
-function localPackageLayout(cwd: string): PreferredInstallLayout | undefined {
-  return builtLayoutAt(localPackageRoot(cwd));
+function localPackageLayout(cwd: string): LocalPackageInstallLayout | undefined {
+  const packageRoot = localPackageRoot(cwd);
+  const preferred = builtLayoutAt(packageRoot);
+  if (preferred === undefined) return undefined;
+  return { ...preferred, packageRoot };
 }
 
-// Precedence: built monorepo checkout first, then a local node_modules package.
-// When neither matches, the caller (lifecycle.cliEntryPath) falls back to
-// KEIKO_CLI_BIN_PATH and then the import.meta.url package-relative entry.
-export function resolvePreferredInstallLayout(cwd: string): PreferredInstallLayout | undefined {
+export function resolvePreferredInstallLayout(
+  cwd: string,
+): PreferredInstallLayout | undefined {
   return builtCheckoutLayout(cwd) ?? localPackageLayout(cwd);
+}
+
+export function resolveKeikoBinary(
+  cwd: string,
+  env: EnvSource = process.env,
+  argv: readonly string[] = process.argv,
+): KeikoBinaryResolution | undefined {
+  const checks: readonly {
+    readonly source: KeikoBinarySource;
+    readonly binPath: string | undefined;
+  }[] = [
+    { source: "env-override", binPath: absoluteExistingPath(env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH) },
+    { source: "argv", binPath: absoluteExistingPath(argv[1]) },
+    { source: "local-build", binPath: builtCheckoutLayout(cwd)?.binPath },
+    { source: "local-package", binPath: localPackageLayout(cwd)?.binPath },
+  ];
+
+  for (const candidate of checks) {
+    if (candidate.binPath !== undefined) {
+      return { source: candidate.source, binPath: candidate.binPath };
+    }
+  }
+
+  const pathHit = resolveKeikoBinaryFromPath(process.platform, env.PATH ?? process.env.PATH);
+  if (pathHit !== undefined) {
+    return { source: "path", binPath: pathHit };
+  }
+  return undefined;
+}
+
+function absoluteExistingPath(value: unknown): string | undefined {
+  return typeof value === "string" && isAbsolute(value) && existsSync(value) ? value : undefined;
+}
+
+function resolveKeikoBinaryFromPath(
+  platform: NodeJS.Platform,
+  pathValue: unknown,
+): string | undefined {
+  if (typeof pathValue !== "string" || pathValue.length === 0) return undefined;
+  const delimiter = platform === "win32" ? ";" : ":";
+  const names =
+    platform === "win32" ? ["keiko.cmd", "keiko.exe", "keiko.bat", "keiko"] : ["keiko"];
+  return pathValue
+    .split(delimiter)
+    .flatMap((directory) => names.map((name) => join(directory, name)))
+    .find((candidate) => existsSync(candidate));
 }

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI &amp; Agent · Keiko Design System</title>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <link rel="stylesheet" href="keiko-ai.css" />
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Components · AI</div>
+        <h1>AI &amp; <span class="dim">agent surfaces.</span></h1>
+        <p class="lead">Keiko is agentic, so these are core components, not patterns. Thinking, streaming, tool calls, grounded citations, confidence, interruption, and the two moments that must never be quiet — asking permission and confirming a destructive action.</p>
+      </header>
+
+      <!-- THINKING + STREAMING -->
+      <section class="sec" id="response">
+        <div class="sec-head"><div class="num">01 — RESPONSE</div><h2>Thinking &amp; streaming</h2><p>The agent always shows its state. A calm pulsing indicator while it reasons; a blinking cursor while tokens arrive — both honour reduced-motion.</p></div>
+        <div class="card demo-card stack">
+          <div class="ai-msg">
+            <span class="ai-avatar"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L13.6 8.4 L19 10 L13.6 11.6 L12 17 L10.4 11.6 L5 10 L10.4 8.4 Z" /></svg></span>
+            <div class="ai-body"><div class="ai-thinking">Thinking<span class="dots"><i></i><i></i><i></i></span></div></div>
+          </div>
+          <div class="ai-msg">
+            <span class="ai-avatar"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L13.6 8.4 L19 10 L13.6 11.6 L12 17 L10.4 11.6 L5 10 L10.4 8.4 Z" /></svg></span>
+            <div class="ai-body"><div class="ai-response">The migration touched <code>components.css</code> and three token files. All component rules now read tier-2/3 tokens, so the change is visually identical<span class="ai-stream-cursor"></span></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TOOL CALL -->
+      <section class="sec" id="tools">
+        <div class="sec-head"><div class="num">02 — TOOL CALLS</div><h2>Tool-call card</h2><p>Every action the agent takes is legible: which tool, what arguments, and a live status that resolves to a result.</p></div>
+        <div class="card demo-card stack">
+          <div class="ai-tool">
+            <div class="ai-tool-head"><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7 h16 M4 12 h16 M4 17 h10" /></svg></span><span class="nm"><b>grep</b>(pattern, path)</span><span class="st run">Running</span></div>
+            <div class="ai-tool-body"><span class="k">pattern:</span> "--accent" &nbsp; <span class="k">path:</span> "components.css"</div>
+          </div>
+          <div class="ai-tool">
+            <div class="ai-tool-head"><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5" /></svg></span><span class="nm"><b>read_file</b>(path)</span><span class="st done">Done</span></div>
+            <div class="ai-tool-body"><span class="k">→</span> 205 lines · 16.3 KB · no raw primitives found</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- GROUNDING -->
+      <section class="sec" id="sources">
+        <div class="sec-head"><div class="num">03 — GROUNDING</div><h2>Source citations</h2><p>Claims that come from retrieved material carry an inline marker; the sources resolve below the answer. Never assert without grounding when grounding exists.</p></div>
+        <div class="card demo-card">
+          <div class="ai-msg">
+            <span class="ai-avatar"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L13.6 8.4 L19 10 L13.6 11.6 L12 17 L10.4 11.6 L5 10 L10.4 8.4 Z" /></svg></span>
+            <div class="ai-body">
+              <div class="ai-response">The high-contrast palette now lives in a single source<span class="ai-cite">1</span>, and success uses its own status green at hue 146<span class="ai-cite">2</span> rather than the interactive accent.</div>
+              <div class="ai-sources">
+                <div class="ai-source"><span class="n">1</span><span class="tl">keiko-tokens.css — HC single-source palettes</span><span class="ur">L110–164</span></div>
+                <div class="ai-source"><span class="n">2</span><span class="tl">audit.html — distinct success status</span><span class="ur">§04</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CONFIDENCE + CONTROLS -->
+      <section class="sec" id="confidence">
+        <div class="sec-head"><div class="num">04 — CONFIDENCE &amp; CONTROL</div><h2>Confidence &amp; interruption</h2><p>Confidence is shown as level + word, never colour alone. The agent is always interruptible.</p></div>
+        <div class="card demo-card" style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:center">
+          <div class="demo-stack">
+            <div class="ai-conf" data-level="high"><span class="track"><i></i><i></i><i></i></span><span class="lbl">High</span></div>
+            <div class="ai-conf" data-level="medium"><span class="track"><i></i><i></i><i></i></span><span class="lbl">Medium</span></div>
+            <div class="ai-conf" data-level="low"><span class="track"><i></i><i></i><i></i></span><span class="lbl">Low — verify</span></div>
+          </div>
+          <div class="ai-controls">
+            <button class="ai-stop"><span class="sq"></span>Stop</button>
+            <button class="c-btn c-btn--sm"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5 v5 h5 M20 19 v-5 h-5" /><path d="M5.5 14 a7 7 0 0 0 12.4 2.2 M18.5 10 A7 7 0 0 0 6.1 7.8" /></svg>Regenerate</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- PERMISSION + SENSITIVE -->
+      <section class="sec" id="permission">
+        <div class="sec-head"><div class="num">05 — HUMAN IN THE LOOP</div><h2>Permission &amp; sensitive actions</h2><p>Before reaching outside the conversation or doing something irreversible, the agent stops and asks — in plain language, with the exact scope, and a clearly weighted pair of actions.</p></div>
+        <div class="stack">
+          <div class="ai-permit">
+            <div class="ai-permit-h">
+              <span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11 V8 a4 4 0 0 1 8 0 v3" /></svg></span>
+              <div><div class="tt">Allow access to your repository?</div><div class="ts">Keiko needs read access to run the linter agent.</div></div>
+            </div>
+            <div class="ai-permit-scope">
+              <div class="row"><span class="gr">✓</span> Read files &amp; commit history</div>
+              <div class="row"><span class="gr">✓</span> Read CI status</div>
+              <div class="row" style="color:var(--text-faint)">✗ No write access · no secrets</div>
+            </div>
+            <div class="ai-permit-act"><button class="c-btn c-btn--primary c-btn--sm">Allow read access</button><button class="c-btn c-btn--sm">Not now</button></div>
+          </div>
+
+          <div class="ai-danger">
+            <div class="ai-danger-h"><span class="ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 L21 19 H3 Z" /><path d="M12 10 v4 M12 17 h.01" /></svg></span><div class="tt">Delete 3 branches?</div></div>
+            <p>This permanently removes <code>release/0.1</code>, <code>hotfix/login</code> and <code>spike/canvas</code>. This can't be undone.</p>
+            <div class="ai-danger-act"><button class="c-btn c-btn--danger c-btn--sm" style="border-color:transparent;background:var(--feedback-danger);color:var(--ink-inverse)">Delete branches</button><button class="c-btn c-btn--sm">Cancel</button></div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="theme-control.js"></script>
+  </body>
+</html>

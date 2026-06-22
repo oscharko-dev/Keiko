@@ -12,6 +12,7 @@
   "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"],
   "references": [
     { "path": "../keiko-contracts" },
+    { "path": "../keiko-sandbox" },
     { "path": "../keiko-security" },
     { "path": "../keiko-workspace" }
   ]

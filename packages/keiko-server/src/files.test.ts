@@ -1,17 +1,45 @@
 import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { Readable } from "node:stream";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { EDITOR_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import {
   buildRedactor,
   createInMemoryUiStore,
+  handleFilesContent,
   listFilesDirectories,
   readFilesContent,
   readFilesPreview,
   readFilesTree,
   writeFilesContent,
 } from "./index.js";
+import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { UiStore } from "./store/index.js";
+
+// Mirrors the (non-exported) editable size limit in files.ts; used for boundary tests.
+const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
+
+function sha256Hex(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+// Minimal RouteContext for a PATCH /api/files/content call. handleFilesContent only reads
+// `req.method`, the request body stream, and (on GET) `url.searchParams`; `res`/`params` are unused.
+function patchContentContext(body: unknown): RouteContext {
+  const req = Readable.from([
+    Buffer.from(JSON.stringify(body), "utf8"),
+  ]) as unknown as IncomingMessage;
+  (req as { method?: string }).method = "PATCH";
+  return {
+    req,
+    res: {} as unknown as ServerResponse,
+    params: {},
+    url: new URL("http://localhost/api/files/content"),
+  };
+}
 
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax6XK0AAAAASUVORK5CYII=",
@@ -342,6 +370,276 @@ describe("desktop files browser", () => {
       status: 409,
       code: "WRITE_CONFLICT",
     });
+  });
+
+  // ─── Editor session metadata (Issue #1197) ──────────────────────────────────────
+  it("returns content-free editor-session version metadata on read", async () => {
+    const content = await readFilesContent(store, root, "src/app.ts");
+
+    expect(content.session.schemaVersion).toBe(EDITOR_SESSION_SCHEMA_VERSION);
+    expect(content.session.version.sizeBytes).toBe(content.sizeBytes);
+    expect(content.session.version.modifiedAt).toBe(content.modifiedAt);
+    expect(content.session.version.contentHash).toBe(sha256Hex(content.content));
+    expect(content.session.version.contentHash).toMatch(/^[0-9a-f]{64}$/u);
+    // The hash is a digest, never the content itself.
+    expect(content.session.version.contentHash).not.toContain("const value");
+  });
+
+  it("returns a fresh version on write whose hash reflects the saved content", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+    const next = 'export const value = "changed";\n';
+
+    const saved = await writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      content: next,
+      baseVersion: initial.session.version,
+    });
+
+    expect(saved.session.version.contentHash).toBe(sha256Hex(next));
+    expect(saved.session.version.contentHash).not.toBe(initial.session.version.contentHash);
+    expect(saved.session.version.sizeBytes).toBe(Buffer.byteLength(next, "utf8"));
+  });
+
+  it("rejects a save with STALE_SESSION when the document changed since it was opened", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+    await writeFile(join(root, "src", "app.ts"), 'export const value = "other";\n', "utf8");
+
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        content: 'export const value = "stale";\n',
+        baseVersion: initial.session.version,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "STALE_SESSION" });
+  });
+
+  it("detects a stale session by content hash even when size and mtime are unchanged", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+    // A different contentHash with the live size/mtime simulates a same-length on-disk change.
+    const forged = {
+      ...initial.session.version,
+      contentHash: sha256Hex("different but same length"),
+    };
+
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        content: "anything\n",
+        baseVersion: forged,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "STALE_SESSION" });
+  });
+
+  it("saves when the supplied baseVersion still matches the document on disk", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+
+    const saved = await writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      content: 'export const value = "fresh";\n',
+      baseVersion: initial.session.version,
+    });
+
+    expect(saved.content).toBe('export const value = "fresh";\n');
+  });
+
+  it("prefers baseVersion over expectedModifiedAt for conflict detection", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+
+    // A matching baseVersion plus a deliberately stale expectedModifiedAt must still succeed,
+    // proving baseVersion takes precedence over the legacy mtime-only check.
+    const saved = await writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      content: 'export const value = "precedence";\n',
+      baseVersion: initial.session.version,
+      expectedModifiedAt: initial.session.version.modifiedAt - 10_000,
+    });
+
+    expect(saved.content).toBe('export const value = "precedence";\n');
+  });
+
+  it("accepts a baseVersion modifiedAt within the 1ms tolerance but rejects beyond it", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+    // Same content+size, mtime nudged +1ms: inside the tolerance, so the save succeeds.
+    const within = {
+      ...initial.session.version,
+      modifiedAt: initial.session.version.modifiedAt + 1,
+    };
+    const saved = await writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      content: 'export const value = "within";\n',
+      baseVersion: within,
+    });
+    expect(saved.content).toBe('export const value = "within";\n');
+
+    // Re-read the now-current revision, then nudge mtime +2ms: outside the tolerance → STALE_SESSION.
+    const reread = await readFilesContent(store, root, "src/app.ts");
+    const beyond = {
+      ...reread.session.version,
+      modifiedAt: reread.session.version.modifiedAt + 2,
+    };
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        content: 'export const value = "beyond";\n',
+        baseVersion: beyond,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "STALE_SESSION" });
+  });
+
+  it("computes a content-free session for a 0-byte file and round-trips a save", async () => {
+    await writeFile(join(root, "empty.ts"), "", "utf8");
+    const initial = await readFilesContent(store, root, "empty.ts");
+
+    expect(initial.content).toBe("");
+    expect(initial.session.version.sizeBytes).toBe(0);
+    expect(initial.session.version.contentHash).toBe(sha256Hex(""));
+
+    const saved = await writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "empty.ts",
+      content: "const filled = 1;\n",
+      baseVersion: initial.session.version,
+    });
+    expect(saved.session.version.sizeBytes).toBe(Buffer.byteLength("const filled = 1;\n", "utf8"));
+  });
+
+  it("handles the editable surface exactly at the size limit and rejects one byte over", async () => {
+    const atLimit = "a".repeat(MAX_TEXT_PREVIEW_BYTES);
+    await writeFile(join(root, "atlimit.ts"), atLimit, "utf8");
+    const initial = await readFilesContent(store, root, "atlimit.ts");
+    expect(initial.session.version.sizeBytes).toBe(MAX_TEXT_PREVIEW_BYTES);
+    expect(initial.session.version.contentHash).toBe(sha256Hex(atLimit));
+
+    const saved = await writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "atlimit.ts",
+      content: "shrunk\n",
+      baseVersion: initial.session.version,
+    });
+    expect(saved.content).toBe("shrunk\n");
+
+    await writeFile(join(root, "over.ts"), "a".repeat(MAX_TEXT_PREVIEW_BYTES + 1), "utf8");
+    await expect(readFilesContent(store, root, "over.ts")).rejects.toMatchObject({
+      status: 413,
+      code: "FILE_TOO_LARGE",
+    });
+  });
+
+  it("never echoes file content or secrets in the STALE_SESSION error", async () => {
+    await writeFile(
+      join(root, "secret.ts"),
+      'const token = "sk-do-not-leak-1234567890";\n',
+      "utf8",
+    );
+    const initial = await readFilesContent(store, root, "secret.ts");
+    await writeFile(join(root, "secret.ts"), 'const token = "sk-rotated-0987654321";\n', "utf8");
+
+    const error = await writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "secret.ts",
+      content: 'const token = "sk-newvalue";\n',
+      baseVersion: initial.session.version,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ status: 409, code: "STALE_SESSION" });
+    const message = (error as { message: string }).message;
+    expect(message).not.toContain("sk-");
+    expect(message).not.toContain("token");
+    expect(message).not.toContain(root);
+  });
+
+  it("rejects a malformed baseVersion at the route with a content-free 400", async () => {
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: "src/app.ts",
+        content: "export const value = 1;\n",
+        baseVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: "not-a-valid-hash" },
+      }),
+      { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+  });
+
+  it("keeps denied-path precedence before malformed baseVersion validation at the route", async () => {
+    await writeFile(join(root, ".env.local"), "API_KEY=value\n");
+
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: ".env.local",
+        content: "API_KEY=changed\n",
+        baseVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: "not-a-valid-hash" },
+      }),
+      { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
+    );
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+  });
+
+  it("threads a valid stale baseVersion through the route to STALE_SESSION", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+    await writeFile(join(root, "src", "app.ts"), 'const value = "moved";\n', "utf8");
+
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: "src/app.ts",
+        content: 'const value = "save";\n',
+        baseVersion: initial.session.version,
+      }),
+      { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: "STALE_SESSION" } });
+  });
+
+  it("never echoes file content, secrets, or roots in the route STALE_SESSION response", async () => {
+    await writeFile(
+      join(root, "secret.ts"),
+      'const token = "sk-do-not-leak-1234567890";\n',
+      "utf8",
+    );
+    const initial = await readFilesContent(store, root, "secret.ts");
+    await writeFile(join(root, "secret.ts"), 'const token = "sk-rotated-0987654321";\n', "utf8");
+
+    const result = await handleFilesContent(
+      patchContentContext({
+        root,
+        path: "secret.ts",
+        content: 'const token = "sk-newvalue";\n',
+        baseVersion: initial.session.version,
+      }),
+      { store, redactor: buildRedactor({}) } as unknown as UiHandlerDeps,
+    );
+
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ error: { code: "STALE_SESSION" } });
+    const serialized = JSON.stringify(result.body);
+    expect(serialized).not.toContain("sk-");
+    expect(serialized).not.toContain("token");
+    expect(serialized).not.toContain(root);
   });
 
   it("refuses to preview .env.local (matches the .env.* deny pattern)", async () => {

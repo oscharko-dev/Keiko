@@ -2,13 +2,12 @@
 // (ADR-0008 D9). Dry-run by default; --apply writes the tests and runs verification. The text path
 // prints the reviewable proposed diff AND the #6 validation summary so a terminal reviewer sees the
 // actual generated test code (AC #4/#6); --json emits the full UnitTestWorkflowReport. The gateway
-// ModelPort is built from config (loadConfigFromFile); tests inject deps.model directly so no live
+// ModelPort is built from config (loadGatewayConfigFromFile); tests inject deps.model directly so no live
 // gateway is needed. Exit 0 on completed/dry-run, 1 on rejected/cancelled/failed/runtime, 2 on
 // usage. Mirrors runVerifyCli's flag-parse / typed-error-catch structure.
 
 import {
   Gateway,
-  loadConfigFromFile,
   type EnvSource,
   ConfigInvalidError,
   GatewayError,
@@ -20,6 +19,7 @@ import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
 import { generateUnitTests, renderMarkdownReport } from "@oscharko-dev/keiko-workflows";
 import type { UnitTestTarget, UnitTestWorkflowReport } from "@oscharko-dev/keiko-workflows";
+import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
@@ -144,7 +144,7 @@ function buildModel(
     if (path === undefined) {
       throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
     }
-    const config = loadConfigFromFile(path, env);
+    const config = loadGatewayConfigFromFile(path, env);
     if (parsed.model !== undefined) {
       assertConfiguredModel(config, parsed.model);
     }
@@ -177,7 +177,7 @@ function resolveConfiguredModelId(parsed: GenTestsArgs, env: EnvSource): string 
   if (path === undefined) {
     return parsed.model ?? "default";
   }
-  const config = loadConfigFromFile(path, env);
+  const config = loadGatewayConfigFromFile(path, env);
   if (parsed.model !== undefined) {
     assertConfiguredModel(config, parsed.model);
     return parsed.model;

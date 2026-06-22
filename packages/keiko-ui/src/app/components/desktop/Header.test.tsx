@@ -3,7 +3,6 @@
 // controls, the tab strip no longer advertises a non-existent tab model,
 // and the project tab exposes its full name via title once truncated.
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Header } from "./Header";
 
@@ -37,19 +36,13 @@ describe("Header window controls (C023)", () => {
   });
 });
 
-// uiux-fix F039 C223 — the command palette used to be reachable only via the
-// Cmd/Ctrl+K chord (a hover tooltip was the sole hint). The header now exposes a
-// visible, clickable ⌘K entry point.
-describe("Header command-palette entry point (F039 C223)", () => {
-  it("renders a visible ⌘K button that opens the command palette", async () => {
-    const user = userEvent.setup();
-    const props = renderHeader();
-    const btn = screen.getByRole("button", { name: "Open the command palette (Ctrl/⌘K)" });
-    expect(btn.textContent).toContain("⌘K");
-    await user.click(btn);
-    expect(props.openCommandPalette).toHaveBeenCalledTimes(1);
-    // The "New" window picker is a different surface — it must not be triggered.
-    expect(props.openPalette).not.toHaveBeenCalled();
+describe("Header release controls", () => {
+  it("does not expose New or command-palette buttons in the header", () => {
+    renderHeader();
+    expect(screen.queryByRole("button", { name: "New window" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Open the command palette (Ctrl/⌘K)" }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -79,10 +72,10 @@ describe("Header connection status", () => {
 });
 
 describe("Header split action wording (F039 C401)", () => {
-  it("uses the CommandPalette's wording 'Split front windows' for title and aria-label", () => {
+  it("uses the CommandPalette's wording 'Split front windows' for tooltip and aria-label", () => {
     renderHeader();
     const btn = screen.getByRole("button", { name: "Split front windows" });
-    expect(btn.getAttribute("title")).toBe("Split front windows");
+    expect(btn.getAttribute("data-tip")).toBe("Split front windows");
   });
 });
 

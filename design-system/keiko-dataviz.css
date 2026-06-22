@@ -1,0 +1,86 @@
+/* ============================================================
+   keiko-dataviz.css — data-visualisation foundation.
+   An accessible categorical + sequential palette across all three
+   modes, axis / legend / tooltip rules, and an uncertainty encoding
+   that never relies on colour alone. Charts are CSS/flex so they
+   inherit every theme automatically.
+   ============================================================ */
+
+:root {
+  /* categorical — the orca green leads, the rest are distinct hues at a
+     matched chroma so no single series shouts. Order is the legend order. */
+  --viz-1: var(--accent);
+  --viz-2: oklch(0.7 0.12 240);
+  --viz-3: oklch(0.78 0.13 75);
+  --viz-4: oklch(0.68 0.15 330);
+  --viz-5: oklch(0.7 0.13 25);
+  --viz-6: oklch(0.72 0.07 200);
+  /* sequential — single-hue green ramp for magnitude */
+  --viz-seq-1: oklch(0.3 0.05 160);
+  --viz-seq-2: oklch(0.42 0.08 160);
+  --viz-seq-3: oklch(0.54 0.1 160);
+  --viz-seq-4: oklch(0.66 0.12 160);
+  --viz-seq-5: oklch(0.78 0.13 160);
+  --viz-grid: var(--border-subtle);
+  --viz-axis: var(--text-faint);
+}
+[data-theme="light"] {
+  --viz-2: oklch(0.5 0.14 240);
+  --viz-3: oklch(0.55 0.13 75);
+  --viz-4: oklch(0.52 0.16 330);
+  --viz-5: oklch(0.52 0.17 25);
+  --viz-6: oklch(0.5 0.08 200);
+  --viz-seq-1: oklch(0.9 0.04 160);
+  --viz-seq-2: oklch(0.8 0.08 160);
+  --viz-seq-3: oklch(0.68 0.11 160);
+  --viz-seq-4: oklch(0.56 0.12 160);
+  --viz-seq-5: oklch(0.46 0.13 160);
+}
+
+/* chart shell */
+.viz { display: flex; flex-direction: column; gap: 14px; }
+.viz-plot { position: relative; display: flex; align-items: flex-end; gap: 14px; height: 200px; padding-left: 34px; }
+.viz-yaxis { position: absolute; left: 0; top: 0; bottom: 22px; width: 30px; display: flex; flex-direction: column; justify-content: space-between; }
+.viz-yaxis span { font: 10px var(--font-mono); color: var(--viz-axis); text-align: right; transform: translateY(-50%); }
+.viz-gridlines { position: absolute; left: 34px; right: 0; top: 0; bottom: 22px; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+.viz-gridlines i { height: 1px; background: var(--viz-grid); }
+
+/* bar chart */
+.viz-bars { flex: 1; display: flex; align-items: flex-end; justify-content: space-around; gap: 12px; height: 100%; padding-bottom: 22px; }
+.viz-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 0; height: 100%; justify-content: flex-end; position: relative; }
+.viz-bar { width: 100%; max-width: 46px; border-radius: 5px 5px 0 0; background: var(--viz-1); transition: filter 0.12s; position: relative; }
+.viz-bar:hover { filter: brightness(1.12); }
+.viz-bar-col .xl { position: absolute; bottom: -20px; font: 10.5px var(--font-mono); color: var(--viz-axis); white-space: nowrap; }
+
+/* stacked / grouped helpers */
+.viz-bar.s2 { background: var(--viz-2); }
+.viz-bar.s3 { background: var(--viz-3); }
+
+/* line / area (SVG-driven, colours from tokens) */
+.viz-line-wrap { position: relative; height: 200px; padding-left: 34px; }
+.viz-line-wrap svg { position: absolute; inset: 0 0 22px 34px; width: calc(100% - 34px); height: calc(100% - 22px); overflow: visible; }
+
+/* legend */
+.viz-legend { display: flex; flex-wrap: wrap; gap: 16px; }
+.viz-legend .it { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-body-sm); color: var(--text-secondary); }
+.viz-legend .sw { width: 12px; height: 12px; border-radius: 4px; flex: none; }
+
+/* tooltip */
+.viz-tip { display: inline-block; background: var(--tooltip-surface); color: var(--tooltip-text); border: 1px solid var(--border-default); border-radius: var(--radius-control); box-shadow: var(--popover-shadow); padding: 8px 11px; font-size: var(--text-label); }
+.viz-tip .vk { display: flex; align-items: center; gap: 8px; }
+.viz-tip .vk .sw { width: 9px; height: 9px; border-radius: 3px; }
+.viz-tip .vv { font-family: var(--font-mono); color: var(--text-primary); font-weight: var(--weight-semibold); margin-left: auto; padding-left: 14px; }
+.viz-tip .vl { font-size: var(--text-caption); color: var(--text-faint); margin-bottom: 4px; }
+
+/* uncertainty — hatched fill, never colour alone */
+.viz-bar.uncertain { background-image: repeating-linear-gradient(135deg, transparent 0 4px, color-mix(in oklch, var(--background-primary) 45%, transparent) 4px 7px); }
+.viz-uncert-note { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-label); color: var(--text-secondary); }
+.viz-uncert-note .pat { width: 22px; height: 14px; border-radius: 3px; background: var(--viz-1); background-image: repeating-linear-gradient(135deg, transparent 0 4px, color-mix(in oklch, var(--background-primary) 45%, transparent) 4px 7px); }
+
+/* sequential swatch strip */
+.viz-seq { display: flex; border-radius: var(--radius-control); overflow: hidden; border: 1px solid var(--border-subtle); }
+.viz-seq i { flex: 1; height: 40px; }
+
+/* donut (conic) */
+.viz-donut { width: 132px; height: 132px; border-radius: 50%; position: relative; }
+.viz-donut::after { content: ""; position: absolute; inset: 26px; border-radius: 50%; background: var(--card-surface); }

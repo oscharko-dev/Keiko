@@ -86,6 +86,17 @@ export {
   type OcrPipelineAdapter,
 } from "./parsers/ocr/index.js";
 
+// Bounded request-local small-document text extraction for Repository Search (Issue #1285).
+// Reuses the shipped DOCX/XLSX/PDF parser adapters as a pure, byte-capped text projection.
+export {
+  extractBoundedDocumentText,
+  type BoundedDocumentExtractionInput,
+  type BoundedDocumentExtractionOptions,
+  type BoundedDocumentExtractionOutcome,
+  type BoundedDocumentExtractionResult,
+  type BoundedDocumentFormat,
+} from "./bounded-document-extraction.js";
+
 export {
   DEFAULT_DISCOVERY_OPTIONS,
   discoverAndExtract,

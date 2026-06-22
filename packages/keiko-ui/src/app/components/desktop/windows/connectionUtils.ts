@@ -14,7 +14,10 @@ export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   agents: ["files", "terminal", "plugins", "review", "browser", "agents", "keiko"],
   // Epic #189 Slice 3 M3 — a Chat window can bind to a Connector window via a relationship edge.
   chat: ["files", "browser", "plugins", "keiko", "connector"],
-  files: ["agents", "chat", "quality"],
+  files: ["agents", "chat", "quality", "editor"],
+  // Issue #1199 — an Editor can bind to Files for focused file context and to Connector for
+  // selected Local Knowledge scope. Completion still posts only to the governed BFF route.
+  editor: ["files", "connector"],
   terminal: ["agents"],
   plugins: ["agents", "chat"],
   review: ["agents"],
@@ -23,17 +26,20 @@ export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   // A Connector window can bind to a Chat window (triggers localKnowledgeScopes binding) or to a
   // Quality Intelligence hub (the selected capsule / capsule-set becomes the Generate source — Epic
   // #710, Issue #718).
-  connector: ["chat", "quality"],
+  connector: ["chat", "quality", "editor"],
   // Epic #270 — Quality Intelligence binds to a Files window: the connected folder (or the active
   // file) becomes the source for "Generate test cases". Epic #710 — QI also binds to a Connector
   // window, adopting its selected capsule / capsule-set as the Generate source.
   // Epic #750 #756 — QI also binds to a Figma Snapshot window: the stored snapshot run becomes the
   // figma-snapshot source for the next Generate run.
-  quality: ["files", "connector", "figma", "figmaJson", "figmaImage"],
+  quality: ["files", "connector", "figma", "figmaView", "figmaJson", "figmaImage"],
   // Epic #750 #756 — a Figma Snapshot window can only bind to the QI hub. The window itself holds
   // no PAT; it stores the snapshotRunId in cfg after a successful server-side build, and the QI hub
   // reads that id via the relationship edge.
   figma: ["quality"],
+  // A Figma View card is a scoped screen-level source. It can bind to QI directly, or the user can
+  // split it into separate JSON/Image source cards first.
+  figmaView: ["quality"],
   // A Figma JSON window is a scoped Screen-IR evidence handle. It is connectable to QI like the
   // source view, but contributes only the persisted JSON scope.
   figmaJson: ["quality"],
@@ -82,7 +88,10 @@ export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
   if (
     filesSide !== null &&
     other !== null &&
-    (other.type === "chat" || other.type === "agents" || other.type === "quality")
+    (other.type === "chat" ||
+      other.type === "agents" ||
+      other.type === "quality" ||
+      other.type === "editor")
   ) {
     const root = configRoot(filesSide.cfg);
     // Honest empty state: nothing is bound yet, so the badge must not claim a folder.
@@ -97,6 +106,7 @@ export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
   if (pair.includes("connector")) return "uses knowledge";
   if (pair.includes("figmaJson")) return "uses JSON";
   if (pair.includes("figmaImage")) return "uses image";
+  if (pair.includes("figmaView")) return "uses view";
   // Epic #750 #756 — a Figma edge means the QI hub will generate from the captured snapshot.
   if (pair.includes("figma")) {
     const figmaSide = a.type === "figma" ? a : b.type === "figma" ? b : null;
@@ -253,8 +263,11 @@ export function subText(type: WindowType, cfg: Record<string, unknown> | undefin
       return cfgString("root");
     case "browser":
       return cfgString("url");
-    case "editor":
-      return cfgString("file");
+    case "editor": {
+      const file = cfgString("file");
+      const root = cfgString("root");
+      return file !== null && root !== null ? `${file} — ${root}` : file;
+    }
     case "terminal":
       return cfgString("cwd");
     case "review": {
@@ -269,9 +282,11 @@ export function subText(type: WindowType, cfg: Record<string, unknown> | undefin
       return title !== null && title !== "New chat" ? title : null;
     }
     case "figma":
-      return cfgString("selectedScreenName") ?? cfgString("snapshotRunId");
+      return cfgString("selectedScreenName");
+    case "figmaView":
+      return cfgString("selectedScreenName");
     case "figmaJson":
-      return cfgString("selectedScreenName") ?? cfgString("screenId") ?? cfgString("snapshotRunId");
+      return cfgString("selectedScreenName") ?? cfgString("screenId");
     default:
       return null;
   }

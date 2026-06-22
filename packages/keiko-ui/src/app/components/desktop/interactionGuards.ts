@@ -35,7 +35,7 @@ export function isWindowDragPointer(event: {
   readonly button: number;
   readonly ctrlKey: boolean;
 }): boolean {
-  return isCanvasPanPointer(event);
+  return isPrimaryActivationPointer(event) || isMiddlePointerButton(event.button);
 }
 
 export function isInteractiveSurfaceTarget(target: EventTarget | null): boolean {
@@ -67,7 +67,6 @@ export function isInteractiveSurfaceTarget(target: EventTarget | null): boolean 
         ".ws-zoom",
         ".ws-fab",
         ".empty-workspace-blob",
-        ".ws-outline",
         ".conn-badge",
       ].join(","),
     ) !== null

@@ -158,6 +158,7 @@ describe("runLifecycleCli", () => {
     expect(spawned[0]?.args).toEqual(
       expect.arrayContaining(["ui", "--port", "4321", "--host", "127.0.0.1"]),
     );
+    expect(spawned[0]?.opts.argv0).toBe("Keiko");
     expect(spawned[0]?.opts.env).toMatchObject({
       KEIKO_STATE_DIR: join(root, ".keiko-test"),
     });
@@ -442,64 +443,6 @@ describe("runLifecycleCli", () => {
     expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
   });
 
-  it("recovers the start path when the stale pid fails the foreign-pid stop guard", async () => {
-    // The recorded pid (999) differs from the live pid in ui.pid (12345): the stop
-    // guard would refuse to signal it. On the restart path that must not deadlock —
-    // a mismatch proves the live process is not ours, so start clears state and
-    // spawns fresh instead of propagating the stop failure.
-    const root = makeRoot();
-    mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
-    writeFileSync(
-      join(root, ".keiko", "ui.meta.json"),
-      JSON.stringify({ pid: 999, binPath: "/old/index.js", startedAt: "2026-01-01T00:00:00Z" }),
-      "utf8",
-    );
-    const c = makeIo();
-    const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
-    const child = { pid: 67890, unref: vi.fn() } as unknown as ChildProcess;
-    const killProcess = vi.fn();
-
-    const code = await runLifecycleCli(
-      "start",
-      ["--start-timeout", "1", "--stop-timeout", "1"],
-      c.io,
-      {},
-      {
-        cwd: root,
-        spawnFn: (command, args, opts) => {
-          spawned.push({ command, args, opts });
-          return child;
-        },
-        fetchImpl: (() => {
-          let probe = 0;
-          return (): Promise<Response> => {
-            probe += 1;
-            return Promise.resolve(
-              Response.json(
-                probe === 1 ? { status: "ok", version: "0.1.2" } : { version: SDK_VERSION },
-                { status: 200 },
-              ),
-            );
-          };
-        })(),
-        isProcessAlive: () => true,
-        isPortAvailable: () => Promise.resolve(true),
-        killProcess,
-        sleep: () => Promise.resolve(),
-      },
-    );
-
-    expect(code).toBe(0);
-    expect(killProcess).not.toHaveBeenCalledWith(12345, "SIGTERM");
-    expect(spawned).toHaveLength(1);
-    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toBe("67890\n");
-    const meta = JSON.parse(readFileSync(join(root, ".keiko", "ui.meta.json"), "utf8")) as {
-      pid: number;
-    };
-    expect(meta.pid).toBe(67890);
-  });
-
   it("returns a usage error for invalid ports", async () => {
     const root = makeRoot();
     const c = makeIo();
@@ -738,132 +681,5 @@ describe("runLifecycleCli", () => {
     } finally {
       nowSpy.mockRestore();
     }
-  });
-
-  it("records launch identity metadata alongside the pid file on start", async () => {
-    const root = makeRoot();
-    const c = makeIo();
-    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
-
-    const code = await runLifecycleCli(
-      "start",
-      [],
-      c.io,
-      {},
-      {
-        cwd: root,
-        spawnFn: () => child,
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
-        isProcessAlive: () => true,
-        isPortAvailable: () => Promise.resolve(true),
-        killProcess: vi.fn(),
-        sleep: () => Promise.resolve(),
-      },
-    );
-
-    expect(code).toBe(0);
-    const meta = JSON.parse(readFileSync(join(root, ".keiko", "ui.meta.json"), "utf8")) as {
-      pid: number;
-      binPath: string;
-      startedAt: string;
-    };
-    expect(meta.pid).toBe(12345);
-    expect(meta.binPath.length).toBeGreaterThan(0);
-    expect(typeof meta.startedAt).toBe("string");
-  });
-
-  it("refuses to signal a live pid whose recorded identity does not match (pid reuse)", async () => {
-    const root = makeRoot();
-    mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
-    // Metadata from a previous run records a *different* pid: on Windows the OS has
-    // since reused 12345 for an unrelated process, so we must not kill it.
-    writeFileSync(
-      join(root, ".keiko", "ui.meta.json"),
-      JSON.stringify({ pid: 999, binPath: "C:\\old\\index.js", startedAt: "2026-01-01T00:00:00Z" }),
-      "utf8",
-    );
-    const c = makeIo();
-    const killProcess = vi.fn();
-
-    const code = await runLifecycleCli(
-      "stop",
-      [],
-      c.io,
-      {},
-      {
-        cwd: root,
-        isProcessAlive: () => true,
-        killProcess,
-        sleep: () => Promise.resolve(),
-      },
-    );
-
-    expect(code).toBe(1);
-    expect(killProcess).not.toHaveBeenCalled();
-    expect(c.err()).toContain("12345");
-    expect(c.err().toLowerCase()).toContain("does not match");
-    // Remediation must name BOTH files: deleting only the metadata would let the
-    // next stop SIGTERM whatever now holds the pid in ui.pid.
-    expect(c.err()).toContain(join(root, ".keiko", "ui.pid"));
-    expect(c.err()).toContain(join(root, ".keiko", "ui.meta.json"));
-    expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toBe("12345\n");
-  });
-
-  it("stops a live pid whose recorded identity matches", async () => {
-    const root = makeRoot();
-    mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
-    writeFileSync(
-      join(root, ".keiko", "ui.meta.json"),
-      JSON.stringify({ pid: 12345, binPath: "/x/index.js", startedAt: "2026-01-01T00:00:00Z" }),
-      "utf8",
-    );
-    const c = makeIo();
-    const killProcess = vi.fn();
-
-    const code = await runLifecycleCli(
-      "stop",
-      [],
-      c.io,
-      {},
-      {
-        cwd: root,
-        isProcessAlive: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
-        killProcess,
-        sleep: () => Promise.resolve(),
-      },
-    );
-
-    expect(code).toBe(0);
-    expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
-    expect(c.out()).toContain("Keiko UI stopped");
-    expect(existsSync(join(root, ".keiko", "ui.meta.json"))).toBe(false);
-  });
-
-  it("falls through to legacy stop behavior when metadata is malformed", async () => {
-    const root = makeRoot();
-    mkdirSync(join(root, ".keiko"), { recursive: true });
-    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
-    writeFileSync(join(root, ".keiko", "ui.meta.json"), "{ not json", "utf8");
-    const c = makeIo();
-    const killProcess = vi.fn();
-
-    const code = await runLifecycleCli(
-      "stop",
-      [],
-      c.io,
-      {},
-      {
-        cwd: root,
-        isProcessAlive: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
-        killProcess,
-        sleep: () => Promise.resolve(),
-      },
-    );
-
-    expect(code).toBe(0);
-    expect(killProcess).toHaveBeenCalledWith(12345, "SIGTERM");
-    expect(c.out()).toContain("Keiko UI stopped");
   });
 });

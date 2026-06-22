@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-local-knowledge",
-  "version": "0.2.0-beta.9",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -32,8 +32,9 @@
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "*",
     "@oscharko-dev/keiko-model-gateway": "*",
+    "@oscharko-dev/keiko-security": "*",
     "@oscharko-dev/keiko-workspace": "*",
-    "@types/yauzl": "^3.4.0",
+    "@types/yauzl": "^3.3.0",
     "pdfjs-dist": "^6.0.227",
     "yauzl": "^3.3.2"
   },

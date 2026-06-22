@@ -386,19 +386,6 @@ function streamingResponse(chunks: readonly string[], status = 200): Response {
   return new Response(stream, { status });
 }
 
-function responseWithNullBody(response: Response): Response {
-  return new Proxy(response, {
-    get(target: Response, prop: PropertyKey): unknown {
-      if (prop === "body") return null;
-      const value: unknown = Reflect.get(target, prop, target);
-      if (typeof value === "function") {
-        return (...args: unknown[]): unknown => Reflect.apply(value, target, args);
-      }
-      return value;
-    },
-  });
-}
-
 describe("readJsonCapped", () => {
   it("parses a small JSON body delivered in a single chunk", async () => {
     const response = streamingResponse(['{"hello":"world"}']);
@@ -424,10 +411,10 @@ describe("readJsonCapped", () => {
   });
 
   it("falls back to response.json() when body is null", async () => {
-    // Simulate an environment where Response.body is null while preserving the
-    // Undici/Node Response brand for methods such as json().
-    const inner = new Response(JSON.stringify({ fallback: true }), { status: 200 });
-    const nullBody = responseWithNullBody(inner);
+    // Simulate an environment where Response.body is null while preserving the native
+    // Response private slots that response.json() requires.
+    const nullBody = new Response(JSON.stringify({ fallback: true }), { status: 200 });
+    Object.defineProperty(nullBody, "body", { get: (): null => null });
     const result = await readJsonCapped(nullBody);
     expect(result).toEqual({ fallback: true });
   });

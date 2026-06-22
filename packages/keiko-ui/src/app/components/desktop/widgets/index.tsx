@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { ChatWindow } from "../ChatWindow";
@@ -7,6 +7,7 @@ import { useChatSession } from "../hooks/useChatSession";
 import { ProjectPanel } from "./panels/ProjectPanel";
 import { ChatHistoryPanel } from "./panels/ChatHistoryPanel";
 import { SearchPanel } from "./panels/SearchPanel";
+import { PromptEnhancerPanel } from "./panels/PromptEnhancerPanel";
 import { PluginsPanel } from "./panels/PluginsPanel";
 import { AutomationsPanel } from "./panels/AutomationsPanel";
 import { MobilePanel } from "./panels/MobilePanel";
@@ -38,6 +39,7 @@ import {
   connectedRunSourcesCfgFromSources,
   connectedRunSourcesFromWindowCfg,
 } from "./quality-intelligence/connectedSources";
+import type { ChatMessage } from "@/lib/types";
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
@@ -47,6 +49,15 @@ function str(cfg: Record<string, unknown>, key: string): string | undefined {
 function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   const v = cfg[key];
   return typeof v === "boolean" ? v : undefined;
+}
+
+function stringArray(cfg: Record<string, unknown>, key: string): readonly string[] | undefined {
+  const raw = cfg[key];
+  if (!Array.isArray(raw)) return undefined;
+  const values = raw
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+  return values.length > 0 ? values : undefined;
 }
 
 function stringArrayJson(cfg: Record<string, unknown>, key: string): readonly string[] {
@@ -119,7 +130,7 @@ function ChatWindowSessionHost({
   const chatId = str(cfg, "chatId");
   const title = str(cfg, "title");
   const { updateCfg } = ctx;
-  const { activeChat, chats, loading, openChat, openNewChat } = session;
+  const { activeChat, activeProject, chats, loading, openChat, openNewChat } = session;
   const activeTarget =
     activeChat !== undefined && activeChat.status !== "closed" ? activeChat : undefined;
 
@@ -142,12 +153,28 @@ function ChatWindowSessionHost({
       });
   }, [chatId, activeTarget?.id, chats, loading, openChat, openNewChat, title, updateCfg]);
 
+  useEffect(() => {
+    if (loading || chatId === undefined || activeTarget?.id !== chatId) return;
+    if (activeTarget.title !== title) updateCfg({ title: activeTarget.title });
+  }, [activeTarget?.id, activeTarget?.title, chatId, loading, title, updateCfg]);
+
   const targetMissing =
     chatId !== undefined &&
     !session.loading &&
     activeTarget?.id !== chatId &&
     !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
   const waitingForTarget = session.loading || (chatId !== undefined && activeTarget?.id !== chatId);
+  const openRunResult = useCallback(
+    (message: ChatMessage): void => {
+      if (message.runId === undefined) return;
+      const cfg: Record<string, string | number | boolean> = { runId: message.runId };
+      const workflow = message.workflowId ?? message.taskType;
+      if (workflow !== undefined) cfg.workflow = workflow;
+      if (activeProject?.path !== undefined) cfg.workspaceRoot = activeProject.path;
+      ctx.openWindow("agents", cfg);
+    },
+    [activeProject?.path, ctx],
+  );
 
   return (
     <ChatSessionProvider value={session}>
@@ -159,7 +186,16 @@ function ChatWindowSessionHost({
       ) : waitingForTarget ? (
         <div className="lk-loading">Opening chat...</div>
       ) : (
-        <ChatWindow mini={ctx.mini === true} linkedRoot={ctx.linkedRoot} />
+        <ChatWindow
+          mini={ctx.mini === true}
+          minimalChat={ctx.minimalChat === true}
+          compact={ctx.compact === true}
+          controlsNarrow={ctx.controlsNarrow === true}
+          barCompact={ctx.barCompact === true}
+          workflowCompact={ctx.workflowCompact === true}
+          linkedRoot={ctx.linkedRoot}
+          onOpenRunResult={openRunResult}
+        />
       )}
     </ChatSessionProvider>
   );
@@ -174,6 +210,7 @@ registerWindowRender("chatHistory", (_cfg, ctx) => (
   />
 ));
 registerWindowRender("project", () => <ProjectPanel />);
+registerWindowRender("promptEnhancer", () => <PromptEnhancerPanel />);
 registerWindowRender("search", () => <SearchPanel />);
 registerWindowRender("plugins", () => <PluginsPanel />);
 registerWindowRender("automations", () => <AutomationsPanel />);
@@ -266,7 +303,7 @@ registerWindowRender("files", (cfg, ctx) => {
     });
   };
   const onOpenFile = (fileRoot: string, path: string): void => {
-    ctx.openWindow("editor", { root: fileRoot, file: path });
+    ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] });
   };
   return root !== undefined ? (
     <FilesWidget
@@ -283,12 +320,42 @@ registerWindowRender("files", (cfg, ctx) => {
     />
   );
 });
-registerWindowRender("editor", (cfg) => {
+registerWindowRender("editor", (cfg, ctx) => {
   const root = str(cfg, "root");
   const file = str(cfg, "file");
-  const props: { root?: string; file?: string } = {};
+  const openFiles = stringArray(cfg, "openFiles");
+  const layoutJson = str(cfg, "layoutJson");
+  const props: {
+    root?: string;
+    file?: string;
+    openFiles?: readonly string[];
+    layoutJson?: string;
+    windowId?: string;
+    linkedRoot?: string | null;
+    linkedFilePath?: string | undefined;
+    linkedCapsuleIds?: readonly string[];
+    linkedCapsuleSetIds?: readonly string[];
+    onWorkspaceChange?:
+      | ((patch: {
+          root?: string | undefined;
+          file?: string | undefined;
+          openFiles?: readonly string[] | undefined;
+          layoutJson?: string | undefined;
+        }) => void)
+      | undefined;
+  } = {};
   if (root !== undefined) props.root = root;
   if (file !== undefined) props.file = file;
+  if (openFiles !== undefined) props.openFiles = openFiles;
+  if (layoutJson !== undefined) props.layoutJson = layoutJson;
+  props.linkedRoot = ctx.linkedRoot;
+  props.linkedFilePath = ctx.linkedFilePath;
+  props.linkedCapsuleIds = ctx.linkedCapsuleIds;
+  props.linkedCapsuleSetIds = ctx.linkedCapsuleSetIds;
+  props.windowId = ctx.windowId;
+  props.onWorkspaceChange = (patch) => {
+    ctx.updateCfg(patch);
+  };
   return <EditorWidget {...props} />;
 });
 registerWindowRender("browser", (cfg) => {
@@ -340,12 +407,29 @@ registerWindowRender("figma", (cfg, ctx) => {
       selectedScreenIds={selectedScreenIds}
       selectedScreenName={selectedScreenName}
       openScreenSource={({ snapshotRunId: runId, screenId, name }) => {
-        ctx.openWindow("figma", {
+        ctx.openWindow("figmaView", {
           snapshotRunId: runId,
           selectedScreenIdsJson: JSON.stringify([screenId]),
           selectedScreenName: name,
         });
       }}
+      updateCfg={(patch) => {
+        ctx.updateCfg(patch);
+      }}
+    />
+  );
+});
+
+registerWindowRender("figmaView", (cfg, ctx) => {
+  const snapshotRunId = str(cfg, "snapshotRunId");
+  const selectedScreenIds = stringArrayJson(cfg, "selectedScreenIdsJson");
+  const selectedScreenName = str(cfg, "selectedScreenName");
+  return (
+    <FigmaSnapshotWindow
+      sourceWindowId={ctx.windowId}
+      snapshotRunId={snapshotRunId}
+      selectedScreenIds={selectedScreenIds}
+      selectedScreenName={selectedScreenName}
       updateCfg={(patch) => {
         ctx.updateCfg(patch);
       }}

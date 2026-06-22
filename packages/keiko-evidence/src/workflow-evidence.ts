@@ -55,6 +55,12 @@ export interface WorkflowEventLike {
   readonly type: string;
 }
 
+interface WorkflowManifestOptions {
+  readonly governedHandoff?: EvidenceManifest["governedHandoff"];
+  readonly includeDiff?: boolean | undefined;
+  readonly redactString?: ((value: string) => string) | undefined;
+}
+
 const KIND_TO_TASK_TYPE: Readonly<Record<WorkflowRunKind, TaskType>> = {
   "unit-tests": "generate-unit-tests",
   "bug-investigation": "investigate-bug",
@@ -95,8 +101,11 @@ export function buildWorkflowManifest(
   events: readonly WorkflowEventLike[],
   report: unknown,
   costClassResolver?: (modelId: string) => CostClass | "unknown",
-  options: { readonly governedHandoff?: EvidenceManifest["governedHandoff"] } = {},
+  options: WorkflowManifestOptions = {},
 ): EvidenceManifest {
+  if (options.includeDiff === true && options.redactString === undefined) {
+    throw new Error("Workflow evidence includeDiff requires a redactor.");
+  }
   return {
     evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
     run: {
@@ -121,7 +130,7 @@ export function buildWorkflowManifest(
     toolCalls: [],
     commandExecutions: [],
     verification: verificationOf(report),
-    patch: patchOf(report),
+    patch: patchOf(report, options),
     failure: undefined,
     ...(options.governedHandoff === undefined ? {} : { governedHandoff: options.governedHandoff }),
   };
@@ -149,10 +158,13 @@ export function persistWorkflowEvidence(
   report: unknown,
   events: readonly WorkflowEventLike[],
   ctx: EvidencePersistContext,
-  options: { readonly governedHandoff?: EvidenceManifest["governedHandoff"] } = {},
+  options: WorkflowManifestOptions = {},
 ): EvidenceReport {
-  const manifest = buildWorkflowManifest(identity, events, report, ctx.costClassResolver, options);
   const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
+  const manifest = buildWorkflowManifest(identity, events, report, ctx.costClassResolver, {
+    ...options,
+    redactString: redactor,
+  });
   const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
   const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
   return buildEvidenceReport(redacted, location);
@@ -177,9 +189,10 @@ function verifiedVerificationOf(report: Record<string, unknown>): unknown {
   return isRecord(verified) ? verified.verification : undefined;
 }
 
-// Builds patch metadata (counts/bytes only, never the raw diff) from a workflow report. unit-tests
-// reports carry `addedTestFiles`; bug-investigation reports carry `changedFiles`.
-function patchOf(report: unknown): EvidenceManifest["patch"] {
+// Builds patch metadata from a workflow report. unit-tests reports carry `addedTestFiles`;
+// bug-investigation reports carry `changedFiles`. The diff is opt-in and must be redacted before it
+// is attached to the manifest.
+function patchOf(report: unknown, options: WorkflowManifestOptions): EvidenceManifest["patch"] {
   if (!isRecord(report)) {
     return undefined;
   }
@@ -197,6 +210,9 @@ function patchOf(report: unknown): EvidenceManifest["patch"] {
     changedFiles,
     created: 0,
     deleted: 0,
+    ...(options.includeDiff === true && typeof proposedDiff === "string" && proposedDiff.length > 0
+      ? { redactedDiff: options.redactString?.(proposedDiff) }
+      : {}),
   };
 }
 

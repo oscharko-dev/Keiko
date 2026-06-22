@@ -7,6 +7,8 @@ const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
 const FIXTURE_ROOT = "tests/architecture/fixtures";
 
 const PROVIDER_SDK_PATTERN = /^(openai($|\/)|@anthropic-ai\/|[^/]+-ai-sdk($|\/))/;
+const LOCAL_KNOWLEDGE_EGRESS_PATTERN =
+  /^(fetch$|node:(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|undici($|\/)|node-fetch($|\/)|axios($|\/)|got($|\/)|tesseract\.js($|\/)|@google-cloud\/vision($|\/)|@aws-sdk\/client-textract($|\/)|libreoffice-convert($|\/)|pdf-poppler($|\/)|sharp($|\/))/;
 const CONTROLLED_TOOLS_FS_ADAPTER_PATTERN =
   /^packages\/keiko-tools\/src\/(_support|exec|writer)\.[cm]?tsx?$/;
 
@@ -38,6 +40,14 @@ const IMPORT_POLICY_RULES = [
         : /^(packages\/keiko-(harness|workflows)\/src\/|src\/(harness|workflows)\/)/.test(path),
     matchesSpecifier: (specifier) =>
       specifier === "node:fs/promises" || specifier === "fs/promises",
+  },
+  {
+    name: "adr-0019-trust-9-local-knowledge-no-egress",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/local-knowledge-no-egress/`)
+        : path.startsWith("packages/keiko-local-knowledge/src/"),
+    matchesSpecifier: (specifier) => LOCAL_KNOWLEDGE_EGRESS_PATTERN.test(specifier),
   },
 ];
 
@@ -133,6 +143,9 @@ function importTypeEntry(node) {
 
 function callExpressionEntry(node) {
   if (!ts.isCallExpression(node)) return undefined;
+  if (ts.isIdentifier(node.expression) && node.expression.text === "fetch") {
+    return { node: node.expression, specifier: "fetch" };
+  }
   const [firstArg] = node.arguments;
   if (!firstArg || !isStringLiteralLike(firstArg)) return undefined;
   if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {

@@ -92,6 +92,14 @@ function hasDeniedFlag(rule: CommandRule, args: readonly string[]): boolean {
   });
 }
 
+function hasRequiredLeadingFlags(rule: CommandRule, args: readonly string[]): boolean {
+  const required = rule.requiredLeadingFlags;
+  if (required === undefined || required.length === 0) {
+    return true;
+  }
+  return required.every((flag, index) => args[index] === flag);
+}
+
 function checkAllowlistMode(
   rule: CommandRule,
   allowed: readonly string[],
@@ -125,6 +133,9 @@ function checkDenylistMode(rule: CommandRule, sub: string | undefined): CommandD
 function checkSubcommand(rule: CommandRule, args: readonly string[]): CommandDecision {
   if (hasDeniedFlag(rule, args)) {
     return { allowed: false, reason: `denied flag for ${rule.executable}` };
+  }
+  if (!hasRequiredLeadingFlags(rule, args)) {
+    return { allowed: false, reason: `missing required leading flag for ${rule.executable}` };
   }
   const sub = resolveSubcommand(rule, args);
   if (rule.allowedSubcommands !== undefined) {

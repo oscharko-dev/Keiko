@@ -1,0 +1,38 @@
+{
+  "issue": 1294,
+  "baseRef": "ba113ac373ebf1114af7de217b07935036adba08",
+  "totalProbes": 1106,
+  "diffCount": 0,
+  "missingSelectors": [],
+  "byMode": {
+    "01-dark": {
+      "probes": 158,
+      "diffs": 0
+    },
+    "02-light": {
+      "probes": 158,
+      "diffs": 0
+    },
+    "03-dark-hc": {
+      "probes": 158,
+      "diffs": 0
+    },
+    "04-light-hc": {
+      "probes": 158,
+      "diffs": 0
+    },
+    "05-prefers-contrast": {
+      "probes": 158,
+      "diffs": 0
+    },
+    "06-forced-colors": {
+      "probes": 158,
+      "diffs": 0
+    },
+    "07-reduced-motion": {
+      "probes": 158,
+      "diffs": 0
+    }
+  },
+  "diffs": []
+}

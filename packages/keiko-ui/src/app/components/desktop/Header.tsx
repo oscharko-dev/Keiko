@@ -38,32 +38,9 @@ export function Header({
       <div className="hd-tools">
         <button
           type="button"
-          className="hd-tool hd-tool-cta"
-          onClick={openPalette}
-          title="New window — press Ctrl/⌘K for all commands"
-        >
-          <Icons.add size={16} />
-          <span>New</span>
-        </button>
-        {/* uiux-fix F039 C223 — clickable ⌘K chip (reuses the shared .kbd optic from the
-            CommandPalette) so the palette has a discoverable on-screen entry point. */}
-        <button
-          type="button"
-          className="hd-tool hd-tool-kbd"
-          onClick={openCommandPalette}
-          title="Open the command palette (Ctrl/⌘K)"
-          aria-label="Open the command palette (Ctrl/⌘K)"
-        >
-          <span className="kbd" aria-hidden="true">
-            ⌘K
-          </span>
-        </button>
-        <span className="hd-div" />
-        <button
-          type="button"
-          className="hd-tool"
+          className="hd-tool ui-tip"
           onClick={onTileAll}
-          title="Tile all windows"
+          data-tip="Tile all windows"
           aria-label="Tile all windows"
         >
           <Icons.tile size={16} />
@@ -72,18 +49,18 @@ export function Header({
             windows") so the action is recognizable across tooltip and palette. */}
         <button
           type="button"
-          className="hd-tool"
+          className="hd-tool ui-tip"
           onClick={onSplitFront}
-          title="Split front windows"
+          data-tip="Split front windows"
           aria-label="Split front windows"
         >
           <Icons.split size={16} />
         </button>
         <button
           type="button"
-          className="hd-tool"
+          className="hd-tool ui-tip"
           onClick={onCascade}
-          title="Cascade windows"
+          data-tip="Cascade windows"
           aria-label="Cascade windows"
         >
           <Icons.cascade size={16} />

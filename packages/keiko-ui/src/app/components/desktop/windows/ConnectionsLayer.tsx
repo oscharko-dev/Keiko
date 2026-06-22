@@ -17,7 +17,7 @@ interface ConnectionsLayerProps {
 
 type FlowIntensity = "light" | "heavy";
 
-interface ResolvedConn {
+export interface ResolvedConn {
   readonly c: Connection;
   readonly d: string;
   readonly mid: { readonly x: number; readonly y: number };
@@ -77,6 +77,44 @@ function resolveConnections(
     out.push({ c, d: p.d, mid: p.mid, label: relLabel(a, b), dataChannel: isDataChannel(a, b) });
   }
   return out;
+}
+
+interface Rect {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
+function windowRect(win: AppWindow): Rect {
+  return { left: win.x, top: win.y, right: win.x + win.w, bottom: win.y + win.h };
+}
+
+function rectsIntersect(a: Rect, b: Rect): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function estimatedBadgeRect(item: ResolvedConn, active: boolean): Rect {
+  const label = item.label;
+  const textWidth = Math.min(240, Math.max(40, label.length * 7.2));
+  const chromeWidth = 44 + (active ? 18 : 0);
+  const width = textWidth + chromeWidth;
+  const height = 26;
+  return {
+    left: item.mid.x - width / 2,
+    right: item.mid.x + width / 2,
+    top: item.mid.y - height / 2,
+    bottom: item.mid.y + height / 2,
+  };
+}
+
+export function shouldRenderConnectionBadge(
+  item: ResolvedConn,
+  wins: readonly AppWindow[],
+  active = false,
+): boolean {
+  const badge = estimatedBadgeRect(item, active);
+  return !wins.some((win) => win.minimized !== true && rectsIntersect(badge, windowRect(win)));
 }
 
 // Heavy vs light data exchange, derived from the last grounded answer. The clearest proxy for "how
@@ -305,6 +343,7 @@ export function ConnectionsLayer({
       <div className="conn-badge-layer">
         {items.map((it) => {
           const active = flowing && it.dataChannel;
+          if (!shouldRenderConnectionBadge(it, wins, active)) return null;
           const armed = armedId === it.c.id;
           const metadataLabel = connectionMetadataLabel(it);
           return (

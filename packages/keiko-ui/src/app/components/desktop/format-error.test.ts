@@ -15,6 +15,12 @@ describe("formatUserError", () => {
     );
   });
 
+  it("turns bare gateway timeout codes into an actionable chat error", () => {
+    expect(formatUserError(new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503), "Retry")).toBe(
+      "The model gateway timed out before the model returned a response. (GATEWAY_TIMEOUT)",
+    );
+  });
+
   it("does not expose raw unknown values to alert regions", () => {
     expect(formatUserError({ code: "INTERNAL" }, "Something went wrong")).toBe(
       "Something went wrong",
@@ -56,6 +62,21 @@ describe("formatUserError", () => {
       code: "CLARIFICATION_NEEDED",
       remediation:
         "Nenne eine konkrete Datei, einen Identifier, eine Fehlermeldung oder eine exakte Phrase.",
+    });
+  });
+
+  it("adds gateway timeout title and remediation for structured notices", () => {
+    const notice = toUserErrorNotice(
+      new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503),
+      "Could not send message.",
+    );
+
+    expect(notice).toEqual({
+      title: "Model gateway timed out",
+      message: "The model gateway timed out before the model returned a response.",
+      code: "GATEWAY_TIMEOUT",
+      remediation:
+        "Retry the request. If it repeats, choose a smaller prompt or another configured model, then check the gateway base URL, proxy, and model deployment availability in Settings.",
     });
   });
 

@@ -32,6 +32,12 @@ The default port is `1983`. Override it with `KEIKO_UI_PORT` or `keiko start --p
 
 The UI runs on loopback only. The `--host` option can validate a loopback host value; the server always binds `127.0.0.1`.
 
+Keiko sets the runtime process title and supported child-process launch metadata to `Keiko`.
+On Windows, npm-based launches still execute through Node.js, so Task Manager surfaces that use
+the executable image name can continue to show `node.exe` until Keiko ships a native Windows
+launcher executable. Process-manager surfaces that read the process title or original argv label
+should show `Keiko`.
+
 ## First-Run Setup
 
 When Keiko has no model gateway configuration, Settings asks for:

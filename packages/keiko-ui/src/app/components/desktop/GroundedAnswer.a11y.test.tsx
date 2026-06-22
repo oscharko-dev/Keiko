@@ -22,6 +22,10 @@ const OMITTED_COUNTS_ZERO = {
   "redacted-only": 0,
   "budget-exhausted": 0,
   "tool-unavailable": 0,
+  "unsupported-format": 0,
+  "no-text-layer": 0,
+  "malformed-document": 0,
+  "encrypted-document": 0,
 } as const;
 
 function contextPack(): GroundedAnswerContextPackSummary {
@@ -71,10 +75,11 @@ function answer(): GroundedAnswerType {
         stableId: "atom-a",
       },
       {
-        scopePath: "src/bar.ts",
-        lineRange: undefined,
+        scopePath: "docs/report.docx",
+        lineRange: { startLine: 1, endLine: 3 },
         score: 0.4,
         stableId: "atom-b",
+        documentFormat: "docx",
       },
     ],
     uncertainty: [{ kind: "no-evidence", claim: "excerpt unavailable" }],
@@ -89,5 +94,20 @@ describe("GroundedAnswer a11y", () => {
     const { container } = render(<GroundedAnswer answer={answer()} busy={false} />);
     const results = await axe(container);
     expect(results).toHaveNoViolations();
+  });
+
+  // Issue #1296 — citation chips now consume the --ai-source-* component tokens (which
+  // adapt per theme). The migration touches no JSX/ARIA, so axe re-verifies the structural
+  // contract on the Light acceptance surface (jsdom axe does not compute colour contrast —
+  // that is delegated to the browser evidence harness).
+  it("jest-axe: stays violation-free under Light theme after the #1296 token migration", async () => {
+    document.documentElement.setAttribute("data-theme", "light");
+    try {
+      const { container } = render(<GroundedAnswer answer={answer()} busy={false} />);
+      const results = await axe(container);
+      expect(results).toHaveNoViolations();
+    } finally {
+      document.documentElement.removeAttribute("data-theme");
+    }
   });
 });

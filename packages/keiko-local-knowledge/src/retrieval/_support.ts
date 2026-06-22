@@ -172,6 +172,7 @@ function seedRows(store: KnowledgeStore, options: SeedVectorsOptions, seed: Reso
   });
   insertParsedUnitRow(
     store._internal.db,
+    store._internal.contentCipher,
     seed.capsuleId,
     // Unit ids must be globally unique (parsed_units.id is the PK; the composite
     // UNIQUE (capsule_id, id) is a *secondary* constraint), so we namespace by capsule id.

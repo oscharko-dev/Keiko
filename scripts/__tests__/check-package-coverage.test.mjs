@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -251,5 +251,19 @@ describe("check-package-coverage", () => {
         strict: false,
       })[0],
     ).toMatchObject({ status: "ratcheted", passes: true, floor: 72.25 });
+  });
+
+  it("enrolls keiko-editor in the committed coverage baseline", () => {
+    const baseline = JSON.parse(
+      readFileSync("docs/qa/package-coverage-baseline.json", "utf8"),
+    );
+
+    expect(baseline.packages["keiko-editor"]).toMatchObject({
+      files: 4,
+      coverage: {
+        lines: 100,
+        branches: 100,
+      },
+    });
   });
 });

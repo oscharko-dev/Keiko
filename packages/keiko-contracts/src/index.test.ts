@@ -50,6 +50,10 @@ import {
   KNOWLEDGE_CAPSULE_TABLES,
   KNOWLEDGE_CAPSULE_INDEX_NAMES,
   DELETE_CAPSULE_SQL,
+  INFILLING_ALIGNMENTS,
+  modelSupportsInfilling,
+  isAlignedInfillingModel,
+  isAsYouTypeCompletionModel,
   validateCapsuleRowShape,
   redactPathInDiagnostic,
 } from "./index.js";
@@ -115,6 +119,11 @@ import type {
   CapsuleRowShape,
   RedactPathOptions,
   SelectedScope,
+  ModelCapability,
+  InfillingAlignment,
+  CompletionInteractionMode,
+  CompletionDegradeReason,
+  CompletionModelSelection,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
@@ -198,6 +207,47 @@ describe("keiko-contracts package surface", () => {
     pin<ExpectedCheck>();
   });
 
+  it("FIM completion value re-exports are reachable through the barrel (#1210)", () => {
+    const fastAligned: ModelCapability = {
+      id: "fast-instruct",
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "low",
+      latencyClass: "fast",
+      throughputHint: "test",
+      preferredUseCases: ["completion"],
+      knownLimitations: [],
+      supportsInfilling: true,
+      infillingAlignment: "instruct",
+    };
+    const fastBase: ModelCapability = {
+      ...fastAligned,
+      id: "fast-base",
+      infillingAlignment: "base",
+    };
+
+    expect(INFILLING_ALIGNMENTS).toEqual(["base", "instruct", "edit-tuned"]);
+    expect(modelSupportsInfilling(fastAligned)).toBe(true);
+    expect(isAlignedInfillingModel(fastAligned)).toBe(true);
+    expect(isAlignedInfillingModel(fastBase)).toBe(false);
+    expect(isAsYouTypeCompletionModel(fastAligned)).toBe(true);
+  });
+
+  it("FIM completion type re-exports are reachable through the barrel (#1210)", () => {
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<InfillingAlignment>();
+    pin<CompletionInteractionMode>();
+    pin<CompletionDegradeReason>();
+    pin<CompletionModelSelection>();
+  });
+
   it("local-knowledge value re-exports are reachable through the barrel (#191)", () => {
     expect(LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("1");
     expect(EMBEDDING_VECTOR_METRICS).toContain("cosine");
@@ -269,7 +319,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(10);
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(13);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
@@ -279,6 +329,7 @@ describe("keiko-contracts package surface", () => {
     expect(KNOWLEDGE_CAPSULE_TABLES).toContain("vectors");
     expect(KNOWLEDGE_CAPSULE_INDEXES.length).toBeGreaterThan(0);
     expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_vectors_capsule_identity");
+    expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_sections_document_section_path_hash");
     expect(KNOWLEDGE_CAPSULE_MIGRATIONS[0]?.version).toBe(1);
     expect(DELETE_CAPSULE_SQL).toContain("DELETE FROM capsules");
     expect(typeof validateCapsuleRowShape).toBe("function");

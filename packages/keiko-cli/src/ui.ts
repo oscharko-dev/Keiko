@@ -12,18 +12,20 @@
 // code. Injected-test invocations skip the guard entirely.
 
 import type { Server } from "node:http";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, unwatchFile, watchFile } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
 import {
+  buildCspHeader,
   createUiServer,
-  loadCspHeader,
   buildUiHandlerDeps,
   DEFAULT_UI_PORT,
   UI_HOST,
   UiStoreError,
+  extractInlineScriptHashes,
   type UiHandlerDeps,
 } from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -31,6 +33,7 @@ import { resolvePreferredInstallLayout } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
+const KEIKO_PROCESS_TITLE = "Keiko";
 const SQLITE_FLAG = "--experimental-sqlite";
 // Deliberately a closed allowlist: repo-local .env discovery must not import KEIKO_*
 // runtime configuration because the UI may be launched from an untrusted project root.
@@ -87,11 +90,62 @@ export interface UiCliDeps {
   readonly cwd?: string | undefined;
 }
 
+interface LiveCspSource {
+  readonly csp: () => string;
+  readonly dispose: () => void;
+}
+
+interface CspMaterial {
+  readonly hashes: readonly string[];
+  readonly header: string;
+}
+
 export type SpawnFn = (
   command: string,
   args: readonly string[],
   opts: SpawnOptions,
 ) => ChildProcess;
+
+async function collectHtmlFiles(dir: string): Promise<readonly string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await collectHtmlFiles(full)));
+      continue;
+    }
+    if (entry.name.endsWith(".html")) {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+function parseHashList(raw: string): readonly string[] {
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((entry): entry is string => typeof entry === "string");
+}
+
+async function loadCspMaterial(staticRoot: string, hashesFile: string): Promise<CspMaterial> {
+  const htmlFiles = await collectHtmlFiles(staticRoot);
+  const documents = await Promise.all(htmlFiles.map((file) => readFile(file, "utf8")));
+  const runtimeHashes = extractInlineScriptHashes(documents);
+  try {
+    const raw = await readFile(hashesFile, "utf8");
+    const storedHashes = parseHashList(raw);
+    if (
+      storedHashes.length === runtimeHashes.length &&
+      storedHashes.every((hash, index) => hash === runtimeHashes[index])
+    ) {
+      return { hashes: storedHashes, header: buildCspHeader(storedHashes) };
+    }
+  } catch {
+    // Fall back to the runtime export-derived hashes below.
+  }
+  return { hashes: runtimeHashes, header: buildCspHeader(runtimeHashes) };
+}
 
 function parsePort(raw: string): number | null {
   if (!/^\d{1,5}$/.test(raw)) {
@@ -314,7 +368,10 @@ export async function reExecWithSqliteFlag(
   const entry = resolvePreferredInstallLayout(cwd)?.binPath ?? process.argv[1];
   if (entry === undefined) return 1;
   const childArgs: string[] = [SQLITE_FLAG, ...process.execArgv, entry, ...process.argv.slice(2)];
-  const child = spawnFn(process.execPath, childArgs, { stdio: "inherit" });
+  const child = spawnFn(process.execPath, childArgs, {
+    argv0: KEIKO_PROCESS_TITLE,
+    stdio: "inherit",
+  });
   const forwardSigint = (): void => {
     child.kill("SIGINT");
   };
@@ -439,6 +496,49 @@ async function startUiServer(
   await maybeWaitForShutdown(server, deps);
 }
 
+export async function createLiveCspSource(
+  staticRoot: string,
+  hashesFile: string,
+  io: CliIo,
+): Promise<LiveCspSource> {
+  let current = (await loadCspMaterial(staticRoot, hashesFile)).header;
+  let reloading = false;
+  let disposed = false;
+  let warned = false;
+
+  const reload = async (): Promise<void> => {
+    if (reloading || disposed) return;
+    reloading = true;
+    try {
+      current = (await loadCspMaterial(staticRoot, hashesFile)).header;
+      warned = false;
+    } catch (error) {
+      if (!warned) {
+        const message = error instanceof Error ? error.message : String(error);
+        io.err(`Warning: failed to reload CSP hashes from ${hashesFile}: ${message}\n`);
+        warned = true;
+      }
+    } finally {
+      reloading = false;
+    }
+  };
+
+  // Issue #1214 follow-up: when the UI process starts while build:ui is still writing the static
+  // export and `csp-hashes.json`, a one-shot CSP read can freeze a stale policy into the process.
+  // Watching the hash file keeps fresh page loads aligned with the latest exported inline scripts.
+  watchFile(hashesFile, { interval: 500 }, () => {
+    void reload();
+  });
+
+  return {
+    csp: () => current,
+    dispose: (): void => {
+      disposed = true;
+      unwatchFile(hashesFile);
+    },
+  };
+}
+
 export async function runUiCli(
   args: readonly string[],
   io: CliIo,
@@ -455,7 +555,11 @@ export async function runUiCli(
   if (!ensureStaticRoot(staticRoot, io)) {
     return 1;
   }
-  const csp = await loadCspHeader(deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json"));
+  const cspRuntime = await createLiveCspSource(
+    staticRoot,
+    deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json"),
+    io,
+  );
   const handlerDeps = buildHandlerDepsOrReport(
     parsed,
     cwd,
@@ -465,6 +569,10 @@ export async function runUiCli(
   if (typeof handlerDeps === "number") return handlerDeps;
   const launchProjectResult = registerLaunchProjectOrReport(cwd, handlerDeps, io);
   if (launchProjectResult !== null) return launchProjectResult;
-  await startUiServer(staticRoot, csp, parsed, handlerDeps, io, deps);
-  return 0;
+  try {
+    await startUiServer(staticRoot, cspRuntime.csp(), parsed, handlerDeps, io, deps);
+    return 0;
+  } finally {
+    cspRuntime.dispose();
+  }
 }

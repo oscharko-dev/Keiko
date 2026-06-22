@@ -210,6 +210,15 @@ describe("BudgetIndicator", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("uses compact labels for constrained composer layouts", () => {
+    render(<BudgetIndicator budget={makeBudget()} onClearHistory={vi.fn()} compact />);
+    expect(screen.getByText("Context: 500 / 10.0k")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Clear conversation history for next prompt" }),
+    ).toHaveTextContent("Clear");
+    expect(screen.queryByText(/Approximate context:/)).toBeNull();
+  });
+
   // uiux-fix F010 (C321): the approximate-tokens hint must be keyboard-reachable —
   // the icon is focusable and carries the data-tip text revealed on focus via CSS.
   it("exposes the approximate-tokens hint to keyboard users (focusable data-tip icon)", () => {
@@ -618,6 +627,10 @@ describe("useChatSession budget accounts for connected context (#151 GAP-D)", ()
           "redacted-only": 0,
           "budget-exhausted": 0,
           "tool-unavailable": 0,
+          "unsupported-format": 0,
+          "no-text-layer": 0,
+          "malformed-document": 0,
+          "encrypted-document": 0,
         },
         uncertaintyCount: 0,
         elapsedMs: 100,

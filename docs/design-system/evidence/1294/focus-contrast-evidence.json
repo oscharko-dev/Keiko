@@ -1,0 +1,431 @@
+{
+  "issue": 1294,
+  "generatedBy": "docs/design-system/evidence/1294/reference-comparison.mjs",
+  "viewport": {
+    "width": 1440,
+    "height": 1220,
+    "deviceScaleFactor": 2
+  },
+  "modes": {
+    "01-dark": {
+      "label": "Dark",
+      "observations": {
+        "default": {
+          "selector": "#prod-default",
+          "color": "oklch(0.74 0.004 160)",
+          "backgroundColor": "oklch(0.235 0.004 160)",
+          "borderColor": "oklch(0.3 0.004 160)",
+          "outlineColor": "oklch(0.74 0.004 160)",
+          "focusRing": "rgb(78, 186, 135)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.17 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.18,
+          "focusRingContrastRatio": null
+        },
+        "hover": {
+          "selector": "#prod-hover",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.18 0.005 160)",
+          "focusRing": "rgb(78, 186, 135)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.17 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": null
+        },
+        "focus": {
+          "selector": "#prod-focus",
+          "color": "rgb(78, 186, 135)",
+          "backgroundColor": "oklch(0.282729 0.0161417 160.009)",
+          "borderColor": "oklch(0.456671 0.0501383 160.035)",
+          "outlineColor": "rgb(78, 186, 135)",
+          "focusRing": "rgb(78, 186, 135)",
+          "focusRingApplicable": true,
+          "pageBackgroundColor": "oklch(0.17 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 5.95,
+          "focusRingContrastRatio": 7.91
+        },
+        "primaryFocus": {
+          "selector": "#prod-primary-focus",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "rgb(78, 186, 135)",
+          "focusRing": "rgb(78, 186, 135)",
+          "focusRingApplicable": true,
+          "pageBackgroundColor": "oklch(0.17 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": 7.91
+        },
+        "active": {
+          "selector": "#prod-active",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.18 0.005 160)",
+          "focusRing": "rgb(78, 186, 135)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.17 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": null
+        },
+        "selected": {
+          "selector": "#prod-selected",
+          "color": "oklch(0.64 0.004 160)",
+          "backgroundColor": "oklch(0.17 0.004 160)",
+          "borderColor": "oklch(0.64 0.004 160)",
+          "outlineColor": "oklch(0.64 0.004 160)",
+          "focusRing": "rgb(78, 186, 135)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.17 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 5.7,
+          "focusRingContrastRatio": null
+        },
+        "disabled": {
+          "selector": "#prod-disabled",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.18 0.005 160)",
+          "focusRing": "rgb(78, 186, 135)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.17 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": null
+        },
+        "loading": {
+          "selector": "#prod-loading",
+          "color": "oklch(0.74 0.004 160)",
+          "backgroundColor": "oklch(0.17 0.004 160)",
+          "borderColor": "oklch(0.74 0.004 160)",
+          "outlineColor": "oklch(0.74 0.004 160)",
+          "focusRing": "rgb(78, 186, 135)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.17 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 8.27,
+          "focusRingContrastRatio": null
+        },
+        "error": {
+          "selector": "#prod-error",
+          "color": "oklch(0.97 0.003 160)",
+          "backgroundColor": "oklch(0.68 0.16 25 / 0.12)",
+          "borderColor": "oklch(0.68 0.16 25 / 0.38)",
+          "outlineColor": "oklch(0.97 0.003 160)",
+          "focusRing": "rgb(78, 186, 135)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.17 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 15.31,
+          "focusRingContrastRatio": null
+        },
+        "errorDismissFocus": {
+          "selector": "#prod-error-close",
+          "color": "oklch(0.74 0.004 160)",
+          "backgroundColor": "oklch(0.17 0.004 160)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.74 0.004 160)",
+          "focusRing": "rgb(78, 186, 135)",
+          "focusRingApplicable": true,
+          "pageBackgroundColor": "oklch(0.17 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 8.27,
+          "focusRingContrastRatio": 7.91
+        }
+      },
+      "notes": [
+        "Reference and product markup are isolated in iframes to avoid CSS cross-contamination.",
+        "Hover and focus observations are driven through Playwright before computed-style capture.",
+        "Loading and active are representative static states because no app runtime is launched by this artifact generator."
+      ]
+    },
+    "02-light": {
+      "label": "Light",
+      "observations": {
+        "default": {
+          "selector": "#prod-default",
+          "color": "oklch(0.42 0.011 160)",
+          "backgroundColor": "oklch(1 0 0)",
+          "borderColor": "oklch(0.88 0.006 160)",
+          "outlineColor": "oklch(0.42 0.011 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 8.42,
+          "focusRingContrastRatio": null
+        },
+        "hover": {
+          "selector": "#prod-hover",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.18 0.005 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": null
+        },
+        "focus": {
+          "selector": "#prod-focus",
+          "color": "oklch(0.48 0.13 160)",
+          "backgroundColor": "oklch(0.971229 0.0125417 16.0091)",
+          "borderColor": "oklch(0.816271 0.0513783 160.035)",
+          "outlineColor": "oklch(0.48 0.13 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": true,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 5.44,
+          "focusRingContrastRatio": 5.23
+        },
+        "primaryFocus": {
+          "selector": "#prod-primary-focus",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.48 0.13 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": true,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": 5.23
+        },
+        "active": {
+          "selector": "#prod-active",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.18 0.005 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": null
+        },
+        "selected": {
+          "selector": "#prod-selected",
+          "color": "oklch(0.52 0.01 160)",
+          "backgroundColor": "oklch(0.955 0.004 160)",
+          "borderColor": "oklch(0.52 0.01 160)",
+          "outlineColor": "oklch(0.52 0.01 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 4.81,
+          "focusRingContrastRatio": null
+        },
+        "disabled": {
+          "selector": "#prod-disabled",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.18 0.005 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": null
+        },
+        "loading": {
+          "selector": "#prod-loading",
+          "color": "oklch(0.42 0.011 160)",
+          "backgroundColor": "oklch(0.955 0.004 160)",
+          "borderColor": "oklch(0.42 0.011 160)",
+          "outlineColor": "oklch(0.42 0.011 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.4,
+          "focusRingContrastRatio": null
+        },
+        "error": {
+          "selector": "#prod-error",
+          "color": "oklch(0.26 0.012 160)",
+          "backgroundColor": "oklch(0.5 0.18 25 / 0.12)",
+          "borderColor": "oklch(0.5 0.18 25 / 0.38)",
+          "outlineColor": "oklch(0.26 0.012 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 11.2,
+          "focusRingContrastRatio": null
+        },
+        "errorDismissFocus": {
+          "selector": "#prod-error-close",
+          "color": "oklch(0.42 0.011 160)",
+          "backgroundColor": "oklch(0.955 0.004 160)",
+          "borderColor": "oklch(0.48 0.13 160)",
+          "outlineColor": "oklch(0.48 0.13 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": true,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.4,
+          "focusRingContrastRatio": 5.23
+        }
+      },
+      "notes": [
+        "Reference and product markup are isolated in iframes to avoid CSS cross-contamination.",
+        "Hover and focus observations are driven through Playwright before computed-style capture.",
+        "Loading and active are representative static states because no app runtime is launched by this artifact generator."
+      ]
+    },
+    "03-light-hc": {
+      "label": "Light High Contrast",
+      "observations": {
+        "default": {
+          "selector": "#prod-default",
+          "color": "oklch(0.42 0.011 160)",
+          "backgroundColor": "oklch(1 0 0)",
+          "borderColor": "oklch(0.88 0.006 160)",
+          "outlineColor": "oklch(0.42 0.011 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 8.42,
+          "focusRingContrastRatio": null
+        },
+        "hover": {
+          "selector": "#prod-hover",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.18 0.005 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": null
+        },
+        "focus": {
+          "selector": "#prod-focus",
+          "color": "oklch(0.48 0.13 160)",
+          "backgroundColor": "oklch(0.971229 0.0125417 16.0091)",
+          "borderColor": "oklch(0.816271 0.0513783 160.035)",
+          "outlineColor": "oklch(0.48 0.13 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": true,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 5.44,
+          "focusRingContrastRatio": 5.23
+        },
+        "primaryFocus": {
+          "selector": "#prod-primary-focus",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.48 0.13 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": true,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": 5.23
+        },
+        "active": {
+          "selector": "#prod-active",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.18 0.005 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": null
+        },
+        "selected": {
+          "selector": "#prod-selected",
+          "color": "oklch(0.52 0.01 160)",
+          "backgroundColor": "oklch(0.955 0.004 160)",
+          "borderColor": "oklch(0.52 0.01 160)",
+          "outlineColor": "oklch(0.52 0.01 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 4.81,
+          "focusRingContrastRatio": null
+        },
+        "disabled": {
+          "selector": "#prod-disabled",
+          "color": "oklch(0.18 0.005 160)",
+          "backgroundColor": "rgb(78, 186, 135)",
+          "borderColor": "rgb(78, 186, 135)",
+          "outlineColor": "oklch(0.18 0.005 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.79,
+          "focusRingContrastRatio": null
+        },
+        "loading": {
+          "selector": "#prod-loading",
+          "color": "oklch(0.42 0.011 160)",
+          "backgroundColor": "oklch(0.955 0.004 160)",
+          "borderColor": "oklch(0.42 0.011 160)",
+          "outlineColor": "oklch(0.42 0.011 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.4,
+          "focusRingContrastRatio": null
+        },
+        "error": {
+          "selector": "#prod-error",
+          "color": "oklch(0.26 0.012 160)",
+          "backgroundColor": "oklch(0.5 0.18 25 / 0.12)",
+          "borderColor": "oklch(0.5 0.18 25 / 0.38)",
+          "outlineColor": "oklch(0.26 0.012 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": false,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 11.2,
+          "focusRingContrastRatio": null
+        },
+        "errorDismissFocus": {
+          "selector": "#prod-error-close",
+          "color": "oklch(0.42 0.011 160)",
+          "backgroundColor": "oklch(0.955 0.004 160)",
+          "borderColor": "oklch(0.48 0.13 160)",
+          "outlineColor": "oklch(0.48 0.13 160)",
+          "focusRing": "oklch(0.48 0.13 160)",
+          "focusRingApplicable": true,
+          "pageBackgroundColor": "oklch(0.955 0.004 160)",
+          "textPresent": true,
+          "contrastRatio": 7.4,
+          "focusRingContrastRatio": 5.23
+        }
+      },
+      "notes": [
+        "Reference and product markup are isolated in iframes to avoid CSS cross-contamination.",
+        "Hover and focus observations are driven through Playwright before computed-style capture.",
+        "Loading and active are representative static states because no app runtime is launched by this artifact generator."
+      ]
+    }
+  }
+}

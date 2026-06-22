@@ -1,18 +1,40 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import type { AppWindow } from "../windows/types";
 
-type UpdateCfg = (patch: Record<string, string | number | boolean | undefined>) => void;
+type UpdateCfg = (patch: AppWindow["cfg"]) => void;
 
 vi.mock("../ChatWindow", () => ({
   ChatWindow: ({
     mini,
     linkedRoot,
+    onOpenRunResult,
   }: {
     readonly mini?: boolean;
     readonly linkedRoot?: string | null;
-  }) => <div data-testid="chat-window">{`${String(mini)}:${linkedRoot ?? ""}`}</div>,
+    readonly onOpenRunResult?: (message: {
+      readonly runId: string;
+      readonly workflowId: string;
+      readonly taskType?: string | undefined;
+    }) => void;
+  }) => (
+    <div data-testid="chat-window">
+      {`${String(mini)}:${linkedRoot ?? ""}`}
+      <button
+        type="button"
+        onClick={() =>
+          onOpenRunResult?.({
+            runId: "run-chat",
+            workflowId: "unit-test-generation",
+          })
+        }
+      >
+        Open chat run
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("../context/ChatSessionContext", () => ({
@@ -22,6 +44,7 @@ vi.mock("../context/ChatSessionContext", () => ({
 vi.mock("../hooks/useChatSession", () => ({
   useChatSession: () => ({
     activeChat: { id: "chat-1", title: "Chat 1", status: "open" },
+    activeProject: { path: "/repo" },
     chats: [{ id: "chat-1", title: "Chat 1", status: "open" }],
     loading: false,
     openChat: vi.fn(),
@@ -87,8 +110,48 @@ vi.mock("./cards/FilesWidget", () => ({
   ),
 }));
 vi.mock("./cards/EditorWidget", () => ({
-  EditorWidget: ({ root, file }: { readonly root?: string; readonly file?: string }) => (
-    <div data-testid="editor-widget">{`${root ?? ""}:${file ?? ""}`}</div>
+  EditorWidget: ({
+    root,
+    file,
+    linkedRoot,
+    linkedFilePath,
+    linkedCapsuleIds,
+    linkedCapsuleSetIds,
+    openFiles,
+    layoutJson,
+    onWorkspaceChange,
+  }: {
+    readonly root?: string;
+    readonly file?: string;
+    readonly openFiles?: readonly string[];
+    readonly layoutJson?: string;
+    readonly linkedRoot?: string | null;
+    readonly linkedFilePath?: string;
+    readonly linkedCapsuleIds?: readonly string[];
+    readonly linkedCapsuleSetIds?: readonly string[];
+    readonly onWorkspaceChange?: (patch: {
+      root?: string;
+      file?: string;
+      openFiles?: readonly string[];
+      layoutJson?: string;
+    }) => void;
+  }) => (
+    <div data-testid="editor-widget">
+      <span>{`${root ?? ""}:${file ?? ""}:${(openFiles ?? []).join("|")}:${layoutJson ?? ""}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}:${(linkedCapsuleIds ?? []).join(",")}:${(linkedCapsuleSetIds ?? []).join(",")}`}</span>
+      <button
+        type="button"
+        onClick={() =>
+          onWorkspaceChange?.({
+            root: "/next-root",
+            file: "README.md",
+            openFiles: ["README.md"],
+            layoutJson: '{"version":1}',
+          })
+        }
+      >
+        Change editor workspace
+      </button>
+    </div>
   ),
 }));
 vi.mock("./cards/BrowserWidget", () => ({
@@ -171,7 +234,7 @@ vi.mock("./figma/FigmaSnapshotWindow", () => ({
     readonly snapshotRunId?: string;
     readonly selectedScreenIds?: readonly string[];
     readonly sourceWindowId?: string;
-    readonly updateCfg: (patch: Record<string, string>) => void;
+    readonly updateCfg: (patch: AppWindow["cfg"]) => void;
     readonly openScreenSource?: (input: {
       readonly snapshotRunId: string;
       readonly screenId: string;
@@ -295,6 +358,15 @@ function makeCtx(): WindowRenderContext & {
 }
 
 describe("workspace widget renderer registry", () => {
+  it("syncs an open chat window title when the active chat is renamed", async () => {
+    const ctx = makeCtx();
+    render(<>{WIN_TYPES.chat.render({ chatId: "chat-1", title: "Old title" }, ctx)}</>);
+
+    await waitFor(() => {
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1" });
+    });
+  });
+
   it("maps window cfg into widget props and follow-up workspace actions", () => {
     const ctx = makeCtx();
     const view = render(<>{WIN_TYPES.files.render({ root: "/repo" }, ctx)}</>);
@@ -314,7 +386,11 @@ describe("workspace widget renderer registry", () => {
       resolvedRoot: undefined,
     });
     fireEvent.click(screen.getByRole("button", { name: "Open file" }));
-    expect(ctx.openWindow).toHaveBeenCalledWith("editor", { root: "/repo", file: "src/app.ts" });
+    expect(ctx.openWindow).toHaveBeenCalledWith("editor", {
+      root: "/repo",
+      file: "src/app.ts",
+      openFiles: ["src/app.ts"],
+    });
 
     view.rerender(<>{WIN_TYPES.review.render({}, ctx)}</>);
     fireEvent.click(screen.getByTestId("review-widget"));
@@ -322,13 +398,25 @@ describe("workspace widget renderer registry", () => {
 
     view.rerender(
       <>
-        {WIN_TYPES.editor.render({ root: "/repo", file: "src/app.ts" }, ctx)}
+        {WIN_TYPES.editor.render(
+          { root: "/repo", file: "src/app.ts", openFiles: ["src/app.ts", "package.json"] },
+          ctx,
+        )}
         {WIN_TYPES.browser.render({ url: "https://example.test" }, ctx)}
         {WIN_TYPES.terminal.render({ cwd: "/repo", projectPath: "/repo" }, ctx)}
         {WIN_TYPES.agents.render({ workflow: "verify", access: "full", keikoMode: true }, ctx)}
       </>,
     );
-    expect(screen.getByTestId("editor-widget")).toHaveTextContent("/repo:src/app.ts");
+    expect(screen.getByTestId("editor-widget")).toHaveTextContent(
+      "/repo:src/app.ts:src/app.ts|package.json::/repo:src/app.ts:cap-1:set-1",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Change editor workspace" }));
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      root: "/next-root",
+      file: "README.md",
+      openFiles: ["README.md"],
+      layoutJson: '{"version":1}',
+    });
     expect(screen.getByTestId("browser-widget")).toHaveTextContent("https://example.test");
     expect(screen.getByTestId("terminal-widget")).toHaveTextContent("/repo:/repo");
     expect(screen.getByTestId("agent-widget")).toHaveTextContent("verify:/repo:src/app.ts");
@@ -369,7 +457,7 @@ describe("workspace widget renderer registry", () => {
     fireEvent.click(screen.getByTestId("figma-window"));
     expect(ctx.updateCfg).toHaveBeenCalledWith({ snapshotRunId: "fs-2" });
     fireEvent.click(screen.getByRole("button", { name: "Add screen source" }));
-    expect(ctx.openWindow).toHaveBeenCalledWith("figma", {
+    expect(ctx.openWindow).toHaveBeenCalledWith("figmaView", {
       snapshotRunId: "fs-1",
       selectedScreenIdsJson: JSON.stringify(["screen-1"]),
       selectedScreenName: "Screen 1",
@@ -378,6 +466,20 @@ describe("workspace widget renderer registry", () => {
     view.rerender(
       <>
         {WIN_TYPES.figma.render(
+          {
+            snapshotRunId: "fs-1",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Screen 1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+    expect(screen.getByTestId("figma-window")).toHaveTextContent("ctx-window:fs-1:screen-1");
+
+    view.rerender(
+      <>
+        {WIN_TYPES.figmaView.render(
           {
             snapshotRunId: "fs-1",
             selectedScreenIdsJson: JSON.stringify(["screen-1"]),
@@ -426,6 +528,12 @@ describe("workspace widget renderer registry", () => {
       </>,
     );
     expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Open chat run" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("agents", {
+      runId: "run-chat",
+      workflow: "unit-test-generation",
+      workspaceRoot: "/repo",
+    });
     expect(screen.getByTestId("connector-graph")).toHaveTextContent("false");
     expect(screen.getByText("RelationshipsView")).toBeInTheDocument();
   });

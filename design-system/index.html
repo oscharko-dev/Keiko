@@ -7,43 +7,18 @@
     <script>
       try {
         var t = localStorage.getItem("keiko-ds-theme");
-        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more";
       } catch (e) { document.documentElement.dataset.theme = "dark"; }
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="ds.css" />
   </head>
   <body class="ds">
     <a class="skip-link" href="#main">Skip to content</a>
-    <nav class="nav" aria-label="Design system">
-      <a class="nav-brand" href="index.html">
-        <img src="assets/keiko-logo.svg" alt="Keiko logo" />
-        <span><span class="bt">Keiko</span><span class="bs">Design System</span></span>
-      </a>
-      <div class="nav-label">Overview</div>
-      <a class="nav-item on" href="index.html" aria-current="page"><span class="ni-dot"></span>Start here</a>
-      <div class="nav-label">Guidelines</div>
-      <a class="nav-item done" href="foundations.html"><span class="ni-dot"></span>Foundations</a>
-      <a class="nav-item done" href="Keiko Icon System.html"><span class="ni-dot"></span>Icons · Lift</a>
-      <a class="nav-item" href="components.html"><span class="ni-dot"></span>Components</a>
-      <a class="nav-item" href="messages.html"><span class="ni-dot"></span>Messages &amp; Feedback</a>
-      <a class="nav-item" href="patterns.html"><span class="ni-dot"></span>Patterns</a>
-      <a class="nav-item" href="motion.html"><span class="ni-dot"></span>Motion</a>
-      <a class="nav-item" href="accessibility.html"><span class="ni-dot"></span>Accessibility</a>
-      <a class="nav-item" href="content.html"><span class="ni-dot"></span>Content &amp; Voice</a>
-      <button class="theme-toggle" type="button" onclick="dsToggleTheme()" aria-label="Toggle colour theme">
-        <span class="ti">
-          <svg class="ti-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 13.5 A8 8 0 1 1 10.5 4.2 a6.5 6.5 0 0 0 9.3 9.1" /></svg>
-          <svg class="ti-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5 V5 M12 19 V21.5 M2.5 12 H5 M19 12 H21.5 M5.1 5.1 L6.9 6.9 M17.1 17.1 l1.8 1.8 M18.9 5.1 L17.1 6.9 M6.9 17.1 L5.1 18.9" /></svg>
-        </span>
-        <span class="tspace">Theme</span>
-        <span data-theme-label>Dark</span>
-      </button>
-      <div class="nav-foot">Keiko · v0.2.0</div>
-    </nav>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
 
     <main class="main" id="main">
       <header class="phero">
@@ -77,7 +52,7 @@
         <div class="sec-head">
           <div class="num">CONTENTS</div>
           <h2>The system</h2>
-          <p>Two areas are ready to review. The rest land in the same visual language, area by area.</p>
+          <p>The system has grown from a handful of families to a near-complete library — components, AI surfaces, data, navigation and the patterns that assemble them. Pick any area.</p>
         </div>
         <div class="hub">
           <a class="hub-card card" href="foundations.html">
@@ -104,6 +79,70 @@
             </div>
             <p>Buttons, inputs, toggles, tabs, cards/windows, rails, composer, tree, badges, toasts.</p>
           </a>
+          <a class="hub-card card" href="inputs.html">
+            <div class="hc-top">
+              <span class="hc-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="17" height="5" rx="2" /><path d="M6.5 16.5 h7" /><circle cx="17" cy="16.5" r="2" /></svg></span>
+              <h3>Inputs &amp; Forms</h3>
+              <span class="status ready">Ready</span>
+            </div>
+            <p>Checkbox, radio, slider, stepper, combobox, tag input, file upload, date field.</p>
+          </a>
+          <a class="hub-card card" href="nav-components.html">
+            <div class="hc-top">
+              <span class="hc-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6 h8 M4 12 h16 M4 18 h11" /><path d="M17 5 l3 1 -3 1" /></svg></span>
+              <h3>Navigation</h3>
+              <span class="status ready">Ready</span>
+            </div>
+            <p>Breadcrumbs, underline tabs, pagination, context menu, back, step indicator.</p>
+          </a>
+          <a class="hub-card card" href="data-grid.html">
+            <div class="hc-top">
+              <span class="hc-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><path d="M3.5 9.5 H20.5 M3.5 14.5 H20.5 M9 4.5 V19.5" /></svg></span>
+              <h3>Table &amp; Data Grid</h3>
+              <span class="status ready">Ready</span>
+            </div>
+            <p>Sortable headers, selection, sticky header, density, loading &amp; empty states.</p>
+          </a>
+          <a class="hub-card card" href="ai-components.html">
+            <div class="hc-top">
+              <span class="hc-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L13.7 8.3 L19 10 L13.7 11.7 L12 17 L10.3 11.7 L5 10 L10.3 8.3 Z" /></svg></span>
+              <h3>AI &amp; Agent</h3>
+              <span class="status ready">Ready</span>
+            </div>
+            <p>Thinking, streaming, tool calls, citations, confidence, permission, confirm.</p>
+          </a>
+          <a class="hub-card card" href="states.html">
+            <div class="hc-top">
+              <span class="hc-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="3" /><circle cx="17" cy="7" r="3" /><circle cx="7" cy="17" r="3" /><circle cx="17" cy="17" r="3" /></svg></span>
+              <h3>States</h3>
+              <span class="status ready">Ready</span>
+            </div>
+            <p>The eleven-state vocabulary, live proof in three modes, applicability matrix.</p>
+          </a>
+          <a class="hub-card card" href="dataviz.html">
+            <div class="hc-top">
+              <span class="hc-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 V10 M10 20 V5 M16 20 V13 M22 20 H3" /></svg></span>
+              <h3>Data Visualisation</h3>
+              <span class="status ready">Ready</span>
+            </div>
+            <p>Categorical &amp; sequential palette, grouped/stacked multi-series, tooltip rules, uncertainty encoding.</p>
+          </a>
+          <a class="hub-card card" href="flows.html">
+            <div class="hc-top">
+              <span class="hc-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="7" height="6" rx="1.5" /><rect x="13.5" y="13" width="7" height="6" rx="1.5" /><path d="M7 11 v3 a2 2 0 0 0 2 2 h4.5" /></svg></span>
+              <h3>Flows</h3>
+              <span class="status ready">Ready</span>
+            </div>
+            <p>Auth, first-run onboarding, settings and a multi-step form — components assembled.</p>
+          </a>
+          <a class="hub-card card" href="governance.html">
+            <div class="hc-top">
+              <span class="hc-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L19 6 V11 c0 5 -3.5 8 -7 10 c-3.5 -2 -7 -5 -7 -10 V6 Z" /><path d="M9 11.5 l2 2 4 -4" /></svg></span>
+              <h3>Governance &amp; Docs</h3>
+              <span class="status ready">Ready</span>
+            </div>
+            <p>Component register, the per-component doc template, contribution rules, changelog.</p>
+          </a>
           <a class="hub-card card" href="messages.html">
             <div class="hc-top">
               <span class="hc-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12.85 6.2 L20 18.6 H4 L11.15 6.2" /><path d="M12 9.9 V13.7" /><path d="M12 16.4 h.01" /></svg></span>
@@ -111,6 +150,14 @@
               <span class="status ready">Ready</span>
             </div>
             <p>Error, warning, info &amp; success — inline messages, banners, toasts and field validation.</p>
+          </a>
+          <a class="hub-card card" href="editor-theme.html">
+            <div class="hc-top">
+              <span class="hc-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 9 L5 12 L8.5 15" /><path d="M15.5 9 L19 12 L15.5 15" /><path d="M13.2 6.5 L10.8 17.5" /></svg></span>
+              <h3>Editor Theme</h3>
+              <span class="status ready">Ready</span>
+            </div>
+            <p>Syntax palette, editor chrome, diff, diagnostics &amp; ghost text — dark, light &amp; high-contrast, mapped to Monaco.</p>
           </a>
           <a class="hub-card card" href="patterns.html">
             <div class="hc-top">
@@ -148,19 +195,7 @@
       </section>
     </main>
 
-    <script>
-      function dsSyncToggle() {
-        var l = document.documentElement.dataset.theme === "light";
-        document.querySelectorAll("[data-theme-label]").forEach(function (e) { e.textContent = l ? "Light" : "Dark"; });
-      }
-      function dsToggleTheme() {
-        var h = document.documentElement;
-        var n = h.dataset.theme === "light" ? "dark" : "light";
-        h.dataset.theme = n;
-        try { localStorage.setItem("keiko-ds-theme", n); } catch (e) {}
-        dsSyncToggle();
-      }
-      dsSyncToggle();
-    </script>
-  </body>
+    
+      <script src="theme-control.js"></script>
+</body>
 </html>

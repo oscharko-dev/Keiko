@@ -1,0 +1,274 @@
+import { describe, expect, it } from "vitest";
+import {
+  EDITOR_LAYOUT_SCHEMA_VERSION,
+  activeEditorPane,
+  createEditorLayoutStateV2,
+  editorLayoutOpenFiles,
+  editorLayoutPaneIds,
+  editorLayoutPanes,
+  editorLayoutReducer,
+  serializeEditorLayoutStateV2,
+  type CreateEditorLayoutStateV2Input,
+  type EditorLayoutStateV2,
+} from "./editor-layout.js";
+
+const DEFAULT_INPUT: CreateEditorLayoutStateV2Input = {
+  root: "/repo",
+  file: "src/a.ts",
+  openFiles: ["src/a.ts", "src/b.ts"],
+  defaultSidebarWidth: 260,
+  minSidebarWidth: 180,
+  maxSidebarWidth: 440,
+};
+
+function layout(overrides: Partial<CreateEditorLayoutStateV2Input> = {}): EditorLayoutStateV2 {
+  return createEditorLayoutStateV2({ ...DEFAULT_INPUT, ...overrides });
+}
+
+describe("EditorLayoutStateV2 contracts", () => {
+  it("creates and serializes a fresh single-pane layout with stable tab order", () => {
+    const created = layout({
+      file: "",
+      openFiles: ["src/b.ts", "src/b.ts", "", "src/a.ts"],
+    });
+
+    expect(created).toEqual(
+      expect.objectContaining({
+        schemaVersion: EDITOR_LAYOUT_SCHEMA_VERSION,
+        root: "/repo",
+        activePaneId: "pane-1",
+        sidebarWidth: 260,
+        sidebarCollapsed: false,
+      }),
+    );
+    expect(created.tree).toEqual({ type: "pane", paneId: "pane-1" });
+    expect(created.panes["pane-1"]).toEqual({
+      id: "pane-1",
+      openFiles: ["src/b.ts", "src/a.ts"],
+      activeFile: "src/b.ts",
+      tabOrder: ["src/b.ts", "src/a.ts"],
+    });
+    expect(JSON.parse(serializeEditorLayoutStateV2({ ...created, sidebarWidth: 260.6 }))).toEqual(
+      expect.objectContaining({
+        schemaVersion: EDITOR_LAYOUT_SCHEMA_VERSION,
+        sidebarWidth: 261,
+      }),
+    );
+  });
+
+  it("normalizes persisted V2 layout state and clamps unsafe persisted values", () => {
+    const restored = layout({
+      layoutJson: JSON.stringify({
+        schemaVersion: "2",
+        root: "/old",
+        activePaneId: "missing-pane",
+        tree: {
+          type: "split",
+          id: "",
+          direction: "diagonal",
+          ratio: 120,
+          first: { type: "pane", paneId: "pane-a" },
+          second: { type: "pane", paneId: "pane-b" },
+        },
+        panes: {
+          "pane-a": {
+            id: "",
+            activeFile: "src/a.ts",
+            openFiles: ["src/a.ts", "src/a.ts"],
+            tabOrder: ["src/b.ts", "src/a.ts", "src/b.ts"],
+          },
+          "pane-b": { file: "src/c.ts", openFiles: ["src/c.ts"] },
+          ignored: { activeFile: "", openFiles: [] },
+        },
+        sidebarWidth: 999,
+        sidebarCollapsed: true,
+      }),
+    });
+
+    expect(restored.root).toBe("/repo");
+    expect(restored.activePaneId).toBe("pane-a");
+    expect(restored.sidebarWidth).toBe(440);
+    expect(restored.sidebarCollapsed).toBe(true);
+    expect(restored.tree).toEqual({
+      type: "split",
+      id: "split-1",
+      direction: "row",
+      ratio: 85,
+      first: { type: "pane", paneId: "pane-a" },
+      second: { type: "pane", paneId: "pane-b" },
+    });
+    expect(Object.keys(restored.panes)).toEqual(["pane-a", "pane-b"]);
+    expect(restored.panes["pane-a"]?.tabOrder).toEqual(["src/b.ts", "src/a.ts"]);
+  });
+
+  it("migrates legacy V1 layout state and falls back cleanly from invalid persistence", () => {
+    const migrated = layout({
+      layoutJson: JSON.stringify({
+        version: 1,
+        panes: [{ file: "src/legacy.ts", openFiles: ["src/legacy.ts"] }],
+        activePaneId: "missing",
+        direction: "column",
+        splitRatio: Number.NaN,
+        sidebarWidth: 120,
+        sidebarCollapsed: true,
+      }),
+    });
+
+    expect(migrated.tree).toEqual({ type: "pane", paneId: "pane-1" });
+    expect(migrated.activePaneId).toBe("pane-1");
+    expect(migrated.sidebarWidth).toBe(180);
+    expect(migrated.sidebarCollapsed).toBe(true);
+    expect(migrated.panes["pane-1"]?.activeFile).toBe("src/legacy.ts");
+
+    const fallback = layout({ layoutJson: "{not-json" });
+    expect(fallback.tree).toEqual({ type: "pane", paneId: "pane-1" });
+    expect(fallback.panes["pane-1"]?.openFiles).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  it("handles pane file actions and no-op pane ids without losing active state", () => {
+    const base = layout();
+
+    expect(editorLayoutReducer(base, { type: "open-file", paneId: "missing", file: "x.ts" })).toBe(
+      base,
+    );
+    const opened = editorLayoutReducer(base, {
+      type: "open-file",
+      paneId: "pane-1",
+      file: "src/c.ts",
+    });
+    expect(opened.panes["pane-1"]?.openFiles).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+    expect(opened.panes["pane-1"]?.activeFile).toBe("src/c.ts");
+
+    const selected = editorLayoutReducer(opened, {
+      type: "select-file",
+      paneId: "pane-1",
+      file: "src/a.ts",
+    });
+    expect(selected.activePaneId).toBe("pane-1");
+    expect(selected.panes["pane-1"]?.activeFile).toBe("src/a.ts");
+
+    const selectedMissingFile = editorLayoutReducer(selected, {
+      type: "select-file",
+      paneId: "pane-1",
+      file: "src/missing.ts",
+    });
+    expect(selectedMissingFile.panes["pane-1"]?.activeFile).toBe("src/a.ts");
+    expect(editorLayoutReducer(selected, { type: "set-active-pane", paneId: "missing" })).toBe(
+      selected,
+    );
+    expect(editorLayoutReducer(selected, { type: "close-tab", paneId: "pane-1", file: "none" })).toBe(
+      selected,
+    );
+  });
+
+  it("splits, moves, drops, resizes, and collapses recursive panes", () => {
+    const split = editorLayoutReducer(layout(), {
+      type: "split-pane",
+      paneId: "pane-1",
+      direction: "row",
+      file: "src/a.ts",
+    });
+    expect(editorLayoutPaneIds(split)).toEqual(["pane-1", "pane-2"]);
+    expect(activeEditorPane(split).id).toBe("pane-2");
+
+    const moved = editorLayoutReducer(split, {
+      type: "move-tab",
+      fromPaneId: "pane-1",
+      toPaneId: "pane-2",
+      file: "src/b.ts",
+      targetIndex: 0,
+    });
+    expect(moved.panes["pane-1"]?.openFiles).toEqual(["src/a.ts"]);
+    expect(moved.panes["pane-2"]?.openFiles).toEqual(["src/b.ts", "src/a.ts"]);
+    expect(editorLayoutOpenFiles(moved)).toEqual(["src/a.ts", "src/b.ts"]);
+
+    const droppedLeft = editorLayoutReducer(moved, {
+      type: "drop-tab",
+      intent: {
+        fromPaneId: "pane-2",
+        toPaneId: "pane-2",
+        file: "src/b.ts",
+        zone: "left",
+      },
+    });
+    expect(editorLayoutPaneIds(droppedLeft)).toEqual(["pane-1", "pane-3", "pane-2"]);
+    expect(droppedLeft.tree).toMatchObject({
+      type: "split",
+      first: { type: "pane", paneId: "pane-1" },
+      second: {
+        type: "split",
+        direction: "row",
+        first: { type: "pane", paneId: "pane-3" },
+        second: { type: "pane", paneId: "pane-2" },
+      },
+    });
+
+    const nestedSplit = droppedLeft.tree.type === "split" ? droppedLeft.tree.second : null;
+    expect(nestedSplit).toMatchObject({ type: "split" });
+    const resized =
+      nestedSplit !== null && nestedSplit.type === "split"
+        ? editorLayoutReducer(droppedLeft, {
+            type: "resize-split",
+            splitId: nestedSplit.id,
+            ratio: 5,
+          })
+        : droppedLeft;
+    const resizedNested = resized.tree.type === "split" ? resized.tree.second : null;
+    expect(resizedNested).toMatchObject({ type: "split", ratio: 15 });
+
+    const collapsed = editorLayoutReducer(
+      editorLayoutReducer(resized, { type: "close-pane", paneId: "pane-3" }),
+      { type: "close-pane", paneId: "pane-2" },
+    );
+    expect(editorLayoutPaneIds(collapsed)).toEqual(["pane-1"]);
+    expect(collapsed.tree).toEqual({ type: "pane", paneId: "pane-1" });
+  });
+
+  it("keeps empty and missing structural actions safe", () => {
+    const empty = layout({ file: "", openFiles: [] });
+    expect(activeEditorPane(empty)).toEqual({
+      id: "pane-1",
+      openFiles: [],
+      activeFile: "",
+      tabOrder: [],
+    });
+    expect(editorLayoutPanes(empty)).toEqual([empty.panes["pane-1"]]);
+    expect(editorLayoutReducer(empty, { type: "split-pane", paneId: "pane-1", direction: "row" })).toBe(
+      empty,
+    );
+    expect(editorLayoutReducer(empty, { type: "close-pane", paneId: "pane-1" })).toBe(empty);
+
+    const base = layout();
+    expect(
+      editorLayoutReducer(base, {
+        type: "move-tab",
+        fromPaneId: "pane-1",
+        toPaneId: "missing",
+        file: "src/a.ts",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        tree: { type: "pane", paneId: "pane-1" },
+        activePaneId: "pane-1",
+      }),
+    );
+    expect(editorLayoutReducer(base, { type: "split-pane", paneId: "missing", direction: "row" })).toBe(
+      base,
+    );
+    expect(
+      editorLayoutReducer(base, {
+        type: "set-sidebar",
+        width: 320,
+        collapsed: true,
+      }),
+    ).toEqual(expect.objectContaining({ sidebarWidth: 320, sidebarCollapsed: true }));
+    expect(editorLayoutReducer(base, { type: "replace-root", root: "/next" })).toEqual(
+      expect.objectContaining({
+        root: "/next",
+        activePaneId: "pane-1",
+        sidebarWidth: base.sidebarWidth,
+        sidebarCollapsed: false,
+      }),
+    );
+  });
+});

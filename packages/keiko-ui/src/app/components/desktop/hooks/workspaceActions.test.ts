@@ -905,6 +905,25 @@ describe("linkedFigmaSnapshotRunIds (Epic #750 #756)", () => {
     expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-abc"]);
   });
 
+  it("does not expose scoped Figma View cards through the legacy whole-snapshot run-id fallback", () => {
+    const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win(
+          "figmaView",
+          {
+            snapshotRunId: "fig-view",
+            selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+            selectedScreenName: "Login mask",
+          },
+          "fig-view-1",
+        ),
+      ],
+      [conn("quality", "fig-view-1")],
+    );
+    expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
+  });
+
   it("works when the quality window is on the b-side of the connection", () => {
     const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
       [win("quality", {}, "quality"), win("figma", { snapshotRunId: "fig-xyz" }, "fig-1")],
@@ -958,7 +977,7 @@ describe("linkedFigmaSnapshotRunIds (Epic #750 #756)", () => {
     expect(linkedFigmaSnapshotRunIds("quality")).toEqual([]);
   });
 
-  it("deduplicates the same snapshotRunId from two figma windows", () => {
+  it("deduplicates the same snapshotRunId from two whole-snapshot Figma windows", () => {
     const { linkedFigmaSnapshotRunIds } = makeConnectHarness(
       [
         win("quality", {}, "quality"),
@@ -970,7 +989,7 @@ describe("linkedFigmaSnapshotRunIds (Epic #750 #756)", () => {
     expect(linkedFigmaSnapshotRunIds("quality")).toEqual(["fig-dup"]);
   });
 
-  it("caps the snapshot list at MAX_SCOPES when more than 16 figma windows are bound", () => {
+  it("caps the snapshot list at MAX_SCOPES when more than 16 whole-snapshot Figma windows are bound", () => {
     // Mirrors the capsule reader cap: without this an off-by-one regression in the
     // `ids.length >= MAX_SCOPES` break would let 17+ figma sources through to Generate.
     const figmas = Array.from({ length: 20 }, (_unused, i) =>
@@ -991,7 +1010,7 @@ describe("linkedFigmaSnapshotSources — scoped screen sources", () => {
       [
         win("quality", {}, "quality"),
         win(
-          "figma",
+          "figmaView",
           {
             snapshotRunId: "fig-abc",
             selectedScreenIdsJson: JSON.stringify(["screen-1"]),
@@ -1045,7 +1064,7 @@ describe("linkedFigmaSnapshotSources — scoped screen sources", () => {
         win("quality", {}, "quality"),
         win("figma", { snapshotRunId: "fig-abc" }, "fig-whole"),
         win(
-          "figma",
+          "figmaView",
           {
             snapshotRunId: "fig-abc",
             selectedScreenIdsJson: JSON.stringify(["screen-1"]),
@@ -1067,7 +1086,7 @@ describe("linkedFigmaSnapshotSources — scoped screen sources", () => {
     ]);
   });
 
-  it("drops a scoped figma window whose selected-screen cfg is malformed (fail-safe — never widens to the whole board)", () => {
+  it("drops a scoped Figma View card whose selected-screen cfg is malformed (fail-safe — never widens to the whole board)", () => {
     // A window opened via "Add to workspace" is SCOPED (it carries selectedScreenName and a
     // selectedScreenIdsJson key). When that JSON is corrupt the scope cannot be resolved, so the
     // window must contribute NOTHING rather than silently degrading to a whole-snapshot ingestion —
@@ -1078,7 +1097,7 @@ describe("linkedFigmaSnapshotSources — scoped screen sources", () => {
       [
         win("quality", {}, "quality"),
         win(
-          "figma",
+          "figmaView",
           {
             snapshotRunId: "fig-abc",
             selectedScreenIdsJson: "{not-json",
@@ -1104,14 +1123,14 @@ describe("linkedFigmaSnapshotSources — scoped screen sources", () => {
     ]);
   });
 
-  it("drops a scoped figma window whose selectedScreenIdsJson was lost on reload (name kept, ids gone)", () => {
+  it("drops a scoped Figma View card whose selectedScreenIdsJson was lost on reload (name kept, ids gone)", () => {
     // Persistence drops an over-cap/invalid selectedScreenIdsJson but keeps selectedScreenName. On
     // reload such a window is still a SCOPED window with an unresolvable scope → it must contribute
     // nothing, never the whole board.
     const { linkedFigmaSnapshotSources } = makeConnectHarness(
       [
         win("quality", {}, "quality"),
-        win("figma", { snapshotRunId: "fig-abc", selectedScreenName: "Login mask" }, "fig-1"),
+        win("figmaView", { snapshotRunId: "fig-abc", selectedScreenName: "Login mask" }, "fig-1"),
       ],
       [conn("quality", "fig-1")],
     );
@@ -1123,7 +1142,7 @@ describe("linkedFigmaSnapshotSources — scoped screen sources", () => {
       [
         win("quality", {}, "quality"),
         win(
-          "figma",
+          "figmaView",
           {
             snapshotRunId: "fig-abc",
             selectedScreenIdsJson: JSON.stringify(["screen-2", "screen-1"]),
@@ -1132,7 +1151,7 @@ describe("linkedFigmaSnapshotSources — scoped screen sources", () => {
           "fig-1",
         ),
         win(
-          "figma",
+          "figmaView",
           {
             snapshotRunId: "fig-abc",
             selectedScreenIdsJson: JSON.stringify(["screen-1", "screen-2"]),

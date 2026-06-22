@@ -80,6 +80,7 @@ import {
   createNodeFigmaSnapshotStore,
   type FigmaSnapshotLinkRow,
   type FigmaSnapshotRecord,
+  type FigmaSnapshotUserMetadata,
 } from "@oscharko-dev/keiko-evidence";
 
 // ─── Error helpers ─────────────────────────────────────────────────────────────
@@ -126,6 +127,7 @@ const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   FIGMA_BAD_LINK:
     "The board link is not a valid Figma URL, or it is missing a node-id " +
     "(section/frame anchor required).",
+  FIGMA_BAD_METADATA: "The snapshot metadata update is invalid.",
   FIGMA_SNAPSHOT_NOT_FOUND: "No snapshot was found for this run id.",
   FIGMA_SCREEN_NOT_FOUND: "No captured screen image was found for this snapshot.",
   FIGMA_NO_EVIDENCE_DIR: "The evidence directory is not configured; snapshots cannot be stored.",
@@ -212,6 +214,10 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 export interface FigmaSnapshotSummary {
   readonly runId: string;
+  /** Mutable display name stored outside the immutable evidence record. */
+  readonly displayName?: string;
+  /** Mutable management metadata stored outside the immutable evidence record. */
+  readonly management: FigmaSnapshotManagementSummary;
   readonly fileKey: string;
   readonly nodeId: string;
   readonly version: string | undefined;
@@ -252,6 +258,11 @@ export interface FigmaSnapshotSummary {
    * These are selectable as QI sources, but the browser cannot request an image for them.
    */
   readonly structuralScreens: readonly FigmaStructuralScreenSummary[];
+}
+
+export interface FigmaSnapshotManagementSummary {
+  readonly displayName?: string;
+  readonly updatedAt?: string;
 }
 
 export interface FigmaScreenSummary {
@@ -320,12 +331,12 @@ interface FigmaSnapshotScreenJsonResponse {
 
 type FigmaSnapshotScreenJsonSnapshot = FigmaSnapshotScreenJsonResponse["snapshot"];
 type FigmaSnapshotRenderedScreen = FigmaSnapshotRecord["screens"][number];
-type FigmaSnapshotStructuralScreen = NonNullable<
-  FigmaSnapshotRecord["structuralScreens"]
->[number];
+type FigmaSnapshotStructuralScreen = NonNullable<FigmaSnapshotRecord["structuralScreens"]>[number];
 
 export interface FigmaSnapshotListEntry {
   readonly runId: string;
+  readonly displayName?: string;
+  readonly management: FigmaSnapshotManagementSummary;
   readonly fileKey: string;
   readonly nodeId: string;
   readonly version: string | undefined;
@@ -403,20 +414,33 @@ function screenNameFromIrJson(irJson: unknown): string {
   return typeof name === "string" && name.length > 0 ? name : "Screen";
 }
 
+function managementSummaryFromMetadata(
+  metadata: FigmaSnapshotUserMetadata | undefined,
+): FigmaSnapshotManagementSummary {
+  return {
+    ...(metadata?.displayName !== undefined ? { displayName: metadata.displayName } : {}),
+    ...(metadata?.updatedAt !== undefined ? { updatedAt: metadata.updatedAt } : {}),
+  };
+}
+
 function recordToSummary(
   record: FigmaSnapshotRecord,
   coverage?: FigmaScopeCoverage,
   metrics?: FigmaConnectorMetrics,
+  metadata?: FigmaSnapshotUserMetadata,
 ): FigmaSnapshotSummary {
   const screenCount = record.screens.length;
   const skippedCount = record.skippedScreens.length;
   const structuralOnlyCount = record.structuralScreens?.length ?? 0;
+  const management = managementSummaryFromMetadata(metadata);
   const truncatedClause =
     coverage !== undefined && (coverage.screensTruncated > 0 || coverage.capped)
       ? `; ${coverage.screensTruncated.toString()} partially captured (deep content bounded)`
       : "";
   return {
     runId: record.runId,
+    ...(management.displayName !== undefined ? { displayName: management.displayName } : {}),
+    management,
     fileKey: record.provenance.fileKey,
     nodeId: record.provenance.nodeId,
     version: record.provenance.version,
@@ -555,10 +579,16 @@ function screenJsonResponse(
   return structural === undefined ? undefined : structuralScreenJsonResponse(record, structural);
 }
 
-function recordToListEntry(record: FigmaSnapshotRecord): FigmaSnapshotListEntry {
+function recordToListEntry(
+  record: FigmaSnapshotRecord,
+  metadata?: FigmaSnapshotUserMetadata,
+): FigmaSnapshotListEntry {
   const structuralOnlyCount = record.structuralScreens?.length ?? 0;
+  const management = managementSummaryFromMetadata(metadata);
   return {
     runId: record.runId,
+    ...(management.displayName !== undefined ? { displayName: management.displayName } : {}),
+    management,
     fileKey: record.provenance.fileKey,
     nodeId: record.provenance.nodeId,
     version: record.provenance.version,
@@ -1064,7 +1094,8 @@ function loadSnapshotListEntries(
     } catch {
       continue;
     }
-    if (record !== undefined) entries.push(recordToListEntry(record));
+    if (record !== undefined)
+      entries.push(recordToListEntry(record, store.loadUserMetadata(runId)));
   }
   return entries;
 }
@@ -1118,7 +1149,9 @@ export function handleFigmaListSnapshots(ctx: RouteContext, deps: UiHandlerDeps)
         .slice(0, limit)
         .flatMap((entry) => {
           const record = store.loadMetadata(entry.runId);
-          return record === undefined ? [] : [recordToListEntry(record)];
+          return record === undefined
+            ? []
+            : [recordToListEntry(record, store.loadUserMetadata(entry.runId))];
         });
       return { status: 200, body: { snapshots } satisfies FigmaSnapshotListResponse };
     }
@@ -1155,7 +1188,151 @@ export function handleFigmaLoadSnapshot(ctx: RouteContext, deps: UiHandlerDeps):
     return { status: 404, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
   }
 
-  return { status: 200, body: recordToSummary(record, undefined, record.metrics) };
+  return {
+    status: 200,
+    body: recordToSummary(record, undefined, record.metrics, store.loadUserMetadata(runId)),
+  };
+}
+
+// ─── PATCH /api/figma/snapshots/:runId — mutable management metadata ────────
+
+const MAX_SNAPSHOT_DISPLAY_NAME_LENGTH = 120;
+
+interface ParsedSnapshotMetadataPatch {
+  readonly displayName: string | null;
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function parseSnapshotMetadataJson(raw: string): Record<string, unknown> | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : undefined;
+}
+
+function normalizePatchDisplayName(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().replace(/\s+/gu, " ");
+  if (trimmed.length === 0) return null;
+  if (trimmed.length > MAX_SNAPSHOT_DISPLAY_NAME_LENGTH) return undefined;
+  if (hasControlCharacter(trimmed)) return undefined;
+  return trimmed;
+}
+
+async function parseSnapshotMetadataPatch(
+  req: IncomingMessage,
+): Promise<ParsedSnapshotMetadataPatch | RouteResult> {
+  let raw: string;
+  try {
+    raw = await readBody(req);
+  } catch {
+    return { status: 400, body: figmaErrorBody("FIGMA_BAD_METADATA") };
+  }
+  const body = parseSnapshotMetadataJson(raw);
+  if (body === undefined || !Object.prototype.hasOwnProperty.call(body, "displayName")) {
+    return { status: 400, body: figmaErrorBody("FIGMA_BAD_METADATA") };
+  }
+  const displayName = normalizePatchDisplayName(body.displayName);
+  return displayName === undefined
+    ? { status: 400, body: figmaErrorBody("FIGMA_BAD_METADATA") }
+    : { displayName };
+}
+
+export async function handleFigmaUpdateSnapshotMetadata(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const evidenceDir = deps.evidenceDir;
+  if (evidenceDir === undefined || evidenceDir.length === 0) {
+    return { status: 503, body: figmaErrorBody("FIGMA_NO_EVIDENCE_DIR") };
+  }
+
+  const runId = ctx.params.runId ?? "";
+  if (runId.length === 0) {
+    return { status: 400, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
+  }
+
+  const patch = await parseSnapshotMetadataPatch(ctx.req);
+  if ("status" in patch) return patch;
+
+  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  let record: FigmaSnapshotRecord | undefined;
+  try {
+    record = store.loadMetadata(runId);
+  } catch {
+    return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
+  }
+  if (record === undefined) {
+    return { status: 404, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
+  }
+
+  let metadata: FigmaSnapshotUserMetadata;
+  try {
+    metadata = store.updateUserMetadata(runId, {
+      displayName: patch.displayName,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch {
+    return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
+  }
+
+  return {
+    status: 200,
+    body: recordToSummary(record, undefined, record.metrics, metadata),
+  };
+}
+
+// ─── DELETE /api/figma/snapshots/:runId — explicit snapshot deletion ─────────
+
+export function handleFigmaDeleteSnapshot(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const evidenceDir = deps.evidenceDir;
+  if (evidenceDir === undefined || evidenceDir.length === 0) {
+    return { status: 503, body: figmaErrorBody("FIGMA_NO_EVIDENCE_DIR") };
+  }
+
+  const runId = ctx.params.runId ?? "";
+  if (runId.length === 0) {
+    return { status: 400, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
+  }
+
+  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  let record: FigmaSnapshotRecord | undefined;
+  try {
+    record = store.loadMetadata(runId);
+  } catch {
+    return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
+  }
+  if (record === undefined) {
+    return { status: 404, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
+  }
+
+  try {
+    const deleted = store.deleteSnapshot(runId);
+    return {
+      status: 200,
+      body: {
+        runId,
+        deleted: deleted.recordDeleted,
+        sideFileDirDeleted: deleted.sideFileDirDeleted,
+        metadataDeleted: deleted.metadataDeleted,
+      },
+    };
+  } catch {
+    return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
+  }
 }
 
 // ─── GET /api/figma/snapshots/:runId/screens/:screenId/json ───────────────────

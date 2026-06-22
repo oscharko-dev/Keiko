@@ -27,8 +27,11 @@ export const UI_HOST = "127.0.0.1";
 export interface UiServerDeps {
   // Absolute path to the directory holding the exported static assets (`dist/ui/static`).
   readonly staticRoot: string;
-  // Precomputed CSP header value (with the static export's inline-script hashes folded in).
+  // Fallback CSP header value (with the static export's inline-script hashes folded in).
   readonly csp: string;
+  // Optional live CSP source. The CLI uses this to refresh hashes from the current build artifacts
+  // across rebuild/restart races; tests and compatibility callers can keep using the fixed `csp`.
+  readonly cspProvider?: (() => string | Promise<string>) | undefined;
   // The port the server will bind; used to validate the request `Host`/`Origin` authority.
   readonly port: number;
   // The JSON/SSE handler dependencies. Optional: when absent the server still serves static assets
@@ -156,30 +159,33 @@ function rejectForbiddenHost(res: ServerResponse): void {
   writeJson(res, 403, body);
 }
 
-function handle(
+async function resolveCsp(deps: UiServerDeps): Promise<string> {
+  try {
+    return (await deps.cspProvider?.()) ?? deps.csp;
+  } catch {
+    return deps.csp;
+  }
+}
+
+async function handle(
   deps: UiServerDeps,
   handlerDeps: UiHandlerDeps,
   req: IncomingMessage,
   res: ServerResponse,
-): void {
+): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${UI_HOST}`);
   const apiPath = isApiPath(url.pathname);
-  applySecurityHeaders(res, deps.csp, apiPath);
+  applySecurityHeaders(res, await resolveCsp(deps), apiPath);
   if (!isAllowedHost(req, deps.port)) {
     rejectForbiddenHost(res);
     return;
   }
   const method = (req.method ?? "GET").toUpperCase();
-  const work = apiPath
-    ? dispatchApi(handlerDeps, req, res, method, url)
-    : serveStatic(res, deps.staticRoot, url.pathname);
-  void work.catch(() => {
-    if (!res.headersSent) {
-      writeJson(res, 500, errorBody("INTERNAL", "An unexpected error occurred."));
-    } else {
-      res.end();
-    }
-  });
+  if (apiPath) {
+    await dispatchApi(handlerDeps, req, res, method, url);
+    return;
+  }
+  await serveStatic(res, deps.staticRoot, url.pathname);
 }
 
 // Creates the BFF server. The caller binds it with `server.listen(deps.port, UI_HOST)` so it never
@@ -188,7 +194,13 @@ function handle(
 export function createUiServer(deps: UiServerDeps): Server {
   const handlerDeps = deps.handlerDeps ?? fallbackDeps();
   const server = createServer((req, res) => {
-    handle(deps, handlerDeps, req, res);
+    void handle(deps, handlerDeps, req, res).catch(() => {
+      if (!res.headersSent) {
+        writeJson(res, 500, errorBody("INTERNAL", "An unexpected error occurred."));
+      } else {
+        res.end();
+      }
+    });
   });
   server.on("upgrade", (_req, socket) => {
     socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");

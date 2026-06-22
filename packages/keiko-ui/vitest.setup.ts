@@ -9,61 +9,56 @@ afterEach(() => {
   cleanup();
 });
 
-class MemoryStorage implements Storage {
-  #data = new Map<string, string>();
-
-  get length(): number {
-    return this.#data.size;
-  }
-
-  clear(): void {
-    this.#data.clear();
-  }
-
-  getItem(key: string): string | null {
-    return this.#data.get(String(key)) ?? null;
-  }
-
-  key(index: number): string | null {
-    return Array.from(this.#data.keys())[index] ?? null;
-  }
-
-  removeItem(key: string): void {
-    this.#data.delete(String(key));
-  }
-
-  setItem(key: string, value: string): void {
-    this.#data.set(String(key), String(value));
-  }
-}
-
-function installStorageShim(key: "localStorage" | "sessionStorage"): void {
-  if (typeof window === "undefined") return;
-  const current = window[key];
-  if (
-    typeof current === "object" &&
-    current !== null &&
-    typeof current.getItem === "function" &&
-    typeof current.setItem === "function" &&
-    typeof current.removeItem === "function" &&
-    typeof current.clear === "function"
-  ) {
-    return;
-  }
-  Object.defineProperty(window, key, {
-    configurable: true,
-    writable: true,
-    value: new MemoryStorage(),
-  });
-}
-
-installStorageShim("localStorage");
-installStorageShim("sessionStorage");
-
 // jsdom does not implement HTMLElement.prototype.scrollIntoView — stub it so
 // components that call scrollIntoView do not throw.
 if (typeof window !== "undefined" && !HTMLElement.prototype.scrollIntoView) {
   HTMLElement.prototype.scrollIntoView = function () {};
+}
+
+// Some coverage runners initialise jsdom with an unavailable/incomplete Storage object.
+// Keep tests focused on UI behavior by providing the standard localStorage surface.
+if (
+  typeof window !== "undefined" &&
+  (typeof window.localStorage?.getItem !== "function" ||
+    typeof window.localStorage?.setItem !== "function" ||
+    typeof window.localStorage?.removeItem !== "function" ||
+    typeof window.localStorage?.clear !== "function")
+) {
+  const store = new Map<string, string>();
+  class MemoryStorage implements Storage {
+    get length() {
+      return store.size;
+    }
+
+    clear(): void {
+      store.clear();
+    }
+
+    getItem(key: string): string | null {
+      return store.get(key) ?? null;
+    }
+
+    key(index: number): string | null {
+      return Array.from(store.keys())[index] ?? null;
+    }
+
+    removeItem(key: string): void {
+      store.delete(key);
+    }
+
+    setItem(key: string, value: string): void {
+      store.set(key, value);
+    }
+  }
+  const storage = new MemoryStorage();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
 }
 
 // jsdom does not implement window.matchMedia — provide a minimal mock so

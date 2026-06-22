@@ -8,10 +8,12 @@ import type { ToolDefinition } from "./gateway.js";
 
 // ─── Sandbox policy (the 5 documented, inspectable dimensions) ───────────────────
 
-// Wave 1 does NOT enforce OS-level network isolation (that needs the container layer,
-// deferred to a later wave per ADR-0006). `"inherit"` is the honest current value; a later
-// wave flips this to `"none"` when the isolation layer lands, WITHOUT changing consumers.
+// `"none"` is now OS/container-enforced: keiko-sandbox wraps a `network: "none"` run in a deny-by-
+// default egress boundary at the keiko-tools spawn boundary (ADR-0043), and a host that cannot enforce
+// it fails the command closed. `"inherit"` stays the default for the read-only command tools; a caller
+// that executes untrusted code opts into `"none"` explicitly, WITHOUT any consumer change.
 export type NetworkPolicy = "inherit" | "none";
+export type FilesystemPolicy = "inherit" | "execution-root";
 
 export interface SandboxPolicy {
   // Names (never values) of parent env vars allowed to reach the child. No credential-bearing
@@ -19,6 +21,10 @@ export interface SandboxPolicy {
   readonly envAllowlist: readonly string[];
   // See NetworkPolicy: documented, not yet OS-enforced in Wave 1.
   readonly network: NetworkPolicy;
+  // Optional stronger filesystem boundary for untrusted-code execution. The default/inherited tool
+  // path leaves filesystem behaviour unchanged; assured execution sets this to "execution-root" and
+  // requires an attested backend before surfacing apply-ready generated tests.
+  readonly filesystem?: FilesystemPolicy | undefined;
   // Hard cap on combined stdout+stderr bytes buffered before the child is killed (flood guard).
   readonly maxOutputBytes: number;
   // Default per-command wall-time before SIGTERM/SIGKILL.
@@ -53,11 +59,51 @@ export const DEFAULT_ENV_ALLOWLIST: readonly string[] = Object.freeze([
 
 export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
   envAllowlist: DEFAULT_ENV_ALLOWLIST,
+  // `"inherit"` stays the default for the read-only command tools. A caller that executes UNTRUSTED
+  // code (e.g. the #1202 assured pre-filter) passes `network: "none"` explicitly; keiko-sandbox then
+  // wraps the spawn in an OS/container egress boundary, so `"none"` is now HONOURED, not merely
+  // documented (ADR-0043). Leaving the default at `"inherit"` keeps the blast radius minimal.
   network: "inherit",
   maxOutputBytes: 262_144,
   defaultTimeoutMs: 30_000,
   terminationGraceMs: 2_000,
 } as const;
+
+// ─── Sandbox enforcement attestation (ADR-0043, keiko-sandbox) ───────────────────
+// Which OS/container primitive actually wrapped a `network: "none"` command and whether egress was
+// enforced for that run. keiko-sandbox produces this; keiko-tools records it on the CommandResult and
+// the redacted audit metadata so keiko-verification's HONEST `enforced` network flag derives from a
+// real run rather than a hardcoded constant. Content-free: an enum, a boolean, and the platform name.
+export type SandboxBackend =
+  | "bubblewrap"
+  | "unshare"
+  | "seatbelt"
+  | "container-docker"
+  | "container-podman"
+  | "none";
+
+export const SANDBOX_BACKENDS: readonly SandboxBackend[] = Object.freeze([
+  "bubblewrap",
+  "unshare",
+  "seatbelt",
+  "container-docker",
+  "container-podman",
+  "none",
+]);
+
+export interface SandboxAttestation {
+  // The backend that wrapped the run; `"none"` means no isolation was applied (network: "inherit").
+  readonly backend: SandboxBackend;
+  // True only when network egress was OS/container-enforced for this run (an outbound connection
+  // from the child fails). False for an inherited-network run.
+  readonly networkEnforced: boolean;
+  // True only when the run was contained to its disposable execution root for writes and host
+  // user/runtime sockets were not mounted into the sandbox. False for inherited-network and
+  // network-only compatibility runs.
+  readonly filesystemEnforced: boolean;
+  // node:os platform the decision was made on (e.g. "linux", "darwin", "win32").
+  readonly platform: string;
+}
 
 // ─── Command allowlist (deny-by-default) ─────────────────────────────────────────
 
@@ -71,6 +117,9 @@ export interface CommandRule {
   // The subcommand resolver skips both the flag and its value so a value cannot masquerade as the
   // subcommand (S-H2): `npm --prefix /x publish` resolves to `publish`, not `/x`.
   readonly valueFlags?: readonly string[] | undefined;
+  // Flags that must appear at the start of the argument vector, before the resolved subcommand. This
+  // lets callers require invariants such as `npx --no-install <tool>` as policy, not convention.
+  readonly requiredLeadingFlags?: readonly string[] | undefined;
   // Flags that are themselves denied because they execute a transitive shell or arbitrary command
   // (e.g. npm/npx `-c`/`--call`). Presence of any of these anywhere in args denies the invocation.
   readonly denyFlags?: readonly string[] | undefined;
@@ -160,6 +209,9 @@ export interface CommandResult {
   readonly durationMs: number;
   readonly timedOut: boolean;
   readonly truncated: boolean;
+  // Present when the command requested `network: "none"`: how (and whether) egress was enforced for
+  // this run (ADR-0043). Absent for inherited-network runs, so existing callers are unaffected.
+  readonly attestation?: SandboxAttestation | undefined;
 }
 
 // ─── Patch workflow ──────────────────────────────────────────────────────────────
@@ -293,6 +345,12 @@ export type ToolCallMetadata =
         readonly timeoutMs: number;
         readonly terminationGraceMs: number;
         readonly cwdRequested: boolean;
+        readonly filesystem?: FilesystemPolicy | undefined;
+        // Present for a `network: "none"` run (ADR-0043): the enforcing backend and whether egress
+        // was actually blocked. Optional so inherited-network audit records are unchanged.
+        readonly networkEnforced?: boolean | undefined;
+        readonly filesystemEnforced?: boolean | undefined;
+        readonly backend?: SandboxBackend | undefined;
       };
     }
   | {

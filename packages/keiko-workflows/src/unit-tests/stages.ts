@@ -24,9 +24,23 @@ import {
   type ModelLoopResult,
   type RunState,
 } from "./internal.js";
+import type { TestStrategy } from "./frontend.js";
 import type { UnitTestWorkflowReport } from "./types.js";
 
-export function rejectedReport(state: RunState, loop: ModelLoopResult): UnitTestWorkflowReport {
+// The content-free strategy fields surfaced on every report assembled after strategy selection
+// (Issue #1203). `undefined` strategy (an early failure before selection) leaves them absent.
+function strategyFields(strategy: TestStrategy | undefined): {
+  readonly testStyle: TestStrategy["style"] | undefined;
+  readonly verification: TestStrategy["verification"] | undefined;
+} {
+  return { testStyle: strategy?.style, verification: strategy?.verification };
+}
+
+export function rejectedReport(
+  state: RunState,
+  loop: ModelLoopResult,
+  strategy: TestStrategy,
+): UnitTestWorkflowReport {
   return assembleReport({
     status: "rejected",
     modelId: state.input.modelId,
@@ -44,6 +58,34 @@ export function rejectedReport(state: RunState, loop: ModelLoopResult): UnitTest
     verificationSkipReason: undefined,
     modelCallCount: loop.modelCallCount,
     patchRetryCount: loop.patchRetryCount,
+    ...strategyFields(strategy),
+  });
+}
+
+// The target's frontend stack is unsupported (Issue #1203 AC5): a clear, reviewable limitation is
+// reported BEFORE any model call, so no fabricated browser/component test is produced. The status is
+// "rejected" (no patch was produced) and `modelCallCount` is 0.
+export function unsupportedReport(state: RunState, strategy: TestStrategy): UnitTestWorkflowReport {
+  return assembleReport({
+    status: "rejected",
+    modelId: state.input.modelId,
+    durationMs: state.now() - state.startedAt,
+    patchFiles: [],
+    dryRunPreview: undefined,
+    proposedDiff: undefined,
+    coveredBehavior: undefined,
+    knownGaps: undefined,
+    nextActions: [
+      "No test was generated: the target's frontend test stack is unsupported. " +
+        "Add a supported test stack (for React components, @testing-library/react) and retry.",
+    ],
+    failureReason: undefined,
+    verificationSummary: undefined,
+    verificationSkipReason: "verification skipped: unsupported frontend stack, no test generated",
+    modelCallCount: 0,
+    patchRetryCount: 0,
+    limitation: strategy.reason,
+    ...strategyFields(strategy),
   });
 }
 
@@ -51,6 +93,7 @@ export function dryRunReport(
   state: RunState,
   loop: ModelLoopResult,
   accepted: AcceptedPatch,
+  strategy: TestStrategy,
 ): UnitTestWorkflowReport {
   const files = accepted.validation.files.map((f) => f.path);
   return assembleReport({
@@ -68,6 +111,7 @@ export function dryRunReport(
     verificationSkipReason: "verification skipped: dry-run, no files written",
     modelCallCount: loop.modelCallCount,
     patchRetryCount: loop.patchRetryCount,
+    ...strategyFields(strategy),
   });
 }
 
@@ -75,6 +119,7 @@ export function cancelledReport(
   state: RunState,
   loop: ModelLoopResult,
   accepted: AcceptedPatch | undefined,
+  strategy?: TestStrategy,
 ): UnitTestWorkflowReport {
   return assembleReport({
     status: "cancelled",
@@ -91,6 +136,7 @@ export function cancelledReport(
     verificationSkipReason: "verification skipped: cancelled",
     modelCallCount: loop.modelCallCount,
     patchRetryCount: loop.patchRetryCount,
+    ...strategyFields(strategy),
   });
 }
 
@@ -136,6 +182,7 @@ function completedReport(
   accepted: AcceptedPatch,
   applyResult: PatchApplyResult,
   verification: Awaited<ReturnType<typeof runWorkflowVerification>>,
+  strategy: TestStrategy,
 ): UnitTestWorkflowReport {
   return assembleReport({
     status: "completed",
@@ -152,6 +199,7 @@ function completedReport(
     verificationSkipReason: verification.skipReason,
     modelCallCount: loop.modelCallCount,
     patchRetryCount: loop.patchRetryCount,
+    ...strategyFields(strategy),
   });
 }
 
@@ -160,6 +208,7 @@ async function applyAndVerify(
   workspace: WorkspaceInfo,
   loop: ModelLoopResult,
   accepted: AcceptedPatch,
+  strategy: TestStrategy,
 ): Promise<UnitTestWorkflowReport> {
   const fs = state.deps.fs ?? nodeWorkspaceFs;
   const writer = resolveApplyWriter(state, workspace);
@@ -173,7 +222,7 @@ async function applyAndVerify(
     });
   } catch (error) {
     if (error instanceof CommandCancelledError) {
-      return cancelledReport(state, loop, accepted);
+      return cancelledReport(state, loop, accepted, strategy);
     }
     throw error;
   }
@@ -184,10 +233,10 @@ async function applyAndVerify(
     deleted: applyResult.deleted.length,
   });
   if (state.signal.aborted) {
-    return cancelledReport(state, loop, accepted);
+    return cancelledReport(state, loop, accepted, strategy);
   }
   const verification = await runWorkflowVerification(state, workspace, fs);
-  return completedReport(state, loop, accepted, applyResult, verification);
+  return completedReport(state, loop, accepted, applyResult, verification, strategy);
 }
 
 export function emitCompleted(
@@ -208,15 +257,16 @@ export async function finishPipeline(
   state: RunState,
   workspace: WorkspaceInfo,
   loop: ModelLoopResult,
+  strategy: TestStrategy,
 ): Promise<UnitTestWorkflowReport> {
   if (loop.accepted === undefined) {
-    return rejectedReport(state, loop);
+    return rejectedReport(state, loop, strategy);
   }
   if (state.signal.aborted) {
-    return cancelledReport(state, loop, loop.accepted);
+    return cancelledReport(state, loop, loop.accepted, strategy);
   }
   if (state.input.apply === true) {
-    return applyAndVerify(state, workspace, loop, loop.accepted);
+    return applyAndVerify(state, workspace, loop, loop.accepted, strategy);
   }
-  return dryRunReport(state, loop, loop.accepted);
+  return dryRunReport(state, loop, loop.accepted, strategy);
 }

@@ -6,13 +6,19 @@
 // (a GatewayError subclass) which the CLI surfaces as exit 1 — it never silently falls back to offline.
 
 import { Gateway } from "@oscharko-dev/keiko-model-gateway";
-import { loadConfigFromFile, type EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import {
+  loadConfigFromFile,
+  type EnvSource,
+  type GatewayConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-model-gateway";
 import { GatewayModelPort } from "@oscharko-dev/keiko-harness";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { createScriptedModelPort } from "./scripted-model.js";
 import type { EvaluationMode } from "./types.js";
+
+export type EvaluationConfigLoader = (path: string, env: EnvSource) => GatewayConfig;
 
 export interface EvaluationModelProviderDeps {
   readonly mode: EvaluationMode;
@@ -24,6 +30,7 @@ export interface EvaluationModelProviderDeps {
   readonly modelId: string;
   // Config file path for live mode. If omitted, KEIKO_CONFIG_FILE must be set.
   readonly configPath?: string | undefined;
+  readonly configLoader?: EvaluationConfigLoader | undefined;
 }
 
 // Builds the ModelPort for the given mode. In live mode this loads the gateway config and constructs
@@ -38,6 +45,6 @@ export function createEvaluationModelProvider(deps: EvaluationModelProviderDeps)
   if (path === undefined) {
     throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
   }
-  const config = loadConfigFromFile(path, env);
+  const config = (deps.configLoader ?? loadConfigFromFile)(path, env);
   return new GatewayModelPort(new Gateway(config));
 }

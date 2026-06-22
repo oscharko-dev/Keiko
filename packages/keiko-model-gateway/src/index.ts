@@ -24,8 +24,12 @@ export type {
   GatewayConfig,
   GatewayRequest,
   GatewayStreamChunk,
+  InfillingAlignment,
   LatencyClass,
   ModelCapability,
+  CompletionInteractionMode,
+  CompletionDegradeReason,
+  CompletionModelSelection,
   ModelKind,
   ModelProviderConfig,
   NormalizedResponse,
@@ -44,11 +48,17 @@ export {
   createDefaultChatCapability,
   explainConversationIneligibility,
   findCapability,
+  INFILLING_ALIGNMENTS,
+  isAlignedInfillingModel,
+  isAsYouTypeCompletionModel,
   isConversationEligibleModel,
   listCapabilities,
+  modelSupportsInfilling,
   resolveCostClass,
   selectCheapest,
+  selectCompletionModelFromCapabilities,
   type CapabilityQuery,
+  type CompletionSelectionOptions,
   type ConversationIneligibilityReason,
 } from "./capabilities.js";
 
@@ -75,7 +85,10 @@ export {
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
+  selectCompletionModel,
   selectConfiguredModel,
+  type ConfiguredCapabilityProvider,
+  type ConfiguredCapabilitySource,
   type ModelSelectionQuery,
 } from "./model-selection.js";
 
@@ -144,3 +157,9 @@ export type {
   QualityIntelligenceDispatcherArgs,
   QualityIntelligenceDispatcherResult,
 } from "./qualityIntelligence/dispatcher.js";
+
+// Prompt Enhancer sub-module (Epic #1307, Issue #1310; ADR-0044 §1). Exposed under a namespace,
+// mirroring Quality Intelligence, so callers reach the generation-profile execution catalog, the
+// deterministic planner, the structured generator, and the provider-neutral renderers. Model-bound
+// candidate/critic dispatch is added by #1312.
+export * as PromptEnhancer from "./promptEnhancer/index.js";

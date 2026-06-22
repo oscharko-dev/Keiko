@@ -7,7 +7,7 @@ import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contr
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
-import type { Chat, GroundedAnswer, ModelCapability } from "@/lib/types";
+import type { Chat, ChatMessage, GroundedAnswer, ModelCapability } from "@/lib/types";
 import { updateChat } from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 
@@ -91,10 +91,13 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
   };
 }
 
-function renderWindow(session: ChatSessionApi): void {
+function renderWindow(
+  session: ChatSessionApi,
+  props: { readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined } = {},
+): void {
   render(
     <ChatSessionProvider value={session}>
-      <ChatWindow />
+      <ChatWindow onOpenRunResult={props.onOpenRunResult} />
     </ChatSessionProvider>,
   );
 }
@@ -119,6 +122,19 @@ function makeCapsuleSetId(value: string): CapsuleSetId {
   return value as CapsuleSetId;
 }
 
+async function openCombobox(user: ReturnType<typeof userEvent.setup>, name: string): Promise<void> {
+  await user.click(await screen.findByRole("combobox", { name }));
+}
+
+async function chooseComboboxOption(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+  option: string | RegExp,
+): Promise<void> {
+  await openCombobox(user, name);
+  await user.click(await screen.findByRole("option", { name: option }));
+}
+
 describe("ChatWindow cancel button", () => {
   it("keeps connected resource details out of the chat header", () => {
     const chat = makeChat({
@@ -130,8 +146,9 @@ describe("ChatWindow cancel button", () => {
       </ChatSessionProvider>,
     );
 
-    const select = screen.getByLabelText("Grounding mode") as HTMLSelectElement;
-    expect(select.value).toBe("files");
+    expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+      "Live Files context",
+    );
     expect(container.querySelector(".scope-grounding")).toHaveAttribute("data-connected", "true");
     expect(container.querySelector(".scope-pill")).toBeNull();
     expect(container.querySelector(".chat-ctx")).toBeNull();
@@ -206,6 +223,34 @@ describe("ChatWindow cancel button", () => {
     expect(screen.getByRole("button", { name: "Cancel grounded request" })).toBeInTheDocument();
   });
 
+  it("passes run-summary result clicks to the workspace opener", async () => {
+    const user = userEvent.setup();
+    const openResult = vi.fn();
+    const runMessage: ChatMessage = {
+      id: "run-msg",
+      chatId: "chat-1",
+      role: "system",
+      content: "Launched: Generate unit tests",
+      timestamp: 1,
+      runId: "run-abc",
+      workflowId: "unit-test-generation",
+      workflowStatus: "completed",
+      shortResult: "Generated 1 test files; 3 tests proposed.",
+      taskType: undefined,
+    };
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [runMessage],
+      }),
+      { onOpenRunResult: openResult },
+    );
+
+    await user.click(screen.getByRole("button", { name: /open result/i }));
+
+    expect(openResult).toHaveBeenCalledWith(runMessage);
+  });
+
   it("renders the grounded panel for a plural-only connectedScopes chat", () => {
     const chat = makeChat({
       connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
@@ -263,6 +308,10 @@ describe("ChatWindow cancel button", () => {
           "redacted-only": 0,
           "budget-exhausted": 0,
           "tool-unavailable": 0,
+          "unsupported-format": 0,
+          "no-text-layer": 0,
+          "malformed-document": 0,
+          "encrypted-document": 0,
         },
         uncertaintyCount: 0,
         elapsedMs: 5,
@@ -428,11 +477,11 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       }),
     );
 
-    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
+    await openCombobox(user, "Grounding mode");
     expect(screen.getByRole("option", { name: "Live Files context" })).not.toBeDisabled();
     expect(screen.queryByRole("option", { name: /Still indexing/i })).toBeNull();
 
-    await user.selectOptions(select, "capsule:cap-release");
+    await user.click(screen.getByRole("option", { name: "Knowledge capsule: Release notes" }));
 
     await waitFor(() => {
       // GRD-009: connecting a connector must NOT clear connected folders (no connectedScopes
@@ -484,7 +533,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       }),
     );
 
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-b");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
 
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
@@ -536,7 +585,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         replaceChat,
       }),
     );
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-b");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
         readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
@@ -584,7 +633,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         replaceChat,
       }),
     );
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-b");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
         readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
@@ -618,12 +667,10 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     updateChatMock.mockResolvedValueOnce({ chat: updated });
     renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
 
-    const filesOption = (await screen.findByRole("option", {
-      name: "Live Files context",
-    })) as HTMLOptionElement;
-    expect(filesOption.disabled).toBe(true);
+    await openCombobox(user, "Grounding mode");
+    expect(screen.getByRole("option", { name: "Live Files context" })).toBeDisabled();
 
-    await user.selectOptions(screen.getByLabelText("Grounding mode"), "capsule-set:set-release");
+    await user.click(screen.getByRole("option", { name: "Capsule set: Release pack" }));
 
     await waitFor(() => {
       // GRD-009: non-destructive — no connectedScopes clear; appends the capsule set.
@@ -658,7 +705,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       }),
     );
 
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "none");
+    await chooseComboboxOption(user, "Grounding mode", "Model only");
 
     await waitFor(() => {
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
@@ -688,7 +735,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     updateChatMock.mockRejectedValueOnce(new Error("knowledge store unavailable"));
     renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
 
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "capsule:cap-release");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Release notes");
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("knowledge store unavailable");
@@ -712,11 +759,13 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     );
 
     await waitFor(() => {
-      const select = screen.getByLabelText("Grounding mode") as HTMLSelectElement;
-      expect(select.value).toBe("capsule:cap-stale");
+      expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+        "Knowledge capsule: cap-stale (unavailable)",
+      );
     });
     // uiux-fix F041 (C173) — "(unavailable)" is the single degraded suffix
     // (previously "(not ready)" for capsules vs "(unavailable)" for sets).
+    await openCombobox(userEvent.setup(), "Grounding mode");
     expect(
       screen.getByRole("option", { name: "Knowledge capsule: cap-stale (unavailable)" }),
     ).toBeInTheDocument();
@@ -738,9 +787,11 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     );
 
     await waitFor(() => {
-      const select = screen.getByLabelText("Grounding mode") as HTMLSelectElement;
-      expect(select.value).toBe("capsule-set:set-1");
+      expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+        "Capsule set: set-1 (unavailable)",
+      );
     });
+    await openCombobox(userEvent.setup(), "Grounding mode");
     expect(
       screen.getByRole("option", { name: "Capsule set: set-1 (unavailable)" }),
     ).toBeInTheDocument();
@@ -775,7 +826,8 @@ function chatModelCapability(id: string): ModelCapability {
 }
 
 describe("ChatWindow conversation model dropdown (Issue #144)", () => {
-  it("renders every chat-eligible model id in the Model dropdown options", () => {
+  it("renders every chat-eligible model id in the Model dropdown options", async () => {
+    const user = userEvent.setup();
     // activeChat is required so the composer bar (containing the model select)
     // is rendered — without it the new NoChatState shows instead (#146).
     renderWindow(
@@ -785,13 +837,13 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
         activeChat: makeChat(),
       }),
     );
-    const select = screen.getByLabelText("Model");
-    const options = Array.from(select.querySelectorAll("option")).map((option) => option.value);
-    expect(options).toContain("test-chat-1");
-    expect(options).toContain("test-chat-2");
+    await openCombobox(user, "Models");
+    expect(screen.getByRole("option", { name: "test-chat-1" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "test-chat-2" })).toBeInTheDocument();
   });
 
-  it("does not render a non-chat model id in the dropdown when session.models is pre-filtered (AC #2)", () => {
+  it("does not render a non-chat model id in the dropdown when session.models is pre-filtered (AC #2)", async () => {
+    const user = userEvent.setup();
     // UI rendering path only: ChatWindow renders whatever session.models
     // contains and never re-filters it. The bootstrap-level filter that keeps
     // embedding / ocr-vision models out of session.models is separately
@@ -804,10 +856,127 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
         activeChat: makeChat(),
       }),
     );
-    const select = screen.getByLabelText("Model");
-    const options = Array.from(select.querySelectorAll("option")).map((option) => option.value);
-    expect(options).not.toContain("test-embedding-1");
-    expect(options).toContain("test-chat-1");
+    await openCombobox(user, "Models");
+    expect(screen.queryByRole("option", { name: "test-embedding-1" })).toBeNull();
+    expect(screen.getByRole("option", { name: "test-chat-1" })).toBeInTheDocument();
+  });
+});
+
+describe("ChatWindow compact responsive controls (#1216)", () => {
+  it("compacts workflow and model controls together while keeping send anchored", () => {
+    const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
+    const { container } = render(
+      <ChatSessionProvider
+        value={makeSession({
+          models: [model],
+          selectedModel: model.id,
+          activeChat: makeChat({ selectedModel: model.id }),
+          draft: "hello",
+        })}
+      >
+        <ChatWindow compact controlsNarrow barCompact workflowCompact />
+      </ChatSessionProvider>,
+    );
+
+    expect(container.querySelector(".chatw")).toHaveClass("chatw-compact");
+    const launch = screen.getByRole("button", { name: "Launch workflow" });
+    expect(launch).toHaveClass("cmp-mode-compact");
+    expect(launch).toHaveAttribute("data-tip", "Launch workflow");
+
+    const modelControl = container.querySelector(".cmp-model");
+    expect(modelControl).toHaveClass("cmp-model-compact");
+    expect(modelControl).toHaveAttribute("data-tip", "Change model");
+    expect(screen.getByRole("button", { name: "Send message" })).toHaveAttribute(
+      "data-tip",
+      "Send message",
+    );
+  });
+
+  it("keeps model and workflow controls in the same compact state", () => {
+    const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
+    const { container } = render(
+      <ChatSessionProvider
+        value={makeSession({
+          models: [model],
+          selectedModel: model.id,
+          activeChat: makeChat({ selectedModel: model.id }),
+        })}
+      >
+        <ChatWindow compact barCompact workflowCompact />
+      </ChatSessionProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Launch workflow" })).toHaveClass(
+      "cmp-mode-compact",
+    );
+    expect(container.querySelector(".cmp-model")).toHaveClass("cmp-model-compact");
+  });
+
+  it("opens the compact model picker with the same menu width as the compact full model button", async () => {
+    const user = userEvent.setup();
+    const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
+    render(
+      <ChatSessionProvider
+        value={makeSession({
+          models: [model],
+          selectedModel: model.id,
+          activeChat: makeChat({ selectedModel: model.id }),
+        })}
+      >
+        <ChatWindow compact controlsNarrow barCompact workflowCompact />
+      </ChatSessionProvider>,
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Models" });
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+      bottom: 82,
+      height: 34,
+      left: 24,
+      right: 58,
+      top: 48,
+      width: 34,
+      x: 24,
+      y: 48,
+      toJSON: () => ({}),
+    });
+
+    await user.click(trigger);
+
+    expect(document.querySelector(".cmp-model-menu")).toHaveStyle({ width: "118px" });
+  });
+
+  it("uses the compact no-memory disclosure icon and hides budget in minimal mode", () => {
+    const { container } = render(
+      <ChatSessionProvider
+        value={makeSession({
+          activeChat: makeChat(),
+          budget: {
+            approximateBytes: 2_000,
+            approximateTokens: 500,
+            contextWindowTokens: 10_000,
+            reservedOutputTokens: 2_000,
+            availableInputTokens: 8_000,
+            pressure: "low",
+            breakdown: {
+              draftBytes: 100,
+              historyBytes: 1_900,
+              documentBytes: 0,
+              repoContextBytes: 0,
+              knowledgeBytes: 0,
+              memoryBytes: 0,
+            },
+          },
+        })}
+      >
+        <ChatWindow minimalChat compact />
+      </ChatSessionProvider>,
+    );
+
+    expect(container.querySelector(".chatw")).toHaveClass("chatw-minimal");
+    const disclosure = screen.getByRole("button", { name: "No memories included" });
+    expect(disclosure).toHaveClass("chat-memory-disclosure-toggle");
+    expect(disclosure).toHaveAttribute("data-tip", "No memories included");
+    expect(screen.queryByText(/Approximate context:/)).toBeNull();
   });
 });
 
@@ -834,6 +1003,12 @@ describe("ChatWindow memory controls", () => {
 
     fireEvent.change(screen.getByLabelText("Budget (tokens)"), { target: { value: "800" } });
     expect(setMemoryBudgetTokens).toHaveBeenCalledWith(800);
+
+    fireEvent.click(screen.getByRole("button", { name: "Increase memory budget" }));
+    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(1300);
+
+    fireEvent.click(screen.getByRole("button", { name: "Decrease memory budget" }));
+    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(1100);
   });
 
   it("discloses disabled no-memory responses without deleting stored memories", async () => {
@@ -1101,8 +1276,7 @@ describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", ()
     expect(screen.queryByText(/example-workspace/i)).toBeNull();
   });
 
-  it("shows the real project name in the empty-state sub-heading when a project is active", () => {
-    // EmptyComposerState renders "Working in <name>…" when an activeChat exists.
+  it("does not show project subtext in the empty state when a project is active", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -1116,8 +1290,8 @@ describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", ()
         },
       }),
     );
-    // The empty-state sub renders "Working in myproject. What would you like to explore?"
-    expect(screen.getByText(/Working in myproject/)).toBeInTheDocument();
+    expect(screen.getByText(/how can i help you today\\?/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Working in myproject/)).toBeNull();
   });
 });
 
@@ -1239,8 +1413,7 @@ describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
       }),
     );
 
-    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
-    await user.selectOptions(select, "none");
+    await chooseComboboxOption(user, "Grounding mode", "Model only");
 
     // Confirmation was shown.
     expect(confirmSpy).toHaveBeenCalledOnce();
@@ -1270,7 +1443,7 @@ describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
       }),
     );
 
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "none");
+    await chooseComboboxOption(user, "Grounding mode", "Model only");
 
     await waitFor(() => {
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
@@ -1284,6 +1457,7 @@ describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
   });
 
   it("skips confirmation and clears immediately when no sources are active", async () => {
+    const user = userEvent.setup();
     const replaceChat = vi.fn();
     const confirmSpy = vi.spyOn(window, "confirm");
     const updated = makeChat();
@@ -1291,19 +1465,7 @@ describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
 
     renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
 
-    // No capsules loaded so the default "none" is the current value;
-    // navigate away to "files" first (disabled but selectable via fireEvent),
-    // then back to "none" — or just use fireEvent.change directly to force
-    // the value="none" onChange without the browser disabling it.
-    // Actually the select already shows "none" (no scopes), so changing to
-    // the same value won't fire onChange. We need an intermediate value.
-    // Use fireEvent.change to simulate picking "none" when already at "none"
-    // by jumping through "files" (even though it's disabled in UA, the
-    // event still fires in jsdom).
-    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
-    // Jump to "files" (zero folder scopes so button is disabled in UA, but
-    // fireEvent bypasses that), then back to "none".
-    fireEvent.change(select, { target: { value: "none" } });
+    await chooseComboboxOption(user, "Grounding mode", "Model only");
 
     // confirm must NOT have been called because there are no active sources.
     expect(confirmSpy).not.toHaveBeenCalled();
@@ -1345,7 +1507,7 @@ describe("ChatWindow scope clear confirmation (#2 / #19)", () => {
     // The chat has 2 sources → "multi" is shown. Selecting "files" clears
     // localKnowledgeScopes but keeps connectedScopes (the "files" arm only
     // sends { localKnowledgeScopes: null }).
-    await user.selectOptions(await screen.findByLabelText("Grounding mode"), "files");
+    await chooseComboboxOption(user, "Grounding mode", "Live Files context");
 
     await waitFor(() => {
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", { localKnowledgeScopes: null });
@@ -1390,11 +1552,12 @@ describe("ChatWindow multi-scope grounding display (#28)", () => {
       }),
     );
 
-    const select = (await screen.findByLabelText("Grounding mode")) as HTMLSelectElement;
-    // The select value must be "multi", not just the first capsule id.
     await waitFor(() => {
-      expect(select.value).toBe("multi");
+      expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+        "Multiple sources",
+      );
     });
+    await openCombobox(userEvent.setup(), "Grounding mode");
     // A disabled read-only "Multiple sources" option is present.
     expect(screen.getByRole("option", { name: "Multiple sources" })).toBeInTheDocument();
   });

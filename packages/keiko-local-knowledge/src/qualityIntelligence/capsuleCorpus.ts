@@ -41,11 +41,15 @@ export function listCapsuleDocumentTexts(
   const sql =
     "SELECT document_id, normalized_text FROM document_texts WHERE capsule_id = ? ORDER BY document_id LIMIT ?";
   const rows = store._internal.db.prepare(sql).all(String(capsuleId), limit);
+  const cipher = store._internal.contentCipher;
   const result: CapsuleDocumentText[] = [];
   for (const row of rows) {
     const documentId = row.document_id;
-    const text = row.normalized_text;
-    if (typeof documentId === "string" && typeof text === "string" && text.length > 0) {
+    const stored = row.normalized_text;
+    if (typeof documentId !== "string" || typeof stored !== "string") continue;
+    // Decrypt at the store boundary so QI ingestion always receives plaintext corpus text.
+    const text = cipher.openText(stored);
+    if (text.length > 0) {
       result.push({ documentId, text });
     }
   }
