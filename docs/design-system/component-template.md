@@ -11,8 +11,10 @@ Every component page follows the same spine, so a reader always knows where to l
 sections, in the same order, on every page. We apply it to the existing high-priority components
 first — the ones already shipped and depended on — and then to each new component as it lands. A page
 is not a description; it is the contract for the component, and the spine is what makes the contract
-auditable. Until a component carries all ten sections — states and accessibility included — its
-status cannot move to Ready (see [Adoption status](#adoption-status)).
+auditable. For new component promotions after #1299, documentation-spine coverage is a Ready gate.
+For component families already shipped as Ready by #1292-#1298, implementation readiness remains as
+shipped while documentation-spine coverage is tracked explicitly below as full, partial, or worked
+example.
 
 ## The ten-section spine
 
@@ -49,17 +51,18 @@ a token, a screenshot, a matrix row, a register entry.
 
 ## Adoption status
 
-Adoption of the spine is a **Ready-status gate**: the register in `governance.html` only lists a
-component as Ready once its page carries all ten sections, states and accessibility included
-(contribution rule 2 — _"Ship the full template before status can move to Ready"_). The high-priority
-families and their current adoption:
+Adoption of the spine is a **documentation gate for future Ready promotions**. A new component cannot
+move to Ready until its page carries all ten sections, states and accessibility included (contribution
+rule 2 — _"Ship the full template before future Ready promotions"_). Existing #1292-#1298 families may
+remain implementation Ready because their product migrations already shipped and were accepted, but
+their documentation coverage is recorded separately:
 
-| High-priority family    | Documentation                                          | Spine coverage                                                        |
-| ----------------------- | ------------------------------------------------------ | --------------------------------------------------------------------- |
-| AI & Agent surfaces     | [ai-components.md](ai-components.md)                   | Partial — tokens, states, accessibility (migration note)              |
-| Table & Data Grid       | [data-display-migration.md](data-display-migration.md) | Partial migration note + full spine in the Table worked example below |
-| Inputs / Navigation     | [input-nav-migration.md](input-nav-migration.md)       | Partial — states, breakpoints, adopters (migration note)              |
-| Core control primitives | Button / Input / field / Table worked examples below   | Full spine (worked examples)                                          |
+| High-priority family    | Implementation status | Documentation                                          | Spine coverage                                                        |
+| ----------------------- | --------------------- | ------------------------------------------------------ | --------------------------------------------------------------------- |
+| AI & Agent surfaces     | Ready                 | [ai-components.md](ai-components.md)                   | Partial — tokens, states, accessibility (migration note)              |
+| Table & Data Grid       | Ready                 | [data-display-migration.md](data-display-migration.md) | Partial migration note + full spine in the Table worked example below |
+| Inputs / Navigation     | Ready                 | [input-nav-migration.md](input-nav-migration.md)       | Partial — states, breakpoints, adopters (migration note)              |
+| Core control primitives | Ready                 | Button / Input / field / Table worked examples below   | Full spine (worked examples)                                          |
 
 The migration notes above document a **subset** of the spine — typically tokens, states, and
 accessibility — rather than all ten sections; they are accurate for their migration purpose but are

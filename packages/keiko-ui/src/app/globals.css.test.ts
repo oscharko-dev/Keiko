@@ -3289,6 +3289,38 @@ describe("Issue #1299 — component state matrix", () => {
     return rows;
   }
 
+  function parseStateMeta(): Array<{
+    readonly key: string;
+    readonly label: string;
+    readonly group: string;
+    readonly icon: string;
+  }> {
+    const match = statesHtml.match(/var STATE_META\s*=\s*\[([\s\S]*?)\];/);
+    expect(match, "var STATE_META block not found in states.html").toBeTruthy();
+    const slice = match![1]!;
+    const rowRe =
+      /\{\s*key:\s*"([a-z])"\s*,\s*label:\s*"([^"]+)"\s*,\s*group:\s*"([^"]+)"\s*,\s*icon:\s*"([^"]*)"\s*\}/g;
+    const rows: Array<{
+      readonly key: string;
+      readonly label: string;
+      readonly group: string;
+      readonly icon: string;
+    }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = rowRe.exec(slice)) !== null) {
+      const [, key, label, group, icon] = m;
+      if (
+        key !== undefined &&
+        label !== undefined &&
+        group !== undefined &&
+        icon !== undefined
+      ) {
+        rows.push({ key, label, group, icon });
+      }
+    }
+    return rows;
+  }
+
   // ── 1. Canonical state keys in order ─────────────────────────────────────────
   // Mutation-robust: inverting or reordering any key in the STATES array re-fails.
   it("states.html declares the 11 canonical state keys in order", () => {
@@ -3371,6 +3403,40 @@ describe("Issue #1299 — component state matrix", () => {
       stateMatrixMd,
       "state-matrix.md must document the skeleton token rule (Loading state)",
     ).toContain("skeleton");
+  });
+
+  // ── 5. The live proof generator exposes state markers and non-colour metadata ─
+  // The Playwright harness renders these markers and fails if any checked matrix cell
+  // lacks a proof element. This static gate prevents accidental removal of the
+  // marker attributes or the data/sync glyph metadata the harness depends on.
+  it("states.html generates live proof markers for every applicable state", () => {
+    expect(statesHtml).toContain('id="state-proof"');
+    expect(statesHtml).toContain('data-family="');
+    expect(statesHtml).toContain('data-state="');
+    expect(statesHtml).toContain("data-state-icon");
+    expect(statesHtml).toContain("data-state-label");
+    expect(statesHtml).toContain('data-noncolor="true"');
+    expect(statesHtml).toContain("ROWS.map(function (r)");
+    expect(statesHtml).toContain("stateChip(r[0], STATES[index])");
+
+    const expectedKeys = ["d", "h", "f", "a", "s", "x", "l", "e", "m", "y", "c"];
+    const dataSyncKeys = new Set(["l", "e", "m", "y", "c"]);
+    const meta = parseStateMeta();
+    expect(meta.map((row) => row.key)).toEqual(expectedKeys);
+
+    const rows = parseRows();
+    const checkedCellCount = rows.reduce(
+      (sum, [, bits]) => sum + [...bits].filter((bit) => bit === "1").length,
+      0,
+    );
+    expect(checkedCellCount, "expected the matrix to contain checked state cells").toBeGreaterThan(0);
+
+    for (const row of meta) {
+      if (dataSyncKeys.has(row.key)) {
+        expect(row.group, `state ${row.label} must be classified as data-sync`).toBe("data-sync");
+        expect(row.icon.trim(), `state ${row.label} must define a non-colour glyph`).not.toBe("");
+      }
+    }
   });
 });
 
