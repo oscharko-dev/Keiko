@@ -24,7 +24,7 @@ import {
   isWindowDragPointer,
 } from "../interactionGuards";
 import { hasConnectablePeer, subText } from "./connectionUtils";
-import { CHAT_MINI_W, CHAT_MINI_H, WIN_TYPES, type WindowType } from "./WindowsRegistry";
+import { CHAT_MINI_W, WIN_TYPES, type WindowType } from "./WindowsRegistry";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 
@@ -41,6 +41,7 @@ const MIN_H_FALLBACK = 150;
 const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
 const HEADER_CONTROL_GUTTER_PX = 210;
+const HEADER_ZOOM_MIN_WIDTH_PX = 340;
 const AUTO_GROW_EPSILON_PX = 8;
 
 interface WindowFrameProps {
@@ -117,17 +118,28 @@ function selectBody(
   linkedFigmaSnapshotRunIds: readonly string[],
   linkedFigmaSnapshotSources: readonly QualityIntelligenceFigmaSnapshotSource[] | undefined,
   linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined,
-  updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void,
-  openWindow: (type: WindowType, cfg?: Record<string, string | number | boolean>) => string | null,
+  updateCfg: (patch: AppWindow["cfg"]) => void,
+  openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null,
 ): BodySelection {
   const def = WIN_TYPES[type];
   if (type === "chat") {
-    const mini = ew < CHAT_MINI_W || eh < CHAT_MINI_H;
+    const compact = ew < 640;
+    const barCompact = ew < 520;
+    const minimalChat = ew < 360 || eh < 320;
+    const footerControlsCompact = ew < 520;
+    const controlsNarrow = footerControlsCompact;
+    const workflowCompact = footerControlsCompact;
+    const mini = ew < CHAT_MINI_W;
     return {
       mode: mini ? "mini" : "full",
       node: def.render(cfg, {
         windowId,
         mini,
+        minimalChat,
+        compact,
+        controlsNarrow,
+        barCompact,
+        workflowCompact,
         linkedRoot,
         linkedFilePath,
         linkedRoots,
@@ -164,7 +176,7 @@ function selectBody(
 
 function shouldAutoGrowWindow(type: WindowType, cfg: Record<string, unknown>): boolean {
   return (
-    type === "figma" &&
+    type === "figmaView" &&
     typeof cfg["selectedScreenIdsJson"] === "string" &&
     cfg["selectedScreenIdsJson"].length > 0
   );
@@ -322,23 +334,25 @@ export function WindowFrame({
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const zoom = win.zoom ?? 1;
-  const linkedRoot =
-    win.type === "chat" || win.type === "agents" || win.type === "quality"
-      ? api.linkedFilesRoot(win.id)
-      : null;
-  const linkedFilePath =
-    win.type === "agents" || win.type === "quality"
-      ? api.linkedFilesContext(win.id)?.activeFilePath
-      : undefined;
+  const receivesFilesContext =
+    win.type === "chat" || win.type === "agents" || win.type === "quality" || win.type === "editor";
+  const receivesFocusedFileContext =
+    win.type === "agents" || win.type === "quality" || win.type === "editor";
+  const receivesConnectorContext = win.type === "quality" || win.type === "editor";
+  const linkedRoot = receivesFilesContext ? api.linkedFilesRoot(win.id) : null;
+  const linkedFilePath = receivesFocusedFileContext
+    ? api.linkedFilesContext(win.id)?.activeFilePath
+    : undefined;
   const linkedRoots =
     win.type === "quality"
       ? api.linkedAllFilesRoots(win.id)
       : linkedRoot !== null
         ? [linkedRoot]
         : [];
-  const linkedCapsuleIds = win.type === "quality" ? api.linkedConnectorCapsuleIds(win.id) : [];
-  const linkedCapsuleSetIds =
-    win.type === "quality" ? api.linkedConnectorCapsuleSetIds(win.id) : [];
+  const linkedCapsuleIds = receivesConnectorContext ? api.linkedConnectorCapsuleIds(win.id) : [];
+  const linkedCapsuleSetIds = receivesConnectorContext
+    ? api.linkedConnectorCapsuleSetIds(win.id)
+    : [];
   const linkedFigmaSnapshotRunIds =
     win.type === "quality" ? api.linkedFigmaSnapshotRunIds(win.id) : [];
   const linkedFigmaSnapshotSources =
@@ -347,14 +361,13 @@ export function WindowFrame({
   const ew = win.w / zoom;
   const eh = win.h / zoom;
   const updateCfg = useCallback(
-    (patch: Record<string, string | number | boolean | undefined>): void => {
+    (patch: AppWindow["cfg"]): void => {
       api.update(win.id, { cfg: { ...win.cfg, ...patch } });
     },
     [api, win.cfg, win.id],
   );
   const openWindow = useCallback(
-    (type: WindowType, cfg?: Record<string, string | number | boolean>): string | null =>
-      api.add(type, cfg),
+    (type: WindowType, cfg?: AppWindow["cfg"]): string | null => api.add(type, cfg),
     [api],
   );
   const { mode: bodyMode, node: body } = selectBody(
@@ -606,6 +619,7 @@ export function WindowFrame({
   }, [api, win.id]);
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
+  const showHeaderZoom = bodyMode === "full" && ew >= HEADER_ZOOM_MIN_WIDTH_PX;
   const bodyStyle: CSSProperties = bodyMode === "tiny" ? {} : { zoom };
   const sectionStyle: CSSProperties = {
     left: win.x,
@@ -663,7 +677,7 @@ export function WindowFrame({
             path/URL reachable for mouse users. */}
         {sub !== null ? (
           <span className="win-sub mono" title={sub}>
-            {sub}
+            <span className="win-sub-text">{sub}</span>
           </span>
         ) : null}
         <span className="spacer" />
@@ -671,54 +685,56 @@ export function WindowFrame({
             several windows open, screen-reader and voice-control users could not
             tell WHICH window a Close/Zoom/Connect control acts on (WCAG 2.4.6).
             def.title scopes each label; the visible chrome is unchanged. */}
-        <div className="win-zoom">
-          <button
-            type="button"
-            className="win-zbtn"
-            title="Zoom content out"
-            aria-label={`Zoom ${def.title} content out`}
-            disabled={zoom <= CONTENT_MIN_ZOOM}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={() => setZoom(zoom - 0.1)}
-          >
-            <Icons.zoomOut size={13} />
-          </button>
-          <button
-            type="button"
-            className="win-zpct"
-            title="Reset content zoom to 100%"
-            aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={() => api.update(win.id, { zoom: 1 })}
-          >
-            {Math.round(zoom * 100)}%
-          </button>
-          <button
-            type="button"
-            className="win-zbtn"
-            title="Zoom content in"
-            aria-label={`Zoom ${def.title} content in`}
-            disabled={zoom >= CONTENT_MAX_ZOOM}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={() => setZoom(zoom + 0.1)}
-          >
-            <Icons.zoomIn size={13} />
-          </button>
-        </div>
+        {showHeaderZoom ? (
+          <div className="win-zoom">
+            <button
+              type="button"
+              className="win-zbtn ui-tip"
+              data-tip="Zoom content out"
+              aria-label={`Zoom ${def.title} content out`}
+              disabled={zoom <= CONTENT_MIN_ZOOM}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+              }}
+              onClick={() => setZoom(zoom - 0.1)}
+            >
+              <Icons.zoomOut size={13} />
+            </button>
+            <button
+              type="button"
+              className="win-zpct ui-tip"
+              data-tip="Reset content zoom to 100%"
+              aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+              }}
+              onClick={() => api.update(win.id, { zoom: 1 })}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              className="win-zbtn ui-tip"
+              data-tip="Zoom content in"
+              aria-label={`Zoom ${def.title} content in`}
+              disabled={zoom >= CONTENT_MAX_ZOOM}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+              }}
+              onClick={() => setZoom(zoom + 0.1)}
+            >
+              <Icons.zoomIn size={13} />
+            </button>
+          </div>
+        ) : null}
         <div className="win-traffic" role="group" aria-label={`${def.title} window controls`}>
           <button
             type="button"
-            className="win-traffic-btn win-traffic-minimize"
-            title="Minimize"
+            className="win-traffic-btn win-traffic-minimize ui-tip"
+            data-tip="Minimize"
             aria-label={`Minimize ${def.title} window`}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
@@ -730,8 +746,8 @@ export function WindowFrame({
           </button>
           <button
             type="button"
-            className="win-traffic-btn win-traffic-maximize"
-            title={win.max ? "Restore" : "Full screen"}
+            className="win-traffic-btn win-traffic-maximize ui-tip"
+            data-tip={win.max ? "Restore" : "Full screen"}
             aria-label={win.max ? `Restore ${def.title} window` : `Full screen ${def.title} window`}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
@@ -743,8 +759,8 @@ export function WindowFrame({
           </button>
           <button
             type="button"
-            className="win-traffic-btn win-traffic-close"
-            title="Close"
+            className="win-traffic-btn win-traffic-close ui-tip"
+            data-tip="Close"
             aria-label={`Close ${def.title} window`}
             onPointerDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {

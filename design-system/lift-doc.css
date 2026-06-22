@@ -211,6 +211,30 @@ section { margin-bottom: 80px; scroll-margin-top: 24px; }
 .lib-cell:hover { background: var(--card); color: var(--fg); }
 .lib-cell .name { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-faint); }
 .lib-cell:hover .name { color: var(--accent-text); }
+.lib-group { margin-top: 26px; }
+.lib-group:first-of-type { margin-top: 0; }
+.lib-cat {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin: 0 2px 12px;
+}
+.lib-cat .lib-count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--accent-text);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-dim);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
 
 /* ── do / don't ── */
 .dd { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }

@@ -54,7 +54,8 @@ function toWorkflowKind(kind: RunKind): WorkflowRunKind {
 }
 
 // Persists a terminated WORKFLOW run (unit-tests / bug-investigation) via the shared audit core. The
-// report is the workflow's own typed report; only counts/summaries are folded in (never the raw diff).
+// UI run browser needs the review artifact after the in-memory run record is gone, so the diff is
+// included through the evidence core's explicit redacted-diff opt-in.
 export function persistWorkflowEvidence(
   identity: RunIdentity,
   report: unknown,
@@ -76,7 +77,7 @@ export function persistWorkflowEvidence(
     report,
     events,
     { ...ctx, costClassResolver: resolveCostClass },
-    { governedHandoff },
+    { governedHandoff, includeDiff: true },
   );
 }
 

@@ -4,6 +4,7 @@
 // O_EXCL open must refuse rather than follow.
 
 import { mkdtemp, mkdir, realpath, rm, symlink, writeFile, readFile } from "node:fs/promises";
+import { statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -153,5 +154,16 @@ describe("writeSideFile evidenceSchemaVersion contract", () => {
     expect(Object.keys(result).sort()).toEqual(
       ["absolutePath", "bytes", "relativePath", "sha256"].sort(),
     );
+  });
+});
+
+describe("writeSideFile POSIX permission hardening (AC1)", () => {
+  it("creates the per-run dir with mode 0o700 and the side-file with mode 0o600", () => {
+    // POSIX only: Windows does not expose UNIX permission bits via statSync.mode.
+    if (process.platform === "win32") return;
+    const result = writeSideFile(baseDir, "run-perms", "browser-1.png", Buffer.from("acl-check"));
+    const runDir = join(baseDir, "run-perms");
+    expect(statSync(runDir).mode & 0o777).toBe(0o700);
+    expect(statSync(result.absolutePath).mode & 0o777).toBe(0o600);
   });
 });

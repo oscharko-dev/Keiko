@@ -8,5 +8,9 @@ interface RightRailProps {
 }
 
 export function RightRail(_props: RightRailProps): ReactNode {
-  return <aside className="rail rail-right" aria-label="Workspace utilities" />;
+  return (
+    <aside className="rail rail-right" aria-label="Workspace utilities">
+      <span className="spacer" />
+    </aside>
+  );
 }

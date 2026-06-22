@@ -175,33 +175,6 @@ These scripts call the installed package entry by relative path, so they do not 
 global `keiko` already on `PATH`. This avoids stale-version launches when a machine still has an
 older global install on macOS or Windows.
 
-### Startup resolution policy
-
-`keiko start` resolves which Keiko binary to launch in a fixed precedence order, so the current
-project's install always wins over an unrelated global on `PATH`:
-
-1. A built monorepo checkout in the current directory (`./dist/cli/index.js`).
-2. The local project package (`./node_modules/@oscharko-dev/keiko/dist/cli/index.js`).
-3. The `KEIKO_CLI_BIN_PATH` environment override.
-4. The package-relative entry next to the running CLI module (the fallback for direct
-   package-local invocation).
-
-Each of rungs 1 and 2 requires both the built CLI entry and the built UI static asset; a partial
-build is skipped. Prefer the project-local `npm run keiko:start` over a bare global `keiko`: the
-script is unambiguous, while a bare `keiko` depends on whatever happens to win on `PATH`. Run
-`keiko doctor` at any time to see the resolved entry and a remediation hint when a stale global is
-detected.
-
-`keiko stop` records the launched pid next to its pid file and refuses to signal a pid when that
-recorded pid no longer matches the pid file (for example after Windows reuses the pid for an
-unrelated process), so it never terminates a process Keiko did not start.
-
-**Boundary:** this resolution policy governs which binary the project launches. It does not remove a
-legacy global binary already installed on the machine — that still needs a one-time manual cleanup
-(`npm uninstall -g @oscharko-dev/keiko`, or the equivalent Homebrew step). See the
-[stale-launch troubleshooting entry](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md#8-an-older-keiko-version-loads-or-keiko-stop-does-nothing)
-for the full remediation.
-
 ## First-run setup
 
 If no model gateway is configured, the UI asks for:
@@ -245,8 +218,46 @@ Surface coverage is intentionally not identical. The UI is the primary surface f
 | `keiko verify`                | Runs configured verification gates and writes redacted evidence. |
 | `keiko evidence list`         | Lists local evidence manifests.                                  |
 | `keiko evidence show <runId>` | Shows one redacted evidence manifest.                            |
+| `keiko doctor`                | Diagnoses stale global-vs-local launch paths.                    |
+| `keiko repair`                | Runs an offline diagnostic-and-repair pass on the local install. |
+| `keiko uninstall`             | Removes Keiko's runtime artifacts so you can reinstall cleanly.  |
 
 `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest. Use `keiko run`, `keiko verify`, or the UI evidence view when a stored manifest is required.
+
+### Repair and uninstall
+
+`keiko repair` runs an offline, deterministic pass that fixes a broken or half-installed local state without a full reinstall. It removes a stale `ui.pid` left by an unclean shutdown, tightens the `.keiko` state-directory permissions to `0o700`, and normalizes the permissions of every known Keiko-owned runtime artifact under it — the UI, Memory, and Local-Knowledge databases and their `-wal`/`-shm` sidecars, Evidence and Quality-Intelligence records, and the sealed credential vaults — to owner-only `0o700`/`0o600` on POSIX. It also prunes launcher records whose shortcut files were deleted, verifies the built CLI/UI assets, the launch path, and any configured model-gateway file, and flags lingering plaintext credentials left in the config by an interrupted migration. The audit is content-free: it reports paths and categories, never file contents, and never touches a customer file that merely lives under `.keiko`. Items it cannot fix automatically are listed as `action`. Add `--dry-run` to report without changing anything.
+
+On Windows, POSIX modes do not apply; repair reports that NTFS ACLs govern access rather than pretending an equivalent change was made.
+
+```bash
+keiko repair            # diagnose and repair in place
+keiko repair --dry-run  # report findings only
+```
+
+To verify (rather than repair) the at-rest posture of a local `.keiko` tree — no plaintext credentials, owner-only modes, encrypted Memory/Local-Knowledge content, and protected Evidence/QI artifacts — run the read-only auditor:
+
+```bash
+npm run audit:local-state -- --state-dir ~/.keiko   # exit 0 healthy, 1 on any finding
+```
+
+`keiko uninstall` reverses the runtime artifacts Keiko creates on a machine so you can clean your device and reinstall a clean version. It removes the user-local launcher shortcut(s), the `keiko:start` / `keiko:stop` scripts that `keiko init` added to your `package.json` (only when they still match what `init` writes), and Keiko-owned runtime state under `.keiko`. With `--state` (and by default), it removes the manifest of Keiko-owned sensitive artifacts — lifecycle and launcher files, the UI, Memory, and Local-Knowledge databases and their sidecars, Evidence and Quality-Intelligence records, and the sealed credential vaults — and then removes the state directory itself only once nothing of yours remains. A customized script, an unknown (non-Keiko) file under `.keiko`, and any symlink are never touched or followed. With no scope flag all three areas are removed; `--state`, `--launchers`, and `--scripts` narrow the operation, and `--dry-run` previews it.
+
+`keiko uninstall --state` deletes local Evidence, Memory, and Local-Knowledge stores. Removing a file from the filesystem unlinks it but does not guarantee secure erasure of SSD-backed data. Repair (`diagnose and fix permission drift`) and uninstall (`remove Keiko-owned local runtime artifacts`) are distinct: repair never deletes a store, and uninstall never weakens permissions.
+
+```bash
+keiko uninstall              # remove launcher, scripts, and state
+keiko uninstall --dry-run    # preview what would be removed
+keiko uninstall --state      # remove only Keiko-owned runtime state under .keiko
+keiko uninstall --launchers  # remove only the OS launcher shortcut
+```
+
+Keiko never removes its own installed npm package — a running process cannot reliably delete the files it is executing from. After `keiko uninstall` completes it prints the package-manager command to finish removal:
+
+```bash
+npm uninstall -g @oscharko-dev/keiko   # global install
+npm uninstall @oscharko-dev/keiko      # local install in a project
+```
 
 ### Connected sources: folder search vs. Knowledge Capsules
 
@@ -410,16 +421,22 @@ Keiko is a local tool, not a remote service.
 
 - The UI binds to `127.0.0.1`.
 - API keys are accepted from local config, local environment, or the first-run UI flow.
+- Local config stores **secret references, not secret values**: provider API keys and the Figma token are sealed in per-feature AES-256-GCM vaults, and `keiko.config.json` carries only non-secret metadata and stable `apiKeySecretRef` references ([ADR-0046](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0046-local-credential-vault.md)).
+- Memory Vault ([ADR-0035](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0035-memory-vault-encryption-at-rest.md)) and Local Knowledge ([ADR-0047](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0047-local-knowledge-content-encryption.md)) content are encrypted at rest; metadata stays cleartext for retrieval.
 - Credentials are redacted from logs, evidence, and browser responses.
 - Workspace reads are bounded by the selected local project path.
 - Commands are allowlisted and run without a shell.
 - Generated patches are dry-run by default and must be reviewed before application.
-- Evidence is redacted before it is written.
+- Evidence is redacted before it is written, stored owner-only, and bounded by deterministic retention.
+
+The full per-surface posture — distinguishing file permissions, redaction, encryption, retention, and tamper evidence as independent controls — is the [local runtime-state contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/local-runtime-state-contract.md). A deterministic auditor (`npm run audit:local-state -- --state-dir <path>`) checks a real `.keiko` tree against it.
 
 Known limits:
 
 - Keiko is not a sandbox or OS-level isolation layer.
-- Workflow evidence files are ordinary local files. Quality Intelligence run manifests additionally carry SHA-256 integrity hashes that are verified on read (tamper-evident, not tamper-proof), and MemoriaViva memory content is encrypted at rest (ADR-0035); neither protects against an attacker with local file access and the vault key.
+- Local encryption protects data **at rest**. It does not protect against malware running as the same user, a live compromised Keiko process, or a stolen machine on which the OS keychain is already unlocked — while a store is open its content is decrypted in process memory by necessity. The keyfile key tier stores the key beside the data; regulated deployments should prefer an injected `KEIKO_*_KEY` or the OS keychain.
+- Workflow evidence files are ordinary local files. Quality Intelligence run manifests carry SHA-256 integrity hashes verified on read (tamper-evident, not tamper-proof). Customer-reconstructive evidence artifacts are not yet encrypted at rest — owner-only permissions, redaction, and bounded retention are the compensating controls ([ADR-0048](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0048-evidence-artifact-confidentiality.md)).
+- Cleartext metadata leaks the shape of stored data (how much, which scopes, when), not its content.
 - Local project scripts can execute repository code when you run verification.
 - Do not run Keiko against untrusted repositories.
 
@@ -442,7 +459,8 @@ Read the full contracts and decisions:
 | No model appears       | Reopen Settings, verify the base URL and token, then run the credential test again.                      |
 | Credential test fails  | Confirm the gateway accepts OpenAI-compatible chat-completions requests at the configured base URL.      |
 | Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header such as `X-Litellm-Key`. |
-| Stale process state    | Run `npm run keiko:stop`, delete `.keiko/ui.pid` if the process is no longer running, then start again.  |
+| Stale process state    | Run `npm run keiko:stop`, then `npx keiko repair` to clear a stale pid and verify the install.           |
+| Broken local install   | Run `npx keiko repair` for an offline diagnostic-and-repair pass, or `npx keiko uninstall` to reset.     |
 
 For categorized playbooks covering TLS trust, first-run gateway setup, `NO_MODEL`, workspace path validation, and run-engine command denials, see the [Troubleshooting guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md).
 

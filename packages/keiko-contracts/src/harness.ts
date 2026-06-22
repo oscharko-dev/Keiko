@@ -2,6 +2,8 @@
 // other than the frozen constant tables (DEFAULT_LIMITS, HARNESS_CODES, TERMINAL_STATES)
 // that the type layer needs to expose as values. Mirrors the ADR-0003 types.ts precedent.
 
+import type { CodingContextPack } from "./coding-context.js";
+
 // ─── State machine ────────────────────────────────────────────────────────────
 
 export type HarnessStateName =
@@ -70,7 +72,15 @@ export type TaskType = "generate-unit-tests" | "investigate-bug" | "explain-plan
 export interface GenerateUnitTestsInput {
   readonly filePath: string;
   readonly targetFunction?: string | undefined;
+  // Legacy free-form context string (pre-#1211). Still honoured for backward compatibility; the BFF
+  // supplies the structured `retrievedContext` pack instead. Both may be present (pack wins, string
+  // appended after).
   readonly context?: string | undefined;
+  // Issue #1211: a governed, redacted coding-context pack assembled server-side (repo-search and,
+  // for explicit requests, Local Knowledge + memory). The harness renders it deterministically into
+  // the prompt; retrieved content is untrusted data and never grants tool authority (allowsTools
+  // stays false for this task regardless of pack contents).
+  readonly retrievedContext?: CodingContextPack | undefined;
 }
 
 export interface InvestigateBugInput {

@@ -30,6 +30,14 @@ import type { RouteContext } from "./routes.js";
 
 const tmpDirs: string[] = [];
 
+// Issue #1320: pin both local vaults (provider credentials + Figma PAT) to the explicit env-key tier
+// so tests never touch the real macOS keychain — deterministic, side-effect-free, and identical on
+// CI (Linux keyfile tier) and developer machines. The values are throwaway 32-byte base64 keys.
+const VAULT_ENV: Readonly<Record<string, string>> = {
+  KEIKO_PROVIDER_CREDENTIALS_KEY: Buffer.alloc(32, 0x21).toString("base64"),
+  KEIKO_FIGMA_KEY: Buffer.alloc(32, 0x42).toString("base64"),
+};
+
 afterEach(() => {
   for (const dir of tmpDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -56,6 +64,13 @@ function fetchInputUrl(url: Parameters<typeof fetch>[0]): string {
   return url instanceof URL ? url.href : url.url;
 }
 
+// Reads the first provider's resolved apiKey from the in-memory runtime config (Issue #1320 keeps the
+// real credential live in memory while the persisted file holds only a reference). Extracted so the
+// optional-chain access does not inflate the calling test's cyclomatic complexity.
+function firstProviderApiKey(deps: Parameters<typeof currentGatewayConfig>[0]): string | undefined {
+  return currentGatewayConfig(deps)?.providers[0]?.apiKey;
+}
+
 describe("handleGatewaySetup", () => {
   it("tests, stores, and activates a local gateway config without returning secrets", async () => {
     const uiDir = await tempDir("keiko-gw-ui-");
@@ -66,7 +81,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () =>
         Promise.resolve([
@@ -91,10 +106,22 @@ describe("handleGatewaySetup", () => {
     expect(savedPath).toBeDefined();
     expect(existsSync(savedPath ?? "")).toBe(true);
     const saved = readFileSync(savedPath ?? "", "utf8");
-    expect(saved).toContain("example-secret-token");
+    // Issue #1320: the persisted config holds only non-secret metadata + a stable secret reference.
+    expect(saved).not.toContain("example-secret-token");
+    expect(saved).toContain("apiKeySecretRef");
+    expect(saved).toContain("cred:example-chat-model-large");
     expect(saved).toContain("example-chat-model-large");
     expect(saved).not.toContain("example-chat-model-fast");
     expect(saved).not.toContain("example-vision-model");
+    // The credential lives in the encrypted vault next to the config — sealed, never plaintext.
+    const vaultStore = readFileSync(
+      join(uiDir, "credentials", "provider-credentials.vault"),
+      "utf8",
+    );
+    expect(vaultStore).not.toContain("example-secret-token");
+    expect(vaultStore).toContain("cred:example-chat-model-large");
+    // The in-memory runtime config still carries the real, resolved credential for live calls.
+    expect(firstProviderApiKey(deps)).toBe("example-secret-token");
     expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
     expect(JSON.stringify(result.body)).not.toContain("https://llm-gateway.example.com");
     if (process.platform !== "win32") {
@@ -111,7 +138,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (_config, modelIds) =>
@@ -137,7 +164,11 @@ describe("handleGatewaySetup", () => {
     expect(JSON.stringify(result.body)).not.toContain("figd_setup-config-token");
     const savedPath = deps.gatewayConfig?.storagePath;
     expect(savedPath).toBeDefined();
-    expect(readFileSync(savedPath ?? "", "utf8")).toContain("figd_setup-config-token");
+    // Issue #1320: the PAT is routed into the encrypted Figma token vault, never written to JSON.
+    expect(readFileSync(savedPath ?? "", "utf8")).not.toContain("figd_setup-config-token");
+    const figmaVault = readFileSync(join(evidenceDir, "figma", "figma-token.vault"), "utf8");
+    expect(figmaVault).not.toContain("figd_setup-config-token");
+    expect(figmaVault.startsWith("kv1.")).toBe(true);
     deps.store.close();
   });
 
@@ -161,7 +192,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (_config, modelIds) =>
@@ -197,7 +228,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (_config, modelIds) => {
@@ -231,8 +262,14 @@ describe("handleGatewaySetup", () => {
     expect(config?.figma?.accessToken).toBe("figd_updated-config-token");
     expect(JSON.stringify(updated.body)).not.toContain("figd_updated-config-token");
     const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
-    expect(saved).toContain("example-secret-token");
-    expect(saved).toContain("figd_updated-config-token");
+    // Issue #1320: preserve-existing re-persists only references — never the plaintext credential
+    // or the Figma PAT, which is routed into the encrypted token vault.
+    expect(saved).not.toContain("example-secret-token");
+    expect(saved).not.toContain("figd_updated-config-token");
+    expect(saved).toContain("apiKeySecretRef");
+    const figmaVault = readFileSync(join(evidenceDir, "figma", "figma-token.vault"), "utf8");
+    expect(figmaVault).not.toContain("figd_updated-config-token");
+    expect(figmaVault.startsWith("kv1.")).toBe(true);
     deps.store.close();
   });
 
@@ -242,7 +279,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (_config, modelIds) =>
@@ -276,7 +313,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
@@ -318,7 +355,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
       gatewaySetupTester: () => Promise.resolve(["text-chat"]),
@@ -402,7 +439,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: (_baseUrl, _apiKey, _apiKeyHeaderName, egress) => {
         discoveryEgress = egress;
@@ -444,7 +481,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (_config, modelIds) =>
@@ -470,7 +507,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(workspaceDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (_config, modelIds) =>
@@ -496,7 +533,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: (config, modelIds) => {
@@ -524,7 +561,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
       gatewaySetupTester: () => Promise.reject(new Error("provider rejected credentials")),
@@ -547,7 +584,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
@@ -572,7 +609,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
@@ -626,7 +663,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -682,10 +719,13 @@ describe("handleGatewaySetup", () => {
       seen.push({ url: href, model: body.model, firstRole: body.messages?.[0]?.role });
       if (body.model === "Mistral-Large-3" || body.model === "text-embedding-3-large") {
         return Promise.resolve(
-          new Response(JSON.stringify({ error: { message: "not Keiko conversation compatible" } }), {
-            status: 400,
-            headers: { "content-type": "application/json" },
-          }),
+          new Response(
+            JSON.stringify({ error: { message: "not Keiko conversation compatible" } }),
+            {
+              status: 400,
+              headers: { "content-type": "application/json" },
+            },
+          ),
         );
       }
       return Promise.resolve(
@@ -702,7 +742,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -803,7 +843,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -887,7 +927,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -923,7 +963,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
@@ -948,7 +988,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
@@ -974,7 +1014,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
@@ -999,7 +1039,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
@@ -1070,7 +1110,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: {},
+      env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {

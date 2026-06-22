@@ -7,10 +7,20 @@
 // options. Aborting the signal mid-walk drops out within one directory of work; aborting
 // between extractions yields a terminal `cancelled` event and stops iteration.
 
-import type { KnowledgeCapsuleId, KnowledgeSource } from "@oscharko-dev/keiko-contracts";
+import type {
+  ExtractionCapabilityAvailability,
+  KnowledgeCapsuleId,
+  KnowledgeSource,
+  LargeDocumentResourcePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
-import { buildParserOptions, type ParserOptions, type ParserRegistry } from "../parsers/index.js";
+import {
+  buildParserOptions,
+  type ParserOptions,
+  type ParserRegistry,
+  type ProgressiveExtractor,
+} from "../parsers/index.js";
 import type { KnowledgeStore } from "../store.js";
 
 import { extractDocument, recordExtractionFailure } from "./extract.js";
@@ -21,6 +31,13 @@ export interface DiscoverAndExtractDeps {
   readonly fs: WorkspaceFs;
   readonly store: KnowledgeStore;
   readonly parserRegistry: ParserRegistry;
+  // Bounded large-document ingestion (Epic #1160, Issue #1286). Forwarded verbatim to
+  // extractDocument so large supported files take the progressive page-windowed path.
+  readonly largeDocumentPolicy?: LargeDocumentResourcePolicy;
+  readonly extractionCapabilities?: ExtractionCapabilityAvailability;
+  readonly progressiveExtractors?: readonly ProgressiveExtractor[];
+  readonly largeDocumentJobId?: string;
+  readonly chunkingStrategyVersion?: string;
 }
 
 export interface DiscoverAndExtractParams {

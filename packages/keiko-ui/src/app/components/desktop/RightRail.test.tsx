@@ -8,8 +8,9 @@ describe("RightRail", () => {
     expect(screen.getByRole("complementary", { name: "Workspace utilities" })).toBeInTheDocument();
   });
 
-  it("does not expose utility icon buttons in the right sidebar", () => {
+  it("does not expose removed workspace utility buttons", () => {
     render(<RightRail openTools={new Set()} onTool={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Workspace outline" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Inspector" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();

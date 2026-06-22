@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { openProviderCredentialVault } from "@oscharko-dev/keiko-server/credential-vault";
 import { runInvestigateCli } from "./investigate.js";
 import { runCli } from "./runner.js";
 import type { CliIo } from "./runner.js";
@@ -89,9 +90,11 @@ const FIX = [
 ].join("\n");
 
 let dir: string;
+const REAL_TMPDIR = realpathSync(tmpdir());
+const PROVIDER_CREDENTIALS_KEY = Buffer.alloc(32, 0x35).toString("base64");
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "keiko-investigate-cli-"));
+  dir = mkdtempSync(join(REAL_TMPDIR, "keiko-investigate-cli-"));
   writeFileSync(
     join(dir, "package.json"),
     JSON.stringify({ name: "demo", devDependencies: { vitest: "^4" } }, null, 2),
@@ -104,6 +107,25 @@ beforeEach(() => {
     "utf8",
   );
 });
+
+function writeReferenceOnlyGatewayConfig(modelId: string): string {
+  const configPath = join(dir, "gateway-reference-only.json");
+  const parsed = JSON.parse(gatewayConfig([modelId])) as {
+    providers: Record<string, unknown>[];
+  };
+  const provider = parsed.providers[0];
+  if (provider === undefined) {
+    throw new Error("test fixture must include one provider");
+  }
+  delete provider.apiKey;
+  provider.apiKeySecretRef = `cred:${modelId}`;
+  writeFileSync(configPath, JSON.stringify(parsed), "utf8");
+  openProviderCredentialVault({
+    configPath,
+    env: { KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY },
+  }).set(`cred:${modelId}`, "test-config-secret-value-1234567890");
+  return configPath;
+}
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
@@ -284,6 +306,27 @@ describe("runInvestigateCli (AC #1 CLI)", () => {
     );
     expect(code).toBe(0);
     expect(seenModelId).toBe("example-chat-model-fast");
+  });
+
+  it("loads a reference-only config when selecting the injected model", async () => {
+    const configPath = writeReferenceOnlyGatewayConfig("example-chat-model-fast");
+    let seenModelId: string | undefined;
+    const model: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        seenModelId = request.modelId;
+        return Promise.resolve(modelReturning(FIX).call(request, new AbortController().signal));
+      },
+    };
+    const cap = makeIo();
+    const code = await runInvestigateCli(
+      ["--description", "half is wrong", "--dir-root", dir, "--config", configPath],
+      cap.io,
+      { KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY },
+      { model },
+    );
+    expect(code).toBe(0);
+    expect(seenModelId).toBe("example-chat-model-fast");
+    expect(cap.out() + cap.err()).not.toContain("test-config-secret-value-1234567890");
   });
 
   it("does not default to a configured chat model without structured output", async () => {

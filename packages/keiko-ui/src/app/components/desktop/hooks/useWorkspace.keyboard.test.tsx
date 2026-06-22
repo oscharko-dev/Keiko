@@ -73,6 +73,8 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
         files
       </section>
       <input aria-label="focused field" />
+      {/* Stands in for Monaco's hidden editing <textarea>, to assert the form-field guard (#1205 AC2). */}
+      <textarea aria-label="editor text input" />
       <button type="button" onClick={() => workspace.api.close("files-1")}>
         close files
       </button>
@@ -158,6 +160,31 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
       expect(chat).toMatchObject({ x: 116, y: 120, w: 500, h: 376, max: false });
     });
     expect(readWins().find((w) => w.id === "files-1")).toMatchObject({ x: 40, y: 40 });
+  });
+
+  it("does not move or resize the frontmost window while the editor text input is focused", async () => {
+    // Issue #1205 Acceptance Criterion 2 + the keyboard conflict review: the Workspace window chords
+    // (Cmd/Ctrl+Arrow move, Alt+Arrow resize) must never reach the editor's text input. Monaco's
+    // editing surface is a <textarea>, which the form-field guard shields, so the chords are skipped
+    // and the typed Arrow keys move the caret instead of the window.
+    persistWorkspace([
+      appWindow({ id: "chat-1", type: "chat", z: 10, x: 100, y: 120, w: 500, h: 360 }),
+    ]);
+    render(<Harness />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(1));
+
+    screen.getByLabelText("editor text input").focus();
+    fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight", metaKey: true });
+    fireEvent.keyDown(window, { key: "ArrowDown", code: "ArrowDown", altKey: true });
+
+    expect(readWins().find((w) => w.id === "chat-1")).toMatchObject({
+      x: 100,
+      y: 120,
+      w: 500,
+      h: 360,
+      max: false,
+    });
   });
 
   it("keeps browser zoom chords untouched but routes Alt+Cmd zoom to window content zoom", async () => {

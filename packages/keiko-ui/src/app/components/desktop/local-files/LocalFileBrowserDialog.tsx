@@ -440,7 +440,7 @@ export function LocalFileBrowserDialog({
                   </li>
                 );
               })}
-              {entries.length === 0 && activeRoot.length > 0 ? (
+              {!loading && entries.length === 0 && activeRoot.length > 0 ? (
                 <li className="lkd-picker-empty">No entries in this folder.</li>
               ) : null}
             </ul>

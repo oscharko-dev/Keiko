@@ -22,6 +22,8 @@ describe("GatewaySetupDialog", () => {
     vi.clearAllMocks();
     delete document.documentElement.dataset.keikoModalOpenCount;
     document.documentElement.removeAttribute("data-keiko-modal-open");
+    delete document.documentElement.dataset.keikoGatewaySetupOpenCount;
+    document.documentElement.removeAttribute("data-keiko-gateway-setup-open");
   });
 
   it("announces dialog semantics, focuses the first field, traps tab focus, and closes on Escape", async () => {
@@ -106,6 +108,18 @@ describe("GatewaySetupDialog", () => {
 
     expect(document.documentElement).not.toHaveAttribute("data-keiko-modal-open");
     expect(document.documentElement.dataset.keikoModalOpenCount).toBeUndefined();
+  });
+
+  it("marks gateway setup as active while the credential dialog is open", () => {
+    const { unmount } = render(<GatewaySetupDialog preserveExisting />);
+
+    expect(document.documentElement).toHaveAttribute("data-keiko-gateway-setup-open", "true");
+    expect(document.documentElement.dataset.keikoGatewaySetupOpenCount).toBe("1");
+
+    unmount();
+
+    expect(document.documentElement).not.toHaveAttribute("data-keiko-gateway-setup-open");
+    expect(document.documentElement.dataset.keikoGatewaySetupOpenCount).toBeUndefined();
   });
 
   // FE-05 (WCAG 4.1.2): submit button must expose aria-busy reflecting the

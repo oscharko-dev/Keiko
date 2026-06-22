@@ -5,6 +5,7 @@ import { registerSw } from "./registerSw";
 // shape and behaviour of `register()` is fully controlled.
 interface FakeServiceWorkerContainer {
   register: ReturnType<typeof vi.fn>;
+  addEventListener?: ReturnType<typeof vi.fn>;
   getRegistrations?: ReturnType<typeof vi.fn>;
   controller?: ServiceWorker | null;
 }
@@ -13,7 +14,11 @@ const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
 
 function installServiceWorker(container: FakeServiceWorkerContainer): void {
   Object.defineProperty(navigator, "serviceWorker", {
-    value: container,
+    value: {
+      addEventListener: vi.fn(),
+      controller: null,
+      ...container,
+    },
     configurable: true,
     writable: true,
   });
@@ -51,11 +56,13 @@ describe("registerSw (issue #126)", () => {
   beforeEach(() => {
     removeServiceWorker();
     restoreCaches();
+    window.sessionStorage.clear();
   });
 
   afterEach(() => {
     removeServiceWorker();
     restoreCaches();
+    window.sessionStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -112,6 +119,133 @@ describe("registerSw (issue #126)", () => {
     expect(() => {
       registerSw();
     }).not.toThrow();
+  });
+
+  it("asks an already waiting update to activate when the page has an active controller", async () => {
+    const postMessage = vi.fn();
+    const waiting = { postMessage } as unknown as ServiceWorker;
+    const registrationAddEventListener = vi.fn();
+    const registration = {
+      waiting,
+      installing: null,
+      addEventListener: registrationAddEventListener,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    installServiceWorker({ controller: {} as ServiceWorker, register });
+
+    registerSw();
+
+    await flushMicrotasks();
+
+    expect(postMessage).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER",
+    });
+    expect(window.sessionStorage.getItem("keiko.service-worker-update-reload-pending")).toBe(
+      "true",
+    );
+  });
+
+  it("does not ask a waiting worker to activate on first install without a controller", async () => {
+    const postMessage = vi.fn();
+    const registrationAddEventListener = vi.fn();
+    const registration = {
+      waiting: { postMessage } as unknown as ServiceWorker,
+      installing: null,
+      addEventListener: registrationAddEventListener,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    installServiceWorker({ controller: null, register });
+
+    registerSw();
+
+    await flushMicrotasks();
+
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
+  it("clears the pending reload marker when update activation cannot be messaged", async () => {
+    const postMessage = vi.fn().mockImplementation(() => {
+      throw new Error("worker is no longer available");
+    });
+    const registrationAddEventListener = vi.fn();
+    const registration = {
+      waiting: { postMessage } as unknown as ServiceWorker,
+      installing: null,
+      addEventListener: registrationAddEventListener,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    installServiceWorker({ controller: {} as ServiceWorker, register });
+
+    registerSw();
+
+    await flushMicrotasks();
+
+    expect(postMessage).toHaveBeenCalledOnce();
+    expect(window.sessionStorage.getItem("keiko.service-worker-update-reload-pending")).toBeNull();
+  });
+
+  it("asks a newly installed update to activate when an old controller is active", async () => {
+    const postMessage = vi.fn();
+    const waiting = { postMessage } as unknown as ServiceWorker;
+    const installingAddEventListener = vi.fn();
+    const installing = {
+      state: "installing",
+      addEventListener: installingAddEventListener,
+    } as unknown as ServiceWorker;
+    const registrationAddEventListener = vi.fn();
+    const registration = {
+      waiting,
+      installing,
+      addEventListener: registrationAddEventListener,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    installServiceWorker({ controller: {} as ServiceWorker, register });
+
+    registerSw();
+
+    await flushMicrotasks();
+    const updateFoundHandler = registrationAddEventListener.mock.calls.find(
+      ([event]) => event === "updatefound",
+    )?.[1] as (() => void) | undefined;
+
+    postMessage.mockClear();
+    updateFoundHandler?.();
+    const stateChangeHandler = installingAddEventListener.mock.calls.find(
+      ([event]) => event === "statechange",
+    )?.[1] as (() => void) | undefined;
+    Object.defineProperty(installing, "state", { value: "installed" });
+    stateChangeHandler?.();
+
+    expect(postMessage).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER",
+    });
+  });
+
+  it("reloads at most once when the activated update becomes the controller", async () => {
+    const registrationAddEventListener = vi.fn();
+    const registration = {
+      waiting: null,
+      installing: null,
+      addEventListener: registrationAddEventListener,
+    } as unknown as ServiceWorkerRegistration;
+    const register = vi.fn().mockResolvedValue(registration);
+    const addEventListener = vi.fn();
+    installServiceWorker({ addEventListener, controller: {} as ServiceWorker, register });
+
+    registerSw();
+
+    await flushMicrotasks();
+    window.sessionStorage.setItem("keiko.service-worker-update-reload-pending", "true");
+    const controllerChangeHandler = addEventListener.mock.calls.find(
+      ([event]) => event === "controllerchange",
+    )?.[1] as (() => void) | undefined;
+
+    controllerChangeHandler?.();
+    controllerChangeHandler?.();
+
+    expect(window.sessionStorage.getItem("keiko.service-worker-update-reload-pending")).toBeNull();
   });
 
   it("unregisters service workers instead of registering them in development", async () => {

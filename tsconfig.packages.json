@@ -2,10 +2,12 @@
   "files": [],
   "references": [
     { "path": "./packages/keiko-contracts" },
+    { "path": "./packages/keiko-editor" },
     { "path": "./packages/keiko-security" },
     { "path": "./packages/keiko-quality-intelligence" },
     { "path": "./packages/keiko-model-gateway" },
     { "path": "./packages/keiko-workspace" },
+    { "path": "./packages/keiko-sandbox" },
     { "path": "./packages/keiko-tools" },
     { "path": "./packages/keiko-evidence" },
     { "path": "./packages/keiko-harness" },

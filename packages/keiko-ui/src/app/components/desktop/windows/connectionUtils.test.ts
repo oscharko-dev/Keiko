@@ -36,6 +36,13 @@ describe("canConnect — quality ↔ files (#270)", () => {
     expect(canConnect("chat", "files")).toBe(true);
     expect(canConnect("chat", "connector")).toBe(true);
   });
+
+  it("allows editor completion context to bind to files and connectors", () => {
+    expect(canConnect("editor", "files")).toBe(true);
+    expect(canConnect("files", "editor")).toBe(true);
+    expect(canConnect("editor", "connector")).toBe(true);
+    expect(canConnect("connector", "editor")).toBe(true);
+  });
 });
 
 // Epic #710, Issue #718 — a QI hub can bind to a Connector window so the connector's selected
@@ -73,6 +80,9 @@ describe("relLabel — files ↔ quality (#270)", () => {
   it("is honest when no folder is configured instead of fabricating 'src'", () => {
     expect(relLabel(snap("files"), snap("chat"))).toBe("no folder selected");
     expect(relLabel(snap("files", { root: "" }), snap("quality"))).toBe("no folder selected");
+    expect(relLabel(snap("files", { root: "/repo", activeFilePath: "src/app.ts" }), snap("editor"))).toBe(
+      "uses app.ts",
+    );
   });
 });
 
@@ -87,14 +97,18 @@ describe("connectionUtils — general workspace contracts", () => {
   it("detects connectable peers including reverse-only peers and rejects unknowns", () => {
     expect(hasConnectablePeer("quality")).toBe(true);
     expect(hasConnectablePeer("figma")).toBe(true);
+    expect(hasConnectablePeer("figmaView")).toBe(true);
     expect(hasConnectablePeer("chatHistory")).toBe(false);
     expect(hasConnectablePeer(undefined)).toBe(false);
     expect(canConnect(undefined, "chat")).toBe(false);
     expect(canConnect("chat", undefined)).toBe(false);
+    expect(canConnect("quality", "figmaView")).toBe(true);
+    expect(canConnect("figmaView", "quality")).toBe(true);
   });
 
   it("labels common non-file relationship predicates with readable verbs", () => {
     expect(relLabel(snap("quality"), snap("figma"))).toBe("uses snapshot");
+    expect(relLabel(snap("quality"), snap("figmaView"))).toBe("uses view");
     expect(relLabel(snap("chat"), snap("keiko"))).toBe("governed by");
     expect(relLabel(snap("agents"), snap("agents"))).toBe("delegates");
     expect(relLabel(snap("agents"), snap("terminal"))).toBe("runs in");
@@ -154,6 +168,7 @@ describe("connectionUtils — general workspace contracts", () => {
     expect(subText("files", { root: "/repo" })).toBe("/repo");
     expect(subText("browser", { url: "https://example.test" })).toBe("https://example.test");
     expect(subText("editor", { file: "src/app.ts" })).toBe("src/app.ts");
+    expect(subText("editor", { root: "/repo", file: "src/app.ts" })).toBe("src/app.ts — /repo");
     expect(subText("terminal", { cwd: "/repo" })).toBe("/repo");
     expect(subText("review", { base: "main", head: "release/0.2.0" })).toBe("main → release/0.2.0");
     expect(subText("review", { base: "main" })).toBeNull();
@@ -161,6 +176,10 @@ describe("connectionUtils — general workspace contracts", () => {
     expect(subText("chat", { title: "Release QA" })).toBe("Release QA");
     expect(subText("chat", { title: "New chat" })).toBeNull();
     expect(subText("connector", { provider: "github" })).toBeNull();
+    expect(subText("figma", { snapshotRunId: "fs-hidden" })).toBeNull();
+    expect(subText("figma", { selectedScreenName: "Checkout" })).toBe("Checkout");
+    expect(subText("figmaView", { selectedScreenName: "Checkout" })).toBe("Checkout");
+    expect(subText("figmaJson", { snapshotRunId: "fs-hidden", screenId: "12:34" })).toBe("12:34");
     expect(subText("files", undefined)).toBeNull();
   });
 });

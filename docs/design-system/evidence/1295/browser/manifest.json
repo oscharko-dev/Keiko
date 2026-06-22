@@ -1,0 +1,186 @@
+{
+  "issue": 1295,
+  "shotCount": 18,
+  "manifest": [
+    {
+      "file": "desktop__home__dark.png",
+      "route": "/",
+      "viewport": "desktop",
+      "mode": "dark",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 127,
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__home__light.png",
+      "route": "/",
+      "viewport": "desktop",
+      "mode": "light",
+      "theme": "light",
+      "hasShell": true,
+      "textLen": 127,
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__home__dark-hc.png",
+      "route": "/",
+      "viewport": "desktop",
+      "mode": "dark-hc",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 127,
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__home__light-hc.png",
+      "route": "/",
+      "viewport": "desktop",
+      "mode": "light-hc",
+      "theme": "light",
+      "hasShell": true,
+      "textLen": 127,
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__home__reduced-motion.png",
+      "route": "/",
+      "viewport": "desktop",
+      "mode": "reduced-motion",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 127,
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__home__forced-colors.png",
+      "route": "/",
+      "viewport": "desktop",
+      "mode": "forced-colors",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 127,
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__home__dark.png",
+      "route": "/",
+      "viewport": "tablet",
+      "mode": "dark",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__home__light.png",
+      "route": "/",
+      "viewport": "tablet",
+      "mode": "light",
+      "theme": "light",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__home__dark-hc.png",
+      "route": "/",
+      "viewport": "tablet",
+      "mode": "dark-hc",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__home__light-hc.png",
+      "route": "/",
+      "viewport": "tablet",
+      "mode": "light-hc",
+      "theme": "light",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__home__reduced-motion.png",
+      "route": "/",
+      "viewport": "tablet",
+      "mode": "reduced-motion",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__home__forced-colors.png",
+      "route": "/",
+      "viewport": "tablet",
+      "mode": "forced-colors",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__home__dark.png",
+      "route": "/",
+      "viewport": "mobile",
+      "mode": "dark",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__home__light.png",
+      "route": "/",
+      "viewport": "mobile",
+      "mode": "light",
+      "theme": "light",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__home__dark-hc.png",
+      "route": "/",
+      "viewport": "mobile",
+      "mode": "dark-hc",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__home__light-hc.png",
+      "route": "/",
+      "viewport": "mobile",
+      "mode": "light-hc",
+      "theme": "light",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__home__reduced-motion.png",
+      "route": "/",
+      "viewport": "mobile",
+      "mode": "reduced-motion",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__home__forced-colors.png",
+      "route": "/",
+      "viewport": "mobile",
+      "mode": "forced-colors",
+      "theme": "dark",
+      "hasShell": true,
+      "textLen": 121,
+      "pageErrors": []
+    }
+  ]
+}

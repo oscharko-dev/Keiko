@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <title>Editor · Chrome &amp; Tabs · Keiko Design System</title>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="keiko-editor-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="keiko-editor-views.css" />
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Guidelines · 10 · Editor</div>
+        <h1>Editor chrome &amp; tabs</h1>
+        <p class="lead">The frame around the code well — the parts a developer reads a hundred times an hour without noticing. Tabs, breadcrumbs, splits, minimap and the status bar. We <b style="color:var(--fg)">orient</b> at the strong ideas in JetBrains IDEs and rebuild them in the Keiko hand: one monochrome surface, one green accent reserved for state, every value from <code style="font-family:var(--font-mono);color:var(--accent-text)">--ed-*</code>.</p>
+      </header>
+
+      <!-- 01 SHOWCASE -->
+      <section class="sec" id="showcase">
+        <div class="sec-head" style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap">
+          <div><div class="num">01 — SHOWCASE</div><h2>The frame, assembled</h2><p>Title bar, tab strip, breadcrumbs, code well, minimap and status bar — every chrome token in one surface. Switch the appearance to preview it in place.</p></div>
+          <div class="vseg" role="group" aria-label="Editor appearance">
+            <button type="button" data-variant="dark" aria-pressed="true">Dark</button>
+            <button type="button" data-variant="light" aria-pressed="false">Light</button>
+            <button type="button" data-variant="hc" aria-pressed="false">High-contrast</button>
+          </div>
+        </div>
+
+        <div class="ev-frame" id="edDemo" data-theme="dark">
+          <div class="ev-titlebar">
+            <span class="ev-traffic"><i></i><i></i><i></i></span>
+            <span class="ev-proj">Keiko</span>
+            <span class="ev-branch"><span class="ico" data-licon="branch" data-size="13"></span>release/0.3.0</span>
+            <span class="grow"></span>
+            <span class="ev-tools">
+              <span class="ev-tbtn"><span class="ico" data-licon="run" data-size="15"></span></span>
+              <span class="ev-tbtn"><span class="ico" data-licon="debug" data-size="15"></span></span>
+              <span class="ev-tbtn"><span class="ico" data-licon="search" data-size="15"></span></span>
+            </span>
+          </div>
+          <div class="ev-tabs">
+            <div class="ev-tab on"><span class="ev-ft ts">TS</span>client.ts<span class="x"><span class="ico" data-licon="close" data-size="12"></span></span></div>
+            <div class="ev-tab"><span class="ev-ft ts">TS</span>workspace.tsx</div>
+            <div class="ev-tab"><span class="ev-ft ts">TS</span>agent.ts<span class="mod"></span></div>
+            <div class="ev-tab preview"><span class="ev-ft ts">TS</span>types.ts</div>
+            <span class="grow"></span>
+            <span class="ev-tabact"><span class="ico" data-licon="split" data-size="14"></span></span>
+          </div>
+          <div class="ev-crumbs">
+            <span class="ev-crumb"><span class="fi"><span class="ico" data-licon="folder" data-size="13"></span></span>src</span>
+            <span class="ev-crumb-sep"><span class="ico" data-licon="chevronR" data-size="12"></span></span>
+            <span class="ev-crumb">runtime</span>
+            <span class="ev-crumb-sep"><span class="ico" data-licon="chevronR" data-size="12"></span></span>
+            <span class="ev-crumb"><span class="fi"><span class="ev-ft ts" style="width:14px;height:14px">TS</span></span>client.ts</span>
+            <span class="ev-crumb-sep"><span class="ico" data-licon="chevronR" data-size="12"></span></span>
+            <span class="ev-crumb cur"><span class="ico" data-licon="hierarchy" data-size="12"></span>fetchAgents</span>
+          </div>
+          <div class="ev-main">
+            <div class="ev-code">
+              <div class="ev-gutter"><span class="ev-gln">1</span><span class="ev-gln">2</span><span class="ev-gln">3</span><span class="ev-gln">4</span><span class="ev-gln cur">5</span><span class="ev-gln">6</span><span class="ev-gln">7</span><span class="ev-gln">8</span><span class="ev-gln">9</span><span class="ev-gln">10</span></div>
+              <div class="ev-lines"><span class="ev-line"><span class="t-com">// agent client — talks to the local runtime</span></span><span class="ev-line"><span class="t-key">import</span> <span class="t-pun">{</span> <span class="t-var">z</span> <span class="t-pun">}</span> <span class="t-key">from</span> <span class="t-str">"zod"</span><span class="t-pun">;</span></span><span class="ev-line"> </span><span class="ev-line"><span class="t-key">export</span> <span class="t-key">interface</span> <span class="t-typ">Agent</span> <span class="t-pun">{</span></span><span class="ev-line active">  <span class="t-prop">id</span><span class="t-op">:</span> <span class="t-typ">string</span><span class="t-pun">;</span> <span class="t-prop">status</span><span class="t-op">:</span> <span class="t-str">"running"</span> <span class="t-op">|</span> <span class="t-str">"paused"</span><span class="t-pun">;</span><span class="ev-caret"></span></span><span class="ev-line"><span class="t-pun">}</span></span><span class="ev-line"> </span><span class="ev-line"><span class="t-key">export</span> <span class="t-key">async</span> <span class="t-key">function</span> <span class="t-fn">fetchAgents</span><span class="ev-bm">(</span><span class="t-pun">)</span><span class="t-op">:</span> <span class="t-typ">Promise</span><span class="t-op">&lt;</span><span class="t-typ">Agent</span><span class="t-pun">[]&gt;</span> <span class="t-pun">{</span></span><span class="ev-line">  <span class="t-key">const</span> <span class="t-var">res</span> <span class="t-op">=</span> <span class="t-key">await</span> <span class="t-fn">fetch</span><span class="t-pun">(</span><span class="t-str">`/api/agents`</span><span class="t-pun">)</span><span class="t-pun">;</span></span><span class="ev-line">  <span class="t-key">return</span> <span class="t-var">res</span><span class="t-op">.</span><span class="t-fn">json</span><span class="t-pun">();</span></span></div>
+            </div>
+            <div class="ev-minimap" aria-hidden="true">
+              <div class="slider"></div>
+              <div class="ev-mm" style="width:80%;background:var(--ed-syn-comment)"></div>
+              <div class="ev-mm" style="width:60%;background:var(--ed-syn-keyword)"></div>
+              <div class="ev-mm" style="width:30%"></div>
+              <div class="ev-mm" style="width:70%;background:var(--ed-syn-type)"></div>
+              <div class="ev-mm" style="width:90%;background:var(--ed-syn-string)"></div>
+              <div class="ev-mm" style="width:20%"></div>
+              <div class="ev-mm" style="width:75%;background:var(--ed-syn-function)"></div>
+              <div class="ev-mm" style="width:55%;background:var(--ed-syn-keyword)"></div>
+              <div class="ev-mm" style="width:50%;background:var(--ed-syn-property)"></div>
+            </div>
+          </div>
+          <div class="ev-status">
+            <span class="br"><span class="ico" data-licon="branch" data-size="13"></span>release/0.3.0</span>
+            <span class="di e"><span class="ico" data-licon="error" data-size="13"></span>1</span>
+            <span class="di w"><span class="ico" data-licon="alert" data-size="13"></span>2</span>
+            <span class="sp"></span>
+            <span class="it">Ln 5, Col 28</span>
+            <span class="it">Spaces: 2</span>
+            <span class="it">UTF-8</span>
+            <span class="it">LF</span>
+            <span class="it">TypeScript</span>
+          </div>
+        </div>
+        <p class="muted-cap" style="margin-top:14px">One frame, six chrome systems. The active tab carries the 2&nbsp;px accent marker; <code>agent.ts</code> shows an unsaved dot; <code>types.ts</code> is an italic preview tab. Everything else is neutral — the surface stays quiet so the code is loud.</p>
+      </section>
+
+      <!-- 02 TABS -->
+      <section class="sec" id="tabs">
+        <div class="sec-head"><div class="num">02 — TABS</div><h2>Tab states</h2><p>A tab carries identity (file-type badge + name) and state (active, dirty, pinned, preview, diagnostic). State never rides on colour alone — the active marker is a shape (top rule), dirty is a dot, pinned is a glyph.</p></div>
+        <div class="ev-frame flat" style="margin-bottom:22px">
+          <div class="ev-tabs">
+            <div class="ev-tab on"><span class="ev-ft ts">TS</span>client.ts<span class="x"><span class="ico" data-licon="close" data-size="12"></span></span></div>
+            <div class="ev-tab"><span class="ev-ft ts">TS</span>workspace.tsx</div>
+            <div class="ev-tab"><span class="ev-ft ts">TS</span>agent.ts<span class="mod"></span></div>
+            <div class="ev-tab"><span class="pin"><span class="ico" data-licon="bookmark" data-size="13"></span></span>schema.ts</div>
+            <div class="ev-tab preview"><span class="ev-ft ts">TS</span>types.ts</div>
+            <div class="ev-tab err"><span class="ico" data-licon="error" data-size="13"></span>broken.ts</div>
+            <span class="grow"></span>
+          </div>
+        </div>
+        <div class="ev-states">
+          <div class="ev-st"><div class="pv"><span style="font:500 12.5px var(--font-mono);color:var(--ed-tab-active-fg);background:var(--ed-tab-active-bg);padding:8px 14px;border-radius:6px;box-shadow:inset 0 -2px 0 0 var(--ed-tab-accent)">client.ts</span></div><div class="lb"><div class="nm">Active</div><div class="tk">--ed-tab-active-bg · -accent</div></div></div>
+          <div class="ev-st"><div class="pv"><span style="font:500 12.5px var(--font-mono);color:var(--ed-tab-inactive-fg)">workspace.tsx</span></div><div class="lb"><div class="nm">Inactive</div><div class="tk">--ed-tab-inactive-fg</div></div></div>
+          <div class="ev-st"><div class="pv"><span style="font:500 12.5px var(--font-mono);color:var(--fg-muted);display:inline-flex;align-items:center;gap:8px">agent.ts<span style="width:8px;height:8px;border-radius:50%;background:var(--fg-muted)"></span></span></div><div class="lb"><div class="nm">Modified (unsaved)</div><div class="tk">dot · --fg-muted</div></div></div>
+          <div class="ev-st"><div class="pv"><span style="font:500 12.5px var(--font-mono);color:var(--fg-muted);display:inline-flex;align-items:center;gap:7px"><span style="color:var(--accent-text);display:grid"><span class="ico" data-licon="bookmark" data-size="13"></span></span>schema.ts</span></div><div class="lb"><div class="nm">Pinned</div><div class="tk">bookmark glyph</div></div></div>
+          <div class="ev-st"><div class="pv"><span style="font:italic 500 12.5px var(--font-mono);color:var(--ed-tab-inactive-fg)">types.ts</span></div><div class="lb"><div class="nm">Preview (single-click)</div><div class="tk">italic</div></div></div>
+          <div class="ev-st"><div class="pv"><span style="font:500 12.5px var(--font-mono);color:var(--ed-error);display:inline-flex;align-items:center;gap:7px"><span class="ico" data-licon="error" data-size="13"></span>broken.ts</span></div><div class="lb"><div class="nm">Has errors</div><div class="tk">--ed-error</div></div></div>
+        </div>
+      </section>
+
+      <!-- 03 SPLITS -->
+      <section class="sec" id="splits">
+        <div class="sec-head"><div class="num">03 — SPLITS</div><h2>Editor groups</h2><p>Side-by-side editors share one tab grammar. The focused group is signalled by a one-pixel accent edge — never a heavy fill — so attention is clear without the layout shouting.</p></div>
+        <div class="ev-frame" style="display:grid;grid-template-columns:1fr 1fr">
+          <div style="border-right:1px solid var(--line);box-shadow:inset 0 0 0 1px var(--accent-line)">
+            <div class="ev-tabs"><div class="ev-tab on"><span class="ev-ft ts">TS</span>client.ts</div><span class="grow"></span></div>
+            <div class="ev-code" style="padding:10px 0"><div class="ev-gutter"><span class="ev-gln">1</span><span class="ev-gln">2</span><span class="ev-gln cur">3</span><span class="ev-gln">4</span></div><div class="ev-lines"><span class="ev-line"><span class="t-key">export</span> <span class="t-key">const</span> <span class="t-var">base</span> <span class="t-op">=</span> <span class="t-str">"/api"</span><span class="t-pun">;</span></span><span class="ev-line"> </span><span class="ev-line active"><span class="t-key">export</span> <span class="t-key">function</span> <span class="t-fn">url</span><span class="t-pun">(</span><span class="t-var">p</span><span class="t-pun">)</span> <span class="t-pun">{</span><span class="ev-caret"></span></span><span class="ev-line">  <span class="t-key">return</span> <span class="t-var">base</span> <span class="t-op">+</span> <span class="t-var">p</span><span class="t-pun">;</span></span></div></div>
+          </div>
+          <div>
+            <div class="ev-tabs"><div class="ev-tab on"><span class="ev-ft ts">TS</span>client.test.ts</div><span class="grow"></span></div>
+            <div class="ev-code" style="padding:10px 0"><div class="ev-gutter"><span class="ev-gln">1</span><span class="ev-gln">2</span><span class="ev-gln">3</span><span class="ev-gln">4</span></div><div class="ev-lines"><span class="ev-line"><span class="t-fn">test</span><span class="t-pun">(</span><span class="t-str">"builds url"</span><span class="t-pun">,</span> <span class="t-pun">()</span> <span class="t-op">=&gt;</span> <span class="t-pun">{</span></span><span class="ev-line">  <span class="t-fn">expect</span><span class="t-pun">(</span><span class="t-fn">url</span><span class="t-pun">(</span><span class="t-str">"/x"</span><span class="t-pun">))</span></span><span class="ev-line">    <span class="t-op">.</span><span class="t-fn">toBe</span><span class="t-pun">(</span><span class="t-str">"/api/x"</span><span class="t-pun">)</span><span class="t-pun">;</span></span><span class="ev-line"><span class="t-pun">})</span><span class="t-pun">;</span></span></div></div>
+          </div>
+        </div>
+        <p class="muted-cap" style="margin-top:14px">Left group focused — note the inset accent edge. Each group keeps its own tab strip; the split control lives at the strip's trailing edge (see Showcase).</p>
+      </section>
+
+      <!-- 04 BREADCRUMBS -->
+      <section class="sec" id="breadcrumbs">
+        <div class="sec-head"><div class="num">04 — BREADCRUMBS</div><h2>Structural navigation</h2><p>The breadcrumb traces the file path <em>and</em> the symbol path down to the cursor. Each crumb is a jump target; the trailing crumb names the enclosing symbol, so you always know where the caret lives.</p></div>
+        <div class="ev-frame flat" style="position:relative;overflow:visible">
+          <div class="ev-crumbs" style="border-bottom:1px solid var(--line-soft)">
+            <span class="ev-crumb"><span class="fi"><span class="ico" data-licon="folder" data-size="13"></span></span>src</span>
+            <span class="ev-crumb-sep"><span class="ico" data-licon="chevronR" data-size="12"></span></span>
+            <span class="ev-crumb">runtime</span>
+            <span class="ev-crumb-sep"><span class="ico" data-licon="chevronR" data-size="12"></span></span>
+            <span class="ev-crumb"><span class="fi"><span class="ev-ft ts" style="width:14px;height:14px">TS</span></span>client.ts</span>
+            <span class="ev-crumb-sep"><span class="ico" data-licon="chevronR" data-size="12"></span></span>
+            <span class="ev-crumb"><span class="ico" data-licon="hierarchy" data-size="12"></span>AgentClient</span>
+            <span class="ev-crumb-sep"><span class="ico" data-licon="chevronR" data-size="12"></span></span>
+            <span class="ev-crumb cur">fetchAgents()</span>
+          </div>
+          <div style="position:absolute;left:228px;top:30px;z-index:5">
+            <div class="ev-menu" style="min-width:200px">
+              <div class="ev-mlabel">Siblings in client.ts</div>
+              <div class="ev-mi"><span class="mic"><span class="ico" data-licon="hierarchy" data-size="14"></span></span><span class="mt">constructor()</span></div>
+              <div class="ev-mi on"><span class="mic"><span class="ico" data-licon="hierarchy" data-size="14"></span></span><span class="mt">fetchAgents()</span></div>
+              <div class="ev-mi"><span class="mic"><span class="ico" data-licon="hierarchy" data-size="14"></span></span><span class="mt">pause(id)</span></div>
+              <div class="ev-mi"><span class="mic"><span class="ico" data-licon="hierarchy" data-size="14"></span></span><span class="mt">resume(id)</span></div>
+            </div>
+          </div>
+          <div style="height:150px"></div>
+        </div>
+        <p class="muted-cap" style="margin-top:14px">Clicking a crumb opens a sibling switcher — jump to any peer file or symbol without leaving the keyboard. The dropdown reuses the context-menu grammar (see <a href="editor-navigation.html" style="color:var(--accent-text)">Navigation</a>).</p>
+      </section>
+
+      <!-- 05 STATUS BAR -->
+      <section class="sec" id="status">
+        <div class="sec-head"><div class="num">05 — STATUS BAR</div><h2>The status line, mapped</h2><p>Quiet by default, dense with truth. Diagnostics on the left (counts, branch), document facts on the right (position, indent, encoding, EOL, language). Each item is a click target that opens its own control.</p></div>
+        <div class="ev-anat" style="padding-top:34px">
+          <div class="ev-status" style="border:1px solid var(--line);border-radius:var(--radius-sm);position:relative">
+            <span class="br"><span class="ico" data-licon="branch" data-size="13"></span>release/0.3.0</span>
+            <span class="di e"><span class="ico" data-licon="error" data-size="13"></span>1</span>
+            <span class="di w"><span class="ico" data-licon="alert" data-size="13"></span>2</span>
+            <span class="sp"></span>
+            <span class="it">Ln 5, Col 28</span>
+            <span class="it">Spaces: 2</span>
+            <span class="it">UTF-8</span>
+            <span class="it">LF</span>
+            <span class="it">TypeScript</span>
+            <span class="ev-callout" style="left:24px;top:-28px">1</span>
+            <span class="ev-callout" style="left:128px;top:-28px">2</span>
+            <span class="ev-callout" style="right:236px;top:-28px">3</span>
+            <span class="ev-callout" style="right:150px;top:-28px">4</span>
+            <span class="ev-callout" style="right:40px;top:-28px">5</span>
+          </div>
+        </div>
+        <div class="ev-legend">
+          <div class="li"><span class="n">1</span><div><b>Branch</b> — current VCS branch, accent-tinted. Click → branch switcher. <code>--ed-statusbar-accent</code></div></div>
+          <div class="li"><span class="n">2</span><div><b>Diagnostics</b> — error + warning counts, status hues, shape-coded icons. Click → Problems. <code>--ed-error / --ed-warn</code></div></div>
+          <div class="li"><span class="n">3</span><div><b>Caret position</b> — <code>Ln, Col</code>. Click → Go to line.</div></div>
+          <div class="li"><span class="n">4</span><div><b>Document facts</b> — indent, encoding, line ending. Each opens its picker.</div></div>
+          <div class="li"><span class="n">5</span><div><b>Language</b> — resolved language mode for the file. Click → language switcher.</div></div>
+        </div>
+        <div class="card" style="padding:8px 22px;margin-top:24px">
+          <table class="ev-spec">
+            <thead><tr><th>Element</th><th>Token</th><th>Rule</th></tr></thead>
+            <tbody>
+              <tr><td class="tok">surface</td><td class="scope">--ed-statusbar-bg</td><td>= <code style="font-family:var(--font-mono)">--surface</code>, reused — the status bar is shell, not code well.</td></tr>
+              <tr><td class="tok">text</td><td class="scope">--ed-statusbar-fg</td><td>= <code style="font-family:var(--font-mono)">--fg-muted</code>; lifts to <code style="font-family:var(--font-mono)">--fg</code> on hover only.</td></tr>
+              <tr><td class="tok">branch</td><td class="scope">--ed-statusbar-accent</td><td>The single accented item — VCS context is the one thing worth a glance.</td></tr>
+              <tr><td class="tok">error · warn</td><td class="scope">--ed-error · --ed-warn</td><td>Straight from the status palette; paired with shape-coded glyphs.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 06 MINIMAP -->
+      <section class="sec" id="minimap">
+        <div class="sec-head"><div class="num">06 — MINIMAP</div><h2>Minimap &amp; overview ruler</h2><p>A 56&nbsp;px reduction of the file: syntax-tinted line blocks, a draggable viewport slider, and right-edge marks for diagnostics and search hits. Decorative density, never a control surface.</p></div>
+        <div class="ev-grid2">
+          <div class="ev-frame flat">
+            <div class="ev-main">
+              <div class="ev-code" style="padding:10px 0">
+                <div class="ev-gutter"><span class="ev-gln">1</span><span class="ev-gln">2</span><span class="ev-gln">3</span><span class="ev-gln">4</span><span class="ev-gln">5</span><span class="ev-gln">6</span><span class="ev-gln">7</span><span class="ev-gln">8</span></div>
+                <div class="ev-lines"><span class="ev-line"><span class="t-com">// reducer</span></span><span class="ev-line"><span class="t-key">export</span> <span class="t-key">function</span> <span class="t-fn">reduce</span><span class="t-pun">(</span><span class="t-var">s</span><span class="t-pun">,</span> <span class="t-var">a</span><span class="t-pun">)</span> <span class="t-pun">{</span></span><span class="ev-line">  <span class="t-key">switch</span> <span class="t-pun">(</span><span class="t-var">a</span><span class="t-op">.</span><span class="t-prop">type</span><span class="t-pun">)</span> <span class="t-pun">{</span></span><span class="ev-line">    <span class="t-key">case</span> <span class="t-str">"add"</span><span class="t-op">:</span></span><span class="ev-line">      <span class="t-key">return</span> <span class="t-pun">[</span><span class="t-op">...</span><span class="t-var">s</span><span class="t-pun">,</span> <span class="t-var">a</span><span class="t-op">.</span><span class="t-prop">item</span><span class="t-pun">];</span></span><span class="ev-line">    <span class="t-key">default</span><span class="t-op">:</span></span><span class="ev-line">      <span class="t-key">return</span> <span class="t-var">s</span><span class="t-pun">;</span></span><span class="ev-line"><span class="t-pun">}}</span></span></div>
+              </div>
+              <div class="ev-minimap" aria-hidden="true">
+                <div class="slider" style="top:20px;height:40px"></div>
+                <div class="ev-mm" style="width:40%;background:var(--ed-syn-comment)"></div>
+                <div class="ev-mm" style="width:85%;background:var(--ed-syn-keyword)"></div>
+                <div class="ev-mm" style="width:70%;background:var(--ed-syn-keyword)"></div>
+                <div class="ev-mm" style="width:55%;background:var(--ed-syn-string)"></div>
+                <div class="ev-mm" style="width:80%;background:var(--ed-syn-property)"></div>
+                <div class="ev-mm" style="width:45%;background:var(--ed-syn-keyword)"></div>
+                <div class="ev-mm" style="width:60%"></div>
+                <div class="ev-mm" style="width:30%;background:var(--ed-syn-punct)"></div>
+                <div class="mark" style="top:62px;background:var(--ed-error);right:4px;left:auto"></div>
+                <div class="mark" style="top:90px;background:var(--ed-warn);right:4px;left:auto"></div>
+              </div>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="note"><span class="tag" style="color:var(--fg-faint)">Slider</span><div>The viewport rectangle uses <code>--ed-minimap-slider</code> — a 10% neutral wash, visible on the tinted blocks but never competing with them.</div></div>
+            <div class="note"><span class="tag" style="color:var(--fg-faint)">Marks</span><div>Right-edge marks reuse status hues: <b style="color:var(--ed-error)">error</b>, <b style="color:var(--ed-warn)">warning</b>, and accent for the current find match — the same overview ruler signals Monaco draws.</div></div>
+            <div class="note flag"><span class="tag">Opt-in</span><div>The minimap is dense by nature. It ships <b>off by default</b> in compact density and on wide editors only — decoration must earn its width.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="tokens">
+        <div class="sec-head"><div class="num">07 — TOKENS</div><h2>Chrome token map</h2><p>Every value on this page resolves to a token. Tabs and the status bar reuse the shell palette; only the active-tab accent is brand green.</p></div>
+        <div class="card" style="padding:8px 22px">
+          <table class="ev-spec">
+            <thead><tr><th>Surface</th><th>Token</th><th>Resolves to</th></tr></thead>
+            <tbody>
+              <tr><td class="tok">tab strip</td><td class="scope">--ed-tab-bg</td><td>--surface</td></tr>
+              <tr><td class="tok">active tab</td><td class="scope">--ed-tab-active-bg</td><td>--ed-bg (the code well bleeds up into its tab)</td></tr>
+              <tr><td class="tok">active marker</td><td class="scope">--ed-tab-accent</td><td>--accent · 2px top rule</td></tr>
+              <tr><td class="tok">inactive label</td><td class="scope">--ed-tab-inactive-fg</td><td>--fg-faint</td></tr>
+              <tr><td class="tok">breadcrumb sep</td><td class="scope">--line-strong</td><td>neutral ramp</td></tr>
+              <tr><td class="tok">minimap slider</td><td class="scope">--ed-minimap-slider</td><td>--fg @ 10%</td></tr>
+              <tr><td class="tok">focused group edge</td><td class="scope">--accent-line</td><td>1px inset</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note" style="margin-top:16px"><span class="tag" style="color:var(--accent-text)">Next</span><div>The left margin of the code well — line numbers, run arrows, breakpoints, VCS bar, folding and inlay hints — is its own system. See <a href="editor-gutter.html" style="color:var(--accent-text)">Gutter</a>.</div></div>
+      </section>
+    </main>
+
+    <script src="lift-glyphs.js"></script>
+    <script>
+      var demo = document.getElementById("edDemo");
+      document.querySelectorAll(".vseg button").forEach(function (b) {
+        b.addEventListener("click", function () {
+          document.querySelectorAll(".vseg button").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+          b.setAttribute("aria-pressed", "true");
+          var v = b.dataset.variant;
+          demo.dataset.theme = v === "light" ? "light" : "dark";
+          if (v === "hc") { demo.dataset.hc = "more"; } else { demo.removeAttribute("data-hc"); }
+        });
+      });
+    </script>
+    <script src="theme-control.js"></script>
+  </body>
+</html>

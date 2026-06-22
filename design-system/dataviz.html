@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Data Visualisation · Keiko Design System</title>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <link rel="stylesheet" href="keiko-dataviz.css" />
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Components · Data Viz</div>
+        <h1>Showing the <span class="dim">numbers.</span></h1>
+        <p class="lead">An accessible palette that leads with the orca green and never shouts, a single-hue sequential ramp for magnitude, axis / legend / tooltip rules, and an uncertainty encoding that works without colour. All resolved to tokens, so charts retheme for free.</p>
+      </header>
+
+      <!-- PALETTE -->
+      <section class="sec" id="palette">
+        <div class="sec-head"><div class="num">01 — PALETTE</div><h2>Categorical &amp; sequential</h2><p>Six categorical hues at a matched chroma — order is legend order. The sequential ramp is one hue, dark→light, for heat &amp; magnitude.</p></div>
+        <div class="card demo-card stack">
+          <div>
+            <div class="sub-head">Categorical</div>
+            <div class="viz-legend">
+              <span class="it"><span class="sw" style="background:var(--viz-1)"></span>Triage</span>
+              <span class="it"><span class="sw" style="background:var(--viz-2)"></span>Summarise</span>
+              <span class="it"><span class="sw" style="background:var(--viz-3)"></span>Review</span>
+              <span class="it"><span class="sw" style="background:var(--viz-4)"></span>Draft</span>
+              <span class="it"><span class="sw" style="background:var(--viz-5)"></span>Lint</span>
+              <span class="it"><span class="sw" style="background:var(--viz-6)"></span>Other</span>
+            </div>
+          </div>
+          <div>
+            <div class="sub-head">Sequential — magnitude</div>
+            <div class="viz-seq"><i style="background:var(--viz-seq-1)"></i><i style="background:var(--viz-seq-2)"></i><i style="background:var(--viz-seq-3)"></i><i style="background:var(--viz-seq-4)"></i><i style="background:var(--viz-seq-5)"></i></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CHARTS -->
+      <section class="sec" id="charts">
+        <div class="sec-head"><div class="num">02 — CHARTS</div><h2>Bar, line &amp; share</h2><p>Gridlines are subtle, axes are mono and faint, the data carries the colour. Hover a bar for the tooltip pattern.</p></div>
+        <div class="card demo-card" style="display:grid;grid-template-columns:1.3fr 1fr;gap:34px;align-items:start">
+          <div class="viz">
+            <div class="sub-head">Runs per day</div>
+            <div class="viz-plot">
+              <div class="viz-yaxis"><span>1.5k</span><span>1k</span><span>500</span><span>0</span></div>
+              <div class="viz-gridlines"><i></i><i></i><i></i><i></i></div>
+              <div class="viz-bars">
+                <div class="viz-bar-col"><div class="viz-bar" style="height:48%"></div><span class="xl">Mon</span></div>
+                <div class="viz-bar-col"><div class="viz-bar" style="height:62%"></div><span class="xl">Tue</span></div>
+                <div class="viz-bar-col"><div class="viz-bar" style="height:55%"></div><span class="xl">Wed</span></div>
+                <div class="viz-bar-col"><div class="viz-bar" style="height:80%"></div><span class="xl">Thu</span></div>
+                <div class="viz-bar-col"><div class="viz-bar" style="height:71%"></div><span class="xl">Fri</span></div>
+                <div class="viz-bar-col"><div class="viz-bar uncertain" style="height:38%"></div><span class="xl">Sat</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="viz">
+            <div class="sub-head">Success rate</div>
+            <div class="viz-line-wrap">
+              <div class="viz-yaxis" style="bottom:22px"><span>100%</span><span>50%</span><span>0</span></div>
+              <div class="viz-gridlines"><i></i><i></i><i></i></div>
+              <svg viewBox="0 0 240 150" preserveAspectRatio="none">
+                <polyline points="0,38 48,30 96,52 144,28 192,18 240,22" fill="none" stroke="var(--viz-1)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+                <polygon points="0,38 48,30 96,52 144,28 192,18 240,22 240,150 0,150" fill="var(--viz-1)" opacity="0.12" />
+              </svg>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MULTI-SERIES -->
+      <section class="sec" id="multi">
+        <div class="sec-head"><div class="num">03 — MULTI-SERIES</div><h2>Grouped &amp; stacked</h2><p>More than one series per category. Grouped bars compare side by side; stacked bars show composition. The categorical palette keeps order = legend order, and pattern fills back up colour so the chart survives greyscale and colour-blindness.</p></div>
+        <div class="card demo-card" style="display:grid;grid-template-columns:1fr 1fr;gap:34px;align-items:start">
+          <div class="viz">
+            <div class="sub-head">Grouped — runs by agent</div>
+            <div class="viz-plot">
+              <div class="viz-yaxis"><span>1.5k</span><span>1k</span><span>500</span><span>0</span></div>
+              <div class="viz-gridlines"><i></i><i></i><i></i><i></i></div>
+              <div class="viz-bars">
+                <div class="viz-bar-col"><div style="display:flex;align-items:flex-end;gap:4px;height:100%;width:100%;justify-content:center;padding-bottom:22px"><div class="viz-bar" style="height:58%;max-width:18px"></div><div class="viz-bar s2" style="height:42%;max-width:18px"></div></div><span class="xl">Triage</span></div>
+                <div class="viz-bar-col"><div style="display:flex;align-items:flex-end;gap:4px;height:100%;width:100%;justify-content:center;padding-bottom:22px"><div class="viz-bar" style="height:80%;max-width:18px"></div><div class="viz-bar s2" style="height:66%;max-width:18px"></div></div><span class="xl">Docs</span></div>
+                <div class="viz-bar-col"><div style="display:flex;align-items:flex-end;gap:4px;height:100%;width:100%;justify-content:center;padding-bottom:22px"><div class="viz-bar" style="height:46%;max-width:18px"></div><div class="viz-bar s2" style="height:71%;max-width:18px"></div></div><span class="xl">Review</span></div>
+              </div>
+            </div>
+            <div class="viz-legend"><span class="it"><span class="sw" style="background:var(--viz-1)"></span>This week</span><span class="it"><span class="sw" style="background:var(--viz-2)"></span>Last week</span></div>
+          </div>
+
+          <div class="viz">
+            <div class="sub-head">Stacked — outcome mix</div>
+            <div class="viz-plot">
+              <div class="viz-yaxis"><span>100%</span><span>50%</span><span>0</span></div>
+              <div class="viz-gridlines"><i></i><i></i><i></i></div>
+              <div class="viz-bars">
+                <div class="viz-bar-col"><div style="display:flex;flex-direction:column;width:100%;max-width:46px;height:78%;border-radius:5px;overflow:hidden"><div style="flex:7;background:var(--viz-1)"></div><div style="flex:2;background:var(--viz-3)"></div><div style="flex:1;background:var(--viz-5)"></div></div><span class="xl">Triage</span></div>
+                <div class="viz-bar-col"><div style="display:flex;flex-direction:column;width:100%;max-width:46px;height:90%;border-radius:5px;overflow:hidden"><div style="flex:8;background:var(--viz-1)"></div><div style="flex:1.5;background:var(--viz-3)"></div><div style="flex:.5;background:var(--viz-5)"></div></div><span class="xl">Docs</span></div>
+                <div class="viz-bar-col"><div style="display:flex;flex-direction:column;width:100%;max-width:46px;height:70%;border-radius:5px;overflow:hidden"><div style="flex:5;background:var(--viz-1)"></div><div style="flex:3;background:var(--viz-3)"></div><div style="flex:2;background:var(--viz-5)"></div></div><span class="xl">Review</span></div>
+              </div>
+            </div>
+            <div class="viz-legend"><span class="it"><span class="sw" style="background:var(--viz-1)"></span>Success</span><span class="it"><span class="sw" style="background:var(--viz-3)"></span>Retried</span><span class="it"><span class="sw" style="background:var(--viz-5)"></span>Failed</span></div>
+          </div>
+        </div>
+        <div class="note" style="margin-top:18px"><span class="tag" style="color:var(--accent-text)">Colour-blind</span><div>The six categorical hues are spaced in oklch hue at a matched chroma, so adjacent series stay distinguishable for deuteranopia / protanopia; where two series can touch (stacked, uncertainty), a pattern or a divider backs up the hue so colour is never the only signal.</div></div>
+      </section>
+
+      <!-- TOOLTIP + UNCERTAINTY -->
+      <section class="sec" id="rules">
+        <div class="sec-head"><div class="num">03 — TOOLTIP &amp; UNCERTAINTY</div><h2>Readout &amp; the unknown</h2><p>Tooltips name the series with a swatch and a tabular value. Uncertain or estimated data is hatched — never just a paler colour, which fails for colour-blind readers and in high-contrast.</p></div>
+        <div class="card demo-card" style="display:grid;grid-template-columns:1fr 1fr;gap:34px;align-items:center">
+          <div>
+            <div class="viz-tip">
+              <div class="vl">Thursday · 4 Jun</div>
+              <div class="vk"><span class="sw" style="background:var(--viz-1)"></span>Triage<span class="vv">1,284</span></div>
+              <div class="vk"><span class="sw" style="background:var(--viz-2)"></span>Summarise<span class="vv">932</span></div>
+            </div>
+          </div>
+          <div class="demo-stack">
+            <div class="viz-uncert-note"><span class="pat"></span>Estimated / low-confidence data</div>
+            <div class="ai-conf-note" style="font-size:12.5px;color:var(--fg-muted);line-height:1.5">Pair any uncertainty fill with a legend note and, where it maps to an agent output, the confidence component from <a href="ai-components.html" style="color:var(--accent-text)">AI &amp; Agent</a>.</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      // tiny hover tooltip on bars (positional, reuses the .viz-tip look)
+      var tip = document.createElement("div"); tip.className = "viz-tip"; tip.style.position = "fixed"; tip.style.pointerEvents = "none"; tip.style.zIndex = 600; tip.style.display = "none"; document.body.appendChild(tip);
+      var vals = { Mon: 720, Tue: 930, Wed: 825, Thu: 1200, Fri: 1065, Sat: 570 };
+      function renderTip(label, value) {
+        var title = document.createElement("div"); title.className = "vl"; title.textContent = label;
+        var row = document.createElement("div"); row.className = "vk";
+        var swatch = document.createElement("span"); swatch.className = "sw"; swatch.style.background = "var(--viz-1)";
+        var valueEl = document.createElement("span"); valueEl.className = "vv"; valueEl.textContent = typeof value === "number" ? value.toLocaleString() : "—";
+        row.append(swatch, document.createTextNode("Runs"), valueEl);
+        tip.replaceChildren(title, row);
+      }
+      document.querySelectorAll(".viz-bar-col").forEach(function (col) {
+        var k = col.querySelector(".xl").textContent;
+        col.addEventListener("mousemove", function (e) {
+          renderTip(k, vals[k]);
+          tip.style.display = "block"; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY - 10) + "px";
+        });
+        col.addEventListener("mouseleave", function () { tip.style.display = "none"; });
+      });
+    </script>
+    <script src="theme-control.js"></script>
+  </body>
+</html>

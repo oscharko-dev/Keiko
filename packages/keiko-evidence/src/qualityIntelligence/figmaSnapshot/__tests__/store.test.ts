@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -74,6 +75,8 @@ const screenIr = (id: string, name: string, text?: string): Record<string, unkno
 });
 
 const snapshotFile = (runId = RUN_ID): string => join(dir, "qi", `${runId}.figma-snapshot.json`);
+const snapshotManagementFile = (runId = RUN_ID): string =>
+  join(dir, "qi", `${runId}.figma-snapshot.management.json`);
 
 const readSnapshotFile = (runId = RUN_ID): Record<string, unknown> =>
   JSON.parse(readFileSync(snapshotFile(runId), "utf8")) as Record<string, unknown>;
@@ -237,11 +240,171 @@ describe("createNodeFigmaSnapshotStore", () => {
     );
   });
 
+  it("rejects invalid JSON when loading metadata only", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    writeFileSync(snapshotFile(), "{", "utf8");
+
+    expect(() => store.loadMetadata(RUN_ID)).toThrow(EvidenceReadError);
+  });
+
   it("is WRITE-ONCE: a second record for the same runId is refused", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record(baseInput());
 
     expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
+  });
+
+  it("stores mutable display metadata without mutating the immutable snapshot record", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const immutableBefore = readFileSync(snapshotFile(), "utf8");
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+    expect(readFileSync(snapshotFile(), "utf8")).toBe(immutableBefore);
+    expect(readSnapshotFile().integrityHash).toBe(loadOrThrow(store, RUN_ID).integrityHash);
+  });
+
+  it("clears the mutable display name when an empty name is stored", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    store.updateUserMetadata(RUN_ID, {
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      displayName: "   ",
+      updatedAt: "2026-06-19T11:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({ updatedAt: "2026-06-19T11:00:00.000Z" });
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+  });
+
+  it("preserves an existing display name when only updatedAt changes", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    store.updateUserMetadata(RUN_ID, {
+      displayName: "  Release   baseline  ",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    const metadata = store.updateUserMetadata(RUN_ID, {
+      updatedAt: "2026-06-19T11:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T11:00:00.000Z",
+    });
+    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+  });
+
+  it("rejects invalid mutable display names", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    expect(() =>
+      store.updateUserMetadata(RUN_ID, {
+        displayName: "x".repeat(121),
+        updatedAt: "2026-06-19T10:00:00.000Z",
+      }),
+    ).toThrow(EvidenceWriteError);
+    expect(() =>
+      store.updateUserMetadata(RUN_ID, {
+        displayName: "bad\u0007name",
+        updatedAt: "2026-06-19T10:00:00.000Z",
+      }),
+    ).toThrow(EvidenceWriteError);
+  });
+
+  it("ignores malformed mutable management sidecars on read", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const invalidRecords: readonly unknown[] = [
+      null,
+      [],
+      { figmaSnapshotManagementSchemaVersion: 0, runId: RUN_ID, updatedAt: "2026-06-19T10:00:00Z" },
+      {
+        figmaSnapshotManagementSchemaVersion: 1,
+        runId: RUN_ID_2,
+        updatedAt: "2026-06-19T10:00:00Z",
+      },
+      { figmaSnapshotManagementSchemaVersion: 1, runId: RUN_ID },
+      {
+        figmaSnapshotManagementSchemaVersion: 1,
+        runId: RUN_ID,
+        updatedAt: "2026-06-19T10:00:00Z",
+        displayName: 42,
+      },
+      {
+        figmaSnapshotManagementSchemaVersion: 1,
+        runId: RUN_ID,
+        updatedAt: "2026-06-19T10:00:00Z",
+        displayName: "bad\u0007name",
+      },
+    ];
+
+    for (const invalidRecord of invalidRecords) {
+      writeFileSync(snapshotManagementFile(), JSON.stringify(invalidRecord), "utf8");
+      expect(store.loadUserMetadata(RUN_ID)).toBeUndefined();
+    }
+    writeFileSync(snapshotManagementFile(), "{", "utf8");
+    expect(store.loadUserMetadata(RUN_ID)).toBeUndefined();
+  });
+
+  it("rejects metadata updates for missing snapshots", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    expect(() =>
+      store.updateUserMetadata(RUN_ID, {
+        displayName: "Release baseline",
+        updatedAt: "2026-06-19T10:00:00.000Z",
+      }),
+    ).toThrow(EvidenceWriteError);
+  });
+
+  it("deletes the snapshot record, side-files, and mutable management metadata together", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const result = store.record(baseInput());
+    store.updateUserMetadata(RUN_ID, {
+      displayName: "Release baseline",
+      updatedAt: "2026-06-19T10:00:00.000Z",
+    });
+
+    const deleted = store.deleteSnapshot(RUN_ID);
+
+    expect(deleted).toEqual({
+      runId: RUN_ID,
+      recordDeleted: true,
+      sideFileDirDeleted: true,
+      metadataDeleted: true,
+    });
+    expect(store.load(RUN_ID)).toBeUndefined();
+    expect(lstatSync(snapshotFile(), { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(result.sideFileDir, { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(snapshotManagementFile(), { throwIfNoEntry: false })).toBeUndefined();
+  });
+
+  it("reports no deleted artifacts when deleting a missing snapshot", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+
+    expect(store.deleteSnapshot(RUN_ID)).toEqual({
+      runId: RUN_ID,
+      recordDeleted: false,
+      sideFileDirDeleted: false,
+      metadataDeleted: false,
+    });
   });
 
   it("does not overwrite a record that appears between the write-once precheck and final commit", () => {
@@ -753,6 +916,7 @@ describe("createNodeFigmaSnapshotStore — listRecent", () => {
 
     expect(store.listRecent()).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
     expect(store.listRecent(2)).toEqual([RUN_ID_2, RUN_ID_3]);
+    expect(store.listRecent(0)).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
   });
 
   it("skips unparseable snapshot files silently", () => {
@@ -802,10 +966,195 @@ describe("enforceFigmaSnapshotRetention", () => {
     expect(lstatSync(sideDir, { throwIfNoEntry: false })).toBeUndefined();
   });
 
+  it("refuses a symlinked side-file root before deleting snapshot records", () => {
+    if (process.platform === "win32") return;
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-01T00:00:00.000Z" },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_2,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-10T00:00:00.000Z" },
+    });
+    const sideFileBase = join(dir, "qi", "figma-snapshots");
+    const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-outside-"));
+    try {
+      rmSync(sideFileBase, { recursive: true, force: true });
+      mkdirSync(join(outside, RUN_ID), { recursive: true });
+      symlinkSync(outside, sideFileBase, "dir");
+
+      expect(() => {
+        enforceFigmaSnapshotRetention(dir, { maxRecords: 1 });
+      }).toThrow(EvidenceWriteError);
+      expect(lstatSync(snapshotFile(RUN_ID), { throwIfNoEntry: false })?.isFile()).toBe(true);
+      expect(lstatSync(join(outside, RUN_ID), { throwIfNoEntry: false })?.isDirectory()).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a symlinked per-run side-file dir before deleting that snapshot record", () => {
+    if (process.platform === "win32") return;
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-01T00:00:00.000Z" },
+    });
+    store.record({
+      ...baseInput(),
+      runId: RUN_ID_2,
+      provenance: { ...baseInput().provenance, fetchedAt: "2026-06-10T00:00:00.000Z" },
+    });
+    const sideFileBase = join(dir, "qi", "figma-snapshots");
+    const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-run-outside-"));
+    const runSideDir = join(sideFileBase, RUN_ID);
+    try {
+      rmSync(runSideDir, { recursive: true, force: true });
+      mkdirSync(join(outside, RUN_ID), { recursive: true });
+      symlinkSync(join(outside, RUN_ID), runSideDir, "dir");
+
+      expect(() => {
+        enforceFigmaSnapshotRetention(dir, { maxRecords: 1 });
+      }).toThrow(EvidenceWriteError);
+      expect(lstatSync(snapshotFile(RUN_ID), { throwIfNoEntry: false })?.isFile()).toBe(true);
+      expect(lstatSync(join(outside, RUN_ID), { throwIfNoEntry: false })?.isDirectory()).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("is a no-op when the evidence dir does not exist yet", () => {
     const nonExistent = join(dir, "does-not-exist");
     expect(() => {
       enforceFigmaSnapshotRetention(nonExistent, { maxRecords: 1 });
     }).not.toThrow();
+  });
+});
+
+// Issue #1323 AC4 — retention is now OPERATIONAL: `enforceFigmaSnapshotRetention` runs once per
+// store instance from the `ensureSwept` seam. Figma snapshot records carry no retention policy id;
+// retention is count-based on `maxRecords`, configurable via store options. The default is a
+// generous 500 (matches the QI `qi:standard-90d` profile's maxRunArtifacts) so a normal local
+// fixture set is NEVER silently purged; deployments raise/lower it explicitly.
+describe("figma snapshot store-init retention (Issue #1323 AC4)", () => {
+  // Seed N records directly on disk (one store instance, whose own ensureSwept has already fired)
+  // so a FRESH store instance is what triggers the retention pass under test.
+  const seedRecords = (count: number, startEpochMs: number): void => {
+    const writer = createNodeFigmaSnapshotStore(dir);
+    for (let i = 0; i < count; i += 1) {
+      const runId = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      writer.record({
+        ...baseInput(),
+        runId,
+        provenance: {
+          ...baseInput().provenance,
+          fetchedAt: new Date(startEpochMs + i * 1000).toISOString(),
+        },
+      });
+    }
+  };
+
+  it("runs retention on a fresh store instance and evicts the oldest beyond an explicit cap", () => {
+    seedRecords(3, Date.parse("2026-06-01T00:00:00.000Z"));
+
+    // A fresh instance with an explicit small cap must evict the two oldest on first touch.
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent(); // any op fires ensureSwept once
+
+    const oldest = "00000000-0000-4000-8000-000000000000";
+    const middle = "00000000-0000-4000-8000-000000000001";
+    const newest = "00000000-0000-4000-8000-000000000002";
+    expect(lstatSync(snapshotFile(oldest), { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(snapshotFile(middle), { throwIfNoEntry: false })).toBeUndefined();
+    expect(store.load(oldest)).toBeUndefined();
+    expect(store.load(middle)).toBeUndefined();
+    expect(loadOrThrow(store, newest).runId).toBe(newest);
+  });
+
+  it("runs retention for listByScope-only callers", () => {
+    seedRecords(3, Date.parse("2026-06-01T00:00:00.000Z"));
+
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    const results = store.listByScope("KEY123", "0:1");
+
+    expect(results.map((entry) => entry.runId)).toEqual(["00000000-0000-4000-8000-000000000002"]);
+    expect(
+      lstatSync(snapshotFile("00000000-0000-4000-8000-000000000000"), {
+        throwIfNoEntry: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("retains records with missing fetchedAt instead of evicting them as oldest", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const uncertain = "00000000-0000-4000-8000-000000000000";
+    const raw = readSnapshotFile(uncertain);
+    raw.provenance = { ...(raw.provenance as Record<string, unknown>), fetchedAt: undefined };
+    writeSnapshotFile(raw, uncertain);
+
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent();
+
+    expect(lstatSync(snapshotFile(uncertain), { throwIfNoEntry: false })?.isFile()).toBe(true);
+    expect(
+      lstatSync(snapshotFile("00000000-0000-4000-8000-000000000001"), {
+        throwIfNoEntry: false,
+      })?.isFile(),
+    ).toBe(true);
+  });
+
+  it("retains records with invalid fetchedAt instead of evicting them as oldest", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const uncertain = "00000000-0000-4000-8000-000000000000";
+    const raw = readSnapshotFile(uncertain);
+    raw.provenance = { ...(raw.provenance as Record<string, unknown>), fetchedAt: "not-a-date" };
+    writeSnapshotFile(raw, uncertain);
+
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent();
+
+    expect(lstatSync(snapshotFile(uncertain), { throwIfNoEntry: false })?.isFile()).toBe(true);
+    expect(
+      lstatSync(snapshotFile("00000000-0000-4000-8000-000000000001"), {
+        throwIfNoEntry: false,
+      })?.isFile(),
+    ).toBe(true);
+  });
+
+  it("the conservative DEFAULT cap (500) does NOT delete a small fixture set", () => {
+    seedRecords(3, Date.parse("2026-06-01T00:00:00.000Z"));
+
+    const store = createNodeFigmaSnapshotStore(dir); // no retention option → default 500
+    store.listRecent();
+
+    // All three survive under the generous default.
+    for (let i = 0; i < 3; i += 1) {
+      const runId = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      expect(loadOrThrow(store, runId).runId).toBe(runId);
+    }
+  });
+
+  it("runs retention only once per store instance (idempotent ensureSwept)", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 1 } });
+    store.listRecent();
+    const newest = "00000000-0000-4000-8000-000000000001";
+    // A second op on the SAME instance does not re-run retention (no throw, newest intact).
+    store.listRecent();
+    expect(loadOrThrow(store, newest).runId).toBe(newest);
+  });
+
+  it("a non-positive configured cap disables retention (no deletion)", () => {
+    seedRecords(2, Date.parse("2026-06-01T00:00:00.000Z"));
+    const store = createNodeFigmaSnapshotStore(dir, { retention: { maxRecords: 0 } });
+    store.listRecent();
+    for (let i = 0; i < 2; i += 1) {
+      const runId = `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+      expect(loadOrThrow(store, runId).runId).toBe(runId);
+    }
   });
 });

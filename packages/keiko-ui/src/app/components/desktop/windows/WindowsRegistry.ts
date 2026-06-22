@@ -4,6 +4,7 @@ import type {
   QualityIntelligenceImageSource,
 } from "@oscharko-dev/keiko-contracts";
 import type { IconName } from "../Icons";
+import type { AppWindow } from "./types";
 
 export type WindowType =
   | "chat"
@@ -38,9 +39,17 @@ export type WindowType =
   // Epic #532 — Relationship engine: a singleton tool window (graph list + inspector + impact +
   // health). Like QI, it lives inside the Workspace, not as a full-page route.
   | "relationships"
+  // Epic #1307, Issue #1314 — Prompt Enhancer: a singleton tool window. Enter a raw prompt, choose a
+  // profile + missing-info strategy, and review the governed Enhanced Prompt (sections, grounding
+  // plan, safety rules, output schema, quality criteria, candidate scorecards) before any downstream
+  // use. Deterministic and provider-neutral; routed through the Model Gateway for readiness only.
+  | "promptEnhancer"
   // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
   // view captured screens + IR summaries. Connects to the QI hub as a figma-snapshot source.
   | "figma"
+  // A scoped Figma View card derived from the singleton Snapshot manager. Unlike the manager, this
+  // is intentionally repeatable: each card can expose its JSON and image sources independently.
+  | "figmaView"
   // A scoped, JSON-only Figma Screen-IR source window derived from a Figma Snapshot view.
   | "figmaJson"
   // A scoped, image-only Figma screen-render source window derived from a Figma Snapshot view.
@@ -67,6 +76,11 @@ export interface ConfigField {
 export interface WindowRenderContext {
   readonly windowId: string;
   readonly mini?: boolean;
+  readonly minimalChat?: boolean;
+  readonly compact?: boolean;
+  readonly controlsNarrow?: boolean;
+  readonly barCompact?: boolean;
+  readonly workflowCompact?: boolean;
   readonly linkedRoot: string | null;
   readonly linkedFilePath: string | undefined;
   readonly linkedRoots: readonly string[];
@@ -82,16 +96,13 @@ export interface WindowRenderContext {
     | undefined;
   /** Image-only sources connected to Quality Intelligence. */
   readonly linkedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
-  readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
+  readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   /**
    * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result
    * card). Singleton targets focus the existing instance; others spawn a new card carrying `cfg`.
    * Returns the new/focused window id, or null when the workspace viewport is not ready.
    */
-  readonly openWindow: (
-    type: WindowType,
-    cfg?: Record<string, string | number | boolean>,
-  ) => string | null;
+  readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
 }
 
 export interface WindowTypeDef {
@@ -188,24 +199,26 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   editor: {
     title: "Editor",
     icon: "editor",
-    desc: "Edit a text file",
-    w: 480,
-    h: 360,
+    desc: "Open a folder or file",
+    w: 920,
+    h: 620,
+    min: { w: 620, h: 380 },
     config: [
+      {
+        key: "root",
+        label: "Folder",
+        type: "directory",
+        def: "",
+        optional: true,
+        placeholder: "/absolute/folder/path",
+      },
       {
         key: "file",
         label: "File path",
         type: "text",
         def: "",
         optional: true,
-        placeholder: "src/app.ts",
-      },
-      {
-        key: "root",
-        label: "Root",
-        type: "directory",
-        def: "",
-        optional: true,
+        placeholder: "optional relative file path",
       },
     ],
   },
@@ -263,7 +276,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   agents: {
     title: "Agents",
     icon: "agents",
-    desc: "Run a BFF workflow",
+    desc: "Choose a coding agent",
     w: 520,
     h: 560,
     tiny: { w: 250, h: 140 },
@@ -427,6 +440,20 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
+  // Epic #1307, Issue #1314 — Prompt Enhancer singleton tool window. Dense workflow-first surface:
+  // raw prompt → profile + strategy → governed Enhanced Prompt with candidate scorecards.
+  promptEnhancer: {
+    title: "Prompt Enhancer",
+    icon: "spark",
+    accent: true,
+    desc: "Turn a raw prompt into a governed, reviewable Enhanced Prompt",
+    w: 460,
+    h: 620,
+    min: { w: 340, h: 360 },
+    tiny: { w: 280, h: 220 },
+    tool: true,
+    singleton: true,
+  },
   // Epic #270 — Quality Intelligence run result card. Non-singleton: one card per run (keyed by
   // cfg.runId). Shows the generated test cases, per-candidate review, and export.
   qiRun: {
@@ -454,18 +481,30 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
-  // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
-  // view captured screens + IR summaries, connect to the QI hub as a figma-snapshot source.
-  // PAT stays server-side; the window only stores the resulting snapshotRunId in cfg.
+  // Epic #750, Issue #756 — Figma Snapshot manager. Paste a board link, trigger snapshot builds,
+  // inspect stored snapshots, and open scoped screen source cards for Quality Intelligence.
+  // PAT stays server-side; the manager stores only the currently loaded snapshotRunId in cfg.
   figma: {
     title: "Figma Snapshot",
     icon: "layers",
     accent: true,
-    desc: "Capture a Figma board snapshot",
+    desc: "Manage Figma snapshots",
     w: 420,
     h: 540,
     min: { w: 320, h: 360 },
     tiny: { w: 280, h: 240 },
+    tool: true,
+    singleton: true,
+  },
+  figmaView: {
+    title: "Figma View",
+    icon: "layers",
+    accent: true,
+    desc: "Inspect a scoped Figma screen view",
+    w: 360,
+    h: 360,
+    min: { w: 300, h: 260 },
+    tiny: { w: 260, h: 200 },
   },
   figmaJson: {
     title: "Figma JSON",
@@ -552,7 +591,9 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "figma",
   "figmaJson",
   "files",
+  "editor",
   "quality",
+  "promptEnhancer",
   "relationships",
   "automations",
   "mobile",

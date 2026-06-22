@@ -67,7 +67,14 @@ describe("workspace-persistence", () => {
     const persisted = sanitizePersistedWindows([
       win({ id: "chat-1", type: "chat", cfg: { title: "Sprint triage" } }),
       win({ id: "files-1", type: "files", cfg: { root: "/Users/alice/work/keiko" } }),
-      win({ id: "editor-1", type: "editor", cfg: { file: "packages/keiko-ui/src/index.ts" } }),
+      win({
+        id: "editor-1",
+        type: "editor",
+        cfg: {
+          file: "packages/keiko-ui/src/index.ts",
+          openFiles: ["packages/keiko-ui/src/index.ts", "package.json"],
+        },
+      }),
       win({ id: "editor-2", type: "editor", cfg: { file: "./.env.example" } }),
       win({ id: "review-1", type: "review", cfg: { runId: "run-2026-06-07-001" } }),
     ]);
@@ -75,13 +82,57 @@ describe("workspace-persistence", () => {
     expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
       ["chat-1", { title: "Sprint triage" }],
       ["files-1", { root: "/Users/alice/work/keiko" }],
-      ["editor-1", { file: "packages/keiko-ui/src/index.ts" }],
+      [
+        "editor-1",
+        {
+          file: "packages/keiko-ui/src/index.ts",
+          openFiles: ["packages/keiko-ui/src/index.ts", "package.json"],
+        },
+      ],
       ["editor-2", { file: "./.env.example" }],
       ["review-1", { runId: "run-2026-06-07-001" }],
     ]);
   });
 
-  it("preserves scoped Figma snapshot references without persisting raw snapshot payloads", () => {
+  it("preserves sanitized editor split layout state in the browser-local snapshot", () => {
+    const layoutJson = JSON.stringify({
+      version: 1,
+      panes: [
+        { id: "pane-1", file: "src/app.ts", openFiles: ["src/app.ts", "package.json"] },
+        { id: "pane-2", file: "README.md", openFiles: ["README.md", "./.env"] },
+      ],
+      activePaneId: "pane-2",
+      direction: "column",
+      splitRatio: 82,
+      sidebarWidth: 999,
+      sidebarCollapsed: true,
+    });
+
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "editor-1",
+        type: "editor",
+        cfg: { root: "/repo", file: "README.md", layoutJson },
+      }),
+    ]);
+
+    const savedLayout = JSON.parse(String(persisted[0]?.cfg.layoutJson));
+    expect(savedLayout).toEqual(
+      expect.objectContaining({
+        activePaneId: "pane-2",
+        direction: "column",
+        splitRatio: 75,
+        sidebarWidth: 440,
+        sidebarCollapsed: true,
+      }),
+    );
+    expect(savedLayout.panes).toEqual([
+      { id: "pane-1", file: "src/app.ts", openFiles: ["src/app.ts", "package.json"] },
+      { id: "pane-2", file: "README.md", openFiles: ["README.md"] },
+    ]);
+  });
+
+  it("migrates legacy scoped Figma windows to repeatable Figma View cards", () => {
     const persisted = sanitizePersistedWindows([
       win({
         id: "figma-1",
@@ -97,6 +148,7 @@ describe("workspace-persistence", () => {
     ]);
 
     expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.type).toBe("figmaView");
     expect(persisted[0]?.cfg).toEqual({
       snapshotRunId: "fs-abc-123",
       selectedScreenIdsJson: JSON.stringify(["3:1466"]),
@@ -104,6 +156,17 @@ describe("workspace-persistence", () => {
     });
     expect(JSON.stringify(persisted)).not.toContain("must");
     expect(JSON.stringify(persisted)).not.toContain("iVBORw0KGgo");
+  });
+
+  it("normalizes persisted Figma Snapshot managers to a singleton", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "figma-old", type: "figma", z: 1, cfg: { snapshotRunId: "fs-old" } }),
+      win({ id: "figma-current", type: "figma", z: 5, cfg: { snapshotRunId: "fs-current" } }),
+      win({ id: "chat-1", type: "chat", cfg: { title: "Design review" } }),
+    ]);
+
+    expect(persisted.map((entry) => entry.id)).toEqual(["figma-current", "chat-1"]);
+    expect(persisted[0]?.cfg).toEqual({ snapshotRunId: "fs-current" });
   });
 
   it("preserves standalone Figma JSON references without persisting raw JSON payloads", () => {
@@ -221,7 +284,11 @@ describe("workspace-persistence", () => {
         type: "files",
         cfg: { root: "https://user:pass@example.test/repo.git" },
       }),
-      win({ id: "editor-1", type: "editor", cfg: { file: "./.env" } }),
+      win({
+        id: "editor-1",
+        type: "editor",
+        cfg: { file: "./.env", openFiles: ["./.env", "src/app.ts"] },
+      }),
       win({ id: "review-1", type: "review", cfg: { runId: gitHubToken } }),
       win({ id: "review-2", type: "review", cfg: { runId: slackToken, rawEvidence: openAiKey } }),
     ]);
@@ -229,7 +296,7 @@ describe("workspace-persistence", () => {
     expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
       ["chat-1", { title: "[REDACTED]" }],
       ["files-1", {}],
-      ["editor-1", {}],
+      ["editor-1", { openFiles: ["src/app.ts"] }],
       ["review-1", {}],
       ["review-2", {}],
     ]);

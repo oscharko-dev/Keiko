@@ -53,7 +53,25 @@ describe("buildWorkflowManifest", () => {
       changedFiles: 1,
       targetFileCount: 1,
     });
+    expect(manifest.patch?.redactedDiff).toBeUndefined();
     expect(manifest.verification?.overallStatus).toBe("passed");
+  });
+
+  it("requires a redactor when workflow diff persistence is enabled", () => {
+    expect(() =>
+      buildWorkflowManifest(
+        identity(),
+        [],
+        {
+          workflowId: "unit-test-generation",
+          status: "dry-run",
+          proposedDiff: "--- /dev/null\n+++ b/tests/add.test.ts\n",
+          addedTestFiles: [{ path: "tests/add.test.ts", estimatedTestCount: 1 }],
+        },
+        undefined,
+        { includeDiff: true },
+      ),
+    ).toThrow("includeDiff requires a redactor");
   });
 
   it("preserves bug-investigation verification from verified.verification", () => {
@@ -138,7 +156,7 @@ describe("persistWorkflowEvidence", () => {
       {
         workflowId: "unit-test-generation",
         status: "dry-run",
-        proposedDiff: "--- /dev/null\n+++ b/tests/add.test.ts\n",
+        proposedDiff: `--- /dev/null\n+++ b/tests/${literalSecret}.test.ts\n`,
         addedTestFiles: [{ path: "tests/add.test.ts", estimatedTestCount: 1 }],
         verificationSummary: { ...verification, workspaceRoot: literalSecret },
       },
@@ -149,6 +167,29 @@ describe("persistWorkflowEvidence", () => {
     expect(report.evidenceLocation).toBe("run-1.json");
     expect(report.usageTotals.requestCount).toBe(1);
     const loaded = loadEvidence(store, "run-1");
+    if (loaded === undefined) throw new Error("Expected persisted evidence.");
     expect(JSON.stringify(loaded)).not.toContain(literalSecret);
+    expect(loaded.patch?.redactedDiff).toBeUndefined();
+  });
+
+  it("persists an opt-in redacted workflow diff", () => {
+    const store = createInMemoryEvidenceStore();
+    const literalSecret = ["CORPSECRET_", "abcdef"].join("");
+    persistWorkflowEvidence(
+      identity(),
+      {
+        workflowId: "unit-test-generation",
+        status: "dry-run",
+        proposedDiff: `--- /dev/null\n+++ b/tests/${literalSecret}.test.ts\n`,
+        addedTestFiles: [{ path: "tests/add.test.ts", estimatedTestCount: 1 }],
+      },
+      [],
+      { store, env: {}, additionalSecrets: [literalSecret] },
+      { includeDiff: true },
+    );
+    const loaded = loadEvidence(store, "run-1");
+    if (loaded === undefined) throw new Error("Expected persisted evidence.");
+    expect(loaded.patch?.redactedDiff).toBeDefined();
+    expect(loaded.patch?.redactedDiff).not.toContain(literalSecret);
   });
 });

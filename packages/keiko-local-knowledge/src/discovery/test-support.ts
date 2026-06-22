@@ -134,6 +134,18 @@ export function memoryFs(root: string, files: readonly MemoryFsFile[]): Workspac
       const cap = Math.max(0, Math.floor(maxBytes));
       return Promise.resolve(buf.subarray(0, Math.min(buf.length, cap)));
     },
+    readFileRange: (
+      absolutePath: string,
+      startByte: number,
+      length: number,
+    ): Promise<Uint8Array> => {
+      const key = findKey(absolutePath);
+      if (key === undefined) return Promise.reject(new Error(`ENOENT: ${absolutePath}`));
+      const buf = map.get(key)?.content ?? new Uint8Array();
+      const start = Math.max(0, Math.floor(startByte));
+      const cap = Math.max(0, Math.floor(length));
+      return Promise.resolve(buf.subarray(start, Math.min(buf.length, start + cap)));
+    },
   };
 }
 

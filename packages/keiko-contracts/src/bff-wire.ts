@@ -6,6 +6,9 @@
 // Reused on RunReport.verificationSummary — verification-summary.ts is the canonical home for
 // the post-#7 audit projection used by both the audit ledger and this wire shape.
 import type { VerificationAuditSummary } from "./verification-summary.js";
+// Editor-session correlation metadata (Issue #1197). Carried additively on the editable file
+// content surface so diagnostics/completion can reference an exact, content-free document version.
+import type { EditorDocumentSession, EditorDocumentVersion } from "./editor-session.js";
 // ModelCapability is the credential-free capability registry shape; SafeGatewayConfig surfaces
 // the optional capabilities table to the UI without crossing into the credential-bearing
 // GatewayConfig in gateway.ts.
@@ -553,11 +556,21 @@ export interface GroundedAskRequest {
   readonly modelId?: string | undefined;
 }
 
+// Bounded-extraction document formats surfaced to the browser citation layer (Issue #1285).
+// A normalized, content-free discriminator (not a file path or extracted text) so the UI can
+// label DOCX/XLSX/text-layer-PDF evidence distinctly without re-deriving format from the
+// scopePath suffix. Absent for ordinary code/text citations.
+export type GroundedCitationDocumentFormat = "docx" | "xlsx" | "pdf";
+
 export interface GroundedEvidenceCitation {
   readonly scopePath: string;
   readonly lineRange: { readonly startLine: number; readonly endLine: number } | undefined;
   readonly score: number;
   readonly stableId: string;
+  // Present only when this citation refers to text extracted from a connected small document
+  // by Repository Search bounded document extraction (Issue #1285); undefined for code/text
+  // evidence. Carries no document content — only the recognized format token.
+  readonly documentFormat?: GroundedCitationDocumentFormat;
   // Epic #532 — a short, human-readable label of the connected source this citation came from
   // (the connected root's basename; disambiguated with a short hash when two sources share a
   // basename). Absent for legacy single-source answers, which carry no per-source attribution.
@@ -981,6 +994,8 @@ export type FilesPreviewResponse =
 export interface FilesContentResponse extends FilesPreviewBase {
   readonly content: string;
   readonly maxBytes: number;
+  // Issue #1197: content-free editor-session metadata for the returned document revision.
+  readonly session: EditorDocumentSession;
 }
 
 export interface FilesWriteRequest {
@@ -988,7 +1003,20 @@ export interface FilesWriteRequest {
   readonly path: string;
   readonly content: string;
   readonly expectedModifiedAt?: number;
+  // Issue #1197: version-aware optimistic-concurrency token. When supplied, the BFF rejects the
+  // save with STALE_SESSION (409) if the on-disk document no longer matches this revision. This
+  // supersedes the coarser mtime-only `expectedModifiedAt` check.
+  readonly baseVersion?: EditorDocumentVersion;
 }
+
+// Re-export the editor-session shapes that the file content/write wire types reference, so wire
+// consumers reach them on the same subpath (Issue #1197).
+export type {
+  EditorDocumentSession,
+  EditorDocumentVersion,
+  EditorSessionAiProvenance,
+  EditorSessionErrorCode,
+} from "./editor-session.js";
 
 // ─── Browser tool (ADR-0017) wire types ───────────────────────────────────────────
 
@@ -1059,3 +1087,28 @@ export interface BrowserEventEnvelope {
   readonly sessionId: string;
   readonly payload: Readonly<Record<string, unknown>>;
 }
+
+// ─── Prompt Enhancer BFF wire surface (Epic #1307 / Issue #1314) ───────────────────
+// Re-exported here so UI surfaces import the prompt-enhancement request/response envelope from the
+// canonical `@oscharko-dev/keiko-contracts/bff-wire` subpath alongside the other BFF wire entities.
+// The shapes and the pure request validator live in `prompt-enhancer-bff.ts`.
+export type {
+  PromptEnhancementWireRequest,
+  PromptEnhancementModelAvailability,
+  PromptEnhancementModelRoutingReason,
+  PromptEnhancementModelRouting,
+  PromptEnhancementCandidateComparison,
+  PromptEnhancementGroundingReadiness,
+  PromptEnhancementGroundingReadinessStatus,
+  PromptEnhancementGroundingReadinessReason,
+  PromptEnhancementEvidenceReference,
+  PromptEnhancementWireResponse,
+} from "./prompt-enhancer-bff.js";
+export {
+  PROMPT_ENHANCEMENT_LOCALE_MAX_CHARS,
+  PROMPT_ENHANCEMENT_MODEL_ID_MAX_CHARS,
+  PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT,
+  PROMPT_ENHANCEMENT_MODEL_AVAILABILITIES,
+  validatePromptEnhancementWireRequest,
+} from "./prompt-enhancer-bff.js";

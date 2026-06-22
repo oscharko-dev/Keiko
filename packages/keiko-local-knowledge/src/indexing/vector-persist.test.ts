@@ -68,7 +68,11 @@ afterEach(() => {
 
 describe("insertVectorRow", () => {
   it("persists a vector row for an existing chunk lineage", () => {
-    insertVectorRow(fixture.store._internal.db, buildRow(fixture));
+    insertVectorRow(
+      fixture.store._internal.db,
+      fixture.store._internal.contentCipher,
+      buildRow(fixture),
+    );
 
     expect(
       countVectorsForDocument(
@@ -85,7 +89,11 @@ describe("insertVectorRow", () => {
     });
 
     expect(() => {
-      insertVectorRow(fixture.store._internal.db, mismatched);
+      insertVectorRow(
+        fixture.store._internal.db,
+        fixture.store._internal.contentCipher,
+        mismatched,
+      );
     }).toThrow(KnowledgeStoreError);
     expect(
       countVectorsForDocument(

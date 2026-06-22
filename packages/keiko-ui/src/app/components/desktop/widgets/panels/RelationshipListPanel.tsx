@@ -465,7 +465,7 @@ export function RelationshipListPanel({
       <div
         role="group"
         aria-label="Relationship density"
-        style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}
+        style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", marginBottom: 8 }}
       >
         {(["minimal", "standard", "dense"] as const).map((mode) => (
           <button
@@ -632,7 +632,7 @@ export function RelationshipListPanel({
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: 2,
+            gap: "var(--space-1)",
             opacity: loading ? 0.6 : 1,
             transition: "opacity 0.15s ease",
           }}

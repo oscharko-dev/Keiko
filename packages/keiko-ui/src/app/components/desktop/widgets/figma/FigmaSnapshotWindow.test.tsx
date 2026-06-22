@@ -49,6 +49,8 @@ import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 type TriggerFn = Required<FigmaSnapshotWindowProps>["triggerImpl"];
 type LoadFn = Required<FigmaSnapshotWindowProps>["loadImpl"];
 type ListFn = Required<FigmaSnapshotWindowProps>["listImpl"];
+type UpdateMetadataFn = Required<FigmaSnapshotWindowProps>["updateMetadataImpl"];
+type DeleteFn = Required<FigmaSnapshotWindowProps>["deleteImpl"];
 type LoadScreenJsonFn = Required<FigmaSnapshotWindowProps>["loadScreenJsonImpl"];
 type CodegenFn = Required<FigmaSnapshotWindowProps>["codegenImpl"];
 type RevokeFn = Required<FigmaSnapshotWindowProps>["revokeImpl"];
@@ -83,6 +85,7 @@ const MOCK_SUMMARY: FigmaSnapshotSummary = {
   nodeId: "1:2",
   version: "123456789",
   fetchedAt: "2026-06-09T10:00:00.000Z",
+  management: {},
   screenCount: 2,
   skippedCount: 0,
   reductionHint: "2 screens from 4 detected",
@@ -120,6 +123,7 @@ const MOCK_LIST_ENTRY = {
   nodeId: MOCK_SUMMARY.nodeId,
   version: MOCK_SUMMARY.version,
   fetchedAt: MOCK_SUMMARY.fetchedAt,
+  management: MOCK_SUMMARY.management,
   screenCount: MOCK_SUMMARY.screenCount,
   skippedCount: MOCK_SUMMARY.skippedCount,
   reductionHint: MOCK_SUMMARY.reductionHint,
@@ -197,6 +201,26 @@ function resolvingList(
   entries: readonly (typeof MOCK_LIST_ENTRY)[] = [],
 ): ReturnType<typeof vi.fn> & ListFn {
   return vi.fn(async () => entries) as ReturnType<typeof vi.fn> & ListFn;
+}
+
+function resolvingUpdateMetadata(): ReturnType<typeof vi.fn> & UpdateMetadataFn {
+  return vi.fn(async (_runId: string, displayName: string | null) => ({
+    ...MOCK_SUMMARY,
+    ...(displayName !== null ? { displayName } : {}),
+    management:
+      displayName !== null
+        ? { displayName, updatedAt: "2026-06-19T10:00:00.000Z" }
+        : { updatedAt: "2026-06-19T10:00:00.000Z" },
+  })) as ReturnType<typeof vi.fn> & UpdateMetadataFn;
+}
+
+function resolvingDelete(): ReturnType<typeof vi.fn> & DeleteFn {
+  return vi.fn(async (runId: string) => ({
+    runId,
+    deleted: true,
+    sideFileDirDeleted: true,
+    metadataDeleted: true,
+  })) as ReturnType<typeof vi.fn> & DeleteFn;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -319,9 +343,9 @@ describe("FigmaSnapshotWindow", () => {
       const user = userEvent.setup();
 
       await waitFor(() => expect(screen.getByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument());
-      const row = screen.getByText(/AbCdEfGhIjKl · 1:2/iu).closest("button");
+      const row = screen.getByText(/AbCdEfGhIjKl · 1:2/iu).closest("article");
       expect(row).not.toBeNull();
-      await user.click(row as HTMLButtonElement);
+      await user.click(within(row as HTMLElement).getByRole("button", { name: /load snapshot/iu }));
 
       await waitFor(() =>
         expect(loadImpl).toHaveBeenCalledWith(MOCK_SUMMARY.runId, expect.anything()),
@@ -330,6 +354,48 @@ describe("FigmaSnapshotWindow", () => {
         expect(screen.getByRole("article", { name: /screen 1: screen 1/iu })).toBeInTheDocument(),
       );
       expect(updateCfg).toHaveBeenCalledWith({ snapshotRunId: MOCK_SUMMARY.runId });
+    });
+
+    it("renames a snapshot from the dashboard list", async () => {
+      const listImpl = resolvingList([MOCK_LIST_ENTRY]);
+      const updateMetadataImpl = resolvingUpdateMetadata();
+      renderWindow({ listImpl, updateMetadataImpl });
+      const user = userEvent.setup();
+
+      await waitFor(() => expect(screen.getByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument());
+      await user.click(screen.getByRole("button", { name: /rename snapshot/iu }));
+      await user.type(screen.getByLabelText(/snapshot name for/iu), "Release baseline");
+      await user.click(screen.getByRole("button", { name: /^save$/iu }));
+
+      await waitFor(() =>
+        expect(updateMetadataImpl).toHaveBeenCalledWith(
+          MOCK_SUMMARY.runId,
+          "Release baseline",
+          expect.any(AbortSignal),
+        ),
+      );
+      expect(await screen.findByText("Release baseline")).toBeInTheDocument();
+    });
+
+    it("deletes a snapshot from the dashboard list after inline confirmation", async () => {
+      const listImpl = resolvingList([MOCK_LIST_ENTRY]);
+      const deleteImpl = resolvingDelete();
+      const { updateCfg } = renderWindow({
+        listImpl,
+        deleteImpl,
+        snapshotRunId: MOCK_SUMMARY.runId,
+      });
+      const user = userEvent.setup();
+
+      await waitFor(() => expect(screen.getByText(/AbCdEfGhIjKl · 1:2/iu)).toBeInTheDocument());
+      await user.click(screen.getByRole("button", { name: /delete snapshot/iu }));
+      await user.click(screen.getByRole("button", { name: /^delete$/iu }));
+
+      await waitFor(() =>
+        expect(deleteImpl).toHaveBeenCalledWith(MOCK_SUMMARY.runId, expect.any(AbortSignal)),
+      );
+      expect(screen.queryByText(/AbCdEfGhIjKl · 1:2/iu)).not.toBeInTheDocument();
+      expect(updateCfg).toHaveBeenCalledWith({ snapshotRunId: undefined });
     });
   });
 
@@ -499,6 +565,44 @@ describe("FigmaSnapshotWindow", () => {
         Object.defineProperty(dragEnd, "clientX", { value: 240 });
         Object.defineProperty(dragEnd, "clientY", { value: 180 });
         fireEvent(previewButton, dragEnd);
+
+        expect(onDrop).toHaveBeenCalledTimes(1);
+        expect((onDrop.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+          payload: {
+            snapshotRunId: MOCK_SUMMARY.runId,
+            screenId: "screen-2",
+            name: "Screen 2",
+          },
+          clientX: 240,
+          clientY: 180,
+        });
+      } finally {
+        window.removeEventListener(FIGMA_VIEW_DROP_EVENT, onDrop as EventListener);
+        document.elementFromPoint = originalElementFromPoint;
+        workspace.remove();
+      }
+    });
+
+    it("dispatches a workspace drop event when a rendered screen is mouse-dragged to the workspace", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger, openScreenSource: vi.fn() });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      const workspace = document.createElement("main");
+      workspace.className = "workspace";
+      document.body.appendChild(workspace);
+      const originalElementFromPoint = document.elementFromPoint;
+      document.elementFromPoint = vi.fn(() => workspace);
+      const onDrop = vi.fn();
+      window.addEventListener(FIGMA_VIEW_DROP_EVENT, onDrop as EventListener);
+      try {
+        const card = await screen.findByRole("article", { name: /screen 2: screen 2/iu });
+        const previewButton = within(card).getByRole("button", { name: /drag screen screen 2/iu });
+
+        fireEvent.mouseDown(previewButton, { button: 0, clientX: 20, clientY: 20 });
+        fireEvent.mouseMove(window, { clientX: 120, clientY: 90 });
+        fireEvent.mouseUp(window, { clientX: 240, clientY: 180 });
 
         expect(onDrop).toHaveBeenCalledTimes(1);
         expect((onDrop.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
@@ -1000,6 +1104,55 @@ describe("FigmaSnapshotWindow", () => {
         });
       } finally {
         window.removeEventListener(FIGMA_JSON_DROP_EVENT, onDrop as EventListener);
+      }
+    });
+
+    it("dispatches a standalone JSON drop from the scoped inspector via mouse drag", async () => {
+      const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
+      const loadScreenJsonSpy = vi.fn(async () => MOCK_SCREEN_JSON);
+      const { container } = renderWindow({
+        sourceWindowId: "figma-view-1",
+        snapshotRunId: MOCK_SUMMARY.runId,
+        selectedScreenIds: ["screen-2"],
+        selectedScreenName: "Screen 2",
+        loadImpl: loadSpy as unknown as LoadFn,
+        loadScreenJsonImpl: loadScreenJsonSpy as unknown as LoadScreenJsonFn,
+      });
+      const user = userEvent.setup();
+
+      await screen.findByRole("article", { name: /figma view source: screen 2/iu });
+      await user.click(screen.getByRole("button", { name: /inspect json/iu }));
+      await screen.findByRole("region", { name: /scoped json for screen 2/iu });
+      const dragSurface = container.querySelector<HTMLElement>(".figma-view-json-drag-surface");
+      expect(dragSurface).not.toBeNull();
+
+      const workspace = document.createElement("main");
+      workspace.className = "workspace";
+      document.body.appendChild(workspace);
+      const originalElementFromPoint = document.elementFromPoint;
+      document.elementFromPoint = vi.fn(() => workspace);
+      const onDrop = vi.fn();
+      window.addEventListener(FIGMA_JSON_DROP_EVENT, onDrop as EventListener);
+      try {
+        fireEvent.mouseDown(dragSurface as HTMLElement, { button: 0, clientX: 10, clientY: 10 });
+        fireEvent.mouseMove(window, { clientX: 30, clientY: 20 });
+        fireEvent.mouseUp(window, { clientX: 90, clientY: 110 });
+
+        expect(onDrop).toHaveBeenCalledTimes(1);
+        expect((onDrop.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+          payload: {
+            snapshotRunId: MOCK_SUMMARY.runId,
+            screenId: "screen-2",
+            name: "Screen 2",
+            sourceWindowId: "figma-view-1",
+          },
+          clientX: 90,
+          clientY: 110,
+        });
+      } finally {
+        window.removeEventListener(FIGMA_JSON_DROP_EVENT, onDrop as EventListener);
+        document.elementFromPoint = originalElementFromPoint;
+        workspace.remove();
       }
     });
 

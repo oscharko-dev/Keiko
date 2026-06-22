@@ -252,161 +252,12 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
   );
 }
 
-function workspaceObjectLabel(win: AppWindow): string {
-  const title = WIN_TYPES[win.type].title;
-  const sub = subText(win.type, win.cfg);
-  return sub !== null ? `${title}: ${sub}` : title;
-}
-
-function workspaceObjectStatus(win: AppWindow, top: AppWindow | null): string {
-  const parts: string[] = [];
-  parts.push(top !== null && top.id === win.id ? "active" : "background");
-  parts.push(win.minimized === true ? "minimized" : "open");
-  if (win.max) parts.push("maximized");
-  const zoom = win.zoom ?? 1;
-  if (zoom !== 1) parts.push(`${String(Math.round(zoom * 100))}% content zoom`);
-  return parts.join(", ");
-}
-
-function relationshipLabel(
-  conn: Connection,
-  wins: readonly AppWindow[],
-): { readonly text: string; readonly source: AppWindow; readonly target: AppWindow } | null {
-  const source = wins.find((w) => w.id === conn.a);
-  const target = wins.find((w) => w.id === conn.b);
-  if (source === undefined || target === undefined) return null;
-  return {
-    source,
-    target,
-    text: `${workspaceObjectLabel(source)} ${relLabel(source, target)} ${workspaceObjectLabel(
-      target,
-    )}`,
-  };
-}
-
-type RelationshipOutlineItem = {
-  readonly conn: Connection;
-  readonly label: {
-    readonly text: string;
-    readonly source: AppWindow;
-    readonly target: AppWindow;
-  };
-};
-
-interface WorkspaceOutlineProps {
-  readonly wins: readonly AppWindow[] | null;
-  readonly conns: readonly Connection[];
-  readonly top: AppWindow | null;
-  readonly api: UseWorkspaceResult["api"];
-  readonly openPalette: () => void;
-}
-
-function WorkspaceOutline({
-  wins,
-  conns,
-  top,
-  api,
+export function Workspace({
+  ws,
+  wsRef,
   openPalette,
-}: WorkspaceOutlineProps): ReactNode {
-  const relationships = useMemo(
-    () =>
-      wins === null
-        ? []
-        : conns
-            .map((conn) => ({ conn, label: relationshipLabel(conn, wins) }))
-            .filter((item): item is RelationshipOutlineItem => item.label !== null),
-    [conns, wins],
-  );
-  const hasWindows = wins !== null && wins.length > 0;
-
-  return (
-    <section className="ws-outline" aria-labelledby="ws-outline-title">
-      <div className="ws-outline-inner">
-        <h2 id="ws-outline-title">Workspace outline</h2>
-        <p className="ws-outline-summary">
-          {wins === null
-            ? "Workspace is loading."
-            : `${String(wins.length)} workspace window${wins.length === 1 ? "" : "s"}, ${String(
-                relationships.length,
-              )} relationship${relationships.length === 1 ? "" : "s"}.`}
-        </p>
-        <div className="ws-outline-actions">
-          <button type="button" onClick={openPalette}>
-            New window
-          </button>
-          <button type="button" onClick={api.tileAll} disabled={!hasWindows}>
-            Tile all windows
-          </button>
-          <button type="button" onClick={api.cascade} disabled={!hasWindows}>
-            Cascade windows
-          </button>
-        </div>
-
-        <section aria-labelledby="ws-outline-windows-title">
-          <h3 id="ws-outline-windows-title">Windows</h3>
-          {wins === null ? (
-            <p>Loading windows.</p>
-          ) : wins.length === 0 ? (
-            <p>No workspace windows are open.</p>
-          ) : (
-            <ul className="ws-outline-list">
-              {wins.map((win) => {
-                const label = workspaceObjectLabel(win);
-                const def = WIN_TYPES[win.type];
-                return (
-                  <li key={win.id}>
-                    <article aria-labelledby={`ws-outline-window-${win.id}`}>
-                      <h4 id={`ws-outline-window-${win.id}`}>{label}</h4>
-                      <p>
-                        Type: {def.title}. Status: {workspaceObjectStatus(win, top)}.
-                      </p>
-                      <p>{def.desc}</p>
-                      <div className="ws-outline-actions" aria-label={`${label} actions`}>
-                        <button type="button" onClick={() => api.restore(win.id)}>
-                          {win.minimized === true ? `Restore ${label}` : `Open ${label}`}
-                        </button>
-                        <button type="button" onClick={() => api.minimize(win.id)}>
-                          Minimize {label}
-                        </button>
-                        <button type="button" onClick={() => api.maximize(win.id)}>
-                          {win.max ? `Restore size of ${label}` : `Full screen ${label}`}
-                        </button>
-                        <button type="button" onClick={() => api.close(win.id)}>
-                          Close {label}
-                        </button>
-                      </div>
-                    </article>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-
-        <section aria-labelledby="ws-outline-relationships-title">
-          <h3 id="ws-outline-relationships-title">Relationships</h3>
-          {relationships.length === 0 ? (
-            <p>No relationships are connected.</p>
-          ) : (
-            <ul className="ws-outline-list">
-              {relationships.map(({ conn, label }) => (
-                <li key={conn.id}>
-                  <p>{label.text}.</p>
-                  <button type="button" onClick={() => api.removeConn(conn.id)}>
-                    Remove relationship between {workspaceObjectLabel(label.source)} and{" "}
-                    {workspaceObjectLabel(label.target)}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </div>
-    </section>
-  );
-}
-
-export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
+  palette,
+}: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
   const [panning, setPanning] = useState(false);
   const [handTool, setHandTool] = useState(false);
@@ -572,7 +423,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
 
   const addFigmaViewNode = useCallback(
     (payload: FigmaViewDragPayload, clientX: number, clientY: number, rect: DOMRect): void => {
-      const id = api.add("figma", {
+      const id = api.add("figmaView", {
         snapshotRunId: payload.snapshotRunId,
         selectedScreenIdsJson: JSON.stringify([payload.screenId]),
         selectedScreenName: payload.name,
@@ -811,6 +662,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   };
 
   const empty = wins !== null && wins.length === 0;
+  const hasMaximizedWindow = wins?.some((win) => win.max) ?? false;
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
@@ -819,6 +671,8 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       ref={wsRef}
       aria-label="Workspace surface"
       tabIndex={0}
+      data-window-maxed={hasMaximizedWindow ? "true" : undefined}
+      data-canvas-overlays-hidden={hasMaximizedWindow ? "true" : "false"}
       data-connecting={connecting !== null ? "true" : undefined}
       data-panning={panning ? "true" : undefined}
       data-hand-tool={handTool ? "true" : undefined}
@@ -830,7 +684,6 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     >
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
-      <WorkspaceOutline wins={wins} conns={conns} top={top} api={api} openPalette={openPalette} />
       <ConnectAnnouncer wins={visibleWins} connecting={connecting} conns={conns} />
       {connecting !== null ? (
         // Visible counterpart to ConnectAnnouncer for sighted users — connect
@@ -875,40 +728,40 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       <div className="ws-zoom">
         <button
           type="button"
-          className="ws-zoom-btn"
+          className="ws-zoom-btn ui-tip cmp-tip-start"
           onClick={() => api.zoomTo(stepViewZoom(view.zoom, -0.2))}
           disabled={view.zoom <= MIN_ZOOM}
           aria-label="Zoom out"
-          title="Zoom out"
+          data-tip="Zoom out"
         >
           <Icons.zoomOut size={15} />
         </button>
         <button
           type="button"
-          className="ws-zoom-btn"
+          className="ws-zoom-btn ui-tip cmp-tip-start"
           onClick={api.fitView}
           disabled={visibleWins === null || visibleWins.length === 0}
           aria-label="Fit workspace to windows"
-          title="Fit workspace to windows"
+          data-tip="Fit workspace to windows"
         >
           <Icons.expand size={15} />
         </button>
         <button
           type="button"
-          className="ws-zoom-pct mono"
+          className="ws-zoom-pct mono ui-tip"
           onClick={api.resetView}
-          aria-label={`${String(Math.round(view.zoom * 100))}% — reset view`}
-          title="Reset view to 100%"
+          aria-label={`${String(Math.round(view.zoom * 100))}% — reset`}
+          data-tip="Reset"
         >
           {Math.round(view.zoom * 100)}%
         </button>
         <button
           type="button"
-          className="ws-zoom-btn"
+          className="ws-zoom-btn ui-tip cmp-tip-end"
           onClick={() => api.zoomTo(stepViewZoom(view.zoom, 0.2))}
           disabled={view.zoom >= MAX_ZOOM}
           aria-label="Zoom in"
-          title="Zoom in"
+          data-tip="Zoom in"
         >
           <Icons.zoomIn size={15} />
         </button>
@@ -916,16 +769,16 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
 
       <button
         type="button"
-        className="ws-fab"
+        className="ws-fab ui-tip cmp-tip-end"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={openPalette}
         aria-label="New window"
-        title="New window"
+        data-tip="New window"
       >
         <Icons.add size={20} />
       </button>
 
-      {palette ?? null}
+      {hasMaximizedWindow ? null : (palette ?? null)}
     </main>
   );
   /* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */

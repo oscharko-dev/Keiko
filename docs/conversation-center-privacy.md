@@ -125,8 +125,10 @@ model gateway for memory-specific processing:
 ## What is never transmitted to a model
 
 - **Gateway credentials.** Your provider API key stays in the
-  `KEIKO_MODEL_<NAME>_API_KEY` env var or the gateway config file and is read
-  only by the BFF when assembling the request to your provider.
+  `KEIKO_MODEL_<NAME>_API_KEY` env var or the encrypted local credential vault
+  (referenced from the gateway config file by `apiKeySecretRef`, never stored as
+  plaintext — see [ADR-0046](./adr/ADR-0046-local-credential-vault.md)) and is
+  read only by the BFF when assembling the request to your provider.
 - **Provider base URLs.** The base URL is server-side only. It does not appear
   in conversation state, UI model lists, error envelopes, or evidence
   manifests.

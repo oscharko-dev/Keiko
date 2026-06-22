@@ -11,6 +11,7 @@ import { fileURLToPath, URL } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const uiDir = join(repoRoot, "packages", "keiko-ui");
+const requireFromRepo = createRequire(join(repoRoot, "package.json"));
 const requireFromUi = createRequire(join(uiDir, "package.json"));
 
 const host = "127.0.0.1";
@@ -20,6 +21,7 @@ const nextPort = Number(process.env.KEIKO_DEV_NEXT_PORT ?? "3000");
 const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko", "dev"));
 const pidFile = resolve(process.env.KEIKO_DEV_PID_FILE ?? join(stateDir, "dev-ui.pid.json"));
 const bffScript = join(repoRoot, "scripts", "dev-bff.mjs");
+const tscBin = requireFromRepo.resolve("typescript/bin/tsc");
 const nextBin = requireFromUi.resolve("next/dist/bin/next");
 const children = new Map();
 const restartCounts = new Map();
@@ -153,6 +155,7 @@ function restartChild(label) {
   setTimeout(() => {
     if (shuttingDown) return;
     if (label === "bff") startBff();
+    else if (label === "packages") startPackageBuildWatch();
     else startNext();
     void waitForPublicReadiness();
   }, delayMs).unref();
@@ -223,8 +226,9 @@ async function waitForPublicReadiness() {
   publicReady = false;
   writeState({ ready: false });
   try {
+    let lastError = "not started";
     while (!shuttingDown) {
-      const lastError = await readinessProbe();
+      lastError = await readinessProbe();
       if (lastError === "ok") {
         publicReady = true;
         writeState({ ready: true });
@@ -240,12 +244,23 @@ async function waitForPublicReadiness() {
 }
 
 function startBff() {
-  spawnChild("bff", process.execPath, [bffScript], {
+  spawnChild("bff", process.execPath, ["--watch", "--watch-preserve-output", bffScript], {
     cwd: repoRoot,
     env: {
       KEIKO_DEV_BFF_PORT: String(bffPort),
       KEIKO_STATE_DIR: stateDir,
     },
+  });
+}
+
+function packageBuildWatchArgs() {
+  return [tscBin, "-b", "tsconfig.packages.json", "--watch", "--preserveWatchOutput"];
+}
+
+function startPackageBuildWatch() {
+  spawnChild("packages", process.execPath, packageBuildWatchArgs(), {
+    cwd: repoRoot,
+    env: {},
   });
 }
 
@@ -404,6 +419,7 @@ if (invokedDirectly) {
     process.exit(1);
   }
 
+  startPackageBuildWatch();
   startBff();
   startNext();
 

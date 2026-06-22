@@ -36,6 +36,26 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the governed editor inline-completion routes (#1200)", () => {
+    const patterns = [
+      { method: "POST", pattern: "/api/editor/inline-completion" },
+      { method: "POST", pattern: "/api/editor/inline-completion/telemetry" },
+    ];
+    for (const { method, pattern } of patterns) {
+      expect(
+        API_ROUTES.find((r) => r.method === method && r.pattern === pattern),
+        `${method} ${pattern} must be registered`,
+      ).toBeDefined();
+    }
+    // The nested telemetry path must resolve to its own handler, not the completion route.
+    expect(matchRoute("POST", "/api/editor/inline-completion")).toMatchObject({
+      definition: { pattern: "/api/editor/inline-completion" },
+    });
+    expect(matchRoute("POST", "/api/editor/inline-completion/telemetry")).toMatchObject({
+      definition: { pattern: "/api/editor/inline-completion/telemetry" },
+    });
+  });
+
   it("includes the Quality Intelligence UI read routes (#280)", () => {
     const list = API_ROUTES.find(
       (r) => r.method === "GET" && r.pattern === "/api/quality-intelligence/runs",

@@ -3,7 +3,11 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { CliIo } from "./runner.js";
-import { builtCheckoutLayout, hasBuiltKeikoLayout, localPackageRoot } from "./install-layout.js";
+import {
+  hasBuiltKeikoLayout,
+  localPackageRoot,
+  resolvePreferredInstallLayout,
+} from "./install-layout.js";
 
 interface PackageJsonLike {
   readonly version?: unknown;
@@ -43,8 +47,6 @@ function resolveLocalPackageInstall(cwd: string): LocalInstall | undefined {
   const packageRoot = localPackageRoot(cwd);
   const cliEntry = resolve(packageRoot, "dist", "cli", "index.js");
   const version = readVersion(join(packageRoot, "package.json"));
-  // Share the start-time predicate: a package missing its built UI asset is not
-  // one `keiko start` would launch, so doctor must not report it as the install.
   if (!hasBuiltKeikoLayout(packageRoot) || version === undefined) return undefined;
   return { packageRoot, cliEntry, version };
 }
@@ -83,7 +85,7 @@ function staleBinaryWarning(report: DoctorReport): string | undefined {
 export function collectDoctorReport(deps: DoctorCliDeps = {}): DoctorReport {
   const cwd = deps.cwd ?? process.cwd();
   const runningEntry = resolveRunningEntry(deps.argv ?? process.argv);
-  const localBuildBin = builtCheckoutLayout(cwd)?.binPath;
+  const localBuildBin = resolvePreferredInstallLayout(cwd)?.binPath;
   const localPackageInstall = resolveLocalPackageInstall(cwd);
   const report: DoctorReport = {
     cwd,
@@ -134,7 +136,9 @@ export function runDoctorCli(
   io.out(`  running version: ${report.runningVersion}\n`);
   io.out(`  running entry: ${report.runningEntry ?? "(unavailable)"}\n`);
   io.out(`  local built CLI: ${report.localBuildBin ?? "(not found)"}\n`);
-  io.out(`  local installed package: ${report.localPackageInstall?.cliEntry ?? "(not found)"}\n`);
+  io.out(
+    `  local installed package: ${report.localPackageInstall?.cliEntry ?? "(not found)"}\n`,
+  );
   io.out(`  local installed version: ${report.localPackageInstall?.version ?? "(not found)"}\n`);
   if (report.warning !== undefined) {
     io.out(`\nDiagnosis:\n${report.warning}\n\n`);

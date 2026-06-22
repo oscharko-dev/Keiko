@@ -33,6 +33,7 @@ import {
 } from "../../../relationships/api";
 import type { ApiRelationship } from "../../../relationships/api";
 import { Icons } from "../Icons";
+import KeikoSelect from "../KeikoSelect";
 
 // ─── Per-denial-code UI messages (verbatim from denial-reasons.md) ─────────────
 // These are displayed only when the server returns a denial — never invented by the UI.
@@ -93,14 +94,8 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
   const [previewLoading, setPreviewLoading] = useState(false);
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  const firstFocusableRef = useRef<HTMLSelectElement | null>(null);
   const titleId = "rel-create-dialog-title";
   const descId = "rel-create-dialog-desc";
-
-  // Focus trap: on mount, focus first field
-  useEffect(() => {
-    firstFocusableRef.current?.focus();
-  }, []);
 
   // Focus trap: keep focus inside dialog
   const trapFocus = useCallback((e: globalThis.KeyboardEvent) => {
@@ -372,12 +367,13 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
             >
               Type
             </label>
-            <select
-              id="rel-type"
-              ref={firstFocusableRef}
+            <KeikoSelect
               value={form.type}
-              onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as RelationshipType }))}
-              style={{
+              ariaLabel="Relationship type"
+              /* eslint-disable-next-line jsx-a11y/no-autofocus -- relationship dialog intentionally starts on type selection. */
+              autoFocus
+              menuTitle="Relationship type"
+              triggerStyle={{
                 width: "100%",
                 background: "var(--inset)",
                 border: "1px solid var(--line)",
@@ -387,21 +383,25 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                 color: "var(--fg)",
                 fontSize: 13,
               }}
-              aria-label="Relationship type"
-            >
-              {RELATIONSHIP_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {RELATIONSHIP_TYPE_DEFINITIONS[t].displayName}
-                </option>
-              ))}
-            </select>
+              sections={[
+                {
+                  options: RELATIONSHIP_TYPES.map((type) => ({
+                    value: type,
+                    label: RELATIONSHIP_TYPE_DEFINITIONS[type].displayName,
+                  })),
+                },
+              ]}
+              onValueChange={(next) =>
+                setForm((current) => ({ ...current, type: next as RelationshipType }))
+              }
+            />
             <div style={{ fontSize: 11, color: "var(--fg-muted)", marginTop: 3 }}>
               {def.semantics}
             </div>
           </div>
 
           {/* Source endpoint */}
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: "var(--space-3)" }}>
             <div style={{ flex: "0 0 140px" }}>
               <label
                 htmlFor="rel-src-kind"
@@ -474,7 +474,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           </div>
 
           {/* Target endpoint */}
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: "var(--space-3)" }}>
             <div style={{ flex: "0 0 140px" }}>
               <label
                 htmlFor="rel-tgt-kind"
@@ -642,7 +642,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           )}
 
           {/* Action row */}
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+          <div style={{ display: "flex", gap: "var(--space-4)", justifyContent: "flex-end", marginTop: 4 }}>
             <button
               type="button"
               className="arun-btn"

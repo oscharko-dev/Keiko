@@ -29,6 +29,18 @@
         "functions": 97.14
       }
     },
+    "keiko-editor": {
+      "files": 4,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 0,
+      "totalLines": 3,
+      "coverage": {
+        "lines": 100,
+        "statements": 100,
+        "branches": 100,
+        "functions": 100
+      }
+    },
     "keiko-evaluations": {
       "files": 18,
       "uncoveredFiles": 0,

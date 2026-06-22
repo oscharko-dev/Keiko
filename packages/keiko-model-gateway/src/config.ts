@@ -16,6 +16,7 @@ import type {
   CostClass,
   FigmaConnectorConfig,
   GatewayConfig,
+  InfillingAlignment,
   LatencyClass,
   ModelCapability,
   ModelKind,
@@ -45,6 +46,18 @@ const BEARER_API_KEY_HEADER_NAME_SET = new Set<string>([
 ]);
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
+
+// Resolves an opaque, NON-SECRET credential reference (persisted in the config file as a provider's
+// `apiKeySecretRef`) to its plaintext secret, or undefined when the reference is unknown. The gateway
+// stays crypto-free and deterministic: keiko-server / keiko-cli inject a vault-backed resolver
+// (Issue #1320), while in-memory configs and tests pass none. A resolver that throws or returns
+// undefined degrades to the next credential source, so a missing/locked vault surfaces as the
+// existing "apiKey must be set" config error rather than a crash.
+export type ProviderSecretResolver = (reference: string) => string | undefined;
+
+export interface ParseGatewayConfigOptions {
+  readonly secretResolver?: ProviderSecretResolver | undefined;
+}
 
 export interface SafeProviderConfig {
   readonly modelId: string;
@@ -344,6 +357,52 @@ function resolveSecret(modelId: string, fileValue: string, env: EnvSource, suffi
   return fallback ?? "";
 }
 
+function resolveSecretRef(
+  rawRef: unknown,
+  resolver: ProviderSecretResolver | undefined,
+): string | undefined {
+  if (resolver === undefined || typeof rawRef !== "string" || rawRef.length === 0) {
+    return undefined;
+  }
+  // A resolver fault (e.g. a tampered or unreadable vault) must not crash config parsing; degrade to
+  // the next credential source so the provider either resolves elsewhere or fails the explicit
+  // "apiKey must be set" check below — never leaking a stack trace or partial key material.
+  try {
+    const resolved = resolver(rawRef);
+    return resolved !== undefined && resolved.length > 0 ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Resolves a provider's effective apiKey. Precedence (highest first):
+//   1. per-model env  KEIKO_MODEL_<id>_API_KEY        — transient operator override, never persisted
+//   2. vault          secretResolver(apiKeySecretRef) — durable encrypted store (Issue #1320)
+//   3. file plaintext raw.apiKey                      — legacy, tolerated until migrated to the vault
+//   4. default env    KEIKO_DEFAULT_API_KEY           — final fallback
+// The env tiers keep their existing positions so environment credentials stay transient and win as
+// runtime overrides; the vault simply occupies the slot the legacy plaintext file value used to own.
+function resolveProviderApiKey(
+  raw: Record<string, unknown>,
+  modelId: string,
+  fileApiKey: string,
+  env: EnvSource,
+  options: ParseGatewayConfigOptions,
+): string {
+  const perModel = env[`KEIKO_MODEL_${envModelToken(modelId)}_API_KEY`];
+  if (perModel !== undefined && perModel.length > 0) {
+    return perModel;
+  }
+  const fromVault = resolveSecretRef(raw.apiKeySecretRef, options.secretResolver);
+  if (fromVault !== undefined) {
+    return fromVault;
+  }
+  if (fileApiKey.length > 0) {
+    return fileApiKey;
+  }
+  return env.KEIKO_DEFAULT_API_KEY ?? "";
+}
+
 function resolveApiKeyHeaderName(
   rawValue: unknown,
   path: string,
@@ -427,6 +486,7 @@ function providerCapabilityFlags(
   | "supportsDocumentInput"
   | "supportsSeeding"
   | "supportsResponseFormat"
+  | "supportsInfilling"
 > {
   return {
     toolCalling: optionalBoolean(raw.toolCalling, `${path}.toolCalling`, false),
@@ -448,6 +508,42 @@ function providerCapabilityFlags(
       `${path}.supportsResponseFormat`,
       false,
     ),
+    supportsInfilling: optionalBoolean(raw.supportsInfilling, `${path}.supportsInfilling`, false),
+  };
+}
+
+// Resolves the optional `infillingAlignment` enum and enforces the two FIM invariants (Issue #1210),
+// shared by the lenient inline parser and the strict top-level parser:
+//   1. suffix-aware completion is a chat-only capability — `supportsInfilling` must be false for any
+//      non-chat kind (defence in depth alongside the contract predicates);
+//   2. an alignment posture is meaningless without the capability — `infillingAlignment` requires
+//      `supportsInfilling: true`.
+// Returns the alignment only when declared so a capability record round-trips exactly.
+function resolveInfillingAlignment(
+  raw: Record<string, unknown>,
+  path: string,
+  supportsInfilling: boolean,
+  kind: ModelKind,
+): { infillingAlignment?: InfillingAlignment } {
+  if (supportsInfilling && kind !== "chat") {
+    throw new ConfigInvalidError(
+      `${path}.supportsInfilling must be false when ${path}.kind is not "chat"`,
+    );
+  }
+  if (raw.infillingAlignment === undefined) {
+    return {};
+  }
+  if (!supportsInfilling) {
+    throw new ConfigInvalidError(
+      `${path}.infillingAlignment requires ${path}.supportsInfilling to be true`,
+    );
+  }
+  return {
+    infillingAlignment: requireEnum<InfillingAlignment>(
+      raw.infillingAlignment,
+      `${path}.infillingAlignment`,
+      ["base", "instruct", "edit-tuned"],
+    ),
   };
 }
 
@@ -458,12 +554,14 @@ function buildProviderCapabilityBody(
   kind: ModelKind,
   workflowEligible: boolean,
 ): ModelCapability {
+  const flags = providerCapabilityFlags(raw, path);
   return {
     id,
     kind,
     contextWindow: optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0),
     maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
-    ...providerCapabilityFlags(raw, path),
+    ...flags,
+    ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
     workflowEligible,
     costClass: requireEnum<CostClass>(raw.costClass ?? "medium", `${path}.costClass`, [
       "low",
@@ -540,6 +638,8 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "supportsDocumentInput",
   "supportsSeeding",
   "supportsResponseFormat",
+  "supportsInfilling",
+  "infillingAlignment",
   "workflowEligible",
   "costClass",
   "latencyClass",
@@ -590,6 +690,24 @@ function optionalDeterminismFlags(
   };
 }
 
+// Optional infilling/FIM flags for the strict list parser — preserved only when declared so a
+// capability record round-trips exactly (Issue #1210). The two FIM invariants are enforced by the
+// shared `resolveInfillingAlignment`.
+function optionalInfillingFlags(
+  value: Record<string, unknown>,
+  path: string,
+  kind: ModelKind,
+): Partial<Pick<ModelCapability, "supportsInfilling" | "infillingAlignment">> {
+  const supportsInfilling =
+    value.supportsInfilling !== undefined
+      ? requireBoolean(value.supportsInfilling, `${path}.supportsInfilling`)
+      : undefined;
+  return {
+    ...(supportsInfilling !== undefined ? { supportsInfilling } : {}),
+    ...resolveInfillingAlignment(value, path, supportsInfilling === true, kind),
+  };
+}
+
 // Reject unknown top-level keys so an adversarial config cannot smuggle future-named fields past
 // the parser. The first offending key is reported by name; values are NEVER echoed.
 function assertKnownCapabilityKeys(value: Record<string, unknown>, path: string): void {
@@ -631,6 +749,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
       `${path}.supportsDocumentInput`,
     ),
     ...optionalDeterminismFlags(value, path),
+    ...optionalInfillingFlags(value, path, kind),
     workflowEligible,
     costClass: requireEnum<CostClass>(value.costClass, `${path}.costClass`, [
       "low",
@@ -660,16 +779,19 @@ function resolveProviderConnection(
   path: string,
   modelId: string,
   env: EnvSource,
+  options: ParseGatewayConfigOptions,
 ): ProviderConnection {
   const fileBaseUrl = typeof raw.baseUrl === "string" ? raw.baseUrl : "";
   const fileApiKey = typeof raw.apiKey === "string" ? raw.apiKey : "";
   const baseUrl = resolveSecret(modelId, fileBaseUrl, env, "BASE_URL");
-  const apiKey = resolveSecret(modelId, fileApiKey, env, "API_KEY");
+  const apiKey = resolveProviderApiKey(raw, modelId, fileApiKey, env, options);
   if (baseUrl.length === 0) {
     throw new ConfigInvalidError(`${path}.baseUrl must be set via config or environment`);
   }
   if (apiKey.length === 0) {
-    throw new ConfigInvalidError(`${path}.apiKey must be set via config or environment`);
+    throw new ConfigInvalidError(
+      `${path}.apiKey must be set via config, secret reference, or environment`,
+    );
   }
   validateBaseUrl(baseUrl, path);
   return { baseUrl, apiKey };
@@ -680,8 +802,9 @@ function parseProviderConfig(
   path: string,
   modelId: string,
   env: EnvSource,
+  options: ParseGatewayConfigOptions,
 ): ModelProviderConfig {
-  const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env);
+  const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env, options);
   return {
     modelId,
     baseUrl,
@@ -701,7 +824,12 @@ function parseProviderConfig(
   };
 }
 
-function parseProvider(raw: unknown, index: number, env: EnvSource): ParsedProvider {
+function parseProvider(
+  raw: unknown,
+  index: number,
+  env: EnvSource,
+  options: ParseGatewayConfigOptions,
+): ParsedProvider {
   const path = `providers[${String(index)}]`;
   if (!isRecord(raw)) {
     throw new ConfigInvalidError(`${path} must be an object`);
@@ -709,7 +837,7 @@ function parseProvider(raw: unknown, index: number, env: EnvSource): ParsedProvi
   const modelId = requireNonEmptyString(raw.modelId, `${path}.modelId`);
   const capability = parseProviderCapability(raw.capability, `${path}.capability`, modelId);
   return {
-    provider: parseProviderConfig(raw, path, modelId, env),
+    provider: parseProviderConfig(raw, path, modelId, env, options),
     ...(capability === undefined ? {} : { capability }),
   };
 }
@@ -823,8 +951,9 @@ function buildGatewayConfig(
   providersRaw: readonly unknown[],
   env: EnvSource,
   egress: OutboundHttpEgressConfig | undefined,
+  options: ParseGatewayConfigOptions,
 ): GatewayConfig {
-  const parsed = providersRaw.map((item, index) => parseProvider(item, index, env));
+  const parsed = providersRaw.map((item, index) => parseProvider(item, index, env, options));
   const capabilities = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
   const grounding = parseGroundingLimits(raw);
   const figma = parseFigmaConnectorConfig(raw);
@@ -838,7 +967,11 @@ function buildGatewayConfig(
   };
 }
 
-export function parseGatewayConfig(raw: unknown, env: EnvSource = {}): GatewayConfig {
+export function parseGatewayConfig(
+  raw: unknown,
+  env: EnvSource = {},
+  options: ParseGatewayConfigOptions = {},
+): GatewayConfig {
   if (!isRecord(raw)) {
     throw new ConfigInvalidError("config root must be a JSON object");
   }
@@ -847,7 +980,7 @@ export function parseGatewayConfig(raw: unknown, env: EnvSource = {}): GatewayCo
   if (!Array.isArray(providersRaw) || providersRaw.length === 0) {
     throw new ConfigInvalidError("providers must be a non-empty array");
   }
-  return buildGatewayConfig(raw, providersRaw, env, egress);
+  return buildGatewayConfig(raw, providersRaw, env, egress, options);
 }
 
 function readGatewayConfigFile(path: string): unknown {
@@ -866,8 +999,12 @@ function readGatewayConfigFile(path: string): unknown {
   return parsed;
 }
 
-export function loadConfigFromFile(path: string, env: EnvSource = {}): GatewayConfig {
-  return parseGatewayConfig(readGatewayConfigFile(path), env);
+export function loadConfigFromFile(
+  path: string,
+  env: EnvSource = {},
+  options: ParseGatewayConfigOptions = {},
+): GatewayConfig {
+  return parseGatewayConfig(readGatewayConfigFile(path), env, options);
 }
 
 export function loadEgressConfigFromFile(

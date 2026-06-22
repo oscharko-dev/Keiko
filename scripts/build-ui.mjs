@@ -14,6 +14,7 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
+import { removeRuntimeJavaScriptSourceMaps } from "./ui-static-cleanup.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const uiDir = join(repoRoot, "packages", "keiko-ui");
@@ -85,6 +86,10 @@ async function main() {
   await rm(staticDir, { recursive: true, force: true });
   await mkdir(staticDir, { recursive: true });
   await cp(exportDir, staticDir, { recursive: true });
+  const removedMaps = await removeRuntimeJavaScriptSourceMaps(staticDir);
+  if (removedMaps.length > 0) {
+    console.log(`Removed ${String(removedMaps.length)} UI runtime source map(s) from ${staticDir}`);
+  }
   await writeCspHashes();
 }
 

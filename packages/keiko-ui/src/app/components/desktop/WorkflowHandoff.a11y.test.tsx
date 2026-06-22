@@ -147,4 +147,46 @@ describe("WorkflowHandoff — a11y (WCAG 2.2 AA)", () => {
     expect(within(dialog).getByRole("button", { name: /^back$/i })).toBeInTheDocument();
     expect(await axe(document.body)).toHaveNoViolations();
   });
+
+  // Issue #1298 — the grounded "Expected checks" list adopts the governed .c-check primitive.
+  // The adoption is presentation-only: each option keeps its native checkbox role + accessible
+  // name (so the existing role/name queries still resolve), the decorative glyph is aria-hidden,
+  // and toggling by accessible name still flips the control.
+  it("expected-checks options adopt the .c-check primitive without losing checkbox semantics", async () => {
+    const user = userEvent.setup();
+    render(
+      <LaunchGroundedWorkflowButton
+        answer={connectedAnswer()}
+        modelId="wf-model"
+        launch={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /launch grounded workflow/i }));
+    const dialog = await screen.findByRole("dialog", { name: /grounded workflow handoff/i });
+    const list = within(dialog).getByRole("list", { name: /available grounded workflows/i });
+    const [firstChoice] = within(list).getAllByRole("button");
+    if (firstChoice === undefined) throw new Error("expected a grounded workflow choice button");
+    await user.click(firstChoice);
+
+    // Accessible name preserved → still queryable by the option label.
+    const tests = within(dialog).getByRole("checkbox", { name: "tests" });
+    const label = tests.closest("label");
+    if (label === null) throw new Error("expected the checkbox to be wrapped in a label");
+    // Governed primitive adopted; the old one-off inline-flex label class is gone.
+    expect(label).toHaveClass("c-check");
+    expect(label.className).not.toContain("wf-dialog-choice-desc");
+    // Decorative check glyph is present and hidden from the accessibility tree.
+    const glyph = label.querySelector(".bx");
+    expect(glyph).not.toBeNull();
+    expect(glyph).toHaveAttribute("aria-hidden", "true");
+    expect(glyph?.querySelector("svg")).not.toBeNull();
+
+    // Behaviour preserved: keyboard/pointer toggle still flips the control.
+    expect(tests).toBeChecked();
+    await user.click(tests);
+    expect(tests).not.toBeChecked();
+    await user.click(within(dialog).getByRole("checkbox", { name: "lint" }));
+    expect(within(dialog).getByRole("checkbox", { name: "lint" })).toBeChecked();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
 });

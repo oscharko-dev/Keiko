@@ -1,5 +1,6 @@
 import type { ReactNode, RefObject } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
@@ -42,12 +43,17 @@ const mocks = vi.hoisted(() => ({
     workspaceResult: undefined as UseWorkspaceResult | undefined,
     session: undefined as TestSession | undefined,
     groundingLimits: undefined as GroundingLimits | undefined,
+    workspaceRendered: false,
+    rightRailRendered: false,
   },
   fetchConfig: vi.fn(),
   updateChatConnectedScopes: vi.fn(),
   updateChatLocalKnowledgeScopes: vi.fn(),
   recordReadsContextRelationship: vi.fn(),
   registerSw: vi.fn(),
+  useKeyboardShortcuts: vi.fn(),
+  undo: vi.fn(),
+  redo: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -85,7 +91,7 @@ vi.mock("./hooks/useChatSession", () => ({
 }));
 
 vi.mock("./hooks/useKeyboardShortcuts", () => ({
-  useKeyboardShortcuts: vi.fn(),
+  useKeyboardShortcuts: mocks.useKeyboardShortcuts,
 }));
 
 vi.mock("./hooks/useUndoStack", () => ({
@@ -95,8 +101,8 @@ vi.mock("./hooks/useUndoStack", () => ({
     undoLabel: null,
     redoLabel: null,
     push: vi.fn(),
-    undo: vi.fn(),
-    redo: vi.fn(),
+    undo: mocks.undo,
+    redo: mocks.redo,
     clear: vi.fn(),
   }),
 }));
@@ -125,25 +131,39 @@ vi.mock("./Header", () => ({
 }));
 
 vi.mock("./Footer", () => ({
-  Footer: ({ winCount }: { readonly winCount: number }) => (
-    <footer data-testid="footer">{winCount}</footer>
+  Footer: ({
+    winCount,
+    statusRef,
+  }: {
+    readonly winCount: number;
+    readonly statusRef?: (node: HTMLElement | null) => void;
+  }) => (
+    <footer ref={statusRef} data-testid="footer" tabIndex={-1}>
+      {winCount}
+    </footer>
   ),
 }));
 
 vi.mock("./LeftRail", () => ({
   LeftRail: ({ onNewChat }: { readonly onNewChat: () => void }) => (
-    <button type="button" onClick={onNewChat}>
+    <button type="button" data-testid="left-rail" onClick={onNewChat}>
       New chat
     </button>
   ),
 }));
 
 vi.mock("./RightRail", () => ({
-  RightRail: () => <aside data-testid="right-rail" />,
+  RightRail: () => {
+    mocks.state.rightRailRendered = true;
+    return <aside data-testid="right-rail" />;
+  },
 }));
 
 vi.mock("./Workspace", () => ({
-  Workspace: () => <main data-testid="workspace" />,
+  Workspace: () => {
+    mocks.state.workspaceRendered = true;
+    return <main data-testid="workspace" />;
+  },
 }));
 
 vi.mock("./modals/CommandPalette", () => ({
@@ -284,6 +304,39 @@ describe("AppShell grounding connections", () => {
       win("chat", { chatId: "chat-1" }, "chat-window"),
     ]);
     mocks.state.workspaceOptions = undefined;
+    mocks.state.workspaceRendered = false;
+    mocks.state.rightRailRendered = false;
+    document.documentElement.removeAttribute("data-input-modality");
+  });
+
+  it("tracks pointer and keyboard modality for focus ring policy", async () => {
+    await renderMounted();
+
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "pointer");
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab" }));
+    });
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "keyboard");
+
+    await act(async () => {
+      window.dispatchEvent(new MouseEvent("mousedown"));
+    });
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "pointer");
+  });
+
+  it("does not turn typed text into keyboard-focus modality after a mouse click", async () => {
+    await renderMounted();
+
+    await act(async () => {
+      window.dispatchEvent(new MouseEvent("mousedown"));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+    });
+
+    expect(document.documentElement).toHaveAttribute("data-input-modality", "pointer");
   });
 
   it("persists a new Files source and records the governed reads-context relationship", async () => {
@@ -339,6 +392,66 @@ describe("AppShell grounding connections", () => {
     );
   });
 
+  it("lets the user dismiss the inline source-limit notice", async () => {
+    const user = userEvent.setup();
+    const connectedScopes = Array.from({ length: 8 }, (_unused, index) =>
+      fileScope(`/repo-${String(index)}`, index),
+    );
+    const localKnowledgeScopes = Array.from({ length: 8 }, (_unused, index) =>
+      capsuleScope(`cap-${String(index)}`),
+    );
+    const cappedChat = chat({ connectedScopes, localKnowledgeScopes });
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      chats: [cappedChat],
+      activeChat: cappedChat,
+    };
+    await renderMounted();
+
+    await act(async () => {
+      await mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", capsuleScope("cap-17"));
+    });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("already has 16 of 16 connected sources");
+
+    await user.click(screen.getByRole("button", { name: "Dismiss source connection notice" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
+  it("lets the user dismiss the missing-ready-chat source connection notice", async () => {
+    const user = userEvent.setup();
+    const closedChat = chat({ status: "closed" });
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      chats: [closedChat],
+      activeChat: closedChat,
+    };
+    await renderMounted();
+
+    let accepted = true;
+    await act(async () => {
+      accepted =
+        (await mocks.state.workspaceOptions?.onConnectorBind?.(
+          "chat-window",
+          capsuleScope("cap-ready"),
+        )) === true;
+    });
+
+    expect(accepted).toBe(false);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Open a ready chat window before connecting a source.");
+
+    await user.click(screen.getByRole("button", { name: "Dismiss source connection notice" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
   it("removes connector scopes through the plural local-knowledge patch", async () => {
     const scopeA = capsuleScope("cap-a");
     const scopeB = capsuleScope("cap-b");
@@ -362,5 +475,54 @@ describe("AppShell grounding connections", () => {
       expect.arrayContaining([expect.objectContaining({ capsuleId: "cap-b" })]),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("hides both side rails while the first-run gateway setup is open", async () => {
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      models: [],
+      noEligibleModels: true,
+      selectedModel: "",
+    };
+
+    await renderMounted();
+
+    expect(screen.getByRole("dialog", { name: "Gateway setup" })).toBeInTheDocument();
+    expect(screen.queryByTestId("left-rail")).toBeNull();
+    expect(screen.queryByTestId("right-rail")).toBeNull();
+  });
+
+  it("dispatches undo, redo, and focus-status shortcuts through the shared shell handler", async () => {
+    await renderMounted();
+
+    const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
+      | { readonly dispatch?: (commandId: string) => void }
+      | undefined;
+    expect(keyboardProps?.dispatch).toBeTypeOf("function");
+
+    const statusSpy = vi.spyOn(HTMLElement.prototype, "focus");
+    keyboardProps?.dispatch?.("undo");
+    keyboardProps?.dispatch?.("redo");
+    keyboardProps?.dispatch?.("focus-status");
+
+    expect(mocks.undo).toHaveBeenCalledTimes(1);
+    expect(mocks.redo).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalled();
+    statusSpy.mockRestore();
+  });
+
+  it("does not open the command palette from the Cmd/Ctrl+K shell shortcut in this release", async () => {
+    await renderMounted();
+    expect(screen.queryByTestId("command-palette")).toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+    });
+    expect(screen.queryByTestId("command-palette")).toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "K", metaKey: true }));
+    });
+    expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 });

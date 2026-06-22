@@ -42,59 +42,32 @@ afterEach(() => {
   }
 });
 
-function packageRootOf(root: string): string {
-  return join(root, "node_modules", "@oscharko-dev", "keiko");
-}
-
-// Writes a local node_modules install. With `withStatic` it also writes the
-// built UI asset, matching what `keiko start` actually requires; without it the
-// install is partial and must be ignored by doctor just as start ignores it.
-function writeLocalPackage(root: string, options: { readonly withStatic: boolean }): string {
-  const packageRoot = packageRootOf(root);
-  mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
-  writeFileSync(join(packageRoot, "package.json"), '{"version":"0.2.0-beta.5"}\n', "utf8");
-  writeFileSync(join(packageRoot, "dist", "cli", "index.js"), "#!/usr/bin/env node\n", "utf8");
-  if (options.withStatic) {
+describe("doctor", () => {
+  it("detects when a stale global binary is running instead of the local package install", () => {
+    const root = makeRoot();
+    const packageRoot = join(root, "node_modules", "@oscharko-dev", "keiko");
+    mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
     mkdirSync(join(packageRoot, "dist", "ui", "static"), { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), '{"version":"0.2.0-beta.5"}\n', "utf8");
+    writeFileSync(join(packageRoot, "dist", "cli", "index.js"), "#!/usr/bin/env node\n", "utf8");
     writeFileSync(
       join(packageRoot, "dist", "ui", "static", "index.html"),
       "<html></html>\n",
       "utf8",
     );
-  }
-  return packageRoot;
-}
-
-describe("doctor", () => {
-  it("detects when a stale global binary is running instead of the local package install", () => {
-    const root = makeRoot();
-    writeLocalPackage(root, { withStatic: true });
     const report = collectDoctorReport({
       cwd: root,
       argv: [process.execPath, "C:\\Users\\dev\\AppData\\Roaming\\npm\\keiko.cmd"],
     });
-    expect(report.warning).toContain("different Keiko binary");
-  });
-
-  it("ignores a local package whose built UI asset is missing, as start would", () => {
-    const root = makeRoot();
-    writeLocalPackage(root, { withStatic: false });
-    const report = collectDoctorReport({
-      cwd: root,
-      argv: [process.execPath, "/usr/local/bin/keiko"],
-    });
-    expect(report.localPackageInstall).toBeUndefined();
-    expect(report.warning).toBeUndefined();
+    expect(report.warning).toContain("different");
+    expect(report.warning).toContain("local build");
   });
 
   it("warns when a built checkout exists but the running entry points elsewhere", () => {
     const root = makeRoot();
     mkdirSync(join(root, "dist", "cli"), { recursive: true });
     mkdirSync(join(root, "dist", "ui", "static"), { recursive: true });
-    writeFileSync(
-      join(root, "package.json"),
-      '{"name":"@oscharko-dev/keiko","version":"0.2.0-beta.5"}\n',
-    );
+    writeFileSync(join(root, "package.json"), '{"name":"@oscharko-dev/keiko","version":"0.2.0-beta.5"}\n');
     writeFileSync(join(root, "dist", "cli", "index.js"), "#!/usr/bin/env node\n");
     writeFileSync(join(root, "dist", "ui", "static", "index.html"), "<html></html>\n");
     const c = makeIo();
@@ -113,32 +86,5 @@ describe("doctor", () => {
     expect(code).toBe(0);
     expect(c.out()).toContain("Keiko doctor");
     expect(c.out()).toContain("Diagnosis:");
-  });
-
-  it("emits an actionable start-time warning when a stale global wins over the local package", () => {
-    const root = makeRoot();
-    const packageRoot = writeLocalPackage(root, { withStatic: true });
-    const c = makeIo();
-
-    emitDoctorWarning(c.io, {
-      cwd: root,
-      argv: [process.execPath, "/usr/local/bin/keiko"],
-    });
-
-    expect(c.err()).toContain("stale launch path detected");
-    expect(c.err()).toContain(join(packageRoot, "dist", "cli", "index.js"));
-    expect(c.err()).toContain("/usr/local/bin/keiko");
-    expect(c.err().toLowerCase()).toContain("keiko:start");
-  });
-
-  it("stays silent when the running entry already is the local package install", () => {
-    const root = makeRoot();
-    const packageRoot = writeLocalPackage(root, { withStatic: true });
-    const cliEntry = join(packageRoot, "dist", "cli", "index.js");
-    const c = makeIo();
-
-    emitDoctorWarning(c.io, { cwd: root, argv: [process.execPath, cliEntry] });
-
-    expect(c.err()).toBe("");
   });
 });

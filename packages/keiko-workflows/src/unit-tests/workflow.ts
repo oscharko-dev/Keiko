@@ -13,7 +13,14 @@ import { buildTestGenContext } from "./context.js";
 import { detectConventions } from "./conventions.js";
 import { computeFingerprint } from "./emit.js";
 import { runModelLoop } from "./model-loop.js";
-import { cancelledReport, emitCompleted, failedReport, finishPipeline } from "./stages.js";
+import { resolveTestStrategy } from "./strategy.js";
+import {
+  cancelledReport,
+  emitCompleted,
+  failedReport,
+  finishPipeline,
+  unsupportedReport,
+} from "./stages.js";
 import { buildRunState, EMPTY_LOOP, type RunState } from "./internal.js";
 import { assertTargetWithinWorkspace } from "./target-guard.js";
 import type {
@@ -50,8 +57,14 @@ async function runPipeline(state: RunState): Promise<UnitTestWorkflowReport> {
     budgetBytes: pack.budgetBytes,
     droppedForBudget: pack.droppedForBudget,
   });
-  const loop = await runModelLoop(state, workspace, conventions, pack);
-  return finishPipeline(state, workspace, loop);
+  // Convention-driven test-style selection (Issue #1203). An unsupported frontend stack short-circuits
+  // here with a reviewable limitation and NO model call (AC5: no fabricated test).
+  const strategy = resolveTestStrategy(workspace, state.input.target, conventions, pack, fs);
+  if (strategy.style === "unsupported") {
+    return unsupportedReport(state, strategy);
+  }
+  const loop = await runModelLoop(state, workspace, conventions, strategy, pack);
+  return finishPipeline(state, workspace, loop, strategy);
 }
 
 export async function generateUnitTests(

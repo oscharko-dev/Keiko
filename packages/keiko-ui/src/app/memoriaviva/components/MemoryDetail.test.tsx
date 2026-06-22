@@ -218,6 +218,16 @@ describe("MemoryDetail — success state with full record", () => {
     });
   });
 
+  it("uses the project-standard Back button text in the desktop detail header", async () => {
+    const onBack = vi.fn();
+    const record = makeRecord();
+    render(<MemoryDetail id="mem-001" fetchMemoryImpl={resolvesWith(record)} onBack={onBack} />);
+
+    const back = await screen.findByRole("button", { name: "Back" });
+    expect(back).toHaveClass("mc-back-link");
+    expect(back).not.toHaveTextContent("←");
+  });
+
   it("renders the status badge as a static label (no live region)", async () => {
     const record = makeRecord({ status: "accepted" });
     render(<MemoryDetail id="mem-001" fetchMemoryImpl={resolvesWith(record)} />);

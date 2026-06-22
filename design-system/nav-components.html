@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Navigation · Keiko Design System</title>
+    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <link rel="stylesheet" href="keiko-fonts.css" />
+    <link rel="stylesheet" href="keiko-tokens.css" />
+    <link rel="stylesheet" href="keiko-semantic-tokens.css" />
+    <link rel="stylesheet" href="ds.css" />
+    <link rel="stylesheet" href="components.css" />
+    <link rel="stylesheet" href="keiko-nav.css" />
+  </head>
+  <body class="ds">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <nav class="nav" data-ds-nav aria-label="Design system"></nav>
+    <script src="ds-nav.js"></script>
+
+    <main class="main" id="main">
+      <header class="phero">
+        <div class="ey">Components · Navigation</div>
+        <h1>Getting <span class="dim">around.</span></h1>
+        <p class="lead">The tool rail and file tree already carry the canvas. These complete the reach — breadcrumbs, underline tabs, pagination, a context menu, a back affordance and a step indicator for multi-stage flows.</p>
+      </header>
+
+      <section class="sec" id="crumbs">
+        <div class="sec-head"><div class="num">01 — WAYFINDING</div><h2>Breadcrumbs &amp; back</h2><p>Show the path; make the parent one tap away. The current page is unlinked and weighted.</p></div>
+        <div class="card demo-card demo-stack" style="gap:18px">
+          <nav class="c-crumbs" aria-label="Breadcrumb">
+            <a href="#">Workspace</a><span class="sep">/</span>
+            <a href="#">Agents</a><span class="sep">/</span>
+            <a href="#">Triage Bot</a><span class="sep">/</span>
+            <span aria-current="page">Runs</span>
+          </nav>
+          <div><button class="c-back"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 6 l-6 6 6 6" /></svg>Back to Agents</button></div>
+        </div>
+      </section>
+
+      <section class="sec" id="tabs">
+        <div class="sec-head"><div class="num">02 — TABS</div><h2>Underline tabs</h2><p>For switching views within a surface. An accent rule marks the active tab; optional counts ride along in mono.</p></div>
+        <div class="card demo-card">
+          <div class="c-utabs" role="tablist" aria-label="Agent views" id="utabs">
+            <button class="c-utab" role="tab" aria-selected="true" tabindex="0">Runs<span class="ct">128</span></button>
+            <button class="c-utab" role="tab" aria-selected="false" tabindex="-1">Logs</button>
+            <button class="c-utab" role="tab" aria-selected="false" tabindex="-1">Settings</button>
+            <button class="c-utab" role="tab" aria-selected="false" tabindex="-1">Permissions<span class="ct">3</span></button>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="pager">
+        <div class="sec-head"><div class="num">03 — PAGINATION</div><h2>Pagination</h2><p>Accent marks the current page; ends disable at the boundaries; a gap collapses long ranges.</p></div>
+        <div class="card demo-card">
+          <div class="c-pager" id="pager">
+            <button disabled aria-label="Previous"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 6 l-6 6 6 6" /></svg></button>
+            <button aria-current="page">1</button>
+            <button>2</button>
+            <button>3</button>
+            <span class="gap">…</span>
+            <button>12</button>
+            <button aria-label="Next"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6 l6 6 -6 6" /></svg></button>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="ctx">
+        <div class="sec-head"><div class="num">04 — CONTEXT MENU</div><h2>Context menu &amp; steps</h2><p>A right-click menu with shortcuts and a weighted destructive item; a step indicator for wizards.</p></div>
+        <div class="card demo-card" style="display:grid;grid-template-columns:auto 1fr;gap:34px;align-items:center">
+          <div class="c-ctx" role="menu" aria-label="Row actions" aria-orientation="vertical" id="ctxmenu">
+            <button class="c-ctx-item" role="menuitem" tabindex="0"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4 h16 v16 h-16 z" opacity="0"/><path d="M8 6 h10 M8 12 h10 M8 18 h6 M4.5 6 h.01 M4.5 12 h.01 M4.5 18 h.01"/></svg>Rename<span class="k">⌘R</span></button>
+            <button class="c-ctx-item" role="menuitem" tabindex="-1"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 8 V5 a1 1 0 0 1 1-1 h10 a1 1 0 0 1 1 1 v10 a1 1 0 0 1-1 1 h-3"/><rect x="4" y="8" width="12" height="12" rx="1.5"/></svg>Duplicate<span class="k">⌘D</span></button>
+            <div class="c-ctx-sep" role="separator"></div>
+            <button class="c-ctx-item danger" role="menuitem" tabindex="-1"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7 h14 M10 7 V5 h4 v2 M6 7 l1 13 h10 l1-13"/></svg>Delete<span class="k">⌫</span></button>
+          </div>
+          <div class="c-steps">
+            <div class="c-step done"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5"/></svg></span><span class="lb">Connect</span></div>
+            <div class="c-step-line"></div>
+            <div class="c-step active"><span class="dot">2</span><span class="lb">Configure</span></div>
+            <div class="c-step-line"></div>
+            <div class="c-step"><span class="dot">3</span><span class="lb">Review</span></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      // Underline tabs — roving tabindex + arrow / Home / End (WAI-ARIA tabs)
+      (function () {
+        var tabs = [].slice.call(document.querySelectorAll("#utabs .c-utab"));
+        function select(t, focus) {
+          tabs.forEach(function (x) { var on = x === t; x.setAttribute("aria-selected", on ? "true" : "false"); x.tabIndex = on ? 0 : -1; });
+          if (focus) t.focus();
+        }
+        tabs.forEach(function (t) { t.addEventListener("click", function () { select(t); }); });
+        document.getElementById("utabs").addEventListener("keydown", function (e) {
+          var i = tabs.indexOf(document.activeElement); if (i < 0) return;
+          var n = i;
+          if (e.key === "ArrowRight") n = (i + 1) % tabs.length;
+          else if (e.key === "ArrowLeft") n = (i - 1 + tabs.length) % tabs.length;
+          else if (e.key === "Home") n = 0;
+          else if (e.key === "End") n = tabs.length - 1;
+          else return;
+          e.preventDefault(); select(tabs[n], true);
+        });
+      })();
+
+      // Pagination
+      document.querySelectorAll("#pager button:not([disabled])").forEach(function (b) {
+        if (b.hasAttribute("aria-label")) return;
+        b.addEventListener("click", function () {
+          document.querySelectorAll("#pager button").forEach(function (x) { x.removeAttribute("aria-current"); });
+          b.setAttribute("aria-current", "page");
+        });
+      });
+
+      // Context menu — roving focus, arrows, Home/End, Esc, type-ahead-free
+      (function () {
+        var menu = document.getElementById("ctxmenu");
+        var items = [].slice.call(menu.querySelectorAll(".c-ctx-item"));
+        items.forEach(function (it, i) {
+          it.addEventListener("mouseenter", function () { focusItem(i); });
+        });
+        function focusItem(i) { items.forEach(function (x, j) { x.classList.toggle("active", i === j); x.tabIndex = i === j ? 0 : -1; }); if (items[i]) items[i].focus(); }
+        menu.addEventListener("keydown", function (e) {
+          var i = items.indexOf(document.activeElement); if (i < 0) i = 0;
+          var n = i;
+          if (e.key === "ArrowDown") n = (i + 1) % items.length;
+          else if (e.key === "ArrowUp") n = (i - 1 + items.length) % items.length;
+          else if (e.key === "Home") n = 0;
+          else if (e.key === "End") n = items.length - 1;
+          else if (e.key === "Escape") { menu.querySelectorAll(".c-ctx-item").forEach(function (x) { x.classList.remove("active"); }); return; }
+          else return;
+          e.preventDefault(); focusItem(n);
+        });
+      })();
+    </script>
+    <script src="theme-control.js"></script>
+  </body>
+</html>
