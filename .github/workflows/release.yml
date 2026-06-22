@@ -27,14 +27,20 @@ concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  RELEASE_BASE_BRANCH: release/0.2
+  RELEASE_REQUIRED_CHECKS: '["ci","actionlint","Verify pinned action SHAs","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","Review dependency diff (dev/main)","ui"]'
+
 jobs:
   release-verify:
     name: Release verification
     if: github.event_name != 'workflow_dispatch' || !inputs.publish
     runs-on: ubuntu-latest
     permissions:
+      checks: read
       contents: read
-    timeout-minutes: 90
+      statuses: read
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -43,76 +49,32 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22.x"
-          cache: "npm"
-      - name: Install dependencies
-        run: npm ci
-      - name: Install sandbox isolation backend (bubblewrap)
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap needs them
-          # to create the network namespace for the ADR-0043 live egress proof.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Version consistency
-        run: npm run check:version-consistency
-      - name: Lint
-        run: npm run lint
-      - name: Architecture check
-        run: npm run arch:check
-      - name: Architecture negative check
-        run: npm run arch:check:negative
-      - name: Quality Intelligence supply-chain gate
-        run: npm run check:qi-supply-chain
-      - name: Unit tests and package coverage quality
-        run: npm run test:coverage:quality
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-      - name: Release smoke E2E
-        run: npm run test:e2e:smoke
-      - name: Build
-        run: npm run build
-      - name: Prepare packaged CLI and UI assets
-        run: |
-          npm run prepare:bin
-          npm run build:ui
-          npm run prune:package-native-optionals
-      - name: Package surface
-        run: npm run check:package-surface
-      - name: Installable-package smoke
-        run: npm run smoke:install
-      - name: Installable memory smoke
-        run: npm run smoke:install:memory
-      - name: Security audit
-        run: npm audit --audit-level=high
-      - name: Generate root CycloneDX SBOM
-        run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
-      - name: Workspace supply-chain gate
-        run: npm run check:workspace-supply-chain
-      - name: Generate UI CycloneDX SBOM
-        run: npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui > ui-sbom.cdx.json
-      - name: Upload root SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-root-sbom-cyclonedx
-          path: sbom.cdx.json
-          retention-days: 90
-      - name: Upload UI SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-ui-sbom-cyclonedx
-          path: ui-sbom.cdx.json
-          retention-days: 90
+          node <<'NODE'
+          const { version } = require("./package.json");
+          const releaseTag = process.env.RELEASE_TAG;
+          if (releaseTag !== `v${version}`) {
+            throw new Error(`Release tag ${releaseTag} does not match package version ${version}.`);
+          }
+          NODE
+      - name: Verify required checks for tagged SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
+      - name: Validate release manifest plan
+        run: npm run release:plan -- --tag beta
 
   publish:
     name: Publish to npm
-    needs: release-verify
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.publish && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
-      actions: read
+      checks: read
       contents: read
+      statuses: read
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -126,31 +88,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - name: Install dependencies
         run: npm ci
-      - name: Require successful tag verification run
+      - name: Verify required checks for release SHA
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ github.sha }}
-          RELEASE_WORKFLOW: ${{ github.workflow }}
-        run: |
-          set -euo pipefail
-          runs_json="$(gh run list --workflow "$RELEASE_WORKFLOW" --event push --json conclusion,headSha,status,url,databaseId -L 50)"
-          RUNS_JSON="$runs_json" node <<'NODE'
-          const runs = JSON.parse(process.env.RUNS_JSON ?? "[]");
-          const releaseSha = process.env.RELEASE_SHA;
-          const match = runs.find(
-            (run) =>
-              run.headSha === releaseSha &&
-              run.status === "completed" &&
-              run.conclusion === "success",
-          );
-          if (match === undefined) {
-            throw new Error(
-              `No successful tag-push Release verification run found for ${releaseSha}. ` +
-                "Wait for the tag-push release workflow to pass before publishing.",
-            );
-          }
-          console.log(`Verified release workflow run ${match.databaseId}: ${match.url}`);
-          NODE
+          GITHUB_TOKEN: ${{ github.token }}
+        run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
       - name: Validate publish dist-tag
         env:
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
