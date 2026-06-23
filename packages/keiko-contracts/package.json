@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko contracts. Not published independently.",
