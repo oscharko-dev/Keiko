@@ -5,7 +5,7 @@
 import { parse } from "acorn";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DEFAULT_STATIC_ROOT = join(repoRoot, "dist", "ui", "static");
@@ -27,7 +27,7 @@ async function collectJavaScriptFiles(dir) {
   return files;
 }
 
-function parseJavaScript(source, file) {
+function parseJavaScript(source) {
   parse(source, {
     ecmaVersion: ECMASCRIPT_VERSION,
     sourceType: "script",
@@ -42,7 +42,7 @@ export async function checkUiStaticJavaScriptCompatibility(staticRoot = DEFAULT_
   for (const file of files) {
     const source = await readFile(file, "utf8");
     try {
-      parseJavaScript(source, file);
+      parseJavaScript(source);
     } catch (error) {
       const location =
         error && typeof error === "object" && "loc" in error && error.loc
