@@ -52,7 +52,9 @@ Software engineering is the first use case because repositories, tests, reviews,
 
 ## Report bugs and findings
 
-If you find a defect while using Keiko, open a GitHub issue with the structured [User-Finding form](https://github.com/oscharko-dev/Keiko/blob/dev/.github/ISSUE_TEMPLATE/user_finding.yml). Do not open a blank issue for reproducible bug intake.
+If you find a defect while using Keiko, use the structured [User-Finding report form](https://github.com/oscharko-dev/Keiko/blob/dev/docs/user-finding-report.md). It is a public, account-free intake template that can be filled without signing in to GitHub.
+
+Maintainers who are signed in to GitHub can transfer the same information into the tracked [GitHub User-Finding issue form](https://github.com/oscharko-dev/Keiko/issues/new?template=user_finding.yml). Do not open a blank issue for reproducible bug intake.
 
 The form captures version, platform, reproduction steps, expected behavior, actual behavior, impact, environment, and redacted evidence. Do not include API keys, customer data, private screenshots, internal model endpoints, private logs, or other secrets.
 
