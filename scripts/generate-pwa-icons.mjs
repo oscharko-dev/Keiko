@@ -25,7 +25,7 @@ const ACCENT = "#4EBA87";
 const MARK = "#050806";
 const PRODUCT_TITLE = "Keiko | Ex experientia disco";
 const SOURCE_VIEWBOX = "0 0 1024 1024";
-const APP_ICON_VISUAL_SCALE = 1.3;
+const APP_ICON_VISUAL_SCALE = 0.95;
 
 const sourceSvg = join(UI_PUBLIC, "keiko-logo.svg");
 const sourceSvgText = readFileSync(sourceSvg, "utf8");
