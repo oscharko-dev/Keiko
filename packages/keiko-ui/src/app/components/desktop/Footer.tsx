@@ -117,7 +117,7 @@ export function Footer({
           <div
             id="footer-window-palette"
             className="ft-window-palette"
-            role="menu"
+            role="group"
             aria-label="Open windows"
           >
             <div className="ft-window-palette-head">Open windows</div>
@@ -134,7 +134,6 @@ export function Footer({
                     key={win.id}
                     type="button"
                     className="ft-window-card"
-                    role="menuitem"
                     data-minimized={win.minimized === true ? "true" : "false"}
                     aria-label={`${actionLabel} ${def.title} window${sub !== null ? ` - ${sub}` : ""}`}
                     onClick={() => onSelectWindow(win.id)}

@@ -197,6 +197,8 @@
   --z-popover: 400;
   --z-toast: 500;
   --z-tooltip: 600;
+  --shell-rail-width: 50px;
+  --shell-right-rail-reserve: var(--shell-rail-width);
 
   /* ── SCALE · BREAKPOINTS — canonical media-query reference values ── */
   --bp-xs: 480px;
@@ -1770,13 +1772,13 @@ button {
 
 .footer {
   position: relative;
-  z-index: 9400;
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   gap: var(--space-2);
   height: 40px;
   flex: none;
-  padding: 0 var(--space-5);
+  padding: 0 calc(var(--space-5) + var(--shell-right-rail-reserve)) 0 var(--space-5);
   background: color-mix(in oklch, var(--background-secondary) 96%, transparent);
   border-top: 0;
   font-size: 11.5px;
@@ -1835,6 +1837,7 @@ button {
   position: absolute;
   right: 0;
   bottom: calc(100% + 8px);
+  z-index: var(--z-popover);
   width: min(360px, calc(100vw - 32px));
   max-height: min(430px, calc(100vh - 96px));
   padding: var(--space-4);
@@ -1932,6 +1935,7 @@ button {
 /* ---------- WORKSPACE SURFACE (the framed canvas) ---------- */
 .stage {
   position: relative;
+  z-index: var(--z-base);
   flex: 1;
   min-width: 0;
   display: flex;
@@ -2072,8 +2076,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 /* ---------- TOOL RAILS ---------- */
 .rail {
   position: relative;
-  z-index: 12000;
-  width: 50px;
+  z-index: var(--z-rail);
+  width: var(--shell-rail-width);
   flex: none;
   background: var(--nav-surface);
   display: flex;
@@ -2096,7 +2100,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   .rail-new:focus-visible,
   .rail-avatar:focus-visible
 ) {
-  z-index: 10001;
+  z-index: var(--z-nav);
 }
 .rail-new {
   width: 38px;
@@ -2212,13 +2216,17 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 
 @media (max-width: 700px), (max-height: 430px) {
+  :root {
+    --shell-rail-width: 44px;
+    --shell-right-rail-reserve: var(--shell-rail-width);
+  }
+
   .stage {
     gap: 0;
     padding: 6px;
   }
 
   .rail {
-    width: 44px;
     padding: 8px 0;
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -2310,6 +2318,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 
 @media (max-width: 420px) {
+  :root {
+    --shell-right-rail-reserve: 0px;
+  }
+
   .rail-right {
     display: none;
   }
@@ -2928,7 +2940,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease;
-  z-index: 9999;
+  z-index: var(--z-tooltip);
 }
 .cmp-tip-start[data-tip]::after {
   left: 0;
@@ -6195,7 +6207,7 @@ select.dlg-input {
   box-shadow: var(--popover-shadow);
   opacity: 0;
   pointer-events: none;
-  z-index: 13000;
+  z-index: var(--z-tooltip);
 }
 .rail-left .rail-btn::after,
 .rail-left .rail-new::after,
@@ -8550,6 +8562,10 @@ select.dlg-input {
 
 html[data-keiko-gateway-setup-open="true"] .rail {
   display: none;
+}
+
+html[data-keiko-gateway-setup-open="true"] {
+  --shell-right-rail-reserve: 0px;
 }
 
 .gw-setup {

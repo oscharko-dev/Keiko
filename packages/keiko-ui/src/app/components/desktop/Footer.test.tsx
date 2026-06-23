@@ -138,13 +138,11 @@ describe("Footer — window status trigger", () => {
       ],
     });
 
-    expect(screen.getByRole("menu", { name: "Open windows" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Open windows" })).toBeInTheDocument();
     expect(
-      screen.getByRole("menuitem", { name: "Restore Chat window - Sprint triage" }),
+      screen.getByRole("button", { name: "Restore Chat window - Sprint triage" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("menuitem", { name: "Focus Files window - /repo" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Focus Files window - /repo" })).toBeInTheDocument();
     expect(screen.getByText("Minimized")).toBeInTheDocument();
   });
 
@@ -160,7 +158,7 @@ describe("Footer — window status trigger", () => {
       onSelectWindow,
     });
 
-    await user.click(screen.getByRole("menuitem", { name: "Restore Files window - /repo" }));
+    await user.click(screen.getByRole("button", { name: "Restore Files window - /repo" }));
 
     expect(onSelectWindow).toHaveBeenCalledWith("files-1");
   });

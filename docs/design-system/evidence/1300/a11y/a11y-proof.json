@@ -2,9 +2,9 @@
   "issue": 1300,
   "epic": 1290,
   "tool": "axe-core 4.12.0",
-  "postCssSha256": "8931128370aebc7dd146c3bcbdbe9870277e4e245595f94278d96fb0d9cda26c",
+  "postCssSha256": "03701663c5a1eb361cd5eb2e53370d6c1d0b67f82db21d4a9a3f9adb2262520b",
   "run": {
-    "generatedAt": "2026-06-24T16:13:51.106Z",
+    "generatedAt": "2026-06-24T09:41:22.823Z",
     "repoHeadSha": "fb6e9439e837e10e5cccd657e7ddf5ebd32624b9"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",

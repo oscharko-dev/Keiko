@@ -472,6 +472,39 @@ describe("WCAG 2.5.8 — footer target size", () => {
   });
 });
 
+describe("Issue #1426 — footer window chrome clears the right rail", () => {
+  it("reserves the right rail width in the footer and lifts the palette above shell rails", () => {
+    const footer = cssBlock(".footer {");
+    expect(footer).toContain("z-index: var(--z-sticky)");
+    expect(footer).toContain(
+      "padding: 0 calc(var(--space-5) + var(--shell-right-rail-reserve)) 0 var(--space-5)",
+    );
+
+    const palette = cssBlock(".ft-window-palette {");
+    expect(palette).toContain("z-index: var(--z-popover)");
+  });
+
+  it("shares the rail width between shell rails and the footer reserve, with a narrow reset", () => {
+    expect(css).toContain("--shell-rail-width: 50px");
+    expect(css).toContain("--shell-right-rail-reserve: var(--shell-rail-width)");
+    expect(css).toContain("@media (max-width: 700px), (max-height: 430px) {\n  :root {");
+    expect(css).toContain("--shell-rail-width: 44px");
+    expect(css).toContain("@media (max-width: 420px) {\n  :root {");
+    expect(css).toContain("--shell-right-rail-reserve: 0px");
+    expect(cssRule('html[data-keiko-gateway-setup-open="true"] {')).toContain(
+      "--shell-right-rail-reserve: 0px",
+    );
+  });
+
+  it("routes footer and rail tooltips through the governed tooltip layer", () => {
+    const shellTooltip = cssRule(".cmp-mode[data-tip]::after,");
+    expect(shellTooltip).toContain("z-index: var(--z-tooltip)");
+
+    const railTooltip = cssRule(".rail-btn[data-tip]::after,");
+    expect(railTooltip).toContain("z-index: var(--z-tooltip)");
+  });
+});
+
 describe("Issue #748 — QI quality badge and weak-test contrast hooks", () => {
   it("quality score tiers use the state tokens that are contrast-pinned in both themes", () => {
     const highBlock = cssBlock(".qi-quality-high {");
@@ -1523,7 +1556,9 @@ describe("Issue #1292 — Tier-2 scale tokens consolidated into the product", ()
       "--ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1)",
       "--z-base: 0",
       "--z-modal: 300",
+      "--z-popover: 400",
       "--z-tooltip: 600",
+      "--shell-rail-width: 50px",
     ]) {
       expect(css, `${decl} must be consolidated into globals.css`).toContain(decl);
     }
@@ -1808,8 +1843,13 @@ describe("Issue #1293 — global shell + workspace chrome token migration", () =
   // type, radius, motion) where a token exists; they consume the Tier-2 scales.
   it("adopts the named z-index, spacing and radius scales in the shell (AC1)", () => {
     expect(cssBlock(".ws-shader {")).toContain("z-index: var(--z-base)");
+    expect(cssBlock(".stage {")).toContain("z-index: var(--z-base)");
     expect(cssBlock(".conn-layer {")).toContain("z-index: var(--z-base)");
     expect(cssBlock(".win-port {")).toContain("z-index: var(--z-canvas-window-active)");
+    expect(cssBlock(".rail {")).toContain("z-index: var(--z-rail)");
+    expect(cssBlock(".rail {")).toContain("width: var(--shell-rail-width)");
+    expect(cssRule(".rail:has(")).toContain("z-index: var(--z-nav)");
+    expect(cssBlock(".footer {")).toContain("z-index: var(--z-sticky)");
     expect(cssBlock(".stage {")).toContain("padding: var(--space-4)");
     expect(cssBlock(".ws-zoom {")).toContain("backdrop-filter: blur(var(--blur-md))");
     expect(cssBlock(".ft-gov {")).toContain("border-radius: var(--radius-pill)");
