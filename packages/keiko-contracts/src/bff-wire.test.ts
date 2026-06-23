@@ -109,6 +109,62 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     expect(summary).toStrictEqual(expected);
   });
 
+  it("omits rankingSummary when the pack carries no diagnostics", () => {
+    const summary = buildGroundedAnswerContextPackSummary(pack(), 0, 0);
+    expect("rankingSummary" in summary).toBe(false);
+  });
+
+  it("derives a path-free ranking aggregate from pack diagnostics", () => {
+    const summary = buildGroundedAnswerContextPackSummary(
+      pack({
+        diagnostics: {
+          rankedCandidates: [
+            {
+              scopePath: "pom.xml",
+              bucket: "canonical-metadata",
+              score: 109,
+              ecosystem: "maven",
+              signals: [],
+            },
+            {
+              scopePath: "services/x/pom.xml",
+              bucket: "canonical-metadata",
+              score: 100,
+              ecosystem: "maven",
+              signals: [],
+            },
+            {
+              scopePath: "go.mod",
+              bucket: "canonical-metadata",
+              score: 98,
+              ecosystem: "go",
+              signals: [],
+            },
+            {
+              scopePath: "README.md",
+              bucket: "overview-doc",
+              score: 70,
+              ecosystem: undefined,
+              signals: [],
+            },
+          ],
+        },
+      }),
+      0,
+      0,
+    );
+    expect(summary.rankingSummary).toStrictEqual({
+      bucketCounts: { "canonical-metadata": 3, "overview-doc": 1 },
+      ecosystems: [
+        { id: "maven", count: 2 },
+        { id: "go", count: 1 },
+      ],
+    });
+    // Path-free contract (#187): the aggregate must not carry any file path.
+    expect(JSON.stringify(summary.rankingSummary)).not.toContain("pom.xml");
+    expect(JSON.stringify(summary.rankingSummary)).not.toContain("README");
+  });
+
   it("maps workspace-root scope to the -1 file-count sentinel", () => {
     const summary = buildGroundedAnswerContextPackSummary(
       pack({ scope: scope("workspace-root", []) }),

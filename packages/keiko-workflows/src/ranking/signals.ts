@@ -8,18 +8,36 @@ import type {
   CandidateSignal,
   EvidenceAtom,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { isCanonicalMetadataFile } from "@oscharko-dev/keiko-workspace";
 
 import type { SearchAnchor } from "../planner/index.js";
+import { isIntentBoosted } from "./scoring.js";
 
 export interface RankingInput {
   readonly atoms: readonly EvidenceAtom[];
   readonly anchors: readonly SearchAnchor[];
   readonly hints?: RankingHints;
+  // Optional intent context (enterprise retrieval M4). When present with a boosted intent, two
+  // extra signals are APPENDED (canonical-metadata, structural-edge); absent ⇒ the signal vector is
+  // byte-identical to before, so non-boosted intents and all existing callers are unchanged.
+  readonly context?: RankingContext;
+}
+
+export interface RankingContext {
+  readonly retrievalIntent?: string | undefined;
 }
 
 export interface RankingHints {
   readonly generatedPathPatterns?: readonly string[];
   readonly duplicateOf?: ReadonlyMap<string, string>;
+}
+
+// True when this candidate is reachable via an inbound import edge or a test↔source pairing, derived
+// from atoms already present (the structural ring's provenance tools). No extra IO.
+const STRUCTURAL_TOOLS: ReadonlySet<string> = new Set(["import-graph", "test-source-pairing"]);
+
+function hasStructuralEdge(atoms: readonly EvidenceAtom[]): boolean {
+  return atoms.some((atom) => STRUCTURAL_TOOLS.has(atom.provenance.tool));
 }
 
 export const DEFAULT_GENERATED_PATTERNS: readonly string[] = [
@@ -163,6 +181,7 @@ export function extractSignals(
   atomsForPath: readonly EvidenceAtom[],
   anchors: readonly SearchAnchor[],
   hints: Required<RankingHints>,
+  context?: RankingContext,
 ): ExtractedSignals {
   const scopePath = deriveScopePath(atomsForPath);
   const generatedHint = detectGenerated(scopePath, hints.generatedPathPatterns);
@@ -173,7 +192,7 @@ export function extractSignals(
   const testBonus = computeTestPairBonus(scopePath, anchors);
   const stackBonus = computeStacktracePositionBonus(scopePath, anchors);
   const penalty = generatedHint ? -1 : 0;
-  const signals: readonly CandidateSignal[] = [
+  const baseSignals: CandidateSignal[] = [
     { name: "provenance-best-score", value: provBest },
     { name: "provenance-count", value: provCount },
     { name: "anchor-overlap", value: overlap },
@@ -182,8 +201,20 @@ export function extractSignals(
     { name: "stacktrace-position-bonus", value: stackBonus },
     { name: "generated-penalty", value: penalty },
   ];
+  // M4: only a boosted intent appends the two new signals (and weightsForIntent only weights them
+  // for the same intents), so the signal vector — and therefore the pack/cache content — is
+  // byte-identical for every other intent and for callers that pass no context.
+  if (isIntentBoosted(context?.retrievalIntent)) {
+    baseSignals.push({
+      name: "canonical-metadata",
+      value: isCanonicalMetadataFile(scopePath) ? 1 : 0,
+    });
+    baseSignals.push({ name: "structural-edge", value: hasStructuralEdge(atomsForPath) ? 1 : 0 });
+  }
+  // baseScore intentionally stays over the original positive signals (it feeds nothing the new
+  // weighted score touches; the filter uses computeScore output, not baseScore).
   const positives = [provBest, provCount, overlap, depthAff, testBonus, stackBonus];
   const positiveMean = positives.reduce((acc, n) => acc + n, 0) / positives.length;
   const baseScore = clampUnit(positiveMean + penalty);
-  return { scopePath, signals, baseScore, generatedHint };
+  return { scopePath, signals: baseSignals, baseScore, generatedHint };
 }

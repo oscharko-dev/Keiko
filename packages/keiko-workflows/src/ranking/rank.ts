@@ -19,7 +19,7 @@ import {
   type FilterOptions,
   type FilterResult,
 } from "./filter.js";
-import { DEFAULT_SCORING_WEIGHTS, computeScore, type ScoringWeights } from "./scoring.js";
+import { computeScore, weightsForIntent, type ScoringWeights } from "./scoring.js";
 import {
   DEFAULT_GENERATED_PATTERNS,
   extractSignals,
@@ -165,7 +165,7 @@ function buildAnnotated(
 ): AnnotatedCandidate[] {
   const annotated: AnnotatedCandidate[] = [];
   for (const [scopePath, atomsForPath] of group) {
-    const signals = extractSignals(atomsForPath, input.anchors, hints);
+    const signals = extractSignals(atomsForPath, input.anchors, hints, input.context);
     const score = computeScore(signals, weights);
     const candidate: CandidateFile = {
       scopePath,
@@ -209,7 +209,9 @@ export function rankCandidates(input: RankingInput, options: RankingOptions = {}
   const startMs = clock();
   const frozenStartMs: () => number = () => startMs;
   const hints = resolveHints(input.hints);
-  const weights = options.weights ?? DEFAULT_SCORING_WEIGHTS;
+  // Explicit weights still win (existing callers/tests unaffected); otherwise the intent picks the
+  // weights — DEFAULT for non-boosted intents and the no-intent path, so behavior is unchanged there.
+  const weights = options.weights ?? weightsForIntent(input.context?.retrievalIntent);
   const { valid, invalidPaths } = groupAtomsByPath(input.atoms);
   const rankingHints = { ...hints, duplicateOf: deriveDuplicateHints(valid, hints.duplicateOf) };
   const annotated = buildAnnotated(valid, input, rankingHints, weights);

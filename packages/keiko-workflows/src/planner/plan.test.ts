@@ -179,6 +179,24 @@ describe("createExplorationPlan", () => {
     expect(p.clarification).toBeUndefined();
   });
 
+  it("explicitConnection: workspace-root allows API route lookups", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({ text: "Which file implements POST /api/payments/:id/refund?" });
+    const p = plan({ scope, query: q });
+    expect(p.state).toBe("ready");
+    expect(p.retrievalIntent).toBe("targeted-code-search");
+    expect(p.anchors).toContainEqual({
+      term: "/api/payments/:id/refund",
+      weight: 0.95,
+      kind: "path",
+    });
+    expect(p.clarification).toBeUndefined();
+  });
+
   it("explicitConnection still requires at least one anchor (no-anchors holds)", () => {
     // The relaxation only waives the generic/scope gates; a pure stop-word query has nothing to
     // search, so it must still ask for an anchor.

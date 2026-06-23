@@ -196,6 +196,7 @@ export type {
   GroundedAnswer,
   LocalKnowledgeEvidenceCitation,
   GroundedAnswerContextPackSummary,
+  GroundedAnswerRankingSummary,
   LocalKnowledgeGroundedAnswerContextSummary,
   HybridGroundedAnswerContextSummary,
   ProjectsResponse,

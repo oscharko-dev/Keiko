@@ -14,6 +14,7 @@ import {
   isValidScopePath,
   type CandidateFile,
   type ConnectedContextPack,
+  type ContextPackDiagnostics,
   type EvidenceAtom,
   type ExplorationBudget,
   type ExplorationUsage,
@@ -42,6 +43,7 @@ import {
   type SearchAnchor,
 } from "@oscharko-dev/keiko-workflows";
 import {
+  CANONICAL_MANIFEST_BASENAMES,
   DEFAULT_SEARCH_LIMITS,
   FileTooLargeError,
   RepoSearchUnsupportedFileError,
@@ -49,6 +51,8 @@ import {
   findFiles,
   gitHistoryAdapter,
   importGraphAdapter,
+  isCanonicalMetadataFile,
+  isDenied,
   readExcerpt,
   resolveWithinWorkspace,
   runStructuralAdapters,
@@ -166,6 +170,29 @@ interface RingResult {
   readonly omitted: readonly OmittedContextEntry[];
   readonly uncertainty: readonly UncertaintyMarker[];
   readonly usage: ExplorationUsage;
+  // Explainable-ranking diagnostics from the lexical ring's candidate ordering (M2). Only the
+  // lexical ring populates this; structural/git rings leave it undefined.
+  readonly diagnostics?: ContextPackDiagnostics | undefined;
+}
+
+// Maps the workspace-layer SearchDiagnostics.rankedCandidates onto the contract pack-diagnostics
+// shape. Structurally identical (path/bucket/score/ecosystem/signals) but mapped explicitly so the
+// workspace and contracts types stay decoupled. Returns undefined when no diagnostics are present.
+function toPackDiagnostics(
+  diagnostics: Awaited<ReturnType<typeof searchText>>["diagnostics"],
+): ContextPackDiagnostics | undefined {
+  if (diagnostics === undefined) {
+    return undefined;
+  }
+  return {
+    rankedCandidates: diagnostics.rankedCandidates.map((entry) => ({
+      scopePath: entry.scopePath,
+      bucket: entry.bucket,
+      score: entry.score,
+      ecosystem: entry.ecosystem,
+      signals: entry.signals.map((signal) => ({ name: signal.name, value: signal.value })),
+    })),
+  };
 }
 
 const TEXT_ENCODER = new TextEncoder();
@@ -418,6 +445,7 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
       omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
       uncertainty: [],
       usage: usageDelta({ elapsedMs: result.elapsedMs }),
+      diagnostics: toPackDiagnostics(result.diagnostics),
     };
   }
   // Keep the planner's ring split authoritative: the structural ring should only run the
@@ -456,6 +484,8 @@ interface RingRunSummary {
   readonly omitted: readonly OmittedContextEntry[];
   readonly governor: GovernorState;
   readonly uncertainty: readonly UncertaintyMarker[];
+  // Ranking diagnostics from the (first) lexical ring; undefined when no lexical ring ran (M2).
+  readonly diagnostics?: ContextPackDiagnostics | undefined;
 }
 
 interface RingReservation {
@@ -498,6 +528,9 @@ async function runAllRings(
   const atoms: EvidenceAtom[] = [];
   const omitted: OmittedContextEntry[] = [];
   const uncertainty: UncertaintyMarker[] = [];
+  // Ring order is fixed by the plan, so capturing the first lexical ring's diagnostics is
+  // deterministic. (There is normally exactly one lexical ring.)
+  let diagnostics: ContextPackDiagnostics | undefined;
   let governor = initialGovernor;
   for (const ring of rings) {
     throwIfCancelled(inputs.signal);
@@ -512,6 +545,8 @@ async function runAllRings(
     }
     const result = await runRing(ring, inputs);
     throwIfCancelled(inputs.signal);
+    // First lexical ring wins (??= never overwrites once set); ring order is plan-fixed.
+    diagnostics ??= result.diagnostics;
     const afterRing = applyUsage(governor, result.usage);
     atoms.push(...result.atoms);
     omitted.push(...result.omitted);
@@ -526,7 +561,7 @@ async function runAllRings(
   if (governor.status === "running") {
     governor = complete(governor);
   }
-  return { atoms, omitted, governor, uncertainty };
+  return { atoms, omitted, governor, uncertainty, diagnostics };
 }
 
 interface ExcerptInputs {
@@ -600,39 +635,22 @@ const PROJECT_METADATA_QUERY_TERMS = [
   "vitest",
   "yarn",
 ] as const;
-const PROJECT_METADATA_FILENAMES = [
-  "package.json",
+// Dependency lockfiles surfaced for project-metadata questions (unchanged behaviour). The manifest
+// basenames themselves now come from the shared ecosystem registry (CANONICAL_MANIFEST_BASENAMES),
+// which is a superset of the prior JS/TS-only list and additionally covers Maven/Gradle/Go/Rust/
+// Python/.NET/etc., so "Which Java version does this project use?" injects pom.xml/build.gradle as
+// deterministic score-1 metadata atoms.
+const PROJECT_METADATA_LOCKFILES = [
   "package-lock.json",
   "pnpm-lock.yaml",
   "yarn.lock",
   "bun.lock",
   "bun.lockb",
-  "vitest.config.ts",
-  "vitest.config.mts",
-  "vitest.config.js",
-  "vitest.config.mjs",
-  "vitest.setup.ts",
-  "vite.config.ts",
-  "vite.config.mts",
-  "vite.config.js",
-  "vite.config.mjs",
-  "jest.config.ts",
-  "jest.config.js",
-  "jest.config.mjs",
-  "playwright.config.ts",
-  "playwright.config.js",
-  "cypress.config.ts",
-  "cypress.config.js",
-  "next.config.ts",
-  "next.config.js",
-  "next.config.mjs",
-  "tsconfig.json",
-  "eslint.config.ts",
-  "eslint.config.js",
-  "eslint.config.mjs",
-  "postcss.config.js",
-  "postcss.config.mjs",
 ] as const;
+const PROJECT_METADATA_FILENAMES: readonly string[] = [
+  ...CANONICAL_MANIFEST_BASENAMES,
+  ...PROJECT_METADATA_LOCKFILES,
+];
 const REPOSITORY_OVERVIEW_FILENAMES = [
   "README.md",
   "readme.md",
@@ -832,6 +850,28 @@ function safeReadDir(
   }
 }
 
+// Bound on how many service subdirectories under a `dir/*` pattern are scanned, so a monorepo with
+// thousands of packages cannot trigger an unbounded directory fan-out (the per-result cap in the
+// caller is MAX_WORKSPACE_MANIFESTS; this caps the WORK, not just the output).
+const MAX_MONOREPO_SERVICE_DIRS = 96;
+
+// Canonical project manifests of ANY ecosystem present directly inside `dir` (one bounded readDir,
+// realpath-contained, no symlink following). Replaces the prior package.json-only probe so a
+// polyglot monorepo surfaces service-local pom.xml / go.mod / Cargo.toml / *.csproj, not just
+// JS packages. isDenied is applied even though the registry is deny-clean (defence in depth), and
+// the result is sorted for deterministic evidence ordering.
+function canonicalManifestScopePathsInDir(
+  dir: string,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+): readonly string[] {
+  return safeReadDir(searchScope, fs, dir)
+    .filter((entry) => !entry.isDirectory && !entry.isSymbolicLink)
+    .map((entry) => joinScopePath(dir, entry.name))
+    .filter((scopePath) => isCanonicalMetadataFile(scopePath) && !isDenied(scopePath))
+    .sort();
+}
+
 function expandWorkspacePattern(
   pattern: string,
   searchScope: SearchScope,
@@ -842,10 +882,10 @@ function expandWorkspacePattern(
     return [];
   }
   if (!normalized.includes("*")) {
-    const scopePath = normalized.endsWith("/package.json")
-      ? normalized
-      : joinScopePath(normalized, "package.json");
-    return fileExistsInSearchScope(searchScope, fs, scopePath) ? [scopePath] : [];
+    const dir = normalized.endsWith("/package.json")
+      ? normalized.slice(0, -"/package.json".length)
+      : normalized;
+    return canonicalManifestScopePathsInDir(dir, searchScope, fs);
   }
   if (!normalized.endsWith("/*") || normalized.slice(0, -2).includes("*")) {
     return [];
@@ -853,9 +893,12 @@ function expandWorkspacePattern(
   const base = normalized.slice(0, -2);
   return safeReadDir(searchScope, fs, base)
     .filter((entry) => entry.isDirectory && !entry.isSymbolicLink)
-    .map((entry) => joinScopePath(joinScopePath(base, entry.name), "package.json"))
-    .filter((scopePath) => fileExistsInSearchScope(searchScope, fs, scopePath))
-    .sort();
+    .map((entry) => entry.name)
+    .sort()
+    .slice(0, MAX_MONOREPO_SERVICE_DIRS)
+    .flatMap((name) =>
+      canonicalManifestScopePathsInDir(joinScopePath(base, name), searchScope, fs),
+    );
 }
 
 function workspacePackageManifestPaths(
@@ -1237,6 +1280,47 @@ function selectedFileScopeAtoms(
   return atoms;
 }
 
+// Accept a candidate injection path once: not already seen, shape-valid, and NOT deny-listed.
+// isDenied is re-checked here (not only at the downstream read gate) so a registry manifest pattern
+// can never inject a deny-listed/secret path as a score-1 atom; registry patterns are also asserted
+// deny-clean in ecosystems.test.ts. Mutates `seen` on acceptance.
+function acceptInjectionScopePath(scopePath: string, seen: Set<string>): boolean {
+  if (
+    seen.has(scopePath) ||
+    !isValidScopePath(scopePath, { mustBeRelative: true }) ||
+    isDenied(scopePath)
+  ) {
+    return false;
+  }
+  seen.add(scopePath);
+  return true;
+}
+
+// Bound on glob-manifest atoms injected per metadata root from a single directory listing (M4,
+// risk #1). The exact-name loop above handles fixed basenames; this catches GLOB manifests at the
+// root/scope dir (e.g. *.csproj, *.tf) that have no fixed name. Deny-checked + deduped + capped.
+const MAX_ROOT_GLOB_MANIFESTS = 16;
+
+// Bounded glob-manifest sweep of a single directory: returns the accepted (deduped, deny-clean,
+// shape-valid) scope paths, capped at MAX_ROOT_GLOB_MANIFESTS. Mutates `seen` via the gate.
+function rootGlobManifestPaths(
+  root: string,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  seen: Set<string>,
+): readonly string[] {
+  const paths: string[] = [];
+  for (const scopePath of canonicalManifestScopePathsInDir(root, searchScope, fs)) {
+    if (paths.length >= MAX_ROOT_GLOB_MANIFESTS) {
+      break;
+    }
+    if (acceptInjectionScopePath(scopePath, seen)) {
+      paths.push(scopePath);
+    }
+  }
+  return paths;
+}
+
 function projectMetadataAtoms(
   input: OrchestratorInput,
   searchScope: SearchScope,
@@ -1252,21 +1336,23 @@ function projectMetadataAtoms(
   for (const root of metadataRootsForScope(input.scope)) {
     for (const filename of PROJECT_METADATA_FILENAMES) {
       const scopePath = joinScopePath(root, filename);
-      if (seen.has(scopePath) || !isValidScopePath(scopePath, { mustBeRelative: true })) {
-        continue;
-      }
-      seen.add(scopePath);
-      if (fileExistsInSearchScope(searchScope, fs, scopePath)) {
+      if (
+        acceptInjectionScopePath(scopePath, seen) &&
+        fileExistsInSearchScope(searchScope, fs, scopePath)
+      ) {
         atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
       }
     }
+    // Glob-manifest sweep of the directory itself (bounded), so a root-level *.csproj / *.tf that
+    // the fixed-name list cannot enumerate is still injected. Exact names already seen are deduped.
+    for (const scopePath of rootGlobManifestPaths(root, searchScope, fs, seen)) {
+      atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
+    }
   }
   for (const scopePath of workspacePackageManifestPaths(input, searchScope, fs)) {
-    if (seen.has(scopePath) || !isValidScopePath(scopePath, { mustBeRelative: true })) {
-      continue;
+    if (acceptInjectionScopePath(scopePath, seen)) {
+      atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
     }
-    seen.add(scopePath);
-    atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
   }
   return atoms;
 }
@@ -1286,11 +1372,10 @@ function repositoryOverviewAtoms(
   for (const root of metadataRootsForScope(input.scope)) {
     for (const filename of REPOSITORY_OVERVIEW_FILENAMES) {
       const scopePath = joinScopePath(root, filename);
-      if (seen.has(scopePath) || !isValidScopePath(scopePath, { mustBeRelative: true })) {
-        continue;
-      }
-      seen.add(scopePath);
-      if (fileExistsInSearchScope(searchScope, fs, scopePath)) {
+      if (
+        acceptInjectionScopePath(scopePath, seen) &&
+        fileExistsInSearchScope(searchScope, fs, scopePath)
+      ) {
         atoms.push(overviewAtom(input.scope, scopePath, queryFingerprint, nowMs));
       }
     }
@@ -1803,6 +1888,7 @@ function cachedGroundedPack({
       excerpts: new Map(),
       cacheIdentity,
       initialUsage,
+      diagnostics: rings.diagnostics,
     },
     assembleOptions,
   );
@@ -1817,7 +1903,13 @@ function preparePackAssembly(
 ): PreparedPackAssembly {
   const atoms = rings.atoms;
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
-  const ranking = rankCandidates({ atoms, anchors: plan.anchors }, { nowMs });
+  // M4: pass the classified retrieval intent so ranking can apply intent-conditioned signals
+  // (canonical-metadata, structural-edge). Non-boosted intents (e.g. clarification) and the
+  // no-context default are byte-identical — see weightsForIntent / isIntentBoosted.
+  const ranking = rankCandidates(
+    { atoms, anchors: plan.anchors, context: { retrievalIntent: plan.retrievalIntent } },
+    { nowMs },
+  );
   const ordered = refineCandidateOrdering(
     ranking.kept,
     ranking.omitted,
@@ -1875,6 +1967,7 @@ async function assemblePackFromReads({
           ? undefined
           : cacheIdentity,
       initialUsage: prepared.initialUsage,
+      diagnostics: rings.diagnostics,
       initialUncertainty: [
         ...rings.uncertainty,
         ...excerptReads.uncertainty,
