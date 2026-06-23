@@ -24,6 +24,7 @@ const UI_PUBLIC = join(REPO_ROOT, "packages", "keiko-ui", "public");
 const ACCENT = "#4EBA87";
 const MARK = "#050806";
 const PRODUCT_TITLE = "Keiko | Ex experientia disco";
+const FAVICON_TITLE = "Keiko cone logo";
 const SOURCE_VIEWBOX = "0 0 1024 1024";
 const APP_ICON_VISUAL_SCALE = 0.95;
 
@@ -54,6 +55,7 @@ function withFill(svg, fill) {
 function buildIconSvg(size, options = {}) {
   const background = options.background;
   const fill = options.fill ?? MARK;
+  const title = options.title ?? PRODUCT_TITLE;
   const visualScale = options.visualScale ?? 1;
   const glyphSize = Math.round(size * visualScale);
   const glyphOffset = Math.round((size - glyphSize) / 2);
@@ -64,7 +66,7 @@ function buildIconSvg(size, options = {}) {
 
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">`,
-    `<title>${xmlEscape(PRODUCT_TITLE)}</title>`,
+    `<title>${xmlEscape(title)}</title>`,
     backgroundRect,
     `<svg x="${glyphOffset}" y="${glyphOffset}" width="${glyphSize}" height="${glyphSize}" viewBox="${SOURCE_VIEWBOX}" preserveAspectRatio="xMidYMid meet">`,
     withFill(svgInner, fill),
@@ -109,12 +111,13 @@ function renderIcon(file, size, options) {
 }
 
 const brandedIcon = { background: ACCENT, fill: MARK, visualScale: APP_ICON_VISUAL_SCALE };
+const faviconIcon = { fill: ACCENT, title: FAVICON_TITLE };
 
 renderIcon("icon-192.png", 192, brandedIcon);
 renderIcon("icon-512.png", 512, brandedIcon);
 renderIcon("icon-192-maskable.png", 192, brandedIcon);
 renderIcon("icon-512-maskable.png", 512, brandedIcon);
 renderIcon("apple-touch-icon.png", 180, brandedIcon);
-renderIcon("favicon.ico", 32, brandedIcon);
-writeSvgIcon("favicon.svg", 1024, brandedIcon);
+renderIcon("favicon.ico", 32, faviconIcon);
+writeSvgIcon("favicon.svg", 1024, faviconIcon);
 console.log("done.");

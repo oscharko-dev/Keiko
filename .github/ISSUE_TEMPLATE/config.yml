@@ -1,6 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Report User Findings
+  - name: Account-free User-Finding Report
+    url: https://github.com/oscharko-dev/Keiko/blob/dev/docs/user-finding-report.md
+    about: Use the structured account-free report form when the reporter cannot sign in to GitHub.
+  - name: GitHub User-Finding Issue Form
     url: https://github.com/oscharko-dev/Keiko/issues/new?template=user_finding.yml
-    about: Report a production or pilot bug with a structured template.
-
+    about: Report a production or pilot bug with the tracked GitHub issue form.
