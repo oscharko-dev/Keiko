@@ -12,7 +12,7 @@
 // Usage: `node scripts/generate-pwa-icons.mjs`. Commit the regenerated assets.
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,7 @@ const UI_PUBLIC = join(REPO_ROOT, "packages", "keiko-ui", "public");
 const ACCENT = "#4EBA87";
 const BG = "#1B1E23";
 const PRODUCT_TITLE = "Keiko | Ex experientia disco";
+const FAVICON_TITLE = "Keiko cone logo";
 const SOURCE_VIEWBOX = "0 0 1024 1024";
 
 const sourceSvg = join(UI_PUBLIC, "keiko-logo.svg");
@@ -53,6 +54,7 @@ function withFill(svg, fill) {
 function buildIconSvg(size, options = {}) {
   const background = options.background;
   const fill = options.fill ?? ACCENT;
+  const title = options.title ?? PRODUCT_TITLE;
   const padding = Math.round(size * (options.paddingRatio ?? 0));
   const glyphSize = size - padding * 2;
   const backgroundRect =
@@ -60,13 +62,18 @@ function buildIconSvg(size, options = {}) {
 
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">`,
-    `<title>${xmlEscape(PRODUCT_TITLE)}</title>`,
+    `<title>${xmlEscape(title)}</title>`,
     backgroundRect,
     `<svg x="${padding}" y="${padding}" width="${glyphSize}" height="${glyphSize}" viewBox="${SOURCE_VIEWBOX}" preserveAspectRatio="xMidYMid meet">`,
     withFill(svgInner, fill),
     "</svg>",
     "</svg>",
   ].join("");
+}
+
+function writeSvgIcon(file, size, options) {
+  writeFileSync(join(UI_PUBLIC, file), buildIconSvg(size, options));
+  console.log(`wrote ${file}`);
 }
 
 function renderSvg(inputSvg, outputPng) {
@@ -104,8 +111,6 @@ renderIcon("icon-512.png", 512, { paddingRatio: 0.08 });
 renderIcon("icon-192-maskable.png", 192, { background: BG, paddingRatio: 0.18 });
 renderIcon("icon-512-maskable.png", 512, { background: BG, paddingRatio: 0.18 });
 renderIcon("apple-touch-icon.png", 180, { background: BG, paddingRatio: 0.12 });
-renderIcon("favicon.ico", 32, { paddingRatio: 0.05 });
-
-copyFileSync(sourceSvg, join(UI_PUBLIC, "favicon.svg"));
-console.log("wrote favicon.svg (copy of keiko-logo.svg)");
+renderIcon("favicon.ico", 32, { paddingRatio: 0.05, title: FAVICON_TITLE });
+writeSvgIcon("favicon.svg", 1024, { title: FAVICON_TITLE });
 console.log("done.");
