@@ -553,6 +553,7 @@ export type {
   NewChatMessage,
   UpdateChatMessagePatch,
   GroundedAnswerContextPackSummary,
+  GroundedAnswerRankingSummary,
   ConversationDocumentContextWire,
   ConversationAttachmentDescriptorWire,
   DesktopChatSendRequestWire,
@@ -595,6 +596,8 @@ export type {
   OmittedContextEntry,
   ConnectedContextPack,
   ConnectedContextPackSummary,
+  ContextPackDiagnostics,
+  RankedCandidateExplanation,
   ConversationAttachmentContextLink,
   ValidationResult,
   IsValidScopePathOptions,
@@ -603,6 +606,7 @@ export type {
 } from "./connected-context.js";
 export {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  MAX_RANKED_CANDIDATE_DIAGNOSTICS,
   SELECTED_SCOPE_KINDS,
   EVIDENCE_ATOM_PROVENANCE_KINDS,
   EVIDENCE_ATOM_REDACTION_STATES,

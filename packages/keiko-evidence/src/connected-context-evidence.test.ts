@@ -196,6 +196,62 @@ describe("connected-context evidence", () => {
     expect(audit.files[0]?.excerpts[0]?.contentSha256).not.toBe(sha256Hex(PEM_FAKE));
   });
 
+  it("persists redacted ranking diagnostics when present, omits them otherwise (M2)", () => {
+    const store = createInMemoryEvidenceStore();
+    const withDiagnostics: ConnectedContextPack = {
+      ...pack(),
+      diagnostics: {
+        rankedCandidates: [
+          {
+            scopePath: `src/${SK_FAKE}.ts`,
+            bucket: "canonical-metadata",
+            score: 100,
+            ecosystem: "maven",
+            signals: [{ name: "bucket:canonical-metadata", value: 100 }],
+          },
+        ],
+      },
+    };
+    persistConnectedContextEvidence(
+      {
+        modelId: "example-chat-model",
+        workspaceRoot: `/repo/${SK_FAKE}`,
+        chatId: "chat-1",
+        pack: withDiagnostics,
+        citationCount: 1,
+        elapsedMs: 42,
+        runId: "grounded-run-rc",
+        startedAt: NOW,
+        finishedAt: NOW + 1,
+      },
+      { store, env: {}, additionalSecrets: [SK_FAKE, GHP_FAKE, PEM_FAKE] },
+    );
+    const audit = requireConnectedContext(requireManifest(loadEvidence(store, "grounded-run-rc")));
+    expect(audit.rankedCandidates?.[0]?.bucket).toBe("canonical-metadata");
+    expect(audit.rankedCandidates?.[0]?.ecosystem).toBe("maven");
+    // The scope path is redacted like every other audit path — no secret leaks through.
+    expect(JSON.stringify(audit.rankedCandidates)).not.toContain(SK_FAKE);
+
+    persistConnectedContextEvidence(
+      {
+        modelId: "example-chat-model",
+        workspaceRoot: "/repo",
+        chatId: "chat-1",
+        pack: pack(),
+        citationCount: 1,
+        elapsedMs: 42,
+        runId: "grounded-run-nodiag",
+        startedAt: NOW,
+        finishedAt: NOW + 1,
+      },
+      { store, env: {}, additionalSecrets: [SK_FAKE, GHP_FAKE, PEM_FAKE] },
+    );
+    const audit2 = requireConnectedContext(
+      requireManifest(loadEvidence(store, "grounded-run-nodiag")),
+    );
+    expect(audit2.rankedCandidates).toBeUndefined();
+  });
+
   it("applies evidence retention after writing connected-context manifests", () => {
     const store = createInMemoryEvidenceStore();
     const baseInput = {

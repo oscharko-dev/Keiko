@@ -1,7 +1,16 @@
 import type {
   CandidateOmissionReason,
+  CandidateSignal,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  canonicalMetadataEcosystem,
+  isCanonicalMetadataFile,
+  isEcosystemLockfile,
+  isEcosystemSourceFile,
+  isGeneratedArtifactPath,
+} from "./ecosystems.js";
+import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import type { DiscoveredFile } from "./types.js";
 
 export type SearchIntent =
@@ -19,6 +28,7 @@ export type CandidateBucket =
   | "overview-doc"
   | "exact-path"
   | "symbol-source"
+  | "config"
   | "source"
   | "test"
   | "docs"
@@ -37,6 +47,18 @@ export interface SearchPolicy {
   readonly omitLowValueWorkspaceFiles: boolean;
 }
 
+// Explainable per-file ranking diagnostic: why a candidate ended up where it did. `signals`
+// reuses the connected-context CandidateSignal contract ({ name, value }); names encode the
+// contribution kind (e.g. "bucket:canonical-metadata", "path-term-bonus", "depth-penalty",
+// "ecosystem:maven") and values their numeric contribution to `score`.
+export interface RankedCandidateDiagnostic {
+  readonly scopePath: string;
+  readonly bucket: CandidateBucket;
+  readonly score: number;
+  readonly ecosystem: string | undefined;
+  readonly signals: readonly CandidateSignal[];
+}
+
 export interface SearchDiagnostics {
   readonly policyMode: SearchPolicyMode;
   readonly intent: SearchIntent;
@@ -45,31 +67,23 @@ export interface SearchDiagnostics {
   readonly ignoredByDiscovery: number;
   readonly deniedByDiscovery: number;
   readonly candidateBuckets: Readonly<Record<CandidateBucket, number>>;
+  // Top-ranked candidates with their ranking-signal breakdown, bounded for audit readability.
+  readonly rankedCandidates: readonly RankedCandidateDiagnostic[];
 }
+
+// Upper bound on how many ranked candidates carry an explainability breakdown in diagnostics. The
+// strongest-ranked files are the ones a reviewer needs to justify; the full bucket histogram still
+// covers the rest via candidateBuckets.
+const MAX_RANKED_CANDIDATE_DIAGNOSTICS = 25;
 
 export interface CandidateOrderingResult {
   readonly files: readonly DiscoveredFile[];
   readonly diagnostics: SearchDiagnostics;
 }
 
-const METADATA_FILENAMES = new Set([
-  "package.json",
-  "tsconfig.json",
-  "tsconfig.base.json",
-  "tsconfig.build.json",
-  "vite.config.ts",
-  "vite.config.js",
-  "vitest.config.ts",
-  "vitest.config.js",
-  "jest.config.ts",
-  "jest.config.js",
-  "playwright.config.ts",
-  "playwright.config.js",
-  "next.config.ts",
-  "next.config.js",
-  "eslint.config.ts",
-  "eslint.config.js",
-]);
+// Canonical-metadata filenames are now owned by the ecosystem registry (ecosystems.ts), which is a
+// superset of the former JS/TS-only literal table and additionally covers Maven/Gradle/Go/Rust/
+// Python/.NET/etc. See isCanonicalMetadataFile.
 
 const OVERVIEW_FILENAMES = new Set([
   "readme.md",
@@ -138,21 +152,27 @@ const SOURCE_EXTENSIONS = new Set([
   "vue",
 ]);
 
+const CONFIG_EXTENSIONS = new Set([
+  "conf",
+  "config",
+  "env",
+  "ini",
+  "json",
+  "properties",
+  "toml",
+  "xml",
+  "yaml",
+  "yml",
+]);
 const DOC_EXTENSIONS = new Set(["adoc", "md", "mdx", "rst", "txt"]);
 const TEST_FILE_RE = /(?:^|[./_-])(?:test|spec|fixture|mock)s?(?:[./_-]|$)/iu;
-// Identifier tokens with a SINGLE greedy quantifier — no two overlapping `[A-Za-z0-9_$]*` runs
-// around `[A-Z]`, which is a polynomial-ReDoS shape on uncontrolled query text (CodeQL). The
-// camelCase test (an uppercase at position >= 1) is applied separately as a constant-width probe.
-const IDENTIFIER_TOKEN_RE = /\b[A-Za-z_$][A-Za-z0-9_$]*\b/gu;
-const HAS_INNER_UPPERCASE_RE = /[A-Za-z0-9_$][A-Z]/u;
-const TOKEN_RE = /[A-Za-z0-9_.-]{3,}/gu;
-
 function emptyBucketCounts(): Record<CandidateBucket, number> {
   return {
     "canonical-metadata": 0,
     "overview-doc": 0,
     "exact-path": 0,
     "symbol-source": 0,
+    config: 0,
     source: 0,
     test: 0,
     docs: 0,
@@ -184,31 +204,45 @@ function pathSegments(scopePath: string): readonly string[] {
 }
 
 function isLockfile(scopePath: string): boolean {
-  return LOCKFILE_FILENAMES.has(basename(scopePath).toLowerCase());
+  return (
+    LOCKFILE_FILENAMES.has(basename(scopePath).toLowerCase()) || isEcosystemLockfile(scopePath)
+  );
 }
 
 function hasLowValueSegment(scopePath: string): boolean {
   return pathSegments(scopePath).some((segment) => LOW_VALUE_SEGMENTS.has(segment));
 }
 
+function isLowValueOrGenerated(scopePath: string): boolean {
+  return hasLowValueSegment(scopePath) || isGeneratedArtifactPath(scopePath);
+}
+
+function isSourceExtension(ext: string, scopePath: string): boolean {
+  return SOURCE_EXTENSIONS.has(ext) || isEcosystemSourceFile(scopePath);
+}
+
+function isConfigPath(scopePath: string): boolean {
+  const name = basename(scopePath).toLowerCase();
+  return (
+    CONFIG_EXTENSIONS.has(extension(scopePath)) ||
+    name === ".env" ||
+    name.startsWith(".env.") ||
+    name.endsWith(".env")
+  );
+}
+
 function normalizedQueryTerms(query: RetrievalQuery): readonly string[] {
-  const terms = new Set<string>();
-  for (const match of query.text.matchAll(TOKEN_RE)) {
-    terms.add(match[0].toLowerCase());
-  }
-  for (const match of query.text.matchAll(IDENTIFIER_TOKEN_RE)) {
-    if (HAS_INNER_UPPERCASE_RE.test(match[0])) {
-      terms.add(match[0].toLowerCase());
-    }
-  }
-  return [...terms];
+  return expandedQueryTerms(query.text, false);
 }
 
 function bucketByPath(scopePath: string): CandidateBucket {
   const path = normalizedPath(scopePath);
   const name = basename(path);
   const ext = extension(path);
-  if (METADATA_FILENAMES.has(name)) {
+  // Canonical manifests are recognized by the ecosystem registry (single source of truth) rather
+  // than a JS/TS-only literal table, so pom.xml / build.gradle / go.mod / Cargo.toml / pyproject.toml
+  // are bucketed as canonical-metadata (and therefore outrank prose) instead of falling to "other".
+  if (isCanonicalMetadataFile(path)) {
     return "canonical-metadata";
   }
   if (OVERVIEW_FILENAMES.has(path) || OVERVIEW_FILENAMES.has(name)) {
@@ -217,13 +251,20 @@ function bucketByPath(scopePath: string): CandidateBucket {
   if (isLockfile(path)) {
     return "lockfile";
   }
-  if (hasLowValueSegment(path)) {
+  // Generated/vendored artifacts (target/, vendor/, __pycache__/, *.pb.go, *.designer.cs, …) are
+  // deprioritized so generated-heavy repos do not flood the candidate set. Detection is
+  // whole-segment / anchored-suffix only — never a bare substring — so hand-authored source such as
+  // src/builder.ts is unaffected.
+  if (isLowValueOrGenerated(path)) {
     return "low-value";
+  }
+  if (isConfigPath(path)) {
+    return "config";
   }
   if (TEST_FILE_RE.test(path)) {
     return "test";
   }
-  if (SOURCE_EXTENSIONS.has(ext)) {
+  if (isSourceExtension(ext, path)) {
     return "source";
   }
   if (DOC_EXTENSIONS.has(ext)) {
@@ -251,6 +292,7 @@ function metadataBucketScore(bucket: CandidateBucket): number {
     "overview-doc": 70,
     "exact-path": 95,
     "symbol-source": 80,
+    config: 65,
     source: 45,
     test: 40,
     docs: 55,
@@ -267,6 +309,7 @@ function overviewBucketScore(bucket: CandidateBucket): number {
     "overview-doc": 100,
     "exact-path": 95,
     "symbol-source": 80,
+    config: 60,
     source: 50,
     test: 35,
     docs: 70,
@@ -283,6 +326,7 @@ function targetedBucketScore(bucket: CandidateBucket): number {
     "overview-doc": 35,
     "exact-path": 100,
     "symbol-source": 95,
+    config: 90,
     source: 80,
     test: 55,
     docs: 25,
@@ -299,6 +343,7 @@ function genericBucketScore(bucket: CandidateBucket): number {
     "overview-doc": 65,
     "exact-path": 90,
     "symbol-source": 85,
+    config: 75,
     source: 60,
     test: 45,
     docs: 50,
@@ -312,58 +357,90 @@ function genericBucketScore(bucket: CandidateBucket): number {
 function pathTermBonus(scopePath: string, terms: readonly string[]): number {
   const path = normalizedPath(scopePath);
   const name = basename(path);
-  let score = 0;
+  const segments = pathSegments(path);
+  let exactPath = 0;
+  let basenameHit = 0;
+  let segmentHit = 0;
+  let substringHit = 0;
   for (const term of terms) {
-    if (name === term || name.startsWith(`${term}.`)) {
-      score = Math.max(score, 25);
+    if (path === term || path.endsWith(`/${term}`)) {
+      exactPath = Math.max(exactPath, 35);
+    } else if (name === term || name.startsWith(`${term}.`)) {
+      basenameHit = Math.max(basenameHit, 25);
+    } else if (segments.includes(term)) {
+      segmentHit = Math.max(segmentHit, 20);
     } else if (path.includes(term)) {
-      score = Math.max(score, 12);
+      substringHit = Math.max(substringHit, 12);
     }
   }
-  return score;
+  return Math.min(50, exactPath + basenameHit + segmentHit + substringHit);
 }
 
 function depthPenalty(scopePath: string): number {
   return Math.min(pathSegments(scopePath).length, 12);
 }
 
-function priorityForFile(
+interface ScoredCandidate {
+  readonly file: DiscoveredFile;
+  readonly bucket: CandidateBucket;
+  readonly score: number;
+  readonly signals: readonly CandidateSignal[];
+  readonly ecosystem: string | undefined;
+}
+
+// Score a candidate ONCE and capture the per-signal breakdown that produced the score, so the same
+// computation drives both ordering and the explainable ranking diagnostics (a reviewer can see WHY
+// a file was selected: which bucket, the intent-specific bucket weight, the path-term bonus, the
+// depth penalty, and — for a manifest — which ecosystem classified it).
+function scoreCandidate(
   file: DiscoveredFile,
   terms: readonly string[],
   policy: SearchPolicy,
-): number {
-  return (
-    bucketScore(bucketByPath(file.relativePath), policy.intent) +
-    pathTermBonus(file.relativePath, terms) -
-    depthPenalty(file.relativePath)
-  );
-}
-
-function bucketCounts(files: readonly DiscoveredFile[]): Readonly<Record<CandidateBucket, number>> {
-  const counts = emptyBucketCounts();
-  for (const file of files) {
-    counts[bucketByPath(file.relativePath)] += 1;
+): ScoredCandidate {
+  const path = file.relativePath;
+  const bucket = bucketByPath(path);
+  const bucketWeight = bucketScore(bucket, policy.intent);
+  const termBonus = pathTermBonus(path, terms);
+  const depth = depthPenalty(path);
+  const ecosystem = bucket === "canonical-metadata" ? canonicalMetadataEcosystem(path) : undefined;
+  const signals: CandidateSignal[] = [
+    { name: `bucket:${bucket}`, value: bucketWeight },
+    { name: "path-term-bonus", value: termBonus },
+    { name: "depth-penalty", value: -depth },
+  ];
+  if (ecosystem !== undefined) {
+    signals.push({ name: `ecosystem:${ecosystem}`, value: 1 });
   }
-  return counts;
+  return { file, bucket, score: bucketWeight + termBonus - depth, signals, ecosystem };
 }
 
-function sortFiles(
+function rankCandidates(
   files: readonly DiscoveredFile[],
   query: RetrievalQuery,
   policy: SearchPolicy,
-): readonly DiscoveredFile[] {
+): readonly ScoredCandidate[] {
   // Score each file ONCE (query tokenization + path bucketing are O(path) and were previously
   // recomputed twice per comparison — O(n log n) blocking work on the 2000-file candidate cap).
   // Tie-break on raw code-point order, not localeCompare, so evidence ordering is reproducible
   // across locales/ICU builds (regulated-delivery determinism).
   const terms = normalizedQueryTerms(query);
-  const scored = files.map((file) => ({ file, score: priorityForFile(file, terms, policy) }));
+  const scored = files.map((file) => scoreCandidate(file, terms, policy));
   scored.sort((a, b) => {
     if (a.score !== b.score) return b.score - a.score;
     if (a.file.relativePath < b.file.relativePath) return -1;
     return a.file.relativePath > b.file.relativePath ? 1 : 0;
   });
-  return scored.map((entry) => entry.file);
+  return scored;
+}
+
+function bucketCounts(
+  ranked: readonly ScoredCandidate[],
+): Readonly<Record<CandidateBucket, number>> {
+  const counts = emptyBucketCounts();
+  for (const candidate of ranked) {
+    counts[candidate.bucket] += 1;
+  }
+  return counts;
 }
 
 export function resolveSearchPolicy(
@@ -404,7 +481,9 @@ export function policyOmissionReason(
   if (isLockfile(scopePath) && policy.intent !== "project-metadata") {
     return "generated";
   }
-  return hasLowValueSegment(scopePath) ? "generated" : undefined;
+  return hasLowValueSegment(scopePath) || isGeneratedArtifactPath(scopePath)
+    ? "generated"
+    : undefined;
 }
 
 export function extraIgnoreLinesForSearch(policy: SearchPolicy): readonly string[] {
@@ -418,17 +497,27 @@ export function orderCandidatesForSearch(
   ignoredByDiscovery: number,
   deniedByDiscovery: number,
 ): CandidateOrderingResult {
-  const ordered = sortFiles(files, query, policy);
+  const ranked = rankCandidates(files, query, policy);
+  const rankedCandidates: readonly RankedCandidateDiagnostic[] = ranked
+    .slice(0, MAX_RANKED_CANDIDATE_DIAGNOSTICS)
+    .map((candidate) => ({
+      scopePath: candidate.file.relativePath,
+      bucket: candidate.bucket,
+      score: candidate.score,
+      ecosystem: candidate.ecosystem,
+      signals: candidate.signals,
+    }));
   return {
-    files: ordered,
+    files: ranked.map((candidate) => candidate.file),
     diagnostics: {
       policyMode: policy.mode,
       intent: policy.intent,
       filesDiscovered: files.length,
-      filesAfterPolicy: ordered.length,
+      filesAfterPolicy: ranked.length,
       ignoredByDiscovery,
       deniedByDiscovery,
-      candidateBuckets: bucketCounts(ordered),
+      candidateBuckets: bucketCounts(ranked),
+      rankedCandidates,
     },
   };
 }

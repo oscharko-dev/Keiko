@@ -1,0 +1,8 @@
+{
+  "minTop1Rate": 1,
+  "minRecallAtK": 1,
+  "minMrr": 1,
+  "minNdcgAtK": 1,
+  "minLineHitRate": 1,
+  "maxGeneratedLeakCount": 0
+}

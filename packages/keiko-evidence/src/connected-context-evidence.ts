@@ -226,10 +226,28 @@ function summaryOf(input: ConnectedContextEvidenceInput): EvidenceConnectedConte
   };
 }
 
+function rankedCandidatesOf(
+  input: ConnectedContextEvidenceInput,
+  redact: Redactor,
+): EvidenceConnectedContextAudit["rankedCandidates"] {
+  const ranked = input.pack.diagnostics?.rankedCandidates;
+  if (ranked === undefined) {
+    return undefined;
+  }
+  return ranked.map((entry) => ({
+    scopePath: redactString(redact, entry.scopePath),
+    bucket: entry.bucket,
+    score: entry.score,
+    ecosystem: entry.ecosystem,
+    signals: entry.signals.map((signal) => ({ name: signal.name, value: signal.value })),
+  }));
+}
+
 function connectedContextOf(
   input: ConnectedContextEvidenceInput,
   redact: Redactor,
 ): EvidenceConnectedContextAudit {
+  const rankedCandidates = rankedCandidatesOf(input, redact);
   return {
     packSchemaVersion: input.pack.schemaVersion,
     packStableIdHash: sha256Hex(redactString(redact, input.pack.stableId)),
@@ -255,6 +273,7 @@ function connectedContextOf(
       kind: entry.kind,
       impactedAtomCount: entry.impactedAtomIds.length,
     })),
+    ...(rankedCandidates !== undefined ? { rankedCandidates } : {}),
     toolsUsed: toolsUsed(input.pack, redact),
     summary: summaryOf(input),
   };

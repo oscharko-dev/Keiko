@@ -241,6 +241,17 @@ export interface EvidenceConnectedContextOmitted {
   readonly reason: string;
 }
 
+// Per-file candidate-ranking rationale for the regulated audit (enterprise retrieval M2). scopePath
+// is redacted by the same redactor as files/omitted; bucket/ecosystem/signals are opaque metadata
+// (no excerpt content). Present only when the pack carried ranking diagnostics.
+export interface EvidenceConnectedContextRankedCandidate {
+  readonly scopePath: string;
+  readonly bucket: string;
+  readonly score: number;
+  readonly ecosystem: string | undefined;
+  readonly signals: readonly { readonly name: string; readonly value: number }[];
+}
+
 export interface EvidenceConnectedContextUncertainty {
   readonly kind: string;
   readonly impactedAtomCount: number;
@@ -275,6 +286,9 @@ export interface EvidenceConnectedContextAudit {
   readonly files: readonly EvidenceConnectedContextFile[];
   readonly omitted: readonly EvidenceConnectedContextOmitted[];
   readonly uncertainty: readonly EvidenceConnectedContextUncertainty[];
+  // Additive (M2): the candidate-ranking rationale. Absent on legacy runs / packs without
+  // diagnostics — additive-optional, no evidence schema-version bump (mirrors `plan`).
+  readonly rankedCandidates?: readonly EvidenceConnectedContextRankedCandidate[] | undefined;
   readonly toolsUsed: readonly string[];
   readonly summary: {
     readonly fileCount: number;

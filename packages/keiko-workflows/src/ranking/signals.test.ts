@@ -185,5 +185,59 @@ describe("extractSignals", () => {
     const result = extractSignals([atom("src/dist/foo.js", 0.05)], [], REQUIRED_HINTS);
     expect(result.baseScore >= 0).toBe(true);
     expect(result.baseScore <= 1).toBe(true);
+    expect(result.generatedHint).toBe(true);
+  });
+});
+
+// ─── Intent-conditioned signals (enterprise retrieval M4) ──────────────────────
+function structuralAtom(scopePath: string, score: number, tool: string): EvidenceAtom {
+  return {
+    ...atom(scopePath, score),
+    provenance: { kind: "structural", tool, queryFingerprint: "fp" },
+  };
+}
+
+describe("extractSignals — intent context (M4)", () => {
+  it("appends nothing without a context (byte-identical signal vector)", () => {
+    const result = extractSignals([atom("pom.xml", 0.5)], [], REQUIRED_HINTS);
+    expect(result.signals.map((s) => s.name)).toEqual(SIGNAL_NAME_ORDER);
+  });
+
+  it("appends nothing for a non-boosted intent (clarification)", () => {
+    const result = extractSignals([atom("pom.xml", 0.5)], [], REQUIRED_HINTS, {
+      retrievalIntent: "clarification-needed",
+    });
+    expect(result.signals.map((s) => s.name)).toEqual(SIGNAL_NAME_ORDER);
+  });
+
+  it("appends canonical-metadata + structural-edge for a boosted intent", () => {
+    const result = extractSignals([atom("pom.xml", 0.5)], [], REQUIRED_HINTS, {
+      retrievalIntent: "project-metadata",
+    });
+    expect(result.signals.map((s) => s.name)).toEqual([
+      ...SIGNAL_NAME_ORDER,
+      "canonical-metadata",
+      "structural-edge",
+    ]);
+    expect(result.signals.find((s) => s.name === "canonical-metadata")?.value).toBe(1);
+  });
+
+  it("canonical-metadata is 0 for a non-manifest source file", () => {
+    const result = extractSignals([atom("src/foo.ts", 0.5)], [], REQUIRED_HINTS, {
+      retrievalIntent: "project-metadata",
+    });
+    expect(result.signals.find((s) => s.name === "canonical-metadata")?.value).toBe(0);
+  });
+
+  it("structural-edge is 1 when an import-graph atom is present", () => {
+    const result = extractSignals(
+      [structuralAtom("src/foo.ts", 0.7, "import-graph")],
+      [],
+      REQUIRED_HINTS,
+      { retrievalIntent: "targeted-code-search" },
+    );
+    expect(result.signals.find((s) => s.name === "structural-edge")?.value).toBe(1);
+    expect(result.baseScore >= 0).toBe(true);
+    expect(result.baseScore <= 1).toBe(true);
   });
 });

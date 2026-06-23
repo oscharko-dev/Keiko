@@ -60,6 +60,8 @@
     "prune:package-native-optionals": "node scripts/prune-package-native-optionals.mjs",
     "check:package-surface": "node scripts/check-package-surface.mjs",
     "check:editor-bundle-size": "node scripts/editor-bundle-size.mjs",
+    "check:retrieval-latency": "node scripts/check-retrieval-latency.mjs",
+    "check:retrieval-quality": "node scripts/check-retrieval-quality.mjs",
     "check:editor-doc-links": "node scripts/check-editor-doc-links.mjs",
     "check:package-graph": "node scripts/check-package-graph.mjs",
     "check:version-consistency": "node scripts/check-version-consistency.mjs",

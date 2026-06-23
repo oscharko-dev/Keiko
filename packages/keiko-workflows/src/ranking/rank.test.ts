@@ -49,6 +49,29 @@ describe("rankCandidates", () => {
     expect(a).toEqual(b);
   });
 
+  it("boosts a canonical manifest above an equal-provenance source for a project-metadata intent (M4)", () => {
+    // Both atoms are at the repo root with the same provenance score, so they tie absent the intent
+    // boost; the canonical-metadata signal is the only differentiator.
+    const atoms = [atom("foo.ts", 0.6), atom("pom.xml", 0.6)];
+    const boosted = rankCandidates(
+      { atoms, anchors: [], context: { retrievalIntent: "project-metadata" } },
+      BASE_OPTIONS,
+    );
+    expect(boosted.kept[0]?.scopePath).toBe("pom.xml");
+    const pom = boosted.kept.find((c) => c.scopePath === "pom.xml");
+    expect(pom?.signals.some((s) => s.name === "canonical-metadata" && s.value === 1)).toBe(true);
+  });
+
+  it("leaves ranking byte-identical for a non-boosted intent (no new signals)", () => {
+    const atoms = [atom("foo.ts", 0.6), atom("pom.xml", 0.6)];
+    const neutral = rankCandidates({ atoms, anchors: [] }, BASE_OPTIONS);
+    const clarification = rankCandidates(
+      { atoms, anchors: [], context: { retrievalIntent: "clarification-needed" } },
+      BASE_OPTIONS,
+    );
+    expect(clarification.kept).toEqual(neutral.kept);
+  });
+
   it("collapses multiple atoms for the same path into a single CandidateFile", () => {
     const result = rankCandidates(
       {

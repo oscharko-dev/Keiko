@@ -445,6 +445,72 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("retrieves Express-style API route declarations through the full context-pack path", async () => {
+    mkdirSync(join(ROOT, "src/http"), { recursive: true });
+    mkdirSync(join(ROOT, "docs"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "src/http/routes.ts"),
+      'router.post("/api/payments/:id/refund", async (req, res) => refundPayment(req, res));\n',
+    );
+    writeFileSync(
+      join(ROOT, "docs/routes.md"),
+      "The POST /api/payments/:id/refund endpoint refunds a payment.\n",
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Which file implements the POST /api/payments/:id/refund route?",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files[0]?.scopePath).toBe("src/http/routes.ts");
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) =>
+        excerpt.content.includes("/api/payments/:id/refund"),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("retrieves the source file for a test-class lookup through the full context-pack path", async () => {
+    mkdirSync(join(ROOT, "src/payments"), { recursive: true });
+    mkdirSync(join(ROOT, "tests/payments"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "src/payments/PaymentService.ts"),
+      "export class PaymentService {\n  authorize(): boolean { return true; }\n}\n",
+    );
+    writeFileSync(
+      join(ROOT, "tests/payments/PaymentService.test.ts"),
+      'describe("PaymentServiceTest", () => it("covers authorize", () => {}));\n',
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Where is the source implementation for PaymentServiceTest?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files[0]?.scopePath).toBe("src/payments/PaymentService.ts");
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes("PaymentService")),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("grounds direct package.json metadata requests without leaking internal .keiko evidence", async () => {
     writeFileSync(join(ROOT, "package.json"), '{\n  "packageManager": "npm@10.9.8"\n}\n');
     mkdirSync(join(ROOT, ".keiko/evidence/qi"), { recursive: true });
@@ -476,6 +542,80 @@ describe("runGroundedExploration", () => {
     ).toBe(true);
     expect(JSON.stringify(out.pack)).not.toContain(".keiko/evidence");
     expect(JSON.stringify(out.pack)).not.toContain("stale-internal-value");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("retrieves the service-local Java manifest in a polyglot monorepo (not only the root manifest)", async () => {
+    mkdirSync(join(ROOT, "services/payments"), { recursive: true });
+    mkdirSync(join(ROOT, "services/gateway"), { recursive: true });
+    // Root aggregator pom (shallower) + a service-local pom declaring the real Java version + an
+    // unrelated Go service manifest. Before the ecosystem registry, only package.json was injected
+    // in service dirs, so the service-local pom.xml was invisible to project-metadata questions.
+    writeFileSync(
+      join(ROOT, "pom.xml"),
+      "<project><modules><module>payments</module></modules></project>\n",
+    );
+    writeFileSync(
+      join(ROOT, "services/payments/pom.xml"),
+      "<project>\n  <properties>\n    <maven.compiler.release>21</maven.compiler.release>\n  </properties>\n</project>\n",
+    );
+    writeFileSync(join(ROOT, "services/gateway/go.mod"), "module acme/gateway\n\ngo 1.22\n");
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which Java version does the payments service use?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const paths = out.pack.files.map((file) => file.scopePath);
+    // The service-local Java manifest is surfaced (the core polyglot-monorepo acceptance criterion).
+    expect(paths).toContain("services/payments/pom.xml");
+    // Discovery is ecosystem-aware, not package.json-only: the sibling Go service manifest is found too.
+    expect(paths).toContain("services/gateway/go.mod");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("carries explainable ranking diagnostics on the pack for a project-metadata question (M2)", async () => {
+    writeFileSync(
+      join(ROOT, "pom.xml"),
+      "<project>\n  <properties>\n    <maven.compiler.release>21</maven.compiler.release>\n  </properties>\n</project>\n",
+    );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which Java version does this project use?" }),
+      }),
+      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+    );
+    const ranked = out.pack.diagnostics?.rankedCandidates ?? [];
+    const pom = ranked.find((entry) => entry.scopePath === "pom.xml");
+    expect(pom).toBeDefined();
+    expect(pom?.bucket).toBe("canonical-metadata");
+    expect(pom?.ecosystem).toBeDefined();
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("injects a root-level glob manifest (*.csproj) for a project-metadata question (M4 root glob scan)", async () => {
+    // *.csproj has no fixed basename, so the exact-name injection list cannot enumerate it; the
+    // bounded root glob sweep must surface it.
+    writeFileSync(
+      join(ROOT, "Service.csproj"),
+      "<Project>\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n",
+    );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which .NET target framework does this project use?" }),
+      }),
+      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+    );
+    expect(out.pack.files.map((file) => file.scopePath)).toContain("Service.csproj");
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

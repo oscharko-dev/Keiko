@@ -585,9 +585,19 @@ export interface GroundedUncertainty {
   readonly claim: string;
 }
 
+// Path-free aggregate of the candidate-ranking rationale (enterprise retrieval M2). Carries only
+// bucket counts + ecosystem counts — NO scope path, NO score, NO signal-per-file — so it preserves
+// the path-free privacy contract below. Full per-file rationale lives only in the regulated audit
+// evidence (EvidenceConnectedContextAudit.rankedCandidates), never on the browser surface.
+export interface GroundedAnswerRankingSummary {
+  readonly bucketCounts: Readonly<Record<string, number>>;
+  readonly ecosystems: readonly { readonly id: string; readonly count: number }[];
+}
+
 // Counts-only projection of a ConnectedContextPack used to display "what was inspected" on
 // every grounded answer (Issue #187 / ADR-0022). Structurally redaction-free by construction:
 // no raw scope id, no scope path, no workspace root, no excerpt content, no query text. The
+// optional `rankingSummary` is likewise path-free (bucket/ecosystem aggregate counts only). The
 // sentinel `fileCount === -1` distinguishes the workspace-root scope (no enumerable file set)
 // from directory/files scopes that always report `relativePaths.length` (>= 1).
 export interface GroundedAnswerContextPackSummary {
@@ -604,6 +614,7 @@ export interface GroundedAnswerContextPackSummary {
   readonly omittedCounts: Readonly<Record<CandidateOmissionReason, number>>;
   readonly uncertaintyCount: number;
   readonly elapsedMs: number;
+  readonly rankingSummary?: GroundedAnswerRankingSummary | undefined;
 }
 
 export interface LocalKnowledgeGroundedAnswerContextSummary {
@@ -644,6 +655,28 @@ function displayScopeId(scopeId: string): string {
   return `scope-${hashString32(scopeId)}`;
 }
 
+// Derives the path-free ranking aggregate from the pack diagnostics. Deterministic: bucket keys in
+// first-seen-then-sorted order, ecosystems sorted by count desc then id asc. Returns undefined when
+// the pack carries no diagnostics (legacy / non-lexical packs) so the field is simply absent.
+function buildRankingSummary(pack: ConnectedContextPack): GroundedAnswerRankingSummary | undefined {
+  const ranked = pack.diagnostics?.rankedCandidates;
+  if (ranked === undefined || ranked.length === 0) {
+    return undefined;
+  }
+  const bucketCounts: Record<string, number> = {};
+  const ecosystemCounts = new Map<string, number>();
+  for (const entry of ranked) {
+    bucketCounts[entry.bucket] = (bucketCounts[entry.bucket] ?? 0) + 1;
+    if (entry.ecosystem !== undefined) {
+      ecosystemCounts.set(entry.ecosystem, (ecosystemCounts.get(entry.ecosystem) ?? 0) + 1);
+    }
+  }
+  const ecosystems = [...ecosystemCounts.entries()]
+    .map(([id, count]) => ({ id, count }))
+    .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.id < b.id ? -1 : 1));
+  return { bucketCounts, ecosystems };
+}
+
 // Pure builder: derives a GroundedAnswerContextPackSummary from the source pack plus the
 // BFF-computed citation count and total elapsed wall time. No IO, no redaction (the only
 // scope-derived string carried is a deterministic display fingerprint); allocates one fresh object.
@@ -652,6 +685,7 @@ export function buildGroundedAnswerContextPackSummary(
   citationCount: number,
   elapsedMs: number,
 ): GroundedAnswerContextPackSummary {
+  const rankingSummary = buildRankingSummary(pack);
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     scopeId: displayScopeId(pack.scope.scopeId),
@@ -665,6 +699,7 @@ export function buildGroundedAnswerContextPackSummary(
     omittedCounts: buildOmittedCounts(pack),
     uncertaintyCount: pack.uncertainty.length,
     elapsedMs,
+    ...(rankingSummary !== undefined ? { rankingSummary } : {}),
   };
 }
 

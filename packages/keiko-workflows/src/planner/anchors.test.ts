@@ -41,6 +41,12 @@ describe("extractAnchors", () => {
     expect(path).toEqual({ term: "src/foo/bar.ts", weight: 0.95, kind: "path" });
   });
 
+  it("captures API route literals as path anchors", () => {
+    const result = run("Which file implements POST /api/payments/:id/refund?");
+    const route = result.anchors.find((a) => a.term === "/api/payments/:id/refund");
+    expect(route).toEqual({ term: "/api/payments/:id/refund", weight: 0.95, kind: "path" });
+  });
+
   it("captures a backtick span as an identifier anchor at weight 0.9", () => {
     const result = run("the `MyClass` symbol");
     const ident = result.anchors.find((a) => a.kind === "identifier" && a.term === "myclass");
