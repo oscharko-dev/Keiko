@@ -29,7 +29,9 @@ concurrency:
 
 env:
   RELEASE_BASE_BRANCH: release/0.2
-  RELEASE_REQUIRED_CHECKS: '["ci","actionlint","Verify pinned action SHAs","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","Review dependency diff (dev/main)","ui"]'
+  # Dependency Review is enforced on release PRs. It is intentionally omitted here because
+  # the check is pull_request-only and is not emitted on the tagged squash commit.
+  RELEASE_REQUIRED_CHECKS: '["ci","actionlint","Verify pinned action SHAs","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
 
 jobs:
   release-verify:
@@ -73,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       checks: read
-      contents: read
+      contents: write
       statuses: read
     timeout-minutes: 30
     steps:
@@ -113,6 +115,7 @@ jobs:
           NODE
       - name: Publish package
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: npm run release:publish -- --tag "$NPM_DIST_TAG"
