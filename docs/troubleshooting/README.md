@@ -17,7 +17,7 @@ external observability tooling.
 2. Confirm the **Root Cause** by running the listed **Diagnostic Steps**.
 3. Apply the **Resolution** for that root cause.
 4. If the symptom does not match any entry, capture redacted evidence
-   following the rules in the [User Finding template](../../.github/ISSUE_TEMPLATE/user_finding.yml)
+   following the rules in the [User-Finding report form](../user-finding-report.md)
    and open a finding.
 
 For contributors adding new entries, use the
