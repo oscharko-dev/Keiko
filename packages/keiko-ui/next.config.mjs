@@ -16,6 +16,7 @@ const nextConfig = {
   productionBrowserSourceMaps: false,
   images: { unoptimized: true },
   reactStrictMode: true,
+  transpilePackages: ["@monaco-editor/react", "monaco-editor"],
   turbopack: {
     root: repoRoot,
   },
