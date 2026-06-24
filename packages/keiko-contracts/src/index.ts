@@ -490,6 +490,40 @@ export {
   validateVoiceControlMessage,
 } from "./voice-protocol.js";
 
+// ─── Voice transcript segment lifecycle (Issue #500 / Epic #491; ADR-0063) ───────
+export type {
+  VoiceTranscriptSegmentState,
+  VoiceTranscriptProviderErrorKind,
+  VoiceTranscriptSource,
+  VoiceTranscriptSegment,
+  CommittedVoiceTranscriptProjection,
+  VoiceTranscriptEvidenceSummary,
+} from "./voice-transcript.js";
+export {
+  VOICE_TRANSCRIPT_SCHEMA_VERSION,
+  VOICE_TRANSCRIPT_SEGMENT_STATES,
+  VOICE_TRANSCRIPT_CONSUMABLE_STATES,
+  VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS,
+  VOICE_TRANSCRIPT_SOURCES,
+  VOICE_TRANSCRIPT_SEGMENT_REPLAY,
+  VOICE_TRANSCRIPT_SEGMENT_REDACTION,
+  VOICE_TRANSCRIPT_SEGMENT_TRANSITIONS,
+  isVoiceTranscriptSchemaVersionSupported,
+  isVoiceTranscriptSegmentState,
+  isVoiceTranscriptProviderErrorKind,
+  isVoiceTranscriptSource,
+  voiceTranscriptSegmentReplayClass,
+  voiceTranscriptSegmentRedactionClass,
+  canTransitionVoiceTranscriptSegment,
+  isCommittedVoiceTranscriptState,
+  assertNeverVoiceTranscriptSegmentState,
+  mapWireKindToVoiceTranscriptSegmentState,
+  voiceTranscriptCaptureAllowed,
+  voiceTranscriptPreviewAllowed,
+  selectCommittedVoiceTranscript,
+  summarizeVoiceTranscript,
+} from "./voice-transcript.js";
+
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {
   NetworkPolicy,
