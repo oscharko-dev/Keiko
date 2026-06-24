@@ -26,9 +26,9 @@ import {
   type ModelProviderConfig,
   type RealtimeNegotiationOutcome,
   type RealtimeNegotiationRequest,
+  type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
-  assertNeverVoiceControlMessageKind,
   isVoiceReplayEligible,
   stripUnsafeFormatChars,
   validateVoiceControlMessage,
@@ -248,22 +248,19 @@ export class VoiceControlConnection {
   }
 
   private async dispatchIn(message: VoiceControlMessage): Promise<void> {
+    // Only the kinds that drive a host action are handled. Every other permitted kind is an
+    // observable no-op: a repeated session.create (start() already announced the session), a late
+    // signal.ice.candidate (proxied single-shot SDP carries ICE in the offer/answer — no provider
+    // trickle channel), client-reported media.track.state / transcript.partial / playback.state, and
+    // any host-originated kind a client should not send. A future contract kind is likewise ignored —
+    // unknown control messages are never trusted.
     switch (message.kind) {
-      case "session.create":
-        // The session is resolved/created by the plane before the connection starts; a repeated
-        // create (reconnect/idempotency) is a no-op here — start() already announced it.
+      case "signal.sdp.offer":
+        await this.handleOffer(message.sdp);
         return;
       case "capability.select":
         // The only selectable profile is the resolved full-realtime profile; acknowledge by policy.
         this.emit({ kind: "policy.decision", decision: "allow" });
-        return;
-      case "signal.sdp.offer":
-        await this.handleOffer(message.sdp);
-        return;
-      case "signal.ice.candidate":
-        // Proxied single-shot SDP negotiation carries ICE inside the offer/answer, so there is no
-        // provider trickle channel to relay a late client candidate to; accept it (it is permitted
-        // for full-realtime) as an ephemeral no-op. A trickle-capable provider profile would relay.
         return;
       case "control.interrupt":
         // Barge-in is observed on the control plane; the actual interruption happens on the media
@@ -271,13 +268,7 @@ export class VoiceControlConnection {
         this.emit({ kind: "playback.state", state: "interrupted" });
         return;
       case "control.cancel":
-        this.negotiation?.abort();
-        this.negotiation = undefined;
-        return;
-      case "media.track.state":
-      case "transcript.partial":
-      case "playback.state":
-        // Client-reported transport state — observable on the control plane, no host action required.
+        this.cancelNegotiation();
         return;
       case "transcript.committed":
         this.recordTranscript(message.text);
@@ -290,20 +281,14 @@ export class VoiceControlConnection {
         this.emit({ kind: "session.closed", reason: "client-request" });
         this.shutdown(1000, "session closed");
         return;
-      // host-originated kinds a well-behaved client never sends; ignore rather than trust.
-      case "session.created":
-      case "session.closed":
-      case "capability.offer":
-      case "signal.sdp.answer":
-      case "policy.decision":
-      case "error":
-        return;
       default:
-        // Exhaustiveness guard: every VoiceControlMessageKind is handled above, so `message` narrows
-        // to `never` here. Adding a new contract kind without a case makes it non-never and fails to
-        // type-check (TS 6 rejects `.kind` access on `never`, so the narrowed message is passed).
-        return assertNeverVoiceControlMessageKind(message);
+        return;
     }
+  }
+
+  private cancelNegotiation(): void {
+    this.negotiation?.abort();
+    this.negotiation = undefined;
   }
 
   private async handleOffer(offerSdp: string): Promise<void> {
@@ -447,7 +432,7 @@ function rawDataToString(data: RawData, isBinary: boolean): string | undefined {
   if (Array.isArray(data)) {
     return Buffer.concat(data).toString("utf8");
   }
-  return Buffer.from(data as ArrayBuffer).toString("utf8");
+  return Buffer.from(data).toString("utf8");
 }
 
 export interface VoiceControlPlaneDeps {
@@ -458,22 +443,49 @@ export interface VoiceControlPlaneDeps {
   readonly handlerDeps: () => UiHandlerDeps;
 }
 
-// Builds the realtime voice control plane bound to one server. The returned `handleUpgrade` is the
-// gated replacement for server.ts's hard-reject upgrade handler; it accepts ONLY the voice control
-// path, ONLY on a loopback Host/Origin, and ONLY when the deployment is full-realtime capable.
-export function createVoiceControlPlane(planeDeps: VoiceControlPlaneDeps): VoiceControlPlane {
-  const wss = new WebSocketServer({ noServer: true });
-  const sessions = new Map<string, SessionState>();
+// The realtime voice control plane bound to one server. `handleUpgrade` is the gated replacement for
+// server.ts's hard-reject upgrade handler; it accepts ONLY the voice control path, ONLY on a loopback
+// Host/Origin, and ONLY when the deployment is full-realtime capable.
+class VoiceControlPlaneImpl implements VoiceControlPlane {
+  private readonly wss = new WebSocketServer({ noServer: true });
+  private readonly sessions = new Map<string, SessionState>();
 
-  function sweepExpired(now: number): void {
-    for (const [key, state] of sessions) {
+  constructor(private readonly planeDeps: VoiceControlPlaneDeps) {}
+
+  handleUpgrade(req: IncomingMessage, sock: Duplex, head: Buffer): boolean {
+    if (!isVoiceControlUpgrade(req)) {
+      return false;
+    }
+    const deps = this.planeDeps.handlerDeps();
+    // The two load-bearing gates: loopback Host/Origin (rejects cross-origin + opaque null), and the
+    // full-realtime capability gate (a no-voice / STT-only / policy-disabled deployment keeps the
+    // WebSocket hard-rejected, AC1/AC3).
+    if (!isAllowedHost(req, this.planeDeps.port) || !isVoiceRealtimeCapable(deps)) {
+      return false;
+    }
+    this.wss.handleUpgrade(req, sock, head, (ws) => {
+      this.onConnection(ws, deps);
+    });
+    return true;
+  }
+
+  closeAll(): void {
+    for (const client of this.wss.clients) {
+      client.close(1001, "server shutting down");
+    }
+    this.wss.close();
+    this.sessions.clear();
+  }
+
+  private sweepExpired(now: number): void {
+    for (const [key, state] of this.sessions) {
       if (state.detachedAt !== undefined && now - state.detachedAt > SESSION_RESUME_TTL_MS) {
-        sessions.delete(key);
+        this.sessions.delete(key);
       }
     }
   }
 
-  function buildNegotiate(deps: UiHandlerDeps): NegotiateFn {
+  private buildNegotiate(deps: UiHandlerDeps): NegotiateFn {
     return async (offerSdp: string, signal: AbortSignal): Promise<RealtimeNegotiationOutcome> => {
       const config = currentGatewayConfig(deps);
       if (config === undefined) {
@@ -488,82 +500,93 @@ export function createVoiceControlPlane(planeDeps: VoiceControlPlaneDeps): Voice
     };
   }
 
-  function onConnection(ws: WsSocket, deps: UiHandlerDeps): void {
-    const config = currentGatewayConfig(deps);
-    const voice = resolveVoiceCapability(config ?? { providers: [] }, {
+  // Resolves (creating or resuming) the session for a validated opening frame, or closes the socket
+  // and returns undefined on a bad frame. The negotiation mode must match the canonical mode for the
+  // effective profile (an inconsistent mode is rejected, never advisory).
+  private resolveSession(
+    ws: WsSocket,
+    deps: UiHandlerDeps,
+    voice: VoiceCapabilityResolution,
+    raw: string,
+  ): { state: SessionState; resume: boolean } | undefined {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      ws.close(1008, "invalid opening frame");
+      return undefined;
+    }
+    if (
+      !validateVoiceControlMessage(parsed).ok ||
+      !isRecord(parsed) ||
+      parsed.kind !== "session.create"
+    ) {
+      ws.close(1008, "expected session.create");
+      return undefined;
+    }
+    const sessionId = parsed.sessionId;
+    if (!isSafeIdentifier(sessionId) || !isSafeIdentifier(parsed.idempotencyKey)) {
+      ws.close(1008, "invalid session identifiers");
+      return undefined;
+    }
+    if (
+      parsed.requestedProfile !== voice.profile ||
+      parsed.negotiationMode !== VOICE_PROFILE_NEGOTIATION_MODE[voice.profile]
+    ) {
+      emitStandaloneError(ws, sessionId, "not-allowed-for-profile", deps.redactor);
+      ws.close(1008, "profile/negotiation mismatch");
+      return undefined;
+    }
+    return this.createOrResumeSession(ws, voice, sessionId, parsed.idempotencyKey, deps.redactor);
+  }
+
+  private createOrResumeSession(
+    ws: WsSocket,
+    voice: VoiceCapabilityResolution,
+    sessionId: string,
+    idempotencyKey: string,
+    redact: (value: unknown) => unknown,
+  ): { state: SessionState; resume: boolean } | undefined {
+    this.sweepExpired(Date.now());
+    const resumed = this.sessions.get(idempotencyKey);
+    if (resumed?.sessionId === sessionId) {
+      resumed.detachedAt = undefined;
+      return { state: resumed, resume: true };
+    }
+    if (this.sessions.size >= MAX_ACTIVE_SESSIONS) {
+      emitStandaloneError(ws, sessionId, "rate-limited", redact);
+      ws.close(1013, "too many sessions");
+      return undefined;
+    }
+    const state: SessionState = {
+      sessionId,
+      idempotencyKey,
+      profile: voice.profile,
+      providerLocality: voice.providerLocality,
+      hostSeq: 0,
+      lastClientSeq: 0,
+      replay: [],
+      detachedAt: undefined,
+    };
+    this.sessions.set(idempotencyKey, state);
+    return { state, resume: false };
+  }
+
+  private onConnection(ws: WsSocket, deps: UiHandlerDeps): void {
+    const voice = resolveVoiceCapability(currentGatewayConfig(deps) ?? { providers: [] }, {
       policyDisabled: isVoiceDisabledByPolicy(deps.env),
     });
-    const negotiate = buildNegotiate(deps);
-    const redact = deps.redactor;
+    const negotiate = this.buildNegotiate(deps);
     const socket: VoiceControlSocket = {
-      send: (data) => ws.send(data),
-      close: (code, reason) => ws.close(code, reason),
+      send: (data) => {
+        ws.send(data);
+      },
+      close: (code, reason) => {
+        ws.close(code, reason);
+      },
     };
     let connection: VoiceControlConnection | undefined;
     let activeSession: SessionState | undefined;
-
-    function beginSession(raw: string): void {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        ws.close(1008, "invalid opening frame");
-        return;
-      }
-      const validation = validateVoiceControlMessage(parsed);
-      if (!validation.ok || !isRecord(parsed) || parsed.kind !== "session.create") {
-        ws.close(1008, "expected session.create");
-        return;
-      }
-      const sessionId = parsed.sessionId;
-      const idempotencyKey = parsed.idempotencyKey;
-      if (!isSafeIdentifier(sessionId) || !isSafeIdentifier(idempotencyKey)) {
-        ws.close(1008, "invalid session identifiers");
-        return;
-      }
-      // The negotiation mode must match the canonical mode for the effective profile; an inconsistent
-      // mode (e.g. direct-ephemeral on a session that must be proxied) is rejected, never advisory.
-      if (
-        parsed.requestedProfile !== voice.profile ||
-        parsed.negotiationMode !== VOICE_PROFILE_NEGOTIATION_MODE[voice.profile]
-      ) {
-        emitStandaloneError(ws, sessionId, "not-allowed-for-profile", redact);
-        ws.close(1008, "profile/negotiation mismatch");
-        return;
-      }
-      sweepExpired(Date.now());
-      const resumed = sessions.get(idempotencyKey);
-      let resume = false;
-      if (resumed !== undefined && resumed.sessionId === sessionId) {
-        resumed.detachedAt = undefined;
-        activeSession = resumed;
-        resume = true;
-      } else {
-        if (sessions.size >= MAX_ACTIVE_SESSIONS) {
-          emitStandaloneError(ws, sessionId, "rate-limited", redact);
-          ws.close(1013, "too many sessions");
-          return;
-        }
-        activeSession = {
-          sessionId,
-          idempotencyKey,
-          profile: voice.profile,
-          providerLocality: voice.providerLocality,
-          hostSeq: 0,
-          lastClientSeq: 0,
-          replay: [],
-          detachedAt: undefined,
-        };
-        sessions.set(idempotencyKey, activeSession);
-      }
-      connection = new VoiceControlConnection({
-        socket,
-        session: activeSession,
-        negotiate,
-        redact,
-      });
-      connection.start(resume);
-    }
 
     ws.on("message", (data: RawData, isBinary: boolean) => {
       const raw = rawDataToString(data, isBinary);
@@ -572,11 +595,22 @@ export function createVoiceControlPlane(planeDeps: VoiceControlPlaneDeps): Voice
         ws.close(1003, "binary frames are not permitted on the control plane");
         return;
       }
-      if (connection === undefined) {
-        beginSession(raw);
+      if (connection !== undefined) {
+        void connection.receive(raw);
         return;
       }
-      void connection.receive(raw);
+      const resolved = this.resolveSession(ws, deps, voice, raw);
+      if (resolved === undefined) {
+        return;
+      }
+      activeSession = resolved.state;
+      connection = new VoiceControlConnection({
+        socket,
+        session: resolved.state,
+        negotiate,
+        redact: deps.redactor,
+      });
+      connection.start(resolved.resume);
     });
 
     ws.on("close", () => {
@@ -591,32 +625,11 @@ export function createVoiceControlPlane(planeDeps: VoiceControlPlaneDeps): Voice
       ws.close(1011, "control plane error");
     });
   }
+}
 
-  return {
-    handleUpgrade(req: IncomingMessage, sock: Duplex, head: Buffer): boolean {
-      if (!isVoiceControlUpgrade(req)) {
-        return false;
-      }
-      const deps = planeDeps.handlerDeps();
-      // The two load-bearing gates: loopback Host/Origin (rejects cross-origin + opaque null), and
-      // the full-realtime capability gate (a no-voice / STT-only / policy-disabled deployment keeps
-      // the WebSocket hard-rejected, AC1/AC3).
-      if (!isAllowedHost(req, planeDeps.port) || !isVoiceRealtimeCapable(deps)) {
-        return false;
-      }
-      wss.handleUpgrade(req, sock, head, (ws) => {
-        onConnection(ws, deps);
-      });
-      return true;
-    },
-    closeAll(): void {
-      for (const client of wss.clients) {
-        client.close(1001, "server shutting down");
-      }
-      wss.close();
-      sessions.clear();
-    },
-  };
+// Builds the realtime voice control plane bound to one server.
+export function createVoiceControlPlane(planeDeps: VoiceControlPlaneDeps): VoiceControlPlane {
+  return new VoiceControlPlaneImpl(planeDeps);
 }
 
 // Emits a standalone protocol error on a socket that has no attached connection yet (e.g. a rejected

@@ -210,7 +210,7 @@ async function decodeSuccess(response: Response): Promise<RealtimeNegotiationOut
   }
   // A well-formed SDP answer begins with the version line "v=0"; reject anything else so a provider
   // error page or empty body never reaches the browser as a fake answer.
-  if (answerSdp === null || !answerSdp.startsWith("v=")) {
+  if (answerSdp?.startsWith("v=") !== true) {
     return { ok: false, kind: "invalid-response" };
   }
   return { ok: true, value: { answerSdp } };

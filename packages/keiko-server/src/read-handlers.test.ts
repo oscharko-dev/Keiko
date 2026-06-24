@@ -339,7 +339,10 @@ describe("isVoiceDictationCapable (Issue #495 — Permissions-Policy microphone 
 // WebSocket control plane (Issue #497).
 const VOICE_REALTIME_CONFIG: GatewayConfig = {
   ...VOICE_STT_CONFIG,
-  capabilities: [{ ...VOICE_STT_CONFIG.capabilities![0]!, supportsRealtimeVoice: true }],
+  capabilities: (VOICE_STT_CONFIG.capabilities ?? []).map((capability) => ({
+    ...capability,
+    supportsRealtimeVoice: true,
+  })),
 };
 
 describe("isVoiceRealtimeCapable (Issue #497 — WebSocket control-plane + microphone gate)", () => {

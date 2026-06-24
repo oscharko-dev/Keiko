@@ -51,12 +51,68 @@ const NO_VOICE_CAPABILITY = {
 // client code (voice-rtc-transport / voice-realtime-client) exercises a complete proxied-SDP handshake
 // in the browser without hardware, a provider, or the real BFF WebSocket upgrade. `mode` controls the
 // microphone grant. The fake WebSocket plays the host side of the #496 protocol.
+// The fake RTCPeerConnection + WebSocket (the host side of the #496 protocol). The WebSocket
+// intercepts only the voice control path; every other socket (e.g. the dev server's own HMR
+// WebSocket) is delegated to the real implementation so the app still loads.
+const TRANSPORT_FAKES_SCRIPT = `
+  const OFFER = "v=0\\r\\no=- 1 1 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
+  const ANSWER = "v=0\\r\\no=- 2 2 IN IP4 0.0.0.0\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
+  class FakeRTCPeerConnection {
+    constructor() {
+      this.iceGatheringState = "complete";
+      this.localDescription = null;
+      this.connectionState = "new";
+      this.ontrack = null;
+      this.onconnectionstatechange = null;
+    }
+    addEventListener() {}
+    addTrack() {}
+    createDataChannel() { return { close() {} }; }
+    async createOffer() { return { type: "offer", sdp: OFFER }; }
+    async setLocalDescription(desc) { this.localDescription = { type: desc.type, sdp: desc.sdp }; }
+    async setRemoteDescription() {
+      setTimeout(() => {
+        this.connectionState = "connected";
+        if (this.onconnectionstatechange) this.onconnectionstatechange({});
+      }, 0);
+    }
+    close() {}
+  }
+  window.RTCPeerConnection = FakeRTCPeerConnection;
+  const RealWebSocket = window.WebSocket;
+  class FakeWebSocket {
+    constructor(url, protocols) {
+      if (!String(url).includes("/api/voice/control")) {
+        return new RealWebSocket(url, protocols);
+      }
+      this.url = url; this.readyState = 0; this._l = {};
+      setTimeout(() => { this.readyState = 1; this._emit("open", {}); }, 0);
+    }
+    addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
+    removeEventListener() {}
+    _emit(type, ev) { for (const cb of this._l[type] || []) cb(ev); }
+    send(data) {
+      let msg; try { msg = JSON.parse(data); } catch { return; }
+      const reply = (obj) => this._emit("message", { data: JSON.stringify(obj) });
+      const base = (seq, kind) => ({ protocolVersion: "1", sessionId: msg.sessionId, seq, direction: "host-to-client", kind });
+      if (msg.kind === "session.create") {
+        reply({ ...base(0, "session.created"), profile: "full-realtime", controlTransport: "loopback-websocket", mediaTransport: "webrtc", negotiationMode: "proxied-sdp" });
+        reply({ ...base(1, "capability.offer"), profile: "full-realtime", capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true } });
+      } else if (msg.kind === "signal.sdp.offer") {
+        reply({ ...base(2, "media.track.state"), track: "audio-in", state: "negotiating" });
+        reply({ ...base(3, "signal.sdp.answer"), sdp: ANSWER });
+      }
+    }
+    close() { this.readyState = 3; this._emit("close", {}); }
+  }
+  window.WebSocket = FakeWebSocket;
+`;
+
 function fakeRealtimeInit(mode: "grant" | "deny"): string {
   return `
     (() => {
       const mode = ${JSON.stringify(mode)};
-      const fakeTrack = { stop() {} };
-      const fakeStream = { getTracks: () => [fakeTrack] };
+      const fakeStream = { getTracks: () => [{ stop() {} }] };
       Object.defineProperty(navigator, "mediaDevices", {
         configurable: true,
         value: {
@@ -70,59 +126,7 @@ function fakeRealtimeInit(mode: "grant" | "deny"): string {
           },
         },
       });
-      const OFFER = "v=0\\r\\no=- 1 1 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
-      const ANSWER = "v=0\\r\\no=- 2 2 IN IP4 0.0.0.0\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
-      class FakeRTCPeerConnection {
-        constructor() {
-          this.iceGatheringState = "complete";
-          this.localDescription = null;
-          this.connectionState = "new";
-          this.ontrack = null;
-          this.onconnectionstatechange = null;
-        }
-        addEventListener() {}
-        addTrack() {}
-        createDataChannel() { return { close() {} }; }
-        async createOffer() { return { type: "offer", sdp: OFFER }; }
-        async setLocalDescription(desc) { this.localDescription = { type: desc.type, sdp: desc.sdp }; }
-        async setRemoteDescription() {
-          setTimeout(() => {
-            this.connectionState = "connected";
-            if (this.onconnectionstatechange) this.onconnectionstatechange({});
-          }, 0);
-        }
-        close() {}
-      }
-      window.RTCPeerConnection = FakeRTCPeerConnection;
-      const RealWebSocket = window.WebSocket;
-      class FakeWebSocket {
-        constructor(url, protocols) {
-          // Only intercept the voice control plane; delegate every other socket (e.g. the dev
-          // server's own HMR WebSocket) to the real implementation so the app still loads.
-          if (!String(url).includes("/api/voice/control")) {
-            return new RealWebSocket(url, protocols);
-          }
-          this.url = url; this.readyState = 0; this._l = {};
-          setTimeout(() => { this.readyState = 1; this._emit("open", {}); }, 0);
-        }
-        addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
-        removeEventListener() {}
-        _emit(type, ev) { for (const cb of this._l[type] || []) cb(ev); }
-        send(data) {
-          let msg; try { msg = JSON.parse(data); } catch { return; }
-          const reply = (obj) => this._emit("message", { data: JSON.stringify(obj) });
-          const base = (seq, kind) => ({ protocolVersion: "1", sessionId: msg.sessionId, seq, direction: "host-to-client", kind });
-          if (msg.kind === "session.create") {
-            reply({ ...base(0, "session.created"), profile: "full-realtime", controlTransport: "loopback-websocket", mediaTransport: "webrtc", negotiationMode: "proxied-sdp" });
-            reply({ ...base(1, "capability.offer"), profile: "full-realtime", capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true } });
-          } else if (msg.kind === "signal.sdp.offer") {
-            reply({ ...base(2, "media.track.state"), track: "audio-in", state: "negotiating" });
-            reply({ ...base(3, "signal.sdp.answer"), sdp: ANSWER });
-          }
-        }
-        close() { this.readyState = 3; this._emit("close", {}); }
-      }
-      window.WebSocket = FakeWebSocket;
+      ${TRANSPORT_FAKES_SCRIPT}
     })();
   `;
 }

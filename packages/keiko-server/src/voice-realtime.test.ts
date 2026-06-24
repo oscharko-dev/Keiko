@@ -53,6 +53,10 @@ function ok(): RealtimeNegotiationOutcome {
   return { ok: true, value: { answerSdp: ANSWER_SDP } };
 }
 
+function okAsync(): Promise<RealtimeNegotiationOutcome> {
+  return Promise.resolve(ok());
+}
+
 function connect(options?: {
   negotiate?: (offerSdp: string, signal: AbortSignal) => Promise<RealtimeNegotiationOutcome>;
   redact?: (value: unknown) => unknown;
@@ -62,9 +66,9 @@ function connect(options?: {
   const session = options?.session ?? makeSession();
   const conn = new VoiceControlConnection({
     socket,
-    session: session as never,
-    negotiate: options?.negotiate ?? (async () => ok()),
-    redact: options?.redact ?? ((value) => value),
+    session: session,
+    negotiate: options?.negotiate ?? okAsync,
+    redact: options?.redact ?? ((value: unknown): unknown => value),
   });
   return { socket, session, conn };
 }
@@ -89,7 +93,7 @@ describe("VoiceControlConnection.start", () => {
     const { socket, conn } = connect();
     conn.start(false);
     expect(kinds(socket)).toEqual(["session.created", "capability.offer"]);
-    const created = socket.sent[0] as Record<string, unknown>;
+    const created = socket.sent[0] as unknown as Record<string, unknown>;
     expect(created).toMatchObject({
       kind: "session.created",
       profile: "full-realtime",
@@ -102,7 +106,7 @@ describe("VoiceControlConnection.start", () => {
     });
     // Host sequence numbers are monotonic per direction.
     expect(socket.sent.map((message) => message.seq)).toEqual([0, 1]);
-    const offer = socket.sent[1] as Record<string, unknown>;
+    const offer = socket.sent[1] as unknown as Record<string, unknown>;
     expect(offer).toMatchObject({
       kind: "capability.offer",
       capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
@@ -130,43 +134,45 @@ describe("VoiceControlConnection.start", () => {
 
 describe("VoiceControlConnection proxied-SDP signaling", () => {
   it("negotiates an SDP offer and returns the answer with live media-track state", async () => {
-    const negotiate = vi.fn(async () => ok());
+    const negotiate = vi.fn(
+      (_offerSdp: string, _signal: AbortSignal): Promise<RealtimeNegotiationOutcome> => okAsync(),
+    );
     const { socket, session, conn } = connect({ negotiate });
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
     expect(negotiate).toHaveBeenCalledTimes(1);
-    expect(negotiate.mock.calls[0][0]).toBe(OFFER_SDP);
+    expect(negotiate).toHaveBeenCalledWith(OFFER_SDP, expect.anything());
     expect(kinds(socket)).toEqual([
       "media.track.state",
       "signal.sdp.answer",
       "media.track.state",
       "media.track.state",
     ]);
-    const answer = socket.sent[1] as Record<string, unknown>;
+    const answer = socket.sent[1] as unknown as Record<string, unknown>;
     expect(answer).toMatchObject({ kind: "signal.sdp.answer", sdp: ANSWER_SDP });
     // The ephemeral, secret-bearing SDP answer is never buffered into the replay record (AC6).
     expect(session.replay.some((m) => m.kind === "signal.sdp.answer")).toBe(false);
   });
 
   it("answers a negotiation failure with error negotiation-failed and an ended track", async () => {
-    const { socket, conn } = connect({ negotiate: async () => ({ ok: false, kind: "transport" }) });
+    const { socket, conn } = connect({ negotiate: (): Promise<RealtimeNegotiationOutcome> => Promise.resolve({ ok: false, kind: "transport" }) });
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
     expect(kinds(socket)).toEqual(["media.track.state", "error", "media.track.state"]);
-    expect((socket.sent[1] as Record<string, unknown>).code).toBe("negotiation-failed");
+    expect((socket.sent[1] as unknown as Record<string, unknown>).code).toBe("negotiation-failed");
   });
 
   it("rejects a malformed SDP offer without calling the provider", async () => {
-    const negotiate = vi.fn(async () => ok());
+    const negotiate = vi.fn(okAsync);
     const { socket, conn } = connect({ negotiate });
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: "not-an-sdp" }));
     expect(negotiate).not.toHaveBeenCalled();
     expect(kinds(socket)).toEqual(["error"]);
-    expect((socket.sent[0] as Record<string, unknown>).code).toBe("invalid-message");
+    expect((socket.sent[0] as unknown as Record<string, unknown>).code).toBe("invalid-message");
   });
 
   it("drops a negotiation result superseded by control.cancel", async () => {
@@ -202,7 +208,7 @@ describe("VoiceControlConnection protocol gating & idempotency", () => {
         sdp: OFFER_SDP,
       }),
     );
-    expect((socket.sent[0] as Record<string, unknown>).code).toBe("unsupported-version");
+    expect((socket.sent[0] as unknown as Record<string, unknown>).code).toBe("unsupported-version");
     expect(socket.closes[0]?.code).toBe(1008);
   });
 
@@ -211,12 +217,12 @@ describe("VoiceControlConnection protocol gating & idempotency", () => {
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive("{ not json");
-    expect((socket.sent[0] as Record<string, unknown>).code).toBe("invalid-message");
+    expect((socket.sent[0] as unknown as Record<string, unknown>).code).toBe("invalid-message");
     expect(socket.closes[0]?.code).toBe(1008);
   });
 
   it("ignores a stale or duplicate client sequence (idempotency on sessionId,seq)", async () => {
-    const negotiate = vi.fn(async () => ok());
+    const negotiate = vi.fn(okAsync);
     const { socket, conn } = connect({ negotiate });
     conn.start(false);
     await conn.receive(clientMessage("signal.sdp.offer", 5, { sdp: OFFER_SDP }));
@@ -238,8 +244,8 @@ describe("VoiceControlConnection protocol gating & idempotency", () => {
     await conn.receive(clientMessage("signal.ice.candidate", 3, { candidate: "candidate:..." }));
     await conn.receive(clientMessage("transcript.partial", 4, { text: "hel" }));
     expect(kinds(socket)).toEqual(["policy.decision", "playback.state"]);
-    expect((socket.sent[0] as Record<string, unknown>).decision).toBe("allow");
-    expect((socket.sent[1] as Record<string, unknown>).state).toBe("interrupted");
+    expect((socket.sent[0] as unknown as Record<string, unknown>).decision).toBe("allow");
+    expect((socket.sent[1] as unknown as Record<string, unknown>).state).toBe("interrupted");
   });
 });
 
@@ -265,7 +271,7 @@ describe("VoiceControlConnection transcripts, replay & teardown", () => {
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive(clientMessage("session.close", 1, { reason: "client-request" }));
-    expect((socket.sent[0] as Record<string, unknown>).kind).toBe("session.closed");
+    expect((socket.sent[0] as unknown as Record<string, unknown>).kind).toBe("session.closed");
     expect(socket.closes[0]?.code).toBe(1000);
   });
 

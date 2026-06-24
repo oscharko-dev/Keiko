@@ -107,9 +107,12 @@ function depsWith(overrides: Partial<UiHandlerDeps>): UiHandlerDeps {
 let server: Server | undefined;
 
 afterEach(async () => {
-  if (server !== undefined) {
-    await new Promise<void>((res) => server!.close(() => res()));
-    server = undefined;
+  const current = server;
+  server = undefined;
+  if (current !== undefined) {
+    await new Promise<void>((res) => {
+      current.close(() => { res(); });
+    });
   }
 });
 
@@ -118,11 +121,14 @@ async function boot(handlerDeps: UiHandlerDeps): Promise<number> {
   const csp = "default-src 'none'";
   const probe = createUiServer({ staticRoot, csp, port: 0, handlerDeps });
   const port = await new Promise<number>((res) =>
-    probe.listen(0, UI_HOST, () => res((probe.address() as AddressInfo).port)),
+    probe.listen(0, UI_HOST, () => { res((probe.address() as AddressInfo).port); }),
   );
-  await new Promise<void>((res) => probe.close(() => res()));
-  server = createUiServer({ staticRoot, csp, port, handlerDeps });
-  await new Promise<void>((res) => server!.listen(port, UI_HOST, res));
+  await new Promise<void>((res) => probe.close(() => { res(); }));
+  const listening = createUiServer({ staticRoot, csp, port, handlerDeps });
+  server = listening;
+  await new Promise<void>((res) => {
+    listening.listen(port, UI_HOST, res);
+  });
   return port;
 }
 
@@ -130,7 +136,7 @@ interface Client {
   readonly opened: boolean;
   readonly ws?: WebSocket;
   // Queue-based reader so messages emitted back-to-back are never dropped between awaits.
-  next?(): Promise<Record<string, unknown>>;
+  readonly next?: () => Promise<Record<string, unknown>>;
 }
 
 function connect(
@@ -139,7 +145,7 @@ function connect(
 ): Promise<Client> {
   const path = options.path ?? "/api/voice/control";
   return new Promise((resolve) => {
-    const ws = new WebSocket(`ws://${UI_HOST}:${port}${path}`, {
+    const ws = new WebSocket(`ws://${UI_HOST}:${String(port)}${path}`, {
       ...(options.headers !== undefined ? { headers: options.headers } : {}),
     });
     const queue: Record<string, unknown>[] = [];
@@ -160,18 +166,33 @@ function connect(
       }
       return new Promise((resolveMessage) => waiters.push(resolveMessage));
     };
-    ws.once("open", () => resolve({ opened: true, ws, next }));
+    ws.once("open", () => { resolve({ opened: true, ws, next }); });
     ws.once("unexpected-response", () => {
       ws.terminate();
       resolve({ opened: false });
     });
-    ws.once("error", () => resolve({ opened: false }));
+    ws.once("error", () => { resolve({ opened: false }); });
   });
+}
+
+interface OpenClient {
+  readonly ws: WebSocket;
+  readonly next: () => Promise<Record<string, unknown>>;
+}
+
+// Asserts the client opened and narrows ws/next to non-optional (no `!` / `as` needed downstream).
+function expectOpen(client: Client): OpenClient {
+  expect(client.opened).toBe(true);
+  const { ws, next } = client;
+  if (ws === undefined || next === undefined) {
+    throw new Error("expected an open control client");
+  }
+  return { ws, next };
 }
 
 function nextClose(ws: WebSocket): Promise<number> {
   return new Promise((resolve) => {
-    ws.once("close", (code: number) => resolve(code));
+    ws.once("close", (code: number) => { resolve(code); });
   });
 }
 
@@ -228,11 +249,9 @@ describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => 
 
   it("accepts the upgrade for a full-realtime deployment and announces the session", async () => {
     const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
-    const client = await connect(port);
-    expect(client.opened).toBe(true);
-    const ws = client.ws as WebSocket;
+    const { ws, next } = expectOpen(await connect(port));
     ws.send(sessionCreate());
-    const created = await client.next!();
+    const created = await next();
     expect(created).toMatchObject({
       kind: "session.created",
       profile: "full-realtime",
@@ -240,7 +259,7 @@ describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => 
       mediaTransport: "webrtc",
       negotiationMode: "proxied-sdp",
     });
-    const offer = await client.next!();
+    const offer = await next();
     expect(offer.kind).toBe("capability.offer");
     ws.close();
   });
@@ -252,18 +271,16 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
       depsWith({
         config: voiceConfig(true),
         configPresent: true,
-        voiceRealtimeNegotiationRequest: async () => ({
+        voiceRealtimeNegotiationRequest: () => Promise.resolve({
           ok: true,
           value: { answerSdp: ANSWER_SDP },
         }),
       }),
     );
-    const client = await connect(port);
-    expect(client.opened).toBe(true);
-    const socket = client.ws as WebSocket;
+    const { ws: socket, next } = expectOpen(await connect(port));
     socket.send(sessionCreate());
-    await client.next!(); // session.created
-    await client.next!(); // capability.offer
+    await next(); // session.created
+    await next(); // capability.offer
     socket.send(
       JSON.stringify({
         protocolVersion: "1",
@@ -274,28 +291,26 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
         sdp: OFFER_SDP,
       }),
     );
-    await client.next!(); // media.track.state negotiating
-    const answer = await client.next!();
+    await next(); // media.track.state negotiating
+    const answer = await next();
     expect(answer).toMatchObject({ kind: "signal.sdp.answer", sdp: ANSWER_SDP });
     socket.close();
   });
 
   it("rejects a session.create whose profile/negotiation is inconsistent", async () => {
     const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
-    const client = await connect(port);
-    const socket = client.ws as WebSocket;
+    const { ws: socket, next } = expectOpen(await connect(port));
     socket.send(sessionCreate({ requestedProfile: "speech-to-text" }));
-    const message = await client.next!();
+    const message = await next();
     expect(message).toMatchObject({ kind: "error", code: "not-allowed-for-profile" });
   });
 
   it("closes the connection when a binary (raw audio) frame is sent on the control plane", async () => {
     const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
-    const client = await connect(port);
-    const socket = client.ws as WebSocket;
+    const { ws: socket, next } = expectOpen(await connect(port));
     socket.send(sessionCreate());
-    await client.next!(); // session.created
-    await client.next!(); // capability.offer
+    await next(); // session.created
+    await next(); // capability.offer
     socket.send(Buffer.from([0, 1, 2, 3]));
     const code = await nextClose(socket);
     expect(code).toBe(1003);
