@@ -526,31 +526,72 @@ export function WindowFrame({
         const z = view.zoom;
         const previousCursor = document.body.style.cursor;
         let active = true;
-        const cleanup = (): void => {
+        let pending: ResizeStart | null = null;
+        let frame: number | null = null;
+        const flushPendingResize = (): void => {
+          frame = null;
+          if (pending === null) return;
+          const next = pending;
+          pending = null;
+          if (sameResizeGeometry(last, next)) return;
+          last = next;
+          api.update(win.id, { ...next, max: false });
+        };
+        const cancelScheduledResize = (): void => {
+          if (frame === null) return;
+          if (typeof window.cancelAnimationFrame === "function") {
+            window.cancelAnimationFrame(frame);
+          } else {
+            window.clearTimeout(frame);
+          }
+          frame = null;
+        };
+        const scheduleResize = (next: ResizeStart): void => {
+          if (pending !== null && sameResizeGeometry(pending, next)) return;
+          if (pending === null && sameResizeGeometry(last, next)) return;
+          pending = next;
+          if (frame !== null) return;
+          frame =
+            typeof window.requestAnimationFrame === "function"
+              ? window.requestAnimationFrame(flushPendingResize)
+              : window.setTimeout(flushPendingResize, 0);
+        };
+        const schedulePendingFlush = (): void => {
+          if (pending === null || frame !== null) return;
+          frame =
+            typeof window.requestAnimationFrame === "function"
+              ? window.requestAnimationFrame(flushPendingResize)
+              : window.setTimeout(flushPendingResize, 0);
+        };
+        const cleanup = (flushPending = false): void => {
           if (!active) return;
           active = false;
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", end);
           window.removeEventListener("pointercancel", end);
           window.removeEventListener("blur", end);
+          if (flushPending) {
+            schedulePendingFlush();
+          } else {
+            cancelScheduledResize();
+            pending = null;
+          }
           document.body.style.cursor = previousCursor;
           if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
         };
         const end = (): void => {
-          cleanup();
+          cleanup(true);
         };
         const move = (ev: PointerEvent): void => {
           if (!active) return;
           if (ev.buttons === 0) {
-            cleanup();
+            cleanup(true);
             return;
           }
           const dx = (ev.clientX - sx) / z;
           const dy = (ev.clientY - sy) / z;
           const next = applyResizeDelta(start, dir, dx, dy, win.type);
-          if (sameResizeGeometry(last, next)) return;
-          last = next;
-          api.update(win.id, { ...next, max: false });
+          scheduleResize(next);
         };
         document.body.style.cursor = resizeCursor(dir);
         window.addEventListener("pointermove", move);

@@ -1473,8 +1473,8 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
 describe("Issue #1205 — editor tab truncation", () => {
   it("keeps the tab strip shrinkable inside compact editor cards", () => {
     expect(cssBlock(".ed-tabs {")).toContain("min-width: 0");
-    expect(cssBlock(".ed-tablist {")).toContain("min-width: 0");
-    expect(cssBlock(".ed-tablist {")).toContain("overflow: hidden");
+    expect(cssBlock(".ed-tablist {")).toContain("min-width: min(160px, 100%)");
+    expect(cssBlock(".ed-tablist {")).toContain("overflow: visible");
   });
 
   it("truncates long editor tab labels instead of expanding the header", () => {
@@ -1485,6 +1485,106 @@ describe("Issue #1205 — editor tab truncation", () => {
       expect(block).toContain("white-space: nowrap");
       expect(block).toContain("text-overflow: ellipsis");
     }
+  });
+
+  it("lets the compact hidden-tab chooser escape clipped split panes while open", () => {
+    const overflowBlock = cssBlock(".editor-workspace:has(.ed-tab-summary-menu[open]) .ed-pane,");
+    expect(overflowBlock).toContain(".ed-pane .editor");
+    expect(overflowBlock).toContain("overflow: visible");
+
+    const stackingBlock = cssBlock(
+      ".editor-workspace:has(.ed-tab-summary-menu[open]) .ed-pane:has(.ed-tab-summary-menu[open])",
+    );
+    expect(stackingBlock).toContain("position: relative");
+    expect(stackingBlock).toContain("z-index: var(--z-overlay)");
+  });
+});
+
+describe("Issue #1424 — editor Monaco hover chrome", () => {
+  it("skins diagnostic hovers with Keiko popover tokens inside an editor container query", () => {
+    const hostBlock = cssBlock(".ed-host {");
+    expect(hostBlock).toContain("container-type: inline-size");
+    expect(hostBlock).toContain(
+      "--ed-hover-max-width: min(520px, calc(100vw - 24px), calc(100cqw - 24px))",
+    );
+
+    const compactViewportBlock = cssRuleFrom(css, "@media (max-width: 800px)");
+    expect(compactViewportBlock).toContain(
+      "--ed-hover-max-width: min(280px, calc(100vw - 128px), calc(100cqw - 24px))",
+    );
+
+    const hoverFrameBlock = cssBlock(".ed-host .monaco-editor .monaco-resizable-hover,");
+    expect(hoverFrameBlock).toContain("max-width: var(--ed-hover-max-width) !important");
+    expect(hoverFrameBlock).toContain("overflow: hidden");
+
+    const resizableHoverBlock = cssBlock(".ed-host .monaco-editor .monaco-resizable-hover {");
+    expect(resizableHoverBlock).toContain("border: 1px solid var(--popover-border) !important");
+    expect(resizableHoverBlock).toContain("border-radius: var(--radius-floating) !important");
+    expect(resizableHoverBlock).toContain("background: var(--surface-primary) !important");
+    expect(resizableHoverBlock).toContain("box-shadow: var(--popover-shadow)");
+
+    const monacoHoverBlock = cssBlock(".ed-host .monaco-editor .monaco-hover {", {
+      fromLast: true,
+    });
+    expect(monacoHoverBlock).toContain("color: var(--text-primary) !important");
+    expect(monacoHoverBlock).toContain("font-size: var(--text-body-sm)");
+    expect(monacoHoverBlock).toContain("line-height: var(--leading-normal)");
+  });
+
+  it("wraps Monaco hover content and action rows instead of letting browser-sized panels clip", () => {
+    const contentBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .monaco-hover-content,", {
+      fromLast: true,
+    });
+    expect(contentBlock).toContain("white-space: normal !important");
+    expect(contentBlock).toContain("overflow-wrap: anywhere");
+
+    const codeBlock = cssBlock(".ed-host .monaco-editor .monaco-hover code,");
+    expect(codeBlock).toContain("white-space: pre-wrap");
+    expect(codeBlock).toContain("overflow-wrap: anywhere");
+    expect(codeBlock).toContain("background: var(--surface-inset) !important");
+
+    const actionsBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .hover-row .actions {");
+    expect(actionsBlock).toContain("flex-wrap: wrap");
+    expect(actionsBlock).toContain("border-top: 1px solid var(--border-subtle)");
+    expect(actionsBlock).toContain("background: var(--surface-secondary) !important");
+  });
+
+  it("skins Monaco copy affordances and nested copy tooltips with Keiko feedback states", () => {
+    const copyButtonBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .hover-copy-button {");
+    expect(copyButtonBlock).toContain("border: 1px solid var(--border-subtle)");
+    expect(copyButtonBlock).toContain("border-radius: var(--radius-control)");
+    expect(copyButtonBlock).toContain("color: var(--text-secondary)");
+    expect(copyButtonBlock).toContain("opacity: 1");
+
+    const copyIconBlock = cssBlock(
+      ".ed-host .monaco-editor .monaco-hover .hover-copy-button.codicon,",
+    );
+    expect(copyIconBlock).toContain("color: currentColor !important");
+
+    const copyHoverBlock = cssBlock(
+      ".ed-host .monaco-editor .monaco-hover .hover-copy-button:hover {",
+    );
+    expect(copyHoverBlock).toContain("border-color: var(--border-accent)");
+    expect(copyHoverBlock).toContain("color: var(--text-accent)");
+    expect(copyHoverBlock).toContain("box-shadow:");
+
+    const copyActiveBlock = cssBlock(
+      ".ed-host .monaco-editor .monaco-hover .hover-copy-button:active {",
+    );
+    expect(copyActiveBlock).toContain("transform: translateY(1px) scale(0.98)");
+
+    const workbenchHoverBlock = cssBlock(".monaco-hover.workbench-hover {");
+    expect(workbenchHoverBlock).toContain("max-width: min(220px, calc(100vw - 24px))");
+    expect(workbenchHoverBlock).toContain("border: 1px solid var(--popover-border) !important");
+    expect(workbenchHoverBlock).toContain("border-radius: var(--radius-control) !important");
+    expect(workbenchHoverBlock).toContain("background: var(--surface-primary) !important");
+    expect(workbenchHoverBlock).toContain("box-shadow: var(--popover-shadow) !important");
+
+    const workbenchPointerBlock = cssBlock(".workbench-hover-pointer:after {");
+    expect(workbenchPointerBlock).toContain("background-color: var(--surface-primary) !important");
+    expect(workbenchPointerBlock).toContain(
+      "border-right: 1px solid var(--popover-border) !important",
+    );
   });
 });
 

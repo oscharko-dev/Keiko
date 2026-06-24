@@ -37,7 +37,7 @@ describe("buildEditorOptions", () => {
   });
 
   it("disables Monaco hover, ambient suggestions, and markdown-capable helper surfaces", () => {
-    expect(options.hover).toEqual({ enabled: false });
+    expect(options.hover).toEqual({ enabled: false, above: false });
     expect(options.quickSuggestions).toBe(false);
     expect(options.quickSuggestionsDelay).toBe(0);
     expect(options.suggestOnTriggerCharacters).toBe(true);
@@ -94,16 +94,17 @@ describe("buildEditorOptions", () => {
   it("keeps hover disabled by default and when explicitly false (#1201)", () => {
     expect(buildEditorOptions({ readOnly: false, ariaPath: "a.ts" }).hover).toEqual({
       enabled: false,
+      above: false,
     });
     expect(
       buildEditorOptions({ readOnly: false, ariaPath: "a.ts", hoverEnabled: false }).hover,
-    ).toEqual({ enabled: false });
+    ).toEqual({ enabled: false, above: false });
   });
 
   it("enables the hover widget when a hover provider is wired (#1201)", () => {
     expect(
       buildEditorOptions({ readOnly: false, ariaPath: "a.ts", hoverEnabled: true }).hover,
-    ).toEqual({ enabled: true });
+    ).toEqual({ enabled: true, above: false });
   });
 
   it("keeps every other markdown-capable helper surface off even when hover is enabled (#1201)", () => {
