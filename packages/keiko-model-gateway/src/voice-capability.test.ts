@@ -10,7 +10,7 @@ import {
   resolveVoiceCapabilityFromCapabilities,
   type VoiceResolutionOptions,
 } from "./capabilities.js";
-import { resolveVoiceCapability } from "./model-selection.js";
+import { resolveVoiceCapability, selectSpeechToTextModel } from "./model-selection.js";
 import type { GatewayConfig } from "./types.js";
 
 // A voice capability with the named sub-capabilities. Defaults to a development Azure Foundry STT
@@ -248,5 +248,68 @@ describe("resolveVoiceCapability — GatewayConfig binder", () => {
   it("honors the policy kill-switch through the binder", () => {
     const config = configWith([voiceCap({ supportsSpeechInput: true })]);
     expect(resolveVoiceCapability(config, { policyDisabled: true }).reason).toBe("policy-disabled");
+  });
+});
+
+describe("selectSpeechToTextModel (Issue #494)", () => {
+  function configWith(capabilities: readonly ModelCapability[]): GatewayConfig {
+    return {
+      providers: capabilities.map((capability) => ({
+        modelId: capability.id,
+        baseUrl: "https://example.test",
+        apiKey: "test-key",
+        timeoutMs: 30_000,
+        maxRetries: 3,
+        retryBaseDelayMs: 500,
+      })),
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      capabilities,
+    };
+  }
+
+  it("returns undefined for a no-voice (chat-only) deployment (AC1)", () => {
+    expect(selectSpeechToTextModel(configWith([chatCap()]))).toBeUndefined();
+  });
+
+  it("returns undefined when no provider is configured", () => {
+    expect(selectSpeechToTextModel(configWith([]))).toBeUndefined();
+  });
+
+  it("selects the configured keiko-stt speech-input provider (AC6)", () => {
+    expect(selectSpeechToTextModel(configWith([voiceCap({ supportsSpeechInput: true })]))).toBe(
+      "keiko-stt",
+    );
+  });
+
+  it("ignores a voice provider that advertises only speech output (not dictation)", () => {
+    const config = configWith([
+      voiceCap({ id: "tts-only", supportsSpeechOutput: true, supportsSpeechInput: undefined }),
+    ]);
+    expect(selectSpeechToTextModel(config)).toBeUndefined();
+  });
+
+  it("prefers the cheapest configured speech-to-text provider", () => {
+    const config = configWith([
+      voiceCap({ id: "stt-expensive", supportsSpeechInput: true, costClass: "high" }),
+      voiceCap({ id: "stt-cheap", supportsSpeechInput: true, costClass: "low" }),
+    ]);
+    expect(selectSpeechToTextModel(config)).toBe("stt-cheap");
+  });
+
+  it("ranks all three cost classes (low < medium < high)", () => {
+    const config = configWith([
+      voiceCap({ id: "stt-high", supportsSpeechInput: true, costClass: "high" }),
+      voiceCap({ id: "stt-medium", supportsSpeechInput: true, costClass: "medium" }),
+      voiceCap({ id: "stt-low", supportsSpeechInput: true, costClass: "low" }),
+    ]);
+    expect(selectSpeechToTextModel(config)).toBe("stt-low");
+  });
+
+  it("never elects a speech-input capability that names no configured provider (fail-closed)", () => {
+    const config: GatewayConfig = {
+      ...configWith([]),
+      capabilities: [voiceCap({ supportsSpeechInput: true })],
+    };
+    expect(selectSpeechToTextModel(config)).toBeUndefined();
   });
 });

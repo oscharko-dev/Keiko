@@ -100,10 +100,19 @@ export {
   resolveVoiceCapability,
   selectCompletionModel,
   selectConfiguredModel,
+  selectSpeechToTextModel,
   type ConfiguredCapabilityProvider,
   type ConfiguredCapabilitySource,
   type ModelSelectionQuery,
 } from "./model-selection.js";
+
+export {
+  requestSpeechToText,
+  type SpeechToTextErrorKind,
+  type SpeechToTextOutcome,
+  type SpeechToTextRequest,
+  type SpeechToTextSuccess,
+} from "./speech-to-text-adapter.js";
 
 export {
   assertCompatibleEmbeddingIdentity,

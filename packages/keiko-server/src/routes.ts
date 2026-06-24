@@ -17,6 +17,7 @@ import {
   handleEvidenceList,
   handleEvidenceDetail,
 } from "./read-handlers.js";
+import { handleVoiceTranscribe } from "./voice-handlers.js";
 import {
   handleCreateRun,
   handleCreateChatRun,
@@ -218,6 +219,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },
   { method: "GET", pattern: "/api/voice/capability", handler: handleVoiceCapability },
+  // Issue #494 (Epic #491) — optional, capability-gated STT composer dictation (ADR-0058 D1/D2/D4).
+  // POST a short audio clip (base64 inside the JSON + CSRF envelope) and receive its transcript;
+  // answers VOICE_UNAVAILABLE when no speech-to-text capability is configured/enabled.
+  { method: "POST", pattern: "/api/voice/transcribe", handler: handleVoiceTranscribe },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
