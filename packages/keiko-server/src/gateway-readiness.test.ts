@@ -1,7 +1,10 @@
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
-import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import {
+  createDefaultChatCapability,
+  type GatewayConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { handleGatewayReadiness, runGatewayReadiness } from "./gateway-readiness.js";
@@ -24,6 +27,26 @@ function gatewayConfig(modelId = "test-chat-model"): GatewayConfig {
   };
 }
 
+function embeddingCapability(modelId: string): NonNullable<GatewayConfig["capabilities"]>[number] {
+  return {
+    id: modelId,
+    kind: "embedding",
+    contextWindow: 8191,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "runtime-configured embedding endpoint",
+    preferredUseCases: ["Embeddings"],
+    knownLimitations: ["Runtime-configured capability; validate before production use"],
+  };
+}
+
 function depsWith(
   config: GatewayConfig | undefined,
   fetchImpl: typeof fetch = vi.fn(),
@@ -42,8 +65,12 @@ function depsWith(
 }
 
 function ctx(body: unknown): RouteContext {
+  return rawCtx(JSON.stringify(body));
+}
+
+function rawCtx(body: string): RouteContext {
   return {
-    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
+    req: Readable.from([Buffer.from(body, "utf8")]) as IncomingMessage,
     res: {} as RouteContext["res"],
     params: {},
     url: new URL("http://127.0.0.1/api/gateway/readiness"),
@@ -136,6 +163,53 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
+  it("rejects invalid readiness request bodies before probing the provider", async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl);
+
+    await expect(handleGatewayReadiness(rawCtx("{"), deps)).resolves.toEqual({
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "The readiness request body must be valid JSON." } },
+    });
+    await expect(handleGatewayReadiness(rawCtx("[]"), deps)).resolves.toEqual({
+      status: 400,
+      body: {
+        error: { code: "BAD_REQUEST", message: "The readiness request body must be a JSON object." },
+      },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    deps.store.close();
+  });
+
+  it("rejects missing or non-conversation model selections without mutating config", async () => {
+    const config = gatewayConfig("chat-model");
+    const deps = depsWith(config, vi.fn());
+
+    await expect(runGatewayReadiness({ modelId: "missing-model" }, deps)).resolves.toEqual({
+      status: 400,
+      body: {
+        error: { code: "NO_MODEL", message: "Select a configured chat model before running readiness checks." },
+      },
+    });
+
+    const embeddingConfig: GatewayConfig = {
+      ...gatewayConfig("text-embedding-3-large"),
+      capabilities: [embeddingCapability("text-embedding-3-large")],
+    };
+    const embeddingDeps = depsWith(embeddingConfig, vi.fn());
+    await expect(
+      runGatewayReadiness({ modelId: "text-embedding-3-large" }, embeddingDeps),
+    ).resolves.toEqual({
+      status: 400,
+      body: {
+        error: { code: "NO_MODEL", message: "Select a conversation-capable model before running readiness checks." },
+      },
+    });
+
+    deps.store.close();
+    embeddingDeps.store.close();
+  });
+
   it("runs the default non-blocking probes without exposing gateway secrets", async () => {
     const fetchImpl = fetchForDefaultSuccess();
     const deps = depsWith(gatewayConfig(), fetchImpl);
@@ -163,6 +237,71 @@ describe("gateway readiness route", () => {
       expect(body).not.toHaveProperty("temperature");
       expect(body).not.toHaveProperty("max_tokens");
     }
+    deps.store.close();
+  });
+
+  it("skips requested feature probes when basic chat is not verified", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("unexpected-answer"))) as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl);
+    const report = await runGatewayReadiness(
+      { options: { probes: ["streaming", "json_schema", "tool_calling"] } },
+      deps,
+    );
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.overallStatus).toBe("failed");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(report.probes).toEqual([
+      expect.objectContaining({ name: "chat", status: "failed" }),
+      expect.objectContaining({ name: "streaming", status: "skipped" }),
+      expect.objectContaining({ name: "json_schema", status: "skipped" }),
+      expect.objectContaining({ name: "tool_calling", status: "skipped" }),
+    ]);
+    deps.store.close();
+  });
+
+  it("classifies streaming and JSON schema provider rejections without blocking chat", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "stream unsupported" } }, 501))
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "schema failed" } }, 500)) as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl);
+    const report = await runGatewayReadiness(
+      { options: { probes: ["streaming", "json_schema"] } },
+      deps,
+    );
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.overallStatus).toBe("partial");
+    expect(report.probes).toEqual([
+      expect.objectContaining({ name: "chat", status: "passed" }),
+      expect.objectContaining({ name: "streaming", status: "unsupported" }),
+      expect.objectContaining({ name: "json_schema", status: "failed" }),
+    ]);
+    deps.store.close();
+  });
+
+  it("reports provider timeouts as failed probes with an actionable warning", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException("timeout", "TimeoutError")) as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl);
+    const report = await runGatewayReadiness({ options: { probes: ["streaming"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.overallStatus).toBe("failed");
+    expect(report.probes[0]).toMatchObject({
+      name: "chat",
+      status: "failed",
+      warning: "The probe timed out before the provider answered.",
+    });
+    expect(report.probes[1]).toMatchObject({ name: "streaming", status: "skipped" });
     deps.store.close();
   });
 
@@ -215,6 +354,91 @@ describe("gateway readiness route", () => {
     expect(report.overallStatus).toBe("ready");
     expect(report.verifiedCapabilities.reasoningOutput).toBe(true);
     expect(JSON.stringify(report)).not.toContain("private chain");
+    deps.store.close();
+  });
+
+  it("marks malformed structured-output payloads as unsupported instead of failed", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("not-json"))) as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl);
+    const report = await runGatewayReadiness({ options: { probes: ["json_schema"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.overallStatus).toBe("partial");
+    expect(report.probes[1]).toMatchObject({
+      name: "json_schema",
+      status: "unsupported",
+      evidence: "The endpoint answered, but did not produce schema-valid JSON.",
+    });
+    deps.store.close();
+  });
+
+  it("verifies image, document, and long-context probes only from provider evidence", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("red")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("KEIKO PDF READINESS PROBE")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("KEIKO_LONG_CONTEXT_SENTINEL"))) as typeof fetch;
+    const config: GatewayConfig = {
+      ...gatewayConfig(),
+      capabilities: [
+        {
+          ...createDefaultChatCapability("test-chat-model"),
+          contextWindow: 64_000,
+        },
+      ],
+    };
+    const deps = depsWith(config, fetchImpl);
+    const report = await runGatewayReadiness(
+      { options: { probes: ["image_input", "document_input", "long_context"] } },
+      deps,
+    );
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.overallStatus).toBe("ready");
+    expect(report.verifiedCapabilities).toMatchObject({
+      imageInput: true,
+      documentInput: true,
+      testedContextTokens: 64_000,
+    });
+    expect(report.probes).toEqual([
+      expect.objectContaining({ name: "chat", status: "passed" }),
+      expect.objectContaining({ name: "image_input", status: "passed" }),
+      expect.objectContaining({ name: "document_input", status: "passed" }),
+      expect.objectContaining({ name: "long_context", status: "passed" }),
+    ]);
+    deps.store.close();
+  });
+
+  it("keeps deep probe failures isolated from the working chat result", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("blue")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("no pdf phrase")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("missing sentinel"))) as typeof fetch;
+    const deps = depsWith(gatewayConfig(), fetchImpl);
+    const report = await runGatewayReadiness(
+      { options: { probes: ["image_input", "document_input", "long_context"], maxContextTokens: 128_000 } },
+      deps,
+    );
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.overallStatus).toBe("partial");
+    expect(report.verifiedCapabilities.imageInput).toBeUndefined();
+    expect(report.verifiedCapabilities.documentInput).toBeUndefined();
+    expect(report.verifiedCapabilities.testedContextTokens).toBeUndefined();
+    expect(report.probes.slice(1).map((probe) => probe.status)).toEqual([
+      "unsupported",
+      "unsupported",
+      "unsupported",
+    ]);
     deps.store.close();
   });
 });
