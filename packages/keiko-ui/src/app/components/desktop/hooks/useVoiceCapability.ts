@@ -63,3 +63,18 @@ export function useVoiceCapability(): VoiceCapabilityResolution | undefined {
 export function supportsDictation(resolution: VoiceCapabilityResolution | undefined): boolean {
   return resolution !== undefined && resolution.available && resolution.capabilities.speechToText;
 }
+
+// True only when the resolved capability is the full-realtime profile — the single profile that may
+// open the WebSocket control plane and the browser WebRTC media plane (Issue #497, AC1/AC3). Reuses
+// the same module-cached probe (no second fetch). STT-only and speech-output deployments return false,
+// so they expose dictation but never the realtime transport. `undefined` (unresolved/failed) and any
+// unavailable resolution both return false, so a slow or failed probe never lights up the realtime UI.
+export function supportsRealtimeVoice(resolution: VoiceCapabilityResolution | undefined): boolean {
+  return (
+    resolution !== undefined &&
+    resolution.available &&
+    resolution.profile === "full-realtime" &&
+    resolution.capabilities.realtimeVoice &&
+    resolution.transport.webrtcMedia
+  );
+}
