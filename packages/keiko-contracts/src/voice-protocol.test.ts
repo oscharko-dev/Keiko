@@ -70,8 +70,12 @@ describe("voice protocol — version & catalog", () => {
     expect(isVoiceProtocolVersionSupported(undefined)).toBe(false);
   });
 
-  it("has a duplicate-free control-message catalog", () => {
+  it("has a duplicate-free control-message catalog of pinned cardinality", () => {
     expect(new Set(VOICE_CONTROL_MESSAGE_KINDS).size).toBe(VOICE_CONTROL_MESSAGE_KINDS.length);
+    // Pin the exact member count so a silent addition/removal trips this test (and must then be
+    // classified and gated). 18 kinds across session/capability/signal/media/control/transcript/
+    // playback/policy/error families.
+    expect(VOICE_CONTROL_MESSAGE_KINDS).toHaveLength(18);
   });
 
   it("classifies every catalog kind for both replay and redaction (totality)", () => {
@@ -185,6 +189,51 @@ describe("AC3 — STT-only dictation does not require full-realtime voice", () =
   });
 });
 
+describe("speech-output profile gating", () => {
+  const out = VOICE_PROFILE_ALLOWED_MESSAGE_KINDS["speech-output"];
+
+  it("permits playback and interruption but not transcript or SDP/ICE signaling", () => {
+    expect(out).toContain("playback.state");
+    expect(out).toContain("control.interrupt");
+    for (const excluded of [
+      "transcript.partial",
+      "transcript.committed",
+      "signal.sdp.offer",
+      "signal.ice.candidate",
+      "media.track.state",
+    ] satisfies VoiceControlMessageKind[]) {
+      expect(out).not.toContain(excluded);
+      expect(voiceMessageAllowedForProfile(excluded, "speech-output")).toBe(false);
+    }
+  });
+
+  it("uses the batch media path and disabled browser negotiation", () => {
+    expect(VOICE_PROFILE_MEDIA_TRANSPORT["speech-output"]).toBe("gateway-batch");
+    expect(VOICE_PROFILE_NEGOTIATION_MODE["speech-output"]).toBe("disabled");
+  });
+});
+
+describe("profile media-transport and negotiation tables are total and pinned", () => {
+  it("assigns a media transport and negotiation mode to every profile", () => {
+    const expectedTransport: Record<VoiceProfile, string> = {
+      none: "none",
+      "speech-to-text": "gateway-batch",
+      "speech-output": "gateway-batch",
+      "full-realtime": "webrtc",
+    };
+    const expectedNegotiation: Record<VoiceProfile, string> = {
+      none: "disabled",
+      "speech-to-text": "disabled",
+      "speech-output": "disabled",
+      "full-realtime": "proxied-sdp",
+    };
+    for (const profile of ALL_PROFILES) {
+      expect(VOICE_PROFILE_MEDIA_TRANSPORT[profile]).toBe(expectedTransport[profile]);
+      expect(VOICE_PROFILE_NEGOTIATION_MODE[profile]).toBe(expectedNegotiation[profile]);
+    }
+  });
+});
+
 describe("AC5 — replay includes control + transcripts but excludes raw audio", () => {
   it("treats the committed transcript and core control events as replayable", () => {
     expect(isVoiceReplayEligible("transcript.committed")).toBe(true);
@@ -253,26 +302,60 @@ describe("AC4 — no new runtime media packages beyond ws + native WebRTC", () =
     return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
   }
 
-  function manifestPaths(root: string): string[] {
-    const paths: string[] = [join(root, "package.json")];
-    const packagesDir = join(root, "packages");
-    if (existsSync(packagesDir)) {
-      for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
-        if (entry.isDirectory()) {
-          const manifest = join(packagesDir, entry.name, "package.json");
-          if (existsSync(manifest)) {
-            paths.push(manifest);
+  function manifestsForGlob(root: string, pattern: string): string[] {
+    // Supports the two workspace glob shapes this monorepo uses: an exact directory ("sandbox")
+    // and a one-level wildcard ("packages/*"). Driven by the root `workspaces` field so the scan
+    // stays structurally complete if the workspace topology changes (a new `apps/*` etc.).
+    const found: string[] = [];
+    if (pattern.endsWith("/*")) {
+      const parent = join(root, pattern.slice(0, -2));
+      if (existsSync(parent)) {
+        for (const entry of readdirSync(parent, { withFileTypes: true })) {
+          if (entry.isDirectory()) {
+            const manifest = join(parent, entry.name, "package.json");
+            if (existsSync(manifest)) {
+              found.push(manifest);
+            }
           }
         }
       }
+      return found;
     }
-    return paths;
+    const manifest = join(root, pattern, "package.json");
+    if (existsSync(manifest)) {
+      found.push(manifest);
+    }
+    return found;
+  }
+
+  function manifestPaths(root: string): string[] {
+    const paths = new Set<string>([join(root, "package.json")]);
+    const rootPkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const workspaces = Array.isArray(rootPkg.workspaces) ? rootPkg.workspaces : [];
+    for (const pattern of workspaces) {
+      if (typeof pattern === "string") {
+        for (const manifest of manifestsForGlob(root, pattern)) {
+          paths.add(manifest);
+        }
+      }
+    }
+    return [...paths];
   }
 
   function declaredDependencies(manifestPath: string): string[] {
     const pkg = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
     const names: string[] = [];
-    for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    // devDependencies are scanned too: a runtime WebRTC SDK must not appear anywhere in the epic,
+    // not merely in the runtime sections.
+    for (const field of [
+      "dependencies",
+      "optionalDependencies",
+      "peerDependencies",
+      "devDependencies",
+    ]) {
       const section = pkg[field];
       if (section !== null && typeof section === "object") {
         names.push(...Object.keys(section));
@@ -281,7 +364,7 @@ describe("AC4 — no new runtime media packages beyond ws + native WebRTC", () =
     return names;
   }
 
-  it("declares none of the forbidden runtime media packages in any workspace", () => {
+  it("declares none of the forbidden media packages in any workspace", () => {
     const root = repoRoot();
     const manifests = manifestPaths(root);
     expect(manifests.length).toBeGreaterThan(1);
@@ -300,6 +383,34 @@ describe("AC4 — no new runtime media packages beyond ws + native WebRTC", () =
   it("models media transport using only native mechanisms (no SDK)", () => {
     expect(VOICE_PROFILE_MEDIA_TRANSPORT["full-realtime"]).toBe("webrtc");
     expect(VOICE_MEDIA_PLANE.transport).toBe("webrtc");
+  });
+});
+
+describe("AC6 — security reasoning over endpoints and credentials is contract-anchored", () => {
+  it("classifies all SDP/ICE signaling as secret-bearing and ephemeral", () => {
+    for (const signal of [
+      "signal.sdp.offer",
+      "signal.sdp.answer",
+      "signal.ice.candidate",
+    ] satisfies VoiceControlMessageKind[]) {
+      expect(voiceControlMessageRedactionClass(signal)).toBe("secret-bearing");
+      expect(voiceControlMessageReplayClass(signal)).toBe("ephemeral");
+    }
+  });
+
+  it("prefers the credential-free proxied-SDP negotiation mode and offers only native modes", () => {
+    expect(PREFERRED_VOICE_NEGOTIATION_MODE).toBe("proxied-sdp");
+    expect([...VOICE_NEGOTIATION_MODES].sort()).toEqual(
+      ["direct-ephemeral", "disabled", "proxied-sdp"].sort(),
+    );
+  });
+
+  it("keeps raw media the only raw-media-classified surface (no control message leaks audio)", () => {
+    const rawMediaControlKinds = VOICE_CONTROL_MESSAGE_KINDS.filter(
+      (kind) => voiceControlMessageRedactionClass(kind) === "raw-media",
+    );
+    expect(rawMediaControlKinds).toEqual([]);
+    expect(VOICE_MEDIA_PLANE.redaction).toBe("raw-media");
   });
 });
 

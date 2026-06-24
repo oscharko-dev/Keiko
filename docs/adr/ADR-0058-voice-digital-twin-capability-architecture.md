@@ -67,7 +67,7 @@ is **greenfield**:
   `checkPatchAgainstScope` ([`workflow-handoff.ts`](../../packages/keiko-contracts/src/workflow-handoff.ts)).
 - **The browser↔BFF seam is loopback HTTP + Server-Sent Events.** The BFF is plain `node:http` bound to
   `127.0.0.1` and **hard-rejects every WebSocket upgrade**
-  ([`server.ts`](../../packages/keiko-server/src/server.ts) lines 205–208); streaming uses `EventSource`
+  ([`server.ts`](../../packages/keiko-server/src/server.ts) lines 210–213); streaming uses `EventSource`
   ([`useSSE.ts`](../../packages/keiko-ui/src/lib/useSSE.ts) line 53). The `ws` dependency (8.21.0) is present
   only for the CDP-to-Chrome client ([`cdp-client.ts`](../../packages/keiko-tools/src/browser/cdp-client.ts))
   and is permit-list scoped to that client (decision ADR-0017, recorded in `cdp-client.ts`; ADR-0017 is an
@@ -117,7 +117,7 @@ Raw audio over the control plane is not the default real-time transport. When We
 it never silently downgrades to streaming raw audio over the control plane.
 
 Because the current BFF binds loopback-only and hard-rejects WebSocket upgrades
-([`server.ts`](../../packages/keiko-server/src/server.ts) lines 205–208), the **local control plane is
+([`server.ts`](../../packages/keiko-server/src/server.ts) lines 210–213), the **local control plane is
 realized on the existing loopback HTTP + Server-Sent Events seam** (request/response over `POST /api/*`,
 server→client push over the existing `EventSource` channel). "WebSocket is authoritative" describes the
 control/signaling _role_ — local control rides the existing HTTP+SSE seam, and any future re-introduction of

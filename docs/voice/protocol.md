@@ -9,9 +9,10 @@ only**: it adds no transport code, re-opens no WebSocket upgrade, and adds no ru
 The typed, machine-checkable form of everything below lives in
 [`packages/keiko-contracts/src/voice-protocol.ts`](../../packages/keiko-contracts/src/voice-protocol.ts)
 and is pinned by [`voice-protocol.test.ts`](../../packages/keiko-contracts/src/voice-protocol.test.ts).
-The protocol reuses the capability types (`VoiceProfile`, `VoiceTransportPosture`,
-`VoiceProviderLocality`, `VoiceUnavailableReason`, `VoiceCapabilityResolution`) defined by Issue #493
-in [`gateway.ts`](../../packages/keiko-contracts/src/gateway.ts); it does not redefine them.
+The protocol imports and reuses the capability types `VoiceProfile`, `VoiceProviderLocality`, and
+`VoiceUnavailableReason` defined by Issue #493 in
+[`gateway.ts`](../../packages/keiko-contracts/src/gateway.ts), and is consistent with the
+`VoiceTransportPosture` / `VoiceCapabilityResolution` shapes there; it does not redefine any of them.
 
 ## 1. Scope and versioning
 
@@ -28,7 +29,8 @@ rule as the other contract schemas: a breaking change introduces a **new literal
 mutation of `"1"`. The version is **independent of** `CONVERSATION_CAPABILITY_CONTRACT_VERSION` (the
 capability-registry contract) and never bumps it. A peer accepts a message only when its declared
 `protocolVersion` is one the build understands (`isVoiceProtocolVersionSupported`); a v1 build
-understands exactly `"1"` and answers an `error` with code `unsupported-version` otherwise.
+understands exactly `"1"`. The protocol defines the rejection response as an `error` message with
+code `unsupported-version`; emitting it is the transport's responsibility (#497).
 
 ## 2. Two-plane model (AC1)
 
@@ -70,26 +72,26 @@ and the version-compatibility rule.
 Each kind is classified by **plane** (always control here), **replay class** (§7), and **redaction
 class** (§8). `→` marks the typical direction; several kinds occur in both directions.
 
-| Kind                   | Payload (beyond envelope)                                                               | Replay class | Redaction class   |
-| ---------------------- | --------------------------------------------------------------------------------------- | ------------ | ----------------- |
-| `session.create`       | `idempotencyKey`, `requestedProfile`, `negotiationMode`                                 | `replayable` | `content-free`    |
-| `session.created`      | `profile`, `controlTransport`, `mediaTransport`, `negotiationMode`, `providerLocality?` | `replayable` | `content-free`    |
-| `session.close`        | `reason`                                                                                | `replayable` | `content-free`    |
-| `session.closed`       | `reason`                                                                                | `replayable` | `content-free`    |
-| `capability.offer`     | `profile`, `capabilities{speechToText, speechOutput, realtimeVoice}`                    | `replayable` | `content-free`    |
-| `capability.select`    | `profile`                                                                               | `replayable` | `content-free`    |
-| `signal.sdp.offer`     | `sdp` (opaque string)                                                                   | `ephemeral`  | `secret-bearing`  |
-| `signal.sdp.answer`    | `sdp` (opaque string)                                                                   | `ephemeral`  | `secret-bearing`  |
-| `signal.ice.candidate` | `candidate` (opaque), `sdpMid?`, `sdpMLineIndex?`                                       | `ephemeral`  | `secret-bearing`  |
-| `media.track.state`    | `track` (`audio-in \| audio-out`), `state`                                              | `replayable` | `content-free`    |
-| `control.cancel`       | —                                                                                       | `replayable` | `content-free`    |
-| `control.interrupt`    | `atMs?` (barge-in offset)                                                               | `replayable` | `content-free`    |
-| `transcript.partial`   | `text`                                                                                  | `ephemeral`  | `reviewable-text` |
-| `transcript.committed` | `text`                                                                                  | `replayable` | `reviewable-text` |
-| `transcript.discarded` | —                                                                                       | `replayable` | `content-free`    |
-| `playback.state`       | `state` (`idle \| playing \| paused \| stopped \| interrupted`)                         | `replayable` | `content-free`    |
-| `policy.decision`      | `decision` (`allow \| deny \| degrade`), `reason?`                                      | `replayable` | `content-free`    |
-| `error`                | `code` (`VoiceProtocolErrorCode`)                                                       | `replayable` | `content-free`    |
+| Kind                   | Payload (beyond envelope)                                                                    | Replay class | Redaction class   |
+| ---------------------- | -------------------------------------------------------------------------------------------- | ------------ | ----------------- |
+| `session.create`       | `idempotencyKey`, `requestedProfile`, `negotiationMode`                                      | `replayable` | `content-free`    |
+| `session.created`      | `profile`, `controlTransport`, `mediaTransport`, `negotiationMode`, `providerLocality?`      | `replayable` | `content-free`    |
+| `session.close`        | `reason`                                                                                     | `replayable` | `content-free`    |
+| `session.closed`       | `reason`                                                                                     | `replayable` | `content-free`    |
+| `capability.offer`     | `profile`, `capabilities{speechToText, speechOutput, realtimeVoice}`                         | `replayable` | `content-free`    |
+| `capability.select`    | `profile`                                                                                    | `replayable` | `content-free`    |
+| `signal.sdp.offer`     | `sdp` (opaque string)                                                                        | `ephemeral`  | `secret-bearing`  |
+| `signal.sdp.answer`    | `sdp` (opaque string)                                                                        | `ephemeral`  | `secret-bearing`  |
+| `signal.ice.candidate` | `candidate` (opaque), `sdpMid?`, `sdpMLineIndex?`                                            | `ephemeral`  | `secret-bearing`  |
+| `media.track.state`    | `track` (`audio-in \| audio-out`), `state`                                                   | `replayable` | `content-free`    |
+| `control.cancel`       | none; cancels the current voice session and its media negotiation only — never a harness run | `replayable` | `content-free`    |
+| `control.interrupt`    | `atMs?` (barge-in offset)                                                                    | `replayable` | `content-free`    |
+| `transcript.partial`   | `text`                                                                                       | `ephemeral`  | `reviewable-text` |
+| `transcript.committed` | `text`                                                                                       | `replayable` | `reviewable-text` |
+| `transcript.discarded` | —                                                                                            | `replayable` | `content-free`    |
+| `playback.state`       | `state` (`idle \| playing \| paused \| stopped \| interrupted`)                              | `replayable` | `content-free`    |
+| `policy.decision`      | `decision` (`allow \| deny \| degrade`), `reason?`                                           | `replayable` | `content-free`    |
+| `error`                | `code` (`VoiceProtocolErrorCode`)                                                            | `replayable` | `content-free`    |
 
 SDP and ICE payloads are **opaque strings**: the protocol never parses, stores, or logs them. Error
 codes are `unsupported-version`, `invalid-message`, `capability-unavailable`,
@@ -137,6 +139,12 @@ The protocol is gated by the already-resolved `VoiceProfile`. `VOICE_PROFILE_ALL
 - Degradation follows the [architecture §5](architecture.md) ladder: an unavailable capability resolves
   down to a lower profile and ultimately to `none`. The protocol **never** silently streams raw audio
   over the control plane.
+- **Profile/negotiation consistency.** A `session.create` carries a client-chosen `requestedProfile`
+  and `negotiationMode`. The transport (#497) **must** reject — with `error` code
+  `not-allowed-for-profile` — any `session.create` whose `negotiationMode` is inconsistent with the
+  effective profile as defined by the canonical `VOICE_PROFILE_NEGOTIATION_MODE` table (for example,
+  `direct-ephemeral` requested for a `speech-to-text` session, which must resolve to `disabled` and
+  hold no browser credential). `negotiationMode` is never advisory.
 
 ## 7. Replay, reconnect, and idempotency semantics (AC5)
 
@@ -164,9 +172,13 @@ Before a message may enter any log or evidence manifest it passes the **existing
 identifier-hashing seams ([privacy-contract §2/§3](privacy-contract.md)) according to its
 `VOICE_CONTROL_MESSAGE_REDACTION` class:
 
-- `content-free` — enums / booleans / integers / opaque ids only; safe verbatim.
-- `reviewable-text` — user-reviewable transcript text; redacted-by-construction then deep-redacted and
-  identifier-hashed at persist, exactly as recap / session-state records already are.
+- `content-free` — enums / booleans / integers, plus client-chosen opaque identifiers (`sessionId`,
+  `idempotencyKey`); the transport bounds id length/charset before logging so a hostile id cannot
+  inject into a log or audit line.
+- `reviewable-text` — user-reviewable transcript text; the transport first applies
+  `stripUnsafeFormatChars` (`text-safety.ts` — strips bidi / zero-width / C0–C1 / DEL, preserves
+  TAB/LF/CR) to neutralise Trojan-source rendering, then redacts-by-construction, deep-redacts, and
+  identifier-hashes at persist, exactly as recap / session-state records already are.
 - `secret-bearing` — SDP / ICE / ephemeral-credential material; never logged or persisted raw.
 - `raw-media` — raw audio frames; never persisted (media plane only).
 
@@ -193,9 +205,10 @@ and **every browser-exposed credential** directly from the contract:
 
 - **External endpoints.** The only external destinations are (a) the configured provider STT / TTS /
   realtime endpoints, reached **only** through `gatewayFetch` (ADR-0038: proxy/CA/timeout/byte-cap),
-  and (b) configurable, validated STUN/TURN hosts for NAT traversal
-  ([deployment-profile-matrix §4](deployment-profile-matrix.md)). No bespoke signaling/media client is
-  introduced. SDP signaling stays under Keiko's loopback origin so auth, rate limiting, audit logging,
+  and (b) configurable STUN/TURN hosts for NAT traversal
+  ([deployment-profile-matrix §4](deployment-profile-matrix.md)); STUN/TURN host validation is a #497
+  obligation and, like the model-endpoint class, no positive destination allowlist exists today
+  (ADR-0058 D4). No bespoke signaling/media client is introduced. SDP signaling stays under Keiko's loopback origin so auth, rate limiting, audit logging,
   and host allowlisting are controlled locally.
 - **Browser-exposed credentials.** Under the preferred `proxied-sdp` mode the browser holds **no**
   credential; under `direct-ephemeral` it holds only a **short-lived, scoped** ephemeral session token

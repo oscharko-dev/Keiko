@@ -29,7 +29,9 @@ survey of the merged voice surface (#492–#495):
   (`websocketControl`, `webrtcMedia`), `VoiceProviderLocality`, `VoiceUnavailableReason`, and
   `VoiceCapabilityResolution` exist in
   [`gateway.ts`](../../packages/keiko-contracts/src/gateway.ts) (Issue #493). The protocol contract
-  **reuses** these types rather than redefining them.
+  **imports and reuses** `VoiceProfile`, `VoiceProviderLocality`, and `VoiceUnavailableReason`, and is
+  consistent with the `VoiceTransportPosture` / `VoiceCapabilityResolution` shapes; it redefines none
+  of them.
 - **The control plane is realized on loopback HTTP + Server-Sent Events today.** The BFF binds
   `127.0.0.1` and **hard-rejects every WebSocket upgrade** with `HTTP/1.1 404` then `socket.destroy()`
   ([`server.ts`](../../packages/keiko-server/src/server.ts) lines 210–213). The STT-only dictation

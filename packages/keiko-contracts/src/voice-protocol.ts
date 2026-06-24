@@ -90,9 +90,13 @@ export const VOICE_REPLAY_CLASSES: readonly VoiceReplayClass[] = [
 
 // Redaction class governing how a message is treated by the existing redaction / hashing seams before
 // it may enter any log or evidence manifest (privacy-contract §2/§3).
-// `content-free`   — enum literals / booleans / integers only; safe to log verbatim.
-// `reviewable-text`— user-reviewable transcript text; redacted-by-construction then deep-redacted and
-//                    identifier-hashed at persist, exactly as recap / session-state records already are.
+// `content-free`   — enum literals / booleans / integers, plus client-chosen opaque identifiers
+//                    (`sessionId`, `idempotencyKey`); the transport (#497) bounds id length and
+//                    charset before logging so a hostile id cannot inject into log/audit lines.
+// `reviewable-text`— user-reviewable transcript text; the transport runs `stripUnsafeFormatChars`
+//                    (text-safety.ts: strips bidi / zero-width / C0-C1 / DEL, preserves TAB/LF/CR)
+//                    then redacts-by-construction, deep-redacts, and identifier-hashes at persist,
+//                    exactly as recap / session-state records already are.
 // `secret-bearing` — SDP / ICE / ephemeral-credential material that may carry private IPs or tokens;
 //                    never logged or persisted raw.
 // `raw-media`      — raw audio frames; never persisted and never a control message (media plane only).
