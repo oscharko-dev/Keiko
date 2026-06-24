@@ -406,6 +406,7 @@ export type {
   EditorSaveStatus,
   KeikoEditorLoadState,
   EditorContentDelta,
+  EditorRevealRequest,
 } from "./components/types.js";
 // The controlled component renders the host-owned save lifecycle; these pure helpers let a host
 // (e.g. keiko-ui in #1196) drive `saveStatus` and detect optimistic-concurrency conflicts

@@ -1817,9 +1817,9 @@ describe("POST /api/chats/messages/run-summary-pair", () => {
   });
 });
 
-// ─── Route 24: POST /api/chats/runs (issue #66) ─────────────────────────────
+// ─── Retired route: POST /api/chats/runs ────────────────────────────────────
 describe("POST /api/chats/runs", () => {
-  it("starts a run and persists the user/system pair with the same reserved runId", async () => {
+  it("is no longer exposed from the chat composer path", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", CHAT_MODEL);
     const res = await fetch(url("/api/chats/runs"), {
@@ -1837,39 +1837,7 @@ describe("POST /api/chats/runs", () => {
         summary: { content: "Verify started", timestamp: 2 },
       }),
     });
-    expect(res.status).toBe(202);
-    const body = (await res.json()) as {
-      run: { runId: string; fingerprint: string };
-      messages: { role: string; runId?: string; taskType?: string; workflowStatus?: string }[];
-    };
-    expect(body.run.runId).toBeTruthy();
-    expect(body.run.fingerprint).toBeTruthy();
-    expect(body.messages.map((m) => m.role)).toEqual(["user", "system"]);
-    expect(body.messages[1]?.runId).toBe(body.run.runId);
-    expect(body.messages[1]?.taskType).toBe("verify");
-    expect(body.messages[1]?.workflowStatus).toBe("running");
-    expect(store.listMessages(c.id).map((m) => m.role)).toEqual(["user", "system"]);
-  });
-
-  it("rejects invalid chat-run message input before starting or persisting", async () => {
-    store.createProject(projDir);
-    const c = store.createChat(projDir, "t", CHAT_MODEL);
-    const res = await fetch(url("/api/chats/runs"), {
-      method: "POST",
-      headers: POST_HEADERS,
-      body: JSON.stringify({
-        chatId: c.id,
-        projectPath: projDir,
-        run: {
-          taskType: "verify",
-          input: { workspaceRoot: projDir },
-          modelId: CHAT_MODEL,
-        },
-        user: { content: "", timestamp: 1 },
-        summary: { content: "Verify started", timestamp: 2 },
-      }),
-    });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(404);
     expect(store.listMessages(c.id)).toHaveLength(0);
   });
 });

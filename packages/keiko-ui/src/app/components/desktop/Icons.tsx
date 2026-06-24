@@ -226,6 +226,12 @@ export const Icons = {
     </Ico>
   ),
   check: (p: IcoProps): ReactNode => <Ico {...p} d="M5 12.5l4.5 4.5L19 6.5" />,
+  copy: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <rect x="8" y="8" width="10" height="10" rx="2" />
+      <path d="M6 14 H5.8 A1.8 1.8 0 0 1 4 12.2 V6.8 A1.8 1.8 0 0 1 5.8 5 H11.2 A1.8 1.8 0 0 1 13 6.8 V7" />
+    </Ico>
+  ),
   /* Lift: info ring open at the top seam + stem. */
   info: (p: IcoProps): ReactNode => (
     <Ico {...p}>

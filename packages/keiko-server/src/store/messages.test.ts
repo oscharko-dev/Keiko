@@ -8,6 +8,7 @@ import {
   createInMemoryUiStore,
   UiStoreError,
   type ChatRole,
+  type GroundedAnswer,
   type UiStore,
   type WorkflowStatus,
 } from "./index.js";
@@ -19,6 +20,73 @@ let store: UiStore;
 
 function makeRedactor(secret: string): (s: string) => string {
   return (s: string) => s.split(secret).join("[REDACTED]");
+}
+
+function groundedAnswer(overrides: Partial<GroundedAnswer> = {}): GroundedAnswer {
+  const base: Extract<GroundedAnswer, { readonly groundingKind: "connected-context" }> = {
+    groundingKind: "connected-context",
+    userMessageId: "user-1",
+    assistantMessageId: "assistant-1",
+    evidenceRunId: "grounded-run-1",
+    content: "Answer from package-lock.json.",
+    citations: [
+      {
+        scopePath: "package-lock.json",
+        lineRange: { startLine: 1, endLine: 48 },
+        score: 0.91,
+        stableId: "atom-package-lock",
+      },
+    ],
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 12,
+    contextPack: {
+      schemaVersion: "1",
+      scopeId: "scope-1",
+      scopeKind: "files",
+      fileCount: 1,
+      queryKind: "natural-language",
+      usage: {
+        searchCalls: 1,
+        filesRead: 1,
+        excerptBytes: 128,
+        modelInputTokens: 64,
+        modelOutputTokens: 12,
+        elapsedMs: 12,
+        rerankCalls: 0,
+      },
+      budget: {
+        searchCallsMax: 16,
+        filesReadMax: 32,
+        excerptBytesMax: 131_072,
+        modelInputTokensMax: 32_000,
+        modelOutputTokensMax: 4_096,
+        elapsedMsMax: 30_000,
+        rerankCallsMax: 0,
+      },
+      citationCount: 1,
+      omittedCount: 0,
+      omittedCounts: {
+        "outside-scope": 0,
+        binary: 0,
+        generated: 0,
+        ignored: 0,
+        "size-exceeded": 0,
+        "near-duplicate": 0,
+        "low-relevance": 0,
+        "redacted-only": 0,
+        "budget-exhausted": 0,
+        "tool-unavailable": 0,
+        "unsupported-format": 0,
+        "no-text-layer": 0,
+        "malformed-document": 0,
+        "encrypted-document": 0,
+      },
+      uncertaintyCount: 0,
+      elapsedMs: 12,
+    },
+  };
+  return { ...base, ...overrides } as GroundedAnswer;
 }
 
 beforeEach(() => {
@@ -91,6 +159,64 @@ describe("createMessage", () => {
     expect(m.workflowId).toBe("unit-tests");
     expect(m.workflowStatus).toBe("completed");
     expect(m.shortResult).toBe("all good");
+  });
+
+  it("attaches and reloads grounded answer metadata on assistant messages", () => {
+    const assistant = store.createMessage({
+      chatId,
+      role: "assistant",
+      content: "Answer from package-lock.json.",
+      timestamp: 210,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const answer = groundedAnswer({
+      assistantMessageId: assistant.id,
+      content: "Answer includes SECRET-TOKEN.",
+    });
+
+    const updated = store.attachGroundedAnswer(assistant.id, answer);
+    const reloaded = store.listMessages(chatId).find((message) => message.id === assistant.id);
+
+    expect(updated.groundedAnswer).toMatchObject({
+      groundingKind: "connected-context",
+      assistantMessageId: assistant.id,
+      citations: [{ scopePath: "package-lock.json" }],
+    });
+    expect(reloaded?.groundedAnswer?.content).toBe("Answer includes [REDACTED].");
+  });
+
+  it("rejects grounded answer metadata on non-assistant messages", () => {
+    const user = store.createMessage({
+      chatId,
+      role: "user",
+      content: "Which TypeScript version?",
+      timestamp: 211,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    expect(() => store.attachGroundedAnswer(user.id, groundedAnswer())).toThrow(UiStoreError);
+    expect(() =>
+      store.createMessage({
+        chatId,
+        role: "user",
+        content: "bad",
+        timestamp: 212,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+        groundedAnswer: groundedAnswer(),
+      }),
+    ).toThrow(UiStoreError);
   });
 
   it("rejects run summary fields on non-system messages", () => {

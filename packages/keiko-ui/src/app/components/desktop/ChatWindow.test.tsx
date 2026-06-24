@@ -2,19 +2,21 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState, type ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import { ChatWindow } from "./ChatWindow";
+import { ChatWindow, copyableMessageText } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { Chat, ChatMessage, GroundedAnswer, ModelCapability } from "@/lib/types";
-import { updateChat } from "@/lib/api";
+import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
+    fetchFilesSearch: vi.fn(),
     updateChat: vi.fn(),
   };
 });
@@ -84,8 +86,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
     clearHistory: vi.fn(),
-    launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
-    launchGroundedWorkflowHandoff: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -93,17 +93,54 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
 
 function renderWindow(
   session: ChatSessionApi,
-  props: { readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined } = {},
+  props: {
+    readonly linkedRoot?: string | null | undefined;
+    readonly linkedRoots?: readonly string[] | undefined;
+    readonly openEditorFile?: ComponentProps<typeof ChatWindow>["openEditorFile"];
+    readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  } = {},
 ): void {
+  const chatWindowProps: ComponentProps<typeof ChatWindow> = {
+    ...(props.linkedRoot === undefined ? {} : { linkedRoot: props.linkedRoot }),
+    ...(props.linkedRoots === undefined ? {} : { linkedRoots: props.linkedRoots }),
+    ...(props.openEditorFile === undefined ? {} : { openEditorFile: props.openEditorFile }),
+    ...(props.onOpenRunResult === undefined ? {} : { onOpenRunResult: props.onOpenRunResult }),
+  };
   render(
     <ChatSessionProvider value={session}>
-      <ChatWindow onOpenRunResult={props.onOpenRunResult} />
+      <ChatWindow {...chatWindowProps} />
     </ChatSessionProvider>,
   );
 }
 
+function renderStatefulWindow(
+  session: ChatSessionApi,
+  props: { readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined } = {},
+): void {
+  function StatefulWindow(): React.JSX.Element {
+    const [draft, setDraftState] = useState(session.draft);
+    return (
+      <ChatSessionProvider
+        value={{
+          ...session,
+          draft,
+          setDraft: (next) => {
+            session.setDraft(next);
+            setDraftState(next);
+          },
+        }}
+      >
+        <ChatWindow onOpenRunResult={props.onOpenRunResult} />
+      </ChatSessionProvider>
+    );
+  }
+
+  render(<StatefulWindow />);
+}
+
 const fetchCapsulesMock = vi.mocked(fetchCapsules);
 const fetchCapsuleSetsMock = vi.mocked(fetchCapsuleSets);
+const fetchFilesSearchMock = vi.mocked(fetchFilesSearch);
 const updateChatMock = vi.mocked(updateChat);
 
 beforeEach(() => {
@@ -111,6 +148,14 @@ beforeEach(() => {
   fetchCapsulesMock.mockResolvedValue({ capsules: [] });
   fetchCapsuleSetsMock.mockReset();
   fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+  fetchFilesSearchMock.mockReset();
+  fetchFilesSearchMock.mockResolvedValue({
+    root: "/repo",
+    query: "",
+    results: [],
+    truncated: false,
+    scannedFileCount: 0,
+  });
   updateChatMock.mockReset();
 });
 
@@ -251,7 +296,7 @@ describe("ChatWindow cancel button", () => {
     expect(openResult).toHaveBeenCalledWith(runMessage);
   });
 
-  it("renders the grounded panel for a plural-only connectedScopes chat", () => {
+  it("renders persisted grounded evidence from the assistant message for a plural-only connectedScopes chat", () => {
     const chat = makeChat({
       connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
     });
@@ -320,7 +365,6 @@ describe("ChatWindow cancel button", () => {
     renderWindow(
       makeSession({
         activeChat: chat,
-        latestGrounded,
         messages: [
           {
             id: "a",
@@ -333,6 +377,7 @@ describe("ChatWindow cancel button", () => {
             workflowStatus: undefined,
             shortResult: undefined,
             taskType: undefined,
+            groundedAnswer: latestGrounded,
           },
         ],
       }),
@@ -434,6 +479,159 @@ describe("ChatWindow memory disclosure", () => {
       .getAllByRole("button", { name: /no memories included/i })
       .map((button) => button.getAttribute("aria-controls"));
     expect(new Set(controls).size).toBe(2);
+  });
+});
+
+describe("ChatWindow repository file focus picker", () => {
+  it("searches connected repository roots and merges the selected file into the Files scope", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    const setDraft = vi.fn();
+    const existingScope = {
+      kind: "files" as const,
+      root: "/repo",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: 1,
+    };
+    const updated = makeChat({
+      projectPath: "/repo",
+      connectedScopes: [
+        { ...existingScope, relativePaths: ["src/a.ts", "src/context/coding-context.ts"] },
+      ],
+    });
+    fetchFilesSearchMock.mockResolvedValue({
+      root: "/repo",
+      query: "coding",
+      results: [
+        {
+          root: "/repo",
+          path: "src/context/coding-context.ts",
+          name: "coding-context.ts",
+          directory: "src/context",
+          extension: "ts",
+          sizeBytes: 42,
+          modifiedAt: 123,
+        },
+      ],
+      truncated: false,
+      scannedFileCount: 10,
+    });
+    updateChatMock.mockResolvedValueOnce({ chat: updated });
+
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [existingScope],
+          connectedScope: existingScope,
+        }),
+        draft: "",
+        replaceChat,
+        setDraft,
+      }),
+    );
+
+    const input = screen.getByRole("textbox", { name: "Chat message" });
+    await user.type(input, "Explain this @coding");
+
+    const result = await screen.findByRole("option", {
+      name: "Reference src/context/coding-context.ts",
+    });
+    await user.click(result);
+
+    await waitFor(() => {
+      expect(fetchFilesSearchMock).toHaveBeenCalledWith("/repo", "coding", 24);
+      expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        connectedScopes: [
+          expect.objectContaining({
+            kind: "files",
+            root: "/repo",
+            relativePaths: ["src/a.ts", "src/context/coding-context.ts"],
+          }),
+        ],
+      });
+    });
+    expect(replaceChat).toHaveBeenCalledWith(updated);
+    expect(setDraft).toHaveBeenCalledWith("Explain this @src/context/coding-context.ts ");
+  });
+
+  it("creates a focused Files scope when only the repository root is connected", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    const rootScope = {
+      kind: "workspace-root" as const,
+      root: "/repo",
+      relativePaths: [],
+      connectedAtMs: 1,
+    };
+    fetchFilesSearchMock.mockResolvedValue({
+      root: "/repo",
+      query: "readme",
+      results: [
+        {
+          root: "/repo",
+          path: "README.md",
+          name: "README.md",
+          directory: "",
+          extension: "md",
+          sizeBytes: 12,
+          modifiedAt: 456,
+        },
+      ],
+      truncated: false,
+      scannedFileCount: 5,
+    });
+    updateChatMock.mockResolvedValueOnce({ chat: makeChat() });
+
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [rootScope],
+          connectedScope: rootScope,
+        }),
+        draft: "",
+        replaceChat,
+      }),
+    );
+
+    const input = screen.getByRole("textbox", { name: "Chat message" });
+    await user.type(input, "@readme");
+    await user.click(await screen.findByRole("option", { name: "Reference README.md" }));
+
+    await waitFor(() => {
+      expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        connectedScopes: [
+          rootScope,
+          expect.objectContaining({
+            kind: "files",
+            root: "/repo",
+            relativePaths: ["README.md"],
+          }),
+        ],
+      });
+    });
+  });
+
+  it("does not open repository search for connector-only grounding", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScopes: [
+            { kind: "capsule", capsuleId: makeCapsuleId("cap-only"), connectedAtMs: 1 },
+          ],
+        }),
+        draft: "@readme",
+      }),
+    );
+
+    const input = screen.getByRole("textbox", { name: "Chat message" });
+    fireEvent.change(input, {
+      target: { value: "@readme", selectionStart: "@readme".length },
+    });
+
+    expect(screen.queryByRole("dialog", { name: "Reference repository file" })).toBeNull();
+    expect(fetchFilesSearchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -863,7 +1061,7 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
 });
 
 describe("ChatWindow compact responsive controls (#1216)", () => {
-  it("compacts workflow and model controls together while keeping send anchored", () => {
+  it("compacts model controls while keeping send anchored", () => {
     const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
     const { container } = render(
       <ChatSessionProvider
@@ -879,9 +1077,7 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     );
 
     expect(container.querySelector(".chatw")).toHaveClass("chatw-compact");
-    const launch = screen.getByRole("button", { name: "Launch workflow" });
-    expect(launch).toHaveClass("cmp-mode-compact");
-    expect(launch).toHaveAttribute("data-tip", "Launch workflow");
+    expect(screen.queryByRole("button", { name: "Launch workflow" })).toBeNull();
 
     const modelControl = container.querySelector(".cmp-model");
     expect(modelControl).toHaveClass("cmp-model-compact");
@@ -892,7 +1088,7 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     );
   });
 
-  it("keeps model and workflow controls in the same compact state", () => {
+  it("keeps model controls compact when workflowCompact is requested by the window frame", () => {
     const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
     const { container } = render(
       <ChatSessionProvider
@@ -906,9 +1102,7 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
       </ChatSessionProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "Launch workflow" })).toHaveClass(
-      "cmp-mode-compact",
-    );
+    expect(screen.queryByRole("button", { name: "Launch workflow" })).toBeNull();
     expect(container.querySelector(".cmp-model")).toHaveClass("cmp-model-compact");
   });
 
@@ -1223,7 +1417,7 @@ describe("ChatWindow: no ornamental Build-mode button (#146 GAP-C1)", () => {
     expect(screen.queryByRole("button", { name: /build/i })).toBeNull();
   });
 
-  it("still renders the Launch workflow button when the model is workflow-eligible", () => {
+  it("does not render a Launch workflow button when the model is workflow-eligible", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -1263,7 +1457,7 @@ describe("ChatWindow: no ornamental Build-mode button (#146 GAP-C1)", () => {
         ],
       }),
     );
-    expect(screen.getByRole("button", { name: /launch workflow/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /launch workflow/i })).toBeNull();
   });
 });
 
@@ -1297,6 +1491,52 @@ describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", ()
 
 // uiux-fix F042 (C208) — per-bubble copy affordance for assistant messages.
 describe("ChatWindow message copy", () => {
+  it("renders user prompt right-aligned with the answer full-width below", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m1",
+            chatId: "chat-1",
+            role: "user",
+            content: "Please explain the test strategy.",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Use focused unit tests and one browser verification.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    const thread = document.querySelector<HTMLElement>(".chatw-thread");
+    const turn = document.querySelector<HTMLElement>(".chat-turn");
+    const prompt = document.querySelector<HTMLElement>(".chat-turn-prompt");
+    const answer = document.querySelector<HTMLElement>(".chat-turn-answer");
+    expect(thread).not.toBeNull();
+    expect(turn).not.toBeNull();
+    expect(prompt).toHaveTextContent("Please explain");
+    expect(answer).toHaveTextContent("focused unit tests");
+    expect(prompt?.querySelector('[data-role="user"][data-layout="turn"]')).not.toBeNull();
+    expect(answer?.querySelector('[data-role="assistant"][data-layout="turn"]')).not.toBeNull();
+    expect(turn?.querySelector('[role="separator"]')).toBeNull();
+  });
+
   it("renders assistant identity as the Keiko logo without the visible wordmark", () => {
     renderWindow(
       makeSession({
@@ -1377,17 +1617,207 @@ describe("ChatWindow message copy", () => {
     );
 
     // Exactly one copy button — the assistant bubble's. User bubbles carry none.
-    expect(screen.getAllByRole("button", { name: "Copy message" })).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+    expect(screen.getAllByRole("button", { name: "Copy answer" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
     await waitFor(() => {
       // Citation markers (ASCII + CJK/fullwidth glyphs) and their leading
       // whitespace are stripped from the copied plaintext.
       expect(writeText).toHaveBeenCalledWith("Paris is the capital.");
     });
+    expect(await screen.findByText("Answer copied")).toBeInTheDocument();
 
     if (clipboardDescriptor !== undefined) {
       Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
     }
+  });
+
+  it("removes grounded source labels and duplicate repository references from copied answers", () => {
+    expect(
+      copyableMessageText(
+        "Check [packages/keiko-harness/src/context.ts:49-58] [source: api] packages/keiko-harness/src/context.ts:49-58 【1】.",
+      ),
+    ).toBe("Check packages/keiko-harness/src/context.ts:49-58.");
+  });
+
+  it("removes standalone source labels without corrupting answer spacing", () => {
+    expect(copyableMessageText("Alpha [source: api] beta.")).toBe("Alpha beta.");
+  });
+
+  it("surfaces assistant answer clipboard failures", async () => {
+    const writeText = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockRejectedValue(new Error("denied"));
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Answer body.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+
+    expect(
+      await screen.findByText("Clipboard access failed. Select the answer manually and copy it."),
+    ).toBeInTheDocument();
+
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  it("lets long assistant answers collapse without changing copy content", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const longAnswer = Array.from({ length: 34 }, (_, index) => `Line ${String(index + 1)}`).join(
+      "\n",
+    );
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: longAnswer,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    const content = document.querySelector(".chat-msg-content");
+    expect(content).toHaveAttribute("data-collapsible", "true");
+    expect(content).toHaveAttribute("data-collapsed", "false");
+
+    const collapse = screen.getByRole("button", { name: "Collapse answer" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(collapse);
+
+    expect(content).toHaveAttribute("data-collapsed", "true");
+    expect(screen.getByRole("button", { name: "Expand answer" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(longAnswer);
+    });
+
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  it("opens assistant repository references directly when one repository root is connected", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Check packages/keiko-harness/src/context.ts:50-57 for this case.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+      { linkedRoot: "/repo", openEditorFile },
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open packages/keiko-harness/src/context.ts at lines 50-57 in editor",
+      }),
+    );
+
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "packages/keiko-harness/src/context.ts",
+      lineStart: 50,
+      lineEnd: 57,
+    });
+    expect(
+      screen.getByText("Opened packages/keiko-harness/src/context.ts in editor."),
+    ).toHaveAttribute("role", "status");
+  });
+
+  it("requires a root choice for assistant repository references when multiple roots are connected", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Check src/context.ts:12 before editing.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+      { linkedRoots: ["/repo-a", "/repo-b"], openEditorFile },
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Open src/context.ts at line 12 in editor" }),
+    );
+    const picker = screen.getByRole("dialog", { name: "Select repository source" });
+    expect(picker).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "repo-b" }));
+
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/repo-b",
+      path: "src/context.ts",
+      lineStart: 12,
+      lineEnd: 12,
+    });
   });
 });
 

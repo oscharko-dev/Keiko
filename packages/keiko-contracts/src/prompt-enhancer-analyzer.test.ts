@@ -145,6 +145,24 @@ describe("analyzePrompt task classification (AC2)", () => {
   it("reports strong confidence for an unambiguous class signal", () => {
     expect(analyze("Write a function to reverse a string.").taskClassConfidence).toBe("strong");
   });
+
+  it("recognizes common German task and domain cues", () => {
+    const prompt = analyze("Schreibe einen robusten Prompt fuer Code-Review und Optimierung.");
+    expect(prompt.taskClass).toBe("prompt-optimization");
+    expect(prompt.domain).toBe("software");
+    expect(prompt.recommendedProfile).toBe("technical");
+
+    const letter = analyze("Schreibe einen Kuendigungsbrief fuer meinen Mobilfunkvertrag.");
+    expect(letter.taskClass).toBe("writing-editing");
+    expect(letter.domain).toBe("legal");
+
+    const travel = analyze("Plane eine zweiwoechige Japan-Reise im Oktober.");
+    expect(travel.taskClass).toBe("decision-support");
+
+    const migration = analyze("Erstelle eine SQL-Migrationsstrategie fuer Kundendaten.");
+    expect(migration.taskClass).toBe("code-architecture");
+    expect(migration.domain).toBe("software");
+  });
 });
 
 // ─── AC1: full structured analysis ───────────────────────────────────────────────

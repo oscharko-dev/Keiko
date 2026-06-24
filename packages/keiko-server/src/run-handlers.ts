@@ -7,7 +7,6 @@
 // directly; no guard is reimplemented; no secret reaches any response (live payloads are redacted).
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
 import { parseRunRequest } from "./run-request.js";
 import type { RunRequest } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
@@ -19,10 +18,7 @@ import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentRedactionSecrets } from "./deps.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { createAuditRedactor } from "@oscharko-dev/keiko-evidence";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
-import { UiStoreError, type ChatMessage, type NewChatMessage } from "./store/index.js";
-import { memoryCaptureCustomerMatchers } from "./memory-capture-policy.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -96,121 +92,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireBodyString(body: Record<string, unknown>, name: string): string | RouteResult {
-  const value = body[name];
-  if (typeof value !== "string" || value.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", `Field "${name}" is required.`) };
-  }
-  return value;
-}
-
-function requireBodyNumber(body: Record<string, unknown>, name: string): number | RouteResult {
-  const value = body[name];
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return {
-      status: 400,
-      body: errorBody("BAD_REQUEST", `Field "${name}" must be a finite number.`),
-    };
-  }
-  return value;
-}
-
-function requireBodyRecord(
-  body: Record<string, unknown>,
-  name: string,
-): Record<string, unknown> | RouteResult {
-  const value = body[name];
-  if (!isRecord(value)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", `Field "${name}" must be an object.`) };
-  }
-  return value;
-}
-
-function parseJsonRecord(raw: string): Record<string, unknown> | RouteResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body is not valid JSON.") };
-  }
-  if (!isRecord(parsed)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
-  }
-  return parsed;
-}
-
-function isRouteResult(value: unknown): value is RouteResult {
-  return isRecord(value) && typeof value.status === "number" && "body" in value;
-}
-
-function chatBelongsToProject(deps: UiHandlerDeps, projectPath: string, chatId: string): boolean {
-  return deps.store.listChats(projectPath).some((chat) => chat.id === chatId);
-}
-
-function runSummaryDiscriminator(
-  request: RunRequest,
-): Pick<NewChatMessage, "workflowId" | "taskType"> {
-  if (request.kind === "unit-tests") {
-    return { workflowId: "unit-test-generation", taskType: undefined };
-  }
-  if (request.kind === "bug-investigation") {
-    return { workflowId: "bug-investigation", taskType: undefined };
-  }
-  if (request.kind === "explain-plan") {
-    return { workflowId: undefined, taskType: "explain-plan" };
-  }
-  return { workflowId: undefined, taskType: "verify" };
-}
-
-function buildChatRunMessages(
-  body: Record<string, unknown>,
-  request: RunRequest,
-  chatId: string,
-  runId: string,
-): readonly [NewChatMessage, NewChatMessage] | RouteResult {
-  const user = requireBodyRecord(body, "user");
-  if (isRouteResult(user)) return user;
-  const summary = requireBodyRecord(body, "summary");
-  if (isRouteResult(summary)) return summary;
-  const userContent = requireBodyString(user, "content");
-  if (typeof userContent !== "string") return userContent;
-  const userTimestamp = requireBodyNumber(user, "timestamp");
-  if (typeof userTimestamp !== "number") return userTimestamp;
-  const summaryContent = requireBodyString(summary, "content");
-  if (typeof summaryContent !== "string") return summaryContent;
-  const summaryTimestamp = requireBodyNumber(summary, "timestamp");
-  if (typeof summaryTimestamp !== "number") return summaryTimestamp;
-  const discriminator = runSummaryDiscriminator(request);
-  return [
-    {
-      chatId,
-      role: "user",
-      content: userContent,
-      timestamp: userTimestamp,
-      runId: undefined,
-      workflowId: undefined,
-      workflowStatus: undefined,
-      shortResult: undefined,
-      taskType: undefined,
-    },
-    {
-      chatId,
-      role: "system",
-      content: summaryContent,
-      timestamp: summaryTimestamp,
-      runId,
-      workflowId: discriminator.workflowId,
-      workflowStatus: "running",
-      shortResult: undefined,
-      taskType: discriminator.taskType,
-    },
-  ];
-}
-
-function storeErrorResult(error: UiStoreError): RouteResult {
-  return { status: error.status, body: errorBody(error.code, error.message) };
-}
-
 // Static, path-safe message for workspace errors surfaced during run launch. The underlying
 // WorkspaceError messages may carry absolute paths — we never echo them (ADR-0005, CWE-209).
 const WORKSPACE_RUN_ERROR_MESSAGE =
@@ -221,115 +102,6 @@ function workspaceRunErrorResult(): RouteResult {
     status: 400,
     body: errorBody("WORKSPACE_UNAVAILABLE", WORKSPACE_RUN_ERROR_MESSAGE),
   };
-}
-
-function markSummaryFailed(deps: UiHandlerDeps, message: ChatMessage, shortResult: string): void {
-  try {
-    deps.store.updateMessage(message.id, { workflowStatus: "failed", shortResult });
-  } catch {
-    // Best-effort compensation only. The original start error remains the response source.
-  }
-}
-
-interface ChatRunEnvelope {
-  readonly body: Record<string, unknown>;
-  readonly chatId: string;
-  readonly projectPath: string;
-  readonly runBody: Record<string, unknown>;
-}
-
-function parseChatRunEnvelope(raw: string, deps: UiHandlerDeps): ChatRunEnvelope | RouteResult {
-  const body = parseJsonRecord(raw);
-  if (isRouteResult(body)) return body;
-  const chatId = requireBodyString(body, "chatId");
-  if (isRouteResult(chatId)) return chatId;
-  const projectPath = requireBodyString(body, "projectPath");
-  if (isRouteResult(projectPath)) return projectPath;
-  if (!chatBelongsToProject(deps, projectPath, chatId)) {
-    return { status: 404, body: errorBody("NOT_FOUND", "Chat not found.") };
-  }
-  const runBody = requireBodyRecord(body, "run");
-  if (isRouteResult(runBody)) return runBody;
-  return { body, chatId, projectPath, runBody };
-}
-
-interface ValidatedRun {
-  readonly request: RunRequest;
-  readonly model: ModelPort;
-}
-
-function validateChatRunRequest(
-  runBody: Record<string, unknown>,
-  deps: UiHandlerDeps,
-): ValidatedRun | RouteResult {
-  const parsed = parseRunRequest(JSON.stringify(runBody));
-  if ("code" in parsed) {
-    return { status: 400, body: errorBody(parsed.code, parsed.message) };
-  }
-  const unregistered = rejectUnregisteredWorkspace(parsed, deps);
-  if (unregistered !== null) return unregistered;
-  const model = resolveRunModel(parsed, deps);
-  return model === undefined
-    ? { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") }
-    : { request: parsed, model };
-}
-
-function engineContextFor(
-  deps: UiHandlerDeps,
-  request: RunRequest,
-  model: ModelPort,
-): EngineContext {
-  return {
-    request,
-    model,
-    registry: deps.registry,
-    evidence: {
-      store: deps.evidenceStore,
-      env: deps.env,
-      additionalSecrets: currentRedactionSecrets(deps),
-    },
-    memoryVault: deps.memoryVault,
-    memoryAuditRedactString: createAuditRedactor(
-      { additionalSecrets: currentRedactionSecrets(deps) },
-      deps.env,
-    ),
-    memoryCustomerIdentifierMatchers: memoryCaptureCustomerMatchers(deps),
-  };
-}
-
-function persistChatRunMessages(
-  deps: UiHandlerDeps,
-  envelope: ChatRunEnvelope,
-  request: RunRequest,
-  runId: string,
-): readonly ChatMessage[] | RouteResult {
-  const messagesInput = buildChatRunMessages(envelope.body, request, envelope.chatId, runId);
-  if (isRouteResult(messagesInput)) return messagesInput;
-  try {
-    return deps.store.createMessages(messagesInput);
-  } catch (error) {
-    if (error instanceof UiStoreError) return storeErrorResult(error);
-    throw error;
-  }
-}
-
-function startPersistedChatRun(
-  deps: UiHandlerDeps,
-  request: RunRequest,
-  model: ModelPort,
-  runId: string,
-  messages: readonly ChatMessage[],
-): RouteResult {
-  try {
-    const run = startRun(engineContextFor(deps, request, model), deps.redactor, { runId });
-    return { status: 202, body: { run, messages } };
-  } catch (error) {
-    const summary = messages[1];
-    if (summary !== undefined) {
-      markSummaryFailed(deps, summary, "Run could not be started.");
-    }
-    return mapRunStartError(error);
-  }
 }
 
 function mapRunStartError(error: unknown): RouteResult {
@@ -387,36 +159,6 @@ export async function handleCreateRun(
   } catch (error) {
     return mapRunStartError(error);
   }
-}
-
-// Route — POST /api/chats/runs. Composer-specific path that makes Issue #66's chat invariant
-// explicit: a successful workflow launch first reserves a runId and persists exactly one user
-// message plus one system run summary, then starts the run with that reserved runId. If persistence
-// fails, no run is started; if the start is refused, the summary is terminalized as failed.
-export async function handleCreateChatRun(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
-  let raw: string;
-  try {
-    raw = await readBody(ctx.req);
-  } catch (error) {
-    if (error instanceof BodyTooLargeError) {
-      return {
-        status: 413,
-        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
-      };
-    }
-    throw error;
-  }
-  const envelope = parseChatRunEnvelope(raw, deps);
-  if (isRouteResult(envelope)) return envelope;
-  const validated = validateChatRunRequest(envelope.runBody, deps);
-  if (isRouteResult(validated)) return validated;
-  const runId = randomUUID();
-  const messages = persistChatRunMessages(deps, envelope, validated.request, runId);
-  if (isRouteResult(messages)) return messages;
-  return startPersistedChatRun(deps, validated.request, validated.model, runId, messages);
 }
 
 function lastEventId(req: IncomingMessage): number {

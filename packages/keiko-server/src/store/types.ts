@@ -18,6 +18,7 @@ import type {
   WorkflowStatus,
   ChatMessage,
   CreateChatOptions,
+  GroundedAnswer,
   UpdateProjectPatch,
   UpdateChatPatch,
   NewChatMessage,
@@ -32,6 +33,7 @@ export type {
   WorkflowStatus,
   ChatMessage,
   CreateChatOptions,
+  GroundedAnswer,
   UpdateProjectPatch,
   UpdateChatPatch,
   NewChatMessage,
@@ -60,6 +62,7 @@ export interface UiStore {
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
   readonly createMessages: (messages: readonly NewChatMessage[]) => readonly ChatMessage[];
   readonly updateMessage: (id: string, patch: UpdateChatMessagePatch) => ChatMessage;
+  readonly attachGroundedAnswer: (id: string, answer: GroundedAnswer) => ChatMessage;
 
   readonly close: () => void;
 }

@@ -57,6 +57,39 @@ describe("ContextStatusPanel", () => {
     expect(details?.hasAttribute("open")).toBe(false);
   });
 
+  it("uses the same evidence disclosure chrome with a compact context meta summary", () => {
+    const counts = laneCounts(0);
+    counts["repo-evidence"] = 7;
+    counts["system-contract"] = 1;
+    const { container } = render(
+      <ContextStatusPanel
+        contextSummary={summary({
+          totalEstimatedTokens: 34_000,
+          laneCounts: counts,
+          compactionActive: true,
+        })}
+      />,
+    );
+
+    const details = container.querySelector("details.ctx-status");
+    const summaryEl = container.querySelector("summary.ctx-status-summary");
+    const title = container.querySelector(".grounded-evidence-summary-title");
+    const meta = container.querySelector(".grounded-evidence-summary-meta");
+
+    expect(details).toHaveClass("grounded-evidence-disclosure");
+    expect(summaryEl).toHaveClass("grounded-evidence-summary");
+    expect(summaryEl).toHaveAttribute("aria-label", "Context assembly details");
+    expect(summaryEl).toHaveAttribute(
+      "title",
+      expect.stringContaining("keiko-conservative-utf8-v1"),
+    );
+    expect(title).toHaveTextContent("Context");
+    expect(meta).toHaveTextContent("34.0k est. assembled tokens");
+    expect(meta).toHaveTextContent("Moderate pressure");
+    expect(meta).toHaveTextContent("2 lanes");
+    expect(meta).toHaveTextContent("Compaction active");
+  });
+
   it("renders the token total, pressure label, and compaction status as aggregate rows", () => {
     const { container } = render(
       <ContextStatusPanel
@@ -64,7 +97,9 @@ describe("ContextStatusPanel", () => {
       />,
     );
     const text = container.textContent ?? "";
-    expect(text).toContain("Estimated");
+    expect(text).toContain("Estimator");
+    expect(text).toContain("keiko-conservative-utf8-v1");
+    expect(text).toContain("Assembled estimate");
     expect(text).toContain("34.0k tok");
     expect(text).toContain("Budget pressure");
     expect(text).toContain("Moderate");

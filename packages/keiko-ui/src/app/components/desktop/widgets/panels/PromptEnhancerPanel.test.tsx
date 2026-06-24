@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PromptEnhancerPanel } from "./PromptEnhancerPanel";
 import { ApiError } from "@/lib/api";
@@ -133,16 +133,56 @@ function chatModel(id: string): ModelCapability {
 }
 
 const noModels = (): Promise<{ models: ModelCapability[] }> => Promise.resolve({ models: [] });
+const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
 
 function typeDraft(text: string): void {
   fireEvent.change(screen.getByLabelText("Raw prompt"), { target: { value: text } });
 }
 
+function setClipboard(writeText: ((text: string) => Promise<void>) | undefined): void {
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: writeText === undefined ? undefined : { writeText },
+  });
+}
+
+function setExecCommand(result: boolean): ReturnType<typeof vi.fn> {
+  const execCommand = vi.fn(() => result);
+  Object.defineProperty(document, "execCommand", {
+    configurable: true,
+    value: execCommand,
+  });
+  return execCommand;
+}
+
 describe("PromptEnhancerPanel", () => {
+  afterEach(() => {
+    if (clipboardDescriptor === undefined) {
+      Reflect.deleteProperty(navigator, "clipboard");
+    } else {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+    if (execCommandDescriptor === undefined) {
+      Reflect.deleteProperty(document, "execCommand");
+    } else {
+      Object.defineProperty(document, "execCommand", execCommandDescriptor);
+    }
+  });
+
   it("renders the workflow form first (not a marketing page)", () => {
     render(<PromptEnhancerPanel enhanceImpl={vi.fn()} fetchModelsImpl={noModels} />);
     expect(screen.getByLabelText("Raw prompt")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Enhance prompt/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Clear prompt workspace" })).toBeDisabled();
+  });
+
+  it("renders the design-system workflow shell before a result exists", () => {
+    render(<PromptEnhancerPanel enhanceImpl={vi.fn()} fetchModelsImpl={noModels} />);
+    expect(screen.getByTestId("prompt-enhancer-panel")).toHaveClass("pe-panel");
+    expect(screen.getByTestId("pe-header")).toHaveClass("pe-header");
+    expect(screen.getByLabelText("Enhancement controls")).toHaveClass("pe-controls-card");
+    expect(screen.getByLabelText("Prompt enhancement empty state")).toHaveClass("pe-empty-state");
   });
 
   it("enables enhancement once a draft is entered and renders the result", async () => {
@@ -158,6 +198,34 @@ describe("PromptEnhancerPanel", () => {
       text: "Summarize the report.",
       missingInformationStrategy: "clarify",
     });
+  });
+
+  it("clears the draft and review artifact for the next prompt", async () => {
+    const enhanceImpl = vi.fn().mockResolvedValue(makeResponse());
+    const { rerender } = render(
+      <PromptEnhancerPanel enhanceImpl={enhanceImpl} fetchModelsImpl={noModels} />,
+    );
+    typeDraft("Summarize the report.");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    rerender(
+      <PromptEnhancerPanel
+        connectedRoot="/repo"
+        enhanceImpl={enhanceImpl}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    expect(screen.getByText(/Grounding context changed/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear prompt workspace" }));
+
+    expect(screen.getByLabelText("Raw prompt")).toHaveValue("");
+    expect(screen.queryByTestId("pe-result")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Prompt enhancement empty state")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Enhance prompt/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Clear prompt workspace" })).toBeDisabled();
+    expect(screen.getByText("Waiting for draft")).toBeInTheDocument();
+    expect(screen.queryByText(/Grounding context changed/)).not.toBeInTheDocument();
   });
 
   it("shows every required Enhanced Prompt section (AC2)", async () => {
@@ -274,6 +342,8 @@ describe("PromptEnhancerPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
     await screen.findByTestId("pe-result");
     expect(screen.getByTestId("pe-grounding-readiness")).toHaveTextContent(/unavailable/);
+    expect(screen.getByTestId("pe-grounding-readiness")).toHaveTextContent(/connect a Files window/);
+    expect(screen.getByTestId("pe-grounding-readiness")).toHaveAttribute("role", "status");
     expect(screen.getByRole("link", { name: /pe-run-1/ })).toHaveAttribute(
       "href",
       "/api/prompt-enhancement/evidence/pe-run-1",
@@ -326,7 +396,7 @@ describe("PromptEnhancerPanel", () => {
 
   it("copies the rendered prompt to the clipboard", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
+    setClipboard(writeText);
     render(
       <PromptEnhancerPanel
         enhanceImpl={vi.fn().mockResolvedValue(makeResponse())}
@@ -341,7 +411,70 @@ describe("PromptEnhancerPanel", () => {
       expect(writeText).toHaveBeenCalledWith(makeResponse().renderedPrompt);
     });
     expect(screen.getByRole("button", { name: /Copy rendered prompt/ })).toBeInTheDocument();
-    expect(screen.getByText("Rendered prompt copied to clipboard.")).toBeInTheDocument();
+    expect(screen.getByText("Copied to clipboard.")).toBeInTheDocument();
+  });
+
+  it("falls back to a selection-backed copy path when the Clipboard API is unavailable", async () => {
+    setClipboard(undefined);
+    const execCommand = setExecCommand(true);
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(makeResponse())}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    typeDraft("x");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    fireEvent.click(screen.getByRole("button", { name: /Copy rendered prompt/ }));
+    await waitFor(() => {
+      expect(execCommand).toHaveBeenCalledWith("copy");
+    });
+    expect(screen.getByText("Copied to clipboard.")).toBeInTheDocument();
+  });
+
+  it("sends connected Files metadata for grounded prompt readiness", async () => {
+    const enhanceImpl = vi.fn().mockResolvedValue(makeResponse());
+    render(
+      <PromptEnhancerPanel
+        connectedRoot="/repo"
+        connectedRoots={["/repo"]}
+        enhanceImpl={enhanceImpl}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    expect(screen.getByTestId("pe-grounding-context")).toHaveTextContent("repo");
+    expect(screen.getByTestId("pe-grounding-context")).toHaveAttribute("data-connected", "true");
+    typeDraft("Summarize the report.");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    expect(enhanceImpl.mock.calls[0]?.[0]).toEqual({
+      text: "Summarize the report.",
+      missingInformationStrategy: "clarify",
+      hasConnectedContext: true,
+      attachmentCount: 1,
+    });
+  });
+
+  it("counts a focused file and additional folders as deduped grounding sources", async () => {
+    const enhanceImpl = vi.fn().mockResolvedValue(makeResponse());
+    render(
+      <PromptEnhancerPanel
+        connectedRoot="/repo"
+        connectedFilePath="src/app.ts"
+        connectedRoots={["/repo", "/docs"]}
+        enhanceImpl={enhanceImpl}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    expect(screen.getByTestId("pe-grounding-context")).toHaveTextContent("2 connected sources");
+    typeDraft("Summarize the report.");
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    await screen.findByTestId("pe-result");
+    expect(enhanceImpl.mock.calls[0]?.[0]).toMatchObject({
+      hasConnectedContext: true,
+      attachmentCount: 2,
+    });
   });
 
   it("populates the readiness model picker from the gateway (chat models only)", async () => {
@@ -425,9 +558,8 @@ describe("PromptEnhancerPanel", () => {
   });
 
   it("surfaces a clipboard failure as an error", async () => {
-    Object.assign(navigator, {
-      clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
-    });
+    setClipboard(vi.fn().mockRejectedValue(new Error("denied")));
+    setExecCommand(false);
     render(
       <PromptEnhancerPanel
         enhanceImpl={vi.fn().mockResolvedValue(makeResponse())}
@@ -439,12 +571,13 @@ describe("PromptEnhancerPanel", () => {
     await screen.findByTestId("pe-result");
     fireEvent.click(screen.getByRole("button", { name: /Copy rendered prompt/ }));
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent(/Could not copy/);
+      expect(screen.getByRole("alert")).toHaveTextContent(/Clipboard access failed/);
     });
   });
 
-  it("does not report copy success when the Clipboard API is unavailable", async () => {
-    Object.assign(navigator, { clipboard: undefined });
+  it("reports copy failure when neither clipboard path is available", async () => {
+    setClipboard(undefined);
+    setExecCommand(false);
     render(
       <PromptEnhancerPanel
         enhanceImpl={vi.fn().mockResolvedValue(makeResponse())}
@@ -456,9 +589,9 @@ describe("PromptEnhancerPanel", () => {
     await screen.findByTestId("pe-result");
     fireEvent.click(screen.getByRole("button", { name: /Copy rendered prompt/ }));
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent(/Clipboard is not available/);
+      expect(screen.getByRole("alert")).toHaveTextContent(/Clipboard access failed/);
     });
-    expect(screen.queryByText("Rendered prompt copied to clipboard.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Copied to clipboard.")).not.toBeInTheDocument();
   });
 
   it("reports a cancelled request distinctly", async () => {

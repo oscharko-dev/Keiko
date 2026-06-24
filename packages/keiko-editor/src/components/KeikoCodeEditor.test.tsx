@@ -25,6 +25,9 @@ interface CapturedEditor {
   formatRuns: () => number;
   saveKeybinding: () => number | undefined;
   focus: ReturnType<typeof vi.fn>;
+  setSelection: ReturnType<typeof vi.fn>;
+  revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
+  deltaDecorations: ReturnType<typeof vi.fn>;
   disposed: { action: boolean; cursor: boolean; selection: boolean };
 }
 
@@ -122,6 +125,9 @@ vi.mock("@monaco-editor/react", () => {
     saveViewState: () => { scroll: number };
     restoreViewState: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
+    setSelection: ReturnType<typeof vi.fn>;
+    revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
+    deltaDecorations: ReturnType<typeof vi.fn>;
     getContainerDomNode: () => HTMLElement;
   }
   interface MockState {
@@ -133,6 +139,9 @@ vi.mock("@monaco-editor/react", () => {
     cursorListener: ((e: { position: { lineNumber: number; column: number } }) => void) | null;
     selectionListener: ((e: { selection: FakeSelection }) => void) | null;
     focus: ReturnType<typeof vi.fn>;
+    setSelection: ReturnType<typeof vi.fn>;
+    revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
+    deltaDecorations: ReturnType<typeof vi.fn>;
     mounted: boolean;
     fakeEditor: FakeEditorShape;
   }
@@ -146,6 +155,11 @@ vi.mock("@monaco-editor/react", () => {
       cursorListener: null,
       selectionListener: null,
       focus: vi.fn(),
+      setSelection: vi.fn(),
+      revealRangeInCenterIfOutsideViewport: vi.fn(),
+      deltaDecorations: vi.fn((_oldDecorations: readonly string[], newDecorations: readonly unknown[]) =>
+        newDecorations.length > 0 ? ["reference-decoration"] : [],
+      ),
       mounted: false,
       fakeEditor: null as unknown as FakeEditorShape,
     };
@@ -186,6 +200,9 @@ vi.mock("@monaco-editor/react", () => {
       saveViewState: (): { scroll: number } => ({ scroll: 1 }),
       restoreViewState: vi.fn(),
       focus: s.focus,
+      setSelection: s.setSelection,
+      revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
+      deltaDecorations: s.deltaDecorations,
       getContainerDomNode: (): HTMLElement => s.container.current ?? document.createElement("div"),
     };
     captured.editor = {
@@ -209,6 +226,9 @@ vi.mock("@monaco-editor/react", () => {
       formatRuns: (): number => s.formatRunCount,
       saveKeybinding: (): number | undefined => s.saveKeybindings?.[0],
       focus: s.focus,
+      setSelection: s.setSelection,
+      revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
+      deltaDecorations: s.deltaDecorations,
       disposed: s.disposed,
     };
     return s;
@@ -481,6 +501,64 @@ describe("KeikoCodeEditor — lifecycle", () => {
     expect(editor?.disposed.action).toBe(true);
     expect(editor?.disposed.cursor).toBe(true);
     expect(editor?.disposed.selection).toBe(true);
+  });
+});
+
+describe("KeikoCodeEditor — reference reveal", () => {
+  it("focuses, selects, scrolls to, and decorates the requested reference range", async () => {
+    render(
+      <KeikoCodeEditor
+        {...baseProps({
+          revealRequest: {
+            id: "ref-1",
+            range: { start: { line: 49, column: 0 }, end: { line: 56, column: 0 } },
+          },
+        })}
+      />,
+    );
+    await flushMount();
+
+    const expectedRange = {
+      startLineNumber: 50,
+      startColumn: 1,
+      endLineNumber: 57,
+      endColumn: 1,
+    };
+    expect(captured.editor?.focus).toHaveBeenCalled();
+    expect(captured.editor?.setSelection).toHaveBeenCalledWith(expectedRange);
+    expect(captured.editor?.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(
+      expectedRange,
+    );
+    expect(captured.editor?.deltaDecorations).toHaveBeenCalledWith([], [
+      {
+        range: expectedRange,
+        options: { isWholeLine: true, className: "keiko-editor-reference-target" },
+      },
+    ]);
+  });
+
+  it("replays the same range when the host sends a new reveal request id", async () => {
+    const revealRequest = {
+      id: "ref-1",
+      range: { start: { line: 9, column: 0 }, end: { line: 9, column: 0 } },
+    };
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({ revealRequest })} />);
+    await flushMount();
+    const firstRevealCount = captured.editor?.setSelection.mock.calls.length ?? 0;
+
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({ revealRequest: { ...revealRequest, id: "ref-2" } })}
+      />,
+    );
+
+    expect(captured.editor?.setSelection).toHaveBeenCalledTimes(firstRevealCount + 1);
+    expect(captured.editor?.setSelection).toHaveBeenLastCalledWith({
+      startLineNumber: 10,
+      startColumn: 1,
+      endLineNumber: 10,
+      endColumn: 1,
+    });
   });
 });
 

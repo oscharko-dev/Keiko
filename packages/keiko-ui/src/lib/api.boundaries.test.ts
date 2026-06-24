@@ -17,10 +17,10 @@ import {
   fetchRunReport,
   fetchWorkflows,
   patchChatMessage,
+  runGatewayReadiness,
   sendDesktopChat,
   sendDesktopChatStream,
   setupGateway,
-  startChatRun,
   startRun,
   updateChat,
   updateChatConnectedScopes,
@@ -100,14 +100,8 @@ describe("API BFF boundary helpers", () => {
     await fetchConfig();
     await fetchWorkflows();
     await setupGateway({ baseUrl: "https://llm.example/v1", apiKey: "secret" });
+    await runGatewayReadiness("model-a", { includeDeepProbes: true });
     await startRun({ taskType: "verify", input: { target: "src/app.ts" }, modelId: "model-a" });
-    await startChatRun({
-      chatId: "chat-1",
-      projectPath: "/repo",
-      run: { taskType: "verify", input: {}, modelId: "model-a" },
-      user: { content: "run verify", timestamp: 1 },
-      summary: { content: "summary", timestamp: 2 },
-    });
     await cancelRun("run 1");
     await fetchRunReport("run 1");
     await applyRun("run 1");
@@ -157,6 +151,14 @@ describe("API BFF boundary helpers", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/gateway/readiness",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+        body: JSON.stringify({ modelId: "model-a", options: { includeDeepProbes: true } }),
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
