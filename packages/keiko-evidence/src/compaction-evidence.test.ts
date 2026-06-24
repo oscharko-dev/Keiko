@@ -81,6 +81,57 @@ function compactionRecord(): ContextCompactionRecord {
   };
 }
 
+function fullCompactionRecord(): ContextCompactionRecord {
+  const fullRef = {
+    kind: "repo-file" as const,
+    stableId: `stable-${SK_FAKE}`,
+    scopePath: ABS_PATH,
+    lineRange: { startLine: 7, endLine: 12 },
+    contentHash: `content-${SK_FAKE}`,
+    evidenceAtomId: `atom-${SK_FAKE}`,
+    notPersistedReason: `not persisted because ${SK_FAKE}`,
+  };
+  return {
+    ...compactionRecord(),
+    laneId: "repo-evidence",
+    rehydration: {
+      schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+      laneId: "repo-evidence",
+      handleId: `handle-${SK_FAKE}`,
+      itemCount: 2,
+      approxTokens: 144,
+      kind: "repo-file",
+      scopePath: ABS_PATH,
+      lineRange: { startLine: 7, endLine: 12 },
+      contentHash: `excerpt-${SK_FAKE}`,
+      evidenceAtomId: `rehydrate-atom-${SK_FAKE}`,
+      notPersistedReason: `artifact not persisted ${SK_FAKE}`,
+      approvedSummary: `approved ${BEARER_FAKE}`,
+    },
+    sourceSpans: [
+      fullRef,
+      { kind: "tool-result", stableId: `tool-${SK_FAKE}`, notPersistedReason: `dropped ${SK_FAKE}` },
+    ],
+    preservedFacts: [
+      {
+        statement: `full fact ${SK_FAKE}`,
+        sourceRef: fullRef,
+        inferred: true,
+        corroborating: [fullRef],
+      },
+      { statement: `inferred only ${SK_FAKE}`, inferred: false },
+    ],
+    userConstraints: [
+      { statement: `constraint ${SK_FAKE}`, sourceRef: fullRef },
+      { statement: `constraint without source ${SK_FAKE}` },
+    ],
+    openQuestions: [`question ${SK_FAKE}`],
+    filesChanged: [ABS_PATH],
+    failingTests: [`failed ${SK_FAKE}`],
+    droppedCategories: [`noise ${SK_FAKE}`],
+  };
+}
+
 function pack(): ConnectedContextPack {
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -148,6 +199,32 @@ function requireManifest(manifest: EvidenceManifest | undefined): EvidenceManife
     throw new Error("expected manifest");
   }
   return manifest;
+}
+
+function requireFirstCompaction(manifest: EvidenceManifest): ContextCompactionRecord {
+  const record = manifest.compaction?.[0];
+  if (record === undefined) {
+    throw new Error("expected compaction record");
+  }
+  return record;
+}
+
+function persistFullCompactionEvidence(): {
+  readonly store: ReturnType<typeof createInMemoryEvidenceStore>;
+  readonly manifest: EvidenceManifest;
+} {
+  const store = createInMemoryEvidenceStore();
+  persistCompactionEvidence(
+    {
+      runId: "compaction-run-full",
+      modelId: "example-model",
+      records: [fullCompactionRecord()],
+      startedAt: NOW,
+      finishedAt: NOW + 5,
+    },
+    { store, env: {}, additionalSecrets: [SK_FAKE, BEARER_FAKE, ABS_PATH] },
+  );
+  return { store, manifest: requireManifest(loadEvidence(store, "compaction-run-full")) };
 }
 
 function sha256Hex(value: string): string {
@@ -222,6 +299,28 @@ describe("compaction evidence (ADR-0056 W2)", () => {
     expect(manifest.context).toBeUndefined();
   });
 
+  it("redacts optional provenance and rehydration fields in serialized evidence", () => {
+    const { store, manifest } = persistFullCompactionEvidence();
+    const serialized = store.get("compaction-run-full") ?? "";
+    expect(serialized).not.toContain(SK_FAKE);
+    expect(serialized).not.toContain("fakeCompactionBearerToken");
+    expect(serialized).not.toContain(ABS_PATH);
+    const record = requireFirstCompaction(manifest);
+    const firstSpan = record.sourceSpans?.[0];
+    expect(firstSpan?.lineRange).toEqual({ startLine: 7, endLine: 12 });
+    expect(record.rehydration?.approvedSummary).toContain("[REDACTED]");
+  });
+
+  it("redacts optional constraints and string-array fields in loaded evidence", () => {
+    const { manifest } = persistFullCompactionEvidence();
+    const record = requireFirstCompaction(manifest);
+    expect(record.userConstraints).toHaveLength(2);
+    expect(record.openQuestions?.[0]).toContain("[REDACTED]");
+    expect(record.filesChanged?.[0]).toContain("[REDACTED]");
+    expect(record.failingTests?.[0]).toContain("[REDACTED]");
+    expect(record.droppedCategories?.[0]).toContain("[REDACTED]");
+  });
+
   it("retention prunes beyond maxRuns", () => {
     const store = createInMemoryEvidenceStore();
     const policy = { maxRuns: 2 } as const;
@@ -291,5 +390,44 @@ describe("connected-context evidence contextAssembly (ADR-0056 W2 Gate 3)", () =
     );
     const manifest = requireManifest(loadEvidence(store, "grounded-ca-2"));
     expect(manifest.contextAssembly).toBeUndefined();
+  });
+
+  it("persists contextAssembly with optional model, reason, and provenance fields omitted", () => {
+    const store = createInMemoryEvidenceStore();
+    persistConnectedContextEvidence(
+      {
+        runId: "grounded-ca-minimal",
+        modelId: "example-model",
+        workspaceRoot: "/repo",
+        pack: pack(),
+        contextAssembly: {
+          schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+          profile: { ...DEFAULT_CONTEXT_PROFILE, tokenEstimatorId: `plain-${SK_FAKE}` },
+          totalEstimatedTokens: 12,
+          budgetPressure: "low",
+          orderedForRecency: false,
+          lanes: [
+            {
+              laneId: "repo-evidence",
+              estimatedTokens: 12,
+              includedItems: 1,
+              excludedItems: 0,
+              budgetPressure: "low",
+            },
+          ],
+        },
+        citationCount: 0,
+        elapsedMs: 5,
+        startedAt: NOW,
+        finishedAt: NOW + 5,
+      },
+      { store, env: {}, additionalSecrets: [SK_FAKE] },
+    );
+    const manifest = requireManifest(loadEvidence(store, "grounded-ca-minimal"));
+    const assembly = manifest.contextAssembly;
+    expect(assembly?.profile.model).toBeUndefined();
+    expect(assembly?.lanes[0]?.compactionReason).toBeUndefined();
+    expect(assembly?.lanes[0]?.provenanceCounts).toBeUndefined();
+    expect(JSON.stringify(assembly)).not.toContain(SK_FAKE);
   });
 });

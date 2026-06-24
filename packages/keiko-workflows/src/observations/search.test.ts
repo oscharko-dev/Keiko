@@ -8,6 +8,7 @@ import type { EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-conte
 import type { SearchResult } from "@oscharko-dev/keiko-workspace";
 
 import { shapeSearchObservation } from "./search.js";
+import { boundExcerpt, buildToolRehydrationHandle } from "./shared.js";
 
 function atom(score: number, scopePath: string): EvidenceAtom {
   return {
@@ -15,6 +16,20 @@ function atom(score: number, scopePath: string): EvidenceAtom {
     stableId: `a-${scopePath}-${String(score)}`,
     scopePath,
     lineRange: { startLine: 1, endLine: 5 },
+    score,
+    provenance: { kind: "lexical-search", tool: "searchText", queryFingerprint: "fp" },
+    redactionState: "redacted",
+    emittedAtMs: 0,
+    ledgerRef: undefined,
+  };
+}
+
+function atomWithoutRange(score: number, scopePath: string): EvidenceAtom {
+  return {
+    schemaVersion: "1",
+    stableId: `a-${scopePath}-${String(score)}-no-range`,
+    scopePath,
+    lineRange: undefined,
     score,
     provenance: { kind: "lexical-search", tool: "searchText", queryFingerprint: "fp" },
     redactionState: "redacted",
@@ -96,6 +111,25 @@ describe("shapeSearchObservation", () => {
     expect(shaped.candidateCount).toBe(0);
     expect(shaped.topRanges).toHaveLength(0);
     expect(shaped.omittedCount).toBe(0);
+  });
+
+  it("uses deterministic defaults and zero line bounds when optional inputs are absent", () => {
+    const shaped = shapeSearchObservation(searchResult([atomWithoutRange(0.4, "no-range.ts")]));
+    expect(shaped.observationId).toHaveLength(64);
+    expect(shaped.query).toBe("");
+    expect(shaped.searchKind).toBe("text");
+    expect(shaped.topRanges[0]?.startLine).toBe(0);
+    expect(shaped.topRanges[0]?.endLine).toBe(0);
+  });
+
+  it("supports non-positive excerpt budgets and rehydration handles without a reason", () => {
+    expect(boundExcerpt("content", 0)).toBe("");
+    const handle = buildToolRehydrationHandle({
+      artifactSeed: "artifact",
+      itemCount: 1,
+      approxTokens: 2,
+    });
+    expect(Object.prototype.hasOwnProperty.call(handle, "notPersistedReason")).toBe(false);
   });
 
   it("produces an observation that passes validateContextToolObservation", () => {

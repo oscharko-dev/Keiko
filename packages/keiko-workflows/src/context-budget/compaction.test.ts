@@ -17,6 +17,14 @@ import {
 import { allocateContext, type ContextLaneInput } from "./allocator.js";
 import { DEFAULT_CONTEXT_BUDGET } from "./defaults.js";
 import { buildCompactionRecords, type CompactionDigest } from "./compaction.js";
+import {
+  buildInvalidationKeys,
+  buildRehydrationHandle,
+  buildSourceSpans,
+  itemsByIds,
+  laneItems,
+  projectDigest,
+} from "./compaction-helpers.js";
 
 function bulk(unit: string, repeats: number): string {
   return unit.repeat(repeats);
@@ -237,6 +245,89 @@ describe("buildCompactionRecords — redaction + anti-poisoning", () => {
     });
     expect(records[0]?.assumptions).toHaveLength(1);
     expect(records[0]?.preservedFacts ?? []).toHaveLength(0);
+  });
+
+  it("redacts optional digest structures while preserving path-list members verbatim", () => {
+    const ref: ContextProvenanceRef = {
+      kind: "tool-result",
+      stableId: "tool-1",
+      notPersistedReason: `captured ${secret}`,
+    };
+    const projection = projectDigest({
+      preservedFacts: [
+        {
+          statement: `fact ${secret}`,
+          sourceRef: ref,
+          corroborating: [ref],
+        },
+      ],
+      userConstraints: [{ statement: `constraint ${secret}`, sourceRef: ref }],
+      commandOutcomes: [{ command: `echo ${secret}`, exitCode: 1, summary: `failed ${secret}` }],
+      openQuestions: [`question ${secret}`],
+      filesChanged: ["src/changed.ts"],
+      failingTests: [`test ${secret}`],
+      droppedCategories: ["verbose output"],
+    });
+    const serialized = JSON.stringify(projection);
+    expect(serialized).not.toContain(secret);
+    expect(projection.filesChanged).toEqual(["src/changed.ts"]);
+    expect(projection.droppedCategories).toEqual(["verbose output"]);
+    expect(projection.preservedFacts?.[0]?.sourceRef?.notPersistedReason).toContain("[REDACTED]");
+    expect(projection.commandOutcomes?.[0]?.summary).toContain("[REDACTED]");
+  });
+});
+
+describe("compaction helper edge cases", () => {
+  it("returns empty lane/items results for unknown ids", () => {
+    const lanes: readonly ContextLaneInput[] = [
+      { laneId: "repo-evidence", items: [{ id: "known", text: "a", score: 1 }] },
+    ];
+    expect(laneItems(lanes, "tool-observations")).toEqual([]);
+    expect(itemsByIds(lanes[0]?.items ?? [], ["missing"])).toEqual([]);
+  });
+
+  it("skips missing provenance, non-file spans, duplicate paths, and missing file hashes", () => {
+    const excluded = [
+      { id: "missing", text: "missing", score: 1 },
+      { id: "tool", text: "tool output", score: 1 },
+      { id: "repo-a", text: "alpha", score: 1 },
+      { id: "repo-dup", text: "beta", score: 1 },
+      { id: "repo-no-hash", text: "gamma", score: 1 },
+    ];
+    const spans = buildSourceSpans(
+      excluded,
+      new Map<string, ContextProvenanceRef>([
+        ["tool", { kind: "tool-result", stableId: "tool-1" }],
+        ["repo-a", repoRef("repo-a", "src/a.ts", 1, 2)],
+        ["repo-dup", repoRef("repo-dup", "src/a.ts", 3, 4)],
+        ["repo-no-hash", repoRef("repo-no-hash", "src/no-hash.ts", 5, 6)],
+      ]),
+    );
+    expect(spans).toHaveLength(4);
+    expect(spans.find((span) => span.kind === "tool-result")?.contentHash).toBeUndefined();
+    expect(spans.find((span) => span.stableId === "repo-a")?.contentHash).toBeDefined();
+    expect(buildInvalidationKeys(spans, new Map([["src/a.ts", "file-hash"]]))).toEqual([
+      { scopePath: "src/a.ts", contentHash: "file-hash" },
+    ]);
+  });
+
+  it("omits direct repo-file fields from rehydration handles when multiple repo files were evicted", () => {
+    const handle = buildRehydrationHandle({
+      laneId: "repo-evidence",
+      excludedIds: ["b", "a"],
+      spans: [repoRef("repo-a", "src/a.ts", 1, 2), repoRef("repo-b", "src/b.ts", 3, 4)],
+      approxTokens: 22,
+    });
+    const sameIdsDifferentOrder = buildRehydrationHandle({
+      laneId: "repo-evidence",
+      excludedIds: ["a", "b"],
+      spans: [repoRef("repo-a", "src/a.ts", 1, 2), repoRef("repo-b", "src/b.ts", 3, 4)],
+      approxTokens: 22,
+    });
+    expect(handle.handleId).toBe(sameIdsDifferentOrder.handleId);
+    expect(handle.scopePath).toBeUndefined();
+    expect(handle.lineRange).toBeUndefined();
+    expect(handle.contentHash).toBeUndefined();
   });
 });
 
