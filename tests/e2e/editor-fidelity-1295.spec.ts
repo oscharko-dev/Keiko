@@ -653,7 +653,8 @@ async function assertMonacoHoverCopyAffordance(
   ).toBe("1");
   expect(restingStyles.borderStyle).not.toBe("none");
   expect(restingStyles.borderRadius).not.toBe("0px");
-  expect(restingStyles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(restingStyles.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  expect(restingStyles.boxShadow).toBe("none");
   expect(restingStyles.iconColor).toBe(restingStyles.color);
 
   await copyButton.hover({ force: true });
@@ -668,8 +669,9 @@ async function assertMonacoHoverCopyAffordance(
   });
   expect(
     hoverStyles.boxShadow,
-    `Copy button hover should expose Keiko feedback in ${viewportCase.name}`,
+    `Copy button hover should expose neutral Keiko feedback in ${viewportCase.name}`,
   ).not.toBe("none");
+  expect(hoverStyles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
 
   const copyTooltip = page.locator(".monaco-hover.workbench-hover").filter({ hasText: /^Copy$/u });
   await expect(copyTooltip.last()).toBeVisible();

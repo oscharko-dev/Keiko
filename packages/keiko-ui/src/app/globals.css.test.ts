@@ -1551,10 +1551,12 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
 
   it("skins Monaco copy affordances and nested copy tooltips with Keiko feedback states", () => {
     const copyButtonBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .hover-copy-button {");
-    expect(copyButtonBlock).toContain("border: 1px solid var(--border-subtle)");
+    expect(copyButtonBlock).toContain("border: 1px solid transparent");
     expect(copyButtonBlock).toContain("border-radius: var(--radius-control)");
+    expect(copyButtonBlock).toContain("background: transparent");
     expect(copyButtonBlock).toContain("color: var(--text-secondary)");
     expect(copyButtonBlock).toContain("opacity: 1");
+    expect(copyButtonBlock).toContain("box-shadow: none");
 
     const copyIconBlock = cssBlock(
       ".ed-host .monaco-editor .monaco-hover .hover-copy-button.codicon,",
@@ -1564,14 +1566,24 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
     const copyHoverBlock = cssBlock(
       ".ed-host .monaco-editor .monaco-hover .hover-copy-button:hover {",
     );
-    expect(copyHoverBlock).toContain("border-color: var(--border-accent)");
-    expect(copyHoverBlock).toContain("color: var(--text-accent)");
-    expect(copyHoverBlock).toContain("box-shadow:");
+    expect(copyHoverBlock).toContain(
+      "background: color-mix(in oklch, var(--text-primary) 10%, transparent) !important",
+    );
+    expect(copyHoverBlock).toContain("border-color: transparent");
+    expect(copyHoverBlock).toContain("color: var(--text-primary)");
+    expect(copyHoverBlock).toContain(
+      "box-shadow: 0 8px 18px -14px rgb(var(--shadow-ink-rgb) / 0.85)",
+    );
+    expect(copyHoverBlock).not.toContain("var(--border-accent)");
+    expect(copyHoverBlock).not.toContain("var(--text-accent)");
 
     const copyActiveBlock = cssBlock(
       ".ed-host .monaco-editor .monaco-hover .hover-copy-button:active {",
     );
     expect(copyActiveBlock).toContain("transform: translateY(1px) scale(0.98)");
+    expect(copyActiveBlock).toContain(
+      "background: var(--button-secondary-surface-hover) !important",
+    );
 
     const workbenchHoverBlock = cssBlock(".monaco-hover.workbench-hover {");
     expect(workbenchHoverBlock).toContain("max-width: min(220px, calc(100vw - 24px))");

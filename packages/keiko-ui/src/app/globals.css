@@ -7083,9 +7083,9 @@ select.dlg-input {
   width: 28px;
   height: 28px;
   padding: 4px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid transparent;
   border-radius: var(--radius-control);
-  background: var(--surface-secondary);
+  background: transparent;
   color: var(--text-secondary);
   opacity: 1;
   box-shadow: none;
@@ -7095,14 +7095,14 @@ select.dlg-input {
   color: currentColor !important;
 }
 .ed-host .monaco-editor .monaco-hover .hover-copy-button:hover {
-  background: var(--button-secondary-surface-hover) !important;
-  border-color: var(--border-accent);
-  color: var(--text-accent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--border-accent) 42%, transparent);
+  background: color-mix(in oklch, var(--text-primary) 10%, transparent) !important;
+  border-color: transparent;
+  color: var(--text-primary);
+  box-shadow: 0 8px 18px -14px rgb(var(--shadow-ink-rgb) / 0.85);
 }
 .ed-host .monaco-editor .monaco-hover .hover-copy-button:active {
   transform: translateY(1px) scale(0.98);
-  background: var(--surface-accent-subtle) !important;
+  background: var(--button-secondary-surface-hover) !important;
 }
 .ed-host .monaco-editor .monaco-hover .hover-copy-button:focus {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
