@@ -97,7 +97,7 @@ Keiko should use a workspace manager for internal development. The architecture 
 Regardless of workspace manager, the published customer path remains:
 
 ```text
-npm install @oscharko-dev/keiko
+npm install -D @oscharko-dev/keiko
 npx keiko init
 npm run keiko:start
 ```

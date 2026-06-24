@@ -28,10 +28,49 @@ const ENTRYPOINT_BASENAMES: ReadonlySet<string> = new Set([
   "cli.js",
 ]);
 
+// Primary build/dependency manifests across ecosystems. Kept deliberately NARROW (no JS/TS tool
+// configs such as eslint.config.js — those remain "config" in this taxonomy, see the config test)
+// and therefore distinct from repoSearchPolicy's broader "canonical-metadata" bucket. This lexical
+// strategy feeds the secondary context-pack assemblers (bug-investigation, unit-test generation,
+// CLI, QI ingestion); the grounded chat path is governed by repoSearchPolicy + the orchestrator.
 const MANIFEST_BASENAMES: ReadonlySet<string> = new Set([
   "package.json",
   "tsconfig.json",
   "tsconfig.build.json",
+  // Java / Kotlin / Scala / Groovy
+  "pom.xml",
+  "build.gradle",
+  "build.gradle.kts",
+  "settings.gradle",
+  "settings.gradle.kts",
+  "build.sbt",
+  // Go
+  "go.mod",
+  "go.work",
+  // Rust
+  "Cargo.toml",
+  "rust-toolchain.toml",
+  // Python
+  "pyproject.toml",
+  "setup.py",
+  "setup.cfg",
+  "requirements.txt",
+  "Pipfile",
+  // .NET
+  "global.json",
+  // C/C++
+  "CMakeLists.txt",
+  "Makefile",
+  "conanfile.txt",
+  "vcpkg.json",
+  "meson.build",
+  // Swift / Ruby / PHP
+  "Package.swift",
+  "Gemfile",
+  "composer.json",
+  // Deno / Bun
+  "deno.json",
+  "bunfig.toml",
 ]);
 
 const DOC_EXTENSIONS: ReadonlySet<string> = new Set([".md", ".mdx", ".rst", ".txt"]);

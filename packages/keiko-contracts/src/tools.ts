@@ -5,6 +5,7 @@
 // exactOptionalPropertyTypes is on. Imports end `.js`, double quotes, `type` keyword.
 
 import type { ToolDefinition } from "./gateway.js";
+import type { ContextToolObservation } from "./context-observations.js";
 
 // ─── Sandbox policy (the 5 documented, inspectable dimensions) ───────────────────
 
@@ -212,6 +213,12 @@ export interface CommandResult {
   // Present when the command requested `network: "none"`: how (and whether) egress was enforced for
   // this run (ADR-0043). Absent for inherited-network runs, so existing callers are unaffected.
   readonly attestation?: SandboxAttestation | undefined;
+  // Bytes the child attempted to write above policy.maxOutputBytes; absent when not truncated
+  // (ADR-0054 PR3-W1, additive). Captured in exec.ts buildResult() from
+  // buffers.attempted - policy.maxOutputBytes. Advisory: undercounts if the child was killed before
+  // all over-cap bytes arrived. summarizeCommand does NOT serialize this, so the model-facing JSON
+  // is byte-identical; existing callers that do not read it are unaffected.
+  readonly omittedByteCount?: number | undefined;
 }
 
 // ─── Patch workflow ──────────────────────────────────────────────────────────────
@@ -338,6 +345,9 @@ export type ToolCallMetadata =
       readonly argCount: number;
       readonly exitCode: number | null;
       readonly timedOut: boolean;
+      // Content-free truncation diagnostic for internal shaped observations. This is never
+      // serialized into the model-facing run_command output.
+      readonly omittedByteCount?: number | undefined;
       readonly sandbox: {
         readonly envAllowlist: readonly string[];
         readonly network: "inherit" | "none";
@@ -370,6 +380,11 @@ export interface ToolCallResult {
   // S-M1: when present, the executor emits the matching redacted audit event in addition to
   // tool:call:completed. Absent for read-only tools.
   readonly metadata?: ToolCallMetadata | undefined;
+  // Shaped observation produced by keiko-workflows shapers (ADR-0054 PR3-W1, additive). Absent on
+  // legacy callers and on non-shapeable tool types (read_file, list_files,
+  // inspect_package_scripts, propose_patch). An additive parallel projection alongside `output`;
+  // the model-facing `output` string is unchanged in PR3.
+  readonly shapedObservation?: ContextToolObservation | undefined;
 }
 
 export interface ToolPort {

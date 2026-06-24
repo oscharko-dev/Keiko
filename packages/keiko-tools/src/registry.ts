@@ -233,6 +233,9 @@ export class WorkspaceToolHost implements ToolPort {
         argCount: cmdArgs.length,
         exitCode: result.exitCode,
         timedOut: result.timedOut,
+        ...(result.omittedByteCount === undefined
+          ? {}
+          : { omittedByteCount: result.omittedByteCount }),
         sandbox: {
           envAllowlist: this.config.sandbox.envAllowlist,
           network: this.config.sandbox.network,

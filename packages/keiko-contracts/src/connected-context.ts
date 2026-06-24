@@ -6,6 +6,9 @@
 // rather than mutating "1". Leaf-package rule (ADR-0019 direction 1) means no
 // `@oscharko-dev/keiko-*` imports may appear in this module.
 
+import type { ContextBudget } from "./context-engineering.js";
+import { validateContextBudget } from "./context-engineering-validation.js";
+
 // ─── Schema version ───────────────────────────────────────────────────────────
 export const CONNECTED_CONTEXT_SCHEMA_VERSION = "1" as const;
 
@@ -274,6 +277,35 @@ export interface ConnectedContextPack {
   readonly uncertainty: readonly UncertaintyMarker[];
   readonly emittedAtMs: number;
   readonly ledgerRef: EvidenceLedgerRef | undefined;
+  // Optional, additive explainable-ranking diagnostics (enterprise retrieval M2). Carries the
+  // per-file candidate-ranking rationale (bucket / ecosystem / signal breakdown) so reviewers can
+  // see WHY each file was selected. Absent on legacy packs; never affects the pack stableId (the
+  // fingerprint hashes only scope/query/atomStableIds). `bucket`/`ecosystem` are opaque strings
+  // here — contracts does not depend on the workspace registry that produces them.
+  readonly diagnostics?: ContextPackDiagnostics | undefined;
+}
+
+// ─── Explainable ranking diagnostics (enterprise retrieval M2) ──────────────────
+// Upper bound on how many ranked candidates carry an explainability breakdown (mirrors the
+// workspace-layer cap in repoSearchPolicy.MAX_RANKED_CANDIDATE_DIAGNOSTICS).
+export const MAX_RANKED_CANDIDATE_DIAGNOSTICS = 25;
+
+export interface RankedCandidateExplanation {
+  readonly scopePath: string;
+  // Candidate bucket name (e.g. "canonical-metadata"); opaque string at the contract layer.
+  readonly bucket: string;
+  // Composite ranking score; may be negative (bucket weight + path-term bonus − depth penalty).
+  readonly score: number;
+  // Ecosystem id that classified a manifest (e.g. "maven"), or undefined for non-manifests.
+  readonly ecosystem?: string | undefined;
+  readonly signals: readonly CandidateSignal[];
+}
+
+export interface ContextPackDiagnostics {
+  readonly rankedCandidates: readonly RankedCandidateExplanation[];
+  // Optional, additive deterministic context-budget plan (ADR-0052). Absent on legacy packs;
+  // when present it is validated by validateContextBudget. Never affects the pack stableId.
+  readonly contextBudget?: ContextBudget | undefined;
 }
 
 // ─── Pack summary ─────────────────────────────────────────────────────────────
@@ -1055,5 +1087,70 @@ export function validateConnectedContextPack(pack: ConnectedContextPack): Valida
   if (pack.ledgerRef !== undefined) {
     validateLedgerRef(pack.ledgerRef, reasons, "pack");
   }
+  // Additive, guarded: legacy packs without diagnostics validate exactly as before.
+  if (pack.diagnostics !== undefined) {
+    validatePackDiagnostics(pack.diagnostics, reasons);
+  }
   return buildResult(reasons);
+}
+
+function isCandidateSignal(value: unknown): value is CandidateSignal {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    value.name.length > 0 &&
+    typeof value.value === "number" &&
+    Number.isFinite(value.value)
+  );
+}
+
+function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: string[]): void {
+  if (!isRecord(diagnostics) || !Array.isArray(diagnostics.rankedCandidates)) {
+    reasons.push("pack.diagnostics.rankedCandidates invalid");
+    return;
+  }
+  const ranked = diagnostics.rankedCandidates;
+  pushIf(
+    reasons,
+    ranked.length > MAX_RANKED_CANDIDATE_DIAGNOSTICS,
+    `pack.diagnostics.rankedCandidates exceeds ${String(MAX_RANKED_CANDIDATE_DIAGNOSTICS)}`,
+  );
+  for (const entry of ranked) {
+    if (!isRecord(entry)) {
+      reasons.push("pack.diagnostics.rankedCandidates entry invalid");
+      continue;
+    }
+    pushIf(reasons, !isNonEmptyTrimmed(entry.scopePath), "rankedCandidate.scopePath empty");
+    pushIf(reasons, !isNonEmptyTrimmed(entry.bucket), "rankedCandidate.bucket empty");
+    pushIf(
+      reasons,
+      typeof entry.score !== "number" || !Number.isFinite(entry.score),
+      "rankedCandidate.score invalid",
+    );
+    pushIf(
+      reasons,
+      entry.ecosystem !== undefined && !isNonEmptyTrimmed(entry.ecosystem),
+      "rankedCandidate.ecosystem invalid",
+    );
+    pushIf(
+      reasons,
+      !Array.isArray(entry.signals) || !entry.signals.every(isCandidateSignal),
+      "rankedCandidate.signals invalid",
+    );
+  }
+  // Additive, guarded: legacy diagnostics without contextBudget validate exactly as before.
+  validateDiagnosticsContextBudget(diagnostics.contextBudget, reasons);
+}
+
+function validateDiagnosticsContextBudget(contextBudget: unknown, reasons: string[]): void {
+  if (contextBudget === undefined) {
+    return;
+  }
+  const budgetResult = validateContextBudget(contextBudget);
+  if (budgetResult.ok) {
+    return;
+  }
+  for (const reason of budgetResult.reasons) {
+    reasons.push(`pack.diagnostics.contextBudget: ${reason}`);
+  }
 }

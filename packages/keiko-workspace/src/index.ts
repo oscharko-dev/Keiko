@@ -92,15 +92,43 @@ export type {
 export { DEFAULT_SEARCH_LIMITS, searchText, findFiles, readExcerpt } from "./repoSearch.js";
 export type {
   CandidateBucket,
+  RankedCandidateDiagnostic,
   SearchDiagnostics,
   SearchHints,
   SearchIntent,
   SearchPolicy,
   SearchPolicyMode,
 } from "./repoSearchPolicy.js";
+
+// ─── Language / build-system ecosystem registry (enterprise retrieval, Milestone 1) ──
+export {
+  allRegisteredFilePatterns,
+  canonicalMetadataEcosystem,
+  CANONICAL_MANIFEST_BASENAMES,
+  ECOSYSTEMS,
+  ecosystemMetadataIntentPatterns,
+  ecosystemTechnicalPhrases,
+  isCanonicalMetadataFile,
+  isEcosystemLockfile,
+  isEcosystemSourceFile,
+  isGeneratedArtifactPath,
+} from "./ecosystems.js";
+export type {
+  Ecosystem,
+  EcosystemId,
+  EcosystemPattern,
+  EcosystemPhrase,
+  EcosystemVersionDeclaration,
+} from "./ecosystems.js";
 export { looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
 export type { BinaryProbeOptions } from "./binaryDetect.js";
-export { evidenceAtomStableId, connectedContextPackStableId } from "./stableId.js";
+export {
+  evidenceAtomStableId,
+  connectedContextPackStableId,
+  fileContentHash,
+  hashExcerptContent,
+  MAX_HASH_FILE_BYTES,
+} from "./stableId.js";
 
 // ─── Structural adapters (Issue #180 / Epic #177) ──────────────────────────
 export type {

@@ -201,6 +201,49 @@ describe("GatewaySetupDialog", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/verified 1 workflow chat model/i);
   });
 
+  it("submits an optional gateway request timeout", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(screen.getByLabelText(/request timeout.*optional/i), "120000");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith({
+      baseUrl: "https://llm-gateway.example.com/v1",
+      apiKey: "example-token",
+      apiKeyHeaderName: undefined,
+      timeoutMs: 120_000,
+      deploymentNames: [],
+      preserveExisting: false,
+    });
+  });
+
+  it("rejects a non-integer gateway request timeout before submit", async () => {
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(screen.getByLabelText(/request timeout.*optional/i), "12.5");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /request timeout must be a positive integer/i,
+    );
+  });
+
   it("announces deployments that could not be verified during setup", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,

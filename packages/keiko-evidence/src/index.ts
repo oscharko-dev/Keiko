@@ -30,6 +30,12 @@ export {
   type ConnectedContextEvidencePersistResult,
 } from "./connected-context-evidence.js";
 export {
+  persistCompactionEvidence,
+  type CompactionEvidenceContext,
+  type CompactionEvidenceInput,
+  type CompactionEvidencePersistResult,
+} from "./compaction-evidence.js";
+export {
   createInMemoryEvidenceStore,
   createNodeEvidenceStore,
   DEFAULT_EVIDENCE_DIR,

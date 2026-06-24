@@ -11,6 +11,7 @@ import { Emitter } from "./emitter.js";
 import { MemoryEventSink } from "./sinks.js";
 import { newCounters, type RunContext } from "./context.js";
 import type { ModelPort, ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
+import type { HarnessShaperPort } from "./shaper-port.js";
 import { resolveTaskPlan } from "./tasks/policy.js";
 import { DEFAULT_LIMITS, type HarnessLimits, type TaskInput } from "./types.js";
 
@@ -121,6 +122,7 @@ export interface CtxOptions {
   readonly signal?: AbortSignal | undefined;
   readonly limits?: Partial<HarnessLimits> | undefined;
   readonly sink?: MemoryEventSink | undefined;
+  readonly shaperPort?: HarnessShaperPort | undefined;
 }
 
 export function buildContext(options: CtxOptions): { ctx: RunContext; sink: MemoryEventSink } {
@@ -141,6 +143,8 @@ export function buildContext(options: CtxOptions): { ctx: RunContext; sink: Memo
     plan,
     startedAt: clock.now(),
     counters: newCounters(),
+    ...(options.shaperPort === undefined ? {} : { shaperPort: options.shaperPort }),
+    shapedObservations: [],
     messages: [...plan.messages],
     lastResponse: undefined,
     patchDiff: undefined,

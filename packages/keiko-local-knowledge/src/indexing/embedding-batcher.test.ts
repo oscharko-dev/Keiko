@@ -232,6 +232,42 @@ describe("embedChunkBatch — identity gate", () => {
     expect(result.errors.some((e) => e.code === "INCOMPATIBLE_EMBEDDING_IDENTITY")).toBe(true);
     expect(countVectorsForCapsule(fixture.store._internal.db, fixture.seeded.capsuleId)).toBe(0);
   });
+
+  it("accepts a LiteLLM upstream response model only when it matches the pinned revision", async () => {
+    const litellmPinned: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      modelId: "Qwen3-Embedding-8B",
+      modelRevision: "RedHatAI/Qwen3-Embedding-8B",
+    };
+    const adapter = scriptedAdapter({
+      responder: (req) => ({
+        ok: true,
+        value: {
+          vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+          modelId: "RedHatAI/Qwen3-Embedding-8B",
+        },
+      }),
+    });
+
+    const result = await embedChunkBatch(fixture.chunks, {
+      adapter,
+      store: fixture.store,
+      pinnedIdentity: litellmPinned,
+      concurrency: 4,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.vectors).toHaveLength(fixture.chunks.length);
+    expect(result.vectors[0]?.embeddingIdentity).toMatchObject({
+      modelId: "Qwen3-Embedding-8B",
+      modelRevision: "RedHatAI/Qwen3-Embedding-8B",
+    });
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.seeded.capsuleId)).toBe(
+      fixture.chunks.length,
+    );
+  });
 });
 
 describe("embedChunkBatch — adapter failure", () => {

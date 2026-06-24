@@ -2,6 +2,7 @@
 // This module is intentionally pure: no IO, no clock, no model calls.
 
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
+import { ecosystemMetadataIntentPatterns } from "@oscharko-dev/keiko-workspace";
 
 export type RetrievalIntent =
   | "project-metadata"
@@ -98,6 +99,11 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
   { term: "nextjs", pattern: /\bnext(?:\.js)?\b/iu },
   { term: "react", pattern: /\breact\b/iu },
   { term: "eslint", pattern: /\beslint\b/iu },
+  // Polyglot ecosystem routing is sourced from the shared registry so questions like "Which Java
+  // version does this project use?" classify as project-metadata instead of generic code search.
+  // The established JS/TS terms above stay in place for compatibility; registry duplicates are
+  // harmless because matched terms are de-duplicated before classification.
+  ...ecosystemMetadataIntentPatterns,
 ];
 
 const REPOSITORY_OVERVIEW_PATTERNS: readonly IntentPattern[] = [

@@ -4,12 +4,17 @@ This guide covers the local Keiko UI used by end users.
 
 ## Start and Stop
 
-After installing Keiko in a project, run:
+After installing Keiko in a project, run the project-local binary:
 
 ```bash
+npm install -D @oscharko-dev/keiko
 npx keiko init
 npm run keiko:start
 ```
+
+`npx keiko init` is valid only after `@oscharko-dev/keiko` has been installed
+in the project. The npm package name is scoped; `keiko` is the binary exposed by
+that package.
 
 Prefer the local `npm run keiko:start` script or a package-manager equivalent in IDE run
 configurations. Do not point WebStorm or Windows terminal shortcuts at a bare global `keiko`

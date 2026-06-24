@@ -26,7 +26,12 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
-import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
+import type {
+  GatewayDiscoveredModels,
+  GatewayModelDiscoveryOutput,
+  RuntimeGatewayConfig,
+  UiHandlerDeps,
+} from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import {
@@ -51,6 +56,8 @@ const SETUP_SMOKE_CONCURRENCY = 4;
 const CHAT_COMPATIBLE_MODES = new Set(["chat", "completion", "responses"]);
 const EMBEDDING_ID_PATTERN =
   /(?:^|[-_/. ])(?:text-)?embed(?:ding)?s?(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
+const IMAGE_INPUT_ID_PATTERN =
+  /(?:^|[-_/. ])(?:vision|multimodal|multi-modal|llava|pixtral|omni|gpt-4o)(?:$|[-_/. ])|(?:^|[-_/. ])vl(?:$|[-_/. ])|qwen(?:2(?:\.5)?|3)?[-_/. ]?vl(?:$|[-_/. ])/i;
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
@@ -179,6 +186,72 @@ function isLikelyEmbeddingModelId(modelId: string): boolean {
   return EMBEDDING_ID_PATTERN.test(modelId);
 }
 
+function isLikelyImageInputModelId(modelId: string): boolean {
+  return IMAGE_INPUT_ID_PATTERN.test(modelId);
+}
+
+function discoveryRecords(item: Record<string, unknown>): readonly Record<string, unknown>[] {
+  return [
+    item,
+    nestedRecord(item, "model_info"),
+    nestedRecord(item, "litellm_params"),
+    nestedRecord(item, "capabilities"),
+  ].filter((record): record is Record<string, unknown> => record !== undefined);
+}
+
+function booleanFieldFromRecords(
+  records: readonly Record<string, unknown>[],
+  fields: readonly string[],
+): boolean {
+  return records.some((record) => fields.some((field) => record[field] === true));
+}
+
+function stringsFromValue(value: unknown): readonly string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string");
+  }
+  return [];
+}
+
+function stringListFieldFromRecords(
+  records: readonly Record<string, unknown>[],
+  fields: readonly string[],
+): readonly string[] {
+  return records.flatMap((record) =>
+    fields.flatMap((field) => stringsFromValue(record[field]).map((value) => value.toLowerCase())),
+  );
+}
+
+function supportsImageInputFromDiscoveryItem(
+  item: Record<string, unknown>,
+  modelId: string,
+): boolean {
+  const records = discoveryRecords(item);
+  if (
+    booleanFieldFromRecords(records, [
+      "supports_vision",
+      "supportsVision",
+      "vision",
+      "image_input",
+      "imageInput",
+      "supports_image_input",
+      "supportsImageInput",
+    ])
+  ) {
+    return true;
+  }
+  const modalities = stringListFieldFromRecords(records, [
+    "input_modalities",
+    "inputModalities",
+    "modalities",
+  ]);
+  if (modalities.some((entry) => entry === "image" || entry === "vision")) {
+    return true;
+  }
+  return isLikelyImageInputModelId(modelId);
+}
+
 function createDefaultEmbeddingCapabilityForSetup(modelId: string): ModelCapability {
   return {
     id: modelId,
@@ -203,12 +276,12 @@ function createDefaultEmbeddingCapabilityForSetup(modelId: string): ModelCapabil
 
 function mergeChatAndEmbeddingModelIds(
   chatModelIds: readonly string[],
-  deploymentNames: readonly string[],
+  embeddingModelIds: readonly string[],
 ): readonly string[] {
   const merged = [...chatModelIds];
   const seen = new Set(merged);
-  for (const modelId of deploymentNames) {
-    if (!isLikelyEmbeddingModelId(modelId) || seen.has(modelId)) {
+  for (const modelId of embeddingModelIds) {
+    if (seen.has(modelId)) {
       continue;
     }
     seen.add(modelId);
@@ -244,6 +317,7 @@ function currentImageInputModelIds(config: GatewayConfig | undefined): readonly 
 function rawConfigFromCurrent(
   config: GatewayConfig,
   figmaAccessToken: string | undefined,
+  timeoutMs?: number,
 ): Record<string, unknown> {
   return {
     providers: config.providers.map((provider) => {
@@ -253,7 +327,7 @@ function rawConfigFromCurrent(
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-        timeoutMs: provider.timeoutMs,
+        timeoutMs: timeoutMs ?? provider.timeoutMs,
         maxRetries: provider.maxRetries,
         retryBaseDelayMs: provider.retryBaseDelayMs,
         ...(capability === undefined ? {} : { capability }),
@@ -336,6 +410,10 @@ function modelModeFromDiscoveryItem(item: Record<string, unknown>): string | und
   return undefined;
 }
 
+function isExplicitlyEmbeddingModel(item: Record<string, unknown>): boolean {
+  return modelModeFromDiscoveryItem(item) === "embedding";
+}
+
 // Issue #144: exported as part of the discovery-normalization seam so a
 // sibling test file can drive it with synthetic payloads. Behaviour unchanged
 // — only the visibility is widened.
@@ -348,36 +426,78 @@ export function isExplicitlyNonChatModel(item: Record<string, unknown>): boolean
   return mode !== undefined && !CHAT_COMPATIBLE_MODES.has(mode);
 }
 
-// Issue #144: exported as part of the discovery-normalization seam. Behaviour
-// unchanged. Returns undefined for unknown/non-record/non-chat/malformed input
-// so callers can drop the entry silently and keep healthy peers.
-export function modelIdFromDiscoveryItem(item: unknown): string | undefined {
-  if (!isRecord(item) || isExplicitlyNonChatModel(item)) {
-    return undefined;
-  }
-  return modelIdFromKnownFields(item);
+type DiscoveryModelKind = "chat" | "embedding";
+
+interface ClassifiedDiscoveryModel {
+  readonly id: string;
+  readonly kind: DiscoveryModelKind;
+  readonly supportsImageInput: boolean;
 }
 
-// Issue #144: exported as part of the discovery-normalization seam. Behaviour
-// unchanged. Throws on schema-level malformation (no data array) and on the
-// "every entry filtered" terminal case so the caller (production path) returns
-// an honest error rather than a silently-empty model list.
-export function parseModelList(payload: unknown): readonly string[] {
+function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefined {
+  if (!isRecord(item)) {
+    return undefined;
+  }
+  const id = modelIdFromKnownFields(item);
+  if (id === undefined) {
+    return undefined;
+  }
+  if (isExplicitlyEmbeddingModel(item)) {
+    return { id, kind: "embedding", supportsImageInput: false };
+  }
+  if (isExplicitlyNonChatModel(item)) {
+    return isLikelyEmbeddingModelId(id)
+      ? { id, kind: "embedding", supportsImageInput: false }
+      : undefined;
+  }
+  return isLikelyEmbeddingModelId(id)
+    ? { id, kind: "embedding", supportsImageInput: false }
+    : { id, kind: "chat", supportsImageInput: supportsImageInputFromDiscoveryItem(item, id) };
+}
+
+// Issue #144: exported as part of the discovery-normalization seam. Gateway setup now returns
+// embedding-capable records so setup can persist them for Local Knowledge while keeping them out of
+// chat.
+// Returns undefined for unknown/non-record/unsupported/malformed input so
+// callers can drop the entry silently and keep healthy peers.
+export function modelIdFromDiscoveryItem(item: unknown): string | undefined {
+  return classifyDiscoveryItem(item)?.id;
+}
+
+// Issue #144: exported as part of the discovery-normalization seam. Throws on schema-level
+// malformation (no data array) and on the "every entry filtered" terminal case so the caller
+// (production path) returns an honest error rather than a silently-empty model list.
+export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error("model discovery response must contain a data array");
   }
-  const ids: string[] = [];
+  const entries: ClassifiedDiscoveryModel[] = [];
+  const seen = new Set<string>();
   for (const item of payload.data) {
-    const id = modelIdFromDiscoveryItem(item);
-    if (id !== undefined) {
-      ids.push(id);
+    const classified = classifyDiscoveryItem(item);
+    if (classified !== undefined && !seen.has(classified.id)) {
+      seen.add(classified.id);
+      entries.push(classified);
     }
   }
-  const unique = Array.from(new Set(ids));
-  if (unique.length === 0) {
+  const limited = entries.slice(0, MAX_DISCOVERED_MODELS);
+  if (limited.length === 0) {
     throw new Error("model discovery returned no model ids");
   }
-  return unique.slice(0, MAX_DISCOVERED_MODELS);
+  return {
+    modelIds: limited.map((entry) => entry.id),
+    chatModelIds: limited.filter((entry) => entry.kind === "chat").map((entry) => entry.id),
+    embeddingModelIds: limited
+      .filter((entry) => entry.kind === "embedding")
+      .map((entry) => entry.id),
+    imageInputModelIds: limited
+      .filter((entry) => entry.kind === "chat" && entry.supportsImageInput)
+      .map((entry) => entry.id),
+  };
+}
+
+export function parseModelList(payload: unknown): readonly string[] {
+  return parseModelDiscovery(payload).modelIds;
 }
 
 // Issue #144 AC #4: the public discovery-normalization seam. Test target. Pure
@@ -387,6 +507,10 @@ export function parseModelList(payload: unknown): readonly string[] {
 // reshaped later.
 export function normalizeDiscoveryPayload(payload: unknown): readonly string[] {
   return parseModelList(payload);
+}
+
+export function normalizeDiscoveryPayloadForSetup(payload: unknown): GatewayDiscoveredModels {
+  return parseModelDiscovery(payload);
 }
 
 async function fetchDiscoveryJson(
@@ -416,10 +540,12 @@ async function discoverLiteLlmModelInfo(
   apiKey: string,
   apiKeyHeaderName: string,
   egress?: GatewayEgressConfig,
-): Promise<readonly string[] | undefined> {
+): Promise<GatewayDiscoveredModels | undefined> {
   for (const endpoint of modelInfoEndpointCandidates(baseUrl)) {
     try {
-      return parseModelList(await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName, egress));
+      return parseModelDiscovery(
+        await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName, egress),
+      );
     } catch {
       // /model/info is a LiteLLM-specific enrichment endpoint. If it is absent or blocked,
       // continue with OpenAI-compatible /models discovery so customer gateways are not broken.
@@ -433,12 +559,12 @@ async function defaultGatewayModelDiscovery(
   apiKey: string,
   apiKeyHeaderName = DEFAULT_API_KEY_HEADER_NAME,
   egress?: GatewayEgressConfig,
-): Promise<readonly string[]> {
+): Promise<GatewayDiscoveredModels> {
   const litellmModels = await discoverLiteLlmModelInfo(baseUrl, apiKey, apiKeyHeaderName, egress);
   if (litellmModels !== undefined) {
     return litellmModels;
   }
-  return parseModelList(
+  return parseModelDiscovery(
     await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName, egress),
   );
 }
@@ -656,6 +782,7 @@ interface SetupRequest {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
   readonly figmaAccessToken: string | undefined;
@@ -706,6 +833,19 @@ function optionalSetupSecret(value: unknown, path: string): string | RouteResult
   }
   const trimmed = value.trim();
   return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function optionalSetupPositiveInt(
+  value: unknown,
+  path: string,
+): number | RouteResult | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", `${path} must be a positive integer.`) };
+  }
+  return value;
 }
 
 function hasNonBlankStringField(raw: Record<string, unknown>, key: string): boolean {
@@ -828,6 +968,10 @@ function readSetupRequest(
   if (isRouteResult(credentials)) {
     return credentials;
   }
+  const timeoutMs = optionalSetupPositiveInt(raw.timeoutMs, "timeoutMs");
+  if (isRouteResult(timeoutMs)) {
+    return timeoutMs;
+  }
   const modelLists = readSetupModelLists(raw);
   if (isRouteResult(modelLists)) {
     return modelLists;
@@ -839,6 +983,7 @@ function readSetupRequest(
   const resolvedModelLists = resolveSetupModelLists(modelLists, current, preserveExisting);
   return {
     ...credentials,
+    timeoutMs,
     deploymentNames: resolvedModelLists.deploymentNames,
     imageInputModelIds: resolvedModelLists.imageInputModelIds,
     figmaAccessToken: figmaAccessToken ?? current?.figma?.accessToken,
@@ -866,6 +1011,7 @@ interface SetupVerificationInput {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
   readonly tester: GatewaySetupTester;
@@ -874,6 +1020,13 @@ interface SetupVerificationInput {
   readonly egress: GatewayEgressConfig | undefined;
   readonly figmaAccessToken: string | undefined;
   readonly current: GatewayConfig | undefined;
+}
+
+interface SetupCandidateModels {
+  readonly modelIds: readonly string[];
+  readonly chatModelIds: readonly string[];
+  readonly embeddingModelIds: readonly string[];
+  readonly imageInputModelIds: readonly string[];
 }
 
 function assertImageInputModelsWereTested(
@@ -887,33 +1040,112 @@ function assertImageInputModelsWereTested(
   }
 }
 
+function testedImageInputModelIds(
+  manualModelIds: readonly string[],
+  discoveredModelIds: readonly string[],
+  testedModelIds: readonly string[],
+): readonly string[] {
+  const tested = new Set(testedModelIds);
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const modelId of [...manualModelIds, ...discoveredModelIds]) {
+    if (!tested.has(modelId) || seen.has(modelId)) {
+      continue;
+    }
+    seen.add(modelId);
+    merged.push(modelId);
+  }
+  return merged;
+}
+
 function validationConfigForSetup(input: SetupVerificationInput): GatewayConfig {
   const validationRawConfig = buildRawConfig(input.baseUrl, input.apiKey, ["setup-validation"], {
     apiKeyHeaderName: input.apiKeyHeaderName,
     imageInputModelIds: input.imageInputModelIds,
+    timeoutMs: input.timeoutMs,
   });
   return parseGatewayConfig(withInheritedEgress(validationRawConfig, input.egress), input.env);
+}
+
+function normalizeLegacyDiscoveryResult(modelIds: readonly string[]): SetupCandidateModels {
+  const embeddingModelIds = embeddingModelIdsFromDeployments(modelIds);
+  const embeddingSet = new Set(embeddingModelIds);
+  return {
+    modelIds,
+    chatModelIds: modelIds.filter((modelId) => !embeddingSet.has(modelId)),
+    embeddingModelIds,
+    imageInputModelIds: [],
+  };
+}
+
+function isStructuredDiscoveryResult(
+  result: GatewayModelDiscoveryOutput,
+): result is GatewayDiscoveredModels {
+  if (Array.isArray(result)) {
+    return false;
+  }
+  const candidate = result as Partial<GatewayDiscoveredModels>;
+  return (
+    Array.isArray(candidate.modelIds) &&
+    Array.isArray(candidate.chatModelIds) &&
+    Array.isArray(candidate.embeddingModelIds)
+  );
+}
+
+function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCandidateModels {
+  if (isStructuredDiscoveryResult(result)) {
+    return {
+      modelIds: result.modelIds,
+      chatModelIds: result.chatModelIds,
+      embeddingModelIds: result.embeddingModelIds,
+      imageInputModelIds: result.imageInputModelIds ?? [],
+    };
+  }
+  return normalizeLegacyDiscoveryResult(result);
+}
+
+function candidateModelsFromDeploymentNames(
+  deploymentNames: readonly string[],
+): SetupCandidateModels {
+  const embeddingModelIds = embeddingModelIdsFromDeployments(deploymentNames);
+  const embeddingSet = new Set(embeddingModelIds);
+  return {
+    modelIds: deploymentNames,
+    chatModelIds: deploymentNames.filter((modelId) => !embeddingSet.has(modelId)),
+    embeddingModelIds,
+    imageInputModelIds: [],
+  };
 }
 
 async function candidateModelIdsForSetup(
   input: SetupVerificationInput,
   validationConfig: GatewayConfig,
-): Promise<readonly string[]> {
-  return input.deploymentNames.length > 0
-    ? input.deploymentNames
-    : input.discovery(input.baseUrl, input.apiKey, input.apiKeyHeaderName, validationConfig.egress);
+): Promise<SetupCandidateModels> {
+  if (input.deploymentNames.length > 0) {
+    return candidateModelsFromDeploymentNames(input.deploymentNames);
+  }
+  return normalizeDiscoveryResult(
+    await input.discovery(
+      input.baseUrl,
+      input.apiKey,
+      input.apiKeyHeaderName,
+      validationConfig.egress,
+    ),
+  );
 }
 
 function finalRawConfigForSetup(
   input: SetupVerificationInput,
   testedModelIds: readonly string[],
+  embeddingModelIds: readonly string[],
+  imageInputModelIds: readonly string[],
 ): Record<string, unknown> {
-  const embeddingModelIds = embeddingModelIdsFromDeployments(input.deploymentNames);
-  const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, input.deploymentNames);
+  const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, embeddingModelIds);
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
     apiKeyHeaderName: input.apiKeyHeaderName,
-    imageInputModelIds: input.imageInputModelIds,
+    imageInputModelIds,
     embeddingModelIds,
+    timeoutMs: input.timeoutMs,
   });
   return {
     ...rawConfig,
@@ -927,13 +1159,28 @@ function finalRawConfigForSetup(
 function skippedModelIdsForSetup(
   candidateModelIds: readonly string[],
   testedModelIds: readonly string[],
-  deploymentNames: readonly string[],
+  embeddingModelIds: readonly string[],
 ): readonly string[] {
-  const acceptedModelIds = new Set([
-    ...testedModelIds,
-    ...embeddingModelIdsFromDeployments(deploymentNames),
-  ]);
+  const acceptedModelIds = new Set([...testedModelIds, ...embeddingModelIds]);
   return candidateModelIds.filter((modelId) => !acceptedModelIds.has(modelId));
+}
+
+function finalRawConfigForTestedSetup(
+  input: SetupVerificationInput,
+  testedModelIds: readonly string[],
+  candidateModels: SetupCandidateModels,
+): Record<string, unknown> {
+  const imageInputModelIds = testedImageInputModelIds(
+    input.imageInputModelIds,
+    candidateModels.imageInputModelIds,
+    testedModelIds,
+  );
+  return finalRawConfigForSetup(
+    input,
+    testedModelIds,
+    candidateModels.embeddingModelIds,
+    imageInputModelIds,
+  );
 }
 
 async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
@@ -941,27 +1188,36 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(input.baseUrl, "candidate");
   const validationConfig = validationConfigForSetup(input);
-  const candidateModelIds = await candidateModelIdsForSetup(input, validationConfig);
+  const candidateModels = await candidateModelIdsForSetup(input, validationConfig);
   const smokeTimeoutMs =
     input.deploymentNames.length > 0
       ? DEPLOYMENT_SMOKE_TIMEOUT_MS
       : DISCOVERED_MODEL_SMOKE_TIMEOUT_MS;
-  const candidateRawConfig = buildRawConfig(input.baseUrl, input.apiKey, candidateModelIds, {
-    apiKeyHeaderName: input.apiKeyHeaderName,
-    timeoutMs: smokeTimeoutMs,
-    // One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
-    // content-filter — does not permanently exclude an otherwise-working model from the setup and
-    // brand it to the user as incompatible. Still bounded so setup latency stays predictable.
-    maxRetries: 1,
-    imageInputModelIds: input.imageInputModelIds,
-  });
+  const candidateRawConfig = buildRawConfig(
+    input.baseUrl,
+    input.apiKey,
+    candidateModels.chatModelIds,
+    {
+      apiKeyHeaderName: input.apiKeyHeaderName,
+      timeoutMs: smokeTimeoutMs,
+      // One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
+      // content-filter — does not permanently exclude an otherwise-working model from the setup and
+      // brand it to the user as incompatible. Still bounded so setup latency stays predictable.
+      maxRetries: 1,
+      imageInputModelIds: input.imageInputModelIds,
+    },
+  );
   const candidateConfig = parseGatewayConfig(
     withInheritedEgress(candidateRawConfig, input.egress),
     input.env,
   );
-  const testedModelIds = await input.tester(candidateConfig, candidateModelIds);
+  const testedModelIds = await input.tester(candidateConfig, candidateModels.chatModelIds);
   assertImageInputModelsWereTested(input.imageInputModelIds, testedModelIds);
-  const rawConfigWithOptionalBlocks = finalRawConfigForSetup(input, testedModelIds);
+  const rawConfigWithOptionalBlocks = finalRawConfigForTestedSetup(
+    input,
+    testedModelIds,
+    candidateModels,
+  );
   const config = parseGatewayConfig(
     withInheritedEgress(rawConfigWithOptionalBlocks, input.egress),
     input.env,
@@ -971,9 +1227,9 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     config,
     testedModelIds,
     skippedModelIds: skippedModelIdsForSetup(
-      candidateModelIds,
+      candidateModels.modelIds,
       testedModelIds,
-      input.deploymentNames,
+      candidateModels.embeddingModelIds,
     ),
   };
 }
@@ -1109,6 +1365,7 @@ async function trySetupCandidate(
     baseUrl,
     apiKey: request.apiKey,
     apiKeyHeaderName: request.apiKeyHeaderName,
+    timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
     tester,
@@ -1133,7 +1390,7 @@ function saveExistingConfigUpdate(
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
 ): RouteResult {
-  const rawConfig = rawConfigFromCurrent(current, request.figmaAccessToken);
+  const rawConfig = rawConfigFromCurrent(current, request.figmaAccessToken, request.timeoutMs);
   const config = parseGatewayConfig(
     withInheritedEgress(rawConfig, currentGatewayEgressConfig(deps)),
     deps.env,

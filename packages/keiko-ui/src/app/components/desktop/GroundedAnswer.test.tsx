@@ -136,6 +136,27 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText("src/foo.ts:10-25")).toBeInTheDocument();
   });
 
+  it("renders the path-free ranking rationale panel when a ranking summary is present (M2)", () => {
+    const a = answer({
+      contextPack: contextPack({
+        rankingSummary: {
+          bucketCounts: { "canonical-metadata": 2, source: 3 },
+          ecosystems: [{ id: "maven", count: 2 }],
+        },
+      }),
+    });
+    render(<GroundedAnswer answer={a} busy={false} />);
+    expect(screen.getByText("Why these files?")).toBeInTheDocument();
+    // Bucket names are humanized; ecosystems are summarized — and NO file path is rendered.
+    expect(screen.getByText("canonical metadata")).toBeInTheDocument();
+    expect(screen.getByText(/Ecosystems: maven \(2\)/)).toBeInTheDocument();
+  });
+
+  it("omits the ranking rationale panel when no ranking summary is present (M2)", () => {
+    render(<GroundedAnswer answer={answer()} busy={false} />);
+    expect(screen.queryByText("Why these files?")).not.toBeInTheDocument();
+  });
+
   it("warns about partial coverage when files were too large or a binary format", () => {
     const a = answer({
       contextPack: contextPack({

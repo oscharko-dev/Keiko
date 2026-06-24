@@ -25,9 +25,11 @@ import {
   collectMemoryActions,
   createAssistantMessage,
   createUserMessage,
+  deriveCompactionOutcome,
   desktopChatErrorResult,
   emptyMemoryResult,
   prepareDesktopChatSend,
+  recordChatCompaction,
   type SendDesktopChatRequest,
 } from "./chat-handlers.js";
 
@@ -159,7 +161,12 @@ async function streamAndPersist(
 ): Promise<void> {
   const { request, chat, modelId, memoryContext } = prepared;
   const memory = await resolveMemory(deps, request, memoryContext);
+  // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage, mirroring the buffered
+  // path's lifecycle moment so the compaction-evidence runId is identical across both paths.
+  const messageCountBeforeTurn = deps.store.listMessages(request.chatId).length;
+  const startedAt = Date.now();
   const userMessage = createUserMessage(deps, request);
+  const outcome = deriveCompactionOutcome(deps, request);
   const messages = buildGatewayMessages(deps, request, memory.context.text);
   const stream = callStream({ modelId, messages }, controller.signal);
   const turn = await streamConversation(ctx, deps, stream, controller);
@@ -177,6 +184,13 @@ async function streamAndPersist(
     turn,
     userMessage,
   );
+  recordChatCompaction(deps, {
+    outcome,
+    request,
+    modelId,
+    messageCount: messageCountBeforeTurn,
+    startedAt,
+  });
   ctx.res.write(sseMessage("done", payload));
 }
 

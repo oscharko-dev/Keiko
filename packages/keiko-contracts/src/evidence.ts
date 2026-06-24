@@ -4,6 +4,7 @@
 // plain-JSON, deeply readonly, and JSON-serializable: timestamps are epoch-ms numbers sourced
 // from events/RunResult, never Date objects.
 
+import type { ContextAssemblyDiagnostics, ContextCompactionRecord } from "./context-engineering.js";
 import type { CostClass } from "./gateway.js";
 import type {
   HarnessCode,
@@ -241,6 +242,17 @@ export interface EvidenceConnectedContextOmitted {
   readonly reason: string;
 }
 
+// Per-file candidate-ranking rationale for the regulated audit (enterprise retrieval M2). scopePath
+// is redacted by the same redactor as files/omitted; bucket/ecosystem/signals are opaque metadata
+// (no excerpt content). Present only when the pack carried ranking diagnostics.
+export interface EvidenceConnectedContextRankedCandidate {
+  readonly scopePath: string;
+  readonly bucket: string;
+  readonly score: number;
+  readonly ecosystem: string | undefined;
+  readonly signals: readonly { readonly name: string; readonly value: number }[];
+}
+
 export interface EvidenceConnectedContextUncertainty {
   readonly kind: string;
   readonly impactedAtomCount: number;
@@ -275,6 +287,9 @@ export interface EvidenceConnectedContextAudit {
   readonly files: readonly EvidenceConnectedContextFile[];
   readonly omitted: readonly EvidenceConnectedContextOmitted[];
   readonly uncertainty: readonly EvidenceConnectedContextUncertainty[];
+  // Additive (M2): the candidate-ranking rationale. Absent on legacy runs / packs without
+  // diagnostics — additive-optional, no evidence schema-version bump (mirrors `plan`).
+  readonly rankedCandidates?: readonly EvidenceConnectedContextRankedCandidate[] | undefined;
   readonly toolsUsed: readonly string[];
   readonly summary: {
     readonly fileCount: number;
@@ -314,6 +329,12 @@ export interface EvidenceManifest {
   readonly browser?: EvidenceBrowserCapture | undefined;
   readonly connectedContext?: EvidenceConnectedContextAudit | undefined;
   readonly governedHandoff?: EvidenceGovernedWorkflowHandoff | undefined;
+  // Context-assembly diagnostics produced by the grounded or harness context observer (PR4/PR5).
+  // Absent on legacy manifests and on manifests where no ContextProfile was threaded.
+  readonly contextAssembly?: ContextAssemblyDiagnostics | undefined;
+  // Compaction records for sessions that exceeded MAX_CONTEXT_MESSAGES (chat/harness path only).
+  // Absent on grounded-path manifests and on short sessions. Redacted at persist time.
+  readonly compaction?: readonly ContextCompactionRecord[] | undefined;
 }
 
 // ─── Redaction config (D3) ──────────────────────────────────────────────────────

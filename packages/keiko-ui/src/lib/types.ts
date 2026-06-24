@@ -113,6 +113,13 @@ export type {
 } from "@oscharko-dev/keiko-contracts";
 export { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 
+// ─── Deterministic context-engineering layer (ADR-0052 / ADR-0057) ──────────────────
+// The context-status panel (ContextStatusPanel.tsx) needs the lane-id literal union and the
+// budget-pressure enum from the root barrel; `GroundedAnswerContextSummary` (the path-free
+// aggregate carried on a grounded answer's pack summary) comes from the bff-wire subpath. All
+// three are structurally path-free (string literal unions, numbers, booleans) by construction.
+export type { ContextLaneId, ContextBudgetPressure } from "@oscharko-dev/keiko-contracts";
+
 // Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
 // from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019
 // trust-3, error severity); contracts is the legitimate value-import source
@@ -196,6 +203,8 @@ export type {
   GroundedAnswer,
   LocalKnowledgeEvidenceCitation,
   GroundedAnswerContextPackSummary,
+  GroundedAnswerContextSummary,
+  GroundedAnswerRankingSummary,
   LocalKnowledgeGroundedAnswerContextSummary,
   HybridGroundedAnswerContextSummary,
   ProjectsResponse,

@@ -7,8 +7,10 @@ import {
   HARNESS_VERSION,
   type AuditSummary,
   type ConnectedContextPack,
+  type ContextAssemblyDiagnostics,
   type CostClass,
 } from "@oscharko-dev/keiko-contracts";
+import { redactContextAssemblyDiagnostics } from "./context-assembly-redaction.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
 import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
@@ -37,6 +39,9 @@ export interface ConnectedContextEvidenceInput {
   readonly elapsedMs: number;
   readonly startedAt: number;
   readonly finishedAt: number;
+  // Context-assembly diagnostics for this run (ADR-0056 W2). Additive-optional: absent when no
+  // ContextProfile was threaded. Field-level redacted, then caught again by the whole-object pass.
+  readonly contextAssembly?: ContextAssemblyDiagnostics | undefined;
 }
 
 export interface ConnectedContextEvidencePlanInput {
@@ -226,10 +231,28 @@ function summaryOf(input: ConnectedContextEvidenceInput): EvidenceConnectedConte
   };
 }
 
+function rankedCandidatesOf(
+  input: ConnectedContextEvidenceInput,
+  redact: Redactor,
+): EvidenceConnectedContextAudit["rankedCandidates"] {
+  const ranked = input.pack.diagnostics?.rankedCandidates;
+  if (ranked === undefined) {
+    return undefined;
+  }
+  return ranked.map((entry) => ({
+    scopePath: redactString(redact, entry.scopePath),
+    bucket: entry.bucket,
+    score: entry.score,
+    ecosystem: entry.ecosystem,
+    signals: entry.signals.map((signal) => ({ name: signal.name, value: signal.value })),
+  }));
+}
+
 function connectedContextOf(
   input: ConnectedContextEvidenceInput,
   redact: Redactor,
 ): EvidenceConnectedContextAudit {
+  const rankedCandidates = rankedCandidatesOf(input, redact);
   return {
     packSchemaVersion: input.pack.schemaVersion,
     packStableIdHash: sha256Hex(redactString(redact, input.pack.stableId)),
@@ -255,6 +278,7 @@ function connectedContextOf(
       kind: entry.kind,
       impactedAtomCount: entry.impactedAtomIds.length,
     })),
+    ...(rankedCandidates !== undefined ? { rankedCandidates } : {}),
     toolsUsed: toolsUsed(input.pack, redact),
     summary: summaryOf(input),
   };
@@ -266,6 +290,10 @@ function buildConnectedContextEvidenceManifest(
   redact: Redactor = (value) => value,
 ): EvidenceManifest {
   const identityDurationMs = Math.max(0, input.finishedAt - input.startedAt);
+  const contextAssembly =
+    input.contextAssembly === undefined
+      ? undefined
+      : redactContextAssemblyDiagnostics(input.contextAssembly, redact);
   return {
     evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
     run: {
@@ -293,6 +321,7 @@ function buildConnectedContextEvidenceManifest(
     toolCalls: [],
     commandExecutions: [],
     connectedContext: connectedContextOf(input, redact),
+    ...(contextAssembly === undefined ? {} : { contextAssembly }),
   };
 }
 

@@ -185,6 +185,7 @@ export interface GatewaySetupInput {
   readonly baseUrl?: string | undefined;
   readonly apiKey?: string | undefined;
   readonly apiKeyHeaderName?: string | undefined;
+  readonly timeoutMs?: number | undefined;
   readonly deploymentNames?: readonly string[] | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
   readonly figmaAccessToken?: string | undefined;
