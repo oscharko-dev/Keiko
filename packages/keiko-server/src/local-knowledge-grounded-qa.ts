@@ -867,16 +867,24 @@ function persistScopedGroundedAnswer(
     noEvidenceReason === undefined ? result.answer.trim() : LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER;
   const redactedUserContent = redactText(deps, input.content);
   const redactedAssistantContent = redactText(deps, assistantContent);
-  return buildLocalKnowledgeAnswer(
+  const persisted = persistGroundedExchange(
+    deps,
+    chat.id,
+    redactedUserContent,
+    redactedAssistantContent,
+  );
+  const answer = buildLocalKnowledgeAnswer(
     chat,
     env.store,
     selected,
-    persistGroundedExchange(deps, chat.id, redactedUserContent, redactedAssistantContent),
+    persisted,
     result,
     elapsedMs,
     redactedAssistantContent,
     (value: string): string => redactText(deps, value),
   ) satisfies GroundedAnswer;
+  deps.store.attachGroundedAnswer(persisted[1].id, answer);
+  return answer;
 }
 
 async function runScopedGroundedAnswer(
@@ -923,14 +931,20 @@ export async function handleLocalKnowledgeGroundedAsk(
     const stateFailure = scopeStateFailure(selected);
     if (stateFailure !== undefined) {
       const redactedMessage = redactText(deps, stateFailure.message);
+      const persisted = persistGroundedExchange(
+        deps,
+        chat.id,
+        redactText(deps, input.content),
+        redactedMessage,
+      );
+      const answer = buildStateFailureAnswer(chat, selected, persisted, {
+        ...stateFailure,
+        message: redactedMessage,
+      });
+      deps.store.attachGroundedAnswer(persisted[1].id, answer);
       return {
         status: 200,
-        body: buildStateFailureAnswer(
-          chat,
-          selected,
-          persistGroundedExchange(deps, chat.id, redactText(deps, input.content), redactedMessage),
-          { ...stateFailure, message: redactedMessage },
-        ),
+        body: answer,
       };
     }
     const answer = await runScopedGroundedAnswer(chat, input, deps, env, selected, signal);

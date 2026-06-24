@@ -30,6 +30,10 @@ import type { UiHandlerDeps } from "./deps.js";
 import type { Project, UiStore } from "./store/index.js";
 
 const MAX_DIRECTORY_ENTRIES = 1_000;
+const DEFAULT_FILE_SEARCH_LIMIT = 24;
+const MAX_FILE_SEARCH_LIMIT = 50;
+const MAX_FILE_SEARCH_QUERY_CHARS = 120;
+const MAX_FILE_SEARCH_SCAN = 20_000;
 const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
 const MAX_IMAGE_PREVIEW_BYTES = 3_000_000;
 const STABLE_CONTENT_READ_ATTEMPTS = 3;
@@ -73,6 +77,24 @@ export interface FilesTreeResponse {
   readonly path: string;
   readonly entries: readonly FilesTreeEntry[];
   readonly truncated: boolean;
+}
+
+export interface FilesSearchResult {
+  readonly root: string;
+  readonly path: string;
+  readonly name: string;
+  readonly directory: string;
+  readonly extension: string | null;
+  readonly sizeBytes: number;
+  readonly modifiedAt: number;
+}
+
+export interface FilesSearchResponse {
+  readonly root: string;
+  readonly query: string;
+  readonly results: readonly FilesSearchResult[];
+  readonly truncated: boolean;
+  readonly scannedFileCount: number;
 }
 
 interface FilesPreviewBase {
@@ -534,6 +556,233 @@ export async function readFilesTree(
   };
 }
 
+function parseSearchLimit(rawLimit: string | null): number {
+  if (rawLimit === null || rawLimit.trim().length === 0) return DEFAULT_FILE_SEARCH_LIMIT;
+  const parsed = Number(rawLimit);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new FilesError(400, "BAD_LIMIT", "The search limit must be a positive integer.");
+  }
+  return Math.min(parsed, MAX_FILE_SEARCH_LIMIT);
+}
+
+function normalizeSearchQuery(queryInput: string | null): string {
+  const query = (queryInput ?? "").trim().replace(/\s+/gu, " ");
+  if (query.includes("\0")) {
+    throw new FilesError(400, "BAD_QUERY", "The search query contains an invalid character.");
+  }
+  if (query.length > MAX_FILE_SEARCH_QUERY_CHARS) {
+    throw new FilesError(
+      400,
+      "BAD_QUERY",
+      `The search query must be at most ${String(MAX_FILE_SEARCH_QUERY_CHARS)} characters.`,
+    );
+  }
+  return query;
+}
+
+function searchTokens(query: string): readonly string[] {
+  return query
+    .toLocaleLowerCase()
+    .split(/\s+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+}
+
+function matchesSearch(relativePath: string, tokens: readonly string[]): boolean {
+  const lowerPath = relativePath.toLocaleLowerCase();
+  return tokens.every((token) => lowerPath.includes(token));
+}
+
+function fileSearchScore(relativePath: string, query: string): number {
+  const lowerPath = relativePath.toLocaleLowerCase();
+  const lowerName = basename(relativePath).toLocaleLowerCase();
+  const lowerQuery = query.toLocaleLowerCase();
+  if (lowerName === lowerQuery) return 0;
+  if (lowerName.startsWith(lowerQuery)) return 100 + relativePath.length;
+  if (lowerPath === lowerQuery) return 200 + relativePath.length;
+  if (lowerPath.startsWith(lowerQuery)) return 300 + relativePath.length;
+  const nameIndex = lowerName.indexOf(lowerQuery);
+  if (nameIndex >= 0) return 400 + nameIndex + relativePath.length;
+  const pathIndex = lowerPath.indexOf(lowerQuery);
+  if (pathIndex >= 0) return 600 + pathIndex + relativePath.length;
+  return 1_000 + relativePath.length;
+}
+
+function directoryOf(relativePath: string): string {
+  const dir = pathPosix.dirname(relativePath);
+  return dir === "." ? "" : dir;
+}
+
+interface FileSearchCandidate {
+  readonly score: number;
+  readonly result: FilesSearchResult;
+}
+
+interface FileSearchStackEntry {
+  readonly path: string;
+  readonly relativePath: string;
+}
+
+interface FileSearchState {
+  candidates: FileSearchCandidate[];
+  stack: FileSearchStackEntry[];
+  scannedFileCount: number;
+  scanTruncated: boolean;
+}
+
+function entryVisibleToFileSearch(
+  relativePath: string,
+  entry: Dirent,
+  redactor: FilesMetadataRedactor,
+): boolean {
+  return (
+    metadataIsSafe(relativePath, redactor) &&
+    !pathIsDenied(relativePath) &&
+    !entry.isSymbolicLink()
+  );
+}
+
+async function addFileSearchCandidate(args: {
+  readonly root: ResolvedProjectRoot;
+  readonly query: string;
+  readonly relativePath: string;
+  readonly nativePath: string;
+  readonly entryName: string;
+  readonly tokens: readonly string[];
+  readonly state: FileSearchState;
+}): Promise<void> {
+  if (!matchesSearch(args.relativePath, args.tokens)) return;
+  let info: Stats;
+  try {
+    info = await lstat(args.nativePath);
+  } catch {
+    return;
+  }
+  args.state.candidates.push({
+    score: fileSearchScore(args.relativePath, args.query),
+    result: {
+      root: args.root.root,
+      path: args.relativePath,
+      name: args.entryName,
+      directory: directoryOf(args.relativePath),
+      extension: extensionOf(args.entryName),
+      sizeBytes: info.size,
+      modifiedAt: info.mtimeMs,
+    },
+  });
+}
+
+async function collectFileSearchEntry(args: {
+  readonly current: FileSearchStackEntry;
+  readonly entry: Dirent;
+  readonly root: ResolvedProjectRoot;
+  readonly query: string;
+  readonly tokens: readonly string[];
+  readonly redactor: FilesMetadataRedactor;
+  readonly state: FileSearchState;
+}): Promise<void> {
+  const relativePath = childRelative(args.current.relativePath, args.entry.name);
+  if (!entryVisibleToFileSearch(relativePath, args.entry, args.redactor)) return;
+  const nativePath = join(args.current.path, args.entry.name);
+  if (args.entry.isDirectory()) {
+    args.state.stack.push({ path: nativePath, relativePath });
+    return;
+  }
+  if (!args.entry.isFile()) return;
+  args.state.scannedFileCount += 1;
+  if (args.state.scannedFileCount > MAX_FILE_SEARCH_SCAN) {
+    args.state.scanTruncated = true;
+    return;
+  }
+  await addFileSearchCandidate({
+    root: args.root,
+    query: args.query,
+    relativePath,
+    nativePath,
+    entryName: args.entry.name,
+    tokens: args.tokens,
+    state: args.state,
+  });
+}
+
+async function collectFileSearchDirectory(args: {
+  readonly current: FileSearchStackEntry;
+  readonly root: ResolvedProjectRoot;
+  readonly query: string;
+  readonly tokens: readonly string[];
+  readonly redactor: FilesMetadataRedactor;
+  readonly state: FileSearchState;
+}): Promise<void> {
+  let dir;
+  try {
+    dir = await opendir(args.current.path);
+  } catch {
+    return;
+  }
+  try {
+    for await (const entry of dir) {
+      await collectFileSearchEntry({ ...args, entry });
+      if (args.state.scanTruncated) break;
+    }
+  } finally {
+    await dir.close().catch(() => undefined);
+  }
+}
+
+async function collectFileSearchResults(args: {
+  readonly root: ResolvedProjectRoot;
+  readonly query: string;
+  readonly limit: number;
+  readonly redactor: FilesMetadataRedactor;
+}): Promise<Omit<FilesSearchResponse, "root" | "query">> {
+  const tokens = searchTokens(args.query);
+  if (tokens.length === 0) {
+    return { results: [], truncated: false, scannedFileCount: 0 };
+  }
+
+  const state: FileSearchState = {
+    candidates: [],
+    stack: [{ path: args.root.realRoot, relativePath: "" }],
+    scannedFileCount: 0,
+    scanTruncated: false,
+  };
+
+  while (state.stack.length > 0) {
+    const current = state.stack.pop();
+    if (current === undefined) break;
+    await collectFileSearchDirectory({ ...args, current, tokens, state });
+    if (state.scanTruncated) break;
+  }
+
+  state.candidates.sort((a, b) => a.score - b.score || a.result.path.localeCompare(b.result.path));
+  return {
+    results: state.candidates.slice(0, args.limit).map((candidate) => candidate.result),
+    truncated: state.scanTruncated || state.candidates.length > args.limit,
+    scannedFileCount: Math.min(state.scannedFileCount, MAX_FILE_SEARCH_SCAN),
+  };
+}
+
+export async function searchFiles(
+  store: UiStore,
+  rootInput: string | null,
+  queryInput: string | null,
+  limitInput?: number,
+  redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
+): Promise<FilesSearchResponse> {
+  const root = await resolveRoot(store, rootInput, redactor);
+  const query = normalizeSearchQuery(queryInput);
+  const limit = Math.min(
+    Math.max(limitInput ?? DEFAULT_FILE_SEARCH_LIMIT, 1),
+    MAX_FILE_SEARCH_LIMIT,
+  );
+  const collected = await collectFileSearchResults({ root, query, limit, redactor });
+  return {
+    root: root.root,
+    query,
+    ...collected,
+  };
+}
+
 const IMAGE_MIME: Readonly<Record<string, string>> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -948,6 +1197,22 @@ export async function handleFilesTree(
       deps.store,
       ctx.url.searchParams.get("root"),
       ctx.url.searchParams.get("path"),
+      deps.redactor,
+    ),
+  }));
+}
+
+export async function handleFilesSearch(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => ({
+    status: 200,
+    body: await searchFiles(
+      deps.store,
+      ctx.url.searchParams.get("root"),
+      ctx.url.searchParams.get("q") ?? ctx.url.searchParams.get("query"),
+      parseSearchLimit(ctx.url.searchParams.get("limit")),
       deps.redactor,
     ),
   }));

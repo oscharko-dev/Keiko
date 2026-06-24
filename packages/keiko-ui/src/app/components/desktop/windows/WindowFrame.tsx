@@ -21,6 +21,7 @@ import {
   acquireGrabbingBodyStyle,
   isInteractiveControlTarget,
   isPrimaryActivationPointer,
+  isTextEntryTarget,
   isWindowDragPointer,
 } from "../interactionGuards";
 import { hasConnectablePeer, subText } from "./connectionUtils";
@@ -120,6 +121,7 @@ function selectBody(
   linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined,
   updateCfg: (patch: AppWindow["cfg"]) => void,
   openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null,
+  openEditorFile: WorkspaceApi["openEditorFile"],
 ): BodySelection {
   const def = WIN_TYPES[type];
   if (type === "chat") {
@@ -150,6 +152,7 @@ function selectBody(
         linkedImageSources,
         updateCfg,
         openWindow,
+        openEditorFile,
       }),
     };
   }
@@ -170,6 +173,7 @@ function selectBody(
       linkedImageSources,
       updateCfg,
       openWindow,
+      openEditorFile,
     }),
   };
 }
@@ -335,16 +339,23 @@ export function WindowFrame({
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const zoom = win.zoom ?? 1;
   const receivesFilesContext =
-    win.type === "chat" || win.type === "agents" || win.type === "quality" || win.type === "editor";
+    win.type === "chat" ||
+    win.type === "agents" ||
+    win.type === "quality" ||
+    win.type === "editor" ||
+    win.type === "promptEnhancer";
   const receivesFocusedFileContext =
-    win.type === "agents" || win.type === "quality" || win.type === "editor";
+    win.type === "agents" ||
+    win.type === "quality" ||
+    win.type === "editor" ||
+    win.type === "promptEnhancer";
   const receivesConnectorContext = win.type === "quality" || win.type === "editor";
   const linkedRoot = receivesFilesContext ? api.linkedFilesRoot(win.id) : null;
   const linkedFilePath = receivesFocusedFileContext
     ? api.linkedFilesContext(win.id)?.activeFilePath
     : undefined;
   const linkedRoots =
-    win.type === "quality"
+    win.type === "quality" || win.type === "promptEnhancer"
       ? api.linkedAllFilesRoots(win.id)
       : linkedRoot !== null
         ? [linkedRoot]
@@ -370,6 +381,10 @@ export function WindowFrame({
     (type: WindowType, cfg?: AppWindow["cfg"]): string | null => api.add(type, cfg),
     [api],
   );
+  const openEditorFile = useCallback<WorkspaceApi["openEditorFile"]>(
+    (request) => api.openEditorFile(request),
+    [api],
+  );
   const { mode: bodyMode, node: body } = selectBody(
     win.id,
     win.type,
@@ -386,6 +401,7 @@ export function WindowFrame({
     linkedImageSources,
     updateCfg,
     openWindow,
+    openEditorFile,
   );
 
   const setZoom = useCallback(
@@ -440,6 +456,10 @@ export function WindowFrame({
 
   const focusWindowForTarget = useCallback(
     (target: EventTarget | null): void => {
+      if (isTextEntryTarget(target)) {
+        window.setTimeout(() => api.focus(win.id), 180);
+        return;
+      }
       if (isInteractiveControlTarget(target)) {
         window.setTimeout(() => api.focus(win.id), 0);
         return;

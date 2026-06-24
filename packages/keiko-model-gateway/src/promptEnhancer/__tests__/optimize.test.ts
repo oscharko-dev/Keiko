@@ -216,13 +216,13 @@ describe("optimizePromptCandidates", () => {
     // is covered separately above — together the two tests exercise all three rejection pathways.)
     const selection = optimizeFor(
       { recommendedProfile: "technical" },
-      { candidateCount: 6, maxIterations: 6, tokenBudget: 800 },
+      { candidateCount: 6, maxIterations: 6, tokenBudget: 1_200 },
     );
     const reasons = new Set(selection.rejected.map((entry) => entry.reason));
     expect(reasons.has("lower-aggregate-score")).toBe(true);
     expect(reasons.has("exceeded-token-budget")).toBe(true);
     expect(selection.candidatesConsidered).toBeGreaterThanOrEqual(2);
-    expect(selection.tokensConsumed).toBeLessThanOrEqual(800);
+    expect(selection.tokensConsumed).toBeLessThanOrEqual(1_200);
   });
 });
 

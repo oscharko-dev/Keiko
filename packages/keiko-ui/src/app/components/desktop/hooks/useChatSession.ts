@@ -17,15 +17,11 @@ import {
   patchChatMessage,
   sendDesktopChat,
   sendDesktopChatStream,
-  startGroundedWorkflowHandoff,
-  startChatRun,
   updateChat,
 } from "@/lib/api";
 import type { SseDonePayload } from "@/lib/api";
 import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/memory-api";
 import { sortProjects } from "@/lib/sidebar-sort";
-import { findChatWorkflow } from "@/lib/chat-workflow-catalog";
-import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
 import { classifyRunReport, formatRunSummaryFromManifest } from "@/lib/run-summary";
 import type {
   Chat,
@@ -34,11 +30,9 @@ import type {
   ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
   ConversationBudgetEstimate,
-  ExpectedCheck,
   GroundedAnswer as GroundedAnswerWire,
   ModelCapability,
   ProjectWithAvailability,
-  WorkflowKind,
 } from "@/lib/types";
 import { estimateConversationBudget, isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
@@ -372,61 +366,7 @@ export interface UseChatSessionResult {
   // connected-context byte counts (#177 / #189 / #204) is a follow-up; the
   // estimator already carries the fields end-to-end.
   readonly clearHistory: () => void;
-  // Issue #153 — governed workflow handoff from the Conversation Center.
-  // Validates the requested model against the STRICTER workflow filter
-  // (chat + tool calling + structured output, per AC#2), looks up the workflow
-  // catalog entry, builds the workflow input deterministically, and POSTs to
-  // /api/chats/runs (which atomically writes the user message and the system
-  // run-summary message and reserves the runId before starting the run).
-  //
-  // The chat handoff is INTENTIONALLY scoped to dry-run launches: `apply` is
-  // omitted on the wire so patch application stays behind the existing
-  // workflow surfaces (AC#4). Shell execution is not exposed by this path.
-  readonly launchWorkflowFromConversation: (
-    input: LaunchWorkflowFromConversationInput,
-  ) => Promise<LaunchWorkflowFromConversationResult>;
-  readonly launchGroundedWorkflowHandoff: (
-    input: LaunchGroundedWorkflowHandoffInput,
-  ) => Promise<LaunchGroundedWorkflowHandoffResult>;
 }
-
-export interface LaunchWorkflowFromConversationInput {
-  readonly workflowId: string;
-  readonly modelId: string;
-  /** Free-text input the user typed into the chat launcher. */
-  readonly text: string;
-}
-
-export type LaunchWorkflowFromConversationResult =
-  | { readonly ok: true; readonly runId: string }
-  | {
-      readonly ok: false;
-      readonly reason:
-        | "not-workflow-eligible"
-        | "unknown-workflow"
-        | "missing-chat"
-        | "missing-input"
-        | "request-failed";
-      readonly message?: string;
-    };
-
-export interface LaunchGroundedWorkflowHandoffInput {
-  readonly assistantMessageId: string;
-  readonly modelId: string;
-  readonly workflowKind: WorkflowKind;
-  readonly input: Record<string, unknown>;
-  readonly editablePaths: readonly string[];
-  readonly expectedChecks?: readonly ExpectedCheck[] | undefined;
-  readonly unknowns?: readonly string[] | undefined;
-}
-
-export type LaunchGroundedWorkflowHandoffResult =
-  | { readonly ok: true; readonly runId: string }
-  | {
-      readonly ok: false;
-      readonly reason: "missing-chat" | "missing-model" | "request-failed";
-      readonly message?: string;
-    };
 
 interface SessionState {
   projects: ProjectWithAvailability[];
@@ -447,20 +387,6 @@ const INITIAL_STATE: SessionState = {
   activeChat: undefined,
   selectedModel: undefined,
 };
-
-function mergeMessages(
-  existing: readonly ChatMessage[],
-  incoming: readonly ChatMessage[],
-): ChatMessage[] {
-  if (incoming.length === 0) return Array.from(existing);
-  const incomingById = new Map(incoming.map((message) => [message.id, message] as const));
-  const merged = existing.map((message) => incomingById.get(message.id) ?? message);
-  const existingIds = new Set(existing.map((message) => message.id));
-  for (const message of incoming) {
-    if (!existingIds.has(message.id)) merged.push(message);
-  }
-  return merged;
-}
 
 function isPendingRunSummaryMessage(message: ChatMessage): boolean {
   return (
@@ -1647,109 +1573,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     memoryEnabled,
   ]);
 
-  // Issue #153 — governed workflow handoff from the Conversation Center. Three guard rails:
-  //   1. The selected model must satisfy the STRICTER workflow filter (AC#2).
-  //   2. The workflowId must match an entry in the in-chat catalog (a small UI-side allowlist
-  //      so an unrecognized id never reaches /api/chats/runs).
-  //   3. An active chat row is required so the user/system message pair lands inside a chat.
-  //
-  // `apply` is omitted on the wire so patch application stays behind the existing workflow
-  // surfaces (AC#4). After a successful launch we merge the BFF-created user/system pair into
-  // the active chat so older messages and previous run summaries remain visible.
-  const launchWorkflowFromConversation = useCallback(
-    async (
-      input: LaunchWorkflowFromConversationInput,
-    ): Promise<LaunchWorkflowFromConversationResult> => {
-      // WH-04: a workflow launch replaces the messages array on success, so a
-      // duplicate submit while a send/launch is in flight risks clobbering the
-      // optimistic state. Mirror sendMessage's idempotency guard.
-      if (isInFlight(sendStatusRef.current)) {
-        return { ok: false, reason: "request-failed", message: "A request is already in flight." };
-      }
-      const trimmed = input.text.trim();
-      if (trimmed.length === 0) return { ok: false, reason: "missing-input" };
-
-      const chat = state.activeChat;
-      const project = state.activeProject;
-      if (chat === undefined || project === undefined) {
-        return { ok: false, reason: "missing-chat" };
-      }
-
-      const capability = state.models.find((m) => m.id === input.modelId);
-      if (capability === undefined || !isWorkflowEligibleModel(capability)) {
-        return { ok: false, reason: "not-workflow-eligible" };
-      }
-
-      const entry = findChatWorkflow(input.workflowId);
-      if (entry === undefined) return { ok: false, reason: "unknown-workflow" };
-
-      const now = Date.now();
-      const workflowInput = entry.buildInput(project.path, trimmed);
-      try {
-        const result = await startChatRun({
-          chatId: chat.id,
-          projectPath: project.path,
-          run: {
-            workflowId: input.workflowId,
-            input: workflowInput,
-            modelId: input.modelId,
-          },
-          user: { content: trimmed, timestamp: now },
-          summary: { content: `Launched: ${entry.label}`, timestamp: now + 1 },
-        });
-        setState((previous) => ({
-          ...previous,
-          messages: mergeMessages(previous.messages, result.messages),
-        }));
-        return { ok: true, runId: result.run.runId };
-      } catch (caught) {
-        const message = errorMessage(caught);
-        setError(message);
-        return { ok: false, reason: "request-failed", message };
-      }
-    },
-    [state.activeChat, state.activeProject, state.models],
-  );
-
-  const launchGroundedWorkflowHandoff = useCallback(
-    async (
-      input: LaunchGroundedWorkflowHandoffInput,
-    ): Promise<LaunchGroundedWorkflowHandoffResult> => {
-      if (isInFlight(sendStatusRef.current)) {
-        return { ok: false, reason: "request-failed", message: "A request is already in flight." };
-      }
-      if (state.activeChat === undefined) {
-        return { ok: false, reason: "missing-chat" };
-      }
-      if (input.modelId.trim().length === 0) {
-        return { ok: false, reason: "missing-model" };
-      }
-      try {
-        const result = await startGroundedWorkflowHandoff({
-          assistantMessageId: input.assistantMessageId,
-          chatId: state.activeChat.id,
-          modelId: input.modelId,
-          workflowKind: input.workflowKind,
-          input: input.input,
-          editablePaths: input.editablePaths,
-          ...(input.expectedChecks === undefined ? {} : { expectedChecks: input.expectedChecks }),
-          ...(input.unknowns === undefined ? {} : { unknowns: input.unknowns }),
-          requestedAtMs: Date.now(),
-        });
-        setState((previous) => ({
-          ...previous,
-          messages: mergeMessages(previous.messages, result.messages),
-        }));
-        return { ok: true, runId: result.run.runId };
-      } catch (caught) {
-        const message = errorMessage(caught);
-        setError(message);
-        return { ok: false, reason: "request-failed", message };
-      }
-    },
-    [state.activeChat],
-  );
-
   // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
   // mutation on the active Chat). Only the matched id is updated; the chat list keeps its
   // existing sort order so the pill flip is non-disruptive. activeChat is rewritten when its
@@ -1809,7 +1632,5 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     rejectMemoryCandidate,
     forgetMemoryAction,
     clearHistory,
-    launchWorkflowFromConversation,
-    launchGroundedWorkflowHandoff,
   };
 }

@@ -11,6 +11,7 @@ import {
   createNodeUiStore,
   openNodeUiDatabase,
   UI_DB_BUSY_TIMEOUT_MS,
+  type GroundedAnswer,
 } from "./index.js";
 
 // Narrows an array-index access (T | undefined) to T without a non-null assertion.
@@ -165,6 +166,82 @@ describe("createNodeUiStore — on-disk file", () => {
       taskType: "unit-test-generation",
     });
 
+    const assistantMsg = s1.createMessage({
+      chatId: chat.id,
+      role: "assistant",
+      content: "Grounded answer.",
+      timestamp: 300,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const grounded: GroundedAnswer = {
+      groundingKind: "connected-context",
+      userMessageId: plainMsg.id,
+      assistantMessageId: assistantMsg.id,
+      evidenceRunId: "grounded-run-1",
+      content: "Grounded answer.",
+      citations: [
+        {
+          scopePath: "package-lock.json",
+          lineRange: { startLine: 1, endLine: 48 },
+          score: 0.9,
+          stableId: "atom-lock",
+        },
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 10,
+      contextPack: {
+        schemaVersion: "1",
+        scopeId: "scope-1",
+        scopeKind: "files",
+        fileCount: 1,
+        queryKind: "natural-language",
+        usage: {
+          searchCalls: 1,
+          filesRead: 1,
+          excerptBytes: 128,
+          modelInputTokens: 64,
+          modelOutputTokens: 12,
+          elapsedMs: 10,
+          rerankCalls: 0,
+        },
+        budget: {
+          searchCallsMax: 16,
+          filesReadMax: 32,
+          excerptBytesMax: 131_072,
+          modelInputTokensMax: 32_000,
+          modelOutputTokensMax: 4_096,
+          elapsedMsMax: 30_000,
+          rerankCallsMax: 0,
+        },
+        citationCount: 1,
+        omittedCount: 0,
+        omittedCounts: {
+          "outside-scope": 0,
+          binary: 0,
+          generated: 0,
+          ignored: 0,
+          "size-exceeded": 0,
+          "near-duplicate": 0,
+          "low-relevance": 0,
+          "redacted-only": 0,
+          "budget-exhausted": 0,
+          "tool-unavailable": 0,
+          "unsupported-format": 0,
+          "no-text-layer": 0,
+          "malformed-document": 0,
+          "encrypted-document": 0,
+        },
+        uncertaintyCount: 0,
+        elapsedMs: 10,
+      },
+    };
+    s1.attachGroundedAnswer(assistantMsg.id, grounded);
+
     s1.close();
 
     // ── Session 2: read ─────────────────────────────────────────────────────
@@ -181,11 +258,12 @@ describe("createNodeUiStore — on-disk file", () => {
     expect(reloadedChat.selectedModel).toBe("example-chat-model-fast");
 
     const messages = s2.listMessages(chat.id);
-    expect(messages).toHaveLength(2);
+    expect(messages).toHaveLength(3);
 
     // Ordered by timestamp ASC, so plain message comes first.
     const reloadedPlain = must(messages[0]);
     const reloadedWorkflow = must(messages[1]);
+    const reloadedAssistant = must(messages[2]);
 
     // Plain message — all optional fields must be undefined (not null).
     expect(reloadedPlain.id).toBe(plainMsg.id);
@@ -210,6 +288,13 @@ describe("createNodeUiStore — on-disk file", () => {
     expect(reloadedWorkflow.workflowStatus).toBe("completed");
     expect(reloadedWorkflow.shortResult).toBe("Generated 12 tests.");
     expect(reloadedWorkflow.taskType).toBe("unit-test-generation");
+
+    expect(reloadedAssistant.id).toBe(assistantMsg.id);
+    expect(reloadedAssistant.groundedAnswer).toMatchObject({
+      groundingKind: "connected-context",
+      assistantMessageId: assistantMsg.id,
+      citations: [{ scopePath: "package-lock.json" }],
+    });
 
     s2.close();
   });

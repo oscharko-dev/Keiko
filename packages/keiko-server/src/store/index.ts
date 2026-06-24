@@ -7,6 +7,7 @@ export type {
   ChatMessage,
   ChatRole,
   CreateChatOptions,
+  GroundedAnswer,
   NewChatMessage,
   Project,
   UiStore,

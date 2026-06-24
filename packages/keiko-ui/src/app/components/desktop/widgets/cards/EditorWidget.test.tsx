@@ -1209,6 +1209,8 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     expect(active).toHaveAttribute("aria-selected", "true");
     expect(inactive).toHaveAttribute("aria-selected", "false");
     expect(inactive.closest(".ed-tab")).toHaveAttribute("data-dirty", "true");
+    expect(active.querySelector(".fi-img")).toHaveAttribute("src", "/assets/icons/typescript.svg");
+    expect(inactive.querySelector(".fi-img")).toHaveAttribute("src", "/assets/icons/json.svg");
 
     await userEvent.click(inactive);
     expect(onSelect).toHaveBeenCalledWith("package.json");

@@ -26,14 +26,14 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the additive route contract including the grounded workflow handoff route, local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI run execution + review + export routes, the QI Conversation Center handoff route, the relationship engine routes (Epic #532), the memory maintenance route (#204), and the desktop chat SSE streaming route (#152)", () => {
-    expect(API_ROUTES.length).toBeGreaterThanOrEqual(98);
+  it("declares the additive route contract while keeping workflow launches outside chat routes", () => {
+    expect(API_ROUTES.length).toBeGreaterThanOrEqual(97);
     expect(
       API_ROUTES.find(
         (route) =>
           route.method === "POST" && route.pattern === "/api/chats/messages/grounded/handoff",
       ),
-    ).toBeDefined();
+    ).toBeUndefined();
   });
 
   it("includes the governed editor inline-completion routes (#1200)", () => {
@@ -204,6 +204,12 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the non-mutating gateway readiness route", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/gateway/readiness"),
+    ).toBeDefined();
+  });
+
   it("includes the 8 browser-tool routes (#76)", () => {
     const browserRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/browser"));
     expect(browserRoutes).toHaveLength(8);
@@ -237,9 +243,9 @@ describe("API route contract", () => {
     expect(pairRoute).toBeDefined();
   });
 
-  it("includes the composer chat-run route (#66)", () => {
+  it("does not expose the retired composer chat-run route", () => {
     const route = API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/chats/runs");
-    expect(route).toBeDefined();
+    expect(route).toBeUndefined();
   });
 
   it("includes the desktop GPT chat routes", () => {
@@ -284,6 +290,9 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/tree"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/search"),
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/preview"),
