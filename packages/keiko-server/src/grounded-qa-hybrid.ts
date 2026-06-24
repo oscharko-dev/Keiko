@@ -89,6 +89,8 @@ import {
   clarificationRequest,
   deriveScopeIdFrom,
   ensureNotCancelled,
+  groundedContextAssemblyInput,
+  groundedContextSummaryInput,
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
@@ -420,8 +422,7 @@ async function retrieveOneConnector(
 
 // ─── Merged prompt ────────────────────────────────────────────────────────────
 
-const HYBRID_NO_EVIDENCE_ANSWER =
-  "Keine Evidenz in den ausgewählten verbundenen Quellen gefunden.";
+const HYBRID_NO_EVIDENCE_ANSWER = "Keine Evidenz in den ausgewählten verbundenen Quellen gefunden.";
 const HYBRID_SYSTEM_PROMPT =
   `${GROUNDED_SYSTEM_PROMPT} Connector excerpts are indexed-document citations: attribute every ` +
   "connector claim to its source label and the matching [n] marker in addition to any file reference.";
@@ -577,6 +578,7 @@ function emptyFolderSummary(): GroundedAnswerContextPackSummary {
 function folderSummary(
   folders: readonly RetrievedFolder[],
   redactor: Redactor,
+  deps: Pick<UiHandlerDeps, "contextProfile">,
 ): GroundedAnswerContextPackSummary {
   if (folders.length === 0) return emptyFolderSummary();
   return mergeContextPackSummaries(
@@ -585,6 +587,7 @@ function folderSummary(
         src.pack,
         buildCitations(src.pack, redactor).length,
         src.elapsedMs,
+        groundedContextSummaryInput(deps, src.pack),
       ),
     ),
   );
@@ -686,6 +689,7 @@ function persistFolderEvidence(
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
+        ...groundedContextAssemblyInput(ctx.deps, src.pack),
       },
       {
         store: ctx.deps.evidenceStore,
@@ -894,7 +898,7 @@ function assembleHybridAnswer(
   );
   persistConnectorAudit(store, sources.connectors, selected, ctx.modelId);
   const elapsedMs = sources.folders.reduce((acc, src) => acc + src.elapsedMs, 0);
-  const summary = folderSummary(sources.folders, redactor);
+  const summary = folderSummary(sources.folders, redactor, ctx.deps);
   return {
     groundingKind: "hybrid",
     ...ids,
@@ -950,10 +954,7 @@ function assembleHybridNoEvidenceRoute(
   selected: readonly SelectedCandidate<HybridPayload>[],
   limits: ReturnType<typeof currentGroundingLimits>,
 ): RouteResult {
-  const content = redactString(
-    ctx.deps.redactor,
-    HYBRID_NO_EVIDENCE_ANSWER,
-  );
+  const content = redactString(ctx.deps.redactor, HYBRID_NO_EVIDENCE_ANSWER);
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,

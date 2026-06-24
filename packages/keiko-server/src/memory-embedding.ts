@@ -35,20 +35,16 @@ import type {
   MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
-import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
+import {
+  configuredEmbeddingProviders,
+  selectEmbeddingModelId,
+} from "./local-knowledge-handlers.js";
 
 const MEMORY_VECTOR_METRIC = "cosine" as const;
 export function selectMemoryEmbeddingModelId(
   config: GatewayConfig | undefined,
 ): string | undefined {
   return selectEmbeddingModelId(config);
-}
-
-function providerForModel(
-  config: GatewayConfig | undefined,
-  modelId: string,
-): ModelProviderConfig | undefined {
-  return config?.providers.find((provider) => provider.modelId === modelId);
 }
 
 function requestEmbeddingImpl(
@@ -108,27 +104,29 @@ export function createMemoryEmbedder(
   config: GatewayConfig | undefined,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
 ): MemoryEmbedder | null {
-  const modelId = selectMemoryEmbeddingModelId(config);
-  if (modelId === undefined) return null;
-  const provider = providerForModel(config, modelId);
-  if (provider === undefined) return null;
-  const adapter = buildAdapter(provider, requestImpl);
+  const providers = configuredEmbeddingProviders(config);
+  if (providers.length === 0) return null;
+  const candidates = providers.map((provider) => ({
+    provider,
+    adapter: buildAdapter(provider, requestImpl),
+  }));
   return async (text: string): Promise<MemoryEmbeddingInput | null> => {
     if (text.length === 0) return null;
-    try {
-      const outcome = await adapter.request({
-        endpoint: provider.baseUrl,
-        apiKey: provider.apiKey,
-        modelId,
-        input: text,
-        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-      });
-      if (!outcome.ok) return null;
-      return toEmbeddingInput("openai", outcome);
-    } catch {
-      // Model/transport boundary: a thrown adapter must degrade to "no embedding", never crash.
-      return null;
+    for (const { provider, adapter } of candidates) {
+      try {
+        const outcome = await adapter.request({
+          endpoint: provider.baseUrl,
+          apiKey: provider.apiKey,
+          modelId: provider.modelId,
+          input: text,
+          ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+        });
+        if (outcome.ok) return toEmbeddingInput("openai", outcome);
+      } catch {
+        // Model/transport boundary: a thrown adapter degrades to the next embedding provider.
+      }
     }
+    return null;
   };
 }
 

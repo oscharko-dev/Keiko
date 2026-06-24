@@ -308,16 +308,22 @@ function identityFromAdapter(
   success: OpenAIEmbeddingSuccess,
 ): EmbeddingModelIdentity {
   // `provider` and `vectorMetric` are not echoed by the OpenAI API response — they come from
-  // the operator's pinned identity. Only `modelId`, `modelRevision`, and `vectorDimensions`
-  // are observed from the adapter's outcome. Identity-compatibility checks the structural
-  // tuple (provider+modelId+dims+metric), so the constructed identity only loses fidelity
-  // on `modelRevision` (which the compatibility check treats as a warning, not a failure).
+  // the operator's pinned identity. LiteLLM can echo the upstream embedding model while the
+  // request must keep using the configured model_name route. Treat that echoed upstream id as
+  // an alias only when the pinned capsule already recorded it as the expected revision.
+  const responseMatchesPinnedRoute = success.modelId === pinned.modelId;
+  const responseMatchesPinnedRevision =
+    pinned.modelRevision !== undefined && success.modelId === pinned.modelRevision;
+  const modelId =
+    responseMatchesPinnedRoute || responseMatchesPinnedRevision ? pinned.modelId : success.modelId;
+  const modelRevision =
+    success.modelRevision ?? (responseMatchesPinnedRevision ? success.modelId : undefined);
   return {
     provider: pinned.provider,
-    modelId: success.modelId,
+    modelId,
     vectorDimensions: success.vector.length,
     vectorMetric: pinned.vectorMetric,
-    ...(success.modelRevision !== undefined ? { modelRevision: success.modelRevision } : {}),
+    ...(modelRevision !== undefined ? { modelRevision } : {}),
   };
 }
 

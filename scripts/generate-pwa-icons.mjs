@@ -22,10 +22,11 @@ const REPO_ROOT = resolve(__dirname, "..");
 const UI_PUBLIC = join(REPO_ROOT, "packages", "keiko-ui", "public");
 
 const ACCENT = "#4EBA87";
-const BG = "#1B1E23";
+const MARK = "#050806";
 const PRODUCT_TITLE = "Keiko | Ex experientia disco";
 const FAVICON_TITLE = "Keiko cone logo";
 const SOURCE_VIEWBOX = "0 0 1024 1024";
+const APP_ICON_VISUAL_SCALE = 0.95;
 
 const sourceSvg = join(UI_PUBLIC, "keiko-logo.svg");
 const sourceSvgText = readFileSync(sourceSvg, "utf8");
@@ -53,18 +54,21 @@ function withFill(svg, fill) {
 
 function buildIconSvg(size, options = {}) {
   const background = options.background;
-  const fill = options.fill ?? ACCENT;
+  const fill = options.fill ?? MARK;
   const title = options.title ?? PRODUCT_TITLE;
-  const padding = Math.round(size * (options.paddingRatio ?? 0));
-  const glyphSize = size - padding * 2;
+  const visualScale = options.visualScale ?? 1;
+  const glyphSize = Math.round(size * visualScale);
+  const glyphOffset = Math.round((size - glyphSize) / 2);
   const backgroundRect =
-    typeof background === "string" ? `<rect width="100%" height="100%" fill="${background}"/>` : "";
+    typeof background === "string"
+      ? `<rect x="0" y="0" width="${size}" height="${size}" fill="${background}"/>`
+      : "";
 
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">`,
     `<title>${xmlEscape(title)}</title>`,
     backgroundRect,
-    `<svg x="${padding}" y="${padding}" width="${glyphSize}" height="${glyphSize}" viewBox="${SOURCE_VIEWBOX}" preserveAspectRatio="xMidYMid meet">`,
+    `<svg x="${glyphOffset}" y="${glyphOffset}" width="${glyphSize}" height="${glyphSize}" viewBox="${SOURCE_VIEWBOX}" preserveAspectRatio="xMidYMid meet">`,
     withFill(svgInner, fill),
     "</svg>",
     "</svg>",
@@ -106,11 +110,14 @@ function renderIcon(file, size, options) {
   }
 }
 
-renderIcon("icon-192.png", 192, { paddingRatio: 0.08 });
-renderIcon("icon-512.png", 512, { paddingRatio: 0.08 });
-renderIcon("icon-192-maskable.png", 192, { background: BG, paddingRatio: 0.18 });
-renderIcon("icon-512-maskable.png", 512, { background: BG, paddingRatio: 0.18 });
-renderIcon("apple-touch-icon.png", 180, { background: BG, paddingRatio: 0.12 });
-renderIcon("favicon.ico", 32, { paddingRatio: 0.05, title: FAVICON_TITLE });
-writeSvgIcon("favicon.svg", 1024, { title: FAVICON_TITLE });
+const brandedIcon = { background: ACCENT, fill: MARK, visualScale: APP_ICON_VISUAL_SCALE };
+const faviconIcon = { fill: ACCENT, title: FAVICON_TITLE };
+
+renderIcon("icon-192.png", 192, brandedIcon);
+renderIcon("icon-512.png", 512, brandedIcon);
+renderIcon("icon-192-maskable.png", 192, brandedIcon);
+renderIcon("icon-512-maskable.png", 512, brandedIcon);
+renderIcon("apple-touch-icon.png", 180, brandedIcon);
+renderIcon("favicon.ico", 32, faviconIcon);
+writeSvgIcon("favicon.svg", 1024, faviconIcon);
 console.log("done.");

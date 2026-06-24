@@ -127,6 +127,8 @@ function validateManifestShape(parsed: Record<string, unknown>, runId: string): 
   requireOptionalRecord(parsed, "failure", runId);
   requireOptionalRecord(parsed, "browser", runId);
   requireOptionalRecord(parsed, "connectedContext", runId);
+  requireOptionalRecord(parsed, "contextAssembly", runId);
+  requireOptionalArray(parsed, "compaction", runId);
 }
 
 function parseManifest(json: string, runId: string): EvidenceManifest {

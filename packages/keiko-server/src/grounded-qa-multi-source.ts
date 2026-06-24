@@ -16,6 +16,11 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
+import {
+  CONTEXT_LANE_IDS,
+  type ContextBudgetPressure,
+  type ContextLaneId,
+} from "@oscharko-dev/keiko-contracts";
 
 import {
   CANDIDATE_OMISSION_REASONS,
@@ -30,6 +35,7 @@ import {
   buildGroundedAnswerContextPackSummary,
   type ChatConnectedScope,
   type GroundedAnswer,
+  type GroundedAnswerContextSummary,
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
@@ -63,6 +69,8 @@ import {
   deriveScopeIdFrom,
   ensureNotCancelled,
   evidenceLines,
+  groundedContextAssemblyInput,
+  groundedContextSummaryInput,
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
@@ -207,6 +215,58 @@ function mergedFileCount(summaries: readonly GroundedAnswerContextPackSummary[])
   return summaries.reduce((acc, s) => acc + s.fileCount, 0);
 }
 
+const PRESSURE_RANK: Readonly<Record<ContextBudgetPressure, number>> = {
+  low: 0,
+  moderate: 1,
+  high: 2,
+  exceeded: 3,
+} as const;
+
+function isContextSummary(
+  summary: GroundedAnswerContextPackSummary["contextSummary"],
+): summary is GroundedAnswerContextSummary {
+  return summary !== undefined;
+}
+
+function emptyLaneCounts(): Record<ContextLaneId, number> {
+  const counts = {} as Record<ContextLaneId, number>;
+  for (const laneId of CONTEXT_LANE_IDS) {
+    counts[laneId] = 0;
+  }
+  return counts;
+}
+
+function worstPressure(
+  current: ContextBudgetPressure,
+  next: ContextBudgetPressure,
+): ContextBudgetPressure {
+  return PRESSURE_RANK[next] > PRESSURE_RANK[current] ? next : current;
+}
+
+function mergeContextSummaries(
+  summaries: readonly GroundedAnswerContextPackSummary[],
+): GroundedAnswerContextSummary | undefined {
+  const contextSummaries = summaries
+    .map((summary) => summary.contextSummary)
+    .filter(isContextSummary);
+  if (contextSummaries.length === 0) {
+    return undefined;
+  }
+  const laneCounts = emptyLaneCounts();
+  let totalEstimatedTokens = 0;
+  let budgetPressure: ContextBudgetPressure = "low";
+  let compactionActive = false;
+  for (const summary of contextSummaries) {
+    totalEstimatedTokens += summary.totalEstimatedTokens;
+    budgetPressure = worstPressure(budgetPressure, summary.budgetPressure);
+    compactionActive ||= summary.compactionActive;
+    for (const laneId of CONTEXT_LANE_IDS) {
+      laneCounts[laneId] += summary.laneCounts[laneId];
+    }
+  }
+  return { totalEstimatedTokens, budgetPressure, laneCounts, compactionActive };
+}
+
 export function mergeContextPackSummaries(
   summaries: readonly GroundedAnswerContextPackSummary[],
 ): GroundedAnswerContextPackSummary {
@@ -214,6 +274,9 @@ export function mergeContextPackSummaries(
   if (first === undefined) {
     throw new Error("mergeContextPackSummaries requires at least one summary");
   }
+  // ADR-0057 D1: merge every contributing source's path-free contextSummary. The projection remains
+  // structurally path-free: fixed lane-id keys, numeric counts/tokens, a pressure enum, and a boolean.
+  const mergedContextSummary = mergeContextSummaries(summaries);
   return {
     schemaVersion: first.schemaVersion,
     scopeId: `scope-${createHash("sha256")
@@ -230,6 +293,7 @@ export function mergeContextPackSummaries(
     omittedCounts: mergeOmittedCounts(summaries),
     uncertaintyCount: summaries.reduce((acc, s) => acc + s.uncertaintyCount, 0),
     elapsedMs: summaries.reduce((acc, s) => acc + s.elapsedMs, 0),
+    ...(mergedContextSummary !== undefined ? { contextSummary: mergedContextSummary } : {}),
   };
 }
 
@@ -587,6 +651,7 @@ function persistPerSourceEvidence(
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
+        ...groundedContextAssemblyInput(ctx.deps, src.pack),
       },
       {
         store: ctx.deps.evidenceStore,
@@ -615,6 +680,7 @@ function assembleMultiSourceAnswer(
       src.pack,
       buildCitations(src.pack, redactor).length,
       src.elapsedMs,
+      groundedContextSummaryInput(ctx.deps, src.pack),
     ),
   );
   const mergedSummary = mergeContextPackSummaries(summaries);

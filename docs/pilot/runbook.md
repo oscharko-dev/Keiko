@@ -8,7 +8,9 @@ This guide is for teams validating Keiko before broader rollout.
 2. Install Keiko in the project:
 
 ```bash
-npm install @oscharko-dev/keiko && npx keiko init && npm run keiko:start
+npm install -D @oscharko-dev/keiko
+npx keiko init
+npm run keiko:start
 ```
 
 (Yarn, pnpm, and npx are also supported; see the [main README](../../README.md) for all package manager options.)

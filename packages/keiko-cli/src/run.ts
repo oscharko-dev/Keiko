@@ -34,6 +34,7 @@ import {
 import { AuditError } from "@oscharko-dev/keiko-evidence";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
+import { harnessToolShaper } from "./tool-shaper.js";
 
 const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([
   "generate-unit-tests",
@@ -340,6 +341,7 @@ export async function runAgentCli(
     model: model.port,
     tools: new DryRunToolPort(),
     sink: teeSink([memory, new CliEventSink(io)]),
+    shaperPort: harnessToolShaper,
   });
   const result = await session.result;
   if (flags.write) {

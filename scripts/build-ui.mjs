@@ -14,6 +14,8 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
+import { checkUiStaticJavaScriptCompatibility } from "./check-ui-static-js-compat.mjs";
+import { transpileUiStaticJavaScript } from "./transpile-ui-static-js.mjs";
 import { removeRuntimeJavaScriptSourceMaps } from "./ui-static-cleanup.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -90,6 +92,8 @@ async function main() {
   if (removedMaps.length > 0) {
     console.log(`Removed ${String(removedMaps.length)} UI runtime source map(s) from ${staticDir}`);
   }
+  await transpileUiStaticJavaScript(staticDir);
+  await checkUiStaticJavaScriptCompatibility(staticDir);
   await writeCspHashes();
 }
 

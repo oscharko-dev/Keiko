@@ -31,6 +31,16 @@ function deploymentNamesFromInput(value: string): readonly string[] {
   );
 }
 
+function timeoutMsFromInput(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error("Request timeout must be a positive integer in milliseconds.");
+  }
+  return parsed;
+}
+
 function isAzureFoundryUrl(value: string): boolean {
   try {
     return new URL(value.trim()).hostname.endsWith(".services.ai.azure.com");
@@ -66,6 +76,7 @@ export function GatewaySetupDialog({
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyHeaderName, setApiKeyHeaderName] = useState("");
+  const [timeoutMs, setTimeoutMs] = useState("");
   const [deploymentNames, setDeploymentNames] = useState("");
   const [imageInputModelIds, setImageInputModelIds] = useState("");
   const [figmaAccessToken, setFigmaAccessToken] = useState("");
@@ -181,6 +192,14 @@ export function GatewaySetupDialog({
         setBusy(false);
         return;
       }
+      let parsedTimeoutMs: number | undefined;
+      try {
+        parsedTimeoutMs = timeoutMsFromInput(timeoutMs);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Request timeout is invalid.");
+        setBusy(false);
+        return;
+      }
       const parsedImageInputModelIds = deploymentNamesFromInput(imageInputModelIds);
       const submittedGatewayCredentials =
         !preserveExisting ||
@@ -189,11 +208,14 @@ export function GatewaySetupDialog({
         apiKeyHeaderName.trim() !== "" ||
         parsedDeploymentNames.length > 0 ||
         parsedImageInputModelIds.length > 0;
+      const submittedGatewaySettings =
+        submittedGatewayCredentials || parsedTimeoutMs !== undefined;
       const submittedFigmaCredential = figmaAccessToken.trim() !== "";
       const result = await setupGateway({
         baseUrl: baseUrl.trim() === "" ? undefined : baseUrl.trim(),
         apiKey: apiKey.trim() === "" ? undefined : apiKey.trim(),
         apiKeyHeaderName: apiKeyHeaderName.trim() === "" ? undefined : apiKeyHeaderName.trim(),
+        ...(parsedTimeoutMs === undefined ? {} : { timeoutMs: parsedTimeoutMs }),
         deploymentNames: parsedDeploymentNames,
         preserveExisting,
         ...(parsedImageInputModelIds.length === 0
@@ -204,8 +226,14 @@ export function GatewaySetupDialog({
       const count = result.testedModelIds.length;
       const skippedSummary = skippedModelSummary(result.skippedModelIds ?? []);
       setBusy(false);
-      if (submittedFigmaCredential && !submittedGatewayCredentials) {
+      if (submittedFigmaCredential && !submittedGatewaySettings) {
         setSuccess("Verified Figma access token. Reloading Keiko…");
+      } else if (submittedFigmaCredential && !submittedGatewayCredentials) {
+        setSuccess(
+          "Updated model gateway settings and verified Figma access token. Reloading Keiko…",
+        );
+      } else if (!submittedFigmaCredential && !submittedGatewayCredentials) {
+        setSuccess("Updated model gateway settings. Reloading Keiko…");
       } else if (submittedFigmaCredential) {
         setSuccess(
           `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"} and Figma access token. Reloading Keiko…${skippedSummary}`,
@@ -241,6 +269,7 @@ export function GatewaySetupDialog({
     baseUrl.trim() !== "" ||
     apiKey.trim() !== "" ||
     apiKeyHeaderName.trim() !== "" ||
+    timeoutMs.trim() !== "" ||
     parsedDeploymentNames.length > 0 ||
     parsedImageInputModelIds.length > 0;
   const hasFigmaCredentialInput = figmaAccessToken.trim() !== "";
@@ -311,6 +340,20 @@ export function GatewaySetupDialog({
           autoComplete="off"
           disabled={busy || success !== undefined}
           onChange={(event) => setApiKeyHeaderName(event.target.value)}
+        />
+      </label>
+      <label className="gw-field">
+        <span>
+          Request timeout (ms) <span className="dlg-opt">optional</span>
+        </span>
+        <input
+          className="gw-input mono"
+          inputMode="numeric"
+          value={timeoutMs}
+          placeholder={preserveExisting ? "Leave blank to keep stored timeout" : "30000"}
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          onChange={(event) => setTimeoutMs(event.target.value)}
         />
       </label>
       <label className="gw-field">

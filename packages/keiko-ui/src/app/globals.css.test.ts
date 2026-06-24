@@ -3885,3 +3885,32 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     );
   });
 });
+
+// ADR-0057 D2 — drift gate pinning the ContextStatusPanel .ctx-* classes into the single
+// globals.css. Reverting any class definition (or swapping a Tier-3 token for a raw value) fails
+// here, so the panel's styling cannot silently disappear or violate the no-raw-values gate.
+describe("PR6 context status panel — .ctx-* styling pin (ADR-0057 D2)", () => {
+  it("defines the .ctx-status disclosure container and its summary / dl children", () => {
+    for (const selector of [".ctx-status {", ".ctx-status-summary {", ".ctx-status-dl {"]) {
+      expect(css.includes(selector), `${selector} must remain in globals.css`).toBe(true);
+    }
+    expect(
+      css.includes(".ctx-status-summary:hover {"),
+      "the quiet summary must brighten on hover",
+    ).toBe(true);
+  });
+
+  it("styles the .ctx-* classes only with existing Tier-3 semantic tokens (no raw values)", () => {
+    const block = css.slice(css.indexOf(".ctx-status {"), css.indexOf(".chatw-typing-row {"));
+    expect(block.length).toBeGreaterThan(0);
+    for (const token of [
+      "var(--border-subtle)",
+      "var(--surface-primary)",
+      "var(--text-secondary)",
+      "var(--text-primary)",
+      "var(--font-mono)",
+    ]) {
+      expect(block.includes(token), `.ctx-* block must use ${token}`).toBe(true);
+    }
+  });
+});
