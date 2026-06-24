@@ -43,6 +43,13 @@ describe("canConnect — quality ↔ files (#270)", () => {
     expect(canConnect("editor", "connector")).toBe(true);
     expect(canConnect("connector", "editor")).toBe(true);
   });
+
+  it("allows Prompt Enhancer grounding context to bind to files", () => {
+    expect(canConnect("promptEnhancer", "files")).toBe(true);
+    expect(canConnect("files", "promptEnhancer")).toBe(true);
+    expect(canConnect("promptEnhancer", "connector")).toBe(false);
+    expect(canConnect("promptEnhancer", "quality")).toBe(false);
+  });
 });
 
 // Epic #710, Issue #718 — a QI hub can bind to a Connector window so the connector's selected
@@ -83,6 +90,9 @@ describe("relLabel — files ↔ quality (#270)", () => {
     expect(relLabel(snap("files", { root: "/repo", activeFilePath: "src/app.ts" }), snap("editor"))).toBe(
       "uses app.ts",
     );
+    expect(
+      relLabel(snap("files", { resolvedRoot: "/Users/oscharko-dev/Projects/Keiko" }), snap("promptEnhancer")),
+    ).toBe("uses Keiko/");
   });
 });
 

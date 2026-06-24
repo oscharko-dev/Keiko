@@ -285,10 +285,9 @@ export function chooseDefaultModel(models: readonly ModelCapability[]): string {
   return models[0]?.id ?? "";
 }
 
-// Issue #153 — single source of truth lives in @/lib/workflow-eligibility so the in-chat
-// launcher (ChatWindow → WorkflowHandoff) and this legacy modal cannot drift. The thin
-// alias below preserves the historical `isAgentWorkflowModel` export name so the existing
-// NewWindowDialog.test imports keep resolving.
+// Issue #153 — single source of truth lives in @/lib/workflow-eligibility. The thin alias below
+// preserves the historical `isAgentWorkflowModel` export name so NewWindowDialog.test imports keep
+// resolving.
 export const isAgentWorkflowModel = isWorkflowEligibleModel;
 
 function toPosix(value: string): string {

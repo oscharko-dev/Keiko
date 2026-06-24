@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import { WindowFrame } from "./WindowFrame";
 import type { AppWindow } from "./types";
-import { WIN_TYPES } from "./WindowsRegistry";
+import { registerWindowRender, WIN_TYPES } from "./WindowsRegistry";
 
 function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
   return {
@@ -26,6 +26,7 @@ function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
 function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
   return {
     add: vi.fn(() => null),
+    openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
     focus: vi.fn(),
     close: vi.fn(),
@@ -184,6 +185,70 @@ describe("WindowFrame content zoom controls", () => {
     expect(
       screen.getByRole("group", { name: "Quality Intelligence window controls" }),
     ).toBeInTheDocument();
+  });
+
+  it("requests connected Files context for Prompt Enhancer windows", () => {
+    const linkedFilesRoot = vi.fn(() => "/repo");
+    const linkedFilesContext = vi.fn(() => ({
+      id: "files-1",
+      root: "/repo",
+      activeFilePath: "src/app.ts",
+    }));
+    const linkedAllFilesRoots = vi.fn(() => ["/repo", "/docs"]);
+
+    render(
+      <WindowFrame
+        win={appWindow({
+          id: "prompt-enhancer-1",
+          type: "promptEnhancer",
+          w: 860,
+          h: 680,
+        })}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ linkedFilesRoot, linkedFilesContext, linkedAllFilesRoots })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "Prompt Enhancer" })).toBeInTheDocument();
+    expect(linkedFilesRoot).toHaveBeenCalledWith("prompt-enhancer-1");
+    expect(linkedFilesContext).toHaveBeenCalledWith("prompt-enhancer-1");
+    expect(linkedAllFilesRoots).toHaveBeenCalledWith("prompt-enhancer-1");
+  });
+
+  it("defers focus long enough for selectable text drags to start", () => {
+    vi.useFakeTimers();
+    registerWindowRender("promptEnhancer", () => (
+      <pre data-text-selectable="true">Selectable prompt text</pre>
+    ));
+    const focus = vi.fn();
+
+    render(
+      <WindowFrame
+        win={appWindow({
+          id: "prompt-enhancer-1",
+          type: "promptEnhancer",
+          w: 860,
+          h: 680,
+        })}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByText("Selectable prompt text"), { button: 0 });
+
+    expect(focus).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(179);
+    expect(focus).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(focus).toHaveBeenCalledWith("prompt-enhancer-1");
+    vi.useRealTimers();
   });
 
   it("ignores header double clicks in the right-side control gutter", () => {

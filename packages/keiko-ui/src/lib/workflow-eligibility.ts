@@ -1,15 +1,13 @@
-// Issue #153 — workflow-eligibility helper for the Conversation Center handoff.
+// Issue #153 — workflow-eligibility helper for Agent widget workflow launches.
 //
 // AC #2 requires that the workflow launch surface use a STRICTER model filter than the
 // general conversation filter (`isConversationEligibleModel`, which is just `kind === "chat"`).
 // A workflow run REQUIRES a model that can also drive tool calls and emit structured output,
-// because the workflow surface relies on both. The same predicate was already used by the
-// pre-Conversation-Center `NewWindowDialog` launcher under the local name `isAgentWorkflowModel`;
-// promoting it to `@/lib` gives both surfaces a single source of truth and lets the new in-chat
-// launcher (ChatWindow + WorkflowHandoff) and the legacy modal stay byte-identical on the rule.
+// because the workflow surface relies on both. The NewWindowDialog launcher exposes the predicate
+// under the local name `isAgentWorkflowModel`.
 //
-// Pure, total, no side effects. Pinned by WorkflowHandoff.test.tsx (workflow handoff suite) and
-// NewWindowDialog.test.tsx (legacy launcher) for cross-surface drift detection.
+// Pure, total, no side effects. Pinned by workflow-eligibility.test.ts and
+// NewWindowDialog.test.tsx for launcher drift detection.
 //
 // ELIG-F1: eligibility is INTENTIONALLY DERIVED from kind + toolCalling +
 // structuredOutput, the three runtime capabilities a workflow run actually needs.
