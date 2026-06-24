@@ -9,6 +9,7 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
+  type Ref,
   type WheelEvent,
 } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
@@ -36,6 +37,10 @@ import {
 import { Toggle } from "./widgets/shared/Toggle";
 import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
+import { supportsDictation, useVoiceCapability } from "./hooks/useVoiceCapability";
+import { useDictation, type DictationController } from "./hooks/useDictation";
+import { dictationCaptureSupported } from "./hooks/dictation-recorder";
+import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./VoiceDictation";
 import { updateChat } from "@/lib/api";
 import { formatUserError } from "./format-error";
 import {
@@ -66,10 +71,6 @@ interface ChatWindowProps {
   readonly linkedRoot?: string | null;
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
 }
-
-// AC #1 — voice is not yet implemented. Gate on a constant so that when the
-// capability flag arrives the removal is a one-line change, not a search.
-const VOICE_SUPPORTED = false;
 
 // Stable id for the no-model alert so aria-describedby chains can reference it.
 const NO_MODEL_ALERT_ID = "cmp-no-model-alert";
@@ -281,6 +282,12 @@ interface ComposerBarProps {
   // Issue #151 — when true, the budget for the next send exceeds the model's
   // window and the send button must be focusable but inert.
   readonly budgetExceeded: boolean;
+  // Issue #495 — capability-gated dictation. The mic affordance renders only when
+  // `voiceDictationVisible` is true (STT advertised + browser can capture). `dictation` is the
+  // composer-local state machine and `micButtonRef` lets the preview return focus to the button.
+  readonly voiceDictationVisible: boolean;
+  readonly dictation: DictationController;
+  readonly micButtonRef: Ref<HTMLButtonElement>;
 }
 
 function ComposerBar({
@@ -293,6 +300,9 @@ function ComposerBar({
   barCompact = false,
   workflowCompact = false,
   budgetExceeded,
+  voiceDictationVisible,
+  dictation,
+  micButtonRef,
 }: ComposerBarProps): ReactNode {
   const {
     models,
@@ -401,12 +411,18 @@ function ComposerBar({
             }}
           />
         </div>
-        {/* AC #1: voice button omitted — VOICE_SUPPORTED is false.
-            When the capability flag arrives, render this block only when VOICE_SUPPORTED is true. */}
-        {VOICE_SUPPORTED ? (
-          <button type="button" className="cmp-icon ui-tip" aria-label="Voice" data-tip="Voice">
-            <Icons.mic size={16} />
-          </button>
+        {/* Issue #495 — capability-gated dictation. Rendered only when the deployment advertises
+            speech-to-text and the browser can capture audio; a no-voice deployment shows no mic at
+            all so the composer stays clean and fully text-capable (AC1). The button is STT dictation
+            only and never implies full voice conversation (AC5). */}
+        {voiceDictationVisible ? (
+          <VoiceDictationButton
+            phase={dictation.phase}
+            onStart={dictation.start}
+            onStop={dictation.stop}
+            buttonRef={micButtonRef}
+            compact={controlsNarrow}
+          />
         ) : null}
       </div>
       {/* AC #2: visually-hidden hint for screen readers when send is blocked by empty draft */}
@@ -611,6 +627,24 @@ function ComposerCore({
     [addPendingAttachment],
   );
 
+  // Issue #495 — capability-gated composer dictation. The probe is non-blocking: the composer
+  // renders fully while `useVoiceCapability` resolves, and the mic affordance appears only once the
+  // deployment advertises speech-to-text AND the browser can capture audio. A no-voice / unsupported
+  // environment shows no voice control at all, so the composer stays clean and fully text-capable.
+  const voiceCapability = useVoiceCapability();
+  const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
+  const micButtonRef = useRef<HTMLButtonElement>(null);
+  // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
+  // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
+  const insertTranscript = useCallback(
+    (text: string): void => {
+      setDraft(draft.trim().length === 0 ? text : `${draft.replace(/\s+$/u, "")} ${text}`);
+      taRef.current?.focus();
+    },
+    [draft, setDraft],
+  );
+  const dictation = useDictation({ onInsert: insertTranscript });
+
   return (
     <div className={`cmp-box${compact ? " cmp-box-compact" : ""}`}>
       <div className="cmp-input-stack">
@@ -638,6 +672,15 @@ function ComposerCore({
             adjacent to the textarea so SR users hear the state without losing
             composer focus. Hidden when there is nothing to announce. */}
         <SendLifecycleStatus status={sendStatus} />
+        {/* Issue #495 — dictation transcript review / transcribing status / error. Lives in the input
+            stack so it is contextually adjacent to the textarea and announced to assistive tech. It
+            renders nothing while idle or recording (the mic button carries those states). */}
+        {voiceDictationVisible ? (
+          <VoiceDictationPreviewFromController
+            controller={dictation}
+            onAfterDiscard={() => micButtonRef.current?.focus()}
+          />
+        ) : null}
       </div>
       <div className="cmp-footer-row">
         {/* Issue #151 — context-pressure indicator + clear-history affordance */}
@@ -659,6 +702,9 @@ function ComposerCore({
           barCompact={barCompact}
           workflowCompact={workflowCompact}
           budgetExceeded={budgetExceeded}
+          voiceDictationVisible={voiceDictationVisible}
+          dictation={dictation}
+          micButtonRef={micButtonRef}
         />
       </div>
     </div>

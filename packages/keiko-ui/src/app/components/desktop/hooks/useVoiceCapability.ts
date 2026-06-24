@@ -1,0 +1,65 @@
+// Issue #495, Epic #491 — non-blocking voice-capability probe for the chat composer.
+//
+// The composer must consult the local voice-capability resolution (Issue #493) BEFORE rendering any
+// dictation affordance, but that probe must NEVER block composer rendering: in a no-voice deployment
+// the composer stays clean, stable, and fully text-capable. This hook fires the probe lazily on first
+// mount and returns `undefined` until it resolves; the composer renders fully meanwhile and only adds
+// the microphone affordance once the resolution reports speech-to-text capability.
+
+import { useEffect, useState } from "react";
+import { fetchVoiceCapability } from "@/lib/api";
+import type { VoiceCapabilityResolution } from "@/lib/types";
+
+// Module-cached single-flight probe. The resolution is content-free and stable for the lifetime of a
+// gateway config, so one fetch is shared across every composer instance and remount (mirrors the
+// `fetchModels` memoized-promise pattern in lib/api.ts). A transport failure is NOT cached, so a later
+// mount retries instead of being stuck on a transient error.
+let capabilityRequest: Promise<VoiceCapabilityResolution> | undefined;
+
+async function loadVoiceCapability(): Promise<VoiceCapabilityResolution> {
+  capabilityRequest ??= fetchVoiceCapability()
+    .then((response) => response.voice)
+    .catch((error: unknown) => {
+      capabilityRequest = undefined;
+      throw error;
+    });
+  return capabilityRequest;
+}
+
+// Test-only reset so each test starts from an unresolved probe (mirrors `clearModelCacheForTests`).
+export function clearVoiceCapabilityCacheForTests(): void {
+  capabilityRequest = undefined;
+}
+
+// Returns the resolved voice capability, or `undefined` while the probe is in flight or after it
+// failed. Callers MUST treat `undefined` and an unavailable resolution identically — render no voice
+// affordance — so a slow or failed probe can never leave a broken control in the composer (AC1).
+export function useVoiceCapability(): VoiceCapabilityResolution | undefined {
+  const [resolution, setResolution] = useState<VoiceCapabilityResolution | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadVoiceCapability().then(
+      (voice) => {
+        if (!cancelled) setResolution(voice);
+      },
+      () => {
+        // Fail safe: a failed probe leaves the resolution undefined, so the mic stays hidden and the
+        // composer remains fully usable. Never logs the error (it could carry transport detail).
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return resolution;
+}
+
+// True only when the resolved capability advertises controlled speech-to-text dictation. STT-only is
+// the single profile Issue #495 surfaces; speech output and full-realtime conversation are deliberately
+// NOT actioned here (a transcription endpoint can never imply full Voice Digital Twin conversation —
+// AC5). `undefined` (unresolved/failed) and any unavailable resolution both return false.
+export function supportsDictation(resolution: VoiceCapabilityResolution | undefined): boolean {
+  return resolution !== undefined && resolution.available && resolution.capabilities.speechToText;
+}

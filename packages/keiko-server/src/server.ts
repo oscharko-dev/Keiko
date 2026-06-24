@@ -18,6 +18,7 @@ import {
   type RouteContext,
 } from "./routes.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { isVoiceDictationCapable } from "./read-handlers.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
@@ -175,7 +176,11 @@ async function handle(
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${UI_HOST}`);
   const apiPath = isApiPath(url.pathname);
-  applySecurityHeaders(res, await resolveCsp(deps), apiPath);
+  // Issue #495 — scope the Permissions-Policy microphone directive to deployments that advertise
+  // speech-to-text dictation; a no-voice deployment keeps the strict `microphone=()` default.
+  applySecurityHeaders(res, await resolveCsp(deps), apiPath, {
+    allowMicrophone: isVoiceDictationCapable(handlerDeps),
+  });
   if (!isAllowedHost(req, deps.port)) {
     rejectForbiddenHost(res);
     return;

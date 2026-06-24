@@ -195,6 +195,41 @@ export async function fetchVoiceCapability(): Promise<{ voice: VoiceCapabilityRe
   return fetchJson<{ voice: VoiceCapabilityResolution }>("/api/voice/capability");
 }
 
+// Issue #495, Epic #491 — controlled composer dictation. Posts one short audio clip to the local
+// BFF speech-to-text route (Issue #494) and returns its transcript. The audio rides as base64 inside
+// the standard JSON + CSRF envelope `fetchJson` already applies, so the server's "state-changing
+// requests must be JSON and carry the CSRF guard" invariant is preserved — the browser never sets a
+// raw audio body or reaches a model directly. The request carries only the audio bytes plus
+// content-free metadata; the response carries only the transcript and content-free provider metadata
+// (never a provider base URL, credential, or model id — AC4/AC5, by construction on the BFF side).
+export interface VoiceTranscriptionRequest {
+  // Base64-encoded audio bytes (no `data:` URI prefix, no whitespace).
+  readonly audio: string;
+  // Audio container MIME type the BFF accepts (e.g. "audio/webm"); parameters such as `;codecs=opus`
+  // are stripped server-side before the allowlist check.
+  readonly mimeType: string;
+  // Optional declared clip length in milliseconds (positive integer within the dictation limit).
+  readonly durationMs?: number | undefined;
+  // Optional BCP-47 language tag hint for the provider.
+  readonly language?: string | undefined;
+}
+
+export interface VoiceTranscriptionResult {
+  readonly transcript: string;
+  readonly confidence?: number | undefined;
+  readonly language?: string | undefined;
+  readonly durationMs?: number | undefined;
+}
+
+export async function transcribeDictation(
+  input: VoiceTranscriptionRequest,
+): Promise<VoiceTranscriptionResult> {
+  return fetchJson<VoiceTranscriptionResult>("/api/voice/transcribe", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export interface GatewaySetupInput {
   readonly baseUrl?: string | undefined;
   readonly apiKey?: string | undefined;
