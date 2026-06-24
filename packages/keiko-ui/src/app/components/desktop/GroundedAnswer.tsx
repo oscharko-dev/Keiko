@@ -13,6 +13,7 @@ import { formatBytes, formatMs } from "@/lib/format";
 import type {
   GroundedAnswer,
   GroundedAnswerContextPackSummary,
+  GroundedAnswerRankingSummary,
   GroundedEvidenceCitation,
   GroundedUncertainty,
   HybridGroundedAnswerContextSummary,
@@ -48,7 +49,7 @@ function formatCount(value: number): string {
 // Internal enum tokens (e.g. "no-evidence", "natural-language", "capsule-set") are
 // hyphen-joined pipeline vocabulary; render them as plain words for knowledge workers
 // (uiux-fix F012 C160 — same humanizer the omission reasons already used).
-function humanizeToken(value: string): string {
+export function humanizeToken(value: string): string {
   return value.replaceAll("-", " ");
 }
 
@@ -64,7 +65,7 @@ function formatScopeLabel(summary: GroundedAnswerContextPackSummary): string {
   return `${humanizeToken(summary.scopeKind)} (${idTail})`;
 }
 
-function MetricRow({
+export function MetricRow({
   label,
   value,
 }: {
@@ -76,6 +77,42 @@ function MetricRow({
       <dt className="grounded-context-pack-dt">{label}</dt>
       <dd className="grounded-context-pack-dd">{value}</dd>
     </>
+  );
+}
+
+// Path-free explainable-ranking panel (enterprise retrieval M2). Renders ONLY the bucket and
+// ecosystem aggregate counts the BFF summary carries — no file paths, scores, or per-file signals
+// (those live solely in the regulated audit evidence). Collapsed by default so it never disrupts
+// the answer layout; absent entirely when the answer carries no ranking summary.
+function RankingRationale({
+  summary,
+}: {
+  readonly summary: GroundedAnswerRankingSummary;
+}): ReactNode {
+  const buckets = Object.entries(summary.bucketCounts)
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => (b[1] !== a[1] ? b[1] - a[1] : a[0] < b[0] ? -1 : 1));
+  if (buckets.length === 0) {
+    return null;
+  }
+  return (
+    <details className="grounded-ranking-rationale">
+      <summary aria-label="Why these files were selected">Why these files?</summary>
+      <dl className="grounded-context-pack-dl">
+        {buckets.map(([bucket, count]) => (
+          <MetricRow
+            key={`bucket-${bucket}`}
+            label={humanizeToken(bucket)}
+            value={formatCount(count)}
+          />
+        ))}
+      </dl>
+      {summary.ecosystems.length > 0 ? (
+        <p className="grounded-ranking-ecosystems">
+          {`Ecosystems: ${summary.ecosystems.map((eco) => `${eco.id} (${formatCount(eco.count)})`).join(", ")}`}
+        </p>
+      ) : null}
+    </details>
   );
 }
 
@@ -129,6 +166,9 @@ function ContextPackSummary({
         />
         <MetricRow label="Query" value={humanizeToken(contextPack.queryKind)} />
       </dl>
+      {contextPack.rankingSummary !== undefined ? (
+        <RankingRationale summary={contextPack.rankingSummary} />
+      ) : null}
     </section>
   );
 }

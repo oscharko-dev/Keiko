@@ -80,11 +80,12 @@ describe("PWA icon assets (ADR-0024 D5, issue #123)", () => {
     expect(sha256(fixture.file)).not.toBe(OLD_PLACEHOLDER_HASHES.get(fixture.file));
   });
 
-  it("ships favicon.svg as a copy of keiko-logo.svg (D5 vector favicon)", () => {
-    const favicon = readFileSync(resolve(PUBLIC_DIR, "favicon.svg"));
-    const source = readFileSync(resolve(PUBLIC_DIR, "keiko-logo.svg"));
-    expect(favicon.length).toBeGreaterThan(0);
-    expect(favicon.equals(source)).toBe(true);
+  it("ships favicon.svg as the standalone cone mark, not the PWA install artwork", () => {
+    const favicon = readFileSync(resolve(PUBLIC_DIR, "favicon.svg"), "utf8");
+    expect(favicon).toContain('fill="#4EBA87"');
+    expect(favicon).toContain("<title>Keiko cone logo</title>");
+    expect(favicon).not.toContain('fill="#050806"');
+    expect(favicon).not.toContain("<rect");
   });
 
   it("ships every manifest-referenced icon path on disk", () => {

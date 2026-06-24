@@ -1,7 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-verification",
-  "version": "0.2.0",
-  "private": true,
+  "version": "0.2.7",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal verification package: deterministic verification orchestrator — plan construction, resource-limit policy, best-effort memory monitoring, command classification, and audit/Markdown summaries (ADR-0007, ADR-0019). Not published independently.",
@@ -26,9 +25,9 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "*",
-    "@oscharko-dev/keiko-security": "*",
-    "@oscharko-dev/keiko-tools": "*",
-    "@oscharko-dev/keiko-workspace": "*"
+    "@oscharko-dev/keiko-contracts": "0.2.7",
+    "@oscharko-dev/keiko-security": "0.2.7",
+    "@oscharko-dev/keiko-tools": "0.2.7",
+    "@oscharko-dev/keiko-workspace": "0.2.7"
   }
 }

@@ -146,4 +146,67 @@ describe("loadEvidence", () => {
     store.put("run-x", JSON.stringify({ evidenceSchemaVersion: "1" }));
     expect(() => listEvidence(store)).toThrow(EvidenceSchemaError);
   });
+
+  it("loads a PR5-shaped manifest carrying contextAssembly + compaction (ADR-0056 Gate 2)", () => {
+    const store = createInMemoryEvidenceStore();
+    const manifest: EvidenceManifest = {
+      ...manifestFixture("run-ce", 400),
+      contextAssembly: {
+        schemaVersion: "1",
+        profile: {
+          schemaVersion: "1",
+          maxInputTokens: 128_000,
+          reservedOutputTokens: 8_000,
+          safetyMarginTokens: 4_000,
+          effectiveInputBudget: 116_000,
+          tokenEstimatorId: "keiko-conservative-utf8-v1",
+        },
+        totalEstimatedTokens: 1_200,
+        budgetPressure: "moderate",
+        lanes: [],
+        orderedForRecency: true,
+      },
+      compaction: [
+        {
+          schemaVersion: "1",
+          laneId: "repo-evidence",
+          reason: "budget exceeded",
+          itemsBefore: 8,
+          itemsAfter: 3,
+          tokensBefore: 4_000,
+          tokensAfter: 1_200,
+        },
+      ],
+    };
+    store.put("run-ce", JSON.stringify(manifest));
+    const loaded = loadEvidence(store, "run-ce");
+    expect(loaded?.contextAssembly?.budgetPressure).toBe("moderate");
+    expect(loaded?.compaction?.[0]?.laneId).toBe("repo-evidence");
+  });
+
+  it("still loads a legacy manifest without the new fields (ADR-0056 Gate 2)", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("run-legacy", JSON.stringify(manifestFixture("run-legacy", 500)));
+    const loaded = loadEvidence(store, "run-legacy");
+    expect(loaded?.contextAssembly).toBeUndefined();
+    expect(loaded?.compaction).toBeUndefined();
+  });
+
+  it("rejects a manifest whose contextAssembly is not an object (ADR-0056 D6)", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put(
+      "run-bad-ca",
+      JSON.stringify({ ...manifestFixture("run-bad-ca", 600), contextAssembly: "nope" }),
+    );
+    expect(() => loadEvidence(store, "run-bad-ca")).toThrow(EvidenceSchemaError);
+  });
+
+  it("rejects a manifest whose compaction is not an array (ADR-0056 D6)", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put(
+      "run-bad-comp",
+      JSON.stringify({ ...manifestFixture("run-bad-comp", 700), compaction: { not: "array" } }),
+    );
+    expect(() => loadEvidence(store, "run-bad-comp")).toThrow(EvidenceSchemaError);
+  });
 });

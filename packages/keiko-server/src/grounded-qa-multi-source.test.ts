@@ -12,12 +12,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
+import { CONTEXT_LANE_IDS, type ContextLaneId } from "@oscharko-dev/keiko-contracts";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
   type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { ChatConnectedScope, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatConnectedScope,
+  GroundedAnswer,
+  GroundedAnswerContextSummary,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 
 import {
   handleGroundedAsk,
@@ -310,6 +315,30 @@ describe("buildMultiSourceGatewayMessages", () => {
 });
 
 describe("mergeContextPackSummaries", () => {
+  function laneCounts(
+    overrides: Partial<Record<ContextLaneId, number>> = {},
+  ): Record<ContextLaneId, number> {
+    const counts = {} as Record<ContextLaneId, number>;
+    for (const laneId of CONTEXT_LANE_IDS) {
+      counts[laneId] = overrides[laneId] ?? 0;
+    }
+    return counts;
+  }
+
+  function contextSummary(input: {
+    readonly totalEstimatedTokens: number;
+    readonly budgetPressure: GroundedAnswerContextSummary["budgetPressure"];
+    readonly lanes: Partial<Record<ContextLaneId, number>>;
+    readonly compactionActive: boolean;
+  }): GroundedAnswerContextSummary {
+    return {
+      totalEstimatedTokens: input.totalEstimatedTokens,
+      budgetPressure: input.budgetPressure,
+      laneCounts: laneCounts(input.lanes),
+      compactionActive: input.compactionActive,
+    };
+  }
+
   it("sums usage/budget/counts and flags fileCount -1 when any source is workspace-root", () => {
     const a = buildGroundedAnswerContextPackSummary(scopePack("src/a.ts", 0.4, "a"), 1, 11);
     const rootPack: ConnectedContextPack = {
@@ -323,6 +352,62 @@ describe("mergeContextPackSummaries", () => {
     expect(merged.citationCount).toBe(2);
     expect(merged.omittedCount).toBe(a.omittedCount + b.omittedCount);
     expect(merged.fileCount).toBe(-1);
+    expect("contextSummary" in merged).toBe(false);
+  });
+
+  it("aggregates every path-free contextSummary instead of copying the first source", () => {
+    const a = {
+      ...buildGroundedAnswerContextPackSummary(scopePack("src/a.ts", 0.4, "a"), 1, 11),
+      contextSummary: contextSummary({
+        totalEstimatedTokens: 100,
+        budgetPressure: "moderate",
+        lanes: { "repo-evidence": 2, "system-contract": 1 },
+        compactionActive: false,
+      }),
+    };
+    const b = {
+      ...buildGroundedAnswerContextPackSummary(scopePack("src/b.ts", 0.9, "b"), 1, 13),
+      contextSummary: contextSummary({
+        totalEstimatedTokens: 250,
+        budgetPressure: "exceeded",
+        lanes: { "repo-evidence": 3, "tool-observations": 4 },
+        compactionActive: true,
+      }),
+    };
+
+    const merged = mergeContextPackSummaries([a, b]);
+
+    expect(merged.contextSummary).toStrictEqual({
+      totalEstimatedTokens: 350,
+      budgetPressure: "exceeded",
+      laneCounts: laneCounts({
+        "repo-evidence": 5,
+        "system-contract": 1,
+        "tool-observations": 4,
+      }),
+      compactionActive: true,
+    });
+    const serialized = JSON.stringify(merged.contextSummary);
+    expect(serialized).not.toContain("/");
+    expect(serialized).not.toContain("\\");
+    expect(serialized).not.toContain("src/");
+  });
+
+  it("keeps contextSummary deterministic for identical merged inputs", () => {
+    const a = {
+      ...buildGroundedAnswerContextPackSummary(scopePack("src/a.ts", 0.4, "a"), 1, 11),
+      contextSummary: contextSummary({
+        totalEstimatedTokens: 100,
+        budgetPressure: "high",
+        lanes: { "repo-evidence": 2 },
+        compactionActive: true,
+      }),
+    };
+    const b = buildGroundedAnswerContextPackSummary(scopePack("src/b.ts", 0.9, "b"), 1, 13);
+
+    expect(mergeContextPackSummaries([a, b]).contextSummary).toStrictEqual(
+      mergeContextPackSummaries([a, b]).contextSummary,
+    );
   });
 });
 

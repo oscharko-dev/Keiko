@@ -61,8 +61,10 @@ function expectPruneBeforePackageSurface(jobBlock: string): void {
 // added `arch:check:negative` immediately after `arch:check` so rule deletions are caught in
 // the publish path, not only in CI. Release fix #895 adds native optional dependency pruning
 // before architecture/package-surface checks so publisher-machine canvas payloads cannot leak
-// into the bundled artifact. The pin stays "exact" against the live `package.json`; it does
-// not lock the chain to a particular historical length.
+// into the bundled artifact. Release hardening for 0.2.0 adds `check:publish-manifests` so
+// workspace packages cannot reach npm with private runtime packages or wildcard internal
+// dependency specs. The pin stays "exact" against the live `package.json`; it does not lock the
+// chain to a particular historical length.
 const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
@@ -73,6 +75,7 @@ const PACKAGE_SURFACE_CHAIN = [
   "npm run arch:check:negative",
   "npm run check:package-surface",
   "npm run check:version-consistency",
+  "npm run check:publish-manifests",
   "npm run check:qi-supply-chain",
 ].join(" && ");
 
@@ -110,9 +113,19 @@ describe("Issue #12 docs drift", () => {
 
   it("prunes publisher-native optional dependencies before manual package-surface gates", () => {
     expectPruneBeforePackageSurface(readWorkflowJobBlock(".github/workflows/ci.yml", "ui"));
-    expectPruneBeforePackageSurface(
-      readWorkflowJobBlock(".github/workflows/release.yml", "release-verify"),
-    );
+
+    const releaseVerify = readWorkflowJobBlock(".github/workflows/release.yml", "release-verify");
+    expect(releaseVerify).toContain("Verify required checks for tagged SHA");
+    expect(releaseVerify).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
+    expect(releaseVerify).toContain("npm run release:plan -- --tag beta");
+    expect(releaseVerify).not.toContain("npm run test:coverage:quality");
+    expect(releaseVerify).not.toContain("npm run check:package-surface");
+    expect(releaseVerify).not.toContain("npm run prune:package-native-optionals");
+
+    const publish = readWorkflowJobBlock(".github/workflows/release.yml", "publish");
+    expect(publish).toContain("Verify required checks for release SHA");
+    expect(publish).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
+    expect(publish).toContain('run: npm run release:publish -- --tag "$NPM_DIST_TAG"');
   });
 
   it("states that gen-tests and investigate do not persist evidence manifests", () => {

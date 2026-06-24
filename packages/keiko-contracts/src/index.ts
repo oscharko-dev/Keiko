@@ -23,7 +23,7 @@ export const KEIKO_CONTRACTS_VERSION = "0.8.0" as const;
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.0" as const;
+export const KEIKO_PRODUCT_VERSION = "0.2.7" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -553,6 +553,8 @@ export type {
   NewChatMessage,
   UpdateChatMessagePatch,
   GroundedAnswerContextPackSummary,
+  GroundedAnswerContextSummary,
+  GroundedAnswerRankingSummary,
   ConversationDocumentContextWire,
   ConversationAttachmentDescriptorWire,
   DesktopChatSendRequestWire,
@@ -595,6 +597,8 @@ export type {
   OmittedContextEntry,
   ConnectedContextPack,
   ConnectedContextPackSummary,
+  ContextPackDiagnostics,
+  RankedCandidateExplanation,
   ConversationAttachmentContextLink,
   ValidationResult,
   IsValidScopePathOptions,
@@ -603,6 +607,7 @@ export type {
 } from "./connected-context.js";
 export {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  MAX_RANKED_CANDIDATE_DIAGNOSTICS,
   SELECTED_SCOPE_KINDS,
   EVIDENCE_ATOM_PROVENANCE_KINDS,
   EVIDENCE_ATOM_REDACTION_STATES,
@@ -619,6 +624,85 @@ export {
   validateRetrievalQuery,
   validateConnectedContextPack,
 } from "./connected-context.js";
+
+// ─── Deterministic context-engineering layer (ADR-0052, context-engineering milestone) ──
+export type {
+  ContextLaneId,
+  ContextEvictionPolicy,
+  ContextBudgetPressure,
+  ContextModelMetadata,
+  ContextProfile,
+  ContextLaneBudget,
+  ContextBudget,
+  ContextLane,
+  ContextLaneDiagnostics,
+  ContextAssemblyDiagnostics,
+  ContextCompactionRecord,
+  ContextRehydrationHandle,
+  ContextProvenanceRefKind,
+  ContextProvenanceRef,
+  ContextPreservedFact,
+  ContextAssumption,
+  ContextUserConstraint,
+  ContextCommandOutcome,
+  ContextInvalidationKey,
+} from "./context-engineering.js";
+export {
+  CONTEXT_ENGINEERING_SCHEMA_VERSION,
+  DEFAULT_TOKEN_ESTIMATOR_ID,
+  CONTEXT_LANE_IDS,
+  CONTEXT_EVICTION_POLICIES,
+  DEFAULT_CONTEXT_PROFILE,
+  estimateTokens,
+  estimateTokensForSegments,
+  deriveContextProfile,
+} from "./context-engineering.js";
+export type { ContextValidationResult } from "./context-engineering-validation.js";
+export {
+  isContextLaneId,
+  validateContextProfile,
+  validateContextBudget,
+  validateContextAssemblyDiagnostics,
+} from "./context-engineering-validation.js";
+export {
+  isContextProvenanceRefKind,
+  validateContextProvenanceRef,
+  validateContextPreservedFact,
+  validateContextAssumption,
+  validateContextCommandOutcome,
+  validateContextInvalidationKey,
+  validateContextCompactionRecord,
+  validateContextRehydrationHandle,
+} from "./context-engineering-compaction-validation.js";
+
+// ─── Shaped tool observations (ADR-0054, PR3-W1) ────────────────────────────────
+export type {
+  ShapedStreamExcerpt,
+  ShapedCommandObservation,
+  ShapedTestCounts,
+  ShapedTestObservation,
+  ShapedSearchRange,
+  ShapedSearchObservation,
+  ShapedBrowserObservation,
+  ContextToolObservation,
+  ContextToolRehydrationHandle,
+} from "./context-observations.js";
+export {
+  MAX_OBSERVATION_EXCERPT_BYTES,
+  MAX_FAILING_TEST_NAMES,
+  MAX_OBSERVATION_QUERY_BYTES,
+  MAX_TOP_RANGES,
+  MAX_STACK_FRAME_LINES,
+} from "./context-observations.js";
+export {
+  isContextToolObservationKind,
+  validateShapedCommandObservation,
+  validateShapedTestObservation,
+  validateShapedSearchObservation,
+  validateShapedBrowserObservation,
+  validateContextToolRehydrationHandle,
+  validateContextToolObservation,
+} from "./context-observations-validation.js";
 
 // ─── Governed coding-context retrieval (Issue #1211 / Epic #1189, ADR-0042 D6) ──
 export type {

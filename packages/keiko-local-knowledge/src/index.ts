@@ -28,6 +28,7 @@ export {
   deleteCapsule,
   getCapsule,
   listCapsules,
+  updateCapsuleEmbeddingModelIdentity,
   updateCapsuleState,
   updateCapsuleDetails,
   type CapsuleDetailsPatch,
