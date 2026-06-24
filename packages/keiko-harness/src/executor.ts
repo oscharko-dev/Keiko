@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { ToolError } from "@oscharko-dev/keiko-tools";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
+import type { ToolCallResult } from "@oscharko-dev/keiko-contracts";
 import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";
 import type { ToolCallMetadata } from "./ports.js";
@@ -154,6 +155,33 @@ function emitToolMetadata(
   });
 }
 
+// ADR-0055 D4 (PR4-W3): additively attach a shaped observation to the completed ToolCallResult via
+// the optional injected port, accumulating it on ctx.shapedObservations. The port is pure/total; a
+// returned undefined means "no shape for this tool type" and leaves `result` untouched. The
+// enriched result's `shapedObservation` is keiko-internal — it is NEVER read for the role:tool
+// ChatMessage content (which stays result.output) and is NOT part of contextBytes. No-op when no
+// port is injected (every existing caller), preserving byte-identical behavior.
+function enrichWithObservation(
+  ctx: RunContext,
+  call: NormalizedToolCall,
+  result: ToolCallResult,
+): ToolCallResult {
+  if (ctx.shaperPort === undefined) {
+    return result;
+  }
+  const observation = ctx.shaperPort({
+    result,
+    toolName: call.name,
+    toolCallId: call.id,
+    arguments: call.arguments,
+  });
+  if (observation === undefined) {
+    return result;
+  }
+  ctx.shapedObservations.push(observation);
+  return { ...result, shapedObservation: observation };
+}
+
 function abortStep(ctx: RunContext, reason: string): StateStep {
   if (ctx.failure?.category === HARNESS_CODES.LIMIT_WALL_TIME) {
     return { to: "limit-exceeded", reason: "maxWallTimeMs exceeded during tool call" };
@@ -201,6 +229,10 @@ async function runOneTool(
       durationMs: result.durationMs,
     });
     emitToolMetadata(ctx, result.metadata, result.durationMs);
+    // Additive shaped-observation attach (ADR-0055 D4). The enriched result carries the
+    // observation on a keiko-internal field; the model-facing message below still uses
+    // result.output verbatim — content and contextBytes are unaffected.
+    enrichWithObservation(ctx, call, result);
     return { role: "tool", content: result.output, toolCallId: call.id };
   } catch (error) {
     const message = error instanceof Error ? error.message : "tool execution failed";

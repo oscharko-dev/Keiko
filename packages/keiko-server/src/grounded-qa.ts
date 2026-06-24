@@ -19,7 +19,10 @@ import {
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
+import {
+  persistConnectedContextEvidence,
+  type ConnectedContextEvidenceInput,
+} from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   RepoSearchInvalidQueryError,
@@ -59,6 +62,7 @@ import {
 } from "./grounded-orchestrator.js";
 import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
+import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { pathIsDenied } from "./files-deny.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
@@ -680,6 +684,10 @@ function defaultRunner(
       nowMs,
       signal,
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
+      // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
+      // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
+      // the legacy no-profile path stays byte-identical (observer guard never sees a key).
+      ...(deps.contextProfile === undefined ? {} : { contextProfile: deps.contextProfile }),
     });
   };
 }
@@ -790,6 +798,41 @@ export function persistGroundedExchange(
   return [user, assistant];
 }
 
+// ADR-0056 W3: regulated EvidenceManifest.contextAssembly? producer for the grounded persist
+// path. Returns the conditional-spread fragment for ConnectedContextEvidenceInput. The field is
+// emitted ONLY when a ContextProfile was threaded (deps.contextProfile) AND the observer ran on
+// this pack (pack.diagnostics?.contextBudget present — the same precondition the PR4 observer
+// records). When either is absent the fragment is empty, so the manifest is byte-identical to
+// today (exactOptionalPropertyTypes: omit, never set to undefined). Shared by all three grounded
+// persist sites (single / multi-source / hybrid) so the gate logic cannot diverge.
+export function groundedContextAssemblyInput(
+  deps: Pick<UiHandlerDeps, "contextProfile">,
+  pack: ConnectedContextPack,
+): Pick<ConnectedContextEvidenceInput, "contextAssembly"> {
+  const profile = deps.contextProfile;
+  if (profile === undefined || pack.diagnostics?.contextBudget === undefined) {
+    return {};
+  }
+  return { contextAssembly: deriveGroundedContextAssembly(pack, profile) };
+}
+
+// ADR-0057 D1: the path-free BFF wire-summary projection. Returns the same
+// ContextAssemblyDiagnostics the evidence path derives (one shared derivation, no divergence) so
+// buildGroundedAnswerContextPackSummary can project a counts-only contextSummary into the
+// browser-visible wire shape. Gated identically to groundedContextAssemblyInput: present ONLY when
+// a ContextProfile is active AND the observer ran (pack.diagnostics?.contextBudget). When absent
+// the builder is called with three args and returns a byte-identical summary (no contextSummary).
+export function groundedContextSummaryInput(
+  deps: Pick<UiHandlerDeps, "contextProfile">,
+  pack: ConnectedContextPack,
+): ReturnType<typeof deriveGroundedContextAssembly> | undefined {
+  const profile = deps.contextProfile;
+  if (profile === undefined || pack.diagnostics?.contextBudget === undefined) {
+    return undefined;
+  }
+  return deriveGroundedContextAssembly(pack, profile);
+}
+
 function persistGroundedAuditEvidence(
   workerCtx: AskWorkerCtx,
   output: OrchestratorOutput,
@@ -813,6 +856,7 @@ function persistGroundedAuditEvidence(
       elapsedMs: output.elapsedMs,
       startedAt,
       finishedAt,
+      ...groundedContextAssemblyInput(workerCtx.deps, output.pack),
     },
     {
       store: workerCtx.deps.evidenceStore,
@@ -851,6 +895,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     output.pack,
     citations.length,
     output.elapsedMs,
+    groundedContextSummaryInput(deps, output.pack),
   );
   const answer: GroundedAnswer = {
     groundingKind: "connected-context",

@@ -23,6 +23,7 @@ import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import { writeSideFile } from "@oscharko-dev/keiko-evidence";
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
+import { DEFAULT_CONTEXT_PROFILE, type ContextProfile } from "@oscharko-dev/keiko-contracts";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -183,6 +184,11 @@ export interface UiHandlerDeps {
   // Optional so legacy tests that build deps manually keep their plaintext fixtures unchanged;
   // buildUiHandlerDeps creates one so production stores encrypt by default.
   readonly localKnowledgeKeyProvider?: KnowledgeStoreKeyProvider | undefined;
+  // ADR-0055 D5 (PR4-W1) — deterministic context-engineering profile. buildUiHandlerDeps
+  // provisions DEFAULT_CONTEXT_PROFILE so the grounded diagnostics observer is active by default
+  // (non-mutating, additive `diagnostics.contextBudget?`). Optional + test seam: injecting
+  // `undefined` pins the legacy no-profile code path (observer not invoked, pack byte-identical).
+  readonly contextProfile?: ContextProfile | undefined;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -752,7 +758,6 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     resolvedUiDbPath,
     options.initialProjectPath,
   );
-  const peripherals = buildPeripherals(options, uiStore, evidenceStore, redactString, liveRedactor);
   return {
     config,
     configPresent,
@@ -772,7 +777,8 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     gatewayModelDiscovery: options.gatewayModelDiscovery,
     figmaCredentialTester: options.figmaCredentialTester,
     localKnowledgeKeyProvider: createLocalKnowledgeKeyProvider({ env: options.env }),
-    ...peripherals,
+    contextProfile: DEFAULT_CONTEXT_PROFILE,
+    ...buildPeripherals(options, uiStore, evidenceStore, redactString, liveRedactor),
     consolidationJobs: createConsolidationJobRegistry(),
     ...(relationship === undefined ? {} : { relationship }),
   };

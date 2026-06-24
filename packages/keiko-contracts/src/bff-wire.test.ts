@@ -15,10 +15,18 @@ import {
   type ChatLocalKnowledgeScope,
   type GroundedAnswer,
   type GroundedAnswerContextPackSummary,
+  type GroundedAnswerContextSummary,
   type GroundingLimits,
   type HybridGroundedAnswer,
   type LocalKnowledgeEvidenceCitation,
 } from "./bff-wire.js";
+import {
+  CONTEXT_ENGINEERING_SCHEMA_VERSION,
+  CONTEXT_LANE_IDS,
+  DEFAULT_CONTEXT_PROFILE,
+  type ContextAssemblyDiagnostics,
+  type ContextLaneDiagnostics,
+} from "./context-engineering.js";
 import {
   CANDIDATE_OMISSION_REASONS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -265,6 +273,123 @@ describe("buildGroundedAnswerContextPackSummary", () => {
   it("structural test: summary JSON is bounded (well below the 1KB review target)", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
     expect(JSON.stringify(summary).length).toBeLessThan(1_000);
+  });
+});
+
+// ADR-0057 D1 — the additive, path-free contextSummary projection of the context-assembly pass.
+function laneDiag(
+  laneId: ContextLaneDiagnostics["laneId"],
+  includedItems: number,
+  compactionReason?: string,
+): ContextLaneDiagnostics {
+  return {
+    laneId,
+    estimatedTokens: includedItems * 10,
+    includedItems,
+    excludedItems: 0,
+    budgetPressure: "low",
+    ...(compactionReason !== undefined ? { compactionReason } : {}),
+  };
+}
+
+function assemblyDiagnostics(
+  overrides: Partial<ContextAssemblyDiagnostics> = {},
+): ContextAssemblyDiagnostics {
+  return {
+    schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+    profile: DEFAULT_CONTEXT_PROFILE,
+    totalEstimatedTokens: 34_000,
+    budgetPressure: "moderate",
+    lanes: [laneDiag("system-contract", 1), laneDiag("repo-evidence", 7)],
+    orderedForRecency: true,
+    ...overrides,
+  };
+}
+
+describe("buildGroundedAnswerContextPackSummary contextSummary (ADR-0057 D1)", () => {
+  it("3-arg call omits contextSummary and deep-equals the prior output", () => {
+    const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
+    expect("contextSummary" in summary).toBe(false);
+    const expected: GroundedAnswerContextPackSummary = {
+      schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+      scopeId: summary.scopeId,
+      scopeKind: "files",
+      fileCount: 2,
+      queryKind: "natural-language",
+      usage: USAGE_FIXTURE,
+      budget: DEFAULT_EXPLORATION_BUDGET,
+      citationCount: 4,
+      omittedCount: 0,
+      omittedCounts: emptyOmittedCounts(),
+      uncertaintyCount: 0,
+      elapsedMs: 1_812,
+    };
+    expect(summary).toStrictEqual(expected);
+  });
+
+  it("4-arg call carries budgetPressure and totalEstimatedTokens", () => {
+    const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812, assemblyDiagnostics());
+    expect(summary.contextSummary).toBeDefined();
+    expect(summary.contextSummary?.totalEstimatedTokens).toBe(34_000);
+    expect(summary.contextSummary?.budgetPressure).toBe("moderate");
+  });
+
+  it("laneCounts has all 8 ContextLaneId keys and counts equal lane includedItems", () => {
+    const summary = buildGroundedAnswerContextPackSummary(pack(), 0, 0, assemblyDiagnostics());
+    const laneCounts = summary.contextSummary?.laneCounts;
+    expect(laneCounts).toBeDefined();
+    expect(Object.keys(laneCounts ?? {}).sort()).toStrictEqual([...CONTEXT_LANE_IDS].sort());
+    expect(laneCounts?.["system-contract"]).toBe(1);
+    expect(laneCounts?.["repo-evidence"]).toBe(7);
+    expect(laneCounts?.["working-memory"]).toBe(0);
+  });
+
+  it("compactionActive is true when a lane carries compactionReason, false otherwise", () => {
+    const without = buildGroundedAnswerContextPackSummary(pack(), 0, 0, assemblyDiagnostics());
+    expect(without.contextSummary?.compactionActive).toBe(false);
+    const withCompaction = buildGroundedAnswerContextPackSummary(
+      pack(),
+      0,
+      0,
+      assemblyDiagnostics({
+        lanes: [laneDiag("history-summary", 3, "lane-evicted-then-summarized")],
+      }),
+    );
+    expect(withCompaction.contextSummary?.compactionActive).toBe(true);
+  });
+
+  it("structural path-free: contextSummary JSON contains no '/' and no fixture scopePath", () => {
+    const dangerous = pack({
+      scope: { ...scope("files", ["src/secret/path.ts"]), scopeId: "cs-leakid-0000" },
+    });
+    const summary = buildGroundedAnswerContextPackSummary(dangerous, 0, 0, assemblyDiagnostics());
+    const contextSummary = summary.contextSummary;
+    expect(contextSummary).toBeDefined();
+    const serialised = JSON.stringify(contextSummary);
+    expect(serialised).not.toContain("/");
+    expect(serialised).not.toContain("src/secret/path.ts");
+    expect(serialised).not.toContain("cs-leakid");
+  });
+
+  it("structural path-free (type-level): every contextSummary value is a number or fixed enum", () => {
+    const summary = buildGroundedAnswerContextPackSummary(pack(), 0, 0, assemblyDiagnostics());
+    const contextSummary: GroundedAnswerContextSummary | undefined = summary.contextSummary;
+    expect(contextSummary).toBeDefined();
+    if (contextSummary === undefined) {
+      return;
+    }
+    expect(typeof contextSummary.totalEstimatedTokens).toBe("number");
+    expect(typeof contextSummary.compactionActive).toBe("boolean");
+    expect(["low", "moderate", "high", "exceeded"]).toContain(contextSummary.budgetPressure);
+    for (const count of Object.values(contextSummary.laneCounts)) {
+      expect(typeof count).toBe("number");
+    }
+  });
+
+  it("is deterministic: equal inputs produce a deep-equal contextSummary", () => {
+    const a = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812, assemblyDiagnostics());
+    const b = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812, assemblyDiagnostics());
+    expect(a.contextSummary).toStrictEqual(b.contextSummary);
   });
 });
 

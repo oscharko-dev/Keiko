@@ -357,6 +357,87 @@ describe("runCommand — output flood protection (F12)", () => {
   });
 });
 
+describe("runCommand — omittedByteCount capture (ADR-0054 D5)", () => {
+  it("sets a positive omittedByteCount on truncation, bounded by total emitted", async () => {
+    const kills = captureKills();
+    const spawn = recordingSpawn();
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 4 },
+    };
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "flood"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    // 6 stdout bytes + 5 stderr bytes = 11 emitted total against a 4-byte cap → 7 dropped.
+    spawn.child.stdout.emit("data", Buffer.from("123456", "utf8"));
+    spawn.child.stderr.emit("data", Buffer.from("abcde", "utf8"));
+    spawn.child.emit("close", null, "SIGTERM");
+    const result = await promise;
+    expect(result.truncated).toBe(true);
+    const totalEmitted = 11;
+    // Lower-bound semantics: at least one byte omitted, never more than what arrived.
+    expect(result.omittedByteCount).toBeGreaterThanOrEqual(1);
+    expect(result.omittedByteCount).toBeLessThanOrEqual(totalEmitted);
+    // Exact for a pre-kill arrival: attempted(11) - cap(4) = 7.
+    expect(result.omittedByteCount).toBe(7);
+    kills.restore();
+  });
+
+  it("omits omittedByteCount entirely when the run is not truncated", async () => {
+    const spawn = recordingSpawn();
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "ok"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      fakeDeps(spawn.fn),
+    );
+    spawn.child.stdout.emit("data", Buffer.from("hello", "utf8"));
+    spawn.child.emit("close", 0, null);
+    const result = await promise;
+    expect(result.truncated).toBe(false);
+    expect(result.omittedByteCount).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(result, "omittedByteCount")).toBe(false);
+  });
+
+  it("is deterministic: identical fake input yields identical omittedByteCount", async () => {
+    const run = async (): Promise<number | undefined> => {
+      const kills = captureKills();
+      const spawn = recordingSpawn();
+      const deps: RunCommandDeps = {
+        ...fakeDeps(spawn.fn),
+        policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 4 },
+      };
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "flood"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        deps,
+      );
+      spawn.child.stdout.emit("data", Buffer.from("0123456789", "utf8"));
+      spawn.child.emit("close", null, "SIGTERM");
+      const result = await promise;
+      kills.restore();
+      return result.omittedByteCount;
+    };
+    expect(await run()).toBe(await run());
+  });
+});
+
 describe("runCommand — real node integration", () => {
   it("runs an allowed command and captures stdout with exitCode 0", async () => {
     const result = await runCommand(

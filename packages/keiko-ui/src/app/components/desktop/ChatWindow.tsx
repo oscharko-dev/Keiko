@@ -15,6 +15,7 @@ import { useChatSessionContext } from "./context/ChatSessionContext";
 import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
+import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
 import { NumberControlStepper } from "./NumberControlStepper";
@@ -50,6 +51,7 @@ import type {
   ConversationMemoryActionWire,
   ConversationMemoryResultWire,
   GroundedAnswer as GroundedAnswerWire,
+  GroundedAnswerContextSummary as GroundedAnswerContextSummaryWire,
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
@@ -1144,6 +1146,18 @@ function ChatScopeHeader({
 // produce one). Rendered inside the role="log" conversation container, which already announces
 // additions politely — no own aria-live (uiux-fix F040 C167: nested live regions caused double
 // announcements of the same update).
+// ADR-0057 D2 — the path-free context-assembly aggregate is carried on the folder/repo pack
+// summary (connected-context answers, and the folder leg of hybrid answers). Local-knowledge
+// answers and legacy packs have no such summary; the panel self-guards (renders null) on undefined.
+function contextSummaryOf(
+  answer: GroundedAnswerWire | undefined,
+): GroundedAnswerContextSummaryWire | undefined {
+  if (answer === undefined) return undefined;
+  if (answer.groundingKind === "connected-context") return answer.contextPack.contextSummary;
+  if (answer.groundingKind === "hybrid") return answer.contextPack.folder.contextSummary;
+  return undefined;
+}
+
 function GroundedAnswerPanel({
   chat,
   answer,
@@ -1165,6 +1179,7 @@ function GroundedAnswerPanel({
   return (
     <div className="chatw-grounded">
       <GroundedAnswer answer={answer} busy={busy} />
+      <ContextStatusPanel contextSummary={contextSummaryOf(answer)} />
       <LaunchGroundedWorkflowButton
         answer={answer}
         modelId={selectedModelId}

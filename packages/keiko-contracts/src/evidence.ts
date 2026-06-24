@@ -4,6 +4,7 @@
 // plain-JSON, deeply readonly, and JSON-serializable: timestamps are epoch-ms numbers sourced
 // from events/RunResult, never Date objects.
 
+import type { ContextAssemblyDiagnostics, ContextCompactionRecord } from "./context-engineering.js";
 import type { CostClass } from "./gateway.js";
 import type {
   HarnessCode,
@@ -328,6 +329,12 @@ export interface EvidenceManifest {
   readonly browser?: EvidenceBrowserCapture | undefined;
   readonly connectedContext?: EvidenceConnectedContextAudit | undefined;
   readonly governedHandoff?: EvidenceGovernedWorkflowHandoff | undefined;
+  // Context-assembly diagnostics produced by the grounded or harness context observer (PR4/PR5).
+  // Absent on legacy manifests and on manifests where no ContextProfile was threaded.
+  readonly contextAssembly?: ContextAssemblyDiagnostics | undefined;
+  // Compaction records for sessions that exceeded MAX_CONTEXT_MESSAGES (chat/harness path only).
+  // Absent on grounded-path manifests and on short sessions. Redacted at persist time.
+  readonly compaction?: readonly ContextCompactionRecord[] | undefined;
 }
 
 // ─── Redaction config (D3) ──────────────────────────────────────────────────────

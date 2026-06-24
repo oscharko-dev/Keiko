@@ -28,3 +28,9 @@ export * from "./qualityIntelligence/index.js";
 
 // ─── Prompt Enhancer workflow execution (Epic #1307, Issue #1314) ─────────────
 export * from "./promptEnhancer/index.js";
+
+// ─── Deterministic context-budget allocator (ADR-0052, context-engineering milestone) ──
+export * from "./context-budget/index.js";
+
+// ─── Tool-observation shapers (ADR-0054, PR3-W3, context-engineering milestone) ──
+export * from "./observations/index.js";

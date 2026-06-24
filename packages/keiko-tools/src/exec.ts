@@ -125,6 +125,12 @@ interface Buffers {
   err: Buffer[];
   total: number;
   truncated: boolean;
+  // Total bytes that arrived across stdout+stderr, counted BEFORE the cap is applied, so it
+  // includes bytes dropped past maxOutputBytes (ADR-0054 D5). Advisory only: it undercounts when
+  // the child is killed before emitting all remaining over-cap output — no further data events
+  // fire after terminate(). Any positive omittedByteCount derived from it is a sufficient
+  // truncation signal; the exact byte total is not claimed.
+  attempted: number;
 }
 
 const TRUNCATED_OUTPUT_MARKER = "[TRUNCATED OUTPUT REDACTED]";
@@ -273,6 +279,8 @@ function resolveSpawnTarget(
 }
 
 function appendCapped(buffers: Buffers, sink: Buffer[], chunk: Buffer, max: number): boolean {
+  // Count every arriving byte BEFORE the cap so attempted reflects bytes dropped past max.
+  buffers.attempted += chunk.length;
   if (buffers.truncated) {
     return false;
   }
@@ -334,6 +342,10 @@ function buildResult(
   const secrets = collectSensitiveEnvValues(deps.processEnv, deps.policy.envAllowlist);
   const attest = attestation === undefined ? {} : { attestation };
   if (buffers.truncated) {
+    // Real over-cap byte count from the raw arrival counter (ADR-0054 D5). Clamped at 0 so a
+    // straggler-free run never reports a negative value. Omitted entirely on the non-truncated
+    // path (exactOptionalPropertyTypes: absent means "nothing omitted", never 0).
+    const omitted = Math.max(0, buffers.attempted - deps.policy.maxOutputBytes);
     return {
       command: input.command,
       args: input.args,
@@ -344,6 +356,7 @@ function buildResult(
       durationMs: deps.now() - startedAt,
       timedOut: state.timedOut,
       truncated: true,
+      omittedByteCount: omitted,
       ...attest,
     };
   }
@@ -556,7 +569,7 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     env.USERPROFILE = homeDir;
     const state = createRunState(home, homeDir);
     const child = spawnChild(input, deps, target, cwd, env, state);
-    const buffers: Buffers = { out: [], err: [], total: 0, truncated: false };
+    const buffers: Buffers = { out: [], err: [], total: 0, truncated: false, attempted: 0 };
     const ctx: ExecContext = {
       child,
       input,

@@ -9,6 +9,7 @@ import type {
   ConnectedContextPackStableIdInput,
   EvidenceAtomStableIdInput,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import type { WorkspaceFs } from "./fs.js";
 
 type JsonScalar = string | number | boolean | null;
 type JsonValue = JsonScalar | JsonObject | readonly JsonValue[];
@@ -62,4 +63,48 @@ export function connectedContextPackStableId(input: ConnectedContextPackStableId
     atomStableIds: sortedAtomIds,
   };
   return `p-${sha256Hex(canonicalize(shape))}`;
+}
+
+// Coarse byte cap (128 KiB) for the file-level invalidation hash. Matches the exploration budget's
+// `excerptBytesMax` default (connected-context.ts) so this reuses the same "excerpt budget" concept
+// rather than introducing a fresh constant. See `fileContentHash` for the truncation semantics.
+export const MAX_HASH_FILE_BYTES = 131_072;
+
+// SHA-256 hex of the EXCERPT CONTENT itself (ContextRehydrationHandle.contentHash, ADR-0053 D2).
+// Captured at compaction time over the exact preserved lines and recomputed on rehydration over the
+// `readExcerpt` result, so a line-range change is detected precisely. Total: never throws — an empty
+// string yields the well-defined SHA-256 of zero bytes. Hashing is byte-based (UTF-8), so multibyte
+// content hashes consistently regardless of how the JS string was constructed.
+export function hashExcerptContent(content: string): string {
+  return sha256Hex(content);
+}
+
+// File-level coarse invalidation signal for ContextInvalidationKey (ADR-0053 D3).
+//
+// Returns `undefined` when the optional `readFileBytes` port is absent (legacy in-memory test fakes
+// that implement only the synchronous surface) — callers omit the invalidation key in that case
+// rather than recording a non-hash value. Otherwise it reads the file's bytes and hashes the FIRST
+// `MAX_HASH_FILE_BYTES` (128 KiB), returning the lowercase hex digest.
+//
+// LIMITATION (a): only the first 128 KiB is hashed. A change confined to the TAIL of a file larger
+// than 128 KiB is a FALSE NEGATIVE — this is an excerpt-range staleness signal, NOT a whole-file
+// integrity guarantee. Accepted per ADR-0053 (the summary's source is the excerpt range, not the
+// whole file).
+//
+// CALLER RESPONSIBILITY (b): the deny/containment gate (`isDenied` + `containedRealPathInfo`) MUST
+// run BEFORE calling this function — it does NOT deny-gate. It receives an already-vetted
+// `absolutePath` resolved by the caller (same boundary contract as `readExcerpt`).
+//
+// Total on an empty file (=> the hash of empty/truncated bytes). If `readFileBytes` rejects, the
+// rejection propagates — the caller handles IO failure; this helper does NOT swallow it.
+export async function fileContentHash(
+  fs: WorkspaceFs,
+  absolutePath: string,
+): Promise<string | undefined> {
+  const readFileBytes = fs.readFileBytes;
+  if (readFileBytes === undefined) {
+    return undefined;
+  }
+  const bytes = await readFileBytes(absolutePath, MAX_HASH_FILE_BYTES);
+  return createHash("sha256").update(bytes).digest("hex");
 }

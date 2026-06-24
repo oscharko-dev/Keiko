@@ -8743,6 +8743,31 @@ html[data-keiko-gateway-setup-open="true"] .rail {
   font-variant-numeric: tabular-nums;
 }
 
+/* ADR-0057 D2 — ContextStatusPanel: a quiet, collapsed-by-default aggregate "Context" disclosure.
+   Mirrors the .grounded-context-pack token usage (mono 11px, subtle top divider); only existing
+   Tier-3 semantic tokens, no raw values. The summary is the quieter secondary text until hovered.
+   Rows reuse .grounded-context-pack-dl grid via the shared class on the <dl>. */
+.ctx-status {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.ctx-status-summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-weight: 500;
+}
+.ctx-status-summary:hover {
+  color: var(--text-primary);
+}
+.ctx-status-dl {
+  margin-top: 4px;
+  color: var(--text-primary);
+}
+
 /* Issue #185 AC3 — typing row wraps the TypingBubble and the cancel button side-by-side. */
 .chatw-typing-row {
   display: flex;

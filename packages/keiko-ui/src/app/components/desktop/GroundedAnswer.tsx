@@ -49,7 +49,7 @@ function formatCount(value: number): string {
 // Internal enum tokens (e.g. "no-evidence", "natural-language", "capsule-set") are
 // hyphen-joined pipeline vocabulary; render them as plain words for knowledge workers
 // (uiux-fix F012 C160 — same humanizer the omission reasons already used).
-function humanizeToken(value: string): string {
+export function humanizeToken(value: string): string {
   return value.replaceAll("-", " ");
 }
 
@@ -65,7 +65,7 @@ function formatScopeLabel(summary: GroundedAnswerContextPackSummary): string {
   return `${humanizeToken(summary.scopeKind)} (${idTail})`;
 }
 
-function MetricRow({
+export function MetricRow({
   label,
   value,
 }: {

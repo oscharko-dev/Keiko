@@ -91,3 +91,5 @@ export {
 } from "./fingerprint.js";
 
 export { resolveTaskPlan, type TaskPlan } from "./tasks/policy.js";
+
+export type { HarnessShaperInput, HarnessShaperPort } from "./shaper-port.js";

@@ -194,6 +194,37 @@ describe("WorkspaceToolHost — run_command", () => {
     expect(result.output).toContain("[REDACTED]");
   });
 
+  it("ADR-0054 D3: summarizeCommand output stays byte-identical and omits omittedByteCount", async () => {
+    const spawn = recordingSpawn();
+    const toolHost = host({
+      spawn: spawn.fn,
+      config: { commandRules: NODE_COMMAND_RULES, sandbox: { maxOutputBytes: 4 } },
+    });
+    const promise = toolHost.execute(
+      request("run_command", { command: "node", args: ["-e", "flood"] }),
+    );
+    // Emit 10 bytes against a 4-byte cap → truncated:true and CommandResult.omittedByteCount = 6.
+    spawn.child.stdout.emit("data", Buffer.from("0123456789", "utf8"));
+    spawn.child.emit("close", null, "SIGTERM");
+    const result = await promise;
+    // The model-facing string MUST be exactly the six pre-existing fields in declaration order.
+    const expected = JSON.stringify({
+      exitCode: null,
+      signal: "SIGTERM",
+      timedOut: false,
+      truncated: true,
+      stdout: "[TRUNCATED OUTPUT REDACTED]",
+      stderr: "[TRUNCATED OUTPUT REDACTED]",
+    });
+    expect(result.output).toBe(expected);
+    expect(result.output).not.toContain("omittedByteCount");
+    expect(result.metadata?.kind).toBe("command");
+    if (result.metadata?.kind !== "command") {
+      throw new Error("expected command metadata");
+    }
+    expect(result.metadata.omittedByteCount).toBe(6);
+  });
+
   it("S-M1: run_command attaches redacted command metadata (no stdout/arg values)", async () => {
     const result = await host({
       spawn: nodeSpawnFn,

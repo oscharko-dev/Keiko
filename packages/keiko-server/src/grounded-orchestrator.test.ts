@@ -35,6 +35,7 @@ import {
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 import type { MicroIndex } from "@oscharko-dev/keiko-workflows";
+import { DEFAULT_CONTEXT_PROFILE, validateContextBudget } from "@oscharko-dev/keiko-contracts";
 
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 
@@ -1250,6 +1251,68 @@ describe("runGroundedExploration", () => {
       }),
     ).rejects.toBeInstanceOf(CancelledError);
     expect(answererCalls).toBe(0);
+  });
+});
+
+// PR4-W1 (ADR-0055 D1/D5/D6): the grounded diagnostics observer threaded through OrchestratorDeps.
+describe("runGroundedExploration — context diagnostics observer (PR4-W1)", () => {
+  it("noProfileUnchanged: omits diagnostics.contextBudget when no profile is threaded", async () => {
+    const out = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(out.pack.diagnostics?.contextBudget).toBeUndefined();
+  });
+
+  it("diagnosticsPresent: populates a valid ContextBudget when a profile is threaded", async () => {
+    const out = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+      contextProfile: DEFAULT_CONTEXT_PROFILE,
+    });
+    const budget = out.pack.diagnostics?.contextBudget;
+    expect(budget).toBeDefined();
+    expect(validateContextBudget(budget).ok).toBe(true);
+    expect(budget?.profile).toBe(DEFAULT_CONTEXT_PROFILE);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("noProfileUnchanged: pack is otherwise byte-identical with vs without the profile", async () => {
+    const withoutProfile = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    const withProfile = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+      contextProfile: DEFAULT_CONTEXT_PROFILE,
+    });
+    expect(withProfile.pack.stableId).toBe(withoutProfile.pack.stableId);
+    expect(withProfile.pack.files).toEqual(withoutProfile.pack.files);
+    expect(withProfile.pack.budget).toEqual(withoutProfile.pack.budget);
+    expect(withProfile.pack.usage).toEqual(withoutProfile.pack.usage);
+    expect(withProfile.assistantContent).toBe(withoutProfile.assistantContent);
+  });
+
+  it("firstRingPreserved: rankedCandidates survives the observer when the lexical ring populated it", async () => {
+    const withoutProfile = await retrieveConnectedContextPack(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    const withProfile = await retrieveConnectedContextPack(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+      contextProfile: DEFAULT_CONTEXT_PROFILE,
+    });
+    expect(withProfile.pack.diagnostics?.rankedCandidates).toEqual(
+      withoutProfile.pack.diagnostics?.rankedCandidates ?? [],
+    );
   });
 });
 
