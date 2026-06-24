@@ -54,6 +54,13 @@ class FakePeerConnection {
     (this.listeners[type] ??= []).push(cb);
   }
 
+  removeEventListener(type: string, cb: Listener): void {
+    const list = this.listeners[type];
+    if (list !== undefined) {
+      this.listeners[type] = list.filter((listener) => listener !== cb);
+    }
+  }
+
   close(): void {}
 
   // Test helper: simulate a connection state change.
@@ -133,6 +140,32 @@ describe("createBrowserVoiceRtcTransport", () => {
     const transport = createBrowserVoiceRtcTransport();
     const session = await transport.connect();
     expect(session.offerSdp).toBe("v=0\r\nfake-sdp-offer");
+  });
+
+  it("falls back to the bounded timeout when ICE gathering never completes", async () => {
+    vi.useFakeTimers();
+    try {
+      // A peer connection whose gathering never reaches "complete" and never fires the event — the
+      // 2 s fallback must resolve the connect with whatever local description is available.
+      class GatheringPeerConnection extends FakePeerConnection {
+        public override iceGatheringState: RTCIceGatheringState = "gathering";
+      }
+      const track = { stop: vi.fn() };
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: { getUserMedia: vi.fn(async () => fakeStream(track)) },
+      });
+      vi.stubGlobal("RTCPeerConnection", GatheringPeerConnection);
+      const transport = createBrowserVoiceRtcTransport();
+      const connectPromise = transport.connect();
+      // Flush the getUserMedia/createOffer/setLocalDescription microtasks and fire the fallback timer
+      // (ICE_GATHER_TIMEOUT_MS = 2_000 in the source).
+      await vi.advanceTimersByTimeAsync(2_000);
+      const session = await connectPromise;
+      expect(session.offerSdp).toBe("v=0\r\nfake-sdp-offer");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("classifies a denied permission as permission-denied", async () => {

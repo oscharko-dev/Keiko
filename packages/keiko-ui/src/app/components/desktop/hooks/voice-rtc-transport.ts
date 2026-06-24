@@ -92,17 +92,24 @@ function waitForIceGathering(pc: RTCPeerConnection): Promise<void> {
       resolve();
       return;
     }
-    const fallback = setTimeout(resolve, ICE_GATHER_TIMEOUT_MS);
-    pc.addEventListener(
-      "icegatheringstatechange",
-      () => {
-        if (pc.iceGatheringState === "complete") {
-          clearTimeout(fallback);
-          resolve();
-        }
-      },
-      { once: false },
-    );
+    let fallback: ReturnType<typeof setTimeout> | undefined;
+    // Resolve once, removing the listener so it never outlives ICE completion (and never re-fires on a
+    // later gathering transition, e.g. a network-interface change). The fallback timeout removes it too.
+    const onChange = (): void => {
+      if (pc.iceGatheringState !== "complete") {
+        return;
+      }
+      if (fallback !== undefined) {
+        clearTimeout(fallback);
+      }
+      pc.removeEventListener("icegatheringstatechange", onChange);
+      resolve();
+    };
+    fallback = setTimeout(() => {
+      pc.removeEventListener("icegatheringstatechange", onChange);
+      resolve();
+    }, ICE_GATHER_TIMEOUT_MS);
+    pc.addEventListener("icegatheringstatechange", onChange);
   });
 }
 
@@ -163,10 +170,7 @@ export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
   return {
     async connect(): Promise<VoiceRtcSession> {
       if (!realtimeVoiceTransportSupported()) {
-        throw new VoiceRtcError(
-          "unsupported",
-          "This browser does not support real-time voice.",
-        );
+        throw new VoiceRtcError("unsupported", "This browser does not support real-time voice.");
       }
 
       let stream: MediaStream;

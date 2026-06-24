@@ -457,10 +457,16 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
       return false;
     }
     const deps = this.planeDeps.handlerDeps();
-    // The two load-bearing gates: loopback Host/Origin (rejects cross-origin + opaque null), and the
-    // full-realtime capability gate (a no-voice / STT-only / policy-disabled deployment keeps the
-    // WebSocket hard-rejected, AC1/AC3).
-    if (!isAllowedHost(req, this.planeDeps.port) || !isVoiceRealtimeCapable(deps)) {
+    // Three load-bearing gates: (1) a present, loopback Origin — a browser always sends Origin on a WS
+    // handshake, so requiring it (in addition to `isAllowedHost` rejecting a non-loopback or opaque
+    // `null` Origin) keeps the control plane reachable only from the loopback browser origin and never
+    // from a non-browser local process; (2) loopback Host; (3) the full-realtime capability gate (a
+    // no-voice / STT-only / policy-disabled deployment keeps the WebSocket hard-rejected, AC1/AC3).
+    if (
+      typeof req.headers.origin !== "string" ||
+      !isAllowedHost(req, this.planeDeps.port) ||
+      !isVoiceRealtimeCapable(deps)
+    ) {
       return false;
     }
     this.wss.handleUpgrade(req, sock, head, (ws) => {

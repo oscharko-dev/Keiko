@@ -111,7 +111,9 @@ afterEach(async () => {
   server = undefined;
   if (current !== undefined) {
     await new Promise<void>((res) => {
-      current.close(() => { res(); });
+      current.close(() => {
+        res();
+      });
     });
   }
 });
@@ -121,9 +123,15 @@ async function boot(handlerDeps: UiHandlerDeps): Promise<number> {
   const csp = "default-src 'none'";
   const probe = createUiServer({ staticRoot, csp, port: 0, handlerDeps });
   const port = await new Promise<number>((res) =>
-    probe.listen(0, UI_HOST, () => { res((probe.address() as AddressInfo).port); }),
+    probe.listen(0, UI_HOST, () => {
+      res((probe.address() as AddressInfo).port);
+    }),
   );
-  await new Promise<void>((res) => probe.close(() => { res(); }));
+  await new Promise<void>((res) =>
+    probe.close(() => {
+      res();
+    }),
+  );
   const listening = createUiServer({ staticRoot, csp, port, handlerDeps });
   server = listening;
   await new Promise<void>((res) => {
@@ -141,13 +149,17 @@ interface Client {
 
 function connect(
   port: number,
-  options: { path?: string; headers?: Record<string, string> } = {},
+  options: { path?: string; headers?: Record<string, string>; omitOrigin?: boolean } = {},
 ): Promise<Client> {
   const path = options.path ?? "/api/voice/control";
+  // A browser always sends Origin on a WS handshake; default to a loopback Origin so the accept tests
+  // mirror a real browser. `omitOrigin` / an explicit Origin header exercise the gate's edge cases.
+  const headers: Record<string, string> = {
+    ...(options.omitOrigin === true ? {} : { Origin: `http://${UI_HOST}:${String(port)}` }),
+    ...(options.headers ?? {}),
+  };
   return new Promise((resolve) => {
-    const ws = new WebSocket(`ws://${UI_HOST}:${String(port)}${path}`, {
-      ...(options.headers !== undefined ? { headers: options.headers } : {}),
-    });
+    const ws = new WebSocket(`ws://${UI_HOST}:${String(port)}${path}`, { headers });
     const queue: Record<string, unknown>[] = [];
     const waiters: ((message: Record<string, unknown>) => void)[] = [];
     ws.on("message", (data: Buffer) => {
@@ -166,12 +178,16 @@ function connect(
       }
       return new Promise((resolveMessage) => waiters.push(resolveMessage));
     };
-    ws.once("open", () => { resolve({ opened: true, ws, next }); });
+    ws.once("open", () => {
+      resolve({ opened: true, ws, next });
+    });
     ws.once("unexpected-response", () => {
       ws.terminate();
       resolve({ opened: false });
     });
-    ws.once("error", () => { resolve({ opened: false }); });
+    ws.once("error", () => {
+      resolve({ opened: false });
+    });
   });
 }
 
@@ -192,7 +208,9 @@ function expectOpen(client: Client): OpenClient {
 
 function nextClose(ws: WebSocket): Promise<number> {
   return new Promise((resolve) => {
-    ws.once("close", (code: number) => { resolve(code); });
+    ws.once("close", (code: number) => {
+      resolve(code);
+    });
   });
 }
 
@@ -247,6 +265,12 @@ describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => 
     expect(result.opened).toBe(false);
   });
 
+  it("rejects an upgrade with no Origin header (browser always sends one)", async () => {
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const result = await connect(port, { omitOrigin: true });
+    expect(result.opened).toBe(false);
+  });
+
   it("accepts the upgrade for a full-realtime deployment and announces the session", async () => {
     const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
     const { ws, next } = expectOpen(await connect(port));
@@ -271,10 +295,11 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
       depsWith({
         config: voiceConfig(true),
         configPresent: true,
-        voiceRealtimeNegotiationRequest: () => Promise.resolve({
-          ok: true,
-          value: { answerSdp: ANSWER_SDP },
-        }),
+        voiceRealtimeNegotiationRequest: () =>
+          Promise.resolve({
+            ok: true,
+            value: { answerSdp: ANSWER_SDP },
+          }),
       }),
     );
     const { ws: socket, next } = expectOpen(await connect(port));
