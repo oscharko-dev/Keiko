@@ -18,6 +18,7 @@ expand each decision into detailed contracts that the child issues (#493–#506)
 | [deployment-profile-matrix.md](deployment-profile-matrix.md) | Provider profile × environment profile matrix (Azure Foundry, customer-hosted controlled-network, no-voice).       |
 | [supply-chain-policy.md](supply-chain-policy.md)             | The "no new runtime media packages by default" policy and its enforcement hooks.                                   |
 | [implementation-sequencing.md](implementation-sequencing.md) | Dependency order and write-ownership boundaries for child issues #493–#506.                                        |
+| [capability-configuration.md](capability-configuration.md)   | Implemented (#493): configuring, registering (`keiko-stt`), reading, and disabling voice capability metadata.      |
 
 ## Core invariants (summary)
 

@@ -381,8 +381,17 @@ export type {
   FinishReason,
   StreamDelta,
   StreamEvent,
+  VoiceProviderLocality,
+  VoiceProfile,
+  VoiceUnavailableReason,
+  VoiceTransportPosture,
+  VoiceCapabilityResolution,
 } from "./gateway.js";
-export { CONVERSATION_CAPABILITY_CONTRACT_VERSION, INFILLING_ALIGNMENTS } from "./gateway.js";
+export {
+  CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  INFILLING_ALIGNMENTS,
+  VOICE_PROVIDER_LOCALITIES,
+} from "./gateway.js";
 export type { ConversationIneligibilityReason } from "./gateway.js";
 export {
   isConversationEligibleModel,
@@ -390,6 +399,10 @@ export {
   modelSupportsInfilling,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
+  isVoiceCapability,
+  modelSupportsSpeechInput,
+  modelSupportsSpeechOutput,
+  modelSupportsRealtimeVoice,
 } from "./gateway.js";
 
 // ─── Tools ──────────────────────────────────────────────────────────────────────

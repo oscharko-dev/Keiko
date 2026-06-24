@@ -68,6 +68,7 @@ import type {
   ProjectsResponse,
   RunReport,
   SafeGatewayConfig,
+  VoiceCapabilityResolution,
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
@@ -179,6 +180,19 @@ export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
     },
   );
   return modelsRequest;
+}
+
+// ---------------------------------------------------------------------------
+// Voice capability (Issue #493, Epic #491)
+// ---------------------------------------------------------------------------
+
+// Reads the content-free voice capability resolution the UI consults before rendering any voice
+// affordance. The response carries only enum literals and booleans — never a provider base URL,
+// credential, or model id — so it is safe to read and display (AC4/AC5). When voice is unavailable
+// the resolution reports `available: false` with a `profile` of "none", and the UI renders no
+// voice affordance at all (AC1).
+export async function fetchVoiceCapability(): Promise<{ voice: VoiceCapabilityResolution }> {
+  return fetchJson<{ voice: VoiceCapabilityResolution }>("/api/voice/capability");
 }
 
 export interface GatewaySetupInput {

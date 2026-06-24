@@ -11,6 +11,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import {
   handleConfig,
   handleModels,
+  handleVoiceCapability,
   handleWorkflows,
   handleWorkspace,
   handleEvidenceList,
@@ -216,6 +217,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },
+  { method: "GET", pattern: "/api/voice/capability", handler: handleVoiceCapability },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
