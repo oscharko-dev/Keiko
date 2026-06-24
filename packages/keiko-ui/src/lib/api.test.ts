@@ -8,9 +8,11 @@ import {
   fetchFilesContent,
   fetchFilesDirectories,
   fetchFilesPreview,
+  fetchFilesSearch,
   fetchFilesTree,
   fetchModels,
   fetchProjects,
+  runGatewayReadiness,
   requestEditorCompletion,
   requestEditorDiagnostics,
   requestEditorFormatting,
@@ -18,7 +20,6 @@ import {
   requestEditorSymbols,
   saveFilesContent,
   sendDesktopChatStream,
-  startGroundedWorkflowHandoff,
   fetchWorkspaceSummary,
   type StreamHandlers,
 } from "./api";
@@ -406,6 +407,28 @@ describe("files API helpers", () => {
     );
   });
 
+  it("encodes repository file search requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        root: "/repo space",
+        query: "coding context",
+        results: [],
+        truncated: false,
+        scannedFileCount: 0,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchFilesSearch("/repo space", "coding context", 12);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/files/search?root=%2Frepo+space&q=coding+context&limit=12",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
   it("serializes the version-aware baseVersion token on save (Issue #1197)", async () => {
     const baseVersion = { sizeBytes: 12, modifiedAt: 7, contentHash: "a".repeat(64) };
     const fetchMock = vi.fn().mockResolvedValueOnce(
@@ -483,6 +506,44 @@ describe("fetchModels", () => {
     await expect(fetchModels()).resolves.toEqual({ models: [] });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("runGatewayReadiness", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts the optional model id and deep probe options without clearing the model cache", async () => {
+    const report = {
+      modelId: "test-chat-model",
+      checkedAt: "2026-06-24T09:00:00.000Z",
+      overallStatus: "ready",
+      probes: [],
+      verifiedCapabilities: {},
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(report));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      runGatewayReadiness("test-chat-model", { includeDeepProbes: true }),
+    ).resolves.toEqual(report);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/gateway/readiness",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          modelId: "test-chat-model",
+          options: { includeDeepProbes: true },
+        }),
+      }),
+    );
   });
 });
 
@@ -738,56 +799,5 @@ describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
 
     expect(handlers.onDone).toHaveBeenCalledTimes(1);
     expect(handlers.onError).not.toHaveBeenCalled();
-  });
-});
-
-describe("startGroundedWorkflowHandoff", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("POSTs the request body and CSRF header to /api/chats/messages/grounded/handoff", async () => {
-    const response = {
-      run: { runId: "run-42", fingerprint: "fp-42" },
-      messages: [],
-    };
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await startGroundedWorkflowHandoff({
-      assistantMessageId: "msg-a",
-      chatId: "chat-a",
-      modelId: "wf-model",
-      workflowKind: "unit-test-generation",
-      input: { target: { kind: "file", filePath: "src/example.ts" } },
-      editablePaths: ["tests/example.test.ts"],
-      expectedChecks: ["tests"],
-      unknowns: ["Need API confirmation"],
-      requestedAtMs: 123,
-    });
-
-    expect(result).toEqual(response);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/chats/messages/grounded/handoff",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          assistantMessageId: "msg-a",
-          chatId: "chat-a",
-          modelId: "wf-model",
-          workflowKind: "unit-test-generation",
-          input: { target: { kind: "file", filePath: "src/example.ts" } },
-          editablePaths: ["tests/example.test.ts"],
-          expectedChecks: ["tests"],
-          unknowns: ["Need API confirmation"],
-          requestedAtMs: 123,
-        }),
-        headers: expect.objectContaining({
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "X-Keiko-CSRF": "1",
-        }),
-      }),
-    );
   });
 });

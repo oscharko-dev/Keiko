@@ -14,6 +14,7 @@ import {
   readFilesContent,
   readFilesPreview,
   readFilesTree,
+  searchFiles,
   writeFilesContent,
 } from "./index.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
@@ -246,6 +247,47 @@ describe("desktop files browser", () => {
       kind: "directory",
       readable: true,
     });
+  });
+
+  it("searches repository file paths without reading file contents", async () => {
+    await mkdir(join(root, "src", "context"));
+    await writeFile(join(root, "src", "context", "coding-context.ts"), "export const x = 1;\n");
+    await writeFile(join(root, "src", "context", "coding-notes.md"), "notes\n");
+
+    const result = await searchFiles(store, root, "coding-context", 10, buildRedactor({}));
+
+    expect(result.root).toBe(root);
+    expect(result.query).toBe("coding-context");
+    expect(result.results.map((entry) => entry.path)).toEqual(["src/context/coding-context.ts"]);
+    expect(result.results[0]).toMatchObject({
+      name: "coding-context.ts",
+      directory: "src/context",
+      extension: "ts",
+    });
+    expect(result.scannedFileCount).toBeGreaterThan(0);
+  });
+
+  it("keeps repository file search inside the selected root and deny list", async () => {
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "coding-context.ts"), "secret\n");
+    await mkdir(join(root, "src", "visible"));
+    await writeFile(join(root, "src", "visible", "coding-context.ts"), "safe\n");
+
+    const result = await searchFiles(store, root, "coding", 10, buildRedactor({}));
+
+    expect(result.results.map((entry) => entry.path)).toEqual(["src/visible/coding-context.ts"]);
+    await expect(searchFiles(store, join(root, ".git"), "coding")).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+  });
+
+  it("does not scan the repository for an empty file search query", async () => {
+    const result = await searchFiles(store, root, "   ", 10, buildRedactor({}));
+
+    expect(result.results).toEqual([]);
+    expect(result.scannedFileCount).toBe(0);
+    expect(result.truncated).toBe(false);
   });
 
   it("rejects path traversal outside the selected root", async () => {

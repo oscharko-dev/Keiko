@@ -51,6 +51,11 @@ function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
 }
 
+function num(cfg: Record<string, unknown>, key: string): number | undefined {
+  const v = cfg[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
 function stringArray(cfg: Record<string, unknown>, key: string): readonly string[] | undefined {
   const raw = cfg[key];
   if (!Array.isArray(raw)) return undefined;
@@ -194,6 +199,8 @@ function ChatWindowSessionHost({
           barCompact={ctx.barCompact === true}
           workflowCompact={ctx.workflowCompact === true}
           linkedRoot={ctx.linkedRoot}
+          linkedRoots={ctx.linkedRoots}
+          openEditorFile={ctx.openEditorFile}
           onOpenRunResult={openRunResult}
         />
       )}
@@ -210,7 +217,13 @@ registerWindowRender("chatHistory", (_cfg, ctx) => (
   />
 ));
 registerWindowRender("project", () => <ProjectPanel />);
-registerWindowRender("promptEnhancer", () => <PromptEnhancerPanel />);
+registerWindowRender("promptEnhancer", (_cfg, ctx) => (
+  <PromptEnhancerPanel
+    connectedRoot={ctx.linkedRoot}
+    connectedFilePath={ctx.linkedFilePath ?? null}
+    connectedRoots={ctx.linkedRoots}
+  />
+));
 registerWindowRender("search", () => <SearchPanel />);
 registerWindowRender("plugins", () => <PluginsPanel />);
 registerWindowRender("automations", () => <AutomationsPanel />);
@@ -325,11 +338,17 @@ registerWindowRender("editor", (cfg, ctx) => {
   const file = str(cfg, "file");
   const openFiles = stringArray(cfg, "openFiles");
   const layoutJson = str(cfg, "layoutJson");
+  const revealLineStart = num(cfg, "revealLineStart");
+  const revealLineEnd = num(cfg, "revealLineEnd");
+  const revealRequestId = str(cfg, "revealRequestId");
   const props: {
     root?: string;
     file?: string;
     openFiles?: readonly string[];
     layoutJson?: string;
+    revealLineStart?: number;
+    revealLineEnd?: number;
+    revealRequestId?: string;
     windowId?: string;
     linkedRoot?: string | null;
     linkedFilePath?: string | undefined;
@@ -348,6 +367,9 @@ registerWindowRender("editor", (cfg, ctx) => {
   if (file !== undefined) props.file = file;
   if (openFiles !== undefined) props.openFiles = openFiles;
   if (layoutJson !== undefined) props.layoutJson = layoutJson;
+  if (revealLineStart !== undefined) props.revealLineStart = revealLineStart;
+  if (revealLineEnd !== undefined) props.revealLineEnd = revealLineEnd;
+  if (revealRequestId !== undefined) props.revealRequestId = revealRequestId;
   props.linkedRoot = ctx.linkedRoot;
   props.linkedFilePath = ctx.linkedFilePath;
   props.linkedCapsuleIds = ctx.linkedCapsuleIds;

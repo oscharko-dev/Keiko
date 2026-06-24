@@ -40,8 +40,6 @@ vi.mock("@/lib/api", () => ({
   fetchProjects: vi.fn(),
   sendDesktopChat: vi.fn(),
   sendDesktopChatStream: vi.fn(),
-  startChatRun: vi.fn(),
-  startGroundedWorkflowHandoff: vi.fn(),
   updateChat: vi.fn(),
 }));
 

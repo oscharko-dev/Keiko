@@ -30,6 +30,7 @@ import {
   type EditorSymbolsResolver,
   type EditorThemeVariant,
   type InlineCompletionTelemetrySnapshot,
+  type KeikoCodeEditorProps,
   type KeikoEditorLoadState,
 } from "@oscharko-dev/keiko-editor";
 
@@ -53,6 +54,7 @@ export interface EditorSurfaceProps {
   readonly onSaveRequested: (request: EditorSaveRequest) => void;
   readonly onSelectionChange?: ((selection: EditorRange | null) => void) | undefined;
   readonly onCursorChange?: ((position: EditorPosition) => void) | undefined;
+  readonly revealRequest?: KeikoCodeEditorProps["revealRequest"] | undefined;
   readonly onRuntimeError?: ((message: string) => void) | undefined;
   /**
    * Host completion resolver (Issue #1199). When present, the editor registers a Monaco completion
@@ -116,6 +118,7 @@ export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
       onSaveRequested={props.onSaveRequested}
       onSelectionChange={props.onSelectionChange}
       onCursorChange={props.onCursorChange}
+      revealRequest={props.revealRequest}
       onRuntimeError={props.onRuntimeError}
       provideCompletions={props.provideCompletions}
       completionTriggerCharacters={props.completionTriggerCharacters}

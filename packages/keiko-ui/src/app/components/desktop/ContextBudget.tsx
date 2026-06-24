@@ -36,7 +36,8 @@ const PRESSURE_CLASS: Readonly<Record<ConversationBudgetPressure, string>> = {
   exceeded: "cmp-budget-badge cmp-budget-badge-exceeded",
 };
 
-const APPROXIMATE_HINT = "Token counts are approximate. Actual model usage may vary.";
+const APPROXIMATE_HINT =
+  "Approximate next-request context. Estimated from UTF-8 bytes / 4; actual provider tokenization may vary. Stored grounded-answer evidence is counted only when it is attached to the next request.";
 
 // Friendly "k tokens" for readability above 1k. Below that, show the raw count.
 function formatTokens(tokens: number): string {

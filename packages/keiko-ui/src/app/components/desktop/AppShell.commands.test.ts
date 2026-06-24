@@ -12,12 +12,18 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
-import { buildAppShellCommands, headerStatus, normalizeEditorWindowCfg } from "./AppShell";
+import {
+  buildAppShellCommands,
+  headerStatus,
+  normalizeEditorWindowCfg,
+  opensDirectlyFromPalette,
+} from "./AppShell";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 
 function fakeApi(): WorkspaceApi {
   return {
     add: vi.fn(() => null),
+    openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
     focus: vi.fn(),
     close: vi.fn(),
@@ -66,6 +72,14 @@ function fakeUndoStack(overrides: Partial<WorkspaceUndoStackApi> = {}): Workspac
 }
 
 describe("buildAppShellCommands — command palette contract (epic #518 #526 #527)", () => {
+  it("opens Knowledge Connector directly while keeping configured windows behind the dialog", () => {
+    expect(opensDirectlyFromPalette("connector")).toBe(true);
+    expect(opensDirectlyFromPalette("files")).toBe(false);
+    expect(opensDirectlyFromPalette("editor")).toBe(false);
+    expect(opensDirectlyFromPalette("agents")).toBe(false);
+    expect(opensDirectlyFromPalette("chat")).toBe(false);
+  });
+
   it("includes a New <card-type> command for every CARD_TYPES entry", () => {
     const commands = buildAppShellCommands(
       fakeApi(),

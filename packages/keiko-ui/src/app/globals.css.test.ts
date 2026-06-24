@@ -307,6 +307,38 @@ describe("Compact model picker", () => {
   });
 });
 
+describe("Prompt Enhancer rendered prompt selection", () => {
+  it("keeps the rendered prompt selectable despite window-level selection guards", () => {
+    const panelBlock = cssBlock(".pe-panel {");
+    expect(panelBlock).toContain("user-select: text");
+    const sectionBlock = cssBlock(".pe-section {");
+    expect(sectionBlock).toContain("user-select: text");
+    const renderedBlock = cssBlock(".pe-rendered {");
+    expect(renderedBlock).toContain("user-select: text");
+    expect(renderedBlock).toContain("-webkit-user-select: text");
+    expect(renderedBlock).toContain("cursor: text");
+    const descendantBlock = cssBlock(".pe-rendered *");
+    expect(descendantBlock).toContain("user-select: text");
+    expect(descendantBlock).toContain("-webkit-user-select: text");
+  });
+});
+
+describe("Chat grounded audit footer density", () => {
+  it("keeps inline Evidence and Context disclosures visually tight inside assistant answers", () => {
+    const inlineBlock = cssBlock(".chatw-grounded-inline {");
+    expect(inlineBlock).toContain("gap: 0");
+    expect(inlineBlock).toContain("padding: 6px 10px");
+
+    const summaryBlock = cssBlock(".chatw-grounded-inline .grounded-evidence-summary {");
+    expect(summaryBlock).toContain("min-height: 27px");
+    expect(summaryBlock).toContain("padding: 3px 0");
+
+    const contextBlock = cssBlock(".chatw-grounded-inline > .ctx-status {");
+    expect(contextBlock).toContain("margin-top: 0");
+    expect(contextBlock).toContain("border-top: 1px solid var(--border-subtle)");
+  });
+});
+
 // ─── Fix 3: WCAG 1.4.3 — light-theme text contrast ───────────────────────────
 
 describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
@@ -437,6 +469,39 @@ describe("WCAG 2.5.8 — footer target size", () => {
   it(".ft-window-trigger keeps at least a 24px hit target", () => {
     const block = cssBlock(".ft-window-trigger");
     expect(block).toContain("min-height: 24px");
+  });
+});
+
+describe("Issue #1426 — footer window chrome clears the right rail", () => {
+  it("reserves the right rail width in the footer and lifts the palette above shell rails", () => {
+    const footer = cssBlock(".footer {");
+    expect(footer).toContain("z-index: var(--z-sticky)");
+    expect(footer).toContain(
+      "padding: 0 calc(var(--space-5) + var(--shell-right-rail-reserve)) 0 var(--space-5)",
+    );
+
+    const palette = cssBlock(".ft-window-palette {");
+    expect(palette).toContain("z-index: var(--z-popover)");
+  });
+
+  it("shares the rail width between shell rails and the footer reserve, with a narrow reset", () => {
+    expect(css).toContain("--shell-rail-width: 50px");
+    expect(css).toContain("--shell-right-rail-reserve: var(--shell-rail-width)");
+    expect(css).toContain("@media (max-width: 700px), (max-height: 430px) {\n  :root {");
+    expect(css).toContain("--shell-rail-width: 44px");
+    expect(css).toContain("@media (max-width: 420px) {\n  :root {");
+    expect(css).toContain("--shell-right-rail-reserve: 0px");
+    expect(cssRule('html[data-keiko-gateway-setup-open="true"] {')).toContain(
+      "--shell-right-rail-reserve: 0px",
+    );
+  });
+
+  it("routes footer and rail tooltips through the governed tooltip layer", () => {
+    const shellTooltip = cssRule(".cmp-mode[data-tip]::after,");
+    expect(shellTooltip).toContain("z-index: var(--z-tooltip)");
+
+    const railTooltip = cssRule(".rail-btn[data-tip]::after,");
+    expect(railTooltip).toContain("z-index: var(--z-tooltip)");
   });
 });
 
@@ -1491,7 +1556,9 @@ describe("Issue #1292 — Tier-2 scale tokens consolidated into the product", ()
       "--ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1)",
       "--z-base: 0",
       "--z-modal: 300",
+      "--z-popover: 400",
       "--z-tooltip: 600",
+      "--shell-rail-width: 50px",
     ]) {
       expect(css, `${decl} must be consolidated into globals.css`).toContain(decl);
     }
@@ -1776,8 +1843,13 @@ describe("Issue #1293 — global shell + workspace chrome token migration", () =
   // type, radius, motion) where a token exists; they consume the Tier-2 scales.
   it("adopts the named z-index, spacing and radius scales in the shell (AC1)", () => {
     expect(cssBlock(".ws-shader {")).toContain("z-index: var(--z-base)");
+    expect(cssBlock(".stage {")).toContain("z-index: var(--z-base)");
     expect(cssBlock(".conn-layer {")).toContain("z-index: var(--z-base)");
     expect(cssBlock(".win-port {")).toContain("z-index: var(--z-canvas-window-active)");
+    expect(cssBlock(".rail {")).toContain("z-index: var(--z-rail)");
+    expect(cssBlock(".rail {")).toContain("width: var(--shell-rail-width)");
+    expect(cssRule(".rail:has(")).toContain("z-index: var(--z-nav)");
+    expect(cssBlock(".footer {")).toContain("z-index: var(--z-sticky)");
     expect(cssBlock(".stage {")).toContain("padding: var(--space-4)");
     expect(cssBlock(".ws-zoom {")).toContain("backdrop-filter: blur(var(--blur-md))");
     expect(cssBlock(".ft-gov {")).toContain("border-radius: var(--radius-pill)");
@@ -3886,22 +3958,33 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
   });
 });
 
-// ADR-0057 D2 — drift gate pinning the ContextStatusPanel .ctx-* classes into the single
-// globals.css. Reverting any class definition (or swapping a Tier-3 token for a raw value) fails
-// here, so the panel's styling cannot silently disappear or violate the no-raw-values gate.
-describe("PR6 context status panel — .ctx-* styling pin (ADR-0057 D2)", () => {
-  it("defines the .ctx-status disclosure container and its summary / dl children", () => {
-    for (const selector of [".ctx-status {", ".ctx-status-summary {", ".ctx-status-dl {"]) {
+// ADR-0057 D2 — drift gate pinning the ContextStatusPanel into the shared grounded-evidence
+// disclosure chrome. Context and Evidence must read as one coherent audit stack instead of two
+// unrelated panels.
+describe("PR6 context status panel — shared evidence disclosure styling pin (ADR-0057 D2)", () => {
+  it("defines the .ctx-status container and shared grounded-evidence disclosure selectors", () => {
+    for (const selector of [
+      ".ctx-status {",
+      ".ctx-status-dl {",
+      ".grounded-evidence-disclosure {",
+      ".grounded-evidence-summary {",
+      ".grounded-evidence-summary-title {",
+      ".grounded-evidence-summary-meta {",
+      ".grounded-evidence-body {",
+    ]) {
       expect(css.includes(selector), `${selector} must remain in globals.css`).toBe(true);
     }
     expect(
-      css.includes(".ctx-status-summary:hover {"),
-      "the quiet summary must brighten on hover",
+      css.includes(".grounded-evidence-summary:hover {"),
+      "the shared quiet summary must brighten on hover",
     ).toBe(true);
   });
 
-  it("styles the .ctx-* classes only with existing Tier-3 semantic tokens (no raw values)", () => {
-    const block = css.slice(css.indexOf(".ctx-status {"), css.indexOf(".chatw-typing-row {"));
+  it("styles the shared Context/Evidence disclosure with existing semantic tokens", () => {
+    const block = css.slice(
+      css.indexOf(".grounded-evidence-disclosure {"),
+      css.indexOf(".grounded-citations-wrap {"),
+    );
     expect(block.length).toBeGreaterThan(0);
     for (const token of [
       "var(--border-subtle)",
