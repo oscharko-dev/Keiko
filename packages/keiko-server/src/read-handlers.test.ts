@@ -10,6 +10,7 @@ import {
   handleWorkspace,
   handleEvidenceList,
   handleEvidenceDetail,
+  isVoiceDictationCapable,
 } from "./read-handlers.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -300,6 +301,36 @@ describe("GET /api/voice/capability", () => {
     const body = result.body as { voice: { available: boolean; reason: string } };
     expect(body.voice.available).toBe(false);
     expect(body.voice.reason).toBe("policy-disabled");
+  });
+});
+
+describe("isVoiceDictationCapable (Issue #495 — Permissions-Policy microphone scoping)", () => {
+  it("is false when no config is resolved", () => {
+    expect(isVoiceDictationCapable(depsWith({}))).toBe(false);
+  });
+
+  it("is false when only a chat provider is configured (no speech-to-text)", () => {
+    expect(isVoiceDictationCapable(depsWith({ config: SAMPLE_CONFIG, configPresent: true }))).toBe(
+      false,
+    );
+  });
+
+  it("is true when a speech-to-text voice provider is configured", () => {
+    expect(
+      isVoiceDictationCapable(depsWith({ config: VOICE_STT_CONFIG, configPresent: true })),
+    ).toBe(true);
+  });
+
+  it("is false when voice is disabled by policy, even with a voice provider", () => {
+    expect(
+      isVoiceDictationCapable(
+        depsWith({
+          config: VOICE_STT_CONFIG,
+          configPresent: true,
+          env: { KEIKO_VOICE_DISABLED: "1" },
+        }),
+      ),
+    ).toBe(false);
   });
 });
 

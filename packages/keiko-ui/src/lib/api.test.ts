@@ -21,6 +21,8 @@ import {
   sendDesktopChatStream,
   startGroundedWorkflowHandoff,
   fetchWorkspaceSummary,
+  transcribeDictation,
+  ApiError,
   type StreamHandlers,
 } from "./api";
 
@@ -524,6 +526,78 @@ describe("fetchVoiceCapability (Issue #493)", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(fetchVoiceCapability()).resolves.toEqual({ voice });
+  });
+});
+
+describe("transcribeDictation (Issue #495)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts base64 audio to /api/voice/transcribe with the JSON + CSRF envelope", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ transcript: "hello there", confidence: 0.92 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await transcribeDictation({
+      audio: "QUJDRA==",
+      mimeType: "audio/webm",
+      durationMs: 1500,
+      language: "en",
+    });
+
+    expect(result).toEqual({ transcript: "hello there", confidence: 0.92 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/voice/transcribe",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          audio: "QUJDRA==",
+          mimeType: "audio/webm",
+          durationMs: 1500,
+          language: "en",
+        }),
+      }),
+    );
+  });
+
+  it("propagates a coded ApiError (e.g. VOICE_UNAVAILABLE) without logging the body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: { code: "VOICE_UNAVAILABLE", message: "Speech-to-text is not available." } },
+          503,
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      transcribeDictation({ audio: "QUJDRA==", mimeType: "audio/webm" }),
+    ).rejects.toMatchObject({ code: "VOICE_UNAVAILABLE", status: 503 });
+  });
+
+  it("maps a provider error to a transcribe ApiError", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(
+          { error: { code: "VOICE_PROVIDER_ERROR", message: "Could not transcribe the audio." } },
+          502,
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await transcribeDictation({ audio: "QUJDRA==", mimeType: "audio/webm" }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe("VOICE_PROVIDER_ERROR");
   });
 });
 

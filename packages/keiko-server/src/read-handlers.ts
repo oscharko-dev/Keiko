@@ -94,6 +94,23 @@ export function handleVoiceCapability(_ctx: RouteContext, deps: UiHandlerDeps): 
   return { status: 200, body: { voice } };
 }
 
+// Issue #495, Epic #491 — whether the running deployment should permit browser microphone capture.
+// True only when the resolved voice capability advertises speech-to-text and voice is not disabled by
+// policy. The server scopes the Permissions-Policy microphone directive to this (headers.ts /
+// server.ts) so a no-voice deployment keeps the strict `microphone=()`. It mirrors the dictation
+// route's capability gate (voice-handlers.ts selectDictationProvider) so the header and the route
+// agree on exactly when dictation is permitted.
+export function isVoiceDictationCapable(deps: UiHandlerDeps): boolean {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) {
+    return false;
+  }
+  const voice = resolveVoiceCapability(config, {
+    policyDisabled: isVoiceDisabledByPolicy(deps.env),
+  });
+  return voice.available && voice.capabilities.speechToText;
+}
+
 // Route 4 — launch-form metadata: the workflow descriptors plus the synthesized explain-plan and
 // verify inputs (both are harness tasks with no workflow descriptor — verify is BFF-only and runs
 // the deterministic verification orchestrator).
