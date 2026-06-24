@@ -9,14 +9,17 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@/lib/types";
-import { SettingsPanel } from "./SettingsPanel";
+import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
 
 const fetchConfigMock = vi.fn();
 const fetchModelsMock = vi.fn();
+const runGatewayReadinessMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   fetchConfig: (): Promise<unknown> => fetchConfigMock(),
   fetchModels: (): Promise<unknown> => fetchModelsMock(),
+  runGatewayReadiness: (...args: readonly unknown[]): Promise<unknown> =>
+    runGatewayReadinessMock(...args),
 }));
 
 // Issue #144: synthetic capability fixtures. Generic ids only — no customer
@@ -86,6 +89,15 @@ function ocrVisionCapability(id = "test-ocr-1"): ModelCapability {
 function primeFetches(models: readonly ModelCapability[]): void {
   fetchConfigMock.mockResolvedValue({ config: null, configPresent: true });
   fetchModelsMock.mockResolvedValue({ models });
+}
+
+function setClipboard(writeText: (text: string) => Promise<void>): PropertyDescriptor | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", {
+    value: { writeText },
+    configurable: true,
+  });
+  return descriptor;
 }
 
 afterEach(() => {
@@ -203,6 +215,147 @@ describe("SettingsPanel gateway summary semantics", () => {
       screen.getByText(/none of the discovered models can be used for conversation/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/keiko can use the configured gateway models for chat/i)).toBeNull();
+  });
+});
+
+describe("SettingsPanel gateway readiness checks", () => {
+  it("shows readiness actions only for conversation-capable models", async () => {
+    primeFetches([chatCapability("test-chat-1"), embeddingCapability("test-embed-1")]);
+
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("conv-elig-ok")).toBeInTheDocument();
+    });
+    expect(screen.getAllByRole("button", { name: "Run readiness check" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Deep probes" })).toHaveLength(1);
+  });
+
+  it("renders busy and verified states for a successful readiness check", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-06-24T09:00:00.000Z",
+      overallStatus: "ready",
+      probes: [
+        { name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" },
+        { name: "streaming", status: "passed", latencyMs: 10, evidence: "Streaming works" },
+        { name: "tool_calling", status: "passed", latencyMs: 11, evidence: "Tools work" },
+        { name: "json_schema", status: "passed", latencyMs: 9, evidence: "JSON works" },
+      ],
+      verifiedCapabilities: { streaming: true, toolCalling: true, structuredOutput: true },
+    });
+
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+
+    expect(screen.getByText(/checking basic readiness/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Working today")).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Streaming");
+    expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Tools");
+    expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("JSON");
+    expect(runGatewayReadinessMock).toHaveBeenCalledWith("test-chat-1", undefined);
+  });
+
+  it("surfaces unsupported probe evidence for partial readiness", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockResolvedValue({
+      modelId: "test-chat-1",
+      checkedAt: "2026-06-24T09:00:00.000Z",
+      overallStatus: "partial",
+      probes: [
+        { name: "chat", status: "passed", latencyMs: 12, evidence: "Working today" },
+        { name: "streaming", status: "passed", latencyMs: 10, evidence: "Streaming works" },
+        {
+          name: "json_schema",
+          status: "unsupported",
+          latencyMs: 9,
+          evidence: "JSON schema response_format was not accepted by the endpoint.",
+        },
+      ],
+      verifiedCapabilities: { streaming: true },
+    });
+
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Working today")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/JSON schema response_format was not accepted/i)).toBeInTheDocument();
+  });
+
+  it("copies a complete readiness report for customer diagnostics", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = setClipboard(writeText);
+    primeFetches([chatCapability("test-chat-1")]);
+    const report = {
+      modelId: "test-chat-1",
+      checkedAt: "2026-06-24T09:00:00.000Z",
+      overallStatus: "partial" as const,
+      probes: [
+        {
+          name: "chat" as const,
+          status: "passed" as const,
+          latencyMs: 12,
+          evidence: "Working today",
+        },
+        {
+          name: "long_context" as const,
+          status: "passed" as const,
+          latencyMs: 99,
+          evidence: "32000 approximate tokens were accepted and the sentinel was recovered.",
+        },
+        {
+          name: "json_schema" as const,
+          status: "unsupported" as const,
+          latencyMs: 9,
+          evidence: "JSON schema response_format was not accepted by the endpoint.",
+        },
+      ],
+      verifiedCapabilities: { testedContextTokens: 32000 },
+    };
+    runGatewayReadinessMock.mockResolvedValue(report);
+
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Copy report" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(formatGatewayReadinessReport(report));
+    });
+    const copied = writeText.mock.calls[0]?.[0] ?? "";
+    expect(copied).toContain("Keiko Gateway Readiness Report");
+    expect(copied).toContain("Model: test-chat-1");
+    expect(copied).toContain("- json_schema: unsupported");
+    expect(copied).toContain("Raw JSON:");
+    expect(await screen.findByText("Readiness report copied.")).toBeInTheDocument();
+
+    if (clipboardDescriptor === undefined) {
+      Reflect.deleteProperty(navigator, "clipboard");
+    } else {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  it("passes deep probe options and surfaces route errors without blocking settings", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockRejectedValue(
+      new Error("Configure a gateway before running readiness checks."),
+    );
+
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deep probes" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/configure a gateway/i);
+    });
+    expect(runGatewayReadinessMock).toHaveBeenCalledWith("test-chat-1", {
+      includeDeepProbes: true,
+    });
+    expect(screen.getByRole("button", { name: "Update credentials" })).toBeEnabled();
   });
 });
 

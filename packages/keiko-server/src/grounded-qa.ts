@@ -909,6 +909,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     elapsedMs: output.elapsedMs,
     contextPack,
   };
+  deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   rememberGroundedTurn({
     assistantMessageId: assistantMessage.id,
     chatId: chat.id,

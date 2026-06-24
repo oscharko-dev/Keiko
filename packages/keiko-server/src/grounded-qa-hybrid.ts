@@ -977,6 +977,7 @@ function assembleHybridNoEvidenceRoute(
     { content, usage: { promptTokens: 0, completionTokens: 0 } },
     { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   );
+  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   return { status: 200, body: answer };
 }
 
@@ -1226,6 +1227,7 @@ async function answerAndAssemble(
     assistant,
     { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   );
+  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   return { status: 200, body: answer };
 }
 

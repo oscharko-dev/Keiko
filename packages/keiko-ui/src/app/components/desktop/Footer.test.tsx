@@ -122,6 +122,14 @@ describe("Footer — window status trigger", () => {
     expect(onToggleWindowPalette).toHaveBeenCalledTimes(1);
   });
 
+  it("does not attach a tooltip to the self-explanatory window-count trigger", () => {
+    renderFooter({ winCount: 1, windows: [footerWindow({ id: "files-1", type: "files" })] });
+
+    const trigger = screen.getByRole("button", { name: /1 window/ });
+    expect(trigger).not.toHaveAttribute("data-tip");
+    expect(trigger).not.toHaveClass("ui-tip");
+  });
+
   it("renders open and minimized windows in the footer palette", () => {
     renderFooter({
       winCount: 2,
@@ -138,13 +146,11 @@ describe("Footer — window status trigger", () => {
       ],
     });
 
-    expect(screen.getByRole("menu", { name: "Open windows" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Open windows" })).toBeInTheDocument();
     expect(
-      screen.getByRole("menuitem", { name: "Restore Chat window - Sprint triage" }),
+      screen.getByRole("button", { name: "Restore Chat window - Sprint triage" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("menuitem", { name: "Focus Files window - /repo" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Focus Files window - /repo" })).toBeInTheDocument();
     expect(screen.getByText("Minimized")).toBeInTheDocument();
   });
 
@@ -160,7 +166,7 @@ describe("Footer — window status trigger", () => {
       onSelectWindow,
     });
 
-    await user.click(screen.getByRole("menuitem", { name: "Restore Files window - /repo" }));
+    await user.click(screen.getByRole("button", { name: "Restore Files window - /repo" }));
 
     expect(onSelectWindow).toHaveBeenCalledWith("files-1");
   });
