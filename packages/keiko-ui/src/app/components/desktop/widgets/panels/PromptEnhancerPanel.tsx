@@ -247,15 +247,15 @@ function SafetyPanel({
     <Section title="Safety">
       <dl className="pe-safety-summary" data-testid="pe-safety-decision">
         <div>
-          <dt>Decision</dt>
+          <dt>Decision:</dt>
           <dd>{humanizeToken(safety.decision)}</dd>
         </div>
         <div>
-          <dt>Verification</dt>
+          <dt>Verification:</dt>
           <dd>{humanizeToken(safety.verificationStatus)}</dd>
         </div>
         <div>
-          <dt>Human review</dt>
+          <dt>Human review:</dt>
           <dd>{reviewing ? "required" : "not required"}</dd>
         </div>
       </dl>
