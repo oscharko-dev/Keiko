@@ -161,6 +161,7 @@ const QUOTED_DOUBLE_RE = /"([^"\n]+)"/g;
 const QUOTED_SINGLE_RE = /'([^'\n]+)'/g;
 const BACKTICK_RE = /`([^`\n]+)`/g;
 const PATH_RE = /(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z]{1,8}/g;
+const API_ROUTE_RE = /(^|[^A-Za-z0-9_.-])((?:\/[A-Za-z0-9_.:{}-]+){2,})/g;
 // Requires a genuine lower/digit -> upper transition so all-caps acronyms and SHOUTING words
 // (WHY, HTTP, BROKEN) are NOT mistaken for code identifiers. A spurious 0.85 identifier anchor
 // would both satisfy the clarification gate for a vague question and seed symbol-file retrieval
@@ -239,7 +240,7 @@ function collectMatches(
   let match = re.exec(source);
   while (match !== null) {
     const full = match[0];
-    const captured = match[1] ?? full;
+    const captured = match[2] ?? match[1] ?? full;
     pushAnchor(out, captured, kind, weight);
     parts.push(source.slice(cursor, match.index));
     parts.push(" ".repeat(full.length));
@@ -330,6 +331,7 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   let remaining = collectMatches(text, QUOTED_DOUBLE_RE, "quoted", 1, collected);
   remaining = collectMatches(remaining, QUOTED_SINGLE_RE, "quoted", 1, collected);
   remaining = collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected);
+  remaining = collectMatches(remaining, API_ROUTE_RE, "path", 0.95, collected);
   remaining = collectMatches(remaining, PATH_RE, "path", 0.95, collected);
   remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);

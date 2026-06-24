@@ -16,6 +16,11 @@ export interface ScoringWeights {
   readonly testPairBonus: number;
   readonly stacktracePositionBonus: number;
   readonly generatedPenalty: number;
+  // Intent-conditioned signals (enterprise retrieval M4). OPTIONAL so existing weight literals stay
+  // valid and DEFAULT_SCORING_WEIGHTS is unchanged; weight 0 / undefined ⇒ inert (computeScore
+  // skips an absent weight). Non-zero only for the intents weightsForIntent boosts.
+  readonly canonicalMetadata?: number;
+  readonly structuralEdge?: number;
 }
 
 export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
@@ -28,6 +33,33 @@ export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
   generatedPenalty: 0.3,
 } as const;
 
+// Intent-conditioned weight overrides (M4). Only the named intents receive non-default weights for
+// the new canonical-metadata / structural-edge signals; every other intent (and the no-intent
+// default path) returns DEFAULT_SCORING_WEIGHTS verbatim, so ranking is byte-identical there.
+// Weights are deliberately modest (tie-breaker magnitude) to nudge, not dominate, the established
+// provenance/anchor signals.
+const INTENT_BOOSTED: ReadonlySet<string> = new Set([
+  "project-metadata",
+  "repository-overview",
+  "targeted-code-search",
+  "diagnostic-search",
+]);
+
+export function isIntentBoosted(intent: string | undefined): boolean {
+  return intent !== undefined && INTENT_BOOSTED.has(intent);
+}
+
+export function weightsForIntent(intent: string | undefined): ScoringWeights {
+  if (intent === undefined || !INTENT_BOOSTED.has(intent)) {
+    return DEFAULT_SCORING_WEIGHTS;
+  }
+  const canonicalMetadata =
+    intent === "project-metadata" || intent === "repository-overview" ? 0.25 : 0.1;
+  const structuralEdge =
+    intent === "targeted-code-search" || intent === "diagnostic-search" ? 0.2 : 0.1;
+  return { ...DEFAULT_SCORING_WEIGHTS, canonicalMetadata, structuralEdge };
+}
+
 const SIGNAL_WEIGHT_KEYS: Readonly<Record<string, keyof ScoringWeights>> = {
   "provenance-best-score": "provenanceBestScore",
   "provenance-count": "provenanceCount",
@@ -36,6 +68,8 @@ const SIGNAL_WEIGHT_KEYS: Readonly<Record<string, keyof ScoringWeights>> = {
   "test-pair-bonus": "testPairBonus",
   "stacktrace-position-bonus": "stacktracePositionBonus",
   "generated-penalty": "generatedPenalty",
+  "canonical-metadata": "canonicalMetadata",
+  "structural-edge": "structuralEdge",
 };
 
 function clampUnit(value: number): number {
@@ -52,7 +86,11 @@ export function computeScore(
     if (key === undefined) {
       continue;
     }
-    raw += signal.value * weights[key];
+    const weight = weights[key];
+    if (weight === undefined) {
+      continue;
+    }
+    raw += signal.value * weight;
   }
   return clampUnit(raw);
 }

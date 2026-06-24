@@ -10,6 +10,7 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateFile,
   type ConnectedContextPack,
+  type ContextPackDiagnostics,
   type ConnectedFileEntry,
   type ConnectedFileRole,
   type ContextExcerpt,
@@ -40,6 +41,8 @@ export interface AssembleInput {
   readonly cacheIdentity?: readonly string[] | undefined;
   readonly initialUsage?: ExplorationUsage;
   readonly initialUncertainty?: readonly UncertaintyMarker[];
+  // Optional explainable-ranking diagnostics (M2) carried verbatim onto the produced pack.
+  readonly diagnostics?: ContextPackDiagnostics | undefined;
 }
 
 export interface ExcerptWindow {
@@ -430,6 +433,7 @@ function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): Connec
     uncertainty: plan.uncertainty,
     emittedAtMs: nowMs,
     ledgerRef: undefined,
+    ...(input.diagnostics !== undefined ? { diagnostics: input.diagnostics } : {}),
   };
 }
 
@@ -522,6 +526,24 @@ function cacheOmitted(entry: OmittedContextEntry): object {
   };
 }
 
+// Diagnostics are carried verbatim onto the pack, so two runs that differ ONLY in ranking
+// explanation must not collide on a cached pack. Returns undefined when absent (serializes away,
+// keeping legacy cache keys byte-identical).
+function cacheDiagnostics(diagnostics: ContextPackDiagnostics | undefined): object | undefined {
+  if (diagnostics === undefined) {
+    return undefined;
+  }
+  return {
+    rankedCandidates: diagnostics.rankedCandidates.map((entry) => ({
+      scopePath: entry.scopePath,
+      bucket: entry.bucket,
+      score: entry.score,
+      ecosystem: entry.ecosystem,
+      signals: entry.signals.map((signal) => ({ name: signal.name, value: signal.value })),
+    })),
+  };
+}
+
 function cacheExcerptWindow(window: ExcerptWindow): object {
   return {
     startLine: window.startLine,
@@ -559,6 +581,7 @@ function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): rea
         : undefined,
     ranked: input.ranked.map(cacheCandidate),
     omittedFromRanking: input.omittedFromRanking.map(cacheOmitted),
+    diagnostics: cacheDiagnostics(input.diagnostics),
     excerpts: cacheExcerptIdentity(input),
     maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
     editablePaths: [...resolved.editablePaths].sort(),

@@ -11,6 +11,7 @@ import {
   DEFAULT_EXPLORATION_BUDGET,
   EVIDENCE_ATOM_PROVENANCE_KINDS,
   EVIDENCE_ATOM_REDACTION_STATES,
+  MAX_RANKED_CANDIDATE_DIAGNOSTICS,
   RETRIEVAL_QUERY_KINDS,
   SELECTED_SCOPE_KINDS,
   UNCERTAINTY_MARKER_KINDS,
@@ -1184,6 +1185,70 @@ describe("validateConnectedContextPack", () => {
       ],
     };
     expectInvalidWithReason(validateConnectedContextPack(pack), "impactedAtomIds unknown");
+  });
+
+  // ─── Explainable ranking diagnostics (M2) ──────────────────────────────────
+  it("accepts a pack with no diagnostics field (legacy / additive)", () => {
+    expect(validateConnectedContextPack(happyPack())).toEqual({ ok: true });
+  });
+
+  it("accepts a pack with well-formed ranking diagnostics", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [
+          {
+            scopePath: "pom.xml",
+            bucket: "canonical-metadata",
+            score: 109,
+            ecosystem: "maven",
+            signals: [
+              { name: "bucket:canonical-metadata", value: 100 },
+              { name: "depth-penalty", value: -1 },
+            ],
+          },
+        ],
+      },
+    };
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it("rejects more than MAX_RANKED_CANDIDATE_DIAGNOSTICS entries", () => {
+    const entry = {
+      scopePath: "a.ts",
+      bucket: "source",
+      score: 1,
+      ecosystem: undefined,
+      signals: [],
+    };
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: Array.from({ length: MAX_RANKED_CANDIDATE_DIAGNOSTICS + 1 }, (_, i) => ({
+          ...entry,
+          scopePath: `a${String(i)}.ts`,
+        })),
+      },
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "exceeds");
+  });
+
+  it("rejects malformed ranking-candidate entries", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [
+          {
+            scopePath: "",
+            bucket: "",
+            score: Number.NaN,
+            ecosystem: undefined,
+            signals: [{ name: "x", value: Number.POSITIVE_INFINITY }],
+          },
+        ],
+      },
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "rankedCandidate");
   });
 });
 

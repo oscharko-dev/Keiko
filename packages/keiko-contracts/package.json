@@ -1,7 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "0.2.0",
-  "private": true,
+  "version": "0.2.7",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko contracts. Not published independently.",
@@ -23,6 +22,14 @@
     "./connected-context": {
       "types": "./dist/connected-context.d.ts",
       "import": "./dist/connected-context.js"
+    },
+    "./context-engineering": {
+      "types": "./dist/context-engineering.d.ts",
+      "import": "./dist/context-engineering.js"
+    },
+    "./context-observations": {
+      "types": "./dist/context-observations.d.ts",
+      "import": "./dist/context-observations.js"
     },
     "./text-safety": {
       "types": "./dist/text-safety.d.ts",

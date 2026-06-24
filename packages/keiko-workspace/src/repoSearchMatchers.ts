@@ -4,7 +4,13 @@
 
 import { createHash } from "node:crypto";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  ecosystemTechnicalPhrases,
+  ecosystemVersionDeclarationPatterns,
+  type EcosystemVersionDeclarationPattern,
+} from "./ecosystems.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
+import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import { regexSafetyIssue } from "./repoSearchRegexSafety.js";
 
 export interface LineMatcher {
@@ -217,6 +223,10 @@ const TECHNICAL_PHRASES: readonly { readonly pattern: RegExp; readonly term: str
   { pattern: /\bpackage\.json\b/iu, term: "package.json" },
   { pattern: /\bpackage[\s_-]?manager\b|\bpaket[\s_-]?manager\b/iu, term: "package-manager" },
   { pattern: /\btest[\s_-]?runner\b|\btestumgebung\b/iu, term: "test-runner" },
+  // Ecosystem-aware content tokens (e.g. a Java/Maven question also searches for "maven.compiler"
+  // so the exact version-declaration line in pom.xml wins the line-range evidence). Sourced from
+  // the shared registry; only ecosystems with routing terms contribute (JS/TS handled above).
+  ...ecosystemTechnicalPhrases,
 ];
 
 interface NaturalLanguageIntent {
@@ -321,17 +331,36 @@ function lineLooksLikeSymbolDefinition(
   return patterns.some((pattern) => pattern.test(line));
 }
 
-function lineLooksLikeRouteDeclaration(
-  line: string,
-  haystack: string,
-  intent: NaturalLanguageIntent,
-): boolean {
+function routeMethodMatches(haystack: string, method: string): boolean {
+  return [
+    `"${method}"`,
+    `'${method}'`,
+    `.${method}(`,
+    ` ${method}(`,
+    `@${method}mapping`,
+    `methods("${method}"`,
+    `methods('${method}'`,
+  ].some((needle) => haystack.includes(needle));
+}
+
+function routeDeclarationShapeMatches(haystack: string): boolean {
+  return (
+    haystack.includes("method:") ||
+    haystack.includes("pattern:") ||
+    haystack.includes("path:") ||
+    haystack.includes("router.") ||
+    haystack.includes("app.") ||
+    haystack.includes("server.") ||
+    haystack.includes("@") ||
+    haystack.includes("handlefunc") ||
+    haystack.includes("route(")
+  );
+}
+
+function lineLooksLikeRouteDeclaration(haystack: string, intent: NaturalLanguageIntent): boolean {
   const routeHit = intent.routeTokens.some((token) => haystack.includes(token));
-  const methodHit = intent.httpMethods.some((method) => haystack.includes(`"${method}"`));
-  if (!routeHit || !methodHit) {
-    return false;
-  }
-  return line.includes("method:") || line.includes("pattern:");
+  const methodHit = intent.httpMethods.some((method) => routeMethodMatches(haystack, method));
+  return routeHit && methodHit && routeDeclarationShapeMatches(haystack);
 }
 
 function adjustedDefinitionIntentScore(
@@ -356,15 +385,45 @@ function adjustedDefinitionIntentScore(
       penalty = Math.max(penalty, 0.2);
     }
   }
-  if (lineLooksLikeRouteDeclaration(line, haystack, intent)) {
+  if (lineLooksLikeRouteDeclaration(haystack, intent)) {
     bonus = Math.max(bonus, 0.65);
   }
   return Math.max(0, Math.min(1, baseScore + bonus - penalty));
 }
 
+// A version-ish value on the line: a digit (manifest version declarations always carry one, e.g.
+// `<maven.compiler.release>21`, `requires-python = ">=3.11"`, `go 1.23.0`). Single linear class —
+// ReDoS-safe. The gate that makes this precise is the ecosystem content-token check below, not this.
+const HAS_VERSIONISH_VALUE = /\d/u;
+
+// M3: when the query routed to an ecosystem, reward the line that actually DECLARES the version (it
+// contains an ecosystem content token such as "maven.compiler" / "requires-python" AND a numeric
+// value) so it outscores prose/other lines and its excerpt window is surfaced first. Mirrors the
+// adjustedDefinitionIntentScore bonus pattern; deterministic and ReDoS-safe.
+function adjustedVersionDeclarationScore(
+  line: string,
+  baseScore: number,
+  versionDeclarationPatterns: readonly EcosystemVersionDeclarationPattern[],
+): number {
+  if (versionDeclarationPatterns.length === 0) {
+    return baseScore;
+  }
+  const lower = line.toLowerCase();
+  for (const entry of versionDeclarationPatterns) {
+    if (
+      entry.declarationPattern.test(line) &&
+      (!entry.requiresNumeric || HAS_VERSIONISH_VALUE.test(lower))
+    ) {
+      return Math.max(0, Math.min(1, baseScore + 0.75));
+    }
+  }
+  return baseScore;
+}
+
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
-  const rawTokens = query.text.split(/\s+/).filter((t) => t.length > 0);
-  const normalizedTokens = naturalLanguageNormalizedTokens(rawTokens);
+  const rawTokens = expandedQueryTerms(query.text, query.caseSensitive);
+  const intentTokens = expandedQueryTerms(query.text, true);
+  const normalizedTokens = naturalLanguageNormalizedTokens(intentTokens);
   // GRD-033: dedupe content tokens (as symbol/route/method tokens already are) so a repeated
   // query word does not double-count in `hits/total`, which over-rewarded prose-heavy scopes.
   const tokens = uniqueStrings([
@@ -372,6 +431,11 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
     ...technicalPhraseTerms(query.text, query.caseSensitive),
   ]);
   const intent = analyzeNaturalLanguageIntent(normalizedTokens, query.caseSensitive);
+  // The ecosystem declaration-line patterns whose routing pattern matched this query (e.g. for a
+  // Java question: maven.compiler/java.version; for a Go question: go/toolchain directives).
+  const versionDeclarationPatterns = ecosystemVersionDeclarationPatterns.filter((p) =>
+    p.routePattern.test(query.text),
+  );
   const total = tokens.length;
   return {
     match: (line: string): number => {
@@ -388,13 +452,14 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
       if (hits === 0) {
         return 0;
       }
-      return adjustedDefinitionIntentScore(
+      const definitionAdjusted = adjustedDefinitionIntentScore(
         line,
         haystack,
         hits / total,
         intent,
         query.caseSensitive,
       );
+      return adjustedVersionDeclarationScore(line, definitionAdjusted, versionDeclarationPatterns);
     },
   };
 }

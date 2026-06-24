@@ -11,6 +11,7 @@ import { HARNESS_CODES, toFailure } from "./errors.js";
 import { defaultFingerprinter, defaultIdSource } from "./fingerprint.js";
 import { runLoop } from "./loop.js";
 import type { EventSink, Fingerprinter, IdSource, ModelPort, ToolPort } from "./ports.js";
+import type { HarnessShaperPort } from "./shaper-port.js";
 import { MemoryEventSink } from "./sinks.js";
 import { resolveTaskPlan } from "./tasks/policy.js";
 import {
@@ -41,6 +42,10 @@ export interface HarnessDeps {
   readonly clock?: Clock | undefined;
   readonly idSource?: IdSource | undefined;
   readonly fingerprinter?: Fingerprinter | undefined;
+  // Optional injected shaped-observation port (ADR-0055 D4). When omitted, the harness performs no
+  // shaping and the run is byte-identical to today. The production wiring tier (which already
+  // depends on keiko-workflows) injects an implementation backed by the workflow shapers.
+  readonly shaperPort?: HarnessShaperPort | undefined;
 }
 
 export interface AgentSession {
@@ -106,6 +111,8 @@ function buildContext(
     plan,
     startedAt: clock.now(),
     counters: newCounters(),
+    ...(deps.shaperPort === undefined ? {} : { shaperPort: deps.shaperPort }),
+    shapedObservations: [],
     messages: [...plan.messages],
     lastResponse: undefined,
     patchDiff: undefined,

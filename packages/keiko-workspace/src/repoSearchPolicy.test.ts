@@ -65,6 +65,28 @@ describe("orderCandidatesForSearch", () => {
     expect(ordered[0]?.relativePath).toBe("packages/core/src/PaymentReconciler.ts");
   });
 
+  it("expands test-style identifiers so their source file path receives the path-term bonus", () => {
+    const files = [
+      file("tests/payments/PaymentService.test.ts"),
+      file("src/payments/PaymentService.ts"),
+      file("docs/payment-service.md"),
+    ];
+    const { files: ordered, diagnostics } = orderCandidatesForSearch(
+      files,
+      query("Where is the source implementation for PaymentServiceTest?"),
+      policy,
+      0,
+      0,
+    );
+    expect(ordered[0]?.relativePath).toBe("src/payments/PaymentService.ts");
+    const source = diagnostics.rankedCandidates.find(
+      (entry) => entry.scopePath === "src/payments/PaymentService.ts",
+    );
+    expect(
+      source?.signals.some((signal) => signal.name === "path-term-bonus" && signal.value > 0),
+    ).toBe(true);
+  });
+
   it("is deterministic and locale-independent on score ties (code-point order)", () => {
     const files = [file("src/zeta.ts"), file("src/alpha.ts"), file("src/Beta.ts")];
     const run = (): readonly string[] =>
@@ -82,5 +104,86 @@ describe("orderCandidatesForSearch", () => {
     expect(diagnostics.ignoredByDiscovery).toBe(7);
     expect(diagnostics.deniedByDiscovery).toBe(3);
     expect(diagnostics.filesAfterPolicy).toBe(1);
+  });
+});
+
+describe("orderCandidatesForSearch — polyglot ecosystem awareness", () => {
+  const metadataPolicy: SearchPolicy = resolveSearchPolicy(false, {
+    retrievalIntent: "project-metadata",
+  });
+
+  it("ranks a Maven pom.xml above prose for a project-metadata question", () => {
+    const files = [file("README.md"), file("docs/setup.md"), file("pom.xml")];
+    const { files: ordered, diagnostics } = orderCandidatesForSearch(
+      files,
+      query("Which Java version does this project use?"),
+      metadataPolicy,
+      0,
+      0,
+    );
+    expect(ordered[0]?.relativePath).toBe("pom.xml");
+    expect(diagnostics.candidateBuckets["canonical-metadata"]).toBe(1);
+  });
+
+  it.each(["go.mod", "Cargo.toml", "pyproject.toml", "build.gradle", "services/x/pom.xml"])(
+    "buckets %s as canonical-metadata",
+    (path) => {
+      const { diagnostics } = orderCandidatesForSearch(
+        [file(path)],
+        query("version"),
+        metadataPolicy,
+        0,
+        0,
+      );
+      expect(diagnostics.candidateBuckets["canonical-metadata"]).toBe(1);
+      expect(diagnostics.rankedCandidates[0]?.ecosystem).toBeDefined();
+    },
+  );
+
+  it("deprioritizes generated/vendored artifacts into the low-value bucket", () => {
+    const files = [
+      file("src/Service.java"),
+      file("target/classes/Service.class"),
+      file("api/user.pb.go"),
+      file("vendor/lib/x.go"),
+    ];
+    const { diagnostics } = orderCandidatesForSearch(
+      files,
+      query("service"),
+      resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" }),
+      0,
+      0,
+    );
+    // The three generated artifacts collapse into low-value; only the hand-authored source is not.
+    expect(diagnostics.candidateBuckets["low-value"]).toBe(3);
+    expect(diagnostics.candidateBuckets.source).toBe(1);
+  });
+
+  it("ranks hand-authored config above source wrappers for config-key lookup", () => {
+    const files = [file("src/config.ts"), file("config/features.yaml"), file("docs/features.md")];
+    const { files: ordered, diagnostics } = orderCandidatesForSearch(
+      files,
+      query("Where is FEATURE_PAYMENTS_V2 configured?"),
+      resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" }),
+      0,
+      0,
+    );
+    expect(ordered[0]?.relativePath).toBe("config/features.yaml");
+    expect(diagnostics.candidateBuckets.config).toBe(1);
+  });
+
+  it("emits explainable per-file ranking signals for the top candidates", () => {
+    const { diagnostics } = orderCandidatesForSearch(
+      [file("pom.xml"), file("README.md")],
+      query("Which Java version"),
+      metadataPolicy,
+      0,
+      0,
+    );
+    const pom = diagnostics.rankedCandidates.find((c) => c.scopePath === "pom.xml");
+    expect(pom?.bucket).toBe("canonical-metadata");
+    expect(pom?.signals.some((s) => s.name === "bucket:canonical-metadata")).toBe(true);
+    expect(pom?.signals.some((s) => s.name === "depth-penalty")).toBe(true);
+    expect(pom?.signals.some((s) => s.name.startsWith("ecosystem:"))).toBe(true);
   });
 });

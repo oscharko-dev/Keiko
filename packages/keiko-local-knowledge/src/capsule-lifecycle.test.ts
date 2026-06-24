@@ -8,6 +8,7 @@ import {
   deleteCapsule,
   getCapsule,
   listCapsules,
+  updateCapsuleEmbeddingModelIdentity,
   updateCapsuleState,
 } from "./capsule-lifecycle.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
@@ -134,6 +135,47 @@ describe("updateCapsuleState", () => {
     expect(() => updateCapsuleState(store, "ghost" as KnowledgeCapsuleId, "ready")).toThrow(
       KnowledgeNotFoundError,
     );
+  });
+});
+
+describe("updateCapsuleEmbeddingModelIdentity", () => {
+  it("updates the pinned embedding identity and bumps updated_at", () => {
+    let t = 100;
+    Object.defineProperty(store._internal, "now", { value: (): number => t, configurable: true });
+    const created = createCapsule(store, sampleCapsuleInput());
+    t = 250;
+
+    const updated = updateCapsuleEmbeddingModelIdentity(store, created.id, {
+      provider: "openai-compatible:alias",
+      modelId: "Qwen3-Embedding-8B",
+      modelRevision: "RedHatAI/Qwen3-Embedding-8B",
+      vectorDimensions: 4096,
+      vectorMetric: "cosine",
+    });
+
+    expect(updated.embeddingModelIdentity).toStrictEqual({
+      provider: "openai-compatible:alias",
+      modelId: "Qwen3-Embedding-8B",
+      modelRevision: "RedHatAI/Qwen3-Embedding-8B",
+      vectorDimensions: 4096,
+      vectorMetric: "cosine",
+    });
+    expect(updated.createdAt).toBe(100);
+    expect(updated.updatedAt).toBe(250);
+    expect(getCapsule(store, created.id)?.embeddingModelIdentity).toStrictEqual(
+      updated.embeddingModelIdentity,
+    );
+  });
+
+  it("raises KnowledgeNotFoundError for an unknown id", () => {
+    expect(() =>
+      updateCapsuleEmbeddingModelIdentity(store, "ghost" as KnowledgeCapsuleId, {
+        provider: "openai",
+        modelId: "text-embedding-3-small",
+        vectorDimensions: 1536,
+        vectorMetric: "cosine",
+      }),
+    ).toThrow(KnowledgeNotFoundError);
   });
 });
 

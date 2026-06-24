@@ -91,6 +91,16 @@ const SELECT_SOURCE_IDS_FOR_CAPSULE_SQL =
   "SELECT id FROM capsule_sources WHERE capsule_id = :c ORDER BY created_at ASC, id ASC";
 const UPDATE_STATE_SQL =
   "UPDATE capsules SET lifecycle_state = :state, updated_at = :now WHERE id = :id";
+const UPDATE_EMBEDDING_IDENTITY_SQL = [
+  "UPDATE capsules SET",
+  "  embedding_model_provider = :embedding_model_provider,",
+  "  embedding_model_id = :embedding_model_id,",
+  "  embedding_model_revision = :embedding_model_revision,",
+  "  vector_dimensions = :vector_dimensions,",
+  "  vector_metric = :vector_metric,",
+  "  updated_at = :now",
+  "WHERE id = :id",
+].join(" ");
 const SELECT_AFFECTED_CAPSULE_SETS_SQL =
   "SELECT set_id FROM capsule_set_members WHERE capsule_id = :c ORDER BY set_id ASC";
 
@@ -287,6 +297,42 @@ export function updateCapsuleState(
   db.exec("BEGIN");
   try {
     const result = db.prepare(UPDATE_STATE_SQL).run({ state, now, id });
+    if (Number(result.changes) === 0) {
+      db.exec("ROLLBACK");
+      throw new KnowledgeNotFoundError(`Capsule not found: ${String(id)}`);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    if (!(error instanceof KnowledgeNotFoundError)) {
+      db.exec("ROLLBACK");
+    }
+    throw error;
+  }
+  const capsule = getCapsule(store, id);
+  if (capsule === undefined) {
+    throw new KnowledgeNotFoundError(`Capsule not found after update: ${String(id)}`);
+  }
+  return capsule;
+}
+
+export function updateCapsuleEmbeddingModelIdentity(
+  store: KnowledgeStore,
+  id: KnowledgeCapsuleId,
+  identity: EmbeddingModelIdentity,
+): KnowledgeCapsule {
+  const db = store._internal.db;
+  const now = store._internal.now();
+  db.exec("BEGIN");
+  try {
+    const result = db.prepare(UPDATE_EMBEDDING_IDENTITY_SQL).run({
+      id,
+      embedding_model_provider: identity.provider,
+      embedding_model_id: identity.modelId,
+      embedding_model_revision: identity.modelRevision ?? null,
+      vector_dimensions: identity.vectorDimensions,
+      vector_metric: identity.vectorMetric,
+      now,
+    });
     if (Number(result.changes) === 0) {
       db.exec("ROLLBACK");
       throw new KnowledgeNotFoundError(`Capsule not found: ${String(id)}`);

@@ -30,6 +30,8 @@ export type {
   EvidenceConnectedContextUncertainty,
   EvidenceConnectedContextPlan,
   EvidenceConnectedContextAudit,
+  ContextAssemblyDiagnostics,
+  ContextCompactionRecord,
   EvidenceManifest,
   AuditRedactionConfig,
   RetentionPolicy,

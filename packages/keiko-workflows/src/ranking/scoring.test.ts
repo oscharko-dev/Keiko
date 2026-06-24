@@ -5,7 +5,13 @@ import { describe, expect, it } from "vitest";
 
 import type { CandidateSignal } from "@oscharko-dev/keiko-contracts/connected-context";
 
-import { DEFAULT_SCORING_WEIGHTS, computeScore, type ScoringWeights } from "./scoring.js";
+import {
+  DEFAULT_SCORING_WEIGHTS,
+  computeScore,
+  isIntentBoosted,
+  weightsForIntent,
+  type ScoringWeights,
+} from "./scoring.js";
 import type { ExtractedSignals } from "./signals.js";
 
 function build(values: Partial<Record<string, number>>): ExtractedSignals {
@@ -102,5 +108,54 @@ describe("computeScore", () => {
       "generated-penalty": -1,
     });
     expect(computeScore(noPenalty)).toBeGreaterThan(computeScore(withPenalty));
+  });
+});
+
+// ─── Intent-conditioned weights (enterprise retrieval M4) ──────────────────────
+describe("weightsForIntent / isIntentBoosted", () => {
+  it("returns DEFAULT_SCORING_WEIGHTS verbatim for non-boosted intents and undefined", () => {
+    expect(weightsForIntent(undefined)).toBe(DEFAULT_SCORING_WEIGHTS);
+    expect(weightsForIntent("clarification-needed")).toBe(DEFAULT_SCORING_WEIGHTS);
+    expect(weightsForIntent("generic")).toBe(DEFAULT_SCORING_WEIGHTS);
+  });
+
+  it("adds canonical-metadata / structural-edge weights only for boosted intents", () => {
+    const meta = weightsForIntent("project-metadata");
+    expect(meta.canonicalMetadata).toBeGreaterThan(0);
+    const targeted = weightsForIntent("targeted-code-search");
+    expect(targeted.structuralEdge).toBeGreaterThan(0);
+    // The base weights are preserved unchanged.
+    expect(meta.provenanceBestScore).toBe(DEFAULT_SCORING_WEIGHTS.provenanceBestScore);
+  });
+
+  it("isIntentBoosted recognizes the boosted set only", () => {
+    for (const intent of [
+      "project-metadata",
+      "repository-overview",
+      "targeted-code-search",
+      "diagnostic-search",
+    ]) {
+      expect(isIntentBoosted(intent)).toBe(true);
+    }
+    expect(isIntentBoosted("clarification-needed")).toBe(false);
+    expect(isIntentBoosted(undefined)).toBe(false);
+  });
+
+  it("computeScore ignores the new signals under DEFAULT weights (inert) but rewards them when weighted", () => {
+    const signals: ExtractedSignals = {
+      scopePath: "pom.xml",
+      signals: [
+        { name: "provenance-best-score", value: 0.5 },
+        { name: "canonical-metadata", value: 1 },
+        { name: "structural-edge", value: 1 },
+      ],
+      baseScore: 0,
+      generatedHint: false,
+    };
+    const defaultScore = computeScore(signals, DEFAULT_SCORING_WEIGHTS);
+    const boostedScore = computeScore(signals, weightsForIntent("project-metadata"));
+    // Under DEFAULT weights the unknown-to-default signals contribute nothing.
+    expect(defaultScore).toBeCloseTo(0.5 * DEFAULT_SCORING_WEIGHTS.provenanceBestScore, 10);
+    expect(boostedScore).toBeGreaterThan(defaultScore);
   });
 });

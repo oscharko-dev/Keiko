@@ -35,20 +35,13 @@ function npmCommand() {
 
 function run(command, args, cwd) {
   console.log(`[dev:start] ${command} ${args.join(" ")}`);
-  const needsShell = process.platform === "win32" && command.endsWith(".cmd");
   const result = spawnSync(command, args, {
     cwd,
     stdio: "inherit",
-    shell: needsShell,
     env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
   });
   if (result.status !== 0) {
-    const code =
-      result.error instanceof Error
-        ? result.error.message
-        : result.status === null
-          ? result.signal
-          : result.status;
+    const code = result.status === null ? result.signal : result.status;
     throw new Error(`${command} ${args.join(" ")} failed (${String(code)})`);
   }
 }

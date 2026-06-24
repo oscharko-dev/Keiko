@@ -71,6 +71,20 @@ jobs:
       - run: npm run arch:check:negative
       - name: Quality Intelligence supply-chain gate
         run: npm run check:qi-supply-chain
+      - name: Retrieval latency gate (enterprise retrieval M3)
+        # Runs after `npm run typecheck` (which builds packages), so the compiled keiko-workspace
+        # dist the gate imports is present. Deterministic fixture + generous p95 ceiling.
+        run: npm run check:retrieval-latency
+      - name: Retrieval quality gate (enterprise retrieval M4)
+        # Same compiled workspace surface as the latency gate; evaluates top-k quality, line-level
+        # evidence, and generated-artifact leakage over fixed synthetic enterprise fixtures.
+        run: npm run check:retrieval-quality
+      - name: Context quality gate (ADR-0052, context-engineering PR1)
+        # Runs after `npm run typecheck` (which builds packages), so the compiled keiko-contracts,
+        # keiko-workflows, keiko-workspace, and keiko-security dist the gate imports are present —
+        # the same build dependency the retrieval gates above rely on. Drives the deterministic lane
+        # allocator over a fixed offline corpus and enforces context-quality invariants.
+        run: npm run check:context-quality
       - name: Keiko Editor static-export bundle gate
         run: |
           npm run build:ui

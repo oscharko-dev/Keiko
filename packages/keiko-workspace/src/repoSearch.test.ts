@@ -257,6 +257,69 @@ describe("searchText (memFs)", () => {
     expect(r.atoms[0]?.score).toBe(1);
   });
 
+  it("expands test-class names so source definitions are retrievable", async () => {
+    const { scope, fs } = memScope({
+      "src/payments/PaymentService.ts":
+        "export class PaymentService {\n  authorize(): boolean { return true; }\n}\n",
+      "tests/payments/PaymentService.test.ts":
+        'describe("PaymentServiceTest", () => it("covers authorize", () => {}));\n',
+    });
+    const r = await searchText(
+      scope,
+      nlq("Where is the source implementation for PaymentServiceTest?"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "targeted-code-search" },
+      },
+    );
+    expect(r.atoms[0]?.scopePath).toBe("src/payments/PaymentService.ts");
+    expect(r.atoms.some((atom) => atom.scopePath === "src/payments/PaymentService.ts")).toBe(true);
+  });
+
+  it("uses stack-frame paths as path and symbol terms", async () => {
+    const { scope, fs } = memScope({
+      "src/payments/AuthService.ts":
+        "export class AuthService {\n  validateToken(): void { throw new Error('boom'); }\n}\n",
+      "docs/errors.md": "Auth failures can mention validateToken in prose.\n",
+    });
+    const r = await searchText(
+      scope,
+      nlq("TypeError: boom at src/payments/AuthService.ts:42:13 in validateToken"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "diagnostic-search" },
+      },
+    );
+    expect(r.atoms[0]?.scopePath).toBe("src/payments/AuthService.ts");
+  });
+
+  it("recognizes Express-style route declarations over generic prose mentions", async () => {
+    const { scope, fs } = memScope({
+      "src/routes.ts":
+        'router.post("/api/payments/:id/refund", async (req, res) => refundPayment(req, res));\n',
+      "docs/routes.md": "The POST /api/payments/:id/refund endpoint refunds a payment.\n",
+      "tests/routes.test.ts": "it('POST refund route works', () => {});\n",
+    });
+    const r = await searchText(
+      scope,
+      nlq("Which file implements the POST /api/payments/:id/refund route?"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "targeted-code-search" },
+      },
+    );
+    expect(r.atoms[0]?.scopePath).toBe("src/routes.ts");
+    expect(r.atoms[0]?.score).toBeGreaterThan(
+      r.atoms.find((a) => a.scopePath === "docs/routes.md")?.score ?? 0,
+    );
+  });
+
   // Issue #188 Case 2: exact-symbol question across a two-file scope where the named
   // symbol appears in both the defining file and a call site. exact-symbol is a substring
   // matcher (per repoSearchMatchers), so this regression locks two properties:
@@ -650,11 +713,16 @@ describe("searchText (memFs)", () => {
       "package.json": '{\n  "devDependencies": { "typescript": "^6.0.3" }\n}\n',
       "packages/keiko-ui/package.json": '{\n  "devDependencies": { "typescript": "5.7.3" }\n}\n',
     });
-    const r = await searchText(scope, nlq("Welche Type-Script Version verwendet die App?"), DEFAULT_SEARCH_LIMITS, {
-      fs,
-      nowMs: FIXED_NOW,
-      searchHints: { retrievalIntent: "project-metadata" },
-    });
+    const r = await searchText(
+      scope,
+      nlq("Welche Type-Script Version verwendet die App?"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "project-metadata" },
+      },
+    );
     expect(r.atoms[0]?.scopePath).toBe("package.json");
     expect(r.atoms.map((a) => a.scopePath)).toEqual(
       expect.arrayContaining(["package.json", "packages/keiko-ui/package.json"]),
@@ -670,11 +738,16 @@ describe("searchText (memFs)", () => {
       "packages/keiko-ui/src/app/components/desktop/AppShell.tsx":
         "import { WindowFrame } from './windows/WindowFrame.js';\n",
     });
-    const r = await searchText(scope, nlq("Wo ist WindowFrame implementiert?"), DEFAULT_SEARCH_LIMITS, {
-      fs,
-      nowMs: FIXED_NOW,
-      searchHints: { retrievalIntent: "targeted-code-search" },
-    });
+    const r = await searchText(
+      scope,
+      nlq("Wo ist WindowFrame implementiert?"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "targeted-code-search" },
+      },
+    );
     expect(r.atoms[0]?.scopePath).toBe(
       "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx",
     );

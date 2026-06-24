@@ -12,6 +12,7 @@ import {
   listCapabilities,
   listConfiguredCapabilities,
   type ModelCapability,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ConversationDocumentContextWire } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -78,12 +79,15 @@ import {
   assertUsableAssistantContent,
   isLegacyEmptyAssistantPlaceholder,
 } from "./assistant-response.js";
+import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
+import type { ConversationCompactionOutcome } from "./conversation-compaction.js";
+import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 
 const DEFAULT_CHAT_MODEL = "example-chat-model";
 const DEFAULT_CHAT_TITLE = "New chat";
 const MAX_BODY_BYTES = 128_000;
 const MAX_CHAT_INPUT_CHARS = 16_000;
-const MAX_CONTEXT_MESSAGES = 24;
+export const MAX_CONTEXT_MESSAGES = 24;
 
 export interface GatewayConversationMessage {
   readonly role: "system" | "user" | "assistant";
@@ -291,13 +295,24 @@ function messageForGateway(
   return { role: message.role, content: message.content };
 }
 
-function conversationForGateway(messages: readonly ChatMessage[]): GatewayConversationMessage[] {
-  const usable = messages
+// The map+filter projection shared by conversationForGateway and the PR4-W2 compaction shim
+// (conversation-compaction.ts). Returns the full filtered, ORDER-PRESERVED set of user/assistant
+// turns BEFORE the recent-window slice — so the shim's "post-filter count", kept window, and
+// dropped prefix are derived from the exact same selection the slice operates on.
+export function usableGatewayMessages(
+  messages: readonly ChatMessage[],
+): { role: "user" | "assistant"; content: string }[] {
+  return messages
     .map(messageForGateway)
     .filter(
       (message): message is { role: "user" | "assistant"; content: string } => message !== null,
-    )
-    .slice(-MAX_CONTEXT_MESSAGES);
+    );
+}
+
+export function conversationForGateway(
+  messages: readonly ChatMessage[],
+): GatewayConversationMessage[] {
+  const usable = usableGatewayMessages(messages).slice(-MAX_CONTEXT_MESSAGES);
   return [
     {
       role: "system",
@@ -909,13 +924,52 @@ export function buildChatPatch(
 // memory text). Shared by the buffered (persistModelChatTurn) and streaming
 // (handleSendDesktopChatStream) paths so both send a byte-identical prompt. `memoryText` is
 // `memory.context.text`.
+// ADR-0057 D3: the full compaction outcome for the latest turn, including the optional
+// ContextCompactionRecord that buildGatewayMessages drops. Both send paths call this to capture the
+// record for best-effort regulated evidence; buildGatewayMessages delegates here for the messages.
+// Reads store.listMessages once — identical history slice the prompt is built from.
+export function deriveCompactionOutcome(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+): ConversationCompactionOutcome {
+  return conversationForGatewayWithCompaction(deps.store.listMessages(request.chatId), {
+    contextProfile: deps.contextProfile,
+  });
+}
+
 export function buildGatewayMessages(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   memoryText: string,
 ): GatewayConversationMessage[] {
-  const history = conversationForGateway(deps.store.listMessages(request.chatId));
-  return applyDocumentContextToLatestUserTurn(history, request, memoryText);
+  // PR4-W2 (ADR-0055 D3): route history assembly through the predicate-gated compaction shim. On
+  // the fast path (no profile or <= MAX_CONTEXT_MESSAGES filtered turns) the shim returns the EXACT
+  // conversationForGateway(...) value, so this is byte-identical to the pre-PR4 path.
+  const { messages } = deriveCompactionOutcome(deps, request);
+  return applyDocumentContextToLatestUserTurn(messages, request, memoryText);
+}
+
+export interface ChatCompactionTurn {
+  readonly outcome: ConversationCompactionOutcome;
+  readonly request: SendDesktopChatRequest;
+  readonly modelId: string;
+  readonly messageCount: number;
+  readonly startedAt: number;
+}
+
+// ADR-0057 D3: best-effort persist of the turn's compaction record AFTER the response completes.
+// finishedAt is captured here (post-turn). Shared by the buffered and streaming send paths so the
+// runId + timing are identical. Never throws into the send path (persistChatCompactionEvidence is
+// fully guarded and a no-op on the fast path).
+export function recordChatCompaction(deps: UiHandlerDeps, turn: ChatCompactionTurn): void {
+  persistChatCompactionEvidence(deps, {
+    compaction: turn.outcome.compaction,
+    chatId: turn.request.chatId,
+    modelId: turn.modelId,
+    messageCount: turn.messageCount,
+    startedAt: turn.startedAt,
+    finishedAt: Date.now(),
+  });
 }
 
 async function persistModelChatTurn(
@@ -929,47 +983,74 @@ async function persistModelChatTurn(
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
+  // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage stores the turn, so the
+  // compaction-evidence runId is collision-free and matches the streaming path's lifecycle moment.
+  const messageCountBeforeTurn = deps.store.listMessages(request.chatId).length;
+  const startedAt = Date.now();
   try {
     const memory =
       memoryContext === undefined
         ? emptyMemoryResult(false)
         : await buildMemoryResult(request, deps, memoryContext);
     const userMessage = createUserMessage(deps, request);
+    const outcome = deriveCompactionOutcome(deps, request);
     const messages = buildGatewayMessages(deps, request, memory.context.text);
     const response = await model.call(
-      {
-        modelId,
-        messages,
-        stream: false,
-      },
+      { modelId, messages, stream: false },
       new AbortController().signal,
     );
-    // Issue #631 — redact the model's raw content before persisting and before returning it to
-    // the browser. A model that echoes a secret from its context (e.g. an apiKey injected via
-    // system prompt) would otherwise surface it un-redacted on the success path, mirroring the
-    // grounded-QA path (grounded-qa.ts line 549) which already applies deps.redactor here.
-    const redactedContent = deps.redactor(response.content) as string;
-    const assistantMessage = createAssistantMessage(deps, request, redactedContent, modelId);
-    const memoryActions = await collectMemoryActions(
-      deps,
+    recordChatCompaction(deps, {
+      outcome,
       request,
-      memoryContext,
       modelId,
-      redactedContent,
-    );
-    const chatPatch = buildChatPatch(chat, request, modelId);
-    return {
-      status: 200,
-      body: {
-        chat: deps.store.updateChat(request.chatId, chatPatch),
-        messages: [userMessage, assistantMessage],
-        usage: response.usage,
-        memory: { ...memory, actions: memoryActions },
-      },
-    };
+      messageCount: messageCountBeforeTurn,
+      startedAt,
+    });
+    return await finalizeBufferedTurn(deps, { request, chat, modelId, memoryContext }, memory, {
+      userMessage,
+      response,
+    });
   } catch (error) {
     return desktopChatErrorResult(error, deps);
   }
+}
+
+// Post-response assembly for the buffered send: redacts the model content, persists the assistant
+// message, collects memory actions, and builds the 200 body. Extracted to keep persistModelChatTurn
+// within the function-length budget after the ADR-0057 D3 compaction wiring.
+async function finalizeBufferedTurn(
+  deps: UiHandlerDeps,
+  turn: {
+    request: SendDesktopChatRequest;
+    chat: Chat;
+    modelId: string;
+    memoryContext: ConversationMemoryRuntimeContext | undefined;
+  },
+  memory: ConversationMemoryResultWire,
+  result: { userMessage: ChatMessage; response: NormalizedResponse },
+): Promise<RouteResult> {
+  const { request, chat, modelId, memoryContext } = turn;
+  // Issue #631 — redact the model's raw content before persisting and before returning it to the
+  // browser, mirroring the grounded-QA path which already applies deps.redactor here.
+  const redactedContent = deps.redactor(result.response.content) as string;
+  const assistantMessage = createAssistantMessage(deps, request, redactedContent, modelId);
+  const memoryActions = await collectMemoryActions(
+    deps,
+    request,
+    memoryContext,
+    modelId,
+    redactedContent,
+  );
+  const chatPatch = buildChatPatch(chat, request, modelId);
+  return {
+    status: 200,
+    body: {
+      chat: deps.store.updateChat(request.chatId, chatPatch),
+      messages: [result.userMessage, assistantMessage],
+      usage: result.response.usage,
+      memory: { ...memory, actions: memoryActions },
+    },
+  };
 }
 
 export async function handleCreateDesktopChat(
