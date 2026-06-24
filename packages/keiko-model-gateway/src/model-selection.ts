@@ -3,6 +3,7 @@ import {
   createDefaultEmbeddingCapability,
   isLikelyEmbeddingModelId,
   listCapabilities,
+  modelSupportsRealtimeVoice,
   modelSupportsSpeechInput,
   resolveVoiceCapabilityFromCapabilities,
   selectCompletionModelFromCapabilities,
@@ -134,6 +135,25 @@ export function selectSpeechToTextModel(config: ConfiguredCapabilitySource): str
   let best: ModelCapability | undefined;
   for (const capability of listConfiguredCapabilities(config)) {
     if (!modelSupportsSpeechInput(capability)) {
+      continue;
+    }
+    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
+      best = capability;
+    }
+  }
+  return best?.id;
+}
+
+// Realtime-voice model selection (Issue #497, ADR-0058 D3, ADR-0059). Returns the configured voice
+// provider that advertises realtime voice (full-duplex conversation), cheapest-first by cost class,
+// or undefined when none is configured. Only configured providers are eligible — the same
+// fail-closed rule as `selectSpeechToTextModel` — so a voice capability that names no provider can
+// never be elected, and a no-voice / STT-only deployment yields undefined (the BFF realtime route
+// then answers voice-unavailable and the WebSocket control upgrade stays hard-rejected, AC1/AC3).
+export function selectRealtimeVoiceModel(config: ConfiguredCapabilitySource): string | undefined {
+  let best: ModelCapability | undefined;
+  for (const capability of listConfiguredCapabilities(config)) {
+    if (!modelSupportsRealtimeVoice(capability)) {
       continue;
     }
     if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {

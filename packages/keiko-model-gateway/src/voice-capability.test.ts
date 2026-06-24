@@ -10,7 +10,11 @@ import {
   resolveVoiceCapabilityFromCapabilities,
   type VoiceResolutionOptions,
 } from "./capabilities.js";
-import { resolveVoiceCapability, selectSpeechToTextModel } from "./model-selection.js";
+import {
+  resolveVoiceCapability,
+  selectRealtimeVoiceModel,
+  selectSpeechToTextModel,
+} from "./model-selection.js";
 import type { GatewayConfig } from "./types.js";
 
 // A voice capability with the named sub-capabilities. Defaults to a development Azure Foundry STT
@@ -311,5 +315,59 @@ describe("selectSpeechToTextModel (Issue #494)", () => {
       capabilities: [voiceCap({ supportsSpeechInput: true })],
     };
     expect(selectSpeechToTextModel(config)).toBeUndefined();
+  });
+});
+
+describe("selectRealtimeVoiceModel (Issue #497)", () => {
+  function configWith(capabilities: readonly ModelCapability[]): GatewayConfig {
+    return {
+      providers: capabilities.map((capability) => ({
+        modelId: capability.id,
+        baseUrl: "https://example.test",
+        apiKey: "test-key",
+        timeoutMs: 30_000,
+        maxRetries: 3,
+        retryBaseDelayMs: 500,
+      })),
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      capabilities,
+    };
+  }
+
+  it("returns undefined for a no-voice (chat-only) deployment (AC1/AC3)", () => {
+    expect(selectRealtimeVoiceModel(configWith([chatCap()]))).toBeUndefined();
+  });
+
+  it("returns undefined when no provider is configured", () => {
+    expect(selectRealtimeVoiceModel(configWith([]))).toBeUndefined();
+  });
+
+  it("returns undefined for an STT-only deployment (full realtime is not advertised) (AC3)", () => {
+    const config = configWith([voiceCap({ supportsSpeechInput: true })]);
+    expect(selectRealtimeVoiceModel(config)).toBeUndefined();
+  });
+
+  it("selects the configured realtime-voice provider", () => {
+    expect(
+      selectRealtimeVoiceModel(
+        configWith([voiceCap({ id: "keiko-realtime", supportsRealtimeVoice: true })]),
+      ),
+    ).toBe("keiko-realtime");
+  });
+
+  it("prefers the cheapest configured realtime-voice provider", () => {
+    const config = configWith([
+      voiceCap({ id: "rt-expensive", supportsRealtimeVoice: true, costClass: "high" }),
+      voiceCap({ id: "rt-cheap", supportsRealtimeVoice: true, costClass: "low" }),
+    ]);
+    expect(selectRealtimeVoiceModel(config)).toBe("rt-cheap");
+  });
+
+  it("never elects a realtime capability that names no configured provider (fail-closed)", () => {
+    const config: GatewayConfig = {
+      ...configWith([]),
+      capabilities: [voiceCap({ supportsRealtimeVoice: true })],
+    };
+    expect(selectRealtimeVoiceModel(config)).toBeUndefined();
   });
 });

@@ -18,7 +18,8 @@ import {
   type RouteContext,
 } from "./routes.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
-import { isVoiceDictationCapable } from "./read-handlers.js";
+import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
+import { createVoiceControlPlane } from "./voice-realtime.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
@@ -176,10 +177,11 @@ async function handle(
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${UI_HOST}`);
   const apiPath = isApiPath(url.pathname);
-  // Issue #495 — scope the Permissions-Policy microphone directive to deployments that advertise
-  // speech-to-text dictation; a no-voice deployment keeps the strict `microphone=()` default.
+  // Issue #495/#497 — scope the Permissions-Policy microphone directive to deployments that advertise
+  // speech-to-text dictation OR full-realtime voice (whose WebRTC capture track also needs the mic);
+  // a no-voice deployment keeps the strict `microphone=()` default, never widened beyond `(self)`.
   applySecurityHeaders(res, await resolveCsp(deps), apiPath, {
-    allowMicrophone: isVoiceDictationCapable(handlerDeps),
+    allowMicrophone: isVoiceDictationCapable(handlerDeps) || isVoiceRealtimeCapable(handlerDeps),
   });
   if (!isAllowedHost(req, deps.port)) {
     rejectForbiddenHost(res);
@@ -194,10 +196,16 @@ async function handle(
 }
 
 // Creates the BFF server. The caller binds it with `server.listen(deps.port, UI_HOST)` so it never
-// listens on a non-loopback interface. The previous PTY WebSocket upgrade handler is removed —
-// the terminal tool is now bounded-exec over plain HTTP (ADR-0018 D1/D8).
+// listens on a non-loopback interface. The previous PTY WebSocket upgrade handler is removed — the
+// terminal tool is now bounded-exec over plain HTTP (ADR-0018 D1/D8). Issue #497 (ADR-0058 D3,
+// ADR-0059) re-opens the upgrade for the single loopback voice control path `/api/voice/control`, and
+// ONLY when the deployment is full-realtime voice capable; every other upgrade keeps the hard reject.
 export function createUiServer(deps: UiServerDeps): Server {
   const handlerDeps = deps.handlerDeps ?? fallbackDeps();
+  const voiceControl = createVoiceControlPlane({
+    port: deps.port,
+    handlerDeps: () => handlerDeps,
+  });
   const server = createServer((req, res) => {
     void handle(deps, handlerDeps, req, res).catch(() => {
       if (!res.headersSent) {
@@ -207,9 +215,16 @@ export function createUiServer(deps: UiServerDeps): Server {
       }
     });
   });
-  server.on("upgrade", (_req, socket) => {
+  server.on("upgrade", (req, socket, head) => {
+    if (voiceControl.handleUpgrade(req, socket, head)) {
+      return;
+    }
+    // Default: every non-voice-control or ungated upgrade is hard-rejected, as before.
     socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
     socket.destroy();
+  });
+  server.on("close", () => {
+    voiceControl.closeAll();
   });
   return server;
 }

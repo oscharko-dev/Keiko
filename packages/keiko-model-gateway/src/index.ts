@@ -100,6 +100,7 @@ export {
   resolveVoiceCapability,
   selectCompletionModel,
   selectConfiguredModel,
+  selectRealtimeVoiceModel,
   selectSpeechToTextModel,
   type ConfiguredCapabilityProvider,
   type ConfiguredCapabilitySource,
@@ -113,6 +114,15 @@ export {
   type SpeechToTextRequest,
   type SpeechToTextSuccess,
 } from "./speech-to-text-adapter.js";
+
+export {
+  MAX_SDP_BYTES,
+  requestRealtimeNegotiation,
+  type RealtimeNegotiationErrorKind,
+  type RealtimeNegotiationOutcome,
+  type RealtimeNegotiationRequest,
+  type RealtimeNegotiationSuccess,
+} from "./realtime-voice-adapter.js";
 
 export {
   assertCompatibleEmbeddingIdentity,

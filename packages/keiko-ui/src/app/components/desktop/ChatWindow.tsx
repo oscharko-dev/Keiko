@@ -37,10 +37,13 @@ import {
 import { Toggle } from "./widgets/shared/Toggle";
 import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
-import { supportsDictation, useVoiceCapability } from "./hooks/useVoiceCapability";
+import { supportsDictation, supportsRealtimeVoice, useVoiceCapability } from "./hooks/useVoiceCapability";
 import { useDictation, type DictationController } from "./hooks/useDictation";
 import { dictationCaptureSupported } from "./hooks/dictation-recorder";
 import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./VoiceDictation";
+import { useRealtimeVoice, type RealtimeVoiceController } from "./hooks/useRealtimeVoice";
+import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
+import { VoiceRealtimeButton, VoiceRealtimeStatusFromController } from "./VoiceRealtime";
 import { updateChat } from "@/lib/api";
 import { formatUserError } from "./format-error";
 import {
@@ -288,6 +291,11 @@ interface ComposerBarProps {
   readonly voiceDictationVisible: boolean;
   readonly dictation: DictationController;
   readonly micButtonRef: Ref<HTMLButtonElement>;
+  // Issue #497 — capability-gated realtime voice. The button renders only when the deployment
+  // advertises full-realtime AND the browser can open a WebRTC peer connection.
+  readonly voiceRealtimeVisible: boolean;
+  readonly realtime: RealtimeVoiceController;
+  readonly realtimeButtonRef: Ref<HTMLButtonElement>;
 }
 
 function ComposerBar({
@@ -303,6 +311,9 @@ function ComposerBar({
   voiceDictationVisible,
   dictation,
   micButtonRef,
+  voiceRealtimeVisible,
+  realtime,
+  realtimeButtonRef,
 }: ComposerBarProps): ReactNode {
   const {
     models,
@@ -421,6 +432,18 @@ function ComposerBar({
             onStart={dictation.start}
             onStop={dictation.stop}
             buttonRef={micButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : null}
+        {/* Issue #497 — capability-gated realtime voice. Rendered only when full-realtime is
+            advertised and the browser supports WebRTC; a no-voice / STT-only deployment shows
+            nothing new (AC1/AC3/AC4). */}
+        {voiceRealtimeVisible ? (
+          <VoiceRealtimeButton
+            phase={realtime.phase}
+            onStart={realtime.start}
+            onStop={realtime.stop}
+            buttonRef={realtimeButtonRef}
             compact={controlsNarrow}
           />
         ) : null}
@@ -633,7 +656,11 @@ function ComposerCore({
   // environment shows no voice control at all, so the composer stays clean and fully text-capable.
   const voiceCapability = useVoiceCapability();
   const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
+  // Issue #497 — realtime voice gate: reuse the already-fetched voiceCapability probe (no second
+  // fetch). Only true when full-realtime is advertised AND the browser can open a WebRTC connection.
+  const voiceRealtimeVisible = supportsRealtimeVoice(voiceCapability) && realtimeVoiceTransportSupported();
   const micButtonRef = useRef<HTMLButtonElement>(null);
+  const realtimeButtonRef = useRef<HTMLButtonElement>(null);
   // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
@@ -644,6 +671,7 @@ function ComposerCore({
     [draft, setDraft],
   );
   const dictation = useDictation({ onInsert: insertTranscript });
+  const realtime = useRealtimeVoice({});
 
   return (
     <div className={`cmp-box${compact ? " cmp-box-compact" : ""}`}>
@@ -681,6 +709,14 @@ function ComposerCore({
             onAfterDiscard={() => micButtonRef.current?.focus()}
           />
         ) : null}
+        {/* Issue #497 — realtime voice status / error. Adjacent to the dictation preview in the
+            input stack. Renders nothing while idle (the button carries that state). */}
+        {voiceRealtimeVisible ? (
+          <VoiceRealtimeStatusFromController
+            controller={realtime}
+            onAfterDismiss={() => realtimeButtonRef.current?.focus()}
+          />
+        ) : null}
       </div>
       <div className="cmp-footer-row">
         {/* Issue #151 — context-pressure indicator + clear-history affordance */}
@@ -705,6 +741,9 @@ function ComposerCore({
           voiceDictationVisible={voiceDictationVisible}
           dictation={dictation}
           micButtonRef={micButtonRef}
+          voiceRealtimeVisible={voiceRealtimeVisible}
+          realtime={realtime}
+          realtimeButtonRef={realtimeButtonRef}
         />
       </div>
     </div>

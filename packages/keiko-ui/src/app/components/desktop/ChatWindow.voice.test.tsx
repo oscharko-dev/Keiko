@@ -212,3 +212,76 @@ describe("ChatWindow dictation integration", () => {
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
   });
 });
+
+const FULL_REALTIME: VoiceCapabilityResolution = {
+  available: true,
+  profile: "full-realtime",
+  capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+  transport: { websocketControl: true, webrtcMedia: true },
+  providerLocality: "azure-foundry",
+};
+
+// Minimal RTCPeerConnection stub so realtimeVoiceTransportSupported() reports a WebRTC-capable
+// browser. The actual WebRTC/WS cycle is not exercised here (it is in the hook/transport suites).
+class StubRTCPeerConnection {}
+
+function stubRealtimeBrowser(getUserMedia: () => Promise<MediaStream>): void {
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia: vi.fn(getUserMedia) },
+  });
+  vi.stubGlobal("MediaRecorder", StubMediaRecorder);
+  vi.stubGlobal("RTCPeerConnection", StubRTCPeerConnection);
+}
+
+describe("ChatWindow realtime voice integration (Issue #497)", () => {
+  it("shows NO realtime button in a no-voice deployment (AC1)", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: NONE });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession());
+
+    await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Start realtime voice" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+  });
+
+  it("shows NO realtime button for an STT-only deployment (AC3)", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession());
+
+    await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
+    // Dictation button appears for STT, but NOT the realtime button.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("button", { name: "Start realtime voice" })).toBeNull();
+  });
+
+  it("renders the realtime button when full-realtime is advertised and RTCPeerConnection is available", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession());
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Start realtime voice" })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+  });
+
+  it("hides the realtime button when full-realtime is advertised but RTCPeerConnection is absent", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME });
+    // Stub MediaRecorder but NOT RTCPeerConnection -> realtimeVoiceTransportSupported() false.
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn(async () => ({} as MediaStream)) },
+    });
+    vi.stubGlobal("MediaRecorder", StubMediaRecorder);
+    // No RTCPeerConnection stub.
+    renderWindow(makeSession());
+
+    await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Start realtime voice" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+  });
+});
