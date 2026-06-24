@@ -35,6 +35,15 @@ import type {
 } from "./local-knowledge.js";
 import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
 import type { ExpectedCheck, WorkflowKind } from "./workflow-handoff.js";
+// Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
+// ContextLaneId is a fixed 8-member string literal union, never a path; ContextBudgetPressure
+// is a 4-value enum. Importing these is intra-package (contracts → contracts), not a sibling edge.
+import {
+  CONTEXT_LANE_IDS,
+  type ContextAssemblyDiagnostics,
+  type ContextBudgetPressure,
+  type ContextLaneId,
+} from "./context-engineering.js";
 
 export interface Project {
   readonly path: string;
@@ -594,6 +603,17 @@ export interface GroundedAnswerRankingSummary {
   readonly ecosystems: readonly { readonly id: string; readonly count: number }[];
 }
 
+// Path-free aggregate of the deterministic context-assembly pass (ADR-0057 D1). Carries only
+// the total estimated token count, the budget-pressure enum, a per-lane count map keyed by the
+// fixed ContextLaneId literal union (never a path), and a compaction-active boolean. There is NO
+// string-typed field, so by construction it cannot carry a file path, scope id, or excerpt.
+export interface GroundedAnswerContextSummary {
+  readonly totalEstimatedTokens: number;
+  readonly budgetPressure: ContextBudgetPressure;
+  readonly laneCounts: Readonly<Record<ContextLaneId, number>>;
+  readonly compactionActive: boolean;
+}
+
 // Counts-only projection of a ConnectedContextPack used to display "what was inspected" on
 // every grounded answer (Issue #187 / ADR-0022). Structurally redaction-free by construction:
 // no raw scope id, no scope path, no workspace root, no excerpt content, no query text. The
@@ -615,6 +635,9 @@ export interface GroundedAnswerContextPackSummary {
   readonly uncertaintyCount: number;
   readonly elapsedMs: number;
   readonly rankingSummary?: GroundedAnswerRankingSummary | undefined;
+  // Path-free aggregate of the context-assembly pass (ADR-0057 D1). Absent on legacy / non-profiled
+  // turns; present only when assembly diagnostics were supplied to the builder.
+  readonly contextSummary?: GroundedAnswerContextSummary | undefined;
 }
 
 export interface LocalKnowledgeGroundedAnswerContextSummary {
@@ -677,15 +700,43 @@ function buildRankingSummary(pack: ConnectedContextPack): GroundedAnswerRankingS
   return { bucketCounts, ecosystems };
 }
 
+// Derives the path-free context aggregate from the assembly diagnostics. laneCounts is built over
+// the full CONTEXT_LANE_IDS list so every lane has a count (lanes absent from diagnostics default to
+// 0); compactionActive is true when any lane recorded a compactionReason. Reads only counts and the
+// budget-pressure enum — never a scopePath, scopeId, excerpt, or score.
+function buildContextSummary(
+  diagnostics: ContextAssemblyDiagnostics,
+): GroundedAnswerContextSummary {
+  const includedByLane = new Map<ContextLaneId, number>();
+  for (const lane of diagnostics.lanes) {
+    includedByLane.set(lane.laneId, lane.includedItems);
+  }
+  const laneCounts = {} as Record<ContextLaneId, number>;
+  for (const laneId of CONTEXT_LANE_IDS) {
+    laneCounts[laneId] = includedByLane.get(laneId) ?? 0;
+  }
+  return {
+    totalEstimatedTokens: diagnostics.totalEstimatedTokens,
+    budgetPressure: diagnostics.budgetPressure,
+    laneCounts,
+    compactionActive: diagnostics.lanes.some((lane) => lane.compactionReason !== undefined),
+  };
+}
+
 // Pure builder: derives a GroundedAnswerContextPackSummary from the source pack plus the
 // BFF-computed citation count and total elapsed wall time. No IO, no redaction (the only
 // scope-derived string carried is a deterministic display fingerprint); allocates one fresh object.
+// When assemblyDiagnostics is provided, a path-free contextSummary is conditionally spread on;
+// three-argument callers receive a byte-identical result (no contextSummary key).
 export function buildGroundedAnswerContextPackSummary(
   pack: ConnectedContextPack,
   citationCount: number,
   elapsedMs: number,
+  assemblyDiagnostics?: ContextAssemblyDiagnostics,
 ): GroundedAnswerContextPackSummary {
   const rankingSummary = buildRankingSummary(pack);
+  const contextSummary =
+    assemblyDiagnostics !== undefined ? buildContextSummary(assemblyDiagnostics) : undefined;
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     scopeId: displayScopeId(pack.scope.scopeId),
@@ -700,6 +751,7 @@ export function buildGroundedAnswerContextPackSummary(
     uncertaintyCount: pack.uncertainty.length,
     elapsedMs,
     ...(rankingSummary !== undefined ? { rankingSummary } : {}),
+    ...(contextSummary !== undefined ? { contextSummary } : {}),
   };
 }
 

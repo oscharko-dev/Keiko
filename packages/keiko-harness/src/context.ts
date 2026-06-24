@@ -3,9 +3,11 @@
 // terminal-outcome carriers (patchDiff, report, failure). Keeping this in one place lets
 // each handler file stay small and free of cross-handler imports.
 
+import type { ContextToolObservation } from "@oscharko-dev/keiko-contracts";
 import type { ChatMessage, Clock, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { Emitter } from "./emitter.js";
 import type { ModelPort, ToolPort } from "./ports.js";
+import type { HarnessShaperPort } from "./shaper-port.js";
 import type { TaskPlan } from "./tasks/policy.js";
 import type {
   HarnessFailure,
@@ -27,6 +29,15 @@ export interface RunContext {
   readonly plan: TaskPlan;
   readonly startedAt: number;
   readonly counters: RunCounters;
+  // Optional injected shaped-observation port (ADR-0055 D4). When absent (every existing caller),
+  // the executor performs no shaping and the run is byte-identical to today. The production wiring
+  // tier injects an implementation backed by the keiko-workflows shapers; the harness never imports
+  // keiko-workflows (no new package edge).
+  readonly shaperPort?: HarnessShaperPort | undefined;
+  // Accumulator of shaped tool observations produced this run (ADR-0055 D4, PR4-W3). NEVER
+  // serialized into `messages` and NOT part of contextBytes; diagnostic-only in PR4. Stays empty
+  // when no shaperPort is injected.
+  shapedObservations: ContextToolObservation[];
   // Accumulating conversation passed to the model on each call.
   messages: ChatMessage[];
   // The most recent model response; the tool-call handler reads its toolCalls.

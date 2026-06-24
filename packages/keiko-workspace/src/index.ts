@@ -122,7 +122,13 @@ export type {
 } from "./ecosystems.js";
 export { looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
 export type { BinaryProbeOptions } from "./binaryDetect.js";
-export { evidenceAtomStableId, connectedContextPackStableId } from "./stableId.js";
+export {
+  evidenceAtomStableId,
+  connectedContextPackStableId,
+  fileContentHash,
+  hashExcerptContent,
+  MAX_HASH_FILE_BYTES,
+} from "./stableId.js";
 
 // ─── Structural adapters (Issue #180 / Epic #177) ──────────────────────────
 export type {

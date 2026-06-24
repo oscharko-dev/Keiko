@@ -23,6 +23,7 @@ import {
   type SelectedScope,
   type UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   advanceRing,
   applyUsage,
@@ -74,6 +75,7 @@ import {
   isConnectedDocumentPath,
   type DocumentEvidenceResult,
 } from "./grounded-document-evidence.js";
+import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -102,6 +104,11 @@ export interface OrchestratorDeps {
   readonly recordPlan?: (plan: ExplorationPlan) => void;
   // Ephemeral #183 context-pack cache for one connected scope/session.
   readonly microIndex?: MicroIndex;
+  // Optional context profile (ADR-0055 D1, PR4-W1). When absent (legacy callers, multi-source and
+  // hybrid paths in W1), the diagnostics observer is NOT invoked and the assembled pack is
+  // byte-identical to today. When present, the observer attaches ContextAssemblyDiagnostics-derived
+  // ContextBudget to pack.diagnostics.contextBudget? — an additive field no prompt builder reads.
+  readonly contextProfile?: ContextProfile | undefined;
 }
 
 export interface OrchestratorOutput {
@@ -2052,6 +2059,21 @@ async function prepareGroundedAssembly(
   return { documentEvidence, cached, cacheIdentity, assembleOptions };
 }
 
+// PR4-W1 (ADR-0055 D1): conditional diagnostics observer. When a ContextProfile is threaded
+// through OrchestratorDeps, the fully assembled pack is enriched with an additive
+// `diagnostics.contextBudget?`. The observer is pure and touches no field a prompt builder reads,
+// so the wire output stays byte-identical (AC5). When the profile is absent, the pack is returned
+// exactly as assembled — the unchanged-guarantee for legacy callers and existing tests.
+function withGroundedContextDiagnostics(
+  pack: ConnectedContextPack,
+  deps: OrchestratorDeps,
+): ConnectedContextPack {
+  if (deps.contextProfile === undefined) {
+    return pack;
+  }
+  return attachContextBudgetDiagnostics(pack, deps.contextProfile);
+}
+
 async function assembleGroundedPack(
   args: AssembleGroundedPackInputs,
 ): Promise<ConnectedContextPack> {
@@ -2060,7 +2082,7 @@ async function assembleGroundedPack(
   const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs);
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
   if (ctx.cached !== undefined) {
-    return ctx.cached;
+    return withGroundedContextDiagnostics(ctx.cached, deps);
   }
   const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
     searchScope,
@@ -2071,7 +2093,7 @@ async function assembleGroundedPack(
     nowMs,
     signal: deps.signal,
   });
-  return await assemblePackFromReads({
+  const pack = await assemblePackFromReads({
     input,
     plan,
     rings: augmentedRings,
@@ -2081,6 +2103,7 @@ async function assembleGroundedPack(
     cacheIdentity: ctx.cacheIdentity,
     assembleOptions: ctx.assembleOptions,
   });
+  return withGroundedContextDiagnostics(pack, deps);
 }
 
 // ─── Public entry ─────────────────────────────────────────────────────────────

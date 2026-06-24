@@ -6,6 +6,9 @@
 // rather than mutating "1". Leaf-package rule (ADR-0019 direction 1) means no
 // `@oscharko-dev/keiko-*` imports may appear in this module.
 
+import type { ContextBudget } from "./context-engineering.js";
+import { validateContextBudget } from "./context-engineering-validation.js";
+
 // ─── Schema version ───────────────────────────────────────────────────────────
 export const CONNECTED_CONTEXT_SCHEMA_VERSION = "1" as const;
 
@@ -300,6 +303,9 @@ export interface RankedCandidateExplanation {
 
 export interface ContextPackDiagnostics {
   readonly rankedCandidates: readonly RankedCandidateExplanation[];
+  // Optional, additive deterministic context-budget plan (ADR-0052). Absent on legacy packs;
+  // when present it is validated by validateContextBudget. Never affects the pack stableId.
+  readonly contextBudget?: ContextBudget | undefined;
 }
 
 // ─── Pack summary ─────────────────────────────────────────────────────────────
@@ -1131,5 +1137,20 @@ function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: s
       !Array.isArray(entry.signals) || !entry.signals.every(isCandidateSignal),
       "rankedCandidate.signals invalid",
     );
+  }
+  // Additive, guarded: legacy diagnostics without contextBudget validate exactly as before.
+  validateDiagnosticsContextBudget(diagnostics.contextBudget, reasons);
+}
+
+function validateDiagnosticsContextBudget(contextBudget: unknown, reasons: string[]): void {
+  if (contextBudget === undefined) {
+    return;
+  }
+  const budgetResult = validateContextBudget(contextBudget);
+  if (budgetResult.ok) {
+    return;
+  }
+  for (const reason of budgetResult.reasons) {
+    reasons.push(`pack.diagnostics.contextBudget: ${reason}`);
   }
 }

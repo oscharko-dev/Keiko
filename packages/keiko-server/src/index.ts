@@ -147,6 +147,20 @@ export {
   type FilesTreeResponse,
 } from "./files.js";
 
+// PR4-W4 (ADR-0055) — additive exports so the deterministic context-quality gate
+// (scripts/check-context-quality.mjs) can drive the REAL chat history-compaction splice end-to-end.
+// Behavior-preserving: these names already exist on their modules; only the barrel surface widens.
+export {
+  conversationForGateway,
+  MAX_CONTEXT_MESSAGES,
+  type GatewayConversationMessage,
+} from "./chat-handlers.js";
+export {
+  conversationForGatewayWithCompaction,
+  type ConversationCompactionOptions,
+  type ConversationCompactionOutcome,
+} from "./conversation-compaction.js";
+
 // Epic #1307 / Issue #1314 — Prompt Enhancer governed surface. The BFF route handler and the reusable,
 // deterministic orchestration the CLI command (`keiko prompt-enhancer`) drives so both surfaces produce
 // byte-identical enhancements (AC1). Routed through the Model Gateway; never dispatches a model.
