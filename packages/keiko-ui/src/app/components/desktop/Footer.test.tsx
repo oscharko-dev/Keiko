@@ -122,6 +122,14 @@ describe("Footer — window status trigger", () => {
     expect(onToggleWindowPalette).toHaveBeenCalledTimes(1);
   });
 
+  it("does not attach a tooltip to the self-explanatory window-count trigger", () => {
+    renderFooter({ winCount: 1, windows: [footerWindow({ id: "files-1", type: "files" })] });
+
+    const trigger = screen.getByRole("button", { name: /1 window/ });
+    expect(trigger).not.toHaveAttribute("data-tip");
+    expect(trigger).not.toHaveClass("ui-tip");
+  });
+
   it("renders open and minimized windows in the footer palette", () => {
     renderFooter({
       winCount: 2,

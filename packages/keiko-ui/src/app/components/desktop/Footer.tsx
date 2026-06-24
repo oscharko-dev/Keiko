@@ -103,12 +103,11 @@ export function Footer({
       <span className="ft-window-wrap" ref={windowPaletteRef}>
         <button
           type="button"
-          className="ft-seg ft-accent ft-window-trigger ui-tip"
+          className="ft-seg ft-accent ft-window-trigger"
           aria-atomic="true"
           aria-expanded={windowPaletteOpen}
           aria-controls="footer-window-palette"
           disabled={winCount === 0}
-          data-tip="Open windows"
           onClick={onToggleWindowPalette}
         >
           <Icons.tile size={13} /> {windowLabel}
