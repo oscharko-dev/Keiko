@@ -10,6 +10,11 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { formatBytes, formatMs } from "@/lib/format";
+import {
+  RepositoryReferenceInline,
+  type OpenRepositoryReference,
+  type RepositoryReferenceRoot,
+} from "./repositoryReferences";
 import type {
   GroundedAnswer,
   GroundedAnswerContextPackSummary,
@@ -24,7 +29,16 @@ import type {
 interface GroundedAnswerProps {
   readonly answer: GroundedAnswer | undefined;
   readonly busy: boolean;
+  readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
+  readonly openRepositoryReference?: OpenRepositoryReference | undefined;
 }
+
+type ConnectedGroundedAnswer = Extract<
+  GroundedAnswer,
+  { readonly groundingKind: "connected-context" }
+>;
+type HybridGroundedAnswer = Extract<GroundedAnswer, { readonly groundingKind: "hybrid" }>;
+type KnowledgeGroundedAnswer = Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>;
 
 // Display "—" for Infinity / non-finite caps (the default budget uses Number.POSITIVE_INFINITY
 // for unbounded dimensions like rerankCallsMax when the orchestrator is disabled).
@@ -51,6 +65,10 @@ function formatCount(value: number): string {
 // (uiux-fix F012 C160 — same humanizer the omission reasons already used).
 export function humanizeToken(value: string): string {
   return value.replaceAll("-", " ");
+}
+
+function pluralize(value: number, singular: string, plural = `${singular}s`): string {
+  return value === 1 ? singular : plural;
 }
 
 function formatScopeLabel(summary: GroundedAnswerContextPackSummary): string {
@@ -214,10 +232,18 @@ function CitationScore({ score }: { readonly score: number }): ReactNode {
 
 function CitationReference({
   citation,
+  repositoryRoots,
+  openRepositoryReference,
 }: {
   readonly citation: GroundedEvidenceCitation;
+  readonly repositoryRoots: readonly RepositoryReferenceRoot[];
+  readonly openRepositoryReference: OpenRepositoryReference | undefined;
 }): ReactNode {
   const documentFormat = citation.documentFormat?.toUpperCase();
+  const canOpenRepositoryCitation =
+    documentFormat === undefined &&
+    openRepositoryReference !== undefined &&
+    repositoryRoots.length > 0;
   return (
     <span className="grounded-citation" title={citationTitle(citation)}>
       {documentFormat === undefined ? null : (
@@ -226,7 +252,27 @@ function CitationReference({
           <span className="sr-only"> document evidence extracted text </span>
         </>
       )}
-      <span className="grounded-citation-range">{formatRange(citation)}</span>
+      <span className="grounded-citation-range">
+        {canOpenRepositoryCitation ? (
+          <RepositoryReferenceInline
+            reference={{
+              label: formatRange(citation),
+              path: citation.scopePath,
+              ...(citation.lineRange === undefined
+                ? {}
+                : {
+                    lineStart: citation.lineRange.startLine,
+                    lineEnd: citation.lineRange.endLine,
+                  }),
+            }}
+            roots={repositoryRoots}
+            openReference={openRepositoryReference}
+            className="repo-ref-link grounded-citation-open"
+          />
+        ) : (
+          formatRange(citation)
+        )}
+      </span>
       <CitationScore score={citation.score} />
     </span>
   );
@@ -234,7 +280,7 @@ function CitationReference({
 
 // uiux-fix F012 C091 — a live 80-candidate run rendered an 80-chip "evidence wall" for a
 // one-sentence answer. Cap the default view at the top-scored chips and put the rest behind
-// an explicit disclosure so the actually-cited sources stay findable.
+// an explicit disclosure so the strongest cited evidence references stay findable.
 const CITATION_DISPLAY_CAP = 8;
 
 function uniqueByStableId<T extends { readonly stableId: string }>(
@@ -267,20 +313,24 @@ function CitationDisclosureButton({
       aria-expanded={expanded}
       onClick={onToggle}
     >
-      {expanded ? "Show fewer sources" : `Show all ${String(total)} sources`}
+      {expanded ? "Show fewer citations" : `Show all ${String(total)} citations`}
     </button>
   );
 }
 
 function CitationList({
   citations,
+  repositoryRoots,
+  openRepositoryReference,
 }: {
   readonly citations: readonly GroundedEvidenceCitation[];
+  readonly repositoryRoots: readonly RepositoryReferenceRoot[];
+  readonly openRepositoryReference: OpenRepositoryReference | undefined;
 }): ReactNode {
   const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
   // Defensive re-sort: the wire delivers folder citations score-sorted already, but the cap
-  // must never hide a stronger source behind a weaker one.
+  // must never hide a stronger citation behind a weaker one.
   const sorted = uniqueByStableId([...citations].sort((a, b) => b.score - a.score));
   const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   // Copilot PR #258 finding: the prior "Evidence" label was a direct child of role="list"
@@ -292,7 +342,11 @@ function CitationList({
       <ul className="grounded-citations" aria-label="Evidence citations">
         {visible.map((citation) => (
           <li key={citation.stableId} className="grounded-citations-item">
-            <CitationReference citation={citation} />
+            <CitationReference
+              citation={citation}
+              repositoryRoots={repositoryRoots}
+              openRepositoryReference={openRepositoryReference}
+            />
           </li>
         ))}
       </ul>
@@ -304,6 +358,60 @@ function CitationList({
         }}
       />
     </div>
+  );
+}
+
+function uniqueCitationCount<T extends { readonly stableId: string }>(items: readonly T[]): number {
+  return uniqueByStableId(items).length;
+}
+
+function connectedEvidenceSummary(answer: ConnectedGroundedAnswer): string {
+  const citationCount = uniqueCitationCount(answer.citations);
+  const filesRead = answer.contextPack.usage.filesRead;
+  const filesMax = formatCap(answer.contextPack.budget.filesReadMax);
+  const omittedCount = answer.contextPack.omittedCount;
+  const citationLabel = pluralize(citationCount, "citation");
+  const omitted =
+    omittedCount > 0
+      ? ` · ${formatCount(omittedCount)} not used`
+      : "";
+  return `${formatCount(citationCount)} ${citationLabel} · ${formatCount(filesRead)} / ${filesMax} files read${omitted}`;
+}
+
+function knowledgeEvidenceSummary(answer: KnowledgeGroundedAnswer): string {
+  const citationCount = uniqueCitationCount(answer.citations);
+  const sourceLabel = pluralize(citationCount, "citation");
+  return `${formatCount(citationCount)} ${sourceLabel} · ${formatCount(answer.contextPack.referencesUsed)} / ${formatCount(answer.contextPack.referenceBudget)} references`;
+}
+
+function hybridEvidenceSummary(answer: HybridGroundedAnswer): string {
+  const fileCount = uniqueCitationCount(answer.citations);
+  const knowledgeCount = uniqueCitationCount(answer.knowledgeCitations);
+  return `${formatCount(fileCount)} file ${pluralize(fileCount, "citation")} · ${formatCount(knowledgeCount)} knowledge ${pluralize(knowledgeCount, "citation")}`;
+}
+
+function GroundedEvidenceDisclosure({
+  title,
+  summary,
+  hasCoverageWarning = false,
+  children,
+}: {
+  readonly title: string;
+  readonly summary: string;
+  readonly hasCoverageWarning?: boolean;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <details className="grounded-evidence-disclosure">
+      <summary className="grounded-evidence-summary">
+        <span className="grounded-evidence-summary-title">{title}</span>
+        <span className="grounded-evidence-summary-meta">{summary}</span>
+        {hasCoverageWarning ? (
+          <span className="grounded-evidence-summary-badge">Partial coverage</span>
+        ) : null}
+      </summary>
+      <div className="grounded-evidence-body">{children}</div>
+    </details>
   );
 }
 
@@ -456,6 +564,12 @@ function CoverageNotice({
   );
 }
 
+function hasCoverageWarning(
+  omittedCounts: GroundedAnswerContextPackSummary["omittedCounts"],
+): boolean {
+  return COVERAGE_GAP_REASONS.some(({ reason }) => omittedCounts[reason] > 0);
+}
+
 function AuditEvidenceLink({
   runId,
   runIds,
@@ -528,7 +642,12 @@ function HybridContextPackSummary({
   );
 }
 
-export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode {
+export function GroundedAnswer({
+  answer,
+  busy,
+  repositoryRoots = [],
+  openRepositoryReference,
+}: GroundedAnswerProps): ReactNode {
   if (answer === undefined) {
     // uiux-fix F012 C163 — the panel also serves capsule/connector-only chats where no
     // repository is involved; keep the loading text source-neutral.
@@ -541,9 +660,14 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
   if (answer.groundingKind === "local-knowledge") {
     return (
       <div className="grounded-answer">
-        <LocalKnowledgeCitationList citations={answer.citations} />
-        <UncertaintyLine markers={answer.uncertainty} />
-        <LocalKnowledgeContextPackSummary contextPack={answer.contextPack} />
+        <GroundedEvidenceDisclosure
+          title="Knowledge evidence"
+          summary={knowledgeEvidenceSummary(answer)}
+        >
+          <LocalKnowledgeCitationList citations={answer.citations} />
+          <UncertaintyLine markers={answer.uncertainty} />
+          <LocalKnowledgeContextPackSummary contextPack={answer.contextPack} />
+        </GroundedEvidenceDisclosure>
       </div>
     );
   }
@@ -551,32 +675,52 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
   if (answer.groundingKind === "hybrid") {
     return (
       <div className="grounded-answer">
-        <CoverageNotice omittedCounts={answer.contextPack.folder.omittedCounts} />
-        {/* Folder evidence (source-tagged) */}
-        <CitationList citations={answer.citations} />
-        {/* Connector evidence (source-tagged) */}
-        <LocalKnowledgeCitationList citations={answer.knowledgeCitations} />
-        <UncertaintyLine markers={answer.uncertainty} />
-        <OmittedLine
-          omittedCount={answer.omittedCount}
-          omittedCounts={answer.contextPack.folder.omittedCounts}
-        />
-        <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
-        <HybridContextPackSummary contextPack={answer.contextPack} />
+        <GroundedEvidenceDisclosure
+          title="Grounding evidence"
+          summary={hybridEvidenceSummary(answer)}
+          hasCoverageWarning={hasCoverageWarning(answer.contextPack.folder.omittedCounts)}
+        >
+          <CoverageNotice omittedCounts={answer.contextPack.folder.omittedCounts} />
+          {/* Folder evidence (source-tagged) */}
+          <CitationList
+            citations={answer.citations}
+            repositoryRoots={repositoryRoots}
+            openRepositoryReference={openRepositoryReference}
+          />
+          {/* Connector evidence (source-tagged) */}
+          <LocalKnowledgeCitationList citations={answer.knowledgeCitations} />
+          <UncertaintyLine markers={answer.uncertainty} />
+          <OmittedLine
+            omittedCount={answer.omittedCount}
+            omittedCounts={answer.contextPack.folder.omittedCounts}
+          />
+          <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
+          <HybridContextPackSummary contextPack={answer.contextPack} />
+        </GroundedEvidenceDisclosure>
       </div>
     );
   }
   return (
     <div className="grounded-answer">
-      <CoverageNotice omittedCounts={answer.contextPack.omittedCounts} />
-      <CitationList citations={answer.citations} />
-      <UncertaintyLine markers={answer.uncertainty} />
-      <OmittedLine
-        omittedCount={answer.omittedCount}
-        omittedCounts={answer.contextPack.omittedCounts}
-      />
-      <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
-      <ContextPackSummary contextPack={answer.contextPack} />
+      <GroundedEvidenceDisclosure
+        title="Evidence"
+        summary={connectedEvidenceSummary(answer)}
+        hasCoverageWarning={hasCoverageWarning(answer.contextPack.omittedCounts)}
+      >
+        <CoverageNotice omittedCounts={answer.contextPack.omittedCounts} />
+        <CitationList
+          citations={answer.citations}
+          repositoryRoots={repositoryRoots}
+          openRepositoryReference={openRepositoryReference}
+        />
+        <UncertaintyLine markers={answer.uncertainty} />
+        <OmittedLine
+          omittedCount={answer.contextPack.omittedCount}
+          omittedCounts={answer.contextPack.omittedCounts}
+        />
+        <AuditEvidenceLink runId={answer.evidenceRunId} runIds={answer.evidenceRunIds} />
+        <ContextPackSummary contextPack={answer.contextPack} />
+      </GroundedEvidenceDisclosure>
     </div>
   );
 }

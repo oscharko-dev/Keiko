@@ -307,6 +307,38 @@ describe("Compact model picker", () => {
   });
 });
 
+describe("Prompt Enhancer rendered prompt selection", () => {
+  it("keeps the rendered prompt selectable despite window-level selection guards", () => {
+    const panelBlock = cssBlock(".pe-panel {");
+    expect(panelBlock).toContain("user-select: text");
+    const sectionBlock = cssBlock(".pe-section {");
+    expect(sectionBlock).toContain("user-select: text");
+    const renderedBlock = cssBlock(".pe-rendered {");
+    expect(renderedBlock).toContain("user-select: text");
+    expect(renderedBlock).toContain("-webkit-user-select: text");
+    expect(renderedBlock).toContain("cursor: text");
+    const descendantBlock = cssBlock(".pe-rendered *");
+    expect(descendantBlock).toContain("user-select: text");
+    expect(descendantBlock).toContain("-webkit-user-select: text");
+  });
+});
+
+describe("Chat grounded audit footer density", () => {
+  it("keeps inline Evidence and Context disclosures visually tight inside assistant answers", () => {
+    const inlineBlock = cssBlock(".chatw-grounded-inline {");
+    expect(inlineBlock).toContain("gap: 0");
+    expect(inlineBlock).toContain("padding: 6px 10px");
+
+    const summaryBlock = cssBlock(".chatw-grounded-inline .grounded-evidence-summary {");
+    expect(summaryBlock).toContain("min-height: 27px");
+    expect(summaryBlock).toContain("padding: 3px 0");
+
+    const contextBlock = cssBlock(".chatw-grounded-inline > .ctx-status {");
+    expect(contextBlock).toContain("margin-top: 0");
+    expect(contextBlock).toContain("border-top: 1px solid var(--border-subtle)");
+  });
+});
+
 // ─── Fix 3: WCAG 1.4.3 — light-theme text contrast ───────────────────────────
 
 describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
@@ -3886,22 +3918,33 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
   });
 });
 
-// ADR-0057 D2 — drift gate pinning the ContextStatusPanel .ctx-* classes into the single
-// globals.css. Reverting any class definition (or swapping a Tier-3 token for a raw value) fails
-// here, so the panel's styling cannot silently disappear or violate the no-raw-values gate.
-describe("PR6 context status panel — .ctx-* styling pin (ADR-0057 D2)", () => {
-  it("defines the .ctx-status disclosure container and its summary / dl children", () => {
-    for (const selector of [".ctx-status {", ".ctx-status-summary {", ".ctx-status-dl {"]) {
+// ADR-0057 D2 — drift gate pinning the ContextStatusPanel into the shared grounded-evidence
+// disclosure chrome. Context and Evidence must read as one coherent audit stack instead of two
+// unrelated panels.
+describe("PR6 context status panel — shared evidence disclosure styling pin (ADR-0057 D2)", () => {
+  it("defines the .ctx-status container and shared grounded-evidence disclosure selectors", () => {
+    for (const selector of [
+      ".ctx-status {",
+      ".ctx-status-dl {",
+      ".grounded-evidence-disclosure {",
+      ".grounded-evidence-summary {",
+      ".grounded-evidence-summary-title {",
+      ".grounded-evidence-summary-meta {",
+      ".grounded-evidence-body {",
+    ]) {
       expect(css.includes(selector), `${selector} must remain in globals.css`).toBe(true);
     }
     expect(
-      css.includes(".ctx-status-summary:hover {"),
-      "the quiet summary must brighten on hover",
+      css.includes(".grounded-evidence-summary:hover {"),
+      "the shared quiet summary must brighten on hover",
     ).toBe(true);
   });
 
-  it("styles the .ctx-* classes only with existing Tier-3 semantic tokens (no raw values)", () => {
-    const block = css.slice(css.indexOf(".ctx-status {"), css.indexOf(".chatw-typing-row {"));
+  it("styles the shared Context/Evidence disclosure with existing semantic tokens", () => {
+    const block = css.slice(
+      css.indexOf(".grounded-evidence-disclosure {"),
+      css.indexOf(".grounded-citations-wrap {"),
+    );
     expect(block.length).toBeGreaterThan(0);
     for (const token of [
       "var(--border-subtle)",

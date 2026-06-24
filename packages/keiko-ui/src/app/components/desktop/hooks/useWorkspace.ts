@@ -605,11 +605,13 @@ export function useWorkspace(
   useKeyboardCtrls({ setWins, rect, cancelConnectRef });
   useFitMaximized({ wsRef, viewRef, setWins });
 
-  const { update, focus, close, minimize, restore, maximize, add, toggleTool } = makeMutations({
-    setWins,
-    zc,
-    worldVP,
-  });
+  const { update, focus, close, minimize, restore, maximize, add, openEditorFile, toggleTool } =
+    makeMutations({
+      setWins,
+      zc,
+      worldVP,
+      winsRef,
+    });
   const { tileAll, splitFront, cascade } = makeLayoutActions({ setWins, worldVP });
   const { setSnap, commitSnap } = makeSnapActions({ setSnapPrev, snapZone, worldVP, update });
   const {
@@ -709,6 +711,7 @@ export function useWorkspace(
 
   const api: WorkspaceApi = {
     add,
+    openEditorFile,
     toggleTool,
     focus,
     close: closeWithTeardown,

@@ -116,6 +116,7 @@ import type {
 import { EDITOR_AGENT_SCHEMA_VERSION } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
+import { FileIcon } from "../shared/projectTree";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import {
@@ -160,6 +161,9 @@ export interface EditorRuntimeWidgetProps {
   readonly root?: string;
   readonly file?: string;
   readonly openFiles?: readonly string[] | undefined;
+  readonly revealLineStart?: number | undefined;
+  readonly revealLineEnd?: number | undefined;
+  readonly revealRequestId?: string | undefined;
   readonly dirtyFiles?: readonly string[] | undefined;
   readonly onSelectOpenFile?: ((file: string) => void) | undefined;
   readonly onCloseOpenFile?: ((file: string) => Promise<boolean> | boolean | void) | undefined;
@@ -354,6 +358,9 @@ export default function EditorRuntimeWidget({
   layoutPanes,
   root,
   file,
+  revealLineStart,
+  revealLineEnd,
+  revealRequestId,
   openFiles,
   dirtyFiles,
   onSelectOpenFile,
@@ -1462,6 +1469,25 @@ export default function EditorRuntimeWidget({
         formatRequestNonce={formatRequestNonce}
         onSelectionChange={setCurrentSelection}
         onCursorChange={setCursor}
+        revealRequest={
+          revealLineStart === undefined
+            ? undefined
+            : {
+                id:
+                  revealRequestId ??
+                  `${file ?? "file"}:${String(revealLineStart)}:${String(revealLineEnd ?? revealLineStart)}`,
+                range: {
+                  start: { line: Math.max(0, Math.floor(revealLineStart) - 1), column: 0 },
+                  end: {
+                    line: Math.max(
+                      Math.max(0, Math.floor(revealLineStart) - 1),
+                      Math.floor(revealLineEnd ?? revealLineStart) - 1,
+                    ),
+                    column: 0,
+                  },
+                },
+              }
+        }
         onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
         onGenerateTests={completionEnabled ? runTestGeneration : undefined}
         showStatusFooter={false}
@@ -1514,7 +1540,7 @@ export default function EditorRuntimeWidget({
                     onKeyDown={tabHandle?.onKeyDown}
                     onClick={() => handleSelectTab(path)}
                   >
-                    <Icons.editor size={12} />
+                    <FileIcon name={path} />
                     <span className="ed-tab-label">{path}</span>
                     {tabDirty ? (
                       <span className="ed-dirty" aria-hidden="true" title="Unsaved changes">
