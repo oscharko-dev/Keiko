@@ -19,6 +19,7 @@ expand each decision into detailed contracts that the child issues (#493–#506)
 | [supply-chain-policy.md](supply-chain-policy.md)             | The "no new runtime media packages by default" policy and its enforcement hooks.                                   |
 | [implementation-sequencing.md](implementation-sequencing.md) | Dependency order and write-ownership boundaries for child issues #493–#506.                                        |
 | [capability-configuration.md](capability-configuration.md)   | Implemented (#493): configuring, registering (`keiko-stt`), reading, and disabling voice capability metadata.      |
+| [dictation-endpoint.md](dictation-endpoint.md)               | Implemented (#494): the optional, capability-gated BFF speech-to-text dictation route and provider-neutral seam.   |
 
 ## Core invariants (summary)
 

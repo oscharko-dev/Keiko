@@ -204,6 +204,17 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the optional voice STT dictation route (#494)", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/voice/transcribe"),
+    ).toBeDefined();
+    expect(matchRoute("POST", "/api/voice/transcribe")).toMatchObject({
+      definition: { pattern: "/api/voice/transcribe" },
+    });
+    // It is a state-changing POST; a GET to the same path is method-not-allowed, not a match.
+    expect(matchRoute("GET", "/api/voice/transcribe")).toBe("method-not-allowed");
+  });
+
   it("includes the 8 browser-tool routes (#76)", () => {
     const browserRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/browser"));
     expect(browserRoutes).toHaveLength(8);

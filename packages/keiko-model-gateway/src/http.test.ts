@@ -147,6 +147,145 @@ describe("gatewayFetch", () => {
     }
   });
 
+  it("forwards a binary request body through a forward proxy without corruption (#494 STT multipart)", async () => {
+    // High bytes (>127) and embedded CRLF prove the body is written as raw bytes, not UTF-8 text.
+    const payload = new Uint8Array([0, 1, 2, 250, 251, 252, 253, 254, 255, 13, 10, 65, 66, 67]);
+    let received: Buffer | undefined;
+    const proxy = createHttpServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        received = Buffer.concat(chunks);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      const response = await gatewayFetch("http://127.0.0.1:9/audio/transcriptions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-length": String(payload.byteLength),
+        },
+        body: payload,
+        egress: { httpProxy: `http://127.0.0.1:${String(proxyPort)}` },
+      });
+      expect(await response.json()).toEqual({ ok: true });
+      expect(received !== undefined && Array.from(received)).toEqual(Array.from(payload));
+    } finally {
+      await close(proxy);
+    }
+  });
+
+  it("forwards a binary request body intact on the custom-CA fallback path (#494 STT multipart)", async () => {
+    // fetchWithCaBundle is entered when the direct HTTPS fetch hits a recoverable TLS-trust error and
+    // a CA bundle is configured. Prove the multipart body survives that path byte-for-byte.
+    const payload = new Uint8Array([0, 1, 2, 250, 251, 252, 253, 254, 255, 13, 10, 65, 66, 67]);
+    const dir = mkdtempSync(join(tmpdir(), "keiko-stt-ca-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    let received: Buffer | undefined;
+    const originSockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        received = Buffer.concat(chunks);
+        res.writeHead(200, { "content-type": "application/json", connection: "close" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+    origin.on("connection", (s) => {
+      originSockets.add(s);
+      s.once("close", () => originSockets.delete(s));
+    });
+    const originPort = await listen(origin);
+    try {
+      const response = await gatewayFetch(
+        `https://127.0.0.1:${String(originPort)}/audio/transcriptions`,
+        {
+          method: "POST",
+          useCaFallback: true,
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-length": String(payload.byteLength),
+          },
+          body: payload,
+          egress: { caBundlePath },
+        },
+      );
+      expect(await response.json()).toEqual({ ok: true });
+      expect(received !== undefined && Array.from(received)).toEqual(Array.from(payload));
+    } finally {
+      for (const s of originSockets) s.destroy();
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards a binary request body intact through an HTTPS CONNECT proxy (#494 STT multipart)", async () => {
+    const payload = new Uint8Array([0, 1, 2, 250, 251, 252, 253, 254, 255, 13, 10, 65, 66, 67]);
+    const dir = mkdtempSync(join(tmpdir(), "keiko-stt-connect-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    let received: Buffer | undefined;
+    const originSockets = new Set<Socket>();
+    const proxySockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        received = Buffer.concat(chunks);
+        res.writeHead(200, { "content-type": "application/json", connection: "close" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+    origin.on("connection", (s) => {
+      originSockets.add(s);
+      s.once("close", () => originSockets.delete(s));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer();
+    proxy.on("connection", (s) => {
+      proxySockets.add(s);
+      s.once("close", () => proxySockets.delete(s));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        upstream.pipe(clientSocket);
+        clientSocket.pipe(upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      const response = await gatewayFetch(
+        `https://127.0.0.1:${String(originPort)}/audio/transcriptions`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-length": String(payload.byteLength),
+          },
+          body: payload,
+          egress: { httpsProxy: `http://127.0.0.1:${String(proxyPort)}`, caBundlePath },
+        },
+      );
+      expect(await response.json()).toEqual({ ok: true });
+      expect(received !== undefined && Array.from(received)).toEqual(Array.from(payload));
+    } finally {
+      for (const s of proxySockets) s.destroy();
+      for (const s of originSockets) s.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks credential headers from crossing a plaintext HTTP proxy boundary", async () => {
     let proxyHits = 0;
     const proxy = createHttpServer((_req, res) => {

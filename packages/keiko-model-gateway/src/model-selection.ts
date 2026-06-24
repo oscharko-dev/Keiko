@@ -3,6 +3,7 @@ import {
   createDefaultEmbeddingCapability,
   isLikelyEmbeddingModelId,
   listCapabilities,
+  modelSupportsSpeechInput,
   resolveVoiceCapabilityFromCapabilities,
   selectCompletionModelFromCapabilities,
   type CompletionSelectionOptions,
@@ -122,4 +123,22 @@ export function resolveVoiceCapability(
   options: VoiceResolutionOptions = {},
 ): VoiceCapabilityResolution {
   return resolveVoiceCapabilityFromCapabilities(listConfiguredCapabilities(config), options);
+}
+
+// Speech-to-text model selection (Issue #494, ADR-0058 D2/D4). Returns the configured voice
+// provider that advertises speech-to-text (dictation), cheapest-first by cost class, or undefined
+// when none is configured. Only configured providers are eligible — the same fail-closed rule as
+// `selectConfiguredModel` — so a voice capability that names no provider can never be elected, and a
+// no-voice deployment yields undefined (the BFF dictation route then answers voice-unavailable, AC1).
+export function selectSpeechToTextModel(config: ConfiguredCapabilitySource): string | undefined {
+  let best: ModelCapability | undefined;
+  for (const capability of listConfiguredCapabilities(config)) {
+    if (!modelSupportsSpeechInput(capability)) {
+      continue;
+    }
+    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
+      best = capability;
+    }
+  }
+  return best?.id;
 }

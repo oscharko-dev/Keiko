@@ -72,8 +72,9 @@ export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
 
 // Voice-capability disable kill-switch (Issue #493, ADR-0058 D1). A regulated deployment can
 // disable voice entirely via `KEIKO_VOICE_DISABLED`; the resolver then reports a clean
-// `unavailable` (reason "policy-disabled") and Keiko stays fully usable.
-function isVoiceDisabledByPolicy(env: EnvSource): boolean {
+// `unavailable` (reason "policy-disabled") and Keiko stays fully usable. Exported so the voice
+// dictation route (Issue #494) gates on the identical kill-switch, keeping one source of truth.
+export function isVoiceDisabledByPolicy(env: EnvSource): boolean {
   const value = env.KEIKO_VOICE_DISABLED;
   return value === "1" || value?.toLowerCase() === "true";
 }
