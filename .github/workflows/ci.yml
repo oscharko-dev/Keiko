@@ -6,12 +6,14 @@ on:
       - dev
       - feat/keiko-editor
       - feat/prompt-enhancer-1307
+      - feat/keiko-voice-digital-twin
       - "release/**"
   pull_request:
     branches:
       - dev
       - feat/keiko-editor
       - feat/prompt-enhancer-1307
+      - feat/keiko-voice-digital-twin
       - "release/**"
   workflow_dispatch:
 
@@ -26,7 +28,7 @@ jobs:
       - name: Confirm dev branch gate
         run: |
           case "${{ github.ref }}:${{ github.base_ref }}" in
-            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:feat/prompt-enhancer-1307 | *:release/*)
+            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:feat/prompt-enhancer-1307 | *:feat/keiko-voice-digital-twin | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;
             *)
