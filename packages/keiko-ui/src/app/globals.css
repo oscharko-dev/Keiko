@@ -4845,6 +4845,26 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: var(--surface-secondary);
   color: var(--text-primary);
 }
+.fpv-back:disabled {
+  opacity: 0.58;
+  cursor: wait;
+}
+.fpv-refresh[data-state="refreshing"] {
+  color: var(--accent);
+}
+.fpv-status {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.fpv-status[data-state="refreshed"] {
+  color: var(--feedback-success);
+}
+.fpv-status[data-state="failed"] {
+  color: var(--feedback-danger);
+}
 .fpv-name {
   font-size: 12.5px;
   color: var(--text-primary);
