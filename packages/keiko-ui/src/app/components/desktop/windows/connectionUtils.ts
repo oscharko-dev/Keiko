@@ -14,7 +14,7 @@ export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   agents: ["files", "terminal", "plugins", "review", "browser", "agents", "keiko"],
   // Epic #189 Slice 3 M3 — a Chat window can bind to a Connector window via a relationship edge.
   chat: ["files", "browser", "plugins", "keiko", "connector"],
-  files: ["agents", "chat", "quality", "editor"],
+  files: ["agents", "chat", "quality", "editor", "promptEnhancer"],
   // Issue #1199 — an Editor can bind to Files for focused file context and to Connector for
   // selected Local Knowledge scope. Completion still posts only to the governed BFF route.
   editor: ["files", "connector"],
@@ -33,6 +33,9 @@ export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   // Epic #750 #756 — QI also binds to a Figma Snapshot window: the stored snapshot run becomes the
   // figma-snapshot source for the next Generate run.
   quality: ["files", "connector", "figma", "figmaView", "figmaJson", "figmaImage"],
+  // The Prompt Enhancer never ingests file content, but a Files edge marks the generated prompt as
+  // grounded against an explicit workspace/file scope for downstream use.
+  promptEnhancer: ["files"],
   // Epic #750 #756 — a Figma Snapshot window can only bind to the QI hub. The window itself holds
   // no PAT; it stores the snapshotRunId in cfg after a successful server-side build, and the QI hub
   // reads that id via the relationship edge.
@@ -91,7 +94,8 @@ export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
     (other.type === "chat" ||
       other.type === "agents" ||
       other.type === "quality" ||
-      other.type === "editor")
+      other.type === "editor" ||
+      other.type === "promptEnhancer")
   ) {
     const root = configRoot(filesSide.cfg);
     // Honest empty state: nothing is bound yet, so the badge must not claim a folder.

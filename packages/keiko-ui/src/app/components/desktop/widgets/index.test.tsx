@@ -10,10 +10,16 @@ vi.mock("../ChatWindow", () => ({
   ChatWindow: ({
     mini,
     linkedRoot,
+    linkedRoots,
+    openEditorFile,
     onOpenRunResult,
   }: {
     readonly mini?: boolean;
     readonly linkedRoot?: string | null;
+    readonly linkedRoots?: readonly string[];
+    readonly openEditorFile?: (request: { readonly root: string; readonly path: string }) => {
+      readonly ok: boolean;
+    };
     readonly onOpenRunResult?: (message: {
       readonly runId: string;
       readonly workflowId: string;
@@ -21,7 +27,7 @@ vi.mock("../ChatWindow", () => ({
     }) => void;
   }) => (
     <div data-testid="chat-window">
-      {`${String(mini)}:${linkedRoot ?? ""}`}
+      {`${String(mini)}:${linkedRoot ?? ""}:${(linkedRoots ?? []).join("|")}:${String(openEditorFile?.({ root: "/repo", path: "src/app.ts" }).ok ?? false)}`}
       <button
         type="button"
         onClick={() =>
@@ -65,6 +71,21 @@ vi.mock("./panels/ChatHistoryPanel", () => ({
   ),
 }));
 vi.mock("./panels/SearchPanel", () => ({ SearchPanel: () => <div>SearchPanel</div> }));
+vi.mock("./panels/PromptEnhancerPanel", () => ({
+  PromptEnhancerPanel: ({
+    connectedRoot,
+    connectedFilePath,
+    connectedRoots,
+  }: {
+    readonly connectedRoot?: string | null;
+    readonly connectedFilePath?: string | null;
+    readonly connectedRoots?: readonly string[];
+  }) => (
+    <div data-testid="prompt-enhancer-panel">
+      {`${connectedRoot ?? ""}:${connectedFilePath ?? ""}:${(connectedRoots ?? []).join("|")}`}
+    </div>
+  ),
+}));
 vi.mock("./panels/PluginsPanel", () => ({ PluginsPanel: () => <div>PluginsPanel</div> }));
 vi.mock("./panels/AutomationsPanel", () => ({
   AutomationsPanel: () => <div>AutomationsPanel</div>,
@@ -119,12 +140,18 @@ vi.mock("./cards/EditorWidget", () => ({
     linkedCapsuleSetIds,
     openFiles,
     layoutJson,
+    revealLineStart,
+    revealLineEnd,
+    revealRequestId,
     onWorkspaceChange,
   }: {
     readonly root?: string;
     readonly file?: string;
     readonly openFiles?: readonly string[];
     readonly layoutJson?: string;
+    readonly revealLineStart?: number;
+    readonly revealLineEnd?: number;
+    readonly revealRequestId?: string;
     readonly linkedRoot?: string | null;
     readonly linkedFilePath?: string;
     readonly linkedCapsuleIds?: readonly string[];
@@ -137,7 +164,7 @@ vi.mock("./cards/EditorWidget", () => ({
     }) => void;
   }) => (
     <div data-testid="editor-widget">
-      <span>{`${root ?? ""}:${file ?? ""}:${(openFiles ?? []).join("|")}:${layoutJson ?? ""}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}:${(linkedCapsuleIds ?? []).join(",")}:${(linkedCapsuleSetIds ?? []).join(",")}`}</span>
+      <span>{`${root ?? ""}:${file ?? ""}:${(openFiles ?? []).join("|")}:${layoutJson ?? ""}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}:${(linkedCapsuleIds ?? []).join(",")}:${(linkedCapsuleSetIds ?? []).join(",")}:${String(revealLineStart ?? "")}:${String(revealLineEnd ?? "")}:${revealRequestId ?? ""}`}</span>
       <button
         type="button"
         onClick={() =>
@@ -354,6 +381,7 @@ function makeCtx(): WindowRenderContext & {
     ],
     updateCfg: vi.fn<UpdateCfg>(),
     openWindow: vi.fn(() => "win-1"),
+    openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
   };
 }
 
@@ -365,6 +393,9 @@ describe("workspace widget renderer registry", () => {
     await waitFor(() => {
       expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1" });
     });
+    expect(screen.getByTestId("chat-window")).toHaveTextContent(
+      "true:/repo:/repo|/docs:false",
+    );
   });
 
   it("maps window cfg into widget props and follow-up workspace actions", () => {
@@ -399,7 +430,14 @@ describe("workspace widget renderer registry", () => {
     view.rerender(
       <>
         {WIN_TYPES.editor.render(
-          { root: "/repo", file: "src/app.ts", openFiles: ["src/app.ts", "package.json"] },
+          {
+            root: "/repo",
+            file: "src/app.ts",
+            openFiles: ["src/app.ts", "package.json"],
+            revealLineStart: 7,
+            revealLineEnd: 10,
+            revealRequestId: "reveal-1",
+          },
           ctx,
         )}
         {WIN_TYPES.browser.render({ url: "https://example.test" }, ctx)}
@@ -408,7 +446,7 @@ describe("workspace widget renderer registry", () => {
       </>,
     );
     expect(screen.getByTestId("editor-widget")).toHaveTextContent(
-      "/repo:src/app.ts:src/app.ts|package.json::/repo:src/app.ts:cap-1:set-1",
+      "/repo:src/app.ts:src/app.ts|package.json::/repo:src/app.ts:cap-1:set-1:7:10:reveal-1",
     );
     fireEvent.click(screen.getByRole("button", { name: "Change editor workspace" }));
     expect(ctx.updateCfg).toHaveBeenCalledWith({
@@ -420,6 +458,11 @@ describe("workspace widget renderer registry", () => {
     expect(screen.getByTestId("browser-widget")).toHaveTextContent("https://example.test");
     expect(screen.getByTestId("terminal-widget")).toHaveTextContent("/repo:/repo");
     expect(screen.getByTestId("agent-widget")).toHaveTextContent("verify:/repo:src/app.ts");
+
+    view.rerender(<>{WIN_TYPES.promptEnhancer.render({}, ctx)}</>);
+    expect(screen.getByTestId("prompt-enhancer-panel")).toHaveTextContent(
+      "/repo:src/app.ts:/repo|/docs",
+    );
   });
 
   it("wires hub callbacks for quality, regenerated runs, connector management, figma, and chat history", () => {

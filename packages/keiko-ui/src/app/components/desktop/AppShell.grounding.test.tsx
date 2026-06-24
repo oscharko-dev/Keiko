@@ -213,6 +213,7 @@ function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-
 function workspaceApi(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
   return {
     add: vi.fn(() => null),
+    openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
     focus: vi.fn(),
     close: vi.fn(),

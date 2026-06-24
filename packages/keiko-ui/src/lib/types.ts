@@ -195,8 +195,6 @@ export type {
   UpdateChatMessagePatch,
   PatchChatMessageBody,
   PatchMessageResponse,
-  GroundedWorkflowHandoffRequest,
-  GroundedWorkflowHandoffResponse,
   GroundedAskRequest,
   GroundedEvidenceCitation,
   GroundedUncertainty,
@@ -257,6 +255,8 @@ export type {
   FilesEntryKind,
   FilesTreeEntry,
   FilesTreeResponse,
+  FilesSearchResult,
+  FilesSearchResponse,
   FilesPreviewBase,
   FilesPreviewResponse,
   FilesContentResponse,
@@ -272,6 +272,28 @@ export type {
   BrowserContentResult,
   BrowserEventKind,
   BrowserEventEnvelope,
+  GatewayReadinessOptions,
+  GatewayReadinessOverallStatus,
+  GatewayReadinessProbeName,
+  GatewayReadinessProbeResult,
+  GatewayReadinessProbeStatus,
+  GatewayReadinessReport,
+  GatewayReadinessRequest,
+  GatewayReadinessVerifiedCapabilities,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+
+// ─── Prompt Enhancer wire types (Epic #1307 / Issue #1314) ──────────────────────────
+export type {
+  PromptEnhancementWireRequest,
+  PromptEnhancementWireResponse,
+  PromptEnhancementModelRouting,
+  PromptEnhancementModelAvailability,
+  PromptEnhancementModelRoutingReason,
+  PromptEnhancementCandidateComparison,
+  PromptEnhancementGroundingReadiness,
+  PromptEnhancementGroundingReadinessStatus,
+  PromptEnhancementGroundingReadinessReason,
+  PromptEnhancementEvidenceReference,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 // ─── Prompt Enhancer wire types (Epic #1307 / Issue #1314) ──────────────────────────

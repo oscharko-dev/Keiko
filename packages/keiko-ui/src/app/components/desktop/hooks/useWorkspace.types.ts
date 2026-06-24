@@ -21,8 +21,20 @@ export interface FilesWindowContext {
   readonly activeFilePath?: string;
 }
 
+export interface OpenEditorFileRequest {
+  readonly root: string;
+  readonly path: string;
+  readonly lineStart?: number | undefined;
+  readonly lineEnd?: number | undefined;
+}
+
+export type OpenEditorFileResult =
+  | { readonly ok: true; readonly windowId: string }
+  | { readonly ok: false; readonly message: string };
+
 export interface WorkspaceApi {
   readonly add: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
+  readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
   readonly toggleTool: (type: WindowType) => void;
   readonly focus: (id: string) => void;
   readonly close: (id: string) => void;

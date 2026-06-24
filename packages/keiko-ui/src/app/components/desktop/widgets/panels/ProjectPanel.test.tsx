@@ -86,8 +86,6 @@ function session(): ChatSessionApi {
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
     clearHistory: vi.fn(),
-    launchWorkflowFromConversation: vi.fn(),
-    launchGroundedWorkflowHandoff: vi.fn(),
     lastSentDocuments: [],
   };
 }

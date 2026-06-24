@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireGrabbingBodyStyle,
   isCanvasPanPointer,
+  isInteractiveControlTarget,
+  isInteractiveSurfaceTarget,
+  isTextEntryTarget,
   isMacContextClick,
   isPrimaryActivationPointer,
   isWindowDragPointer,
@@ -29,6 +32,15 @@ describe("pointer guards", () => {
     expect(isWindowDragPointer({ button: 0, ctrlKey: true })).toBe(false);
     expect(isWindowDragPointer({ button: 1, ctrlKey: false })).toBe(true);
     expect(isWindowDragPointer({ button: 2, ctrlKey: false })).toBe(false);
+  });
+
+  it("treats explicitly selectable text surfaces as interactive text targets", () => {
+    const host = document.createElement("div");
+    host.innerHTML = '<pre data-text-selectable="true">Rendered prompt text</pre>';
+    const target = host.querySelector("pre");
+    expect(isInteractiveSurfaceTarget(target)).toBe(true);
+    expect(isInteractiveControlTarget(target)).toBe(true);
+    expect(isTextEntryTarget(target)).toBe(true);
   });
 });
 

@@ -1,50 +1,16 @@
-// Issue #153 — governed workflow handoff from the Conversation Center.
-//
-// Pins all four AC sub-cases listed in the task spec, plus a structural
-// AC #4 check (no apply / no exec affordance is exposed by the chat surface):
-//
-//   1. AC#2: launch affordance hidden when no workflow-eligible model is selected.
-//   2. AC#2: launch affordance enabled when the selected model carries tool-call +
-//            structured-output (the stricter chat+toolCalling+structuredOutput filter).
-//   3. AC#1: clicking launch opens the workflow picker — explicit user action.
-//   4. Workflow + free-text input → calls the launch action (startChatRun with
-//      apply omitted/false). AC#3: the system run-summary message lands in chat.
-//   5. AC#3: assistant/system pair renders with a RunSummaryCard that shows the
-//            workflow id and status without exposing patch or shell affordances.
-//   6. AC#4: the in-chat RunSummaryCard never renders "Apply patch" / shell exec
-//            controls — those stay behind the existing workflow surfaces.
-//
-// The tests prop-inject a `ChatSessionApi` so we can drive the UI without booting
-// the full network mock. The hook-level launchWorkflowFromConversation is covered
-// indirectly: the WorkflowHandoff component calls the hook method via context,
-// and a hook-level test pins the API-shape contract (#153 launch action) at the
-// bottom of the file using renderHook + mocked @/lib/api.
+// Issue #153 — workflow evidence remains visible in chat, but workflow launches live exclusively
+// in the Agent widget surface.
 
-import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import {
-  LaunchGroundedWorkflowButton,
-  LaunchWorkflowButton,
-  RunSummaryCard,
-} from "./WorkflowHandoff";
+import { RunSummaryCard } from "./WorkflowHandoff";
 import { useChatSession, type ChatSessionApi } from "./hooks/useChatSession";
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
-
-// ─── helpers ──────────────────────────────────────────────────────────────────
-
-async function chooseComboboxOption(
-  user: ReturnType<typeof userEvent.setup>,
-  trigger: HTMLElement,
-  optionName: string,
-): Promise<void> {
-  await user.click(trigger);
-  await user.click(await screen.findByRole("option", { name: optionName }));
-}
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -94,10 +60,6 @@ function workflowEligibleModel(id: string): ModelCapability {
   };
 }
 
-function plainChatModel(id: string): ModelCapability {
-  return { ...workflowEligibleModel(id), id, toolCalling: false, structuredOutput: false };
-}
-
 function userMessage(content: string, overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
     id: "m1",
@@ -135,6 +97,7 @@ function connectedGroundedAnswer() {
     groundingKind: "connected-context" as const,
     userMessageId: "msg-u",
     assistantMessageId: "msg-a",
+    messageId: "msg-a",
     content: "Repository-grounded answer.",
     citations: [],
     uncertainty: [],
@@ -229,8 +192,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
     clearHistory: vi.fn(),
-    launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "run-42" }),
-    launchGroundedWorkflowHandoff: vi.fn().mockResolvedValue({ ok: true, runId: "run-42" }),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -248,23 +209,8 @@ function strictModeWrapper({ children }: { readonly children: ReactNode }) {
   return <StrictMode>{children}</StrictMode>;
 }
 
-// ─── 1. AC #2: launch affordance hidden for non-workflow-eligible models ──────
-
-describe("WorkflowHandoff — model gating (AC#2)", () => {
-  it("hides the Launch workflow button when the selected model is plain chat (no tool calling)", () => {
-    renderWindow(
-      makeSession({
-        activeChat: makeChat(),
-        activeProject: makeProject(),
-        models: [plainChatModel("plain-chat")],
-        selectedModel: "plain-chat",
-        messages: [userMessage("hi")],
-      }),
-    );
-    expect(screen.queryByRole("button", { name: /launch workflow/i })).toBeNull();
-  });
-
-  it("renders the Launch workflow button when the model carries chat+tool+structuredOutput", () => {
+describe("WorkflowHandoff — chat launch surfaces are retired", () => {
+  it("does not render Launch workflow in the composer, even for workflow-capable models", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -274,94 +220,13 @@ describe("WorkflowHandoff — model gating (AC#2)", () => {
         messages: [userMessage("hi")],
       }),
     );
-    expect(screen.getByRole("button", { name: /launch workflow/i })).toBeInTheDocument();
-  });
-});
 
-// ─── 2. AC #1: explicit user action opens the picker ─────────────────────────
-
-describe("WorkflowHandoff — picker requires an explicit click (AC#1)", () => {
-  it("does not auto-open the workflow picker on mount", () => {
-    renderWindow(
-      makeSession({
-        activeChat: makeChat(),
-        activeProject: makeProject(),
-        models: [workflowEligibleModel("wf-model")],
-        selectedModel: "wf-model",
-        messages: [userMessage("hi")],
-      }),
-    );
-    expect(screen.queryByRole("dialog", { name: /launch workflow/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^launch workflow$/i })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /^launch workflow$/i })).toBeNull();
   });
 
-  it("opens the picker only when the user clicks Launch workflow", async () => {
-    renderWindow(
-      makeSession({
-        activeChat: makeChat(),
-        activeProject: makeProject(),
-        models: [workflowEligibleModel("wf-model")],
-        selectedModel: "wf-model",
-        messages: [userMessage("hi")],
-      }),
-    );
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /launch workflow/i }));
-    expect(screen.getByRole("dialog", { name: /launch workflow/i })).toBeInTheDocument();
-    // Both catalog workflows are offered.
-    expect(screen.getByRole("button", { name: /generate unit tests/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /investigate bug/i })).toBeInTheDocument();
-  });
-
-  it("portals the picker dialog to document.body (transformed .ws-scene ancestor breaks position: fixed)", async () => {
-    renderWindow(
-      makeSession({
-        activeChat: makeChat(),
-        activeProject: makeProject(),
-        models: [workflowEligibleModel("wf-model")],
-        selectedModel: "wf-model",
-        messages: [userMessage("hi")],
-      }),
-    );
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /launch workflow/i }));
-    const dialog = screen.getByRole("dialog", { name: /launch workflow/i });
-    expect(dialog.parentElement).toBe(document.body);
-  });
-});
-
-// ─── 3. Selecting a workflow + input calls the launch action ─────────────────
-
-describe("WorkflowHandoff — launch action (AC#1, AC#3)", () => {
-  it("calls launchWorkflowFromConversation with the workflowId, user text, and the active model", async () => {
-    const launch = vi.fn().mockResolvedValue({ ok: true as const, runId: "run-42" });
-    renderWindow(
-      makeSession({
-        activeChat: makeChat(),
-        activeProject: makeProject(),
-        models: [workflowEligibleModel("wf-model")],
-        selectedModel: "wf-model",
-        messages: [userMessage("hi")],
-        launchWorkflowFromConversation: launch,
-      }),
-    );
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /launch workflow/i }));
-    await user.click(screen.getByRole("button", { name: /generate unit tests/i }));
-    const textbox = await screen.findByLabelText(/target file/i);
-    await user.type(textbox, "src/example.ts");
-    await user.click(screen.getByRole("button", { name: /^launch$/i }));
-
-    await waitFor(() => expect(launch).toHaveBeenCalledOnce());
-    const call = launch.mock.calls[0]?.[0] as
-      | { workflowId: string; modelId: string; text: string }
-      | undefined;
-    expect(call?.workflowId).toBe("unit-test-generation");
-    expect(call?.modelId).toBe("wf-model");
-    expect(call?.text).toBe("src/example.ts");
-  });
-
-  it("launches a grounded workflow with explicit editable paths and default checks", async () => {
-    const launch = vi.fn().mockResolvedValue({ ok: true as const, runId: "run-99" });
+  it("does not render a grounded workflow launch action under grounded answers", () => {
+    const groundedAnswer = connectedGroundedAnswer();
     renderWindow(
       makeSession({
         activeChat: makeChat({
@@ -370,31 +235,20 @@ describe("WorkflowHandoff — launch action (AC#1, AC#3)", () => {
         activeProject: makeProject(),
         models: [workflowEligibleModel("wf-model")],
         selectedModel: "wf-model",
-        messages: [userMessage("hi")],
-        latestGrounded: connectedGroundedAnswer(),
-        launchGroundedWorkflowHandoff: launch,
+        messages: [
+          userMessage("hi"),
+          userMessage("Repository-grounded answer.", {
+            id: "msg-a",
+            role: "assistant",
+            timestamp: 2,
+            groundedAnswer,
+          }),
+        ],
       }),
     );
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /launch grounded workflow/i }));
-    await user.click(screen.getByRole("button", { name: /generate unit tests/i }));
-    await user.type(screen.getByLabelText(/target file/i), "src/example.ts");
-    await user.type(
-      screen.getByLabelText(/editable paths \(explicit, workspace-relative, one per line\)/i),
-      "tests/example.test.ts",
-    );
-    await user.click(screen.getByRole("button", { name: /^launch$/i }));
 
-    await waitFor(() => expect(launch).toHaveBeenCalledOnce());
-    expect(launch).toHaveBeenCalledWith({
-      assistantMessageId: "msg-a",
-      modelId: "wf-model",
-      workflowKind: "unit-test-generation",
-      input: { target: { kind: "file", filePath: "src/example.ts" } },
-      editablePaths: ["tests/example.test.ts"],
-      expectedChecks: ["tests"],
-      unknowns: [],
-    });
+    expect(screen.queryByRole("button", { name: /launch grounded workflow/i })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /grounded workflow handoff/i })).toBeNull();
   });
 
   it("hides grounded workflow handoff for multi-source connected answers", () => {
@@ -586,10 +440,8 @@ describe("WorkflowHandoff — dialog edge cases and grounded input matrix", () =
   });
 });
 
-// ─── 4. AC #3: system run-summary message renders as a RunSummaryCard ────────
-
-describe("WorkflowHandoff — run summary rendering (AC#3)", () => {
-  it("renders a system run-summary message as a RunSummaryCard with workflow id + status", () => {
+describe("WorkflowHandoff — run summary rendering", () => {
+  it("renders a system run-summary message as a RunSummaryCard with workflow id and status", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -606,27 +458,20 @@ describe("WorkflowHandoff — run summary rendering (AC#3)", () => {
     expect(card).toBeInTheDocument();
     expect(card).toHaveTextContent("unit-test-generation");
     expect(card.getAttribute("data-status")).toBe("running");
-    // The card carries a stable run-id slug for the user.
     expect(card).toHaveTextContent("run-42");
   });
 
-  it("falls back to a 'queued' indicator when workflowStatus is missing", () => {
+  it("falls back to a queued indicator when workflowStatus is missing", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
         activeProject: makeProject(),
         models: [workflowEligibleModel("wf-model")],
         selectedModel: "wf-model",
-        messages: [
-          systemRunSummaryMessage({
-            workflowStatus: undefined,
-            content: "Launched: Generate unit tests",
-          }),
-        ],
+        messages: [systemRunSummaryMessage({ workflowStatus: undefined })],
       }),
     );
-    const card = screen.getByTestId("run-summary-card");
-    expect(card.getAttribute("data-status")).toBe("queued");
+    expect(screen.getByTestId("run-summary-card").getAttribute("data-status")).toBe("queued");
   });
 
   it("offers a result CTA and evidence link for a run-summary message", async () => {
@@ -643,12 +488,8 @@ describe("WorkflowHandoff — run summary rendering (AC#3)", () => {
       "/api/evidence/run-42",
     );
   });
-});
 
-// ─── 5. AC #4: the chat RunSummaryCard never exposes patch apply / shell exec ──
-
-describe("WorkflowHandoff — patch/exec stay gated (AC#4)", () => {
-  it("does not render an Apply patch or Run command affordance in the chat run card", () => {
+  it("does not render patch-apply or command-exec affordances in the chat run card", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -658,8 +499,7 @@ describe("WorkflowHandoff — patch/exec stay gated (AC#4)", () => {
         messages: [systemRunSummaryMessage({ workflowStatus: "completed" })],
       }),
     );
-    // Patch apply / exec are reserved for the gated workflow surfaces. The chat card
-    // must never surface them — covered by AC#4.
+
     expect(screen.queryByRole("button", { name: /apply patch/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /apply/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /run command/i })).toBeNull();
@@ -667,14 +507,10 @@ describe("WorkflowHandoff — patch/exec stay gated (AC#4)", () => {
   });
 });
 
-// ─── 6. Hook-level: launchWorkflowFromConversation drives /api/chats/runs ────
-
-describe("useChatSession.launchWorkflowFromConversation (Issue #153)", () => {
+describe("useChatSession run-summary patching", () => {
   beforeEach(() => {
     vi.spyOn(api, "fetchModels").mockResolvedValue({ models: [workflowEligibleModel("wf-model")] });
-    vi.spyOn(api, "fetchProjects").mockResolvedValue({
-      projects: [makeProject()],
-    });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({ projects: [makeProject()] });
     vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [makeChat()] });
     vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
     vi.spyOn(api, "fetchRunReport").mockRejectedValue(
@@ -687,66 +523,6 @@ describe("useChatSession.launchWorkflowFromConversation (Issue #153)", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("POSTs to /api/chats/runs with apply omitted (dry-run only) and returns the runId", async () => {
-    const startChatRun = vi.spyOn(api, "startChatRun").mockResolvedValue({
-      run: { runId: "run-42", fingerprint: "fp" },
-      messages: [userMessage("test draft"), systemRunSummaryMessage({ workflowStatus: "running" })],
-    });
-
-    const { result } = renderHook(() => useChatSession(), { wrapper: strictModeWrapper });
-    // Wait for bootstrap to settle.
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    let outcome: { ok: true; runId: string } | { ok: false; reason: string } | undefined;
-    await act(async () => {
-      outcome = await result.current.launchWorkflowFromConversation({
-        workflowId: "unit-test-generation",
-        modelId: "wf-model",
-        text: "src/example.ts",
-      });
-    });
-
-    expect(outcome?.ok).toBe(true);
-    expect(startChatRun).toHaveBeenCalledOnce();
-    const body = startChatRun.mock.calls[0]?.[0];
-    expect(body?.run.workflowId).toBe("unit-test-generation");
-    expect(body?.run.modelId).toBe("wf-model");
-    // AC#4: chat handoff never applies — apply is omitted (or strictly false).
-    expect(body?.run.apply ?? false).toBe(false);
-    // Chat row is preserved.
-    expect(body?.chatId).toBe("chat-1");
-  });
-
-  it("merges launch-created messages with the existing chat history", async () => {
-    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({
-      messages: [userMessage("previous turn", { id: "m-prev" })],
-    });
-    vi.spyOn(api, "startChatRun").mockResolvedValue({
-      run: { runId: "run-append", fingerprint: "fp" },
-      messages: [
-        userMessage("src/example.ts", { id: "m-run-user", timestamp: 3 }),
-        systemRunSummaryMessage({ id: "m-run-system", runId: "run-append", timestamp: 4 }),
-      ],
-    });
-
-    const { result } = renderHook(() => useChatSession(), { wrapper: strictModeWrapper });
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    await act(async () => {
-      await result.current.launchWorkflowFromConversation({
-        workflowId: "unit-test-generation",
-        modelId: "wf-model",
-        text: "src/example.ts",
-      });
-    });
-
-    expect(result.current.messages.map((message) => message.id)).toEqual([
-      "m-prev",
-      "m-run-user",
-      "m-run-system",
-    ]);
   });
 
   it("patches a unit-test run-summary when the run report reaches a terminal dry-run status", async () => {
@@ -769,6 +545,7 @@ describe("useChatSession.launchWorkflowFromConversation (Issue #153)", () => {
     });
 
     const { result } = renderHook(() => useChatSession(), { wrapper: strictModeWrapper });
+
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith("m-unit", "chat-1", "/proj", {
         workflowStatus: "completed",
@@ -809,6 +586,7 @@ describe("useChatSession.launchWorkflowFromConversation (Issue #153)", () => {
     });
 
     const { result } = renderHook(() => useChatSession());
+
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith("m-bug", "chat-1", "/proj", {
         workflowStatus: "completed",
@@ -822,156 +600,6 @@ describe("useChatSession.launchWorkflowFromConversation (Issue #153)", () => {
         shortResult: "Investigation complete; root cause documented.",
       }),
     );
-  });
-
-  it("rejects when the requested modelId is not workflow-eligible (AC#2)", async () => {
-    vi.spyOn(api, "fetchModels").mockResolvedValue({
-      models: [plainChatModel("plain")],
-    });
-
-    const startChatRun = vi.spyOn(api, "startChatRun");
-
-    const { result } = renderHook(() => useChatSession());
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    let outcome: { ok: true; runId: string } | { ok: false; reason: string } | undefined;
-    await act(async () => {
-      outcome = await result.current.launchWorkflowFromConversation({
-        workflowId: "unit-test-generation",
-        modelId: "plain",
-        text: "src/example.ts",
-      });
-    });
-
-    expect(outcome?.ok).toBe(false);
-    expect(startChatRun).not.toHaveBeenCalled();
-  });
-
-  // WH-05 — hook error paths. Each asserts the exact discriminated reason and that
-  // no run is started. Mutation note: these pin the guard branches at the top of
-  // launchWorkflowFromConversation.
-  it("returns reason 'missing-input' when the text is blank (WH-05)", async () => {
-    const startChatRun = vi.spyOn(api, "startChatRun");
-    const { result } = renderHook(() => useChatSession());
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    let outcome: { ok: true; runId: string } | { ok: false; reason: string } | undefined;
-    await act(async () => {
-      outcome = await result.current.launchWorkflowFromConversation({
-        workflowId: "unit-test-generation",
-        modelId: "wf-model",
-        text: "   ",
-      });
-    });
-
-    expect(outcome).toEqual({ ok: false, reason: "missing-input" });
-    expect(startChatRun).not.toHaveBeenCalled();
-  });
-
-  it("returns reason 'unknown-workflow' for an id absent from the catalog (WH-05)", async () => {
-    const startChatRun = vi.spyOn(api, "startChatRun");
-    const { result } = renderHook(() => useChatSession());
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    let outcome: { ok: true; runId: string } | { ok: false; reason: string } | undefined;
-    await act(async () => {
-      outcome = await result.current.launchWorkflowFromConversation({
-        workflowId: "this-workflow-does-not-exist",
-        modelId: "wf-model",
-        text: "src/example.ts",
-      });
-    });
-
-    expect(outcome?.ok).toBe(false);
-    expect(outcome).toMatchObject({ reason: "unknown-workflow" });
-    expect(startChatRun).not.toHaveBeenCalled();
-  });
-
-  it("returns reason 'missing-chat' when no active chat exists (WH-05)", async () => {
-    // No eligible model → bootstrap creates no chat, leaving activeChat undefined.
-    // missing-chat is checked before model eligibility, so we still reach it.
-    vi.spyOn(api, "fetchModels").mockResolvedValue({ models: [] });
-    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [] });
-    const startChatRun = vi.spyOn(api, "startChatRun");
-
-    const { result } = renderHook(() => useChatSession());
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.activeChat).toBeUndefined();
-
-    let outcome: { ok: true; runId: string } | { ok: false; reason: string } | undefined;
-    await act(async () => {
-      outcome = await result.current.launchWorkflowFromConversation({
-        workflowId: "unit-test-generation",
-        modelId: "wf-model",
-        text: "src/example.ts",
-      });
-    });
-
-    expect(outcome).toMatchObject({ reason: "missing-chat" });
-    expect(startChatRun).not.toHaveBeenCalled();
-  });
-});
-
-describe("useChatSession.launchGroundedWorkflowHandoff", () => {
-  beforeEach(() => {
-    vi.spyOn(api, "fetchModels").mockResolvedValue({ models: [workflowEligibleModel("wf-model")] });
-    vi.spyOn(api, "fetchProjects").mockResolvedValue({
-      projects: [makeProject()],
-    });
-    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [makeChat()] });
-    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
-    vi.spyOn(api, "fetchRunReport").mockRejectedValue(
-      new api.ApiError("RUN_STILL_STARTING", "Run report is not ready.", 409),
-    );
-    vi.spyOn(api, "fetchEvidenceManifest").mockRejectedValue(
-      new api.ApiError("EVIDENCE_NOT_FOUND", "Evidence manifest not found.", 404),
-    );
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("POSTs the grounded handoff request and returns the runId", async () => {
-    const start = vi.spyOn(api, "startGroundedWorkflowHandoff").mockResolvedValue({
-      run: { runId: "run-77", fingerprint: "fp" },
-      messages: [
-        userMessage("Requested grounded unit-test generation."),
-        systemRunSummaryMessage(),
-      ],
-    });
-    const { result } = renderHook(() => useChatSession());
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    let outcome:
-      | { ok: true; runId: string }
-      | { ok: false; reason: string; message?: string | undefined }
-      | undefined;
-    await act(async () => {
-      outcome = await result.current.launchGroundedWorkflowHandoff({
-        assistantMessageId: "msg-a",
-        modelId: "wf-model",
-        workflowKind: "unit-test-generation",
-        input: { target: { kind: "file", filePath: "src/example.ts" } },
-        editablePaths: ["tests/example.test.ts"],
-        expectedChecks: ["tests"],
-        unknowns: ["Need API confirmation"],
-      });
-    });
-
-    expect(outcome).toEqual({ ok: true, runId: "run-77" });
-    expect(start).toHaveBeenCalledOnce();
-    expect(start.mock.calls[0]?.[0]).toMatchObject({
-      assistantMessageId: "msg-a",
-      chatId: "chat-1",
-      modelId: "wf-model",
-      workflowKind: "unit-test-generation",
-      input: { target: { kind: "file", filePath: "src/example.ts" } },
-      editablePaths: ["tests/example.test.ts"],
-      expectedChecks: ["tests"],
-      unknowns: ["Need API confirmation"],
-    });
-    expect(typeof start.mock.calls[0]?.[0]?.requestedAtMs).toBe("number");
   });
 
   it("merges grounded handoff messages with the existing chat history", async () => {

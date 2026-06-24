@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 interface Migration {
   readonly version: number;
@@ -198,12 +198,19 @@ CREATE INDEX idx_relationship_audit_relationship
   WHERE relationship_id IS NOT NULL;
 `;
 
+// V6 — persist the redacted, browser-safe grounded answer projection on assistant messages.
+// This stores citation metadata and context summaries only, not retrieved excerpt contents.
+const V6_SQL = `
+ALTER TABLE chat_messages ADD COLUMN grounded_answer_json TEXT;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
   { version: 3, sql: V3_SQL },
   { version: 4, sql: V4_SQL },
   { version: 5, sql: V5_SQL },
+  { version: 6, sql: V6_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

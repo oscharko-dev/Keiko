@@ -170,12 +170,13 @@ function seedChat(): string {
 // Seeds `count` alternating user/assistant turns. The first dropped user turn carries the config
 // secret so the redaction gate has something concrete to scrub.
 function seedHistory(chatId: string, count: number): void {
+  const seedBaseTimestamp = 1_700_000_000_000;
   for (let i = 0; i < count; i += 1) {
     store.createMessage({
       chatId,
       role: i % 2 === 0 ? "user" : "assistant",
       content: i === 0 ? `leak ${SECRET} in turn 0` : `turn ${String(i)} content`,
-      timestamp: Date.now() + i,
+      timestamp: seedBaseTimestamp + i,
       runId: undefined,
       workflowId: undefined,
       workflowStatus: undefined,
