@@ -47,6 +47,7 @@
     "@oscharko-dev/keiko-memory-retrieval": "0.2.7",
     "@oscharko-dev/keiko-memory-capture": "0.2.7",
     "@oscharko-dev/keiko-memory-consolidation": "0.2.7",
+    "ws": "^8.21.0",
     "typescript": "^6.0.3"
   }
 }

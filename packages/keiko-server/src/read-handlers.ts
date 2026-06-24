@@ -111,6 +111,25 @@ export function isVoiceDictationCapable(deps: UiHandlerDeps): boolean {
   return voice.available && voice.capabilities.speechToText;
 }
 
+// Issue #497, Epic #491 (ADR-0058 D3, ADR-0059) — whether the running deployment may open the
+// realtime voice WebSocket control plane and the browser-native WebRTC media plane. True only when
+// the resolved voice capability is the full-realtime profile (`transport.webrtcMedia`) and voice is
+// not disabled by policy. It is the single source of truth for two gates: the capability-gated
+// WebSocket upgrade (server.ts re-opens the BFF upgrade only for this) and the Permissions-Policy
+// microphone scoping (a realtime-only-without-STT deployment still needs `microphone=(self)` for the
+// WebRTC capture track, which `isVoiceDictationCapable` alone would not grant). A no-voice or
+// STT-only deployment returns false, so the upgrade stays hard-rejected (AC1/AC3).
+export function isVoiceRealtimeCapable(deps: UiHandlerDeps): boolean {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) {
+    return false;
+  }
+  const voice = resolveVoiceCapability(config, {
+    policyDisabled: isVoiceDisabledByPolicy(deps.env),
+  });
+  return voice.available && voice.transport.webrtcMedia;
+}
+
 // Route 4 — launch-form metadata: the workflow descriptors plus the synthesized explain-plan and
 // verify inputs (both are harness tasks with no workflow descriptor — verify is BFF-only and runs
 // the deterministic verification orchestrator).

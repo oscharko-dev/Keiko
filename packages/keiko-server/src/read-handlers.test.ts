@@ -11,6 +11,7 @@ import {
   handleEvidenceList,
   handleEvidenceDetail,
   isVoiceDictationCapable,
+  isVoiceRealtimeCapable,
 } from "./read-handlers.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -326,6 +327,49 @@ describe("isVoiceDictationCapable (Issue #495 — Permissions-Policy microphone 
       isVoiceDictationCapable(
         depsWith({
           config: VOICE_STT_CONFIG,
+          configPresent: true,
+          env: { KEIKO_VOICE_DISABLED: "1" },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+// A full-realtime voice provider (advertises realtime voice), the only profile that may open the
+// WebSocket control plane (Issue #497).
+const VOICE_REALTIME_CONFIG: GatewayConfig = {
+  ...VOICE_STT_CONFIG,
+  capabilities: [{ ...VOICE_STT_CONFIG.capabilities![0]!, supportsRealtimeVoice: true }],
+};
+
+describe("isVoiceRealtimeCapable (Issue #497 — WebSocket control-plane + microphone gate)", () => {
+  it("is false when no config is resolved", () => {
+    expect(isVoiceRealtimeCapable(depsWith({}))).toBe(false);
+  });
+
+  it("is false for a chat-only deployment", () => {
+    expect(isVoiceRealtimeCapable(depsWith({ config: SAMPLE_CONFIG, configPresent: true }))).toBe(
+      false,
+    );
+  });
+
+  it("is false for an STT-only deployment (dictation, not full realtime)", () => {
+    expect(
+      isVoiceRealtimeCapable(depsWith({ config: VOICE_STT_CONFIG, configPresent: true })),
+    ).toBe(false);
+  });
+
+  it("is true for a full-realtime voice deployment", () => {
+    expect(
+      isVoiceRealtimeCapable(depsWith({ config: VOICE_REALTIME_CONFIG, configPresent: true })),
+    ).toBe(true);
+  });
+
+  it("is false when voice is disabled by policy, even when realtime-capable", () => {
+    expect(
+      isVoiceRealtimeCapable(
+        depsWith({
+          config: VOICE_REALTIME_CONFIG,
           configPresent: true,
           env: { KEIKO_VOICE_DISABLED: "1" },
         }),

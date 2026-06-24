@@ -52,6 +52,8 @@ import type {
   OpenAIEmbeddingBatchRequest,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
+  RealtimeNegotiationOutcome,
+  RealtimeNegotiationRequest,
   SpeechToTextOutcome,
   SpeechToTextRequest,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -197,6 +199,15 @@ export interface UiHandlerDeps {
   // the configured provider through the Model Gateway egress seam (gatewayFetch) and never persisted.
   readonly voiceTranscriptionRequest?:
     | ((request: SpeechToTextRequest) => Promise<SpeechToTextOutcome>)
+    | undefined;
+  // Issue #497 (Epic #491) — realtime voice proxied-SDP negotiation seam (ADR-0058 D3/D6). Lets the
+  // WebSocket control plane perform the browser↔provider SDP exchange through the provider-neutral
+  // realtime adapter without touching global fetch in tests. Production leaves this undefined and
+  // uses requestRealtimeNegotiation, so the offer is forwarded once to the configured provider
+  // through the Model Gateway egress seam (gatewayFetch); the long-lived credential never reaches the
+  // browser and no SDP is persisted.
+  readonly voiceRealtimeNegotiationRequest?:
+    | ((request: RealtimeNegotiationRequest) => Promise<RealtimeNegotiationOutcome>)
     | undefined;
 }
 
