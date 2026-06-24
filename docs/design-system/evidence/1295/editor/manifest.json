@@ -4,7 +4,7 @@
   "route": "/",
   "appPath": "packaged-cli-ui",
   "workspace": "synthetic-temp-project",
-  "generatedAt": "2026-06-24T16:31:34.694Z",
+  "generatedAt": "2026-06-24T20:41:10.680Z",
   "themes": [
     {
       "mode": "dark",
@@ -171,7 +171,7 @@
     "monacoVisible": true,
     "syntaxAndDiagnosticsContentVisible": true,
     "tabsVisible": true,
-    "embeddedFileIconsVisible": 8,
+    "embeddedFileIconsVisible": 9,
     "findWidgetCaptured": true,
     "splitPaneCaptured": true,
     "resizeExercised": true,
