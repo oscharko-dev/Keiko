@@ -174,6 +174,18 @@ way, capability is local configuration / runtime discovery — `CAPABILITY_DATA`
 ([`capabilities.data.ts`](../../packages/keiko-model-gateway/src/capabilities.data.ts) line 8), so no cloud
 provider is required for Keiko to reason about voice availability.
 
+**Realized by #493:** the **new `ModelKind` literal** mechanism was chosen — `"voice"` is added to `ModelKind`
+(bumping `CONVERSATION_CAPABILITY_CONTRACT_VERSION` to `3` and forcing classification through the
+`INELIGIBILITY_REASON_BY_KIND` exhaustiveness gate, which now maps `voice → "voice-only"`). This is the safer
+option for a regulated product because a transcription/realtime endpoint is then never conversation-eligible,
+never workflow-eligible, and never elected for chat completion. The voice modality is refined by additive
+optional flags `supportsSpeechInput?`, `supportsSpeechOutput?`, `supportsRealtimeVoice?`, plus
+`voiceProviderLocality?` (`azure-foundry` | `customer-hosted` | `local-only`, D7), all on the closed
+`MODEL_CAPABILITY_KNOWN_KEYS` allowlist and enforced by two voice invariants (voice fields require
+`kind: "voice"`; a voice capability must advertise ≥1 sub-capability and a locality). A content-free
+`resolveVoiceCapability` resolver and a UI-readable `GET /api/voice/capability` BFF endpoint expose the
+effective profile. See [`docs/voice/capability-configuration.md`](../voice/capability-configuration.md).
+
 ### D6 — Security review requirements for the voice surface (AC6)
 
 Any voice implementation child issue that touches the realtime media path, signaling, or provider

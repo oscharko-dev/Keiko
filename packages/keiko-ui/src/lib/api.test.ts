@@ -11,6 +11,7 @@ import {
   fetchFilesTree,
   fetchModels,
   fetchProjects,
+  fetchVoiceCapability,
   requestEditorCompletion,
   requestEditorDiagnostics,
   requestEditorFormatting,
@@ -483,6 +484,46 @@ describe("fetchModels", () => {
     await expect(fetchModels()).resolves.toEqual({ models: [] });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("fetchVoiceCapability (Issue #493)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads the content-free voice capability from /api/voice/capability", async () => {
+    const voice = {
+      available: true,
+      profile: "speech-to-text",
+      capabilities: { speechToText: true, speechOutput: false, realtimeVoice: false },
+      transport: { websocketControl: true, webrtcMedia: false },
+      providerLocality: "azure-foundry",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ voice }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchVoiceCapability()).resolves.toEqual({ voice });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/voice/capability",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("surfaces an unavailable resolution without throwing", async () => {
+    const voice = {
+      available: false,
+      profile: "none",
+      capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
+      transport: { websocketControl: false, webrtcMedia: false },
+      reason: "no-voice-provider",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ voice }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchVoiceCapability()).resolves.toEqual({ voice });
   });
 });
 

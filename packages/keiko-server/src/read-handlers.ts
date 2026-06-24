@@ -6,7 +6,12 @@
 // never leaks the config path even on a load failure (handled upstream in deps.ts, which yields
 // `config: undefined` rather than throwing).
 
-import { toSafeObject, listConfiguredCapabilities } from "@oscharko-dev/keiko-model-gateway";
+import {
+  toSafeObject,
+  listConfiguredCapabilities,
+  resolveVoiceCapability,
+  type EnvSource,
+} from "@oscharko-dev/keiko-model-gateway";
 import {
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
@@ -63,6 +68,29 @@ export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
   const config = currentGatewayConfig(deps);
   const models = config === undefined ? [] : listConfiguredCapabilities(config);
   return { status: 200, body: { models } };
+}
+
+// Voice-capability disable kill-switch (Issue #493, ADR-0058 D1). A regulated deployment can
+// disable voice entirely via `KEIKO_VOICE_DISABLED`; the resolver then reports a clean
+// `unavailable` (reason "policy-disabled") and Keiko stays fully usable.
+function isVoiceDisabledByPolicy(env: EnvSource): boolean {
+  const value = env.KEIKO_VOICE_DISABLED;
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+// Route — voice capability resolution (Issue #493, Epic #491). Returns the content-free voice
+// capability the UI reads before rendering any voice affordance. The resolution carries only enum
+// literals and booleans — never a provider base URL, credential, model id, audio, or transcript —
+// so provider credentials are never returned to the browser (AC4) and nothing sensitive can leak
+// into UI logs (AC5), by construction. When no config is resolved, voice is disabled by policy, or
+// no voice provider is configured, the endpoint returns a clean `unavailable` resolution rather
+// than failing — Keiko stays fully usable in no-voice environments (AC1). Capability detection is
+// metadata-only and performs NO network probe (ADR-0058 out-of-scope for #493).
+export function handleVoiceCapability(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const config = currentGatewayConfig(deps);
+  const policyDisabled = isVoiceDisabledByPolicy(deps.env);
+  const voice = resolveVoiceCapability(config ?? { providers: [] }, { policyDisabled });
+  return { status: 200, body: { voice } };
 }
 
 // Route 4 — launch-form metadata: the workflow descriptors plus the synthesized explain-plan and

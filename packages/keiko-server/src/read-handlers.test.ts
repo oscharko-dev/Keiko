@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   handleConfig,
   handleModels,
+  handleVoiceCapability,
   handleWorkflows,
   handleWorkspace,
   handleEvidenceList,
@@ -211,6 +212,94 @@ describe("GET /api/models", () => {
     const result = handleModels(ctx("/api/models"), depsWith({}));
     const body = result.body as { models: unknown[] };
     expect(body.models).toEqual([]);
+  });
+});
+
+// A configured STT-only voice provider shaped like the existing keiko-stt deployment (Issue #493).
+const VOICE_STT_CONFIG: GatewayConfig = {
+  providers: [
+    {
+      modelId: "keiko-stt",
+      baseUrl: "https://keiko-stt.example.com",
+      apiKey: "voice-secret-token-1234567890",
+      timeoutMs: 1000,
+      maxRetries: 2,
+      retryBaseDelayMs: 10,
+    },
+  ],
+  circuitBreaker: { failureThreshold: 5, cooldownMs: 1000, halfOpenProbes: 1 },
+  capabilities: [
+    {
+      id: "keiko-stt",
+      kind: "voice",
+      contextWindow: 0,
+      maxOutputTokens: 0,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      supportsSpeechInput: true,
+      voiceProviderLocality: "azure-foundry",
+      workflowEligible: false,
+      costClass: "low",
+      latencyClass: "fast",
+      throughputHint: "azure foundry stt",
+      preferredUseCases: ["Dictation"],
+      knownLimitations: [],
+    },
+  ],
+};
+
+describe("GET /api/voice/capability", () => {
+  it("reports unavailable (no-voice-provider) when no config is resolved (AC1)", () => {
+    const result = handleVoiceCapability(ctx("/api/voice/capability"), depsWith({}));
+    expect(result.body).toEqual({
+      voice: {
+        available: false,
+        profile: "none",
+        capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
+        transport: { websocketControl: false, webrtcMedia: false },
+        reason: "no-voice-provider",
+      },
+    });
+  });
+
+  it("reports dictation (speech-to-text) when keiko-stt is configured (AC2/AC6)", () => {
+    const result = handleVoiceCapability(
+      ctx("/api/voice/capability"),
+      depsWith({ config: VOICE_STT_CONFIG, configPresent: true }),
+    );
+    const body = result.body as { voice: { available: boolean; profile: string } };
+    expect(body.voice.available).toBe(true);
+    expect(body.voice.profile).toBe("speech-to-text");
+  });
+
+  it("never returns the provider base URL, credential, or model id (AC4/AC5)", () => {
+    const result = handleVoiceCapability(
+      ctx("/api/voice/capability"),
+      depsWith({ config: VOICE_STT_CONFIG, configPresent: true }),
+    );
+    const json = JSON.stringify(result.body);
+    expect(json).not.toContain("voice-secret-token-1234567890");
+    expect(json).not.toContain("https://keiko-stt.example.com");
+    expect(json).not.toContain("keiko-stt");
+    expect(json).not.toContain("apiKey");
+    expect(json).not.toContain("baseUrl");
+  });
+
+  it("reports policy-disabled when KEIKO_VOICE_DISABLED is set, even with a provider", () => {
+    const result = handleVoiceCapability(
+      ctx("/api/voice/capability"),
+      depsWith({
+        config: VOICE_STT_CONFIG,
+        configPresent: true,
+        env: { KEIKO_VOICE_DISABLED: "1" },
+      }),
+    );
+    const body = result.body as { voice: { available: boolean; reason: string } };
+    expect(body.voice.available).toBe(false);
+    expect(body.voice.reason).toBe("policy-disabled");
   });
 });
 

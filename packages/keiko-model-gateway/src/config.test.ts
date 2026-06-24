@@ -1101,6 +1101,131 @@ describe("parseModelCapability", () => {
   });
 });
 
+// ─── Voice capability parsing (Issue #493, ADR-0058 D5/D7) ───────────────────────
+// The voice ModelKind plus its additive sub-capability flags and provider locality, with the two
+// voice invariants enforced identically by the strict and inline parsers: voice fields require
+// kind "voice"; a voice capability must advertise ≥1 sub-capability and declare a locality.
+
+function validVoiceCapability(): Record<string, unknown> {
+  return {
+    id: "keiko-stt",
+    kind: "voice",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    supportsSpeechInput: true,
+    voiceProviderLocality: "azure-foundry",
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "runtime-configured voice endpoint",
+    preferredUseCases: ["Dictation"],
+    knownLimitations: ["Validate against the target endpoint"],
+  };
+}
+
+describe("parseModelCapability — voice capability", () => {
+  it("accepts and round-trips an STT-only voice capability (AC2/AC6)", () => {
+    const raw = validVoiceCapability();
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed).toEqual(raw);
+    expect(parsed.kind).toBe("voice");
+    expect(parsed.supportsSpeechInput).toBe(true);
+    expect(parsed.voiceProviderLocality).toBe("azure-foundry");
+  });
+
+  it("preserves only declared voice flags (round-trips exactly, no false-defaulting)", () => {
+    const raw = validVoiceCapability();
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.supportsSpeechOutput).toBeUndefined();
+    expect(parsed.supportsRealtimeVoice).toBeUndefined();
+  });
+
+  it("rejects a voice capability that advertises no sub-capability (fail-closed)", () => {
+    const raw = withoutKey(validVoiceCapability(), "supportsSpeechInput");
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+      /must advertise at least one of/,
+    );
+  });
+
+  it("rejects a voice capability missing voiceProviderLocality", () => {
+    const raw = withoutKey(validVoiceCapability(), "voiceProviderLocality");
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+      /must declare voiceProviderLocality/,
+    );
+  });
+
+  it("rejects an unknown voiceProviderLocality value", () => {
+    const raw = { ...validVoiceCapability(), voiceProviderLocality: "on-prem" };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/voiceProviderLocality/);
+  });
+
+  it("rejects voice fields on a non-voice kind (no Azure hardcode bleed into chat)", () => {
+    const raw = { ...validCapability(), supportsSpeechInput: true };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+      /voice capability fields require/,
+    );
+  });
+
+  it("rejects voiceProviderLocality on a non-voice kind", () => {
+    const raw = { ...validCapability(), voiceProviderLocality: "azure-foundry" };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+      /voice capability fields require/,
+    );
+  });
+
+  it("accepts a realtime voice capability with both speech directions", () => {
+    const raw = {
+      ...validVoiceCapability(),
+      id: "realtime-voice",
+      supportsSpeechInput: true,
+      supportsSpeechOutput: true,
+      supportsRealtimeVoice: true,
+      voiceProviderLocality: "customer-hosted",
+    };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.supportsRealtimeVoice).toBe(true);
+    expect(parsed.voiceProviderLocality).toBe("customer-hosted");
+  });
+});
+
+describe("parseGatewayConfig — inline voice provider (AC6, no Azure hardcode)", () => {
+  it("registers a keiko-stt provider with an inline STT-only voice capability", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "keiko-stt",
+      capability: {
+        kind: "voice",
+        supportsSpeechInput: true,
+        voiceProviderLocality: "azure-foundry",
+        costClass: "low",
+        latencyClass: "fast",
+        throughputHint: "azure foundry stt deployment",
+        preferredUseCases: ["Dictation"],
+        knownLimitations: ["Validate against the target endpoint"],
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "keiko-stt");
+    expect(cap?.kind).toBe("voice");
+    expect(cap?.supportsSpeechInput).toBe(true);
+    expect(cap?.voiceProviderLocality).toBe("azure-foundry");
+  });
+
+  it("rejects an inline voice capability with no advertised sub-capability", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "empty-voice",
+      capability: { kind: "voice", voiceProviderLocality: "local-only" },
+    }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/must advertise at least one of/);
+  });
+});
+
 describe("parseCapabilityList", () => {
   it("returns parsed entries in declaration order", () => {
     const raw = [

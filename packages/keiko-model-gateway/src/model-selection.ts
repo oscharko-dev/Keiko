@@ -3,8 +3,10 @@ import {
   createDefaultEmbeddingCapability,
   isLikelyEmbeddingModelId,
   listCapabilities,
+  resolveVoiceCapabilityFromCapabilities,
   selectCompletionModelFromCapabilities,
   type CompletionSelectionOptions,
+  type VoiceResolutionOptions,
 } from "./capabilities.js";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
@@ -12,6 +14,7 @@ import type {
   GatewayConfig,
   ModelCapability,
   ModelKind,
+  VoiceCapabilityResolution,
 } from "./types.js";
 
 const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
@@ -108,4 +111,15 @@ export function selectCompletionModel(
   options: CompletionSelectionOptions = {},
 ): CompletionModelSelection {
   return selectCompletionModelFromCapabilities(listConfiguredCapabilities(config), options);
+}
+
+// Voice-capability resolution (Issue #493, ADR-0058 D1/D2). Resolves the configured capabilities
+// and applies the voice profile ladder. Only configured providers are eligible, so a voice
+// capability that names no provider can never be elected — the same fail-closed rule as completion
+// selection. The result is content-free and safe to serialise to the browser (AC4/AC5).
+export function resolveVoiceCapability(
+  config: ConfiguredCapabilitySource,
+  options: VoiceResolutionOptions = {},
+): VoiceCapabilityResolution {
+  return resolveVoiceCapabilityFromCapabilities(listConfiguredCapabilities(config), options);
 }
