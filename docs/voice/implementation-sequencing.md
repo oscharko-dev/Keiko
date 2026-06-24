@@ -81,7 +81,9 @@ To honor the Stop Condition "two parallel agents must not edit the same file sco
 ## 6. References
 
 - [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md);
-  [architecture.md](architecture.md); [privacy-contract.md](privacy-contract.md);
+  [ADR-0059](../adr/ADR-0059-voice-control-media-capability-replay-protocol.md) (the #496 protocol
+  contract); [architecture.md](architecture.md); [privacy-contract.md](privacy-contract.md);
   [deployment-profile-matrix.md](deployment-profile-matrix.md);
-  [supply-chain-policy.md](supply-chain-policy.md).
+  [supply-chain-policy.md](supply-chain-policy.md); [protocol.md](protocol.md) (the #496 protocol
+  specification).
 - Epic [#491](https://github.com/oscharko-dev/Keiko/issues/491) (child issue list and required order).

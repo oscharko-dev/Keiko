@@ -126,6 +126,15 @@ a bidirectional WebSocket upgrade is an explicit, ADR-gated change to be raised 
 (`RTCPeerConnection`, `getUserMedia`, `RTCDataChannel`) which are platform capabilities requiring zero npm
 dependencies. See [`docs/voice/architecture.md`](../voice/architecture.md).
 
+**Defined by #496:** the versioned control/media protocol contract — the WebSocket control / signaling
+message catalog, the WebRTC media-plane descriptor, the capability-gating and fallback state table, and
+the replay / reconnect / redaction semantics — is specified in
+[ADR-0059](ADR-0059-voice-control-media-capability-replay-protocol.md) and
+[`docs/voice/protocol.md`](../voice/protocol.md), with the typed contract in
+[`packages/keiko-contracts/src/voice-protocol.ts`](../../packages/keiko-contracts/src/voice-protocol.ts).
+The protocol keeps the v1 control transport on loopback HTTP + SSE; re-opening the WebSocket upgrade
+remains the explicit, ADR-gated decision owned by the transport child issue (#497).
+
 ### D4 — Local-first data boundary: no external destinations except explicitly configured model endpoints (AC4)
 
 Audio buffers, transcripts, voice session state, memory candidates, recap artifacts, policy decisions, and
