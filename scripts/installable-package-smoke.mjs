@@ -432,8 +432,9 @@ async function assertRepositoryPickerSearchRebasesNestedRepo(baseUrl, tmp) {
 }
 
 // Compare two absolute paths for equality. On Windows paths are case-insensitive and may differ in
-// separator (`\` vs `/`) or drive-letter case between `realpathSync` and the server's resolved path,
-// so normalise both before comparing there; POSIX comparison stays exact (case-sensitive).
+// separator (`\` vs `/`), drive-letter case, or 8.3 short-name expansion between `realpathSync`
+// and the server's resolved path, so compare every realpath variant we can resolve there; POSIX
+// comparison stays exact (case-sensitive).
 //
 // Test layering for the cross-platform path helpers (this `samePath` and the forward-slash
 // `probeFile` above): they are deliberately covered by the CI matrix itself rather than a unit test.
@@ -441,11 +442,31 @@ async function assertRepositoryPickerSearchRebasesNestedRepo(baseUrl, tmp) {
 // the `win32` branches by `cross-platform-smoke (windows-latest)`, the POSIX branches by the
 // `(macos-latest)` leg and the gating Linux `build-scan-sbom-smoke` job. A unit test would mock the
 // platform/fs and assert against the harness, not the product, so it is intentionally not added.
+function comparableWindowsPath(value) {
+  return String(value)
+    .replace(/^\\\\\?\\/u, "")
+    .replace(/\\/gu, "/")
+    .toLowerCase();
+}
+
+function windowsPathVariants(value) {
+  const variants = new Set([comparableWindowsPath(value)]);
+  for (const resolvePath of [realpathSync, realpathSync.native]) {
+    try {
+      variants.add(comparableWindowsPath(resolvePath(value)));
+    } catch {
+      // Missing paths should still compare by their normalized literal form.
+    }
+  }
+  return variants;
+}
+
 function samePath(a, b) {
   if (a === undefined || b === undefined) return false;
   if (process.platform !== "win32") return a === b;
-  const norm = (p) => String(p).replace(/\\/gu, "/").toLowerCase();
-  return norm(a) === norm(b);
+  const left = windowsPathVariants(a);
+  const right = windowsPathVariants(b);
+  return [...left].some((candidate) => right.has(candidate));
 }
 
 async function assertUiLaunchProject(baseUrl, tmp) {
