@@ -221,9 +221,12 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
   // user-confirmed action. Trust spans the git tool boundary and the evidence ledger.
   governedGit: {
     lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
-    trustBoundary: ["ui", "tool", "evidence"],
+    // Crosses keiko-workspace path containment (operates on a project's git worktree), drives governed
+    // tools, and produces audit evidence. fs-reference persistence keeps the project path across reloads
+    // (evidence-reference would strip the slash-bearing path, leaving a broken empty window on restore).
+    trustBoundary: ["ui", "fs", "tool", "evidence"],
     authority: "user-confirm",
-    persistence: "evidence-reference",
+    persistence: "fs-reference",
   },
 };
 
