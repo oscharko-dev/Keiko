@@ -77,6 +77,16 @@ function childLogFds(opts: SpawnOptions): { readonly stdoutFd: number; readonly 
   return { stdoutFd: stdio[1] as number, stderrFd: stdio[2] as number };
 }
 
+function requireCapturedLogFds(
+  logFds: { readonly stdoutFd: number; readonly stderrFd: number } | undefined,
+): { readonly stdoutFd: number; readonly stderrFd: number } {
+  expect(logFds).toBeDefined();
+  if (logFds === undefined) {
+    throw new Error("Expected child log file descriptors to be captured");
+  }
+  return logFds;
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -172,14 +182,18 @@ describe("runLifecycleCli", () => {
 
     expect(code).toBe(0);
     expect(spawned).toHaveLength(1);
-    expect(spawned[0]?.args).toEqual(
+    const spawn = spawned[0];
+    if (spawn === undefined) {
+      throw new Error("Expected keiko start to spawn the UI process");
+    }
+    expect(spawn.args).toEqual(
       expect.arrayContaining(["ui", "--port", "4321", "--host", "127.0.0.1"]),
     );
-    expect(spawned[0]?.opts.argv0).toBe("Keiko");
-    expect(spawned[0]?.opts.env).toMatchObject({
+    expect(spawn.opts.argv0).toBe("Keiko");
+    expect(spawn.opts.env).toMatchObject({
       KEIKO_STATE_DIR: join(root, ".keiko-test"),
     });
-    const logFds = childLogFds(spawned[0]!.opts);
+    const logFds = childLogFds(spawn.opts);
     expect(logFds.stdoutFd).not.toBe(logFds.stderrFd);
     expect(() => fstatSync(logFds.stdoutFd)).toThrow();
     expect(() => fstatSync(logFds.stderrFd)).toThrow();
@@ -634,10 +648,10 @@ describe("runLifecycleCli", () => {
 
     expect(code).toBe(1);
     expect(c.err()).toContain("failed to spawn");
-    expect(logFds).toBeDefined();
-    expect(logFds?.stdoutFd).not.toBe(logFds?.stderrFd);
-    expect(() => fstatSync(logFds!.stdoutFd)).toThrow();
-    expect(() => fstatSync(logFds!.stderrFd)).toThrow();
+    const capturedLogFds = requireCapturedLogFds(logFds);
+    expect(capturedLogFds.stdoutFd).not.toBe(capturedLogFds.stderrFd);
+    expect(() => fstatSync(capturedLogFds.stdoutFd)).toThrow();
+    expect(() => fstatSync(capturedLogFds.stderrFd)).toThrow();
     expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
   });
 

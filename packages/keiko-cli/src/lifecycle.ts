@@ -395,7 +395,7 @@ function openUiLogStdio(options: LifecycleOptions): UiLogStdio {
     return {
       logPath,
       stdio: ["ignore", stdoutFd, stderrLogFd],
-      close: () => {
+      close: (): void => {
         closeSync(stdoutFd);
         closeSync(stderrLogFd);
       },
