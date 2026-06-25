@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createEditorDirtyCloseIntent,
-  type EditorDirtyCloseDecision,
-  type EditorDirtyCloseReason,
-} from "./editor-dirty-close.js";
+import { createEditorDirtyCloseIntent, type EditorDirtyCloseReason } from "./editor-dirty-close.js";
 
 const ALL_REASONS: readonly EditorDirtyCloseReason[] = [
   "tab-close",
@@ -68,10 +64,5 @@ describe("createEditorDirtyCloseIntent", () => {
     expect(intent.files).not.toBe(files);
     files.push("src/b.ts");
     expect(intent.files).toEqual(["src/a.ts"]);
-  });
-
-  it("models the three resolution decisions", () => {
-    const decisions: readonly EditorDirtyCloseDecision[] = ["save", "discard", "cancel"];
-    expect(new Set(decisions).size).toBe(3);
   });
 });

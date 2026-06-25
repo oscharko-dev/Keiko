@@ -529,6 +529,9 @@ export default function EditorRuntimeWidget({
   const [languageCapabilities, setLanguageCapabilities] =
     useState<LanguageServiceCapabilities | null>(BOOTSTRAP_LANGUAGE_CAPABILITIES);
   const [recoverySnapshot, setRecoverySnapshot] = useState<EditorHotExitSnapshotV1 | null>(null);
+  // The on-disk content captured at the moment recovery was offered, so the compare view diffs the
+  // recovered buffer against the disk file even if the live buffer is edited before Compare is opened.
+  const [recoveryDiskBaseline, setRecoveryDiskBaseline] = useState<string | null>(null);
   const [reloadConfirm, setReloadConfirm] = useState(false);
   const [recoveryCompare, setRecoveryCompare] = useState(false);
   const [activeContentHash, setActiveContentHash] = useState<string | null>(null);
@@ -576,6 +579,7 @@ export default function EditorRuntimeWidget({
     // confirmation; both are scoped to the file that opened them.
     setRecoveryCompare(false);
     setReloadConfirm(false);
+    setRecoveryDiskBaseline(null);
   }, [file, root]);
 
   useEffect(() => {
@@ -774,8 +778,10 @@ export default function EditorRuntimeWidget({
           // on the content the user would lose.
           if (snapshot !== null && snapshot.content !== response.content) {
             setRecoverySnapshot(snapshot);
+            setRecoveryDiskBaseline(response.content);
           } else {
             setRecoverySnapshot(null);
+            setRecoveryDiskBaseline(null);
           }
         })
         .catch((err: unknown) => {
@@ -813,8 +819,14 @@ export default function EditorRuntimeWidget({
 
   const confirmReloadDiscard = useCallback((): void => {
     setReloadConfirm(false);
+    // The user chose to discard the unsaved buffer for the on-disk version, so the hot-exit snapshot
+    // holding those edits must go too — otherwise the reload would immediately re-offer them as a
+    // recovery. Serialized store mutations keep this delete ordered ahead of the reload's snapshot read.
+    if (root !== undefined && file !== undefined) {
+      void deleteEditorHotExitSnapshot(root, file);
+    }
     reload();
-  }, [reload]);
+  }, [reload, root, file]);
 
   const cancelReloadDiscard = useCallback((): void => {
     setReloadConfirm(false);
@@ -994,6 +1006,7 @@ export default function EditorRuntimeWidget({
     setFileModel(editorFileModelReducer(fileModel, { type: "edited", origin: "human" }));
     setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
     setRecoverySnapshot(null);
+    setRecoveryDiskBaseline(null);
     setRecoveryCompare(false);
   }, [fileModel, recoverySnapshot]);
 
@@ -1002,6 +1015,7 @@ export default function EditorRuntimeWidget({
       void deleteEditorHotExitSnapshot(root, file);
     }
     setRecoverySnapshot(null);
+    setRecoveryDiskBaseline(null);
     setRecoveryCompare(false);
   }, [file, root]);
 
@@ -1011,6 +1025,12 @@ export default function EditorRuntimeWidget({
   const compareRecovery = useCallback((): void => {
     setRecoveryCompare(true);
   }, []);
+
+  // Opening the compare view replaces the editor surface, so move focus to its primary action.
+  const recoveryCompareButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (recoveryCompare) recoveryCompareButtonRef.current?.focus();
+  }, [recoveryCompare]);
 
   const closeRecoveryCompare = useCallback((): void => {
     setRecoveryCompare(false);
@@ -1720,11 +1740,17 @@ export default function EditorRuntimeWidget({
   let panel: ReactNode;
   if (recoveryCompare && recoverySnapshot !== null) {
     // AC4 "compare": a true side-by-side diff of the on-disk file (left) against the recovered
-    // unsaved buffer (right), reusing the same diff surface as agent-patch review.
-    const recoveryDiffModel = buildAgentPatchDiffModel(content, recoverySnapshot.content, file);
+    // unsaved buffer (right), reusing the same diff surface as agent-patch review. The disk side is
+    // the baseline captured when recovery was offered, not the live buffer, so it stays accurate
+    // even if the buffer was edited before Compare was opened.
+    const recoveryDiffModel = buildAgentPatchDiffModel(
+      recoveryDiskBaseline ?? content,
+      recoverySnapshot.content,
+      file,
+    );
     panel = (
       <>
-        <div aria-label={`Compare recovered changes for ${file ?? "this file"}`}>
+        <div role="group" aria-label={`Compare recovered changes for ${file ?? "this file"}`}>
           <span className="sr-only">
             Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep
             local restores the recovered changes; use disk keeps the file on disk.
@@ -1736,7 +1762,12 @@ export default function EditorRuntimeWidget({
           />
         </div>
         <div className="ed-toolbar-actions">
-          <button type="button" className="ed-save" onClick={restoreRecovery}>
+          <button
+            ref={recoveryCompareButtonRef}
+            type="button"
+            className="ed-save"
+            onClick={restoreRecovery}
+          >
             Keep local
           </button>
           <button type="button" className="ed-reload" onClick={discardRecovery}>
@@ -2041,7 +2072,7 @@ export default function EditorRuntimeWidget({
           ) : null}
         </div>
       </div>
-      {recoverySnapshot !== null ? (
+      {recoverySnapshot !== null && !recoveryCompare ? (
         <div className="ed-recovery" role="status">
           <span>
             {recoveryDiskChanged
@@ -2067,6 +2098,7 @@ export default function EditorRuntimeWidget({
               onClick={() => {
                 setRecoverySnapshot(null);
                 setRecoveryCompare(false);
+                setRecoveryDiskBaseline(null);
               }}
             >
               Cancel
