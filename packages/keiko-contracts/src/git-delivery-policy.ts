@@ -15,7 +15,11 @@ import type {
   GitDeliveryPolicyDecision,
   GitDeliveryProviderCapability,
 } from "./git-delivery.js";
-import { isGitDeliveryConstraint, isGitDeliveryProviderCapability } from "./git-delivery.js";
+import {
+  isGitDeliveryActionKind,
+  isGitDeliveryConstraint,
+  isGitDeliveryProviderCapability,
+} from "./git-delivery.js";
 
 export const GIT_DELIVERY_POLICY_SCHEMA_VERSION = "1" as const;
 
@@ -186,7 +190,7 @@ function isRuleDecision(value: unknown): value is GitDeliveryRuleDecision {
 export { isGitDeliveryConstraint, isGitDeliveryProviderCapability };
 
 function isActionKind(value: unknown): boolean {
-  return isNonEmptyString(value);
+  return isGitDeliveryActionKind(value);
 }
 
 // A decision's per-decision required fields must validate. approval-gated requires a string-array
