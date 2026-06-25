@@ -338,7 +338,9 @@ describe("editorHotExitStore", () => {
     await writeEditorHotExitSnapshot(fresh);
 
     await expect(readEditorHotExitSnapshot("/repo", "src/old.ts", freshNow)).resolves.toBeNull();
-    await expect(readEditorHotExitSnapshot("/repo", "src/new.ts", freshNow)).resolves.toEqual(fresh);
+    await expect(readEditorHotExitSnapshot("/repo", "src/new.ts", freshNow)).resolves.toEqual(
+      fresh,
+    );
   });
 
   it("evicts the oldest fresh snapshots when total hot-exit storage exceeds the quota", async () => {
@@ -365,5 +367,36 @@ describe("editorHotExitStore", () => {
     await expect(readEditorHotExitSnapshot("/repo", "src/older.ts", 2_002)).resolves.toBeNull();
     await expect(readEditorHotExitSnapshot("/repo", "src/large.ts", 2_002)).resolves.toBeNull();
     await expect(readEditorHotExitSnapshot("/repo", "src/fresh.ts", 2_002)).resolves.toEqual(fresh);
+  });
+
+  it("counts the incoming snapshot against the quota so a fresh write cannot exceed the cap", async () => {
+    // ~5 MiB each: either fits alone under the 8 MiB cap, but the two together exceed it. A prune
+    // that ignored the snapshot being written would leave both in the store at ~10 MiB.
+    const half = "y".repeat(5 * 1024 * 1024);
+    const first = snapshot({ relativePath: "src/first.ts", content: half, updatedAt: 3_000 });
+    const second = snapshot({ relativePath: "src/second.ts", content: half, updatedAt: 3_001 });
+
+    await writeEditorHotExitSnapshot(first);
+    await writeEditorHotExitSnapshot(second);
+
+    await expect(readEditorHotExitSnapshot("/repo", "src/first.ts", 3_002)).resolves.toBeNull();
+    await expect(readEditorHotExitSnapshot("/repo", "src/second.ts", 3_002)).resolves.toEqual(
+      second,
+    );
+  });
+
+  it("does not evict a snapshot against its own overwritten predecessor's bytes", async () => {
+    // Rewriting one key with larger content must not count the stale entry: only the ~6 MiB
+    // replacement is charged to the quota, so it stays under the 8 MiB cap and survives.
+    const small = snapshot({ relativePath: "src/one.ts", content: "small", updatedAt: 4_000 });
+    await writeEditorHotExitSnapshot(small);
+    const larger = snapshot({
+      relativePath: "src/one.ts",
+      content: "z".repeat(6 * 1024 * 1024),
+      updatedAt: 4_001,
+    });
+    await writeEditorHotExitSnapshot(larger);
+
+    await expect(readEditorHotExitSnapshot("/repo", "src/one.ts", 4_002)).resolves.toEqual(larger);
   });
 });

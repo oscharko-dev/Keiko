@@ -529,7 +529,8 @@ export default function EditorRuntimeWidget({
   const [languageCapabilities, setLanguageCapabilities] =
     useState<LanguageServiceCapabilities | null>(BOOTSTRAP_LANGUAGE_CAPABILITIES);
   const [recoverySnapshot, setRecoverySnapshot] = useState<EditorHotExitSnapshotV1 | null>(null);
-  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  const [reloadConfirm, setReloadConfirm] = useState(false);
+  const [recoveryCompare, setRecoveryCompare] = useState(false);
   const [activeContentHash, setActiveContentHash] = useState<string | null>(null);
   // Issue #1394 (ADR-0058 D3/D4): conflict banner and applyPatch review state.
   const [agentConflict, setAgentConflict] = useState<{
@@ -571,7 +572,10 @@ export default function EditorRuntimeWidget({
     setCurrentSelection(null);
     setCursor(null);
     setDiagnosticsSummary(null);
-    setRecoveryNotice(null);
+    // Switching the active file leaves any per-file recovery-compare view or pending reload
+    // confirmation; both are scoped to the file that opened them.
+    setRecoveryCompare(false);
+    setReloadConfirm(false);
   }, [file, root]);
 
   useEffect(() => {
@@ -762,11 +766,13 @@ export default function EditorRuntimeWidget({
           setVersion(response.session.version);
           setMaxBytes(response.maxBytes);
           setLoadState({ status: "ready" });
-          if (
-            snapshot !== null &&
-            snapshot.content !== response.content &&
-            snapshot.contentHash !== response.session.version.contentHash
-          ) {
+          // AC3: offer recovery whenever the snapshot's buffer differs from what is on disk now.
+          // The content comparison is the authoritative signal; an additional contentHash check is
+          // redundant against it (a content difference implies a hash difference) and can only ever
+          // suppress a legitimate recovery offer when the client buffer hash and the server-issued
+          // version hash are computed over different normalizations — a false negative. Gate solely
+          // on the content the user would lose.
+          if (snapshot !== null && snapshot.content !== response.content) {
             setRecoverySnapshot(snapshot);
           } else {
             setRecoverySnapshot(null);
@@ -792,6 +798,40 @@ export default function EditorRuntimeWidget({
     const signal = { cancelled: false };
     load(signal, { bypassCache: true });
   }, [load]);
+
+  // D1/AC1: reloading from disk over a dirty buffer is a destructive discard of unsaved edits, so it
+  // must route through the editor's explicit "reload-file" dirty-close policy — a modal acknowledgement
+  // that reuses the same dialog surface as the close flows — instead of overwriting the buffer outright.
+  // A clean buffer has nothing to lose and reloads immediately.
+  const requestReload = useCallback((): void => {
+    if (dirtyRef.current) {
+      setReloadConfirm(true);
+      return;
+    }
+    reload();
+  }, [reload]);
+
+  const confirmReloadDiscard = useCallback((): void => {
+    setReloadConfirm(false);
+    reload();
+  }, [reload]);
+
+  const cancelReloadDiscard = useCallback((): void => {
+    setReloadConfirm(false);
+  }, []);
+
+  const reloadConfirmRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!reloadConfirm) return;
+    reloadConfirmRef.current?.focus();
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") cancelReloadDiscard();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [reloadConfirm, cancelReloadDiscard]);
 
   const persist = useCallback(
     async (text: string): Promise<boolean> => {
@@ -954,7 +994,7 @@ export default function EditorRuntimeWidget({
     setFileModel(editorFileModelReducer(fileModel, { type: "edited", origin: "human" }));
     setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
     setRecoverySnapshot(null);
-    setRecoveryNotice(null);
+    setRecoveryCompare(false);
   }, [fileModel, recoverySnapshot]);
 
   const discardRecovery = useCallback((): void => {
@@ -962,11 +1002,18 @@ export default function EditorRuntimeWidget({
       void deleteEditorHotExitSnapshot(root, file);
     }
     setRecoverySnapshot(null);
-    setRecoveryNotice(null);
+    setRecoveryCompare(false);
   }, [file, root]);
 
+  // AC4: surface an actual side-by-side comparison of the recovered buffer against the on-disk file
+  // (reusing the editor's diff surface) rather than a prose notice, so the user can see exactly what
+  // "Keep local" would restore before choosing.
   const compareRecovery = useCallback((): void => {
-    setRecoveryNotice("Recovery content differs from disk. Keep local to restore it, or use disk.");
+    setRecoveryCompare(true);
+  }, []);
+
+  const closeRecoveryCompare = useCallback((): void => {
+    setRecoveryCompare(false);
   }, []);
 
   // Issue #1199: the governed completion resolver. The Monaco bridge calls this with the live buffer
@@ -1671,7 +1718,37 @@ export default function EditorRuntimeWidget({
   }, [agentSelectionRequest, consumeSelectionRequest]);
 
   let panel: ReactNode;
-  if (agentPatchPending !== null) {
+  if (recoveryCompare && recoverySnapshot !== null) {
+    // AC4 "compare": a true side-by-side diff of the on-disk file (left) against the recovered
+    // unsaved buffer (right), reusing the same diff surface as agent-patch review.
+    const recoveryDiffModel = buildAgentPatchDiffModel(content, recoverySnapshot.content, file);
+    panel = (
+      <>
+        <div aria-label={`Compare recovered changes for ${file ?? "this file"}`}>
+          <span className="sr-only">
+            Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep
+            local restores the recovered changes; use disk keeps the file on disk.
+          </span>
+          <EditorDiffSurface
+            model={recoveryDiffModel}
+            loadState={{ status: "ready" }}
+            themeVariant={themeVariant}
+          />
+        </div>
+        <div className="ed-toolbar-actions">
+          <button type="button" className="ed-save" onClick={restoreRecovery}>
+            Keep local
+          </button>
+          <button type="button" className="ed-reload" onClick={discardRecovery}>
+            Use disk
+          </button>
+          <button type="button" className="ed-icon-action" onClick={closeRecoveryCompare}>
+            Close compare
+          </button>
+        </div>
+      </>
+    );
+  } else if (agentPatchPending !== null) {
     const patchDiffModel = buildAgentPatchDiffModel(
       agentPatchPending.original,
       agentPatchPending.modified,
@@ -1943,7 +2020,7 @@ export default function EditorRuntimeWidget({
             <button
               type="button"
               className="ed-reload ui-tip"
-              onClick={reload}
+              onClick={requestReload}
               data-tip="Reload from disk"
             >
               Reload
@@ -1987,12 +2064,41 @@ export default function EditorRuntimeWidget({
             <button
               type="button"
               className="ed-icon-action"
-              onClick={() => setRecoverySnapshot(null)}
+              onClick={() => {
+                setRecoverySnapshot(null);
+                setRecoveryCompare(false);
+              }}
             >
               Cancel
             </button>
           ) : null}
-          {recoveryNotice !== null ? <span>{recoveryNotice}</span> : null}
+        </div>
+      ) : null}
+      {reloadConfirm ? (
+        <div className="ed-dialog-backdrop" role="presentation">
+          <div
+            className="ed-dirty-dialog"
+            ref={reloadConfirmRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="editor-reload-confirm-title"
+            tabIndex={-1}
+          >
+            <h2 id="editor-reload-confirm-title">Discard unsaved changes?</h2>
+            <p>
+              {`Reloading from disk replaces this buffer with the saved file and discards your unsaved editor changes${
+                file !== undefined && file.length > 0 ? ` in ${file}` : ""
+              }.`}
+            </p>
+            <div className="ed-dialog-actions">
+              <button type="button" className="ed-reload" onClick={confirmReloadDiscard}>
+                Discard and reload
+              </button>
+              <button type="button" className="ed-icon-action" onClick={cancelReloadDiscard}>
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
       {agentConflict !== null ? (

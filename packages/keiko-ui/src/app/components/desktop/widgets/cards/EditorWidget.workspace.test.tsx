@@ -127,8 +127,22 @@ vi.mock("./FilesWidget", () => ({
   ),
 }));
 
+const hotExitState = vi.hoisted(() => ({ deletes: [] as Array<readonly [string, string]> }));
+
+vi.mock("./editorHotExitStore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./editorHotExitStore")>();
+  return {
+    ...actual,
+    deleteEditorHotExitSnapshot: vi.fn((root: string, path: string) => {
+      hotExitState.deletes.push([root, path]);
+      return Promise.resolve();
+    }),
+  };
+});
+
 afterEach(() => {
   probeState.runtimeProps = null;
+  hotExitState.deletes = [];
   vi.clearAllMocks();
 });
 
@@ -539,6 +553,39 @@ describe("EditorWidget workspace session", () => {
       expect(screen.getAllByTestId("runtime-probe")).toHaveLength(1);
     });
     expect(screen.queryByRole("separator", { name: "Resize editor split" })).toBeNull();
+  });
+
+  it("deletes the hot-exit snapshot when a dirty tab close is discarded (AC5)", async () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close a" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    // An explicit Discard must remove the buffer's hot-exit snapshot from the EditorWidget side: the
+    // runtime widget that normally deletes it has already unmounted with the closed tab.
+    expect(hotExitState.deletes).toContainEqual(["/repo", "src/a.ts"]);
+  });
+
+  it("routes an in-app dirty close through the React dialog, never window.confirm (D4)", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close a" }));
+
+    expect(
+      await screen.findByRole("dialog", { name: "Unsaved editor changes" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
   it("supports keyboard tab reordering within a pane", () => {
