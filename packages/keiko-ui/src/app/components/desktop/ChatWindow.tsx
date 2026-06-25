@@ -37,13 +37,20 @@ import {
 import { Toggle } from "./widgets/shared/Toggle";
 import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
-import { supportsDictation, supportsRealtimeVoice, useVoiceCapability } from "./hooks/useVoiceCapability";
+import {
+  supportsDictation,
+  supportsRealtimeVoice,
+  supportsSpeechOutput,
+  useVoiceCapability,
+} from "./hooks/useVoiceCapability";
 import { useDictation, type DictationController } from "./hooks/useDictation";
 import { dictationCaptureSupported } from "./hooks/dictation-recorder";
 import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./VoiceDictation";
 import { useRealtimeVoice, type RealtimeVoiceController } from "./hooks/useRealtimeVoice";
 import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
 import { VoiceRealtimeButton, VoiceRealtimeStatusFromController } from "./VoiceRealtime";
+import { useVoicePlayback, type VoicePlaybackBinding } from "./hooks/useVoicePlayback";
+import { VoicePlaybackMuteButton, VoicePlaybackStatusFromBinding } from "./VoicePlayback";
 import { updateChat } from "@/lib/api";
 import { formatUserError } from "./format-error";
 import {
@@ -296,6 +303,11 @@ interface ComposerBarProps {
   readonly voiceRealtimeVisible: boolean;
   readonly realtime: RealtimeVoiceController;
   readonly realtimeButtonRef: Ref<HTMLButtonElement>;
+  // Issue #501 — capability-gated assistant speech output. The mute toggle renders only when the
+  // deployment advertises speech output; a no-voice / STT-only deployment shows nothing (AC1).
+  readonly voiceSpeechOutputVisible: boolean;
+  readonly playback: VoicePlaybackBinding;
+  readonly playbackButtonRef: Ref<HTMLButtonElement>;
 }
 
 function ComposerBar({
@@ -314,6 +326,9 @@ function ComposerBar({
   voiceRealtimeVisible,
   realtime,
   realtimeButtonRef,
+  voiceSpeechOutputVisible,
+  playback,
+  playbackButtonRef,
 }: ComposerBarProps): ReactNode {
   const {
     models,
@@ -444,6 +459,17 @@ function ComposerBar({
             onStart={realtime.start}
             onStop={realtime.stop}
             buttonRef={realtimeButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : null}
+        {/* Issue #501 — capability-gated assistant speech-output mute toggle. Rendered only when the
+            deployment advertises speech output; a no-voice / STT-only deployment shows nothing new, so
+            the assistant answers in text with no playback control (AC1). */}
+        {voiceSpeechOutputVisible ? (
+          <VoicePlaybackMuteButton
+            muted={playback.snapshot.muted}
+            onToggle={playback.toggleMute}
+            buttonRef={playbackButtonRef}
             compact={controlsNarrow}
           />
         ) : null}
@@ -658,9 +684,15 @@ function ComposerCore({
   const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
   // Issue #497 — realtime voice gate: reuse the already-fetched voiceCapability probe (no second
   // fetch). Only true when full-realtime is advertised AND the browser can open a WebRTC connection.
-  const voiceRealtimeVisible = supportsRealtimeVoice(voiceCapability) && realtimeVoiceTransportSupported();
+  const voiceRealtimeVisible =
+    supportsRealtimeVoice(voiceCapability) && realtimeVoiceTransportSupported();
+  // Issue #501 — assistant speech-output gate: reuse the already-fetched voiceCapability probe (no
+  // second fetch). Only true when the deployment advertises speech output; STT-only and no-voice
+  // deployments leave it false, so no playback control appears and Keiko answers in text (AC1).
+  const voiceSpeechOutputVisible = supportsSpeechOutput(voiceCapability);
   const micButtonRef = useRef<HTMLButtonElement>(null);
   const realtimeButtonRef = useRef<HTMLButtonElement>(null);
+  const playbackButtonRef = useRef<HTMLButtonElement>(null);
   // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
@@ -672,6 +704,9 @@ function ComposerCore({
   );
   const dictation = useDictation({ onInsert: insertTranscript });
   const realtime = useRealtimeVoice({});
+  // Issue #501 — assistant speech-output playback binding. Driven by the resolved voice profile; a
+  // non-playback profile yields a dormant controller (AC1). Replay is policy-gated and off by default.
+  const playback = useVoicePlayback({ profile: voiceCapability?.profile ?? "none" });
 
   return (
     <div className={`cmp-box${compact ? " cmp-box-compact" : ""}`}>
@@ -717,6 +752,10 @@ function ComposerCore({
             onAfterDismiss={() => realtimeButtonRef.current?.focus()}
           />
         ) : null}
+        {/* Issue #501 — assistant speech-output status / controls. Adjacent to the realtime status in
+            the input stack. Renders nothing between spoken turns; while a spoken response is active or
+            freshly settled it announces the state and offers pause / resume / stop / replay (AC1). */}
+        {voiceSpeechOutputVisible ? <VoicePlaybackStatusFromBinding binding={playback} /> : null}
       </div>
       <div className="cmp-footer-row">
         {/* Issue #151 — context-pressure indicator + clear-history affordance */}
@@ -744,6 +783,9 @@ function ComposerCore({
           voiceRealtimeVisible={voiceRealtimeVisible}
           realtime={realtime}
           realtimeButtonRef={realtimeButtonRef}
+          voiceSpeechOutputVisible={voiceSpeechOutputVisible}
+          playback={playback}
+          playbackButtonRef={playbackButtonRef}
         />
       </div>
     </div>

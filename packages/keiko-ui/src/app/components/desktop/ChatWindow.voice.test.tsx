@@ -274,7 +274,7 @@ describe("ChatWindow realtime voice integration (Issue #497)", () => {
     // Stub MediaRecorder but NOT RTCPeerConnection -> realtimeVoiceTransportSupported() false.
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
-      value: { getUserMedia: vi.fn(async () => ({} as MediaStream)) },
+      value: { getUserMedia: vi.fn(async () => ({}) as MediaStream) },
     });
     vi.stubGlobal("MediaRecorder", StubMediaRecorder);
     // No RTCPeerConnection stub.
@@ -283,5 +283,59 @@ describe("ChatWindow realtime voice integration (Issue #497)", () => {
     await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: "Start realtime voice" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+  });
+});
+
+const SPEECH_OUTPUT: VoiceCapabilityResolution = {
+  available: true,
+  profile: "speech-output",
+  capabilities: { speechToText: false, speechOutput: true, realtimeVoice: false },
+  transport: { websocketControl: true, webrtcMedia: false },
+  providerLocality: "azure-foundry",
+};
+
+describe("ChatWindow assistant speech-output integration (Issue #501)", () => {
+  it("shows NO playback control and stays fully text-capable in a no-voice deployment (AC1)", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: NONE });
+    renderWindow(makeSession());
+
+    await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /assistant voice/iu })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+  });
+
+  it("shows NO playback control for an STT-only deployment — dictation does not imply speech (AC1)", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
+    stubCaptureBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession());
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("button", { name: /assistant voice/iu })).toBeNull();
+  });
+
+  it("renders the mute toggle when speech output is advertised and it stays text-capable", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: SPEECH_OUTPUT });
+    renderWindow(makeSession());
+
+    const mute = await screen.findByRole("button", { name: "Mute assistant voice" });
+    expect(mute).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+
+    await userEvent.click(mute);
+    expect(
+      await screen.findByRole("button", { name: "Unmute assistant voice" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the mute toggle for a full-realtime deployment (which also speaks)", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession());
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Mute assistant voice" })).toBeInTheDocument(),
+    );
   });
 });

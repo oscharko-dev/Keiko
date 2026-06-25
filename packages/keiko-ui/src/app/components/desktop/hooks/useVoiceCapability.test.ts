@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearVoiceCapabilityCacheForTests,
   supportsDictation,
+  supportsSpeechOutput,
   useVoiceCapability,
 } from "./useVoiceCapability";
 import * as api from "@/lib/api";
@@ -91,6 +92,62 @@ describe("supportsDictation", () => {
         ...STT,
         profile: "speech-output",
         capabilities: { speechToText: false, speechOutput: true, realtimeVoice: false },
+      }),
+    ).toBe(false);
+  });
+});
+
+const SPEECH_OUTPUT: VoiceCapabilityResolution = {
+  available: true,
+  profile: "speech-output",
+  capabilities: { speechToText: false, speechOutput: true, realtimeVoice: false },
+  transport: { websocketControl: true, webrtcMedia: false },
+  providerLocality: "azure-foundry",
+};
+
+const FULL_REALTIME: VoiceCapabilityResolution = {
+  available: true,
+  profile: "full-realtime",
+  capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+  transport: { websocketControl: true, webrtcMedia: true },
+  providerLocality: "azure-foundry",
+};
+
+describe("supportsSpeechOutput", () => {
+  it("is true for the speech-output profile advertising speech output", () => {
+    expect(supportsSpeechOutput(SPEECH_OUTPUT)).toBe(true);
+  });
+
+  it("is true for full-realtime (which also speaks)", () => {
+    expect(supportsSpeechOutput(FULL_REALTIME)).toBe(true);
+  });
+
+  it("is false for STT-only — dictation does not imply the assistant can speak (AC1)", () => {
+    expect(supportsSpeechOutput(STT)).toBe(false);
+  });
+
+  it("is false for a no-voice deployment", () => {
+    expect(supportsSpeechOutput(NONE)).toBe(false);
+  });
+
+  it("is false for an unresolved (undefined) probe", () => {
+    expect(supportsSpeechOutput(undefined)).toBe(false);
+  });
+
+  it("is false when the profile claims speech-output but the flag is not advertised", () => {
+    expect(
+      supportsSpeechOutput({
+        ...SPEECH_OUTPUT,
+        capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
+      }),
+    ).toBe(false);
+  });
+
+  it("is false when the speechOutput flag is set but the profile has not elected playback", () => {
+    expect(
+      supportsSpeechOutput({
+        ...STT,
+        capabilities: { speechToText: true, speechOutput: true, realtimeVoice: false },
       }),
     ).toBe(false);
   });
