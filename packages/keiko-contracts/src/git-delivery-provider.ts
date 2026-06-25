@@ -8,8 +8,16 @@
 //
 // Imports ONLY from ./git-delivery.js (GitDeliveryMergeBlockReason, GitDeliveryProviderCapability).
 
-import type { GitDeliveryMergeBlockReason, GitDeliveryProviderCapability } from "./git-delivery.js";
-import { isGitDeliveryMergeBlockReason } from "./git-delivery.js";
+import type {
+  GitDeliveryBranchPattern,
+  GitDeliveryMergeBlockReason,
+  GitDeliveryProviderCapability,
+} from "./git-delivery.js";
+import {
+  isGitDeliveryBranchPattern,
+  isGitDeliveryMergeBlockReason,
+  isGitDeliveryProviderCapability,
+} from "./git-delivery.js";
 
 export const GIT_DELIVERY_PROVIDER_SCHEMA_VERSION = "1" as const;
 
@@ -78,8 +86,9 @@ export interface GitDeliveryPullRequestState {
 
 export interface GitDeliveryRemoteTargetPolicy {
   // Branch name patterns the remote accepts as push targets. Empty array means all branches are
-  // accepted (no restriction).
-  readonly allowedPushTargetPatterns: readonly string[];
+  // accepted (no restriction). Typed as GitDeliveryBranchPattern[] (exact/prefix) — raw strings
+  // are rejected at the boundary to preserve AC3 structured-data guarantee.
+  readonly allowedPushTargetPatterns: readonly GitDeliveryBranchPattern[];
   readonly forcePushGloballyDenied: boolean;
 }
 
@@ -115,7 +124,7 @@ function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T
 }
 
 function isProviderCapability(value: unknown): boolean {
-  return isNonEmptyString(value);
+  return isGitDeliveryProviderCapability(value);
 }
 
 // ─── Guards ──────────────────────────────────────────────────────────────────────
@@ -196,5 +205,16 @@ export function isGitDeliveryProviderDescriptor(
     isNonEmptyString(value.providerInstanceId) &&
     Array.isArray(value.capabilities) &&
     value.capabilities.every(isProviderCapability)
+  );
+}
+
+export function isGitDeliveryRemoteTargetPolicy(
+  value: unknown,
+): value is GitDeliveryRemoteTargetPolicy {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.allowedPushTargetPatterns) &&
+    value.allowedPushTargetPatterns.every(isGitDeliveryBranchPattern) &&
+    typeof value.forcePushGloballyDenied === "boolean"
   );
 }

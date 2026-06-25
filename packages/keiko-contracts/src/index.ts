@@ -1522,4 +1522,5 @@ export {
   isGitDeliveryMergeReadiness,
   isGitDeliveryPullRequestState,
   isGitDeliveryProviderDescriptor,
+  isGitDeliveryRemoteTargetPolicy,
 } from "./git-delivery-provider.js";

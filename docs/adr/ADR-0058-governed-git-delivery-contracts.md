@@ -259,7 +259,7 @@ The four neutral interfaces are:
 | `GitDeliveryChecksState` | Total, passing, failing, pending (counts); overall status as `passing | failing | pending | skipped` |
 | `GitDeliveryPullRequestState` | Neutral PR status: `open | closed | merged` (draftness is the orthogonal `isDraft: boolean`, not a status member); base branch name; head branch name; merge readiness reference |
 | `GitDeliveryMergeReadiness` | Ready boolean; blocking reason as `GitDeliveryMergeBlockReason` (typed union, not a string); required approval count (number) |
-| `GitDeliveryRemoteTargetPolicy` | Allowed push targets as readonly string[]; force-push globally denied boolean |
+| `GitDeliveryRemoteTargetPolicy` | Allowed push targets as typed GitDeliveryBranchPattern[] (exact/prefix); force-push globally denied boolean |
 | `GitDeliveryProviderCapability` | Named capability (`branch-protection | draft-pr | required-checks | merge-queue | protected-branch-delete`) — what the connected provider supports |
 
 **The rule that keeps providers out of the core:** No interface in `git-delivery-provider.ts` may

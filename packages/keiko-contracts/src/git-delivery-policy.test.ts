@@ -44,6 +44,11 @@ function repoPack(partial: Partial<GitDeliveryRepoPolicyPack>): GitDeliveryRepoP
 }
 
 describe("isGitDeliveryPolicyRule", () => {
+  it("rejects a rule whose actionKind is not a known GitDeliveryActionKind", () => {
+    expect(isGitDeliveryPolicyRule({ actionKind: "bogus", decision: "allowed" })).toBe(false);
+    expect(isGitDeliveryPolicyRule({ actionKind: "warp-drive", decision: "blocked" })).toBe(false);
+  });
+
   it("accepts each well-formed decision shape", () => {
     expect(isGitDeliveryPolicyRule({ actionKind: "push", decision: "allowed" })).toBe(true);
     expect(isGitDeliveryPolicyRule({ actionKind: "push", decision: "blocked" })).toBe(true);
@@ -280,6 +285,18 @@ describe("policy-pack parsers", () => {
       schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
       repoId: "r",
       rules: [{ actionKind: "push", decision: "maybe" }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes("invalid GitDeliveryPolicyRule"))).toBe(true);
+    }
+  });
+
+  it("parseGitRepoPolicyPack rejects a rule whose actionKind is not a known action kind", () => {
+    const result = parseGitRepoPolicyPack({
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "r",
+      rules: [{ actionKind: "bogus", decision: "allowed" }],
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
