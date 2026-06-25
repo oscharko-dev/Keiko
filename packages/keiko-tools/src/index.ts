@@ -167,6 +167,12 @@ export {
   type GitStageCommand,
   type GitUnstageCommand,
 } from "./git-mutation-orchestrator.js";
+export {
+  buildGitDeliveryEvidenceRecord,
+  type GitDeliveryEvidenceBuildDeps,
+  type GitDeliveryEvidenceBuildInput,
+  type GitDeliveryEvidenceSnapshot,
+} from "./git-mutation-evidence.js";
 
 // ─── Browser sub-surface (ADR-0017) ─────────────────────────────────────────────────
 export { BROWSER_ERROR_CODES, BrowserToolError, type BrowserErrorCode } from "./browser/errors.js";
