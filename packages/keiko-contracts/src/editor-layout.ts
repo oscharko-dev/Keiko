@@ -1,5 +1,5 @@
 /**
- * Editor layout state and reducer for multi-tab, split-pane workspaces (Issue #1375, ADR-0063).
+ * Editor layout state and reducer for multi-tab, split-pane workspaces (Issue #1375, ADR-0064).
  *
  * The reducer is the single authority for layout structure: drag/keyboard intents in the UI are
  * translated into EditorLayoutActions and applied here, never by mutating pane state directly.

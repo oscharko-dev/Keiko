@@ -10,6 +10,8 @@ import {
   createEditorLayoutStateV2,
   editorLayoutOpenFiles,
   editorLayoutReducer,
+  isRootRelativeFileIdentifier,
+  resolveWorkspaceFileIdentifier,
   serializeEditorLayoutStateV2,
 } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -66,8 +68,24 @@ function normalizeEditorOpenRoot(root: string): string {
   return root.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
 }
 
-function normalizeEditorOpenPath(path: string): string {
-  return path.trim().replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+// Root-relative file-identifier contract (Issue #1374): coerce a repository reference / persisted
+// cfg path into the root-relative identifier the BFF requires, keeping it UNDER `root`. Chat
+// repository references use a leading-slash "from the repo root" convention (e.g.
+// "/packages/x/y.ts" means "packages/x/y.ts" under the selected root) and are root-relative by
+// construction, so an absolute-looking candidate that does not live under `root` has its leading
+// slash stripped and is re-validated rather than reinterpreted as a different machine root. A path
+// that re-includes the root is reduced to the bare remainder. Anything still not a contained file
+// collapses to "" and is dropped by the callers, so a non-root-relative path can never be persisted
+// into the editor window cfg or sent to the BFF.
+function toRootRelativeOpenPath(root: string, value: unknown): string {
+  if (typeof value !== "string") return "";
+  const resolution = resolveWorkspaceFileIdentifier(root, value);
+  if (resolution.kind === "relative") return resolution.path;
+  if (resolution.kind === "outside-root") {
+    const coerced = resolution.candidate.replace(/^\/+/u, "");
+    return isRootRelativeFileIdentifier(coerced) ? coerced : "";
+  }
+  return "";
 }
 
 function editorCfgString(cfg: AppWindow["cfg"], key: string): string | undefined {
@@ -75,11 +93,14 @@ function editorCfgString(cfg: AppWindow["cfg"], key: string): string | undefined
   return typeof value === "string" ? value : undefined;
 }
 
-function mergeEditorCfgOpenFiles(cfg: AppWindow["cfg"], file: string): readonly string[] {
+function mergeEditorCfgOpenFiles(
+  cfg: AppWindow["cfg"],
+  root: string,
+  file: string,
+): readonly string[] {
   const out: string[] = [];
   const add = (value: unknown): void => {
-    if (typeof value !== "string") return;
-    const normalized = normalizeEditorOpenPath(value);
+    const normalized = toRootRelativeOpenPath(root, value);
     if (normalized.length === 0 || out.includes(normalized)) return;
     out.push(normalized);
   };
@@ -96,11 +117,11 @@ function editorOpenLayoutPatch(
   root: string,
   file: string,
 ): Pick<AppWindow["cfg"], "file" | "openFiles" | "layoutJson"> {
-  const currentFile = normalizeEditorOpenPath(editorCfgString(cfg, "file") ?? "");
+  const currentFile = toRootRelativeOpenPath(root, editorCfgString(cfg, "file") ?? "");
   const layout = createEditorLayoutStateV2({
     root,
     file: currentFile,
-    openFiles: mergeEditorCfgOpenFiles(cfg, file),
+    openFiles: mergeEditorCfgOpenFiles(cfg, root, file),
     layoutJson: editorCfgString(cfg, "layoutJson"),
     defaultSidebarWidth: EDITOR_DEFAULT_SIDEBAR_WIDTH,
     minSidebarWidth: EDITOR_MIN_SIDEBAR_WIDTH,
@@ -314,12 +335,15 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
 function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
   const { setWins, zc, worldVP, winsRef } = args;
   return ({ root, path, lineStart, lineEnd }) => {
+    // Root-relative file-identifier contract (Issue #1374): a chat repository reference is opened
+    // UNDER the selected root (it is root-relative by construction), so the root is kept and the
+    // path is coerced to a contained root-relative identifier rather than deriving a new root.
     const normalizedRoot = normalizeEditorOpenRoot(root);
-    const normalizedPath = normalizeEditorOpenPath(path);
     if (normalizedRoot.length === 0) {
       return { ok: false, message: "Select a repository source before opening file references." };
     }
-    if (normalizedPath.length === 0 || normalizedPath.includes("..")) {
+    const normalizedPath = toRootRelativeOpenPath(normalizedRoot, path);
+    if (normalizedPath.length === 0) {
       return { ok: false, message: "This repository reference is not a valid file path." };
     }
     const vp = worldVP();

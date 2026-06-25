@@ -1,5 +1,5 @@
 /**
- * Accessibility smoke tests for the EditorWidget layout chrome (Issue #1375, ADR-0063).
+ * Accessibility smoke tests for the EditorWidget layout chrome (Issue #1375, ADR-0064).
  *
  * Covers the keyboard-focus and tab/split controls the issue calls out:
  *   - jest-axe reports no WCAG violations for a split workspace.

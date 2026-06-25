@@ -1,4 +1,4 @@
-# ADR-0063: Editor layout reducer invariants and regression hardening
+# ADR-0064: Editor layout reducer invariants and regression hardening
 
 ## Status
 
