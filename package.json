@@ -102,6 +102,7 @@
     "@playwright/test": "^1.61.0",
     "@types/node": "^25.9.1",
     "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "6.0.3",
     "@vitest/coverage-v8": "^4.1.7",
     "acorn": "^8.16.0",
     "dependency-cruiser": "^17.4.3",
