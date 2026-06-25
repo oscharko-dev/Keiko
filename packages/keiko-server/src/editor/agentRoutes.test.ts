@@ -550,8 +550,9 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
             type: "applyPatch",
             idempotencyKey: "ik-valid",
             actionId: "a-valid",
-            expectedContentHash: undefined,
-            expectedDocumentVersion: undefined,
+            // #1391 AC2: write actions must pin a revision. The hash matches the registered snapshot,
+            // so the precondition is satisfied and the patch queues normally.
+            expectedContentHash: HASH,
             patch: validSingleFileDiff,
           }),
         ),
@@ -606,8 +607,8 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
             type: "applyPatch",
             idempotencyKey: "ik-emit",
             actionId: "a-emit",
-            expectedContentHash: undefined,
-            expectedDocumentVersion: undefined,
+            // #1391 AC2: pin the revision (hash matches the registered snapshot) so the patch queues.
+            expectedContentHash: HASH,
             patch: validDiff,
           }),
         ),
@@ -789,8 +790,9 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
             type: "applyPatch",
             idempotencyKey: "ik-f3",
             actionId: "a-f3",
-            expectedContentHash: undefined,
-            expectedDocumentVersion: undefined,
+            // #1391 AC2: pin the revision so the action clears the precondition gate and reaches the
+            // file-mismatch derivation path this test exercises (the patch targets b.ts, not a.ts).
+            expectedContentHash: HASH,
             patch: patchTargetingB,
           }),
         ),
@@ -809,6 +811,85 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
         const res = (body as Record<string, unknown>).result as Record<string, unknown>;
         expect(res.status).toBe("failed");
       }
+    });
+  });
+
+  // ── Issue #1391 AC2: write actions require a version/hash precondition (PRECONDITION_REQUIRED) ──
+
+  describe("write precondition — PRECONDITION_REQUIRED (Issue #1391 AC2)", () => {
+    it("returns 409 PRECONDITION_REQUIRED for a save with neither version nor hash", async () => {
+      await registerSnapshot();
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "save",
+            idempotencyKey: "ik-noprecond",
+            actionId: "a-noprecond",
+            expectedContentHash: undefined,
+            expectedDocumentVersion: undefined,
+          }),
+        ),
+      );
+      expect(result.status).toBe(409);
+      expect(actionResultStatus(result.body)).toBe("conflict");
+      expect(actionConflictCode(result.body)).toBe("PRECONDITION_REQUIRED");
+    });
+
+    it("returns 409 PRECONDITION_REQUIRED for structurally valid applyTextEdits without a precondition", async () => {
+      await registerSnapshot();
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "applyTextEdits",
+            idempotencyKey: "ik-edits-noprecond",
+            actionId: "a-edits-noprecond",
+            expectedContentHash: undefined,
+            expectedDocumentVersion: undefined,
+            textEdits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+                newText: "hello",
+              },
+            ],
+          }),
+        ),
+      );
+      expect(result.status).toBe(409);
+      expect(actionConflictCode(result.body)).toBe("PRECONDITION_REQUIRED");
+    });
+
+    it("accepts a write that pins the revision by document version only (queues 202)", async () => {
+      await registerSnapshot();
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "save",
+            idempotencyKey: "ik-version-only",
+            actionId: "a-version-only",
+            expectedContentHash: undefined,
+            expectedDocumentVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: HASH },
+          }),
+        ),
+      );
+      expect(result.status).toBe(202);
+      expect(actionResultStatus(result.body)).toBe("queued");
+    });
+
+    it("does not require a precondition for a non-write action (setSelection queues 202)", async () => {
+      await registerSnapshot();
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "setSelection",
+            idempotencyKey: "ik-nav",
+            actionId: "a-nav",
+            expectedContentHash: undefined,
+            expectedDocumentVersion: undefined,
+          }),
+        ),
+      );
+      expect(result.status).toBe(202);
+      expect(actionResultStatus(result.body)).toBe("queued");
     });
   });
 });

@@ -9,7 +9,8 @@
  *
  * - DIRTY: Save + Dismiss (the user saves the dirty buffer so the agent can re-try)
  * - VERSION_MISMATCH / CONTENT_HASH_MISMATCH: Reload + Dismiss (stale token — reload refreshes it)
- * - INVALID_EDITS / OUT_OF_SCOPE: Dismiss only (agent errors, user cannot self-resolve)
+ * - INVALID_EDITS / OUT_OF_SCOPE / PRECONDITION_REQUIRED: Dismiss only (agent errors, user cannot
+ *   self-resolve — the agent must re-issue the action correctly)
  *
  * Uses the existing `.ai-danger` / `.ai-danger-h` / `.ai-danger-act` classes; no new CSS classes.
  */
@@ -40,6 +41,8 @@ function conflictTitle(code: AgentConflictCode): string {
       return "Action out of scope";
     case "NO_ACTIVE_SESSION":
       return "No active editor session";
+    case "PRECONDITION_REQUIRED":
+      return "Missing write precondition";
   }
 }
 

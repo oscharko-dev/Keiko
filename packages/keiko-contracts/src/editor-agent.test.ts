@@ -1,13 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
+  EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_SCHEMA_VERSION,
+  EDITOR_AGENT_WRITE_ACTION_TYPES,
+  editorAgentActionHasWritePrecondition,
+  editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
+  isEditorAgentActionResult,
   isEditorAgentConflictCode,
+  isEditorAgentEvent,
   isEditorAgentSessionSnapshot,
+  isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
   validateAgentTextEdits,
+  type EditorAgentAction,
+  type EditorAgentActionResult,
+  type EditorAgentActionStatus,
+  type EditorAgentActionType,
+  type EditorAgentConflictCode,
+  type EditorAgentEvent,
   type EditorAgentSessionSnapshot,
 } from "./editor-agent.js";
 
@@ -340,5 +354,263 @@ describe("isEditorAgentConflictCode (Issue #1394)", () => {
     expect(isEditorAgentConflictCode(undefined)).toBe(false);
     expect(isEditorAgentConflictCode(42)).toBe(false);
     expect(isEditorAgentConflictCode({ code: "DIRTY" })).toBe(false);
+  });
+});
+
+// ─── Issue #1391: public contract foundation (snapshots, actions, results, events, taxonomy) ─────
+
+const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
+  "openFile",
+  "focusTab",
+  "moveTab",
+  "splitPane",
+  "setSelection",
+  "format",
+  "save",
+  "applyTextEdits",
+  "applyPatch",
+];
+
+const NON_WRITE_ACTION_TYPES = [
+  "openFile",
+  "focusTab",
+  "moveTab",
+  "splitPane",
+  "setSelection",
+] as const;
+
+function baseAction(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: "action-1",
+    idempotencyKey: "idempotency-1",
+    sessionId: "session-1",
+    type: "openFile",
+    ...overrides,
+  };
+}
+
+describe("schema version compatibility (Issue #1391)", () => {
+  it("pins EDITOR_AGENT_SCHEMA_VERSION to the literal '1'", () => {
+    expect(EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
+  });
+});
+
+describe("snapshot text mode defaults to none (Issue #1391 AC1)", () => {
+  it("exposes the content-free default mode constant", () => {
+    expect(DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE).toBe("none");
+  });
+
+  it("defaults an omitted textMode to none on a read snapshot request", () => {
+    const parsed = parseEditorAgentSnapshotRequest({ schemaVersion: EDITOR_AGENT_SCHEMA_VERSION });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("expected ok");
+    if ("kind" in parsed.value) throw new Error("expected a read request, not a bridge snapshot");
+    expect(parsed.value.textMode).toBe("none");
+  });
+
+  it("preserves an explicit opt-in textMode", () => {
+    const parsed = parseEditorAgentSnapshotRequest({
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      textMode: "activeFile",
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("expected ok");
+    if ("kind" in parsed.value) throw new Error("expected a read request, not a bridge snapshot");
+    expect(parsed.value.textMode).toBe("activeFile");
+  });
+
+  it("still rejects a present-but-invalid textMode", () => {
+    const parsed = parseEditorAgentSnapshotRequest({
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      textMode: "everything",
+    });
+    expect(parsed.ok).toBe(false);
+  });
+});
+
+describe("action validator covers every action type (Issue #1391)", () => {
+  it("accepts a minimal valid action for each action type", () => {
+    for (const type of ALL_ACTION_TYPES) {
+      expect(isEditorAgentAction(baseAction({ type }))).toBe(true);
+    }
+  });
+
+  it("rejects an unknown action type", () => {
+    expect(
+      isEditorAgentAction(baseAction({ type: "deleteEverything" as EditorAgentActionType })),
+    ).toBe(false);
+  });
+
+  it("rejects an action missing its mandatory idempotency key", () => {
+    expect(
+      isEditorAgentAction({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "action-1",
+        sessionId: "session-1",
+        type: "openFile",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("action result validator covers every status (Issue #1391)", () => {
+  const statuses: readonly EditorAgentActionStatus[] = [
+    "queued",
+    "succeeded",
+    "failed",
+    "conflict",
+  ];
+
+  it("accepts a valid result for each status", () => {
+    for (const status of statuses) {
+      const result: EditorAgentActionResult = {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "action-1",
+        sessionId: "session-1",
+        status,
+        ...(status === "conflict"
+          ? { conflict: { code: "PRECONDITION_REQUIRED", message: "precondition missing" } }
+          : {}),
+      };
+      expect(isEditorAgentActionResult(result)).toBe(true);
+    }
+  });
+
+  it("rejects an unknown status", () => {
+    expect(
+      isEditorAgentActionResult({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "a",
+        sessionId: "s",
+        status: "pending",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("event validator covers every event kind (Issue #1391)", () => {
+  const events: readonly EditorAgentEvent[] = [
+    {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      eventId: "e1",
+      type: "session",
+      snapshot: snapshot(),
+    },
+    {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      eventId: "e2",
+      type: "action",
+      action: baseAction(),
+    },
+    {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      eventId: "e3",
+      type: "result",
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "a",
+        sessionId: "s",
+        status: "succeeded",
+      },
+    },
+    { schemaVersion: EDITOR_AGENT_SCHEMA_VERSION, eventId: "e4", type: "heartbeat", updatedAt: 1 },
+  ];
+
+  it("accepts every well-formed event kind", () => {
+    for (const event of events) {
+      expect(isEditorAgentEvent(event)).toBe(true);
+    }
+  });
+
+  it("rejects unknown type, missing id, or wrong schema version", () => {
+    expect(
+      isEditorAgentEvent({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        eventId: "e",
+        type: "noise",
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentEvent({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        eventId: "",
+        type: "heartbeat",
+        updatedAt: 1,
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentEvent({ schemaVersion: "2", eventId: "e", type: "heartbeat", updatedAt: 1 }),
+    ).toBe(false);
+  });
+
+  it("rejects an event whose payload is the wrong shape for its kind", () => {
+    expect(
+      isEditorAgentEvent({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        eventId: "e",
+        type: "result",
+        result: { status: "succeeded" },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("write-action precondition rule (Issue #1391 AC2)", () => {
+  it("lists exactly the four mutating action types", () => {
+    expect([...EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
+      ["applyPatch", "applyTextEdits", "format", "save"].sort(),
+    );
+  });
+
+  it("classifies write vs non-write action types", () => {
+    for (const type of EDITOR_AGENT_WRITE_ACTION_TYPES) {
+      expect(isEditorAgentWriteActionType(type)).toBe(true);
+    }
+    for (const type of NON_WRITE_ACTION_TYPES) {
+      expect(isEditorAgentWriteActionType(type)).toBe(false);
+    }
+    expect(isEditorAgentWriteActionType("nonsense")).toBe(false);
+  });
+
+  it("flags a write action that pins no revision", () => {
+    for (const type of EDITOR_AGENT_WRITE_ACTION_TYPES) {
+      const action = baseAction({ type });
+      expect(editorAgentActionHasWritePrecondition(action)).toBe(false);
+      expect(editorAgentWritePreconditionError(action)).toBeTypeOf("string");
+    }
+  });
+
+  it("accepts a write action pinned by version or by hash", () => {
+    const byHash = baseAction({ type: "save", expectedContentHash: HASH });
+    const byVersion = baseAction({
+      type: "applyTextEdits",
+      expectedDocumentVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: HASH },
+    });
+    expect(editorAgentActionHasWritePrecondition(byHash)).toBe(true);
+    expect(editorAgentWritePreconditionError(byHash)).toBeNull();
+    expect(editorAgentActionHasWritePrecondition(byVersion)).toBe(true);
+    expect(editorAgentWritePreconditionError(byVersion)).toBeNull();
+  });
+
+  it("never requires a precondition for a non-write action", () => {
+    for (const type of NON_WRITE_ACTION_TYPES) {
+      expect(editorAgentWritePreconditionError(baseAction({ type }))).toBeNull();
+    }
+  });
+});
+
+describe("conflict-code taxonomy (Issue #1391 AC3)", () => {
+  it("enumerates the full structured taxonomy including PRECONDITION_REQUIRED", () => {
+    expect(EDITOR_AGENT_CONFLICT_CODES).toContain("PRECONDITION_REQUIRED");
+    expect(EDITOR_AGENT_CONFLICT_CODES.length).toBe(7);
+    for (const code of EDITOR_AGENT_CONFLICT_CODES) {
+      expect(isEditorAgentConflictCode(code)).toBe(true);
+    }
+  });
+
+  it("recognises the new PRECONDITION_REQUIRED code", () => {
+    const code: EditorAgentConflictCode = "PRECONDITION_REQUIRED";
+    expect(isEditorAgentConflictCode(code)).toBe(true);
   });
 });

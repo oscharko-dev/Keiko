@@ -516,4 +516,43 @@ describe("keiko-contracts package surface", () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<ConnectedContextPack>();
   });
+
+  it("editor-agent contract value re-exports are reachable through the barrel (#1391)", async () => {
+    const mod = await import("./index.js");
+    // Compatibility pin for the schema version constant: the public agent-editor contract is v1.
+    expect(mod.EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
+    // AC1: the content-free default snapshot text mode is exported and is `none`.
+    expect(mod.DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE).toBe("none");
+    // AC3: the structured conflict-code taxonomy is exported in full, including PRECONDITION_REQUIRED.
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("PRECONDITION_REQUIRED");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(7);
+    // AC2: the write-action classification is exported as a single source of truth.
+    expect([...mod.EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
+      ["applyPatch", "applyTextEdits", "format", "save"].sort(),
+    );
+    expect(typeof mod.isEditorAgentEvent).toBe("function");
+    expect(typeof mod.isEditorAgentWriteActionType).toBe("function");
+    expect(typeof mod.editorAgentWritePreconditionError).toBe("function");
+    expect(typeof mod.editorAgentActionHasWritePrecondition).toBe("function");
+    expect(typeof mod.isEditorAgentConflictCode).toBe("function");
+  });
+
+  it("editor-agent contract type re-exports are reachable through the barrel (#1391)", () => {
+    // Phantom generics pin the public contract types onto the barrel surface; a future refactor that
+    // drops one of these names stops this test compiling (same guard pattern as #186/#205 above).
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    type _Code = import("./index.js").EditorAgentConflictCode;
+    type _Action = import("./index.js").EditorAgentAction;
+    type _Result = import("./index.js").EditorAgentActionResult;
+    type _Event = import("./index.js").EditorAgentEvent;
+    type _Snapshot = import("./index.js").EditorAgentSessionSnapshot;
+    type _Request = import("./index.js").EditorAgentSnapshotRequest;
+    pin<_Code>();
+    pin<_Action>();
+    pin<_Result>();
+    pin<_Event>();
+    pin<_Snapshot>();
+    pin<_Request>();
+    expect(true).toBe(true);
+  });
 });
