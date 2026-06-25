@@ -79,6 +79,19 @@ async function tabLabels(pane: Locator): Promise<readonly string[]> {
   return pane.locator(".ed-tab-label").allInnerTexts();
 }
 
+async function persistedFirstPaneTabOrder(page: Page): Promise<readonly string[] | null> {
+  return page.evaluate(() => {
+    const raw = window.localStorage.getItem("keiko.workspace.v4");
+    if (raw === null) return null;
+    const wins = JSON.parse(raw) as readonly { type?: string; cfg?: { layoutJson?: string } }[];
+    const layoutJson = wins.find((w) => w.type === "editor")?.cfg?.layoutJson;
+    if (layoutJson === undefined) return null;
+    const layout = JSON.parse(layoutJson) as { panes?: Record<string, { tabOrder?: string[] }> };
+    const firstPane = Object.values(layout.panes ?? {})[0];
+    return firstPane?.tabOrder ?? null;
+  });
+}
+
 test.afterAll(() => {
   for (const root of tempProjects) rmSync(root, { recursive: true, force: true });
 });
@@ -148,6 +161,9 @@ test("persists tab order across a reload (AC1)", async ({ page }) => {
   const reordered = ["src/utils.ts", "README.md", ACTIVE_FILE];
   expect(await tabLabels(pane)).toEqual(reordered);
 
+  // The layout-persistence effect runs after paint; wait until the reordered order is in
+  // localStorage so the reload reads persisted state rather than racing the write.
+  await expect.poll(() => persistedFirstPaneTabOrder(page)).toEqual(reordered);
   await page.reload();
   const restored = await openEditor(page);
   expect(await tabLabels(restored.locator(".ed-pane").first())).toEqual(reordered);
