@@ -809,6 +809,9 @@ export function EditorWidget({
       layoutPanes: layoutPaneSnapshots,
       activePaneId: layout.activePaneId,
       onSelectOpenFile: (nextFile) => selectOpenFile(pane.id, nextFile),
+      onSplitPane: (targetPaneId, direction) => splitPane(targetPaneId, direction),
+      onMoveTab: (fromPaneId, file, toPaneId) =>
+        commitLayout(editorLayoutReducer(layout, { type: "move-tab", fromPaneId, toPaneId, file })),
       onCloseOpenFile: (path) => closeOpenFile(pane.id, path),
       onDirtyChange: (path, dirty) => markDirty(pane.id, path, dirty),
       toolbarExtras: paneActions(pane),

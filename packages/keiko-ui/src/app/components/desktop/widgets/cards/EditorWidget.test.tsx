@@ -1705,10 +1705,8 @@ describe("EditorWidget — agent bridge", () => {
       expect.arrayContaining([
         expect.objectContaining({ status: "failed", message: "Missing target file." }),
         expect.objectContaining({ status: "failed", message: "Missing text edits." }),
-        expect.objectContaining({
-          status: "failed",
-          message: "Action must be executed by the editor layout controller.",
-        }),
+        expect.objectContaining({ status: "failed", message: "Provider unavailable." }),
+        expect.objectContaining({ status: "failed", message: "Missing selection target." }),
         expect.objectContaining({ status: "succeeded" }),
       ]),
     );
@@ -2233,5 +2231,201 @@ describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
     // React should have set saveStatus to "saving" but agentConflict stays non-null.
     await act(async () => {});
     expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
+  });
+});
+
+// ─── Issue #1393 — layout-controller bridge actions (ADR-0061) ────────────────
+//
+// These tests render EditorRuntimeWidget with onSplitPane / onMoveTab injected
+// (exactly as EditorWidget.renderPane does) and exercise the AC1 path where
+// agent actions reach and invoke the layout controllers.
+
+describe("EditorWidget — agent layout-controller bridge actions", () => {
+  function agentResultsLayoutCtrl(): readonly Parameters<
+    typeof postEditorAgentActionResult
+  >[0]["result"][] {
+    return vi.mocked(postEditorAgentActionResult).mock.calls.map(([body]) => body.result);
+  }
+
+  async function renderedLayoutSession(
+    onSplitPane: ((paneId: string, direction: "row" | "column") => void) | undefined,
+    onMoveTab: ((fromPaneId: string, file: string, toPaneId: string) => void) | undefined,
+  ): Promise<{ source: FakeEventSource; sessionId: string }> {
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget
+        windowId="layout-ctrl-agent"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+        openFiles={["src/app.ts"]}
+        onSelectOpenFile={vi.fn()}
+        onSplitPane={onSplitPane}
+        onMoveTab={onMoveTab}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+      expect(FakeSource.instances.length).toBeGreaterThan(0);
+    });
+    const sessionId = String(
+      vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
+    );
+    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    return { source, sessionId };
+  }
+
+  // (a) splitPane — layout controller invoked, result succeeded ───────────────
+
+  it("splitPane with onSplitPane injected calls the layout controller and reports succeeded", async () => {
+    const onSplitPane = vi.fn();
+    const { source, sessionId } = await renderedLayoutSession(onSplitPane, vi.fn());
+
+    act(() => {
+      source.emitAction(agentAction(sessionId, "splitPane", { target: { splitDirection: "row" } }));
+    });
+
+    await waitFor(() => {
+      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
+    });
+    expect(onSplitPane).toHaveBeenCalledWith("pane-1", "row");
+  });
+
+  it("splitPane with column direction calls onSplitPane with 'column'", async () => {
+    const onSplitPane = vi.fn();
+    const { source, sessionId } = await renderedLayoutSession(onSplitPane, vi.fn());
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "splitPane", { target: { splitDirection: "column" } }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
+    });
+    expect(onSplitPane).toHaveBeenCalledWith("pane-1", "column");
+  });
+
+  // (b) moveTab — containment check blocks escaping paths ────────────────────
+
+  it("moveTab with an escaping path returns conflict OUT_OF_SCOPE", async () => {
+    const onMoveTab = vi.fn();
+    const { source, sessionId } = await renderedLayoutSession(vi.fn(), onMoveTab);
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "moveTab", {
+          target: { file: "../escape", toPaneId: "pane-x" },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        agentResultsLayoutCtrl().some(
+          (r) => r.status === "conflict" && r.conflict?.code === "OUT_OF_SCOPE",
+        ),
+      ).toBe(true);
+    });
+    expect(onMoveTab).not.toHaveBeenCalled();
+  });
+
+  it("moveTab with a valid file and pane calls onMoveTab and reports succeeded", async () => {
+    const onMoveTab = vi.fn();
+    const { source, sessionId } = await renderedLayoutSession(vi.fn(), onMoveTab);
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "moveTab", {
+          target: { file: "src/app.ts", toPaneId: "pane-2" },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
+    });
+    expect(onMoveTab).toHaveBeenCalledWith("pane-1", "src/app.ts", "pane-2");
+  });
+
+  // (c) setSelection — revealRequest transiently set on editor surface ─────────
+  // The hook sets agentSelectionRequest → surfaceRevealRequest for one render, then
+  // consumeSelectionRequest() clears it in the same act() flush. We capture the
+  // peak value via a spy on the probe write so we can assert on it after act returns.
+
+  it("setSelection passes a revealRequest with correct id and column mapping to the editor surface", async () => {
+    const { source, sessionId } = await renderedLayoutSession(vi.fn(), vi.fn());
+    const selection = {
+      start: { line: 1, character: 2 },
+      end: { line: 1, character: 5 },
+    };
+    const action = agentAction(sessionId, "setSelection", { target: { selection } });
+
+    // Capture all non-null revealRequests seen during any render of the surface probe.
+    const seenRevealRequests: NonNullable<EditorSurfaceProps["revealRequest"]>[] = [];
+    const origProps = Object.getOwnPropertyDescriptor(surface, "props");
+    Object.defineProperty(surface, "props", {
+      configurable: true,
+      set(value: EditorSurfaceProps | null) {
+        if (value?.revealRequest != null) seenRevealRequests.push(value.revealRequest);
+        // Store via direct property so reads work normally.
+        Object.defineProperty(surface, "props", {
+          configurable: true,
+          writable: true,
+          value,
+        });
+      },
+    });
+
+    act(() => {
+      source.emitAction(action);
+    });
+
+    // Restore surface.props descriptor so afterEach cleanup works normally.
+    if (origProps !== undefined) {
+      Object.defineProperty(surface, "props", origProps);
+    } else {
+      Object.defineProperty(surface, "props", { configurable: true, writable: true, value: null });
+    }
+
+    // Primary AC1 proof: the action was dispatched and reported as succeeded.
+    await waitFor(() => {
+      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
+    });
+
+    // Secondary proof: a revealRequest was seen during the transient render.
+    // It carries the actionId and maps character → column (character === column).
+    expect(seenRevealRequests.length).toBeGreaterThan(0);
+    const revealRequest = seenRevealRequests[0];
+    expect(revealRequest?.id).toContain(action.actionId);
+    expect(revealRequest?.range.start.column).toBe(2);
+    expect(revealRequest?.range.end.column).toBe(5);
+  });
+
+  // Smoke: setSelection does not change document.activeElement (AC: no focus theft)
+  it("setSelection does not steal keyboard focus from the current element", async () => {
+    const { source, sessionId } = await renderedLayoutSession(vi.fn(), vi.fn());
+    // Capture the active element before the agent action.
+    const elementBefore = document.activeElement;
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "setSelection", {
+          target: {
+            selection: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+          },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
+    });
+    // Focus must not have moved to the editor surface or any other element.
+    expect(document.activeElement).toBe(elementBefore);
+    expect(document.activeElement).not.toBe(screen.getByTestId("editor-surface"));
   });
 });
