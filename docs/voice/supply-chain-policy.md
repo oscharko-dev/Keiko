@@ -8,9 +8,11 @@ voice child issue (#493–#506).
 
 The runtime dependency budget for the entire Voice Digital Twin is:
 
-- the **existing `ws` package** (resolved version **8.21.0**, MIT), already declared in
-  [`packages/keiko-tools/package.json`](../../packages/keiko-tools/package.json) (line 40) and the root CLI
-  [`package.json`](../../package.json) (line 137); and
+- the **existing `ws` package** (resolved version **8.21.0**, MIT), declared in the root CLI
+  [`package.json`](../../package.json),
+  [`packages/keiko-tools/package.json`](../../packages/keiko-tools/package.json), and — added by Issue #497
+  under [ADR-0060](../adr/ADR-0060-realtime-voice-transport.md) — also
+  [`packages/keiko-server/package.json`](../../packages/keiko-server/package.json); and
 - **browser-native WebRTC APIs** (`RTCPeerConnection`, `MediaDevices.getUserMedia`, `RTCDataChannel`,
   `RTCIceCandidate`, `RTCSessionDescription`, ICE/STUN/TURN), which are platform capabilities, not packages.
 
@@ -29,13 +31,17 @@ reviewed for license and size, and is a compatibility shim only — not a WebRTC
 - WebRTC is a **browser platform capability**, not an npm dependency; adding a client SDK would bloat the
   bundle and couple Keiko to a provider's event schema. Keeping to native APIs keeps the surface
   provider-agnostic and audit-friendly.
-- The `ws` package is already vetted and is scoped to the CDP-to-Chrome client
+- The `ws` package is already vetted. In `keiko-tools` it is scoped to the CDP-to-Chrome client
   ([`cdp-client.ts`](../../packages/keiko-tools/src/browser/cdp-client.ts)) with a hard-coded method permit
-  list. A new import of `ws` in any package that does not currently declare it (including `keiko-server`) is
-  itself an ADR-gated decision and is not covered by the existing budget, even though `ws` is already resolved
-  in the monorepo root lockfile. Re-using it for any future WebSocket control channel is an explicit,
-  ADR-gated decision (see [architecture.md](architecture.md) §4.1), not a free additive reuse, and does not
-  change the dependency count.
+  list. Re-using `ws` in a package that did not previously declare it is an explicit, ADR-gated decision, not
+  a free additive reuse. That decision was **taken for `keiko-server`** by Issue #497 under
+  [ADR-0060](../adr/ADR-0060-realtime-voice-transport.md), which re-opened the single loopback
+  `/api/voice/control` WebSocket upgrade and declared `ws` in
+  [`packages/keiko-server/package.json`](../../packages/keiko-server/package.json) for manifest correctness.
+  This did **not** change the dependency count (`ws` was already resolved in the monorepo lockfile) and added
+  no new package. `ws` therefore remains the single allowed runtime media-adjacent package across all three
+  manifests; any further new WebSocket/media import remains ADR-gated (see
+  [architecture.md](architecture.md) §4.1).
 - Server-side WebRTC (the Node.js backend becoming a peer) would require a new native dependency and is
   **explicitly out of scope** for this epic; if ever needed it is raised as a separate dependency and
   architecture decision, not smuggled in.

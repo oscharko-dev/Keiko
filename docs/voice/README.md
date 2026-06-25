@@ -7,7 +7,10 @@ only** — it adds no runtime code, deploys no models, and adds no dependencies.
 
 The authoritative decision record is
 [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md). The documents in this directory
-expand each decision into detailed contracts that the child issues (#493–#506) reference.
+expand each decision into detailed contracts that the child issues (#493–#506) reference. Epic closure is
+recorded by Issue [#506](https://github.com/oscharko-dev/Keiko/issues/506) in
+[production-readiness.md](production-readiness.md) and
+[ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md) (documentation only).
 
 ## Documents
 
@@ -28,7 +31,9 @@ expand each decision into detailed contracts that the child issues (#493–#506)
 | [discussion-intelligence.md](discussion-intelligence.md)     | Defined (#502): text-first colleague-like discussion behavior — the five modes (challenge/review/decide/brainstorm/evidence-check), disagreement structure (evidence/assumptions/uncertainty facets), interruption recovery, committed-only voice input, no-authority guarantee, deferred visible mode-selector seam ([ADR-0065](../adr/ADR-0065-discussion-intelligence.md)). |
 | [action-intent-governance.md](action-intent-governance.md)   | Defined (#503): fail-closed deterministic effect classification (read-only/mutating/destructive/external-effect/unknown), confirmation binding via content digest, state machine with terminal invalidation, content-free audit, server governance enforcement, threat model and injection resistance ([ADR-0066](../adr/ADR-0066-voice-spoken-action-governance.md)).         |
 | [session-recap.md](session-recap.md)                         | Implemented (#504): user-triggered memory capture from committed voice transcript; reused governed extraction; content-free audit; data-retention contract (no raw audio, no unreviewed claims stored by default); review queue integration ([ADR-0067](../adr/ADR-0067-voice-session-recap.md)).                                                                              |
-| [evaluation-harness.md](evaluation-harness.md)               | Implemented (#505): capstone evaluation harness proving all six deployment profiles are machine-checkable and Acceptance Criteria 1–6 hold structurally without a live voice provider; CI-safe deterministic suite at the keiko-contracts boundary; eleven dimensions mapping to ACs ([ADR-0068](../adr/ADR-0068-voice-evaluation-harness.md)).                                   |
+| [evaluation-harness.md](evaluation-harness.md)               | Implemented (#505): capstone evaluation harness proving all six deployment profiles are machine-checkable and Acceptance Criteria 1–6 hold structurally without a live voice provider; CI-safe deterministic suite at the keiko-contracts boundary; eleven dimensions mapping to ACs ([ADR-0068](../adr/ADR-0068-voice-evaluation-harness.md)).                                |
+
+| [production-readiness.md](production-readiness.md) | Closure (#506): the formal production-readiness gate for regulated deployments — the AC1–AC6 closure checklist, capability-matrix evidence, security/privacy review record, dependency/supply-chain confirmation, deployment-profile references, and named known limitations ([ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md)). |
 
 ## Core invariants (summary)
 
