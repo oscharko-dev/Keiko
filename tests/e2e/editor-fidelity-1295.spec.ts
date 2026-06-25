@@ -621,18 +621,56 @@ function requireTrimmedText(value: string | null, message: string): string {
   return trimmed;
 }
 
-async function assertMonacoHoverCopyAffordance(
-  page: Page,
-  viewportCase: EditorResizeViewportCase,
-): Promise<void> {
-  const copyButton = page
+type BoundingBox = NonNullable<Awaited<ReturnType<Locator["boundingBox"]>>>;
+
+interface CopyButtonRestingStyles {
+  readonly backgroundColor: string;
+  readonly borderRadius: string;
+  readonly borderStyle: string;
+  readonly boxShadow: string;
+  readonly color: string;
+  readonly cursor: string;
+  readonly iconColor: string;
+  readonly opacity: string;
+}
+
+interface CopyButtonHoverStyles {
+  readonly backgroundColor: string;
+  readonly borderColor: string;
+  readonly boxShadow: string;
+  readonly color: string;
+}
+
+interface CopyTooltipStyles {
+  readonly backgroundColor: string;
+  readonly borderRadius: string;
+  readonly borderStyle: string;
+  readonly boxShadow: string;
+  readonly color: string;
+  readonly width: number;
+}
+
+interface DiagnosticHoverStyles {
+  readonly contentOverflowWrap: string;
+  readonly contentWhiteSpace: string;
+  readonly frameBorderRadius: string;
+  readonly frameBoxShadow: string;
+  readonly frameOverflowX: string;
+  readonly hoverBackground: string;
+  readonly hoverColor: string;
+  readonly actionsFlexWrap: string;
+}
+
+function monacoHoverCopyButton(page: Page): Locator {
+  return page
     .locator(
       ".monaco-resizable-hover .hover-copy-button, .monaco-editor .monaco-hover .hover-copy-button",
     )
     .first();
-  await expect(copyButton).toBeVisible();
+}
 
-  const restingStyles = await copyButton.evaluate((buttonElement) => {
+async function readCopyButtonRestingStyles(copyButton: Locator): Promise<CopyButtonRestingStyles> {
+  return copyButton.evaluate((buttonElement) => {
     const button = buttonElement as HTMLElement;
     const icon = button.matches(".codicon") ? button : button.querySelector(".codicon");
     const buttonStyle = getComputedStyle(button);
@@ -647,18 +685,25 @@ async function assertMonacoHoverCopyAffordance(
       opacity: buttonStyle.opacity,
     };
   });
+}
+
+function assertCopyButtonRestingStyles(
+  styles: CopyButtonRestingStyles,
+  viewportCase: EditorResizeViewportCase,
+): void {
   expect(
-    restingStyles.opacity,
+    styles.opacity,
     `Copy button should stay discoverable in ${viewportCase.name}`,
   ).toBe("1");
-  expect(restingStyles.borderStyle).not.toBe("none");
-  expect(restingStyles.borderRadius).not.toBe("0px");
-  expect(restingStyles.backgroundColor).toBe("rgba(0, 0, 0, 0)");
-  expect(restingStyles.boxShadow).toBe("none");
-  expect(restingStyles.iconColor).toBe(restingStyles.color);
+  expect(styles.borderStyle).not.toBe("none");
+  expect(styles.borderRadius).not.toBe("0px");
+  expect(styles.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  expect(styles.boxShadow).toBe("none");
+  expect(styles.iconColor).toBe(styles.color);
+}
 
-  await copyButton.hover({ force: true });
-  const hoverStyles = await copyButton.evaluate((buttonElement) => {
+async function readCopyButtonHoverStyles(copyButton: Locator): Promise<CopyButtonHoverStyles> {
+  return copyButton.evaluate((buttonElement) => {
     const style = getComputedStyle(buttonElement as HTMLElement);
     return {
       backgroundColor: style.backgroundColor,
@@ -667,15 +712,23 @@ async function assertMonacoHoverCopyAffordance(
       color: style.color,
     };
   });
+}
+
+function assertCopyButtonHoverStyles(
+  styles: CopyButtonHoverStyles,
+  viewportCase: EditorResizeViewportCase,
+): void {
   expect(
-    hoverStyles.boxShadow,
+    styles.boxShadow,
     `Copy button hover should expose neutral Keiko feedback in ${viewportCase.name}`,
   ).not.toBe("none");
-  expect(hoverStyles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(styles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+}
 
+async function readCopyTooltipStyles(page: Page): Promise<CopyTooltipStyles> {
   const copyTooltip = page.locator(".monaco-hover.workbench-hover").filter({ hasText: /^Copy$/u });
   await expect(copyTooltip.last()).toBeVisible();
-  const tooltipStyles = await copyTooltip.last().evaluate((tooltipElement) => {
+  return copyTooltip.last().evaluate((tooltipElement) => {
     const style = getComputedStyle(tooltipElement as HTMLElement);
     return {
       backgroundColor: style.backgroundColor,
@@ -686,16 +739,28 @@ async function assertMonacoHoverCopyAffordance(
       width: (tooltipElement as HTMLElement).getBoundingClientRect().width,
     };
   });
-  expect(tooltipStyles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
-  expect(tooltipStyles.borderStyle).not.toBe("none");
-  expect(tooltipStyles.borderRadius).not.toBe("0px");
-  expect(tooltipStyles.boxShadow).not.toBe("none");
-  expect(tooltipStyles.color).not.toBe("");
+}
+
+function assertCopyTooltipStyles(
+  styles: CopyTooltipStyles,
+  viewportCase: EditorResizeViewportCase,
+): void {
+  expect(styles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(styles.borderStyle).not.toBe("none");
+  expect(styles.borderRadius).not.toBe("0px");
+  expect(styles.boxShadow).not.toBe("none");
+  expect(styles.color).not.toBe("");
   expect(
-    tooltipStyles.width,
+    styles.width,
     `Copy tooltip should stay compact in ${viewportCase.name}`,
   ).toBeLessThanOrEqual(220);
+}
 
+async function assertCopyButtonActiveState(
+  page: Page,
+  copyButton: Locator,
+  viewportCase: EditorResizeViewportCase,
+): Promise<void> {
   await page.mouse.down();
   const activeTransform = await copyButton.evaluate(
     (buttonElement) => getComputedStyle(buttonElement as HTMLElement).transform,
@@ -708,50 +773,59 @@ async function assertMonacoHoverCopyAffordance(
   ).not.toBe("none");
 }
 
-async function exerciseResponsiveDiagnosticHover(
+async function assertMonacoHoverCopyAffordance(
+  page: Page,
+  viewportCase: EditorResizeViewportCase,
+): Promise<void> {
+  const copyButton = monacoHoverCopyButton(page);
+  await expect(copyButton).toBeVisible();
+
+  assertCopyButtonRestingStyles(await readCopyButtonRestingStyles(copyButton), viewportCase);
+  await copyButton.hover({ force: true });
+  assertCopyButtonHoverStyles(await readCopyButtonHoverStyles(copyButton), viewportCase);
+  assertCopyTooltipStyles(await readCopyTooltipStyles(page), viewportCase);
+  await assertCopyButtonActiveState(page, copyButton, viewportCase);
+}
+
+async function revealNeedleWithFind(
   page: Page,
   editorWindow: Locator,
-  viewportCase: EditorResizeViewportCase,
   needle: string,
-  shouldOpenBelowLine = false,
 ): Promise<void> {
-  const host = editorWindow.locator(".ed-host").first();
-  const diagnosticLine = editorWindow.locator(".view-line").filter({ hasText: needle }).first();
-  if (!(await diagnosticLine.isVisible({ timeout: 2_000 }).catch(() => false))) {
-    await editorWindow.locator(".monaco-editor").first().click();
-    await page.keyboard.press("Control+F");
-    if (
-      !(await page
-        .locator(".find-widget")
-        .isVisible({ timeout: 1_000 })
-        .catch(() => false))
-    ) {
-      await page.keyboard.press("Meta+F");
-    }
-    await page.keyboard.insertText(needle);
-    await expect(diagnosticLine).toBeVisible();
-    await page.keyboard.press("Escape");
-    await waitForAnimationFrames(page);
+  await editorWindow.locator(".monaco-editor").first().click();
+  await page.keyboard.press("Control+F");
+  if (!(await page.locator(".find-widget").isVisible({ timeout: 1_000 }).catch(() => false))) {
+    await page.keyboard.press("Meta+F");
   }
+  await page.keyboard.insertText(needle);
+}
+
+async function ensureDiagnosticLineVisible(
+  page: Page,
+  editorWindow: Locator,
+  diagnosticLine: Locator,
+  needle: string,
+): Promise<void> {
+  if (await diagnosticLine.isVisible({ timeout: 2_000 }).catch(() => false)) return;
+  await revealNeedleWithFind(page, editorWindow, needle);
   await expect(diagnosticLine).toBeVisible();
+  await page.keyboard.press("Escape");
+  await waitForAnimationFrames(page);
+}
+
+async function assertEditorProblemStatus(editorWindow: Locator): Promise<void> {
   await expect(
     editorWindow
       .getByRole("status")
       .filter({ hasText: /Problems: [1-9]\d* errors/u })
       .first(),
   ).toBeVisible({ timeout: 60_000 });
+}
 
+async function openDiagnosticHover(page: Page, diagnosticLineBox: BoundingBox): Promise<Locator> {
   const hoverFrame = page
     .locator(".monaco-resizable-hover:has(.monaco-hover), .monaco-hover")
     .first();
-  const diagnosticLineBox = await diagnosticLine.boundingBox();
-  expect(
-    diagnosticLineBox,
-    `Diagnostic probe line should be measurable in ${viewportCase.name}`,
-  ).not.toBeNull();
-  if (diagnosticLineBox === null) {
-    throw new Error("Expected diagnostic probe line to have a bounding box");
-  }
   const hoverY = diagnosticLineBox.y + diagnosticLineBox.height / 2;
   for (const xOffset of [84, 132, 184, 236]) {
     await page.mouse.move(
@@ -763,24 +837,41 @@ async function exerciseResponsiveDiagnosticHover(
     }
   }
   await expect(hoverFrame).toBeVisible();
-  await expect(hoverFrame).toContainText(new RegExp(escapeRegExp(needle), "u"));
+  return hoverFrame;
+}
 
-  const hoverBox = await hoverFrame.boundingBox();
-  const hostBox = await host.boundingBox();
-  expect(hoverBox, `Diagnostic hover should be measurable in ${viewportCase.name}`).not.toBeNull();
-  expect(hostBox, `Editor host should be measurable in ${viewportCase.name}`).not.toBeNull();
-  if (hoverBox === null || hostBox === null) {
-    throw new Error("Expected diagnostic hover and editor host to have bounding boxes");
+function requireBoundingBox(
+  box: Awaited<ReturnType<Locator["boundingBox"]>>,
+  message: string,
+): BoundingBox {
+  expect(box, message).not.toBeNull();
+  if (box === null) {
+    throw new Error(message);
   }
+  return box;
+}
 
-  const maxAllowedWidth =
-    viewportCase.viewport.width <= 800
-      ? Math.min(280, viewportCase.viewport.width - 128, Math.max(0, hostBox.width - 24))
-      : Math.min(520, viewportCase.viewport.width - 24, Math.max(0, hostBox.width - 24));
+function maxDiagnosticHoverWidth(
+  viewportCase: EditorResizeViewportCase,
+  hostBox: BoundingBox,
+): number {
+  if (viewportCase.viewport.width <= 800) {
+    return Math.min(280, viewportCase.viewport.width - 128, Math.max(0, hostBox.width - 24));
+  }
+  return Math.min(520, viewportCase.viewport.width - 24, Math.max(0, hostBox.width - 24));
+}
+
+function assertDiagnosticHoverPosition(
+  hoverBox: BoundingBox,
+  hostBox: BoundingBox,
+  diagnosticLineBox: BoundingBox,
+  viewportCase: EditorResizeViewportCase,
+  shouldOpenBelowLine: boolean,
+): void {
   expect(
     hoverBox.width,
     `Diagnostic hover width should be capped in ${viewportCase.name}`,
-  ).toBeLessThanOrEqual(maxAllowedWidth + 1);
+  ).toBeLessThanOrEqual(maxDiagnosticHoverWidth(viewportCase, hostBox) + 1);
   expect(
     hoverBox.x,
     `Diagnostic hover should not clip left in ${viewportCase.name}`,
@@ -803,8 +894,10 @@ async function exerciseResponsiveDiagnosticHover(
     hoverBox.y + hoverBox.height,
     `Diagnostic hover should remain inside the viewport vertically in ${viewportCase.name}`,
   ).toBeLessThanOrEqual(viewportCase.viewport.height + 1);
+}
 
-  const hoverStyles = await hoverFrame.evaluate((frameElement) => {
+async function readDiagnosticHoverStyles(hoverFrame: Locator): Promise<DiagnosticHoverStyles> {
+  return hoverFrame.evaluate((frameElement) => {
     const frame = frameElement as HTMLElement;
     const hover = frame.classList.contains("monaco-hover")
       ? frame
@@ -819,7 +912,7 @@ async function exerciseResponsiveDiagnosticHover(
     const actions = hover.querySelector(".hover-row .actions");
     const frameStyle = getComputedStyle(frame);
     const hoverStyle = getComputedStyle(hover);
-    const contentStyle = getComputedStyle(content as HTMLElement);
+    const contentStyle = getComputedStyle(content);
     return {
       contentOverflowWrap: contentStyle.overflowWrap,
       contentWhiteSpace: contentStyle.whiteSpace,
@@ -832,16 +925,57 @@ async function exerciseResponsiveDiagnosticHover(
         actions instanceof HTMLElement ? getComputedStyle(actions).flexWrap : "missing",
     };
   });
-  expect(hoverStyles.frameBorderRadius).not.toBe("0px");
-  expect(hoverStyles.frameBoxShadow).not.toBe("none");
-  expect(hoverStyles.frameOverflowX).toBe("hidden");
-  expect(hoverStyles.hoverBackground).not.toBe("rgba(0, 0, 0, 0)");
-  expect(hoverStyles.hoverColor).not.toBe("");
-  expect(["normal", "pre-wrap"]).toContain(hoverStyles.contentWhiteSpace);
-  expect(hoverStyles.contentOverflowWrap).toBe("anywhere");
-  if (hoverStyles.actionsFlexWrap !== "missing") {
-    expect(hoverStyles.actionsFlexWrap).toBe("wrap");
+}
+
+function assertDiagnosticHoverStyles(styles: DiagnosticHoverStyles): void {
+  expect(styles.frameBorderRadius).not.toBe("0px");
+  expect(styles.frameBoxShadow).not.toBe("none");
+  expect(styles.frameOverflowX).toBe("hidden");
+  expect(styles.hoverBackground).not.toBe("rgba(0, 0, 0, 0)");
+  expect(styles.hoverColor).not.toBe("");
+  expect(["normal", "pre-wrap"]).toContain(styles.contentWhiteSpace);
+  expect(styles.contentOverflowWrap).toBe("anywhere");
+  if (styles.actionsFlexWrap !== "missing") {
+    expect(styles.actionsFlexWrap).toBe("wrap");
   }
+}
+
+async function exerciseResponsiveDiagnosticHover(
+  page: Page,
+  editorWindow: Locator,
+  viewportCase: EditorResizeViewportCase,
+  needle: string,
+  shouldOpenBelowLine = false,
+): Promise<void> {
+  const host = editorWindow.locator(".ed-host").first();
+  const diagnosticLine = editorWindow.locator(".view-line").filter({ hasText: needle }).first();
+  await ensureDiagnosticLineVisible(page, editorWindow, diagnosticLine, needle);
+  await expect(diagnosticLine).toBeVisible();
+  await assertEditorProblemStatus(editorWindow);
+
+  const diagnosticLineBox = requireBoundingBox(
+    await diagnosticLine.boundingBox(),
+    `Diagnostic probe line should be measurable in ${viewportCase.name}`,
+  );
+  const hoverFrame = await openDiagnosticHover(page, diagnosticLineBox);
+  await expect(hoverFrame).toContainText(new RegExp(escapeRegExp(needle), "u"));
+
+  const hoverBox = requireBoundingBox(
+    await hoverFrame.boundingBox(),
+    `Diagnostic hover should be measurable in ${viewportCase.name}`,
+  );
+  const hostBox = requireBoundingBox(
+    await host.boundingBox(),
+    `Editor host should be measurable in ${viewportCase.name}`,
+  );
+  assertDiagnosticHoverPosition(
+    hoverBox,
+    hostBox,
+    diagnosticLineBox,
+    viewportCase,
+    shouldOpenBelowLine,
+  );
+  assertDiagnosticHoverStyles(await readDiagnosticHoverStyles(hoverFrame));
   await assertMonacoHoverCopyAffordance(page, viewportCase);
 
   await page.keyboard.press("Escape");
