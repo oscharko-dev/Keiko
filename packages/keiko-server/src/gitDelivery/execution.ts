@@ -111,7 +111,7 @@ function adapterFor(
   return createNodeGitMutationAdapter({ workspace, processEnv: process.env, now });
 }
 
-function defaultActionId(command: GitMutationCommand, nowMs: number): string {
+export function defaultGitDeliveryActionId(command: unknown, nowMs: number): string {
   return `gde-action-${sha256Hex(`${JSON.stringify(command)}:${String(nowMs)}`).slice(0, 24)}`;
 }
 
@@ -121,7 +121,7 @@ function redactStringFor(deps: Pick<UiHandlerDeps, "redactor">): (input: string)
   return (input: string): string => deps.redactor(input) as string;
 }
 
-function persistEvidence(
+export function persistGitDeliveryEvidence(
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   result: GitMutationLifecycleResult,
   snapshot: GitWorktreeSnapshot,
@@ -167,7 +167,8 @@ export async function executeGovernedMutation(
   const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
   const adapter = adapterFor(workspace, seams, now);
   const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK };
-  const newActionId = seams.newActionId ?? ((): string => defaultActionId(command, now()));
+  const newActionId =
+    seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
   const result = await runGitMutation(
     { command, approval },
     {
@@ -179,7 +180,7 @@ export async function executeGovernedMutation(
       newActionId,
     },
   );
-  persistEvidence(deps, result, snapshot, workspace.root, now);
+  persistGitDeliveryEvidence(deps, result, snapshot, workspace.root, now);
   return result;
 }
 

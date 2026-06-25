@@ -162,6 +162,7 @@ const ACTION_HINT_BY_PREFLIGHT_FINDING: Readonly<
   "untracked-files-impacted": "stage-changes",
   "no-upstream-configured": "configure-upstream",
   "nothing-to-push": "retry",
+  "non-fast-forward": "resolve-conflicts",
   "remote-alias-missing": "configure-upstream",
   "remote-unreachable": "wait-for-provider",
   "operation-in-progress": "abort-in-progress-operation",

@@ -201,3 +201,8 @@ export {
   readStagedPaths,
   type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";
+
+// The Node remote publish executor (Issue #476) carries the same Node spawn effect and a DEDICATED
+// push allowlist; it is exposed on the SAME `./internal/git-mutation` subpath. Its allowlist is
+// structurally separate from both the mutation and the read-only inspection rules.
+export { createNodeGitPublishAdapter, type NodeGitPublishAdapterDeps } from "./git-publish-node.js";
