@@ -342,6 +342,13 @@ export const Icons = {
       <path d="M14.5 5 V19" />
     </Ico>
   ),
+  /* Lift: panel frame with one top seam + bottom divider. */
+  panelDown: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M13.50 4.50 H18.00 A2.5 2.5 0 0 1 20.50 7.00 V17.00 A2.5 2.5 0 0 1 18.00 19.50 H6.00 A2.5 2.5 0 0 1 3.50 17.00 V7.00 A2.5 2.5 0 0 1 6.00 4.50 H10.50" />
+      <path d="M5 14.5 H19" />
+    </Ico>
+  ),
   /* Lift: open top diamond (seam) + two stacked sheets. */
   layers: (p: IcoProps): ReactNode => (
     <Ico {...p}>
