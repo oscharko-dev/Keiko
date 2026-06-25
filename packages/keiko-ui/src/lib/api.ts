@@ -52,6 +52,7 @@ import type {
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
   EditorAgentActionResultRequest,
+  EditorAgentAuditResponse,
   EditorAgentSessionSnapshot,
   EditorAgentSessionsResponse,
   EditorAgentSnapshotRequest,
@@ -1210,6 +1211,12 @@ export async function postEditorAgentActionResult(
     method: "POST",
     body: JSON.stringify(result),
   });
+}
+
+// Issue #1395 (ADR-0062) — read the bounded audit feed of recent agent editor actions for a session.
+// Content-free records only (no raw source, no secrets); used by the recent-actions governance panel.
+export async function fetchEditorAgentAudit(sessionId: string): Promise<EditorAgentAuditResponse> {
+  return fetchJson(`/api/editor/agent/audit?sessionId=${encodeURIComponent(sessionId)}`);
 }
 
 // ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import type { ServerResponse } from "node:http";
 import { createHash } from "node:crypto";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
+  classifyEditorAgentAction,
   editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
@@ -26,6 +27,7 @@ import {
   parseEditorAgentSnapshotRequest,
   validateAgentTextEdits,
   type EditorAgentAction,
+  type EditorAgentActionPolicyDecision,
   type EditorAgentActionResult,
   type EditorAgentConflictCode,
   type EditorAgentEvent,
@@ -39,7 +41,11 @@ import {
   type PatchFileChange,
   type PatchValidation,
 } from "@oscharko-dev/keiko-tools";
-import { resolveWithinWorkspace, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  isDenied,
+  resolveWithinWorkspace,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   errorBody,
@@ -51,6 +57,11 @@ import {
 import { SSE_HEADERS, readyMessage } from "../sse.js";
 import { readJsonObject } from "../files.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
+import {
+  _resetEditorAgentAuditForTests,
+  listEditorAgentActionAudit,
+  recordEditorAgentActionAudit,
+} from "./agentActionAudit.js";
 
 const MAX_AGENT_BODY_BYTES = 1_048_576;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = 64 * 1024;
@@ -168,6 +179,22 @@ function containmentConflict(
   return isContainedAgentPath(file)
     ? null
     : conflict(action, "OUT_OF_SCOPE", "The target file escapes the workspace root.");
+}
+
+// Issue #1395 (ADR-0062) — a write action whose target is a contained but always-on-deny-listed path
+// (.env, .ssh, .keiko, credentials, …) is denied by policy across ALL write action types. Previously
+// the deny-list was enforced only on the applyPatch path (via validatePatch); this closes the gap for
+// applyTextEdits/save/format. Surfaced as the existing OUT_OF_SCOPE conflict so no new wire code is
+// introduced; the fine-grained governance reason (denied-sensitive-path) lives in the audit record.
+function sensitivePathConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionResult | null {
+  const file = targetFile(action, snapshot);
+  if (file === null || !isContainedAgentPath(file)) return null;
+  return isDenied(file)
+    ? conflict(action, "OUT_OF_SCOPE", "The target file is a protected workspace path.")
+    : null;
 }
 
 function textEditsConflict(action: EditorAgentAction): EditorAgentActionResult | null {
@@ -365,6 +392,7 @@ function structuralWriteConflict(
     documentVersionConflict(action, snapshot) ??
     contentHashConflict(action, snapshot) ??
     containmentConflict(action, snapshot) ??
+    sensitivePathConflict(action, snapshot) ??
     textEditsConflict(action) ??
     patchValidationConflict(action, snapshot) ??
     preconditionConflict(action)
@@ -416,6 +444,52 @@ export async function handleEditorAgentSnapshot(ctx: RouteContext): Promise<Rout
   };
 }
 
+// Issue #1395 (ADR-0062) — the workspace-relative target path an action governs, or null when it has
+// no file target. Used both for the policy decision and the (content-free) audit record.
+function resolveActionTargetPath(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+): string | null {
+  return action.target?.file ?? snapshot?.activeFile ?? null;
+}
+
+// Deterministic policy classification (AC2). Containment reuses the contract guard; sensitivity reuses
+// the always-on workspace deny-list (a keiko-workspace concern the leaf classifier cannot reach, so
+// the boolean is resolved here). Only meaningful for write actions; navigation/layout always allow.
+function decideActionPolicy(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+): EditorAgentActionPolicyDecision {
+  const targetPath = resolveActionTargetPath(action, snapshot);
+  const targetSensitive =
+    targetPath !== null && isContainedAgentPath(targetPath) && isDenied(targetPath);
+  return classifyEditorAgentAction(action.type, { targetPath, targetSensitive });
+}
+
+// Issue #1395 (AC1) — record one content-free audit entry for this action at its admission decision.
+// Best-effort: the ledger filters to mutating/denied actions and never throws. `editCount`/
+// `patchByteLength` are counts only, never edit or patch content.
+function auditAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+  result: EditorAgentActionResult,
+): void {
+  recordEditorAgentActionAudit({
+    occurredAt: Date.now(),
+    sessionId: action.sessionId,
+    actionId: action.actionId,
+    actionType: action.type,
+    decision,
+    outcome: result.status,
+    conflictCode: result.conflict?.code,
+    failureCode: result.failure?.code,
+    targetPath: resolveActionTargetPath(action, snapshot),
+    editCount: action.type === "applyTextEdits" ? action.textEdits?.length : undefined,
+    patchByteLength: action.type === "applyPatch" ? action.patch?.length : undefined,
+  });
+}
+
 export async function handleEditorAgentActions(ctx: RouteContext): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
   if (isRouteResult(body)) return body;
@@ -443,13 +517,16 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
     }
     return { status: 200, body: { result: replay.result } };
   }
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  const decision = decideActionPolicy(action, snapshot);
   const failed = preflight(action);
   if (failed !== null) {
     rememberIdempotency(action.idempotencyKey, requestHash, failed);
+    auditAction(action, snapshot, decision, failed);
     editorAgentRegistry.reportResult(failed);
     return { status: 409, body: { result: failed } };
   }
-  return queueAndEmitAction(action, requestHash);
+  return queueAndEmitAction(action, requestHash, snapshot, decision);
 }
 
 function failedResult(action: EditorAgentAction, message: string): EditorAgentActionResult {
@@ -462,16 +539,22 @@ function failedResult(action: EditorAgentAction, message: string): EditorAgentAc
   };
 }
 
-function queueAndEmitAction(action: EditorAgentAction, requestHash: string): RouteResult {
-  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+function queueAndEmitAction(
+  action: EditorAgentAction,
+  requestHash: string,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+): RouteResult {
   const emitAction = snapshot === undefined ? null : buildEmitAction(action, snapshot);
   if (emitAction === null) {
     const result = failedResult(action, "Patch could not be prepared for review.");
     rememberIdempotency(action.idempotencyKey, requestHash, result);
+    auditAction(action, snapshot, decision, result);
     return { status: 409, body: { result } };
   }
   const outcome = editorAgentRegistry.queueAction(action, emitAction);
   rememberIdempotency(action.idempotencyKey, requestHash, outcome.result);
+  auditAction(action, snapshot, decision, outcome.result);
   if (outcome.kind === "rejected") {
     // QUEUE_FULL is backpressure (429); a duplicate in-flight actionId is a conflict (409).
     const status = outcome.result.failure?.code === "QUEUE_FULL" ? 429 : 409;
@@ -484,6 +567,14 @@ export function handleEditorAgentEvents(ctx: RouteContext): HandlerOutcome {
   const sessionId = ctx.url.searchParams.get("sessionId") ?? undefined;
   openAgentSseStream(ctx, sessionId);
   return STREAMING;
+}
+
+// Issue #1395 (ADR-0062, AC4) — read-only feed of the bounded audit ledger so users can inspect what
+// an agent changed or attempted. Scoped to the session when `?sessionId=` is present; otherwise a
+// bounded recent-activity view across sessions. Content-free records only (no raw source, no secrets).
+export function handleEditorAgentAudit(ctx: RouteContext): RouteResult {
+  const sessionId = ctx.url.searchParams.get("sessionId") ?? undefined;
+  return { status: 200, body: { records: listEditorAgentActionAudit(sessionId) } };
 }
 
 // Opens the SSE stream and registers the connection as either a session bridge (when `?sessionId=` is
@@ -507,4 +598,5 @@ function openAgentSseStream(ctx: RouteContext, sessionId: string | undefined): v
 export function _resetEditorAgentStateForTests(): void {
   idempotency.clear();
   editorAgentRegistry.reset();
+  _resetEditorAgentAuditForTests();
 }

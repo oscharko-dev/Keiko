@@ -251,6 +251,12 @@ export interface UseEditorAgentBridgeParams {
     readonly code: EditorAgentConflictCode;
     readonly message: string;
   }) => void;
+  /**
+   * Issue #1395 — fired whenever the bridge observes agent activity for this session (an action
+   * dispatch or a result). The recent-actions audit panel uses it to re-fetch the bounded audit feed
+   * so the governance surface stays live without widening the frozen `EditorAgentEvent` union.
+   */
+  readonly onAgentActivity?: (() => void) | undefined;
 }
 
 export interface UseEditorAgentBridgeResult {
@@ -266,7 +272,7 @@ export interface UseEditorAgentBridgeResult {
 export function useEditorAgentBridge(
   params: UseEditorAgentBridgeParams,
 ): UseEditorAgentBridgeResult {
-  const { agentSessionId, controllers, registerSnapshot, onConflict } = params;
+  const { agentSessionId, controllers, registerSnapshot, onConflict, onAgentActivity } = params;
   const [agentSelectionRequest, setAgentSelectionRequest] =
     useState<EditorAgentSelectionRequest | null>(null);
 
@@ -274,6 +280,8 @@ export function useEditorAgentBridge(
   // dispatchControllersRef are used without tearing down and re-opening the EventSource on every keystroke.
   const onConflictRef = useRef(onConflict);
   onConflictRef.current = onConflict;
+  const onAgentActivityRef = useRef(onAgentActivity);
+  onAgentActivityRef.current = onAgentActivity;
 
   const requestSelectionReveal = useCallback((request: EditorAgentSelectionRequest): void => {
     setAgentSelectionRequest(request);
@@ -312,6 +320,8 @@ export function useEditorAgentBridge(
         if (action.sessionId !== agentSessionId) return;
         const descriptor = dispatchEditorAgentAction(action, dispatchControllersRef.current);
         reportDescriptor(action, descriptor);
+        // Issue #1395 — an action for this session was dispatched; refresh the audit panel.
+        onAgentActivityRef.current?.();
       } catch {
         // Ignore malformed SSE frames; the server owns validation before enqueueing.
       }
@@ -320,9 +330,12 @@ export function useEditorAgentBridge(
       try {
         const parsed: unknown = JSON.parse(event.data);
         if (!isEditorAgentEvent(parsed)) return;
-        if (parsed.type !== "result" || parsed.result.status !== "conflict") return;
-        // F6: filter by sessionId so a conflict for another pane does not pop this banner.
+        if (parsed.type !== "result") return;
+        // F6: filter by sessionId so a result for another pane does not pop this banner.
         if (parsed.result.sessionId !== agentSessionId) return;
+        // Issue #1395 — any result for this session is audit-relevant; refresh the audit panel.
+        onAgentActivityRef.current?.();
+        if (parsed.result.status !== "conflict") return;
         const { conflict } = parsed.result;
         if (conflict === undefined) return;
         onConflictRef.current({ code: conflict.code, message: conflict.message });

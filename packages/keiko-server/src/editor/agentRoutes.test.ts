@@ -15,10 +15,12 @@ import { EDITOR_AGENT_ACTION_TIMEOUT_MS } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentStateForTests,
   handleEditorAgentActions,
+  handleEditorAgentAudit,
   handleEditorAgentEvents,
   handleEditorAgentSessions,
   handleEditorAgentSnapshot,
 } from "./agentRoutes.js";
+import type { EditorAgentActionAuditRecord } from "@oscharko-dev/keiko-contracts";
 
 const HASH = "a".repeat(64);
 
@@ -1124,5 +1126,101 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     expect(logged).not.toContain("TOP_SECRET_EDIT");
 
     vi.restoreAllMocks();
+  });
+});
+
+// ─── Issue #1395 (ADR-0062): policy taxonomy + bounded audit ─────────────────────────────────────
+
+function auditRecords(sessionId = "session-1"): readonly EditorAgentActionAuditRecord[] {
+  const result = handleEditorAgentAudit({
+    req: {} as unknown as IncomingMessage,
+    res: {} as unknown as ServerResponse,
+    params: {},
+    url: new URL(
+      `http://localhost/api/editor/agent/audit?sessionId=${encodeURIComponent(sessionId)}`,
+    ),
+  });
+  const body = result.body;
+  if (!isRecord(body) || !Array.isArray(body.records)) return [];
+  return body.records as readonly EditorAgentActionAuditRecord[];
+}
+
+function applyTextEditsAction(newText: string, file?: string): EditorAgentAction {
+  return action({
+    type: "applyTextEdits",
+    expectedContentHash: HASH,
+    ...(file === undefined ? {} : { target: { file } }),
+    textEdits: [
+      { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, newText },
+    ],
+  });
+}
+
+describe("agent editor action policy (Issue #1395 AC2)", () => {
+  it("denies a write to a deny-listed sensitive path with OUT_OF_SCOPE", async () => {
+    await registerSnapshot();
+    const result = await handleEditorAgentActions(context(applyTextEditsAction("x", ".env")));
+    expect(result.status).toBe(409);
+    expect(actionResultStatus(result.body)).toBe("conflict");
+    expect(actionConflictCode(result.body)).toBe("OUT_OF_SCOPE");
+  });
+
+  it("admits a contained, non-sensitive write for human review (review-required → queued)", async () => {
+    await registerSnapshot();
+    const result = await handleEditorAgentActions(context(applyTextEditsAction("hello")));
+    expect(result.status).toBe(202);
+    expect(actionResultStatus(result.body)).toBe("queued");
+  });
+});
+
+describe("agent editor action audit (Issue #1395 AC1, AC3, AC4)", () => {
+  it("records bounded audit metadata for a queued mutating action (AC1)", async () => {
+    await registerSnapshot();
+    await handleEditorAgentActions(context(applyTextEditsAction("hello")));
+    const records = auditRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]?.actionType).toBe("applyTextEdits");
+    expect(records[0]?.disposition).toBe("review-required");
+    expect(records[0]?.outcome).toBe("queued");
+    expect(records[0]?.mutating).toBe(true);
+    expect(records[0]?.editCount).toBe(1);
+  });
+
+  it("records a denied action with its deny reason and conflict code (AC2, AC4)", async () => {
+    await registerSnapshot();
+    await handleEditorAgentActions(context(applyTextEditsAction("x", ".env")));
+    const records = auditRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]?.disposition).toBe("denied");
+    expect(records[0]?.denyReason).toBe("denied-sensitive-path");
+    expect(records[0]?.conflictCode).toBe("OUT_OF_SCOPE");
+  });
+
+  it("does not audit an allowed navigation action", async () => {
+    await registerSnapshot();
+    await handleEditorAgentActions(
+      context(
+        action({ type: "openFile", target: { file: "src/a.ts" }, expectedContentHash: undefined }),
+      ),
+    );
+    expect(auditRecords()).toHaveLength(0);
+  });
+
+  it("never stores raw edit content in the audit feed (AC3)", async () => {
+    await registerSnapshotOnly({ text: "AUDIT_SECRET_SOURCE", textMode: "activeFile" });
+    connectBridge("session-1");
+    await handleEditorAgentActions(context(applyTextEditsAction("AUDIT_SECRET_EDIT")));
+    const serialized = JSON.stringify(auditRecords());
+    expect(serialized).not.toContain("AUDIT_SECRET_EDIT");
+    expect(serialized).not.toContain("AUDIT_SECRET_SOURCE");
+    // The record still proves the action happened: it carries the edit COUNT, not the edit content.
+    expect(auditRecords()[0]?.editCount).toBe(1);
+  });
+
+  it("scopes the audit feed to the requested session", async () => {
+    await registerSnapshot();
+    await handleEditorAgentActions(context(applyTextEditsAction("hello")));
+    expect(auditRecords("session-1")).toHaveLength(1);
+    expect(auditRecords("session-2")).toHaveLength(0);
   });
 });
