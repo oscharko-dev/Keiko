@@ -38,6 +38,6 @@
     "yauzl": "^3.3.2"
   },
   "optionalDependencies": {
-    "@napi-rs/canvas": "^1.0.0"
+    "@napi-rs/canvas": "^1.0.1"
   }
 }
