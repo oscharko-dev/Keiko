@@ -124,6 +124,35 @@ import type {
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
+  GitDeliveryActionEnvelope,
+  GitDeliveryResolvedInputs,
+  GitDeliveryConstraint,
+  GitDeliveryPolicyDecision,
+  GitDeliveryBranchProtection,
+  GitDeliveryMergeReadiness,
+  GitDeliveryPullRequestState,
+} from "./index.js";
+import {
+  GIT_DELIVERY_SCHEMA_VERSION,
+  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  GIT_DELIVERY_PROVIDER_SCHEMA_VERSION,
+  GIT_DELIVERY_ACTION_KINDS,
+  GIT_DELIVERY_RISK_CLASSES,
+  GIT_DELIVERY_RISK_CLASS_SEVERITY,
+  GIT_DELIVERY_ACTION_RISK_DEFAULTS,
+  GIT_DELIVERY_BLOCK_REASONS,
+  GIT_DELIVERY_PROVIDER_CAPABILITIES,
+  GIT_DELIVERY_RULE_DECISIONS,
+  GIT_DELIVERY_CHECKS_OVERALL_STATUSES,
+  GIT_DELIVERY_PULL_REQUEST_STATUSES,
+  GIT_DELIVERY_BRANCH_MATCH_KINDS,
+  GIT_DELIVERY_EXECUTION_ERROR_CODES,
+  GIT_DELIVERY_EXECUTION_OUTCOMES,
+  GIT_DELIVERY_MERGE_BLOCK_REASONS,
+  isGitDeliveryActionKind,
+  gitDeliveryDefaultRiskClass,
+  evaluateGitPolicy,
+  parseGitDeliveryActionEnvelope,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
@@ -515,5 +544,50 @@ describe("keiko-contracts package surface", () => {
     expect(validateSelectedScope(scope)).toEqual({ ok: true });
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<ConnectedContextPack>();
+  });
+
+  it("governed Git delivery contracts are reachable through the barrel (#471)", () => {
+    // Schema versions.
+    expect(GIT_DELIVERY_SCHEMA_VERSION).toBe("1");
+    expect(GIT_DELIVERY_POLICY_SCHEMA_VERSION).toBe("1");
+    expect(GIT_DELIVERY_PROVIDER_SCHEMA_VERSION).toBe("1");
+
+    // Count assertions are intentional surface pins; bump deliberately when #472+ extends the surface.
+    expect(GIT_DELIVERY_ACTION_KINDS.length).toBe(10);
+    expect(GIT_DELIVERY_RISK_CLASSES.length).toBe(4);
+    expect(GIT_DELIVERY_BLOCK_REASONS.length).toBe(6);
+    expect(GIT_DELIVERY_PROVIDER_CAPABILITIES.length).toBe(5);
+    expect(GIT_DELIVERY_RULE_DECISIONS.length).toBe(4);
+    expect(GIT_DELIVERY_CHECKS_OVERALL_STATUSES.length).toBe(4);
+    expect(GIT_DELIVERY_PULL_REQUEST_STATUSES.length).toBe(3);
+    expect(GIT_DELIVERY_BRANCH_MATCH_KINDS.length).toBe(2);
+    expect(GIT_DELIVERY_EXECUTION_ERROR_CODES.length).toBe(6);
+    expect(GIT_DELIVERY_EXECUTION_OUTCOMES.length).toBe(4);
+    expect(GIT_DELIVERY_MERGE_BLOCK_REASONS.length).toBe(6);
+
+    // Risk severity and per-kind defaults cover every kind.
+    expect(GIT_DELIVERY_RISK_CLASS_SEVERITY["local-mutation"]).toBe(1);
+    expect(GIT_DELIVERY_RISK_CLASS_SEVERITY["recovery-or-rewrite"]).toBe(4);
+    for (const kind of GIT_DELIVERY_ACTION_KINDS) {
+      expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS[kind]).toBeDefined();
+    }
+
+    // Value-level functions are reachable.
+    expect(typeof isGitDeliveryActionKind).toBe("function");
+    expect(typeof gitDeliveryDefaultRiskClass).toBe("function");
+    expect(typeof evaluateGitPolicy).toBe("function");
+    expect(typeof parseGitDeliveryActionEnvelope).toBe("function");
+    expect(gitDeliveryDefaultRiskClass("unknown-future-kind")).toBe("recovery-or-rewrite");
+    expect(isGitDeliveryActionKind("commit")).toBe(true);
+
+    // Type pins (compile-time reachability).
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<GitDeliveryActionEnvelope>();
+    pin<GitDeliveryResolvedInputs>();
+    pin<GitDeliveryConstraint>();
+    pin<GitDeliveryPolicyDecision>();
+    pin<GitDeliveryBranchProtection>();
+    pin<GitDeliveryMergeReadiness>();
+    pin<GitDeliveryPullRequestState>();
   });
 });
