@@ -103,6 +103,16 @@ describe("validateGitCommitMessage per-violation cases", () => {
     expect(violationsOf("feat(ui): add flow", emptyPattern)).not.toContain("missing-issue-key");
   });
 
+  it("stays total and fails closed when an enabled issue-key pattern is not a valid regex", () => {
+    const brokenPattern: GitCommitMessagePolicy = {
+      ...DEFAULT,
+      requireIssueKey: { enabled: true, pattern: "[unterminated(" },
+    };
+    // A pure validator must never throw on a well-typed input; an unparseable enabled pattern blocks.
+    expect(() => validateGitCommitMessage("feat(ui): add flow #475", brokenPattern)).not.toThrow();
+    expect(violationsOf("feat(ui): add flow #475", brokenPattern)).toContain("missing-issue-key");
+  });
+
   it("missing-signoff only when sign-off is required", () => {
     const policy: GitCommitMessagePolicy = { ...DEFAULT, requireSignoff: true };
     expect(violationsOf("feat(ui): add flow", policy)).toContain("missing-signoff");
