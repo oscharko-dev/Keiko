@@ -491,6 +491,36 @@ describe("normalizeEditorWindowCfg", () => {
       openFiles: ["Users/example/Keiko/package.json"],
     });
   });
+
+  it("drops an absolute file outside the root instead of persisting it (#1374)", () => {
+    // An absolute path that does not live under the window root must NOT be written back into the
+    // editor cfg (it would be rejected by the BFF as a non-root-relative id). It is dropped so the
+    // window persists with no active file, single-sourced through the keiko-contracts contract.
+    expect(
+      normalizeEditorWindowCfg({
+        root: "/Users/example/Keiko",
+        file: "/Users/example/Other/outside.ts",
+        openFiles: ["/Users/example/Other/outside.ts", "/Users/example/Keiko/src/app.ts"],
+      }),
+    ).toEqual({
+      root: "/Users/example/Keiko",
+      openFiles: ["src/app.ts"],
+    });
+  });
+
+  it("keeps an already-relative file id and rejects a traversal-escaping tab (#1374)", () => {
+    expect(
+      normalizeEditorWindowCfg({
+        root: "/Users/example/Keiko",
+        file: "src/app.ts",
+        openFiles: ["src/app.ts", "../../etc/passwd"],
+      }),
+    ).toEqual({
+      root: "/Users/example/Keiko",
+      file: "src/app.ts",
+      openFiles: ["src/app.ts"],
+    });
+  });
 });
 
 // uiux-fix F008 C043/C118 — the header status pill derives from real session state instead of a

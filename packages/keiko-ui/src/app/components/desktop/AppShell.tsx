@@ -165,39 +165,27 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-// Root-relative file-identifier contract (Issue #1374). The editor-window cfg-persistence layer
-// shares the same contract as the editor open flow (EditorWidget / workspaceActions), so a file id
-// is single-sourced through @oscharko-dev/keiko-contracts. The historic ""/relative/null return
-// contract is preserved: "" for the root itself / no file, the root-relative remainder when
-// contained, and null when the candidate cannot be relativized under `root` (the caller then keeps
-// the candidate as-is for already-relative paths, or drops it when it is absolute). The two edge
-// cases the contract folds to "outside-root" — a filesystem-root ("/") root and an empty root — are
-// handled locally to keep behavior identical.
-function editorRelativePath(root: string, file: string): string | null {
-  const slashedRoot = root.trim().replace(/\\/gu, "/");
-  // `^\/+$` is anchored at both ends, so it stays linear on adversarial all-slash input.
-  if (/^\/+$/u.test(slashedRoot)) {
+// Root-relative file-identifier contract (Issue #1374). The editor-window cfg-persistence layer is
+// single-sourced through @oscharko-dev/keiko-contracts, exactly like the editor open flow
+// (EditorWidget / workspaceActions). A persisted cfg file id is resolved to a root-relative
+// identifier under the window's `root`; an absolute-inside-root path is stripped, the root itself or
+// an empty file maps to "" (no active file), and a path that cannot be relativized under the root
+// (absolute-outside or a traversal escape) returns null and is DROPPED — never persisted. This
+// closes the divergence where an absolute path could be written into the editor window cfg, which is
+// the failure #1374 set out to prevent. Cfg persistence intentionally keeps the window's root rather
+// than re-anchoring it, so `resolveWorkspaceFileIdentifier` is used here, not `selectWorkspaceFileTarget`.
+function editorCfgRelativePath(root: string, file: string): string | null {
+  // Filesystem-root ("/") workspace edge: every absolute path is "under" it, so strip the leading
+  // slash. The contract folds a "/" root to empty/outside-root, so this one intentional, tested case
+  // (a whole-disk editor root) is handled locally. `^\/+$` is anchored at both ends — linear.
+  if (/^\/+$/u.test(root.trim().replace(/\\/gu, "/"))) {
     const comparableFile = file.trim().replace(/\\/gu, "/");
     return comparableFile.length === 0 ? "" : comparableFile.replace(/^\/+/u, "");
   }
-  // Past the all-slash guard, an empty root is the only way the stripped root is empty.
-  if (slashedRoot.length === 0) return "";
   const resolution = resolveWorkspaceFileIdentifier(root, file);
   if (resolution.kind === "relative") return resolution.path;
-  if (resolution.kind === "outside-root") return null;
-  return "";
-}
-
-function isAbsoluteEditorPath(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/u.test(path);
-}
-
-function normalizeEditorCfgPath(root: string, path: string): string | null {
-  const raw = path.trim();
-  if (raw.length === 0) return "";
-  const relative = editorRelativePath(root, raw);
-  if (relative !== null) return relative;
-  return isAbsoluteEditorPath(raw) ? null : raw.replace(/\\/gu, "/").replace(/^\/+/u, "");
+  if (resolution.kind === "root" || resolution.kind === "empty") return "";
+  return null;
 }
 
 function normalizeEditorOpenFiles(
@@ -207,7 +195,7 @@ function normalizeEditorOpenFiles(
 ): readonly string[] {
   const out: string[] = [];
   const add = (path: string): void => {
-    const relative = normalizeEditorCfgPath(root, path);
+    const relative = editorCfgRelativePath(root, path);
     if (relative === null || relative.length === 0 || out.includes(relative)) return;
     out.push(relative);
   };
@@ -224,23 +212,11 @@ export function normalizeEditorWindowCfg(cfg: Cfg): Cfg {
   const root = typeof cfg.root === "string" ? cfg.root.trim() : "";
   const file = typeof cfg.file === "string" ? cfg.file.trim() : "";
   if (root.length === 0) return cfg;
-  const relativeFile = editorRelativePath(root, file);
+  const relativeFile = editorCfgRelativePath(root, file);
   const next: Cfg = { ...cfg, root };
-  const normalizedOpenFiles = normalizeEditorOpenFiles(
-    root,
-    cfg.openFiles,
-    relativeFile !== null ? relativeFile : file,
-  );
-  if (relativeFile === null) {
-    if (file.length > 0) next.file = file;
-    if (normalizedOpenFiles.length > 0) {
-      next.openFiles = normalizedOpenFiles;
-    } else {
-      delete next.openFiles;
-    }
-    return next;
-  }
-  if (relativeFile.length > 0) {
+  const normalizedOpenFiles = normalizeEditorOpenFiles(root, cfg.openFiles, relativeFile ?? "");
+  // A non-relativizable file id (absolute-outside or escaping) is dropped, never persisted (#1374).
+  if (relativeFile !== null && relativeFile.length > 0) {
     next.file = relativeFile;
   } else {
     delete next.file;
