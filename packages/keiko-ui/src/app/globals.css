@@ -5263,8 +5263,20 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .dlg-agent-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 10px;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 0 -18px -6px;
+  padding: 12px 18px 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-overlay);
+  box-shadow: 0 -10px 18px color-mix(in oklch, var(--surface-overlay) 70%, transparent);
+}
+.dlg-agent-actions .dlg-note {
+  margin-right: auto;
 }
 .dlg-note {
   font-size: 11px;
@@ -18070,9 +18082,28 @@ button.figma-view-preview {
   gap: 2px;
   max-height: 220px;
   overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
   padding: 4px;
+}
+.dir-list::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.dir-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dir-list::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border: 3px solid transparent;
+  border-radius: 10px;
+  background-clip: padding-box;
+}
+.dir-list::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  background-clip: padding-box;
 }
 .file-picker-list {
   max-height: 260px;

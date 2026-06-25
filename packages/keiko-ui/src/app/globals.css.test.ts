@@ -78,6 +78,32 @@ function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}):
   return css.slice(idx, css.indexOf("}", idx) + 1);
 }
 
+describe("Issue #1429 — Agents launcher action row and picker scrollbars", () => {
+  it("keeps the Agents dialog actions sticky and unified inside the dialog flow", () => {
+    const block = cssBlock(".dlg-agent-actions {");
+    expect(block).toContain("justify-content: flex-end");
+    expect(block).toContain("position: sticky");
+    expect(block).toContain("bottom: 0");
+    expect(block).toContain("border-top: 1px solid var(--border-subtle)");
+    expect(block).toContain("background: var(--surface-overlay)");
+    expect(cssBlock(".dlg-agent-actions .dlg-note {")).toContain("margin-right: auto");
+  });
+
+  it("uses token-backed thin scrollbar styling for directory and file pickers", () => {
+    const dirList = cssBlock(".dir-list {");
+    expect(dirList).toContain("scrollbar-width: thin");
+    expect(dirList).toContain("scrollbar-color: var(--border-default) transparent");
+    expect(cssBlock(".file-picker-list {")).toContain("max-height: 260px");
+
+    const thumb = cssBlock(".dir-list::-webkit-scrollbar-thumb {");
+    expect(thumb).toContain("background: var(--border-default)");
+    expect(thumb).toContain("background-clip: padding-box");
+    expect(cssBlock(".dir-list::-webkit-scrollbar-thumb:hover {")).toContain(
+      "background: var(--border-strong)",
+    );
+  });
+});
+
 // ─── Fix 1: WCAG 2.4.7 — focus-visible ───────────────────────────────────────
 
 describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
