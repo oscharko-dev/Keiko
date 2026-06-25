@@ -154,9 +154,12 @@ export function EditorAgentActionsPanel({
     >
       <h3 style={TITLE_STYLE}>Recent agent actions</h3>
       {errored ? (
+        // aria-live (not role="status") announces the failure without registering a queryable
+        // "status" role — the panel is mounted per pane, so a status role would collide with other
+        // status queries in the editor surface.
         <p
           style={{ ...ROW_STYLE, color: "var(--feedback-danger)", margin: 0 }}
-          role="status"
+          aria-live="polite"
           data-testid="agent-actions-error"
         >
           Unable to load recent agent actions.
