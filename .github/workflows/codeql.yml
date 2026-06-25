@@ -6,12 +6,14 @@ on:
       - dev
       - feat/keiko-editor
       - feat/prompt-enhancer-1307
+      - feat/keiko-establish-governed-end-to-end-git-delivery
       - "release/**"
   pull_request:
     branches:
       - dev
       - feat/keiko-editor
       - feat/prompt-enhancer-1307
+      - feat/keiko-establish-governed-end-to-end-git-delivery
       - "release/**"
   schedule:
     - cron: "15 2 * * 0"
