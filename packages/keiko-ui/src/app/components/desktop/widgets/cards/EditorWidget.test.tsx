@@ -27,9 +27,14 @@ import {
   requestEditorTestGeneration,
   saveFilesContent,
 } from "../../../../../lib/api";
+import {
+  EDITOR_HOT_EXIT_SCHEMA_VERSION,
+  type EditorHotExitSnapshotV1,
+} from "@oscharko-dev/keiko-contracts";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
+import { deleteEditorHotExitSnapshot, readEditorHotExitSnapshot } from "./editorHotExitStore";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -51,6 +56,15 @@ vi.mock("../../../../../lib/api", async () => {
     requestEditorTestGeneration: vi.fn(),
   };
 });
+
+// The hot-exit store reaches IndexedDB, which jsdom does not provide. Mock it so recovery snapshots
+// can be injected deterministically; reads default to "no snapshot" to match the unmocked degraded
+// behaviour the rest of the suite relies on.
+vi.mock("./editorHotExitStore", () => ({
+  readEditorHotExitSnapshot: vi.fn(() => Promise.resolve(null)),
+  writeEditorHotExitSnapshot: vi.fn(() => Promise.resolve()),
+  deleteEditorHotExitSnapshot: vi.fn(() => Promise.resolve()),
+}));
 
 // The real surface dynamically imports `monaco-editor`, which cannot run in jsdom. Replace
 // `next/dynamic` with a probe that captures the host-driven props and lets the test drive the
@@ -214,6 +228,23 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
     content: "const value = 1;\n",
     maxBytes: 1_000_000,
     session: { schemaVersion: "1", version: BASE_VERSION },
+    ...over,
+  };
+}
+
+function recoverySnapshotFixture(over?: Partial<EditorHotExitSnapshotV1>): EditorHotExitSnapshotV1 {
+  return {
+    schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
+    workspaceRoot: "/repo",
+    relativePath: "src/app.ts",
+    content: "recovered edits\n",
+    baseVersion: BASE_VERSION,
+    contentHash: "b".repeat(64),
+    // Matches BASE_VERSION.contentHash by default → the on-disk file is unchanged since the snapshot.
+    savedContentHash: "a".repeat(64),
+    updatedAt: 1,
+    paneId: "pane-1",
+    windowId: "editor-test",
     ...over,
   };
 }
@@ -635,6 +666,9 @@ describe("EditorWidget — conflict and error", () => {
       fileResponse({ modifiedAt: 5, session: { schemaVersion: "1", version: reloadedVersion } }),
     );
     await userEvent.click(reload);
+    // Reloading over the dirty conflict buffer routes through the explicit reload-file discard
+    // acknowledgement before the disk content is loaded (Issue #1376 D1).
+    await userEvent.click(await screen.findByRole("button", { name: "Discard and reload" }));
     await waitFor(() => {
       expect(fetchFilesContent).toHaveBeenCalledTimes(2);
     });
@@ -656,6 +690,37 @@ describe("EditorWidget — conflict and error", () => {
         expect.objectContaining({ baseVersion: reloadedVersion }),
       );
     });
+  });
+
+  it("requires explicit confirmation before a dirty conflict reload discards the buffer (Issue #1376)", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "edited\n", sizeBytes: 7 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("conflict");
+    });
+
+    // Clicking Reload over a dirty buffer must not immediately re-fetch from disk; it opens an
+    // explicit discard confirmation (the reload-file dirty-close policy) instead.
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Discard unsaved changes?" }),
+    ).toBeInTheDocument();
+    expect(fetchFilesContent).toHaveBeenCalledTimes(1);
+
+    // Cancel leaves the dirty conflict buffer untouched and reloads nothing.
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull();
+    });
+    expect(fetchFilesContent).toHaveBeenCalledTimes(1);
+    expect(surface.props?.fileModel.dirty).toBe(true);
+    expect(surface.props?.saveStatus).toBe("conflict");
   });
 
   it("treats a STALE_SESSION 409 as a recoverable conflict (Issue #1197)", async () => {
@@ -705,6 +770,8 @@ describe("EditorWidget — conflict and error", () => {
       new ApiError("READ_FAILED", "The file could not be loaded.", 500),
     );
     await userEvent.click(reload);
+    // Acknowledge the reload-file discard confirmation before the (failing) disk load runs.
+    await userEvent.click(await screen.findByRole("button", { name: "Discard and reload" }));
 
     const retry = await screen.findByRole("button", { name: "Retry" });
     expect(screen.queryByTestId("editor-surface")).toBeNull();
@@ -2427,5 +2494,75 @@ describe("EditorWidget — agent layout-controller bridge actions", () => {
     // Focus must not have moved to the editor surface or any other element.
     expect(document.activeElement).toBe(elementBefore);
     expect(document.activeElement).not.toBe(screen.getByTestId("editor-surface"));
+  });
+});
+
+describe("EditorWidget — hot-exit recovery", () => {
+  it("offers recovery when a hot-exit snapshot differs from disk and restores it on demand (AC3)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n" }),
+    );
+    await renderLoaded();
+
+    expect(
+      await screen.findByText("Recovered unsaved editor changes are available."),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore unsaved changes" }));
+
+    await waitFor(() => {
+      expect(surface.props?.fileModel.dirty).toBe(true);
+    });
+    expect(screen.queryByText("Recovered unsaved editor changes are available.")).toBeNull();
+  });
+
+  it("does not offer recovery when the snapshot matches the on-disk content (AC3)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "const value = 1;\n" }),
+    );
+    await renderLoaded();
+
+    expect(surface.props?.fileModel.dirty).toBe(false);
+    expect(screen.queryByText(/Recovered/)).toBeNull();
+  });
+
+  it("offers compare, keep-local, use-disk, and cancel when the disk changed under a recovery (AC4)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n", savedContentHash: "f".repeat(64) }),
+    );
+    await renderLoaded();
+
+    expect(
+      await screen.findByText("Recovered editor changes are available, and the disk file changed."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Compare" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep local" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use disk" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+    // Compare opens a true side-by-side diff: on-disk content (original) vs the recovered buffer.
+    await userEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await waitFor(() => {
+      expect(diffSurface.props).not.toBeNull();
+    });
+    expect(diffSurface.props?.model.files[0]?.original).toBe("const value = 1;\n");
+    expect(diffSurface.props?.model.files[0]?.modified).toBe("recovered edits\n");
+  });
+
+  it("deletes the hot-exit snapshot when the disk version is chosen over a recovery (AC4/AC5)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n", savedContentHash: "f".repeat(64) }),
+    );
+    await renderLoaded();
+    await screen.findByText("Recovered editor changes are available, and the disk file changed.");
+
+    // Ignore the clean-buffer delete fired during load; assert the deletion caused by "Use disk".
+    vi.mocked(deleteEditorHotExitSnapshot).mockClear();
+    await userEvent.click(screen.getByRole("button", { name: "Use disk" }));
+
+    await waitFor(() => {
+      expect(deleteEditorHotExitSnapshot).toHaveBeenCalledWith("/repo", "src/app.ts");
+    });
+    expect(screen.queryByText(/Recovered editor changes/)).toBeNull();
   });
 });

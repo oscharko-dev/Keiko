@@ -36,6 +36,7 @@ import {
 
 import { Icons } from "../../Icons";
 import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirtyState";
+import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget } from "./FilesWidget";
@@ -445,10 +446,16 @@ export function EditorWidget({
       for (const [paneId, files] of Object.entries(dirtyByPane)) {
         if (files[path] === true) markDirty(paneId, path, false);
       }
+      // AC5: an explicit Discard must delete the hot-exit snapshot for the file, otherwise the
+      // discarded edits resurface as a recovery offer the next time the file is opened. The runtime
+      // widget's own clean-delete effect cannot be relied on here: applying the close unmounts that
+      // widget in the same React commit as the dirty flag is cleared, so the effect never runs.
+      // Deletion is scoped to the still-current workspace root (apply() may switch roots afterward).
+      void deleteEditorHotExitSnapshot(workspaceRoot, path);
     }
     pendingClose.apply();
     setPendingClose(null);
-  }, [dirtyByPane, markDirty, pendingClose]);
+  }, [dirtyByPane, markDirty, pendingClose, workspaceRoot]);
 
   const cancelPendingClose = useCallback((): void => {
     if (pendingClose?.saving === true) return;
