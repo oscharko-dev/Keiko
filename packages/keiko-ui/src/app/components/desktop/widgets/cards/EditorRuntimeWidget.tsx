@@ -26,6 +26,7 @@ import dynamic from "next/dynamic";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useId,
   useMemo,
   useReducer,
@@ -141,6 +142,8 @@ const TEST_GENERATION_CONTEXT_BUDGET_BYTES = 65_536;
 // Content-free transport-failure message; the editor stays usable after a failed run.
 const TEST_GENERATION_FAILURE_MESSAGE =
   "Test generation could not be reached. The editor is still usable.";
+const COMPACT_TABS_ENTER_WIDTH_PX = 420;
+const COMPACT_TABS_EXIT_WIDTH_PX = 460;
 const BOOTSTRAP_LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   schemaVersion: "1",
   providers: [
@@ -240,9 +243,7 @@ async function sha256Hex(text: string): Promise<string> {
   const cryptoLike = globalThis.crypto;
   if (cryptoLike?.subtle !== undefined) {
     const digest = await cryptoLike.subtle.digest("SHA-256", new TextEncoder().encode(text));
-    return [...new Uint8Array(digest)]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
   let hash = 0x811c9dc5;
   for (let index = 0; index < text.length; index += 1) {
@@ -252,9 +253,10 @@ async function sha256Hex(text: string): Promise<string> {
   return hash.toString(16).padStart(8, "0").repeat(8).slice(0, 64);
 }
 
-function rangeToAgentRange(range: EditorRange | null):
-  | { readonly start: { readonly line: number; readonly character: number }; readonly end: { readonly line: number; readonly character: number } }
-  | null {
+function rangeToAgentRange(range: EditorRange | null): {
+  readonly start: { readonly line: number; readonly character: number };
+  readonly end: { readonly line: number; readonly character: number };
+} | null {
   if (range === null) return null;
   return {
     start: { line: range.start.line, character: range.start.column },
@@ -335,9 +337,7 @@ function providerForLanguage(
   languageId: string | undefined,
 ): LanguageProviderDescriptor | null {
   if (capabilities === null || languageId === undefined) return null;
-  return (
-    capabilities.providers.find((provider) => provider.languages.includes(languageId)) ?? null
-  );
+  return capabilities.providers.find((provider) => provider.languages.includes(languageId)) ?? null;
 }
 
 function providerOperationEnabled(
@@ -349,6 +349,13 @@ function providerOperationEnabled(
     provider.availability === "available" &&
     provider.operations.includes(operation)
   );
+}
+
+function summarizePaths(paths: readonly string[]): string {
+  if (paths.length === 0) return "";
+  if (paths.length === 1) return paths[0] ?? "";
+  if (paths.length === 2) return `${paths[0] ?? ""}, ${paths[1] ?? ""}`;
+  return `${paths[0] ?? ""}, ${paths[1] ?? ""} +${String(paths.length - 2)} more`;
 }
 
 export default function EditorRuntimeWidget({
@@ -383,6 +390,7 @@ export default function EditorRuntimeWidget({
   );
   const tabId = `${editorDomIdPrefix}-active-tab`;
   const tabpanelId = `${editorDomIdPrefix}-tabpanel`;
+  const tablistRef = useRef<HTMLDivElement>(null);
   const documentTabs = useMemo(() => {
     const deduped: string[] = [];
     for (const path of openFiles ?? []) {
@@ -393,6 +401,52 @@ export default function EditorRuntimeWidget({
     }
     return deduped;
   }, [file, openFiles]);
+  const [tablistCompact, setTablistCompact] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = tablistRef.current;
+    if (el === null) return;
+    let frame: number | null = null;
+    const updateCompactState = (): void => {
+      frame = null;
+      const width = Math.round(el.getBoundingClientRect().width);
+      if (width <= 0) return;
+      setTablistCompact((current) => {
+        const next = current
+          ? width < COMPACT_TABS_EXIT_WIDTH_PX
+          : width < COMPACT_TABS_ENTER_WIDTH_PX;
+        return current === next ? current : next;
+      });
+    };
+    const scheduleUpdate = (): void => {
+      if (frame !== null) return;
+      frame =
+        typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame(updateCompactState)
+          : window.setTimeout(updateCompactState, 0);
+    };
+    scheduleUpdate();
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleUpdate);
+    ro?.observe(el);
+    return () => {
+      if (frame !== null) {
+        if (typeof window.cancelAnimationFrame === "function") {
+          window.cancelAnimationFrame(frame);
+        } else {
+          window.clearTimeout(frame);
+        }
+      }
+      ro?.disconnect();
+    };
+  }, [documentTabs.length]);
+  const compactTabs =
+    tablistCompact && file !== undefined && file.length > 0 && documentTabs.length > 2;
+  const summaryTabs = compactTabs ? documentTabs.filter((path) => path !== file) : [];
+  const visibleTabs = compactTabs ? documentTabs.filter((path) => path === file) : documentTabs;
+  const summaryTip = summarizePaths(summaryTabs);
+  const summaryMenuId = `${editorDomIdPrefix}-summary-menu`;
+  const summaryMenuRef = useRef<HTMLDetailsElement>(null);
+  const [summaryMenuOpen, setSummaryMenuOpen] = useState(false);
 
   const [content, setContent] = useState("");
   const [fileModel, setFileModel] = useState<EditorFileModel | null>(null);
@@ -419,9 +473,8 @@ export default function EditorRuntimeWidget({
   const [diagnosticsSummary, setDiagnosticsSummary] = useState<EditorDiagnosticsSummary | null>(
     null,
   );
-  const [languageCapabilities, setLanguageCapabilities] = useState<LanguageServiceCapabilities | null>(
-    BOOTSTRAP_LANGUAGE_CAPABILITIES,
-  );
+  const [languageCapabilities, setLanguageCapabilities] =
+    useState<LanguageServiceCapabilities | null>(BOOTSTRAP_LANGUAGE_CAPABILITIES);
   const [recoverySnapshot, setRecoverySnapshot] = useState<EditorHotExitSnapshotV1 | null>(null);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [activeContentHash, setActiveContentHash] = useState<string | null>(null);
@@ -493,8 +546,15 @@ export default function EditorRuntimeWidget({
   const dirty = fileModelMatchesTarget && isDocumentDirty(fileModel);
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
+  const lastDirtyNotificationRef = useRef<{
+    readonly file: string;
+    readonly dirty: boolean;
+  } | null>(null);
   useEffect(() => {
     if (file === undefined || file.length === 0) return;
+    const lastNotification = lastDirtyNotificationRef.current;
+    if (lastNotification?.file === file && lastNotification.dirty === dirty) return;
+    lastDirtyNotificationRef.current = { file, dirty };
     onDirtyChange?.(file, dirty);
   }, [dirty, file, onDirtyChange]);
   useEffect(() => {
@@ -1145,7 +1205,8 @@ export default function EditorRuntimeWidget({
   const diagnosticsEnabled =
     providerOperationEnabled(languageProvider, "diagnostics") && !largeFileDegraded;
   const hoverEnabled = providerOperationEnabled(languageProvider, "hover") && !largeFileDegraded;
-  const symbolsEnabled = providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
+  const symbolsEnabled =
+    providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
   const formattingEnabled =
     providerOperationEnabled(languageProvider, "formatting") && !largeFileDegraded;
   const editorSurfaceKey = `${themeVariant ?? "dark"}:${languageProvider?.id ?? "none"}:${largeFileMode}`;
@@ -1161,6 +1222,7 @@ export default function EditorRuntimeWidget({
   const canGenerateTests =
     hasTarget && completionEnabled && loadState.status === "ready" && !testGenBusy;
   const testGenStatusText = describeTestGenerationStatus(testGenState);
+  const testGenStatusLabel = testGenState.kind === "disabled" ? "Tests off" : testGenStatusText;
 
   const buffer: EditorBuffer | null = useMemo(
     () =>
@@ -1196,7 +1258,7 @@ export default function EditorRuntimeWidget({
       ? undefined
       : currentSelection.end.line - currentSelection.start.line + 1;
   const statusBarRun: EditorStatusRun | undefined =
-    testGenStatusText.length > 0 ? { label: testGenStatusText, busy: testGenBusy } : undefined;
+    testGenStatusLabel.length > 0 ? { label: testGenStatusLabel, busy: testGenBusy } : undefined;
   const statusBarViewModel =
     fileModel === null
       ? null
@@ -1255,35 +1317,52 @@ export default function EditorRuntimeWidget({
     },
     [file, onCloseOpenFile, root, saveStatus],
   );
+  const handleChooseSummaryTab = useCallback(
+    (path: string): void => {
+      handleSelectTab(path);
+      setSummaryMenuOpen(false);
+      summaryMenuRef.current?.removeAttribute("open");
+    },
+    [handleSelectTab],
+  );
 
   const agentSessionId = useMemo(
     () => `${safeDomIdSegment(windowId ?? generatedId)}:${rootHash(root ?? "")}`,
     [generatedId, root, windowId],
   );
+  const agentDocumentVersion = useMemo(
+    () =>
+      version === null
+        ? null
+        : {
+            ...version,
+            modifiedAt: Math.max(0, Math.round(version.modifiedAt)),
+          },
+    [version],
+  );
 
   useEffect(() => {
-    if (!hasTarget || root === undefined || file === undefined || activeContentHash === null) return;
+    if (!hasTarget || root === undefined || file === undefined || activeContentHash === null)
+      return;
     void postEditorAgentSessionSnapshot({
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       sessionId: agentSessionId,
       windowId: windowId ?? "editor",
       workspaceRoot: root,
       activePaneId: activePaneId ?? paneId ?? null,
-      panes:
-        layoutPanes ??
-        [
-          {
-            paneId: paneId ?? "pane-1",
-            activeFile: file,
-            openFiles: documentTabs,
-          },
-        ],
+      panes: layoutPanes ?? [
+        {
+          paneId: paneId ?? "pane-1",
+          activeFile: file,
+          openFiles: documentTabs,
+        },
+      ],
       dirtyFiles: effectiveDirtyFiles.size > 0 ? [...effectiveDirtyFiles] : [],
       activeFile: file,
       cursor: cursor === null ? null : { line: cursor.line, character: cursor.column },
       selection: rangeToAgentRange(currentSelection),
       diagnosticsSummary,
-      ...(version === null ? {} : { documentVersion: version }),
+      ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
       activeFileContentHash: activeContentHash,
       textMode: "none",
       updatedAt: Date.now(),
@@ -1299,17 +1378,21 @@ export default function EditorRuntimeWidget({
     diagnosticsSummary,
     documentTabs,
     effectiveDirtyFiles,
+    agentDocumentVersion,
     file,
     hasTarget,
     layoutPanes,
     paneId,
     root,
-    version,
     windowId,
   ]);
 
   const postAgentResult = useCallback(
-    (action: EditorAgentAction, status: "succeeded" | "failed" | "conflict", message?: string): void => {
+    (
+      action: EditorAgentAction,
+      status: "succeeded" | "failed" | "conflict",
+      message?: string,
+    ): void => {
       const body: EditorAgentActionResultRequest = {
         schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
         kind: "result",
@@ -1384,11 +1467,19 @@ export default function EditorRuntimeWidget({
           case "splitPane":
           case "setSelection":
           case "applyPatch":
-            postAgentResult(action, "failed", "Action must be executed by the editor layout controller.");
+            postAgentResult(
+              action,
+              "failed",
+              "Action must be executed by the editor layout controller.",
+            );
             return;
         }
       } catch (error) {
-        postAgentResult(action, "failed", error instanceof Error ? error.message : "Action failed.");
+        postAgentResult(
+          action,
+          "failed",
+          error instanceof Error ? error.message : "Action failed.",
+        );
       }
     },
     [agentSessionId, formattingEnabled, onSelectOpenFile, persist, postAgentResult],
@@ -1510,9 +1601,9 @@ export default function EditorRuntimeWidget({
   return (
     <div className="editor">
       <div className="ed-tabs mono">
-        <div className="ed-tablist" role="tablist" aria-label="Open documents">
-          {documentTabs.length > 0 ? (
-            documentTabs.map((path) => {
+        <div className="ed-tablist" ref={tablistRef} role="tablist" aria-label="Open documents">
+          {visibleTabs.length > 0 ? (
+            visibleTabs.map((path) => {
               const active = path === file;
               const tabDomId = active
                 ? tabId
@@ -1527,14 +1618,14 @@ export default function EditorRuntimeWidget({
                 >
                   <button
                     type="button"
-                    className="ed-tab-hit"
+                    className="ed-tab-hit ui-tip"
                     draggable={tabHandle?.draggable}
                     role="tab"
                     id={tabDomId}
                     aria-selected={active ? "true" : "false"}
                     aria-controls={tabpanelId}
                     tabIndex={active ? 0 : -1}
-                    title={path}
+                    data-tip={path}
                     onDragStart={tabHandle?.onDragStart}
                     onDragEnd={tabHandle?.onDragEnd}
                     onKeyDown={tabHandle?.onKeyDown}
@@ -1543,7 +1634,7 @@ export default function EditorRuntimeWidget({
                     <FileIcon name={path} />
                     <span className="ed-tab-label">{path}</span>
                     {tabDirty ? (
-                      <span className="ed-dirty" aria-hidden="true" title="Unsaved changes">
+                      <span className="ed-dirty" aria-hidden="true">
                         ●
                       </span>
                     ) : null}
@@ -1551,9 +1642,9 @@ export default function EditorRuntimeWidget({
                   {onCloseOpenFile !== undefined ? (
                     <button
                       type="button"
-                      className="ed-tab-close"
+                      className="ed-tab-close ui-tip"
                       aria-label={`Close ${path}`}
-                      title={`Close ${path}`}
+                      data-tip={`Close ${path}`}
                       onClick={() => void handleCloseTab(path)}
                     >
                       ×
@@ -1565,70 +1656,127 @@ export default function EditorRuntimeWidget({
           ) : (
             <span className="ed-tab active" data-dirty="false">
               <span
-                className="ed-tab-hit"
+                className="ed-tab-hit ui-tip"
                 role="tab"
                 id={tabId}
                 aria-selected="true"
                 aria-controls={tabpanelId}
                 tabIndex={0}
-                title="Editor"
+                data-tip="Editor"
               >
                 <Icons.editor size={12} />
                 <span className="ed-tab-label">Editor</span>
               </span>
             </span>
           )}
+          {compactTabs && summaryTabs.length > 0 ? (
+            <details
+              ref={summaryMenuRef}
+              className="ed-tab-summary-menu"
+              open={summaryMenuOpen}
+              onToggle={(event) => setSummaryMenuOpen(event.currentTarget.open)}
+            >
+              <summary
+                className="ed-tab-summary ui-tip"
+                aria-label={`${String(summaryTabs.length)} more open documents`}
+                aria-haspopup="menu"
+                aria-expanded={summaryMenuOpen ? "true" : "false"}
+                aria-controls={summaryMenuId}
+                data-tip={summaryTip}
+              >
+                +{summaryTabs.length}
+              </summary>
+              <div
+                className="ed-tab-summary-panel"
+                id={summaryMenuId}
+                aria-label="Hidden open documents"
+              >
+                {summaryTabs.map((path) => {
+                  const tabDirty = effectiveDirtyFiles.has(path);
+                  return (
+                    <button
+                      type="button"
+                      key={path}
+                      className="ed-tab-summary-item ui-tip"
+                      data-tip={path}
+                      onClick={() => handleChooseSummaryTab(path)}
+                    >
+                      <Icons.editor size={12} />
+                      <span className="ed-tab-summary-label">{path}</span>
+                      {tabDirty ? (
+                        <span className="ed-dirty" aria-hidden="true">
+                          ●
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </details>
+          ) : null}
         </div>
-        <span className="spacer" />
-        {toolbarExtras}
-        {hasTarget && completionEnabled ? (
-          <button
-            type="button"
-            className="ed-save"
-            onClick={() => {
-              if (canGenerateTests) runTestGeneration();
-            }}
-            aria-disabled={!canGenerateTests}
-            title="Generate unit tests for this file"
-          >
-            {testGenBusy ? "Generating…" : "Generate Tests"}
-          </button>
-        ) : null}
-        {testGenBusy ? (
-          <button type="button" className="ed-reload" onClick={cancelTestGeneration}>
-            Cancel
-          </button>
-        ) : null}
-        {hasTarget ? (
-          <button
-            type="button"
-            className="ed-save"
-            onClick={() => {
-              if (canFormat) setFormatRequestNonce((value) => value + 1);
-            }}
-            aria-disabled={canFormat ? "false" : "true"}
-            title="Format document"
-          >
-            Format
-          </button>
-        ) : null}
-        {hasTarget && saveStatus === "conflict" ? (
-          <button type="button" className="ed-reload" onClick={reload}>
-            Reload
-          </button>
-        ) : null}
-        {hasTarget ? (
-          <button
-            type="button"
-            className="ed-save"
-            onClick={() => {
-              if (canSave) void persist(content);
-            }}
-            aria-disabled={saveUnavailable}
-          >
-            {saveStatus === "saving" ? "Saving…" : "Save"}
-          </button>
-        ) : null}
+        <div className="ed-toolbar-actions">
+          {toolbarExtras}
+          {hasTarget && completionEnabled ? (
+            <button
+              type="button"
+              className="ed-save ui-tip"
+              onClick={() => {
+                if (canGenerateTests) runTestGeneration();
+              }}
+              aria-disabled={!canGenerateTests}
+              data-tip="Generate unit tests for this file"
+            >
+              {testGenBusy ? "Generating…" : "Generate Tests"}
+            </button>
+          ) : null}
+          {testGenBusy ? (
+            <button
+              type="button"
+              className="ed-reload ui-tip"
+              onClick={cancelTestGeneration}
+              data-tip="Cancel test generation"
+            >
+              Cancel
+            </button>
+          ) : null}
+          {hasTarget ? (
+            <button
+              type="button"
+              className="ed-save ui-tip"
+              onClick={() => {
+                if (canFormat) setFormatRequestNonce((value) => value + 1);
+              }}
+              aria-disabled={canFormat ? "false" : "true"}
+              data-tip="Format document"
+            >
+              Format
+            </button>
+          ) : null}
+          {hasTarget && saveStatus === "conflict" ? (
+            <button
+              type="button"
+              className="ed-reload ui-tip"
+              onClick={reload}
+              data-tip="Reload from disk"
+            >
+              Reload
+            </button>
+          ) : null}
+          {hasTarget ? (
+            <button
+              type="button"
+              className="ed-save ui-tip"
+              onClick={() => {
+                if (canSave) void persist(content);
+              }}
+              aria-disabled={saveUnavailable}
+              data-tip={saveStatus === "saving" ? "Saving changes" : "Save changes"}
+            >
+              {saveStatus === "saving" ? "Saving…" : "Save"}
+            </button>
+          ) : null}
+        </div>
       </div>
       {recoverySnapshot !== null ? (
         <div className="ed-recovery" role="status">

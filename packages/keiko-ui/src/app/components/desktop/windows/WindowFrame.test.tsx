@@ -86,6 +86,37 @@ function workspaceRef(rect: DOMRect = domRect()): RefObject<HTMLElement> {
   return { current: element };
 }
 
+function installAnimationFrameQueue(): {
+  readonly frames: Map<number, FrameRequestCallback>;
+  readonly flushNextFrame: () => void;
+  readonly restore: () => void;
+} {
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrameId = 0;
+  const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+    nextFrameId += 1;
+    frames.set(nextFrameId, callback);
+    return nextFrameId;
+  });
+  const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+    frames.delete(id);
+  });
+  return {
+    frames,
+    flushNextFrame: () => {
+      const [frameId, callback] = Array.from(frames.entries())[0] ?? [];
+      expect(frameId).toBeDefined();
+      expect(callback).toBeDefined();
+      frames.delete(frameId as number);
+      callback?.(0);
+    },
+    restore: () => {
+      requestFrame.mockRestore();
+      cancelFrame.mockRestore();
+    },
+  };
+}
+
 describe("WindowFrame content zoom controls", () => {
   it.each(windowControlCases)(
     "orders %s window controls as minimize, maximize, close",
@@ -432,84 +463,151 @@ describe("WindowFrame content zoom controls", () => {
   it("resizes from the south-east handle with viewport zoom applied", () => {
     const focus = vi.fn();
     const update = vi.fn();
-    const { container } = render(
-      <WindowFrame
-        win={appWindow()}
-        top
-        connState={null}
-        view={{ x: 0, y: 0, zoom: 2 }}
-        api={api({ focus, update })}
-        wsRef={createRef<HTMLElement>()}
-      />,
-    );
+    const frames = installAnimationFrameQueue();
 
-    const handle = container.querySelector<HTMLElement>(".wz-se");
-    expect(handle).not.toBeNull();
+    try {
+      const { container } = render(
+        <WindowFrame
+          win={appWindow()}
+          top
+          connState={null}
+          view={{ x: 0, y: 0, zoom: 2 }}
+          api={api({ focus, update })}
+          wsRef={createRef<HTMLElement>()}
+        />,
+      );
 
-    fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
-    expect(document.body.style.cursor).toBe("nwse-resize");
+      const handle = container.querySelector<HTMLElement>(".wz-se");
+      expect(handle).not.toBeNull();
 
-    fireEvent.pointerMove(window, { buttons: 1, clientX: 160, clientY: 140 });
-    fireEvent.pointerUp(window);
+      fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+      expect(document.body.style.cursor).toBe("nwse-resize");
 
-    expect(focus).toHaveBeenCalledWith("agents-1");
-    expect(update).toHaveBeenLastCalledWith("agents-1", {
-      x: 40,
-      y: 40,
-      w: 450,
-      h: 340,
-      max: false,
-    });
-    expect(document.body.style.cursor).toBe("");
+      fireEvent.pointerMove(window, { buttons: 1, clientX: 160, clientY: 140 });
+      expect(update).not.toHaveBeenCalled();
+      frames.flushNextFrame();
+      fireEvent.pointerUp(window);
+
+      expect(focus).toHaveBeenCalledWith("agents-1");
+      expect(update).toHaveBeenLastCalledWith("agents-1", {
+        x: 40,
+        y: 40,
+        w: 450,
+        h: 340,
+        max: false,
+      });
+      expect(document.body.style.cursor).toBe("");
+    } finally {
+      frames.restore();
+    }
   });
 
   it("ignores duplicate resize pointer moves with unchanged geometry", () => {
     const update = vi.fn();
-    const { container } = render(
-      <WindowFrame
-        win={appWindow()}
-        top
-        connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
-        api={api({ update })}
-        wsRef={createRef<HTMLElement>()}
-      />,
-    );
+    const frames = installAnimationFrameQueue();
 
-    const handle = container.querySelector<HTMLElement>(".wz-se");
-    expect(handle).not.toBeNull();
+    try {
+      const { container } = render(
+        <WindowFrame
+          win={appWindow()}
+          top
+          connState={null}
+          view={{ x: 0, y: 0, zoom: 1 }}
+          api={api({ update })}
+          wsRef={createRef<HTMLElement>()}
+        />,
+      );
 
-    fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
-    fireEvent.pointerMove(window, { buttons: 1, clientX: 140, clientY: 120 });
-    fireEvent.pointerMove(window, { buttons: 1, clientX: 140, clientY: 120 });
-    fireEvent.pointerUp(window);
+      const handle = container.querySelector<HTMLElement>(".wz-se");
+      expect(handle).not.toBeNull();
 
-    expect(update).toHaveBeenCalledTimes(1);
+      fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+      fireEvent.pointerMove(window, { buttons: 1, clientX: 140, clientY: 120 });
+      fireEvent.pointerMove(window, { buttons: 1, clientX: 140, clientY: 120 });
+      fireEvent.pointerUp(window);
+      frames.flushNextFrame();
+
+      expect(update).toHaveBeenCalledTimes(1);
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it("batches rapid resize pointer moves into one animation-frame update", () => {
+    const update = vi.fn();
+    const frames = installAnimationFrameQueue();
+
+    try {
+      const { container } = render(
+        <WindowFrame
+          win={appWindow()}
+          top
+          connState={null}
+          view={{ x: 0, y: 0, zoom: 1 }}
+          api={api({ update })}
+          wsRef={createRef<HTMLElement>()}
+        />,
+      );
+
+      const handle = container.querySelector<HTMLElement>(".wz-se");
+      expect(handle).not.toBeNull();
+
+      fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+      fireEvent.pointerMove(window, { buttons: 1, clientX: 120, clientY: 110 });
+      fireEvent.pointerMove(window, { buttons: 1, clientX: 140, clientY: 120 });
+      fireEvent.pointerMove(window, { buttons: 1, clientX: 160, clientY: 140 });
+
+      expect(update).not.toHaveBeenCalled();
+      expect(frames.frames.size).toBe(1);
+      frames.flushNextFrame();
+
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenLastCalledWith("agents-1", {
+        x: 40,
+        y: 40,
+        w: 480,
+        h: 360,
+        max: false,
+      });
+
+      fireEvent.pointerUp(window);
+
+      expect(update).toHaveBeenCalledTimes(1);
+    } finally {
+      frames.restore();
+    }
   });
 
   it("cleans up a stale resize session when moves arrive after button release", () => {
     const update = vi.fn();
-    const { container } = render(
-      <WindowFrame
-        win={appWindow()}
-        top
-        connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
-        api={api({ update })}
-        wsRef={createRef<HTMLElement>()}
-      />,
-    );
+    const frames = installAnimationFrameQueue();
 
-    const handle = container.querySelector<HTMLElement>(".wz-se");
-    expect(handle).not.toBeNull();
+    try {
+      const { container } = render(
+        <WindowFrame
+          win={appWindow()}
+          top
+          connState={null}
+          view={{ x: 0, y: 0, zoom: 1 }}
+          api={api({ update })}
+          wsRef={createRef<HTMLElement>()}
+        />,
+      );
 
-    fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
-    fireEvent.pointerMove(window, { buttons: 1, clientX: 140, clientY: 120 });
-    fireEvent.pointerMove(window, { buttons: 0, clientX: 180, clientY: 150 });
-    fireEvent.pointerMove(window, { buttons: 1, clientX: 220, clientY: 180 });
+      const handle = container.querySelector<HTMLElement>(".wz-se");
+      expect(handle).not.toBeNull();
 
-    expect(update).toHaveBeenCalledTimes(1);
-    expect(document.body.style.cursor).toBe("");
+      fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+      fireEvent.pointerMove(window, { buttons: 1, clientX: 140, clientY: 120 });
+      fireEvent.pointerMove(window, { buttons: 0, clientX: 180, clientY: 150 });
+      fireEvent.pointerMove(window, { buttons: 1, clientX: 220, clientY: 180 });
+      frames.flushNextFrame();
+
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(document.body.style.cursor).toBe("");
+    } finally {
+      frames.restore();
+    }
   });
 
   it("does not resize from right click or macOS control click on a resize handle", () => {
@@ -546,31 +644,38 @@ describe("WindowFrame content zoom controls", () => {
 
   it("keeps north-west resize within the registered minimum size", () => {
     const update = vi.fn();
-    const { container } = render(
-      <WindowFrame
-        win={appWindow({ w: 260, h: 170 })}
-        top
-        connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
-        api={api({ update })}
-        wsRef={createRef<HTMLElement>()}
-      />,
-    );
+    const frames = installAnimationFrameQueue();
 
-    const handle = container.querySelector<HTMLElement>(".wz-nw");
-    expect(handle).not.toBeNull();
+    try {
+      const { container } = render(
+        <WindowFrame
+          win={appWindow({ w: 260, h: 170 })}
+          top
+          connState={null}
+          view={{ x: 0, y: 0, zoom: 1 }}
+          api={api({ update })}
+          wsRef={createRef<HTMLElement>()}
+        />,
+      );
 
-    fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
-    fireEvent.pointerMove(window, { buttons: 1, clientX: 260, clientY: 250 });
-    fireEvent.pointerUp(window);
+      const handle = container.querySelector<HTMLElement>(".wz-nw");
+      expect(handle).not.toBeNull();
 
-    expect(update).toHaveBeenLastCalledWith("agents-1", {
-      x: 150,
-      y: 100,
-      w: 150,
-      h: 110,
-      max: false,
-    });
+      fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+      fireEvent.pointerMove(window, { buttons: 1, clientX: 260, clientY: 250 });
+      fireEvent.pointerUp(window);
+      frames.flushNextFrame();
+
+      expect(update).toHaveBeenLastCalledWith("agents-1", {
+        x: 150,
+        y: 100,
+        w: 150,
+        h: 110,
+        max: false,
+      });
+    } finally {
+      frames.restore();
+    }
   });
 
   it("starts a connection from pointer and keyboard port gestures", () => {
