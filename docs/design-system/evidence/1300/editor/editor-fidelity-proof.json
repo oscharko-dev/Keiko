@@ -2,7 +2,7 @@
   "issue": 1300,
   "epic": 1290,
   "surface": "editor",
-  "postCssSha256": "9fa04497c6bddef9deff62061916801650a055834113c5116db17eff4197f6ae",
+  "postCssSha256": "96529b37fae488e4bddfb3af6deb54669f07b1787cee199f87f04605be00f9f9",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
@@ -14,8 +14,8 @@
     "keiko-editor-tokens.css": "9d61f7df19dc02861354eb30206403942695608a8c9ee43cde0db13c0da81bac"
   },
   "run": {
-    "generatedAt": "2026-06-25T14:14:02.062Z",
-    "repoHeadSha": "5b968c32ccd0de8e53626ddfcc8172f366eb4305"
+    "generatedAt": "2026-06-25T16:24:54.212Z",
+    "repoHeadSha": "6e2469b1b159d3dc9ffa530a580a2509ed7ecfb1"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {

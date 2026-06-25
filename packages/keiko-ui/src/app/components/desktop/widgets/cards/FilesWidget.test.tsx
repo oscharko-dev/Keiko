@@ -325,6 +325,59 @@ describe("FilesWidget", () => {
     expect(session.replaceChat).not.toHaveBeenCalled();
   });
 
+  it("refreshes the current folder without jumping back to the root", async () => {
+    vi.mocked(fetchFilesTree)
+      .mockResolvedValueOnce({
+        root: "/resolved-repo",
+        path: "",
+        truncated: false,
+        entries: [
+          { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+          { ...treeEntryBase, name: "package.json", path: "package.json", kind: "file" },
+        ],
+      })
+      .mockResolvedValueOnce({
+        root: "/resolved-repo",
+        path: "src",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "inside.ts", path: "src/inside.ts", kind: "file" }],
+      })
+      .mockResolvedValueOnce({
+        root: "/resolved-repo",
+        path: "src",
+        truncated: false,
+        entries: [
+          { ...treeEntryBase, name: "inside.ts", path: "src/inside.ts", kind: "file" },
+          { ...treeEntryBase, name: "new.ts", path: "src/new.ts", kind: "file" },
+        ],
+      });
+    const onActiveFileChange = vi.fn();
+    render(
+      <FilesWidget
+        root="/configured-repo"
+        onRootChange={() => undefined}
+        onActiveFileChange={onActiveFileChange}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^src$/i }));
+    expect(await screen.findByRole("treeitem", { name: /inside\.ts/i })).toBeInTheDocument();
+    expect(screen.queryByRole("treeitem", { name: /package\.json/i })).toBeNull();
+    onActiveFileChange.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh folder" }));
+
+    await waitFor(() => {
+      expect(fetchFilesTree).toHaveBeenLastCalledWith("/configured-repo", "src");
+    });
+    expect(await screen.findByRole("treeitem", { name: /new\.ts/i })).toBeInTheDocument();
+    expect(screen.queryByRole("treeitem", { name: /package\.json/i })).toBeNull();
+    expect(screen.getByLabelText("Folder path — open any folder on this machine")).toHaveValue(
+      "/resolved-repo/src",
+    );
+    expect(onActiveFileChange).not.toHaveBeenCalledWith(null, "/resolved-repo", null);
+  });
+
   it("expands a folder from the caret without changing the chat-visible folder scope", async () => {
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
       root: "/resolved-repo",
