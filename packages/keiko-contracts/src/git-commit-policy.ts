@@ -186,7 +186,15 @@ function checkIssueKey(
   if (!rule.enabled || rule.pattern.length === 0) {
     return undefined;
   }
-  const re = new RegExp(rule.pattern);
+  let re: RegExp;
+  try {
+    re = new RegExp(rule.pattern);
+  } catch {
+    // The rule is enabled but its pattern is not a valid regex (operator misconfiguration). Keep the
+    // validator total (a pure function must never throw on a well-typed input) AND fail closed: a key
+    // requirement that cannot be evaluated must block rather than silently pass.
+    return "missing-issue-key";
+  }
   return re.test(message) ? undefined : "missing-issue-key";
 }
 

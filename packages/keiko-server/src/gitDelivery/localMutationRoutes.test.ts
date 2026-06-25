@@ -26,9 +26,10 @@ import { createUiServer, UI_HOST } from "../server.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
-import type { RouteContext } from "../routes.js";
+import type { RouteContext, RouteResult } from "../routes.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
+  createGitDeliveryLocalMutationRouteGroup,
   createHandleLocalMutation,
   type GitDeliveryLocalErrorBody,
 } from "./localMutationRoutes.js";
@@ -405,5 +406,80 @@ describe("local mutation routes — governed execution (direct handler + seams)"
     );
     expect(res.status).toBe(200);
     expect((res.body as { status: string }).status).toBe("succeeded");
+  });
+});
+
+describe("local mutation routes — real specs through the route group (direct handler + seams)", () => {
+  function handlerFor(
+    pattern: string,
+    s: GitDeliveryExecutionSeams,
+  ): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
+    const group = createGitDeliveryLocalMutationRouteGroup({ execution: s });
+    const def = group.find((d) => d.pattern === pattern);
+    if (def === undefined) throw new Error(`no route for ${pattern}`);
+    return def.handler as (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>;
+  }
+
+  const CREATE = "/api/git-delivery/local-branch/create";
+  const UNSTAGE = "/api/git-delivery/staging/unstage";
+
+  it("creates a branch via the real branch-create spec", async () => {
+    const adapter = recordingAdapter();
+    const res = await handlerFor(CREATE, seams({ adapterFactory: () => adapter.adapter }))(
+      ctxFor(CREATE, {
+        schemaVersion: "1",
+        projectId,
+        branchName: "feature/new",
+        baseBranchName: "main",
+        startPointRefHash: "HEAD",
+      }),
+      deps(),
+    );
+    expect((res.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["createBranch"]);
+  });
+
+  it("stages and unstages via the real staging specs", async () => {
+    const a1 = recordingAdapter();
+    const staged = await handlerFor(STAGE, seams({ adapterFactory: () => a1.adapter }))(
+      ctxFor(STAGE, { schemaVersion: "1", projectId, pathspecs: ["src/a.ts"], includeUntracked: false }),
+      deps(),
+    );
+    expect((staged.body as { status: string }).status).toBe("succeeded");
+    expect(a1.calls()).toEqual(["stage"]);
+
+    const a2 = recordingAdapter();
+    const unstaged = await handlerFor(UNSTAGE, seams({ adapterFactory: () => a2.adapter }))(
+      ctxFor(UNSTAGE, { schemaVersion: "1", projectId, pathspecs: ["src/a.ts"] }),
+      deps(),
+    );
+    expect((unstaged.body as { status: string }).status).toBe("succeeded");
+    expect(a2.calls()).toEqual(["unstage"]);
+  });
+
+  it("400s when a required field is missing or malformed", async () => {
+    const missing = await handlerFor(CREATE, seams())(
+      ctxFor(CREATE, { schemaVersion: "1", projectId, branchName: "x" }),
+      deps(),
+    );
+    expect(missing.status).toBe(400);
+    const badApproval = await handlerFor(SWITCH, seams())(
+      ctxFor(SWITCH, { schemaVersion: "1", projectId, branchName: "feature/x", approval: { required: "no" } }),
+      deps(),
+    );
+    expect(badApproval.status).toBe(400);
+  });
+
+  it("returns 409 worktree-unavailable when the live snapshot cannot be read", async () => {
+    const res = await handlerFor(
+      SWITCH,
+      seams({ snapshotReader: () => Promise.reject(new Error("not a git repo")) }),
+    )(ctxFor(SWITCH, { schemaVersion: "1", projectId, branchName: "feature/x" }), deps());
+    expect(res.status).toBe(409);
+  });
+
+  it("400s an unparseable JSON body", async () => {
+    const res = await handlerFor(SWITCH, seams())(ctxFor(SWITCH, "{ not json"), deps());
+    expect(res.status).toBe(400);
   });
 });

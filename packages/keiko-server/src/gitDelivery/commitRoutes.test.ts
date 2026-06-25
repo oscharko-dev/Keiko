@@ -221,6 +221,30 @@ describe("commit routes — central enforcement (real dispatch)", () => {
     });
     expect(res.status).toBe(403);
   });
+
+  function postExec(body: unknown): Promise<Response> {
+    return fetch(`http://${UI_HOST}:${String(port)}${EXECUTE}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+  }
+
+  it("rejects validation failures before execution", async () => {
+    expect(
+      (await postExec({ schemaVersion: "1", projectId, message: "feat: x", evil: 1 })).status,
+    ).toBe(400);
+    expect(
+      (await postExec({ schemaVersion: "1", projectId, message: "Authorization: Bearer abc" }))
+        .status,
+    ).toBe(400);
+    expect(
+      (await postExec({ schemaVersion: "1", projectId: "/no/such", message: "feat: x" })).status,
+    ).toBe(404);
+    const big = JSON.stringify({ schemaVersion: "1", projectId, message: "x".repeat(70 * 1024) });
+    expect((await postExec(big)).status).toBe(413);
+    expect((await postExec("{ not json")).status).toBe(400);
+  });
 });
 
 describe("commit preview — read-only verification context (AC3)", () => {
@@ -325,5 +349,95 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
       "nothing-staged-to-commit",
     );
     expect(adapter.calls()).toEqual([]);
+  });
+
+  it("commits with allowEmpty and honours a granted approval object", async () => {
+    const adapter = recordingAdapter();
+    const handler = createHandleCommitExecute({
+      execution: seams({ adapterFactory: () => adapter.adapter }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message: "chore: empty",
+        allowEmpty: true,
+        approval: { required: false },
+      }),
+      deps(),
+    );
+    expect((res.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["commit"]);
+  });
+
+  it("holds for approval when the trusted pack is approval-gated", async () => {
+    const adapter = recordingAdapter();
+    const approvalGated: GitDeliveryRepoPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "repo",
+      rules: [{ actionKind: "commit", decision: "approval-gated", requiredApprovers: ["lead"] }],
+      defaultRule: { decision: "blocked" },
+    };
+    const handler = createHandleCommitExecute({
+      execution: seams({
+        adapterFactory: () => adapter.adapter,
+        policyPacks: { repoPack: approvalGated },
+      }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+      deps(),
+    );
+    expect((res.body as { status: string }).status).toBe("approval-required");
+    expect(adapter.calls()).toEqual([]);
+  });
+
+  it("returns 409 worktree-unavailable when the live snapshot cannot be read", async () => {
+    const handler = createHandleCommitExecute({
+      execution: seams({ snapshotReader: () => Promise.reject(new Error("not a git repo")) }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+      deps(),
+    );
+    expect(res.status).toBe(409);
+  });
+
+  it("rejects a malformed approval and an oversized/invalid body", async () => {
+    const handler = createHandleCommitExecute({ execution: seams() });
+    const bad = await handler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message: "feat: x",
+        approval: { required: "yes" },
+      }),
+      deps(),
+    );
+    expect(bad.status).toBe(400);
+  });
+});
+
+describe("commit preview — default draft, policy block, and worktree failure", () => {
+  it("defaults an absent messageDraft to empty and reports a policy block reason", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({ policyPacks: { repoPack: BLOCK_ALL_PACK } }),
+    });
+    const res = await handler(ctxFor(PREVIEW, { schemaVersion: "1", projectId }), deps());
+    const body = res.body as GitDeliveryCommitPreviewBody & { policyBlockReason?: string };
+    expect(body.policyOutcome).toBe("blocked");
+    expect(body.policyBlockReason).toBeDefined();
+    expect(body.messageValidation.ok).toBe(false); // empty draft → empty-subject
+  });
+
+  it("returns 409 when the worktree cannot be read", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({ snapshotReader: () => Promise.reject(new Error("not a git repo")) }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "feat: x" }),
+      deps(),
+    );
+    expect(res.status).toBe(409);
   });
 });
