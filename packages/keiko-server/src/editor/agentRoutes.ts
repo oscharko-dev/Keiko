@@ -1,13 +1,16 @@
 import type { ServerResponse } from "node:http";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
+  editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
+  isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
   validateAgentTextEdits,
   type EditorAgentAction,
   type EditorAgentActionResult,
+  type EditorAgentConflictCode,
   type EditorAgentEvent,
   type EditorAgentSessionSnapshot,
   type EditorAgentSnapshotTextMode,
@@ -308,18 +311,17 @@ function targetFile(
   return action.target?.file ?? snapshot.activeFile;
 }
 
-function writeAction(action: EditorAgentAction): boolean {
-  return (
-    action.type === "format" ||
-    action.type === "save" ||
-    action.type === "applyTextEdits" ||
-    action.type === "applyPatch"
-  );
+// Issue #1391 AC2 — reject a write action that does not pin the document revision it expects to write
+// against. The contract owns both "what is a write action" and "what counts as a precondition"; the
+// server only maps the missing-precondition rule onto the structured PRECONDITION_REQUIRED conflict.
+function preconditionConflict(action: EditorAgentAction): EditorAgentActionResult | null {
+  const error = editorAgentWritePreconditionError(action);
+  return error === null ? null : conflict(action, "PRECONDITION_REQUIRED", error);
 }
 
 function conflict(
   action: EditorAgentAction,
-  code: NonNullable<EditorAgentActionResult["conflict"]>["code"],
+  code: EditorAgentConflictCode,
   message: string,
 ): EditorAgentActionResult {
   return {
@@ -337,14 +339,18 @@ function preflight(action: EditorAgentAction): EditorAgentActionResult | null {
   if (snapshot === undefined) {
     return conflict(action, "NO_ACTIVE_SESSION", "No active browser bridge is registered.");
   }
-  if (!writeAction(action)) return null;
+  if (!isEditorAgentWriteActionType(action.type)) return null;
+  // The structural gates run first so a doubly-invalid write reports its most specific failure; the
+  // precondition gate runs last and rejects any otherwise-valid write that did not pin a revision
+  // (#1391 AC2 — no blind writes).
   return (
     dirtyBufferConflict(action, snapshot) ??
     documentVersionConflict(action, snapshot) ??
     contentHashConflict(action, snapshot) ??
     containmentConflict(action, snapshot) ??
     textEditsConflict(action) ??
-    patchValidationConflict(action, snapshot)
+    patchValidationConflict(action, snapshot) ??
+    preconditionConflict(action)
   );
 }
 

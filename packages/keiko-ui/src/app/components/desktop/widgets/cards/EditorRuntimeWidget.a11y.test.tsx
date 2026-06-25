@@ -121,8 +121,15 @@ class FakeEventSource {
   }
 
   emitAction(action: EditorAgentAction): void {
+    // Emit the full editor-agent event envelope the server sends, so the widget's contract-guarded
+    // SSE listener (isEditorAgentEvent) accepts the frame.
     const event = new MessageEvent<string>("editor-agent:action", {
-      data: JSON.stringify({ action }),
+      data: JSON.stringify({
+        schemaVersion: "1",
+        eventId: `evt-${action.actionId}`,
+        type: "action",
+        action,
+      }),
     });
     for (const listener of this.listeners.get("editor-agent:action") ?? []) {
       if (typeof listener === "function") {

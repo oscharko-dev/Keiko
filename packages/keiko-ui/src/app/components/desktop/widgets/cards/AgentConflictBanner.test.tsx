@@ -206,6 +206,25 @@ describe("AgentConflictBanner — NO_ACTIVE_SESSION affordances", () => {
   });
 });
 
+// ─── PRECONDITION_REQUIRED: Dismiss only (Issue #1391 AC2/AC3) ────────────────
+
+describe("AgentConflictBanner — PRECONDITION_REQUIRED affordances", () => {
+  it("renders the title and only Dismiss for PRECONDITION_REQUIRED", () => {
+    renderBanner("PRECONDITION_REQUIRED", { message: "Write actions require a precondition." });
+    expect(screen.getByText("Missing write precondition")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
+  });
+
+  it("calls onDismiss when Dismiss is clicked for PRECONDITION_REQUIRED", async () => {
+    const onDismiss = vi.fn();
+    renderBanner("PRECONDITION_REQUIRED", { onDismiss });
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ─── Accessibility (jest-axe) ─────────────────────────────────────────────────
 
 describe("AgentConflictBanner — accessibility (jest-axe)", () => {
@@ -216,6 +235,7 @@ describe("AgentConflictBanner — accessibility (jest-axe)", () => {
     "INVALID_EDITS",
     "OUT_OF_SCOPE",
     "NO_ACTIVE_SESSION",
+    "PRECONDITION_REQUIRED",
   ];
 
   it.each(allCodes)("has no axe violations for code %s", async (code) => {

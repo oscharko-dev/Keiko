@@ -109,7 +109,6 @@ import type {
   EditorAgentAction,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
-  EditorAgentEvent,
   EditorAgentPaneSnapshot,
   EditorCompletionContextSelectors,
   EditorDocumentVersion,
@@ -117,7 +116,7 @@ import type {
   LanguageServiceCapabilities,
   EditorTestGenerationWireTarget,
 } from "../../../../../lib/types";
-import { EDITOR_AGENT_SCHEMA_VERSION } from "../../../../../lib/types";
+import { EDITOR_AGENT_SCHEMA_VERSION, isEditorAgentEvent } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import { FileIcon } from "../shared/projectTree";
@@ -1632,7 +1631,10 @@ export default function EditorRuntimeWidget({
   const onAgentResult = useCallback(
     (event: MessageEvent<string>): void => {
       try {
-        const parsed = JSON.parse(event.data) as EditorAgentEvent;
+        const parsed: unknown = JSON.parse(event.data);
+        // Validate the SSE frame at the trust boundary with the public contract guard (#1391) rather
+        // than casting untyped JSON.
+        if (!isEditorAgentEvent(parsed)) return;
         if (parsed.type !== "result" || parsed.result.status !== "conflict") return;
         // F6: filter by sessionId so a conflict for another pane does not pop this banner.
         if (parsed.result.sessionId !== agentSessionId) return;
@@ -1651,8 +1653,11 @@ export default function EditorRuntimeWidget({
     const source = new EventSource("/api/editor/agent/events");
     const onAction = (event: MessageEvent<string>): void => {
       try {
-        const parsed = JSON.parse(event.data) as { readonly action?: EditorAgentAction };
-        if (parsed.action !== undefined) executeAgentAction(parsed.action);
+        const parsed: unknown = JSON.parse(event.data);
+        // Validate the action frame at the trust boundary with the public contract guard (#1391),
+        // symmetric with the result listener, rather than casting untyped JSON.
+        if (isEditorAgentEvent(parsed) && parsed.type === "action")
+          executeAgentAction(parsed.action);
       } catch {
         // Ignore malformed SSE frames; the server owns validation before enqueueing.
       }
