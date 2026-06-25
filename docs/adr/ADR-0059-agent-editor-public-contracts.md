@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -126,10 +126,12 @@ widening is additive; the exhaustive `conflictTitle` switch adds the new case.
 ### D5 — AC4: reusability and event validation
 
 We add `isEditorAgentEvent`, a structural guard over the full event union (session, action, result,
-heartbeat) that validates the shared envelope and each kind's payload, so consumers reading events off
-the SSE stream validate frames at the trust boundary instead of casting untyped JSON. The browser
-bridge adopts it for the result stream. All new symbols are exported from the contracts barrel and
-pinned by the barrel surface test, demonstrating reuse by UI, BFF, tests, and future agents.
+heartbeat) that validates the shared envelope and each kind's payload (a `result`'s `conflict` detail,
+when present, must carry a taxonomy code and a string message), so consumers reading events off the
+SSE stream validate frames at the trust boundary instead of casting untyped JSON. The browser bridge
+adopts it for both the action and result streams — the action stream drives the write actions, so it
+is the more consequential boundary to guard. All new symbols are exported from the contracts barrel
+and pinned by the barrel surface test, demonstrating reuse by UI, BFF, tests, and future agents.
 
 ## Consequences
 
@@ -156,6 +158,13 @@ pinned by the barrel surface test, demonstrating reuse by UI, BFF, tests, and fu
 
 - The precondition gate is ordered last so existing structural codes keep priority; a future revision
   could surface "multiple reasons" if agents need it.
+- AC2 requires the precondition to be *present* on the write action, and the contract guarantees that
+  when present it is a real document version / SHA-256 hash. The server's `VERSION_MISMATCH` /
+  `CONTENT_HASH_MISMATCH` comparison additionally requires the registered snapshot to carry the same
+  revision fields (the browser bridge populates them); when the snapshot side is absent the comparison
+  is a no-op. This is pre-existing #1394 behaviour the bridge satisfies in practice; a fail-closed
+  "pinned but unverifiable" comparison is a reasonable defence-in-depth follow-up, not a #1391
+  obligation.
 
 ## Acceptance criteria mapping
 

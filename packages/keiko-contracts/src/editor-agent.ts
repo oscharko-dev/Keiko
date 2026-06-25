@@ -405,6 +405,15 @@ function isActionStatus(value: unknown): value is EditorAgentActionStatus {
   return value === "queued" || value === "succeeded" || value === "failed" || value === "conflict";
 }
 
+// A conflict detail, when present, must carry a code drawn from the taxonomy and a string message —
+// so a result that claims a conflict cannot smuggle an out-of-taxonomy code past the guard.
+function isEditorAgentConflictDetail(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isRecord(value) && isEditorAgentConflictCode(value.code) && typeof value.message === "string"
+  );
+}
+
 export function isEditorAgentActionResult(value: unknown): value is EditorAgentActionResult {
   return (
     isRecord(value) &&
@@ -412,7 +421,8 @@ export function isEditorAgentActionResult(value: unknown): value is EditorAgentA
     isNonEmptyString(value.actionId) &&
     isNonEmptyString(value.sessionId) &&
     isActionStatus(value.status) &&
-    (value.message === undefined || typeof value.message === "string")
+    (value.message === undefined || typeof value.message === "string") &&
+    isEditorAgentConflictDetail(value.conflict)
   );
 }
 

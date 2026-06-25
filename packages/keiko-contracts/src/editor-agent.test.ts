@@ -330,13 +330,14 @@ describe("isContainedAgentPath (Issue #1394)", () => {
 });
 
 describe("isEditorAgentConflictCode (Issue #1394)", () => {
-  it("returns true for all six valid conflict codes", () => {
+  it("returns true for all seven valid conflict codes", () => {
     expect(isEditorAgentConflictCode("DIRTY")).toBe(true);
     expect(isEditorAgentConflictCode("VERSION_MISMATCH")).toBe(true);
     expect(isEditorAgentConflictCode("CONTENT_HASH_MISMATCH")).toBe(true);
     expect(isEditorAgentConflictCode("NO_ACTIVE_SESSION")).toBe(true);
     expect(isEditorAgentConflictCode("INVALID_EDITS")).toBe(true);
     expect(isEditorAgentConflictCode("OUT_OF_SCOPE")).toBe(true);
+    expect(isEditorAgentConflictCode("PRECONDITION_REQUIRED")).toBe(true);
   });
 
   it("returns false for an empty string", () => {
@@ -487,6 +488,18 @@ describe("action result validator covers every status (Issue #1391)", () => {
       }),
     ).toBe(false);
   });
+
+  it("rejects a result whose conflict carries an out-of-taxonomy code", () => {
+    expect(
+      isEditorAgentActionResult({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "a",
+        sessionId: "s",
+        status: "conflict",
+        conflict: { code: "NONSENSE", message: "x" },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("event validator covers every event kind (Issue #1391)", () => {
@@ -597,6 +610,16 @@ describe("write-action precondition rule (Issue #1391 AC2)", () => {
     for (const type of NON_WRITE_ACTION_TYPES) {
       expect(editorAgentWritePreconditionError(baseAction({ type }))).toBeNull();
     }
+  });
+
+  it("rejects a precondition that is not a real SHA-256 hash (no pseudo-hash blind write)", () => {
+    // isEditorAgentAction validates expectedContentHash as a 64-char lowercase hex digest, so a
+    // write cannot satisfy the precondition gate with an empty or malformed hash.
+    expect(isEditorAgentAction(baseAction({ type: "save", expectedContentHash: "" }))).toBe(false);
+    expect(
+      isEditorAgentAction(baseAction({ type: "save", expectedContentHash: "a".repeat(63) })),
+    ).toBe(false);
+    expect(isEditorAgentAction(baseAction({ type: "save", expectedContentHash: HASH }))).toBe(true);
   });
 });
 

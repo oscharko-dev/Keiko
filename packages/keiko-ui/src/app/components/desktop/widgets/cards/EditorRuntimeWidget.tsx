@@ -1653,8 +1653,11 @@ export default function EditorRuntimeWidget({
     const source = new EventSource("/api/editor/agent/events");
     const onAction = (event: MessageEvent<string>): void => {
       try {
-        const parsed = JSON.parse(event.data) as { readonly action?: EditorAgentAction };
-        if (parsed.action !== undefined) executeAgentAction(parsed.action);
+        const parsed: unknown = JSON.parse(event.data);
+        // Validate the action frame at the trust boundary with the public contract guard (#1391),
+        // symmetric with the result listener, rather than casting untyped JSON.
+        if (isEditorAgentEvent(parsed) && parsed.type === "action")
+          executeAgentAction(parsed.action);
       } catch {
         // Ignore malformed SSE frames; the server owns validation before enqueueing.
       }

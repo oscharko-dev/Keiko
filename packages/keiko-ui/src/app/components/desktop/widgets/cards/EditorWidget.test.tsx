@@ -137,7 +137,16 @@ class FakeEventSource {
   }
 
   emitAction(action: EditorAgentAction): void {
-    this.emitRaw(JSON.stringify({ action }));
+    // Emit the full editor-agent event envelope the server actually sends, so the widget's
+    // contract-guarded SSE listener (isEditorAgentEvent) accepts the frame.
+    this.emitRaw(
+      JSON.stringify({
+        schemaVersion: "1",
+        eventId: `evt-${action.actionId}`,
+        type: "action",
+        action,
+      }),
+    );
   }
 
   emitRaw(data: string): void {
