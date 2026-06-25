@@ -131,6 +131,13 @@ import type {
   GitDeliveryBranchProtection,
   GitDeliveryMergeReadiness,
   GitDeliveryPullRequestState,
+  GitDeliveryActionSheet,
+  GitDeliveryPreviewManifest,
+  GitDeliveryApprovalSummary,
+  GitDeliveryRecoveryHint,
+  GitDeliveryExpectedBlocker,
+  GitDeliveryActionSheetRequest,
+  GitDeliveryWorktreeSnapshot,
 } from "./index.js";
 import {
   GIT_DELIVERY_SCHEMA_VERSION,
@@ -154,6 +161,16 @@ import {
   gitDeliveryDefaultRiskClass,
   evaluateGitPolicy,
   parseGitDeliveryActionEnvelope,
+  GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION,
+  GIT_DELIVERY_ACTION_SHEET_STATES,
+  GIT_DELIVERY_APPROVAL_NECESSITIES,
+  GIT_DELIVERY_BLOCKED_CAUSES,
+  GIT_DELIVERY_RECOVERY_ACTION_HINTS,
+  isGitDeliveryActionSheet,
+  buildGitDeliveryActionSheet,
+  gitDeliverySuggestedRecoveryStrategy,
+  GIT_DELIVERY_POLICY_DECISION_OUTCOMES,
+  isGitDeliveryPolicyDecisionOutcome,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
@@ -591,5 +608,48 @@ describe("keiko-contracts package surface", () => {
     pin<GitDeliveryBranchProtection>();
     pin<GitDeliveryMergeReadiness>();
     pin<GitDeliveryPullRequestState>();
+  });
+
+  it("governed Git action-sheet contracts are reachable through the barrel (#473)", () => {
+    expect(GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION).toBe("1");
+    // Count assertions are intentional surface pins; bump deliberately when the surface changes.
+    expect(GIT_DELIVERY_ACTION_SHEET_STATES.length).toBe(3);
+    expect(GIT_DELIVERY_APPROVAL_NECESSITIES.length).toBe(3);
+    expect(GIT_DELIVERY_BLOCKED_CAUSES.length).toBe(3);
+    expect(GIT_DELIVERY_RECOVERY_ACTION_HINTS.length).toBe(9);
+
+    expect(typeof isGitDeliveryActionSheet).toBe("function");
+    expect(typeof buildGitDeliveryActionSheet).toBe("function");
+    expect(gitDeliverySuggestedRecoveryStrategy("commit", false)).toBe("soft-reset");
+    expect(GIT_DELIVERY_POLICY_DECISION_OUTCOMES.length).toBe(4);
+    expect(isGitDeliveryPolicyDecisionOutcome("approval-gated")).toBe(true);
+    expect(isGitDeliveryPolicyDecisionOutcome("nonsense")).toBe(false);
+
+    const sheet = buildGitDeliveryActionSheet({
+      actionId: "act-1",
+      resolvedInputs: {
+        kind: "commit",
+        messageByteLength: 8,
+        stagedPathCount: 1,
+        allowEmptyCommit: false,
+      },
+      policyDecision: { outcome: "allowed" },
+      approvalRequirement: { required: false },
+      providerReady: true,
+      expectedBlockers: [],
+      recovery: [],
+    });
+    expect(isGitDeliveryActionSheet(sheet)).toBe(true);
+    expect(sheet.state).toBe("ready-to-execute");
+
+    // Type pins (compile-time reachability).
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<GitDeliveryActionSheet>();
+    pin<GitDeliveryPreviewManifest>();
+    pin<GitDeliveryApprovalSummary>();
+    pin<GitDeliveryRecoveryHint>();
+    pin<GitDeliveryExpectedBlocker>();
+    pin<GitDeliveryActionSheetRequest>();
+    pin<GitDeliveryWorktreeSnapshot>();
   });
 });

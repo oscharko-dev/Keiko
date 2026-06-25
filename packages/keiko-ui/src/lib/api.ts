@@ -72,6 +72,10 @@ import type {
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
+import type {
+  GitDeliveryActionSheet,
+  GitDeliveryActionSheetRequest,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_GROUNDING_LIMITS,
   EDITOR_COMPLETION_SCHEMA_VERSION,
@@ -1230,5 +1234,27 @@ export async function askGrounded(
     method: "POST",
     body: JSON.stringify(req),
     signal: signal ?? null,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Issue #473 (Epic #470) — governed Git delivery action sheet
+// ---------------------------------------------------------------------------
+// POSTs the content-free repository facts a caller legitimately holds — the proposed resolved action,
+// the worktree snapshot, an optional granted approval, optional provider PR/merge/branch-protection/
+// checks state, and the active provider capabilities — to the BFF, which establishes policy/approval
+// AUTHORITY server-side and assembles the UI-safe GitDeliveryActionSheet projection. The request
+// carries NO authority fields (policy decision, providerReady, expected blockers); the server rejects
+// any such key. The response carries counts/flags/names/typed codes only — never diff content, file
+// paths, secrets, or command strings. The CSRF header is added by `fetchJson` for the POST.
+
+export async function fetchGitDeliveryActionSheet(
+  request: GitDeliveryActionSheetRequest,
+  signal?: AbortSignal,
+): Promise<GitDeliveryActionSheet> {
+  return fetchJson("/api/git-delivery/action-sheet", {
+    method: "POST",
+    body: JSON.stringify(request),
+    ...(signal === undefined ? {} : { signal }),
   });
 }
