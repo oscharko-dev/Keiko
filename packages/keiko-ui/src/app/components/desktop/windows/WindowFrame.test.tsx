@@ -326,6 +326,36 @@ describe("WindowFrame content zoom controls", () => {
     ).toBeInTheDocument();
   });
 
+  it("scales the whole window chrome with content zoom while preserving visual geometry", () => {
+    const { container } = render(
+      <WindowFrame
+        win={appWindow({ w: 700, h: 420, zoom: 1.4 })}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const windowSection = container.querySelector<HTMLElement>(".window");
+    const body = container.querySelector<HTMLElement>(".win-body");
+    expect(windowSection).not.toBeNull();
+    expect(body).not.toBeNull();
+    expect(Number.parseFloat(windowSection?.style.width ?? "")).toBeCloseTo(500, 5);
+    expect(windowSection).toHaveStyle({
+      height: "300px",
+      zoom: "1.4",
+    });
+    expect(body?.style.zoom).toBe("");
+    expect(
+      screen.getByRole("button", { name: "Zoom Agents content out" }).closest(".window"),
+    ).toBe(windowSection);
+    expect(screen.getByRole("group", { name: "Agents window controls" }).closest(".window")).toBe(
+      windowSection,
+    );
+  });
+
   it("requests connected Files context for Prompt Enhancer windows", () => {
     const linkedFilesRoot = vi.fn(() => "/repo");
     const linkedFilesContext = vi.fn(() => ({

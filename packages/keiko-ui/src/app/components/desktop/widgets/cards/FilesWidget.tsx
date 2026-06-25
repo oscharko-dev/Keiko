@@ -146,7 +146,6 @@ export function FilesWidget({
   const [currentDirectoryPath, setCurrentDirectoryPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
-  const [refreshKey, setRefreshKey] = useState(0);
   const activeFileChangeRef = useRef(onActiveFileChange);
   activeFileChangeRef.current = onActiveFileChange;
   // Focus restore (WCAG 2.4.3): closing the preview re-mounts the whole tree, which would drop
@@ -252,7 +251,7 @@ export function FilesWidget({
     setExpanded(new Set([""]));
     setDirectories({});
     void loadDirectory("");
-  }, [apiRoot, loadDirectory, refreshKey]);
+  }, [apiRoot, loadDirectory]);
 
   const visibleRootPath = displayPath(
     resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : ""),
@@ -283,6 +282,11 @@ export function FilesWidget({
     },
     [apiRoot, directories, loadDirectory, resolvedRoot],
   );
+
+  const refreshCurrentDirectory = useCallback((): void => {
+    setSelectedPath(null);
+    void loadDirectory(currentDirectoryPath ?? "");
+  }, [currentDirectoryPath, loadDirectory]);
 
   const goUp = useCallback((): void => {
     if (currentDirectoryPath !== null) {
@@ -534,7 +538,7 @@ export function FilesWidget({
       <button
         className="files-refresh"
         type="button"
-        onClick={() => setRefreshKey((value) => value + 1)}
+        onClick={refreshCurrentDirectory}
         title="Refresh folder"
         aria-label="Refresh folder"
       >

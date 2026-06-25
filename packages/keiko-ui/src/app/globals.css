@@ -901,6 +901,10 @@ button {
 }
 .mono {
   font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
 }
 .dot {
   width: 7px;
@@ -13958,6 +13962,10 @@ html[data-keiko-gateway-setup-open="true"] {
 /* Inline code */
 .sm-inline-code {
   font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
   font-size: 0.86em;
   background: color-mix(in oklch, var(--surface-inset) 78%, transparent);
   border: 1px solid var(--border-subtle);
@@ -14072,6 +14080,10 @@ html[data-keiko-gateway-setup-open="true"] {
   overflow: auto;
   scrollbar-gutter: stable;
   font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
   font-size: 12.75px;
   line-height: 1.7;
   color: var(--ed-fg);
@@ -14087,6 +14099,10 @@ html[data-keiko-gateway-setup-open="true"] {
   min-width: max-content;
   padding: 10px 0;
   font-family: inherit;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
   background: none;
   border: none;
 }
@@ -14109,6 +14125,10 @@ html[data-keiko-gateway-setup-open="true"] {
 .sm-code-line-src {
   padding: 0 18px 0 11px;
   white-space: pre;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
 }
 
 /* Blockquote */

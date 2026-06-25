@@ -674,6 +674,16 @@ describe("Fix 4 — dense desktop text clarity", () => {
     expect(bodyBlock).not.toContain("text-rendering: optimizeLegibility");
   });
 
+  it("keeps code and mono text free of programming-operator ligatures", () => {
+    const selectors = [".mono {", ".sm-inline-code", ".sm-pre", ".sm-pre code", ".sm-code-line-src"];
+    for (const selector of selectors) {
+      const block = cssBlock(selector);
+      expect(block).toContain("font-variant-ligatures: none");
+      expect(block).toContain('"liga" 0');
+      expect(block).toContain('"calt" 0');
+    }
+  });
+
   it("keeps Files root controls above the micro-text floor", () => {
     const inputBlock = cssBlock(".files-root-input");
     expect(inputBlock).toContain("height: 28px");
