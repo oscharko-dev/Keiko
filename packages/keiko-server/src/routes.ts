@@ -169,6 +169,7 @@ import {
   handlePromptEnhancement,
   handlePromptEnhancementEvidence,
 } from "./promptEnhancer/index.js";
+import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -603,6 +604,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // envelope (refs only, no chat content). Registered as a sibling group so concurrent
   // QI epic merges (e.g. #280) stay mechanically merge-safe.
   ...QI_HANDOFF_ROUTE_GROUP,
+  // Issue #473 (Epic #470) — governed Git delivery action-sheet route group. Single READ-ONLY
+  // POST seam returning a UI-safe GitDeliveryActionSheet projection; never mutates the repo.
+  // Registered as a sibling group so concurrent #470 epic merges stay mechanically merge-safe.
+  ...GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

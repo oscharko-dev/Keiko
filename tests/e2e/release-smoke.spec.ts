@@ -276,6 +276,65 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
   assertNoPageErrors();
 });
 
+test("governed Git action-sheet endpoint is wired, CSRF-protected, and returns the contract shape @smoke", async ({
+  request,
+}) => {
+  // Issue #473: the action-sheet BFF is read-only/computational. Against the packaged app (governed
+  // Git delivery not enabled in this deployment) it must return a well-formed, content-free
+  // GitDeliveryActionSheet that is fail-closed to blocked/provider-not-ready — never a 500 or raw output.
+  const body = {
+    schemaVersion: "1",
+    resolvedInputs: {
+      kind: "commit",
+      messageByteLength: 24,
+      stagedPathCount: 2,
+      allowEmptyCommit: false,
+    },
+    worktreeSnapshot: {
+      headDetached: false,
+      currentBranchName: "feature/x",
+      stagedFileCount: 2,
+      unstagedFileCount: 0,
+      untrackedFileCount: 0,
+      hasUpstream: true,
+      aheadCount: 0,
+      behindCount: 0,
+      existingLocalBranchNames: ["feature/x", "main"],
+      remoteAliases: ["origin"],
+    },
+  };
+
+  const ok = await request.post("/api/git-delivery/action-sheet", {
+    headers: MUTATION_HEADERS,
+    data: body,
+  });
+  expect(ok.status()).toBe(200);
+  const sheet = (await ok.json()) as {
+    schemaVersion: string;
+    state: string;
+    preview: { actionKind: string };
+    approval: { necessity: string };
+    policyExplanation: { decision: string };
+    recovery: unknown[];
+    blocked?: { cause: string };
+  };
+  expect(sheet.schemaVersion).toBe("1");
+  expect(["ready-to-execute", "waiting-for-approval", "blocked"]).toContain(sheet.state);
+  expect(sheet.preview.actionKind).toBe("commit");
+  expect(typeof sheet.approval.necessity).toBe("string");
+  expect(typeof sheet.policyExplanation.decision).toBe("string");
+  expect(Array.isArray(sheet.recovery)).toBe(true);
+  // Governed Git delivery is disabled in the packaged deployment -> fail-closed to a hard block.
+  expect(sheet.state).toBe("blocked");
+  expect(sheet.blocked?.cause).toBe("provider-not-ready");
+  // Content-free guarantee: no raw repo paths or command output leaked into the response.
+  expect(JSON.stringify(sheet)).not.toContain("/Users/");
+
+  // CSRF is enforced centrally for the mutating verb: the same POST without the header is rejected.
+  const noCsrf = await request.post("/api/git-delivery/action-sheet", { data: body });
+  expect(noCsrf.status()).toBe(403);
+});
+
 test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", async ({
   page,
 }) => {
