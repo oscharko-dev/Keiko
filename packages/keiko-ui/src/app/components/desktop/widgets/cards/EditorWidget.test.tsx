@@ -1645,7 +1645,12 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     await renderLoaded();
     expect(surface.props?.formatRequestNonce).toBe(0);
 
-    await userEvent.click(screen.getByRole("button", { name: "Format" }));
+    // The aria-label is dynamic (ADR-0068 D4); the stable locator is the constant data-tip.
+    const formatButton = document.querySelector<HTMLButtonElement>(
+      'button[data-tip="Format document"]',
+    );
+    expect(formatButton).not.toBeNull();
+    await userEvent.click(formatButton as HTMLButtonElement);
 
     await waitFor(() => {
       expect(surface.props?.formatRequestNonce).toBe(1);

@@ -175,3 +175,57 @@ describe("deriveEditorStatusBar run + language + completions + selection", () =>
     );
   });
 });
+
+describe("deriveEditorStatusBar formatting field (ADR-0068 D4)", () => {
+  it("is absent when the host wires no formatting state", () => {
+    expect(field(deriveEditorStatusBar(input()), "formatting")).toBeUndefined();
+  });
+
+  it("shows 'Format ready' with a default tone when formatting is available", () => {
+    const view = deriveEditorStatusBar(
+      input({ formatting: { available: true, source: "monaco-builtin" } }),
+    );
+    const formatting = field(view, "formatting");
+    expect(formatting?.label).toBe("Format ready");
+    expect(formatting?.ariaLabel).toBe("Document formatting available");
+    expect(formatting?.tone).toBe("default");
+  });
+
+  it("shows 'Format unavailable' with a warn tone when formatting is unavailable", () => {
+    const view = deriveEditorStatusBar(input({ formatting: { available: false, source: "none" } }));
+    const formatting = field(view, "formatting");
+    expect(formatting?.label).toBe("Format unavailable");
+    expect(formatting?.ariaLabel).toBe("Document formatting is unavailable for this language");
+    expect(formatting?.tone).toBe("warn");
+  });
+
+  it("never announces the formatting field (non-live, non-assertive)", () => {
+    const available = deriveEditorStatusBar(
+      input({ formatting: { available: true, source: "keiko-language-service" } }),
+    );
+    expect(field(available, "formatting")?.live).toBe(false);
+    expect(field(available, "formatting")?.assertive).toBe(false);
+    expect(available.liveSummary).not.toContain("Document formatting");
+    expect(available.alertSummary).not.toContain("Document formatting");
+
+    const unavailable = deriveEditorStatusBar(
+      input({ formatting: { available: false, source: "none" } }),
+    );
+    expect(unavailable.liveSummary).not.toContain("Document formatting");
+    expect(unavailable.alertSummary).not.toContain("Document formatting");
+  });
+
+  it("places the formatting field directly after the language-service field", () => {
+    const view = deriveEditorStatusBar(
+      input({
+        languageService: { providerId: null, available: true },
+        formatting: { available: true, source: "monaco-builtin" },
+      }),
+    );
+    const ids = view.fields.map((entry) => entry.id);
+    const languageServiceIndex = ids.indexOf("language-service");
+    const formattingIndex = ids.indexOf("formatting");
+    expect(languageServiceIndex).toBeGreaterThanOrEqual(0);
+    expect(formattingIndex).toBe(languageServiceIndex + 1);
+  });
+});

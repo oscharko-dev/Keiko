@@ -46,6 +46,7 @@ import {
   deriveEditorStatusBar,
   describeTestGenerationStatus,
   editorFileModelReducer,
+  editorLanguageLabel,
   EditorStatusBar,
   IDLE_TEST_GENERATION_STATE,
   inferMonacoLanguageId,
@@ -80,6 +81,7 @@ import {
   type PatchPreviewModel,
   type TestGenerationPreview,
 } from "@oscharko-dev/keiko-editor";
+import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
   fetchEditorLanguageCapabilities,
@@ -1353,8 +1355,21 @@ export default function EditorRuntimeWidget({
   const hoverEnabled = providerOperationEnabled(languageProvider, "hover") && !largeFileDegraded;
   const symbolsEnabled =
     providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
-  const formattingEnabled =
-    providerOperationEnabled(languageProvider, "formatting") && !largeFileDegraded;
+  // ADR-0068 D3: formatting availability is browser-reachability truth from the editor-tier registry,
+  // NOT the server capability set. `monaco-builtin` languages (json/css/scss/less/html) are formatted
+  // by Monaco's bundled workers and need no server; `keiko-language-service` languages (ts/js) format
+  // through the Keiko bridge and additionally require the server provider to be up; `none` languages
+  // (yaml/markdown/…) have no in-browser formatter and are correctly unavailable (AC5).
+  const builtinFormatting = editorBuiltinDocumentFormatting(completionLanguage ?? "plaintext");
+  const formattingAvailable =
+    builtinFormatting === "monaco-builtin" ||
+    (builtinFormatting === "keiko-language-service" &&
+      providerOperationEnabled(languageProvider, "formatting"));
+  const formattingEnabled = formattingAvailable && !largeFileDegraded;
+  // Content-free, human-readable language name for the Format button's dynamic aria-label (ADR-0068
+  // D4). Reuses the editor-tier label table; falls back to a generic noun when no language is known.
+  const formattingLanguageLabel =
+    completionLanguage === undefined ? "this file" : editorLanguageLabel(completionLanguage);
   const editorSurfaceKey = `${themeVariant ?? "dark"}:${languageProvider?.id ?? "none"}:${largeFileMode}`;
 
   const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
@@ -1432,6 +1447,11 @@ export default function EditorRuntimeWidget({
                     : { unavailableReason: languageProvider.unavailableReason }),
                 },
           readOnly: largeFileDegraded,
+          // ADR-0068 D4: feed the SAME effective availability that gates the Format button
+          // (`formattingEnabled`, which folds in `!largeFileDegraded`) so the command and status can
+          // never disagree — in degraded mode both read unavailable, and the large-file field explains
+          // why.
+          formatting: { available: formattingEnabled, source: builtinFormatting },
           ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
         });
 
@@ -2076,6 +2096,11 @@ export default function EditorRuntimeWidget({
                 if (canFormat) setFormatRequestNonce((value) => value + 1);
               }}
               aria-disabled={canFormat ? "false" : "true"}
+              aria-label={
+                canFormat
+                  ? "Format document"
+                  : `Formatting unavailable for ${formattingLanguageLabel}`
+              }
               data-tip="Format document"
             >
               Format
