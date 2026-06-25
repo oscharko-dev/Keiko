@@ -252,6 +252,65 @@ function referenceRangeLabel(reference: RepositoryReference): string {
   return ` at lines ${String(reference.lineStart)}-${String(reference.lineEnd)}`;
 }
 
+function referenceVisibleLabel(reference: RepositoryReference): string {
+  const fileName = reference.path.split("/").filter(Boolean).pop() ?? reference.path;
+  if (reference.lineStart === undefined) return fileName;
+  if (reference.lineEnd === undefined || reference.lineEnd === reference.lineStart) {
+    return `${fileName}:${String(reference.lineStart)}`;
+  }
+  return `${fileName}:${String(reference.lineStart)}-${String(reference.lineEnd)}`;
+}
+
+function referencePathForRoot(referencePath: string, root: string): string {
+  const normalizedPath = normalizeReferencePath(referencePath);
+  const rootLabel = normalizeReferencePath(repositoryRootLabel(root));
+  if (rootLabel.length > 0 && normalizedPath.startsWith(`${rootLabel}/`)) {
+    return normalizedPath.slice(rootLabel.length + 1);
+  }
+  return normalizedPath;
+}
+
+function repositoryRootSuffix(root: string): string {
+  const normalized = root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  const parts = normalized.split("/").filter((part) => part.length > 0);
+  return parts.slice(-2).join("/");
+}
+
+function rootLabelPrefixForReference(
+  referencePath: string,
+  roots: readonly RepositoryReferenceRoot[],
+): string | null {
+  const firstSegment = normalizeReferencePath(referencePath).split("/")[0]?.toLocaleLowerCase();
+  if (firstSegment === undefined || firstSegment.length === 0) return null;
+  return roots.some((root) => repositoryRootLabel(root.root).toLocaleLowerCase() === firstSegment)
+    ? firstSegment
+    : null;
+}
+
+function rootCanOpenReference(
+  referencePath: string,
+  root: RepositoryReferenceRoot,
+  roots: readonly RepositoryReferenceRoot[],
+): boolean {
+  const requiredRootLabel = rootLabelPrefixForReference(referencePath, roots);
+  if (requiredRootLabel === null) return true;
+  return repositoryRootLabel(root.root).toLocaleLowerCase() === requiredRootLabel;
+}
+
+interface RankedRepositoryRoot extends RepositoryReferenceRoot {
+  readonly openPath: string;
+}
+
+function rankedRootsForReference(
+  reference: RepositoryReference,
+  roots: readonly RepositoryReferenceRoot[],
+): readonly RankedRepositoryRoot[] {
+  return roots
+    .filter((root) => rootCanOpenReference(reference.path, root, roots))
+    .map((root) => ({ ...root, openPath: referencePathForRoot(reference.path, root.root) }))
+    .sort((a, b) => a.openPath.length - b.openPath.length || a.root.localeCompare(b.root));
+}
+
 interface RepositoryReferenceInlineProps {
   readonly reference: RepositoryReference;
   readonly roots: readonly RepositoryReferenceRoot[];
@@ -284,21 +343,31 @@ export function RepositoryReferenceInline({
     }
     return out;
   }, [roots]);
+  const rankedRootOptions = useMemo(
+    () => rankedRootsForReference(reference, rootOptions),
+    [reference, rootOptions],
+  );
+  const bestRootOptions = useMemo(() => {
+    const best = rankedRootOptions[0];
+    if (best === undefined) return [];
+    return rankedRootOptions.filter((root) => root.openPath.length === best.openPath.length);
+  }, [rankedRootOptions]);
 
   const openForRoot = useCallback(
-    (root: RepositoryReferenceRoot): void => {
+    (root: RankedRepositoryRoot): void => {
       if (openReference === undefined) return;
+      const path = root.openPath;
       setStatus("opening");
-      setMessage(`Opening ${reference.path}…`);
+      setMessage(`Opening ${path}…`);
       const result = openReference({
         root: root.root,
-        path: reference.path,
+        path,
         ...(reference.lineStart === undefined ? {} : { lineStart: reference.lineStart }),
         ...(reference.lineEnd === undefined ? {} : { lineEnd: reference.lineEnd }),
       });
       if (result.ok) {
         setStatus("opened");
-        setMessage(`Opened ${reference.path} in editor.`);
+        setMessage(`Opened ${path} in editor.`);
         window.setTimeout(() => {
           setStatus("idle");
           setMessage("");
@@ -317,14 +386,19 @@ export function RepositoryReferenceInline({
       setMessage("Connect a Files window to open repository references.");
       return;
     }
-    if (rootOptions.length === 1) {
-      const root = rootOptions[0];
+    if (rankedRootOptions.length === 0) {
+      setStatus("failed");
+      setMessage("This repository reference does not match any connected source.");
+      return;
+    }
+    if (bestRootOptions.length === 1) {
+      const root = bestRootOptions[0];
       if (root !== undefined) openForRoot(root);
       return;
     }
     setStatus((current) => (current === "choosing" ? "idle" : "choosing"));
     setMessage("Select a repository source.");
-  }, [openForRoot, openReference, rootOptions]);
+  }, [bestRootOptions, openForRoot, openReference, rankedRootOptions.length, rootOptions.length]);
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>): void => {
@@ -341,8 +415,8 @@ export function RepositoryReferenceInline({
     [activate],
   );
 
-  if (openReference === undefined || rootOptions.length === 0) {
-    return <span>{reference.label}</span>;
+  if (openReference === undefined) {
+    return <span title={reference.label}>{referenceVisibleLabel(reference)}</span>;
   }
 
   const alert = status === "failed";
@@ -352,26 +426,30 @@ export function RepositoryReferenceInline({
         type="button"
         className={className}
         aria-label={`Open ${reference.path}${referenceRangeLabel(reference)} in editor`}
-        aria-expanded={rootOptions.length > 1 ? status === "choosing" : undefined}
+        aria-expanded={bestRootOptions.length > 1 ? status === "choosing" : undefined}
         data-state={status}
+        title={reference.label}
         onClick={activate}
         onKeyDown={onKeyDown}
       >
         <span className="repo-ref-file-icon" aria-hidden="true">
           <FileIcon name={reference.path} />
         </span>
-        <span>{reference.label}</span>
+        <span>{referenceVisibleLabel(reference)}</span>
       </button>
       {status === "choosing" ? (
         <span className="repo-ref-picker" role="dialog" aria-label="Select repository source">
-          {rootOptions.map((root) => (
+          {bestRootOptions.map((root) => (
             <button
               key={root.root}
               type="button"
               className="repo-ref-root"
               onClick={() => openForRoot(root)}
             >
-              {root.label}
+              <span>{root.label}</span>
+              {repositoryRootSuffix(root.root) === root.label ? null : (
+                <span className="repo-ref-root-path">{repositoryRootSuffix(root.root)}</span>
+              )}
             </button>
           ))}
         </span>

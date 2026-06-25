@@ -1041,7 +1041,23 @@ export interface FilesSearchResult {
   readonly extension: string | null;
   readonly sizeBytes: number;
   readonly modifiedAt: number;
+  readonly fileRole?: FilesSearchFileRole | undefined;
+  readonly matchQuality?: FilesSearchMatchQuality | undefined;
+  readonly rootKind?: FilesSearchRootKind | undefined;
 }
+
+export type FilesSearchFileRole =
+  | "source"
+  | "test"
+  | "config"
+  | "docs"
+  | "generated"
+  | "asset"
+  | "other";
+
+export type FilesSearchMatchQuality = "exact" | "strong" | "path" | "weak";
+
+export type FilesSearchRootKind = "selected-root" | "nested-git-root";
 
 export interface FilesSearchResponse {
   readonly root: string;

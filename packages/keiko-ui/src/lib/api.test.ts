@@ -502,7 +502,15 @@ describe("fetchModels", () => {
       .mockResolvedValueOnce(jsonResponse({ models: [] }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(fetchModels()).rejects.toThrow("offline");
+    await fetchModels().then(
+      () => {
+        throw new Error("Expected fetchModels to reject.");
+      },
+      (error: unknown) => {
+        expect(error).toBeInstanceOf(TypeError);
+        expect((error as Error).message).toBe("offline");
+      },
+    );
     await expect(fetchModels()).resolves.toEqual({ models: [] });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
