@@ -83,7 +83,6 @@ import {
 import {
   ApiError,
   fetchEditorLanguageCapabilities,
-  postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
   fetchFilesContent,
   reportEditorInlineCompletionTelemetry,
@@ -107,8 +106,6 @@ import {
 } from "../../../../../lib/editor-language";
 import type {
   EditorAgentAction,
-  EditorAgentActionResult,
-  EditorAgentActionResultRequest,
   EditorAgentPaneSnapshot,
   EditorCompletionContextSelectors,
   EditorDocumentVersion,
@@ -116,11 +113,16 @@ import type {
   LanguageServiceCapabilities,
   EditorTestGenerationWireTarget,
 } from "../../../../../lib/types";
-import { EDITOR_AGENT_SCHEMA_VERSION, isEditorAgentEvent } from "../../../../../lib/types";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
+import {
+  postEditorAgentResult,
+  useEditorAgentBridge,
+  type EditorAgentActionControllers,
+} from "./editorAgentBridge";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import {
@@ -172,6 +174,8 @@ export interface EditorRuntimeWidgetProps {
   readonly revealRequestId?: string | undefined;
   readonly dirtyFiles?: readonly string[] | undefined;
   readonly onSelectOpenFile?: ((file: string) => void) | undefined;
+  readonly onSplitPane?: ((paneId: string, direction: "row" | "column") => void) | undefined;
+  readonly onMoveTab?: ((fromPaneId: string, file: string, toPaneId: string) => void) | undefined;
   readonly onCloseOpenFile?: ((file: string) => Promise<boolean> | boolean | void) | undefined;
   readonly onDirtyChange?: ((file: string, dirty: boolean) => void) | undefined;
   readonly externalSaveRequest?: EditorExternalSaveRequest | undefined;
@@ -417,6 +421,8 @@ export default function EditorRuntimeWidget({
   openFiles,
   dirtyFiles,
   onSelectOpenFile,
+  onSplitPane,
+  onMoveTab,
   onCloseOpenFile,
   onDirtyChange,
   externalSaveRequest,
@@ -1404,7 +1410,10 @@ export default function EditorRuntimeWidget({
     [version],
   );
 
-  useEffect(() => {
+  // Issue #1392 — post the current pane snapshot to the BFF. Wrapped in `useCallback` so the bridge
+  // hook's register effect re-fires exactly when a snapshot dimension changes (its identity is the
+  // dependency). Registration is best-effort and must never affect editing.
+  const registerAgentSnapshot = useCallback((): void => {
     if (!hasTarget || root === undefined || file === undefined || activeContentHash === null)
       return;
     void postEditorAgentSessionSnapshot({
@@ -1450,43 +1459,15 @@ export default function EditorRuntimeWidget({
     windowId,
   ]);
 
-  const postAgentResult = useCallback(
-    (
-      action: EditorAgentAction,
-      status: "succeeded" | "failed" | "conflict",
-      message?: string,
-      conflictCode?: AgentConflictCode,
-    ): void => {
-      const conflict: EditorAgentActionResult["conflict"] =
-        conflictCode !== undefined ? { code: conflictCode, message: message ?? "" } : undefined;
-      const body: EditorAgentActionResultRequest = {
-        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-        kind: "result",
-        result: {
-          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-          actionId: action.actionId,
-          sessionId: action.sessionId,
-          status,
-          ...(message === undefined ? {} : { message }),
-          ...(conflict === undefined ? {} : { conflict }),
-        },
-      };
-      void postEditorAgentActionResult(body).catch(() => {
-        // Best-effort action reporting; the local UI action already happened or was rejected.
-      });
-    },
-    [],
-  );
-
   // Issue #1394 (ADR-0058 D3): apply text edits, guarded for read-only/large-file buffers (AC4 risk #5).
   const applyAgentTextEditsAction = useCallback(
     (action: EditorAgentAction): void => {
       if (action.textEdits === undefined) {
-        postAgentResult(action, "failed", "Missing text edits.");
+        postEditorAgentResult(action, "failed", "Missing text edits.");
         return;
       }
       if (largeFileDegraded) {
-        postAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
+        postEditorAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
         return;
       }
       const mapped = action.textEdits.map((edit) => ({
@@ -1506,14 +1487,14 @@ export default function EditorRuntimeWidget({
             : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
         );
         setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
-        postAgentResult(action, "succeeded");
+        postEditorAgentResult(action, "succeeded");
       } catch (error) {
         // OverlappingPatchEditError is not re-exported by @oscharko-dev/keiko-editor; identify by name.
         const isOverlap = error instanceof Error && error.name === "OverlappingPatchEditError";
         if (isOverlap) {
-          postAgentResult(action, "conflict", error.message, "INVALID_EDITS");
+          postEditorAgentResult(action, "conflict", error.message, "INVALID_EDITS");
         } else {
-          postAgentResult(
+          postEditorAgentResult(
             action,
             "failed",
             error instanceof Error ? error.message : "Action failed.",
@@ -1521,7 +1502,7 @@ export default function EditorRuntimeWidget({
         }
       }
     },
-    [largeFileDegraded, postAgentResult],
+    [largeFileDegraded],
   );
 
   // Issue #1394 (ADR-0058 D3): applyPatch — server pre-validates and emits textEdits; the browser
@@ -1530,7 +1511,7 @@ export default function EditorRuntimeWidget({
     (action: EditorAgentAction): void => {
       const targetFile = action.target?.file;
       if (targetFile !== undefined && targetFile !== file) {
-        postAgentResult(
+        postEditorAgentResult(
           action,
           "conflict",
           "Patch targets a file not open in this pane.",
@@ -1539,11 +1520,11 @@ export default function EditorRuntimeWidget({
         return;
       }
       if (action.textEdits === undefined || action.textEdits.length === 0) {
-        postAgentResult(action, "failed", "Patch could not be prepared for review.");
+        postEditorAgentResult(action, "failed", "Patch could not be prepared for review.");
         return;
       }
       if (largeFileDegraded) {
-        postAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
+        postEditorAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
         return;
       }
       const mapped = action.textEdits.map((edit) => ({
@@ -1559,7 +1540,7 @@ export default function EditorRuntimeWidget({
         setAgentPatchPending({ action, original, modified });
       } catch (error) {
         const isOverlap = error instanceof Error && error.name === "OverlappingPatchEditError";
-        postAgentResult(
+        postEditorAgentResult(
           action,
           isOverlap ? "conflict" : "failed",
           error instanceof Error ? error.message : "Patch application failed.",
@@ -1567,115 +1548,46 @@ export default function EditorRuntimeWidget({
         );
       }
     },
-    [contentRef, file, largeFileDegraded, postAgentResult],
+    [file, largeFileDegraded],
   );
 
-  const executeAgentAction = useCallback(
-    (action: EditorAgentAction): void => {
-      if (action.sessionId !== agentSessionId) return;
-      switch (action.type) {
-        case "openFile":
-        case "focusTab":
-          if (action.target?.file === undefined) {
-            postAgentResult(action, "failed", "Missing target file.");
-            return;
-          }
-          onSelectOpenFile?.(action.target.file);
-          postAgentResult(action, "succeeded");
-          return;
-        case "format":
-          if (!formattingEnabled) {
-            postAgentResult(action, "failed", "Formatting is unavailable for this language.");
-            return;
-          }
-          setFormatRequestNonce((value) => value + 1);
-          postAgentResult(action, "succeeded");
-          return;
-        case "save":
-          void persist(contentRef.current).then((ok) => {
-            postAgentResult(action, ok ? "succeeded" : "failed", ok ? undefined : "Save failed.");
-          });
-          return;
-        case "applyTextEdits":
-          applyAgentTextEditsAction(action);
-          return;
-        case "applyPatch":
-          applyAgentPatchAction(action);
-          return;
-        case "moveTab":
-        case "splitPane":
-        case "setSelection":
-          postAgentResult(
-            action,
-            "failed",
-            "Action must be executed by the editor layout controller.",
-          );
-          return;
-      }
-    },
+  // Issue #1393 (ADR-0061 D2): the controller bundle the pure dispatcher calls. The two layout
+  // controllers (onSplitPane/onMoveTab) are injected by EditorWidget; they are undefined when this
+  // pane is rendered standalone, and the dispatcher then answers a structured provider-unavailable
+  // failure. The setSelection controller is owned by the bridge hook (it drives hook state), so it is
+  // left undefined here and merged in by the hook.
+  const agentControllers = useMemo<EditorAgentActionControllers>(
+    () => ({
+      paneId,
+      onSelectOpenFile,
+      formattingEnabled,
+      formatRequest: { increment: () => setFormatRequestNonce((value) => value + 1) },
+      persist,
+      currentText: () => contentRef.current,
+      applyTextEdits: applyAgentTextEditsAction,
+      applyPatch: applyAgentPatchAction,
+      onSplitPane,
+      onMoveTab,
+      onRequestSelectionReveal: undefined,
+    }),
     [
-      agentSessionId,
       applyAgentPatchAction,
       applyAgentTextEditsAction,
-      contentRef,
       formattingEnabled,
+      onMoveTab,
       onSelectOpenFile,
+      onSplitPane,
+      paneId,
       persist,
-      postAgentResult,
     ],
   );
 
-  // Issue #1394 (ADR-0058 D4): observe conflict results from the SSE stream and surface them via the
-  // AgentConflictBanner. The action listener already runs on the same EventSource; we reuse a single
-  // connection and add a second event type listener for "editor-agent:result".
-  const onAgentResult = useCallback(
-    (event: MessageEvent<string>): void => {
-      try {
-        const parsed: unknown = JSON.parse(event.data);
-        // Validate the SSE frame at the trust boundary with the public contract guard (#1391) rather
-        // than casting untyped JSON.
-        if (!isEditorAgentEvent(parsed)) return;
-        if (parsed.type !== "result" || parsed.result.status !== "conflict") return;
-        // F6: filter by sessionId so a conflict for another pane does not pop this banner.
-        if (parsed.result.sessionId !== agentSessionId) return;
-        const { conflict } = parsed.result;
-        if (conflict === undefined) return;
-        setAgentConflict({ code: conflict.code, message: conflict.message });
-      } catch {
-        // Ignore malformed SSE frames.
-      }
-    },
-    [agentSessionId],
-  );
-
-  useEffect(() => {
-    if (typeof EventSource === "undefined") return;
-    // Issue #1392 — carry the session id so the BFF registers this connection as the session's live
-    // browser bridge. Server-side liveness gates action queueing (an action for a session with no live
-    // bridge is answered with a structured NO_ACTIVE_BRIDGE conflict), and event fan-out is scoped to
-    // this session. The client-side session filter in executeAgentAction remains as defense in depth.
-    const source = new EventSource(
-      `/api/editor/agent/events?sessionId=${encodeURIComponent(agentSessionId)}`,
-    );
-    const onAction = (event: MessageEvent<string>): void => {
-      try {
-        const parsed: unknown = JSON.parse(event.data);
-        // Validate the action frame at the trust boundary with the public contract guard (#1391),
-        // symmetric with the result listener, rather than casting untyped JSON.
-        if (isEditorAgentEvent(parsed) && parsed.type === "action")
-          executeAgentAction(parsed.action);
-      } catch {
-        // Ignore malformed SSE frames; the server owns validation before enqueueing.
-      }
-    };
-    source.addEventListener("editor-agent:action", onAction);
-    source.addEventListener("editor-agent:result", onAgentResult);
-    return () => {
-      source.removeEventListener("editor-agent:action", onAction);
-      source.removeEventListener("editor-agent:result", onAgentResult);
-      source.close();
-    };
-  }, [agentSessionId, executeAgentAction, onAgentResult]);
+  const { agentSelectionRequest, consumeSelectionRequest } = useEditorAgentBridge({
+    agentSessionId,
+    controllers: agentControllers,
+    registerSnapshot: registerAgentSnapshot,
+    onConflict: setAgentConflict,
+  });
 
   const recoveryDiskChanged =
     recoverySnapshot !== null &&
@@ -1687,7 +1599,7 @@ export default function EditorRuntimeWidget({
   const handleAgentPatchAccept = useCallback((): void => {
     if (agentPatchPending === null) return;
     if (largeFileDegraded) {
-      postAgentResult(
+      postEditorAgentResult(
         agentPatchPending.action,
         "failed",
         "Editor is read-only; cannot apply agent edits.",
@@ -1702,15 +1614,57 @@ export default function EditorRuntimeWidget({
         : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
     );
     setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
-    postAgentResult(agentPatchPending.action, "succeeded");
+    postEditorAgentResult(agentPatchPending.action, "succeeded");
     setAgentPatchPending(null);
-  }, [agentPatchPending, largeFileDegraded, postAgentResult]);
+  }, [agentPatchPending, largeFileDegraded]);
 
   const handleAgentPatchReject = useCallback((): void => {
     if (agentPatchPending === null) return;
-    postAgentResult(agentPatchPending.action, "failed", "Patch rejected by user.");
+    postEditorAgentResult(agentPatchPending.action, "failed", "Patch rejected by user.");
     setAgentPatchPending(null);
-  }, [agentPatchPending, postAgentResult]);
+  }, [agentPatchPending]);
+
+  // Issue #1393 (ADR-0061 D3): merge an agent setSelection request into the editor surface
+  // revealRequest, mapping the contract LanguageRange (0-based, `character`) onto the editor's
+  // EditorRange (0-based, `column`). Agent selection takes precedence over the line-based reveal; it
+  // is consumed one-shot below so a stale agent selection never fights a later user-driven reveal.
+  const lineRevealRequest =
+    revealLineStart === undefined
+      ? undefined
+      : {
+          id:
+            revealRequestId ??
+            `${file ?? "file"}:${String(revealLineStart)}:${String(revealLineEnd ?? revealLineStart)}`,
+          range: {
+            start: { line: Math.max(0, Math.floor(revealLineStart) - 1), column: 0 },
+            end: {
+              line: Math.max(
+                Math.max(0, Math.floor(revealLineStart) - 1),
+                Math.floor(revealLineEnd ?? revealLineStart) - 1,
+              ),
+              column: 0,
+            },
+          },
+        };
+  const surfaceRevealRequest =
+    agentSelectionRequest === null
+      ? lineRevealRequest
+      : {
+          id: `agentAction:${agentSelectionRequest.actionId}`,
+          range: {
+            start: {
+              line: agentSelectionRequest.selection.start.line,
+              column: agentSelectionRequest.selection.start.character,
+            },
+            end: {
+              line: agentSelectionRequest.selection.end.line,
+              column: agentSelectionRequest.selection.end.character,
+            },
+          },
+        };
+  useEffect(() => {
+    if (agentSelectionRequest !== null) consumeSelectionRequest();
+  }, [agentSelectionRequest, consumeSelectionRequest]);
 
   let panel: ReactNode;
   if (agentPatchPending !== null) {
@@ -1806,25 +1760,7 @@ export default function EditorRuntimeWidget({
         formatRequestNonce={formatRequestNonce}
         onSelectionChange={setCurrentSelection}
         onCursorChange={setCursor}
-        revealRequest={
-          revealLineStart === undefined
-            ? undefined
-            : {
-                id:
-                  revealRequestId ??
-                  `${file ?? "file"}:${String(revealLineStart)}:${String(revealLineEnd ?? revealLineStart)}`,
-                range: {
-                  start: { line: Math.max(0, Math.floor(revealLineStart) - 1), column: 0 },
-                  end: {
-                    line: Math.max(
-                      Math.max(0, Math.floor(revealLineStart) - 1),
-                      Math.floor(revealLineEnd ?? revealLineStart) - 1,
-                    ),
-                    column: 0,
-                  },
-                },
-              }
-        }
+        revealRequest={surfaceRevealRequest}
         onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
         onGenerateTests={completionEnabled ? runTestGeneration : undefined}
         showStatusFooter={false}

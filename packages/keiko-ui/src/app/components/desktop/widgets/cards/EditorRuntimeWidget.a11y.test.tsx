@@ -304,3 +304,46 @@ describe("EditorRuntimeWidget patch-review buttons — focus management (A11Y-2)
     expect(document.activeElement).toBe(acceptBtn);
   });
 });
+
+describe("EditorRuntimeWidget agent actions — focus management (A11Y)", () => {
+  it("a setSelection agent action does not steal focus", async () => {
+    // Arrange: mount the widget (no patch review — this test stays in normal editing mode).
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget windowId="a11y-focus" root="/repo" file="src/app.ts" paneId="pane-1" />,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+      expect(FakeSource.instances.length).toBeGreaterThan(0);
+    });
+    const sessionId = String(
+      vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0]?.sessionId,
+    );
+    const source = FakeSource.instances.at(-1) as FakeEventSource;
+
+    // Capture whatever element currently owns focus before the agent action.
+    const before = document.activeElement;
+
+    // Act: emit a setSelection action — this drives a one-shot revealRequest (scroll/select)
+    // and MUST NOT call .focus(), so the document's active element must not change.
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "setSelection", {
+          target: {
+            selection: {
+              start: { line: 1, character: 2 },
+              end: { line: 1, character: 5 },
+            },
+          },
+        }),
+      );
+    });
+
+    // Assert: focus did not move to a focusable agent-driven element.
+    expect(document.activeElement).toBe(before);
+    // The editor-surface probe is still mounted (widget did not unmount).
+    expect(surface.props).not.toBeNull();
+  });
+});

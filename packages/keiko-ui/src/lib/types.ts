@@ -103,6 +103,7 @@ export type {
   EditorAgentActionQueuedResponse,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
+  EditorAgentConflictCode,
   EditorAgentEvent,
   EditorAgentPaneSnapshot,
   EditorAgentSessionSnapshot,
@@ -111,7 +112,11 @@ export type {
   EditorAgentSnapshotResponse,
   EditorAgentSnapshotTextMode,
 } from "@oscharko-dev/keiko-contracts";
-export { EDITOR_AGENT_SCHEMA_VERSION, isEditorAgentEvent } from "@oscharko-dev/keiko-contracts";
+export {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  isContainedAgentPath,
+  isEditorAgentEvent,
+} from "@oscharko-dev/keiko-contracts";
 
 // ─── Deterministic context-engineering layer (ADR-0052 / ADR-0057) ──────────────────
 // The context-status panel (ContextStatusPanel.tsx) needs the lane-id literal union and the
