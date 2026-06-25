@@ -86,7 +86,10 @@ function clampNumber(value: number, min: number, max: number): number {
 // may be absolute, e.g. from an older session or a symlink-aliased root) into the root-relative
 // identifier the BFF requires. An absolute path that does not live under `root` resolves to "" so
 // the editor renders its non-blocking empty state instead of sending an absolute path that the BFF
-// would reject with 400 BAD_PATH. Single-sources the conversion through @oscharko-dev/keiko-contracts.
+// would reject with 400 BAD_PATH. This and the chat repository-reference open path
+// (workspaceActions) share the contract in @oscharko-dev/keiko-contracts; the editor window's
+// cfg-persistence normalizer (AppShell.normalizeEditorWindowCfg) is a separate layer that likewise
+// never persists an absolute file id.
 function normalizeEditorFile(root: string, file: string | undefined): string {
   const resolution = resolveWorkspaceFileIdentifier(root, file);
   return resolution.kind === "relative" ? resolution.path : "";

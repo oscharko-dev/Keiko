@@ -44,6 +44,7 @@ import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
+import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
 import { applyShellUndoAction, SHELL_SHORTCUT_BINDINGS } from "./shell-undo-bindings";
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
@@ -164,26 +165,25 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-function normalizeComparablePath(path: string): string {
-  return path.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
-}
-
+// Root-relative file-identifier contract (Issue #1374). The editor-window cfg-persistence layer
+// shares the same contract as the editor open flow (EditorWidget / workspaceActions), so a file id
+// is single-sourced through @oscharko-dev/keiko-contracts. The historic ""/relative/null return
+// contract is preserved: "" for the root itself / no file, the root-relative remainder when
+// contained, and null when the candidate cannot be relativized under `root` (the caller then keeps
+// the candidate as-is for already-relative paths, or drops it when it is absolute). The two edge
+// cases the contract folds to "outside-root" — a filesystem-root ("/") root and an empty root — are
+// handled locally to keep behavior identical.
 function editorRelativePath(root: string, file: string): string | null {
-  const normalizedRoot = normalizeComparablePath(root);
-  const normalizedFile = normalizeComparablePath(file);
-  if (normalizedFile.length === 0) return "";
-  if (normalizedRoot.length === 0) {
-    return /^\/+$/u.test(root.trim().replace(/\\/gu, "/"))
-      ? normalizedFile.replace(/^\/+/u, "")
-      : "";
+  const comparableRoot = root.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
+  if (/^\/+$/u.test(root.trim().replace(/\\/gu, "/"))) {
+    const comparableFile = file.trim().replace(/\\/gu, "/");
+    return comparableFile.length === 0 ? "" : comparableFile.replace(/^\/+/u, "");
   }
-  const rootCmp = normalizedRoot.toLowerCase();
-  const fileCmp = normalizedFile.toLowerCase();
-  if (fileCmp === rootCmp) return "";
-  if (fileCmp.startsWith(`${rootCmp}/`)) {
-    return normalizedFile.slice(normalizedRoot.length + 1).replace(/^\/+/u, "");
-  }
-  return null;
+  if (comparableRoot.length === 0) return "";
+  const resolution = resolveWorkspaceFileIdentifier(root, file);
+  if (resolution.kind === "relative") return resolution.path;
+  if (resolution.kind === "outside-root") return null;
+  return "";
 }
 
 function isAbsoluteEditorPath(path: string): boolean {

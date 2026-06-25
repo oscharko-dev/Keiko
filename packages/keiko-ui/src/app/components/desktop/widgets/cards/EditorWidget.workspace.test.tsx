@@ -350,7 +350,11 @@ describe("EditorWidget workspace session", () => {
     expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
   });
 
-  it("selects a containing root when a single absolute file outside the root is opened (#1374 AC3)", () => {
+  it("anchors a single absolute file outside the root to a containing root via openFile (#1374 AC3)", () => {
+    // Exercises the editor's openFile single-file-target contract directly: handed an absolute file
+    // that does not live under the current root, it selects the file's containing directory as the
+    // root and opens the basename root-relative (AC3 "selects a containing root"). The pure
+    // resolution is also covered by editor-workspace-path.test.ts (selectWorkspaceFileTarget).
     const onWorkspaceChange = vi.fn();
     render(<EditorWidget root="/repo" onWorkspaceChange={onWorkspaceChange} />);
 
@@ -363,12 +367,14 @@ describe("EditorWidget workspace session", () => {
     );
   });
 
-  it("remains mounted and usable after changing to a different root (#1374 AC4)", () => {
+  it("remains mounted with the embedded tree after switching to a new root (#1374 AC4)", () => {
     const onWorkspaceChange = vi.fn();
     render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
 
-    // A root change resets to an empty pane on the new root; the embedded tree (its sidebar) is
-    // still rendered, so the editor stays interactive even if the new root later fails to load.
+    // A root change resets to an empty pane on the new root while keeping the embedded tree (its
+    // sidebar) mounted, so the editor stays interactive. The genuine failed-root-load recovery
+    // (error surfaced, app alive) lives in FilesWidget and is proven by the release-smoke e2e
+    // ("arbitrary folder opening …": an unavailable root renders role="alert").
     fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
 
     expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next");

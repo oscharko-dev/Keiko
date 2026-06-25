@@ -380,6 +380,11 @@ test("arbitrary folder opening keeps root-relative ids with clear error and empt
   await rootInput.press("Enter");
   await expect(filesWindow.getByRole("alert")).toBeVisible();
 
+  // D3: a permission-denied root (a deny-listed path segment) renders the same clear error state.
+  await rootInput.fill(join(projectPath, ".git"));
+  await rootInput.press("Enter");
+  await expect(filesWindow.getByRole("alert")).toBeVisible();
+
   // Recovery to an empty folder shows the clear empty state (no editor failure).
   await rootInput.fill(join(projectPath, "empty-folder"));
   await rootInput.press("Enter");
