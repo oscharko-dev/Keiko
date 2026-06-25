@@ -361,7 +361,7 @@ describe("POST /api/voice/recap/build — candidate creation enters proposed sta
     await handleVoiceRecapBuild(ctx(recapBody(spans)), recapDeps({ evidenceStore: store }));
     const record = auditRecords(store)[0] ?? {};
     expect(record.committedSegmentCount).toBe(2);
-    expect(record.committedChars).toBe(spans[0].length + spans[1].length);
+    expect(record.committedChars).toBe(spans.reduce((total, span) => total + span.length, 0));
     expect(record.triggeredByUser).toBe(true);
     const serialized = JSON.stringify(record);
     expect(serialized).not.toContain("dark mode");
