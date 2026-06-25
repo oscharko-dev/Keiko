@@ -102,6 +102,34 @@ describe("reconcileEditorDirtyByPane", () => {
     expect(reconciled["pane-2"]).toEqual({ "src/a.ts": true });
   });
 
+  it("re-spreads a still-dirty shared file to every pane that holds it, by design (ADR-0064 D2)", () => {
+    // The Monaco model is keyed by (root, file), so an unsaved buffer is unsaved in every pane that
+    // shows it. Clearing the flag in only one pane of a split view is an inconsistent intermediate;
+    // reconcile re-homes the still-dirty file onto both panes rather than trusting that stale state.
+    const split = editorLayoutReducer(baseLayout(), {
+      type: "split-pane",
+      paneId: "pane-1",
+      direction: "row",
+      file: "src/b.ts",
+    });
+    const openInSecond = editorLayoutReducer(split, {
+      type: "open-file",
+      paneId: "pane-2",
+      file: "src/a.ts",
+    });
+    const both = editorLayoutReducer(openInSecond, {
+      type: "open-file",
+      paneId: "pane-1",
+      file: "src/a.ts",
+    });
+    const partiallyCleared: EditorDirtyByPane = { "pane-1": { "src/a.ts": true }, "pane-2": {} };
+
+    const reconciled = reconcileEditorDirtyByPane(partiallyCleared, both);
+
+    expect(reconciled["pane-1"]).toEqual({ "src/a.ts": true });
+    expect(reconciled["pane-2"]).toEqual({ "src/a.ts": true });
+  });
+
   it("drops a dirty flag for a file that is no longer open in any pane", () => {
     const dirty: EditorDirtyByPane = { "pane-1": { "src/gone.ts": true } };
     expect(reconcileEditorDirtyByPane(dirty, baseLayout())).toEqual({});
