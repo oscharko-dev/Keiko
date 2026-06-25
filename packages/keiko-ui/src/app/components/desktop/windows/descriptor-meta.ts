@@ -216,6 +216,15 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "evidence-reference",
   },
+  // Epic #470, Issue #475 — Governed local Git flow. Drives the governed mutation kernel (preflight +
+  // policy + approval + execute) over the local repository and records evidence; every mutation is a
+  // user-confirmed action. Trust spans the git tool boundary and the evidence ledger.
+  governedGit: {
+    lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
+    trustBoundary: ["ui", "tool", "evidence"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
 };
 
 // ─── Module-evaluation validation ─────────────────────────────────────────

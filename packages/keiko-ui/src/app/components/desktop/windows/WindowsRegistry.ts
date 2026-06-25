@@ -54,7 +54,11 @@ export type WindowType =
   // A scoped, JSON-only Figma Screen-IR source window derived from a Figma Snapshot view.
   | "figmaJson"
   // A scoped, image-only Figma screen-render source window derived from a Figma Snapshot view.
-  | "figmaImage";
+  | "figmaImage"
+  // Epic #470, Issue #475 — Governed local Git flow surface. A per-project card walking
+  // branch → staging → commit (live preview + message-policy + policy decision) entirely through the
+  // governed mutation kernel. Gated server-side by KEIKO_GIT_DELIVERY_ENABLED.
+  | "governedGit";
 
 export interface WindowSize {
   readonly w: number;
@@ -527,6 +531,19 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     min: { w: 300, h: 240 },
     tiny: { w: 240, h: 180 },
   },
+  // Epic #470, Issue #475 — Governed local Git flow. Branch → staging → commit, walked entirely
+  // through the governed mutation kernel. Reads the active project root from cfg (like terminal).
+  governedGit: {
+    title: "Governed Git",
+    icon: "git",
+    accent: true,
+    desc: "Branch, stage, and commit under policy",
+    w: 520,
+    h: 640,
+    min: { w: 360, h: 420 },
+    tiny: { w: 300, h: 240 },
+    config: [{ key: "projectPath", label: "Project path", type: "text", def: "" }],
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -593,6 +610,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "figmaJson",
   "files",
   "editor",
+  "governedGit",
   "quality",
   "promptEnhancer",
   "relationships",

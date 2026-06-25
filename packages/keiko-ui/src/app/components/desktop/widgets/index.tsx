@@ -19,6 +19,7 @@ import { FilesWidget } from "./cards/FilesWidget";
 import { EditorWidget } from "./cards/EditorWidget";
 import { BrowserWidget } from "./cards/BrowserWidget";
 import { TerminalWidget } from "./cards/TerminalWidget";
+import { GovernedGitFlowCard } from "./cards/GovernedGitFlowCard";
 import { ReviewWidget } from "./cards/ReviewWidget";
 import { AgentRunWidget, type AgentRunCfg } from "./cards/AgentRunWidget";
 import { IntegrationsWidget } from "./cards/IntegrationsWidget";
@@ -391,6 +392,14 @@ registerWindowRender("terminal", (cfg) => {
   if (cwd !== undefined) props.cwd = cwd;
   if (projectPath !== undefined) props.projectPath = projectPath;
   return <TerminalWidget {...props} />;
+});
+// Epic #470, Issue #475 — Governed local Git flow surface. The active project root acts as the
+// projectId. Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a
+// linked Files/Editor window root; an empty state renders when none is available.
+registerWindowRender("governedGit", (cfg, ctx) => {
+  const projectId =
+    str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
+  return <GovernedGitFlowCard projectId={projectId} />;
 });
 // uiux-fix F018 C110: a review window without a run ID was a dead end — the empty
 // state now offers an inline run-ID form, persisted via updateCfg like files/figma.

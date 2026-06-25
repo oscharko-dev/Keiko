@@ -73,8 +73,13 @@ import type {
   WorkflowsResponse,
 } from "./types";
 import type {
+  GitCommitChangeSummary,
+  GitCommitIntentAnalysis,
+  GitCommitMessageValidation,
+  GitCommitMessageViolationCode,
   GitDeliveryActionSheet,
   GitDeliveryActionSheetRequest,
+  GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -1255,6 +1260,181 @@ export async function fetchGitDeliveryActionSheet(
   return fetchJson("/api/git-delivery/action-sheet", {
     method: "POST",
     body: JSON.stringify(request),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Issue #475 (Epic #470) — governed local Git flows (branch / staging / commit)
+// ---------------------------------------------------------------------------
+// Six POST routes that drive the governed local-mutation kernel server-side. Each request body carries
+// `{ schemaVersion: "1", projectId, ... }` where `projectId` is the workspace root path. The CSRF header
+// is added by `fetchJson` for the POST. Requests and responses are content-free: counts, structural area
+// tokens, branch names, and typed warning / violation / finding codes only — never diff content, raw
+// paths, secrets, or the commit-message body. Mutation responses report a `status`; a message-policy
+// block returns `{ status: "blocked", blockReason: "message-policy", messageViolations }`.
+
+export type GitDeliveryMutationStatus =
+  | "succeeded"
+  | "blocked"
+  | "approval-required"
+  | "failed"
+  | "recovery-required";
+
+// Shared mutation response shape for branch + staging + commit execution. Optional fields appear only
+// for the matching outcome (block reason, preflight codes, required approvers, execution error code).
+export interface GitDeliveryMutationResponse {
+  readonly schemaVersion: "1";
+  readonly status: GitDeliveryMutationStatus;
+  readonly actionKind: string;
+  readonly phaseReached?: string;
+  readonly policyOutcome?: string;
+  readonly blockReason?: string;
+  readonly preflightFindingCodes?: readonly string[];
+  readonly requiredApprovers?: readonly string[];
+  readonly executionErrorCode?: string;
+  readonly messageViolations?: readonly GitCommitMessageViolationCode[];
+}
+
+export interface GitDeliveryLocalBranchCreateInput {
+  readonly projectId: string;
+  readonly branchName: string;
+  readonly baseBranchName: string;
+  readonly startPointRefHash: string;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export async function fetchGitDeliveryLocalBranchCreate(
+  input: GitDeliveryLocalBranchCreateInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/local-branch/create", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      branchName: input.branchName,
+      baseBranchName: input.baseBranchName,
+      startPointRefHash: input.startPointRefHash,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryLocalBranchSwitchInput {
+  readonly projectId: string;
+  readonly branchName: string;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export async function fetchGitDeliveryLocalBranchSwitch(
+  input: GitDeliveryLocalBranchSwitchInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/local-branch/switch", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      branchName: input.branchName,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryStageInput {
+  readonly projectId: string;
+  readonly pathspecs: readonly string[];
+  readonly includeUntracked: boolean;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export async function fetchGitDeliveryStage(
+  input: GitDeliveryStageInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/staging/stage", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      pathspecs: input.pathspecs,
+      includeUntracked: input.includeUntracked,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryUnstageInput {
+  readonly projectId: string;
+  readonly pathspecs: readonly string[];
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export async function fetchGitDeliveryUnstage(
+  input: GitDeliveryUnstageInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/staging/unstage", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      pathspecs: input.pathspecs,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryCommitPreviewResponse {
+  readonly schemaVersion: "1";
+  readonly summary: GitCommitChangeSummary;
+  readonly intent: GitCommitIntentAnalysis;
+  readonly messageValidation: GitCommitMessageValidation;
+  readonly preflightFindingCodes: readonly string[];
+  readonly policyOutcome: string;
+  readonly policyBlockReason?: string;
+}
+
+export async function fetchGitDeliveryCommitPreview(
+  input: { readonly projectId: string; readonly messageDraft?: string | undefined },
+  signal?: AbortSignal,
+): Promise<GitDeliveryCommitPreviewResponse> {
+  return fetchJson("/api/git-delivery/commit/preview", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      ...(input.messageDraft === undefined ? {} : { messageDraft: input.messageDraft }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryCommitExecuteInput {
+  readonly projectId: string;
+  readonly message: string;
+  readonly allowEmpty?: boolean | undefined;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export async function fetchGitDeliveryCommitExecute(
+  input: GitDeliveryCommitExecuteInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/commit/execute", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      message: input.message,
+      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
     ...(signal === undefined ? {} : { signal }),
   });
 }
