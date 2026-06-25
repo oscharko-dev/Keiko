@@ -135,3 +135,57 @@ describe("isMonacoLanguageId", () => {
     expect(isMonacoLanguageId("")).toBe(false);
   });
 });
+// Issue #1379 (ADR-0067 D2) PARITY GATE. The mode map is now DERIVED from the canonical contract
+// table; this block hard-codes the pre-change `MONACO_LANGUAGE_BY_EXTENSION` so the consolidation
+// cannot silently drift the tested inference. Every historic (extension -> id) pair must still hold,
+// and the historic key set must be exactly the derived key set (no additions, no removals).
+describe("Issue #1379 parity gate — derived map equals pre-change map", () => {
+  const PRE_CHANGE_PAIRS: readonly (readonly [string, string])[] = [
+    ["ts", "typescript"],
+    ["mts", "typescript"],
+    ["cts", "typescript"],
+    ["tsx", "typescript"],
+    ["js", "javascript"],
+    ["mjs", "javascript"],
+    ["cjs", "javascript"],
+    ["jsx", "javascript"],
+    ["json", "json"],
+    ["jsonc", "json"],
+    ["css", "css"],
+    ["scss", "scss"],
+    ["less", "less"],
+    ["html", "html"],
+    ["htm", "html"],
+    ["md", "markdown"],
+    ["markdown", "markdown"],
+    ["yaml", "yaml"],
+    ["yml", "yaml"],
+    ["py", "python"],
+    ["pyi", "python"],
+    ["java", "java"],
+    ["go", "go"],
+    ["rs", "rust"],
+    ["sql", "sql"],
+    ["sh", "shell"],
+    ["bash", "shell"],
+    ["zsh", "shell"],
+  ];
+
+  it("infers the same Monaco id for every historic extension", () => {
+    for (const [extension, expected] of PRE_CHANGE_PAIRS) {
+      expect(inferMonacoLanguageId(`file.${extension}`)).toBe(expected);
+      expect(MONACO_LANGUAGE_BY_EXTENSION[extension]).toBe(expected);
+    }
+  });
+
+  it("has exactly the historic extension key set (no drift)", () => {
+    const historicKeys = [...PRE_CHANGE_PAIRS.map(([ext]) => ext)].sort();
+    const derivedKeys = Object.keys(MONACO_LANGUAGE_BY_EXTENSION).sort();
+    expect(derivedKeys).toEqual(historicKeys);
+  });
+
+  it("keeps plaintext as the fallback for an unknown extension", () => {
+    expect(inferMonacoLanguageId("file.unknownext")).toBe("plaintext");
+    expect(MONACO_LANGUAGE_BY_EXTENSION.unknownext).toBeUndefined();
+  });
+});

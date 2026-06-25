@@ -150,6 +150,15 @@ const TEST_GENERATION_FAILURE_MESSAGE =
   "Test generation could not be reached. The editor is still usable.";
 const COMPACT_TABS_ENTER_WIDTH_PX = 420;
 const COMPACT_TABS_EXIT_WIDTH_PX = 460;
+// Pre-GET bootstrap seed for `languageCapabilities` before the async `/api/editor/language/capabilities`
+// GET resolves. It seeds the TypeScript/JavaScript provider as available so the primary editing
+// surface registers its governed intelligence at the FIRST `onMount` and does not remount when the GET
+// resolves: Monaco language providers are registered once per editor mount (use-editor-handlers.ts),
+// and `editorSurfaceKey` includes the resolved provider id, so a bootstrap id that differs from the
+// server's would force a Monaco re-initialisation on load. Language *actions* are not TS/JS-gated —
+// `providerOperationEnabled` reads the now-exhaustive server registry (Issue #1379 AC1); this seed is
+// a transient, best-effort first-paint optimisation that the GET response immediately supersedes for
+// every language.
 const BOOTSTRAP_LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   schemaVersion: "1",
   providers: [
@@ -216,7 +225,7 @@ function safeDomIdSegment(value: string): string {
   return safe.length > 0 ? safe : "editor";
 }
 
-/** Map a workspace path to a renderable editor language; intelligence remains TS/JS-gated below. */
+/** Map a workspace path to a renderable editor language; intelligence is registry/capability-gated below. */
 function inferEditorLanguage(path: string): EditorLanguageId {
   const language = inferMonacoLanguageId(path);
   return isSupportedEditorLanguage(language) ? language : "plaintext";
@@ -1388,13 +1397,19 @@ export default function EditorRuntimeWidget({
           completionsEnabled: completionEnabled,
           largeFileMode,
           diagnostics: diagnosticsEnabled ? diagnosticsSummary : null,
+          // Issue #1379 (ADR-0067 D4): after the exhaustive registry, providerForLanguage returns a
+          // descriptor for every KNOWN language; we read its id/availability/reason directly. The
+          // null guard is retained ONLY for the genuinely-unknown plaintext/unknown case (plaintext
+          // is intentionally not a registry language, ADR-0067 D5) so the status bar still renders.
           languageService:
             languageProvider === null
-              ? { providerId: null, available: false, unavailableReason: "No provider configured" }
+              ? { providerId: null, available: false }
               : {
-                  providerId: languageProvider.id,
+                  providerId: languageProvider.id === "none" ? null : languageProvider.id,
                   available: languageProvider.availability === "available",
-                  unavailableReason: languageProvider.unavailableReason,
+                  ...(languageProvider.unavailableReason === undefined
+                    ? {}
+                    : { unavailableReason: languageProvider.unavailableReason }),
                 },
           readOnly: largeFileDegraded,
           ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
@@ -1482,6 +1497,23 @@ export default function EditorRuntimeWidget({
       cursor: cursor === null ? null : { line: cursor.line, character: cursor.column },
       selection: rangeToAgentRange(currentSelection),
       diagnosticsSummary,
+      // Issue #1379 AC4 (ADR-0067 D6): content-free language-provider availability for the active
+      // file, derived from the descriptor we already computed. The synthetic id:"none" maps to
+      // providerId:null for honesty; null overall when there is no active language.
+      languageCapability:
+        completionLanguage === undefined
+          ? null
+          : {
+              languageId: completionLanguage,
+              providerId:
+                languageProvider !== null && languageProvider.id !== "none"
+                  ? languageProvider.id
+                  : null,
+              available: languageProvider?.availability === "available",
+              ...(languageProvider?.unavailableReason !== undefined
+                ? { unavailableReason: languageProvider.unavailableReason }
+                : {}),
+            },
       ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
       activeFileContentHash: activeContentHash,
       textMode: "none",
@@ -1495,12 +1527,14 @@ export default function EditorRuntimeWidget({
     agentSessionId,
     currentSelection,
     cursor,
+    completionLanguage,
     diagnosticsSummary,
     documentTabs,
     effectiveDirtyFiles,
     agentDocumentVersion,
     file,
     hasTarget,
+    languageProvider,
     layoutPanes,
     paneId,
     root,

@@ -33,6 +33,17 @@ export interface EditorAgentSessionSnapshot {
     readonly warnings: number;
     readonly infos: number;
   } | null;
+  // Issue #1379 AC4 (ADR-0067 D6) — content-free language-provider availability for the active file.
+  // Additive and optional: old snapshots (field absent) still validate. ids/booleans/short reason
+  // strings only — never buffer text. `providerId` is null when no provider serves the language.
+  readonly languageCapability?:
+    | {
+        readonly languageId: string;
+        readonly providerId: string | null;
+        readonly available: boolean;
+        readonly unavailableReason?: string | undefined;
+      }
+    | null;
   readonly documentVersion?: EditorDocumentVersion | undefined;
   readonly activeFileContentHash?: string | undefined;
   readonly textMode: EditorAgentSnapshotTextMode;
@@ -289,6 +300,20 @@ function isDiagnosticsSummary(
   );
 }
 
+// Issue #1379 AC4 — the content-free language-capability detail. languageId is a non-empty string,
+// providerId is a string or null, available is a boolean, and unavailableReason (when present) is a
+// string. Reuses the existing isRecord / string / isUndefinedOr helpers so the validator style
+// matches the rest of this module.
+function isLanguageCapability(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.languageId) &&
+    (value.providerId === null || isString(value.providerId)) &&
+    typeof value.available === "boolean" &&
+    isUndefinedOr(value.unavailableReason, isString)
+  );
+}
+
 function isPaneSnapshot(value: unknown): value is EditorAgentPaneSnapshot {
   return (
     isRecord(value) &&
@@ -320,6 +345,7 @@ export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAge
     isNullOr(value.cursor, isPosition),
     isNullOr(value.selection, isRange),
     isNullOr(value.diagnosticsSummary, isDiagnosticsSummary),
+    isUndefinedOr(value.languageCapability, (c) => c === null || isLanguageCapability(c)),
     isUndefinedOr(value.documentVersion, isDocumentVersion),
     isUndefinedOr(value.activeFileContentHash, isSha256Hex),
     isSnapshotTextMode(value.textMode),

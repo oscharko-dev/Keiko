@@ -13,9 +13,11 @@ import {
   type LanguageHoverResult,
   type LanguageServiceCapabilities,
   type LanguageServiceErrorCode,
+  type LanguageProviderDescriptor,
   type LanguageServiceLimits,
   type LanguageServiceRequest,
   type LanguageSymbolResult,
+  EDITOR_LANGUAGE_MODE_IDS,
   LANGUAGE_SERVICE_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -51,12 +53,43 @@ export function languageServiceRegistry(): LanguageProviderRegistry {
   return defaultRegistry;
 }
 
+// Issue #1379 AC2 (ADR-0067 D3) — the content-free reason advertised for a known mode-map language
+// that no registered provider serves. Distinct from the external-LSP "no executable configured"
+// reason: this language has no provider at all, real or unavailable.
+export const NO_PROVIDER_UNAVAILABLE_REASON =
+  "No language provider is configured for this language." as const;
+
+// Issue #1379 AC2 (ADR-0067 D3) — exhaustive over the canonical mode-map universe. We project the
+// registered descriptors (available providers + unavailable external LSP descriptors), then append a
+// synthetic `unavailable` descriptor for every known mode-map language that no descriptor already
+// covers. After this, `providerForLanguage` returns a descriptor for EVERY known language id, never
+// null, so AC2 holds at the registry layer rather than by UI patching. The synthesis is additive and
+// read-only — it changes no operation-execution path. `runLanguageOperation` is untouched: an
+// unmatched/unavailable language still yields UNSUPPORTED_LANGUAGE (AC3).
 export function describeLanguageCapabilities(
   registry: LanguageProviderRegistry = defaultRegistry,
 ): LanguageServiceCapabilities {
+  const descriptors = registry.describe();
+  const covered = new Set<string>();
+  for (const descriptor of descriptors) {
+    for (const language of descriptor.languages) {
+      covered.add(language);
+    }
+  }
+  const synthesized: LanguageProviderDescriptor[] = [];
+  for (const languageId of EDITOR_LANGUAGE_MODE_IDS) {
+    if (covered.has(languageId)) continue;
+    synthesized.push({
+      id: "none",
+      languages: [languageId],
+      operations: [],
+      availability: "unavailable",
+      unavailableReason: NO_PROVIDER_UNAVAILABLE_REASON,
+    });
+  }
   return {
     schemaVersion: LANGUAGE_SERVICE_SCHEMA_VERSION,
-    providers: registry.describe(),
+    providers: [...descriptors, ...synthesized],
   };
 }
 

@@ -685,3 +685,80 @@ describe("failure-code taxonomy (Issue #1392)", () => {
     ).toBe(false);
   });
 });
+// Issue #1379 AC4 (ADR-0067 D6) — additive, content-free languageCapability field on the snapshot.
+describe("languageCapability snapshot field (Issue #1379 AC4)", () => {
+  it("validates a snapshot carrying a well-formed available languageCapability", () => {
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        languageCapability: {
+          languageId: "typescript",
+          providerId: "typescript",
+          available: true,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("validates an unavailable languageCapability with a null provider and a reason", () => {
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        languageCapability: {
+          languageId: "go",
+          providerId: null,
+          available: false,
+          unavailableReason: "No language provider is configured for this language.",
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("validates when the field is absent (back-compat) or explicitly null", () => {
+    const base = snapshot();
+    expect(isEditorAgentSessionSnapshot(base)).toBe(true);
+    expect("languageCapability" in base).toBe(false);
+    expect(isEditorAgentSessionSnapshot({ ...base, languageCapability: null })).toBe(true);
+  });
+
+  it("rejects a malformed languageCapability", () => {
+    const base = snapshot();
+    // available is not a boolean
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...base,
+        languageCapability: {
+          languageId: "typescript",
+          providerId: "typescript",
+          available: "yes",
+        },
+      }),
+    ).toBe(false);
+    // languageId is empty
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...base,
+        languageCapability: { languageId: "", providerId: null, available: false },
+      }),
+    ).toBe(false);
+    // providerId is a number (neither string nor null)
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...base,
+        languageCapability: { languageId: "typescript", providerId: 7, available: true },
+      }),
+    ).toBe(false);
+    // unavailableReason is the wrong type
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...base,
+        languageCapability: {
+          languageId: "go",
+          providerId: null,
+          available: false,
+          unavailableReason: 42,
+        },
+      }),
+    ).toBe(false);
+  });
+});
