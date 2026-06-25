@@ -83,6 +83,13 @@ describe("agent editor action audit ledger (Issue #1395)", () => {
     expect(JSON.stringify(record)).not.toContain(token);
   });
 
+  it("redacts a different secret shape (AWS access key) — full redactor, not one pattern (AC3)", () => {
+    const key = "AKIAIOSFODNN7EXAMPLE";
+    const record = recordEditorAgentActionAudit(input({ targetPath: `config/${key}.ts` }));
+    expect(record).not.toBeNull();
+    expect(JSON.stringify(record)).not.toContain(key);
+  });
+
   it("never carries raw edit or patch content — only counts (AC3)", () => {
     const record = recordEditorAgentActionAudit(
       input({ patchByteLength: 9001, actionType: "applyPatch" }),

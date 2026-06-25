@@ -1171,6 +1171,24 @@ describe("agent editor action policy (Issue #1395 AC2)", () => {
     expect(result.status).toBe(202);
     expect(actionResultStatus(result.body)).toBe("queued");
   });
+
+  it("denies format and save to a deny-listed sensitive path with OUT_OF_SCOPE", async () => {
+    await registerSnapshot();
+    for (const type of ["format", "save"] as const) {
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type,
+            target: { file: ".env" },
+            actionId: `a-${type}`,
+            idempotencyKey: `ik-${type}`,
+          }),
+        ),
+      );
+      expect(result.status).toBe(409);
+      expect(actionConflictCode(result.body)).toBe("OUT_OF_SCOPE");
+    }
+  });
 });
 
 describe("agent editor action audit (Issue #1395 AC1, AC3, AC4)", () => {
@@ -1222,5 +1240,15 @@ describe("agent editor action audit (Issue #1395 AC1, AC3, AC4)", () => {
     await handleEditorAgentActions(context(applyTextEditsAction("hello")));
     expect(auditRecords("session-1")).toHaveLength(1);
     expect(auditRecords("session-2")).toHaveLength(0);
+  });
+
+  it("does not duplicate the audit record on idempotent replay (AC1 bounded)", async () => {
+    await registerSnapshot();
+    const first = await handleEditorAgentActions(context(applyTextEditsAction("hello")));
+    expect(first.status).toBe(202);
+    // Replaying the identical action returns the cached result and records no second audit entry.
+    const replay = await handleEditorAgentActions(context(applyTextEditsAction("hello")));
+    expect(replay.status).toBe(200);
+    expect(auditRecords()).toHaveLength(1);
   });
 });

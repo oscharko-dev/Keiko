@@ -123,16 +123,23 @@ export function EditorAgentActionsPanel({
   refreshNonce,
 }: EditorAgentActionsPanelProps): ReactNode {
   const [records, setRecords] = useState<readonly EditorAgentActionAuditRecord[]>([]);
+  // Distinguish a load failure from a genuinely empty feed so the user is not told "no actions"
+  // when the audit feed simply could not be reached (AC4 — the failure must be inspectable).
+  const [errored, setErrored] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     void fetchEditorAgentAudit(agentSessionId)
       .then((response) => {
         // Newest first for the panel; the server returns oldest-first insertion order.
-        if (!cancelled) setRecords([...response.records].reverse());
+        if (cancelled) return;
+        setRecords([...response.records].reverse());
+        setErrored(false);
       })
       .catch(() => {
-        if (!cancelled) setRecords([]);
+        if (cancelled) return;
+        setRecords([]);
+        setErrored(true);
       });
     return () => {
       cancelled = true;
@@ -146,7 +153,15 @@ export function EditorAgentActionsPanel({
       data-testid="agent-actions-panel"
     >
       <h3 style={TITLE_STYLE}>Recent agent actions</h3>
-      {records.length === 0 ? (
+      {errored ? (
+        <p
+          style={{ ...ROW_STYLE, color: "var(--feedback-danger)", margin: 0 }}
+          role="status"
+          data-testid="agent-actions-error"
+        >
+          Unable to load recent agent actions.
+        </p>
+      ) : records.length === 0 ? (
         <p style={{ ...ROW_STYLE, color: "var(--text-secondary)", margin: 0 }}>
           No recent agent editor actions.
         </p>

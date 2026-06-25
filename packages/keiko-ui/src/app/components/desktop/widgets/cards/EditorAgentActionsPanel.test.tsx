@@ -82,6 +82,14 @@ describe("EditorAgentActionsPanel", () => {
     );
   });
 
+  it("distinguishes a load failure from an empty feed (AC4)", async () => {
+    fetchEditorAgentAudit.mockRejectedValue(new Error("network down"));
+    render(<EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />);
+    await waitFor(() => expect(screen.getByTestId("agent-actions-error")).toBeInTheDocument());
+    expect(screen.getByText("Unable to load recent agent actions.")).toBeInTheDocument();
+    expect(screen.queryByText("No recent agent editor actions.")).not.toBeInTheDocument();
+  });
+
   it("re-fetches when the activity nonce changes", async () => {
     fetchEditorAgentAudit.mockResolvedValue({ records: [] });
     const { rerender } = render(
