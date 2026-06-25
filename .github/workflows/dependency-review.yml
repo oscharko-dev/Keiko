@@ -5,6 +5,7 @@ on:
     branches:
       - dev
       - feat/keiko-editor
+      - feat/keiko-agent-native-editor-foundation-and-runtime
       - "release/**"
 
 permissions: {}

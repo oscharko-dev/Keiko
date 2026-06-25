@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { useEffect, type ReactElement } from "react";
@@ -1799,5 +1799,427 @@ describe("EditorWidget — agent bridge", () => {
         }),
       );
     });
+  });
+});
+
+// ─── Issue #1394 — AgentConflictBanner + applyPatch review (ADR-0058 D3/D4) ──────────────────
+
+describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
+  function agentResults(): readonly Parameters<typeof postEditorAgentActionResult>[0]["result"][] {
+    return vi.mocked(postEditorAgentActionResult).mock.calls.map(([body]) => body.result);
+  }
+
+  async function renderedAgentSession1394(): Promise<{
+    readonly source: FakeEventSource;
+    readonly sessionId: string;
+  }> {
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget windowId="agent-1394" root="/repo" file="src/app.ts" paneId="pane-1" />,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+      expect(FakeSource.instances.length).toBeGreaterThan(0);
+    });
+    const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    return { source, sessionId: String(snapshot?.sessionId) };
+  }
+
+  // ── AC3: conflict banner visibility (D4) ─────────────────────────────────
+
+  it("renders AgentConflictBanner when a conflict result arrives via SSE", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    // Before the conflict event the banner must not be present.
+    expect(screen.queryByTestId("agent-conflict-banner")).toBeNull();
+
+    // Emit a conflict result from the SSE stream (editor-agent:result event).
+    act(() => {
+      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
+        data: JSON.stringify({
+          schemaVersion: "1",
+          eventId: "ev-1",
+          type: "result",
+          result: {
+            schemaVersion: "1",
+            actionId: "a-1",
+            sessionId,
+            status: "conflict",
+            message: "The target buffer has unsaved changes.",
+            conflict: { code: "DIRTY", message: "The target buffer has unsaved changes." },
+          },
+        }),
+      });
+      // The component listens on "editor-agent:result"; FakeEventSource only wraps
+      // "editor-agent:action" in emitAction, so we dispatch directly to its listeners.
+      for (const listener of (
+        source as unknown as {
+          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
+        }
+      ).listeners.get("editor-agent:result") ?? []) {
+        if (typeof listener === "function") {
+          listener(conflictEvent);
+        } else {
+          listener.handleEvent(conflictEvent);
+        }
+      }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
+    });
+
+    // The editor surface stays mounted — non-destructive (AC3).
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+  });
+
+  it("dismisses the conflict banner when Dismiss is clicked (non-destructive AC3)", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    act(() => {
+      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
+        data: JSON.stringify({
+          schemaVersion: "1",
+          eventId: "ev-dismiss",
+          type: "result",
+          result: {
+            schemaVersion: "1",
+            actionId: "a-dismiss",
+            sessionId,
+            status: "conflict",
+            conflict: { code: "INVALID_EDITS", message: "Edit range was inverted." },
+          },
+        }),
+      });
+      for (const listener of (
+        source as unknown as {
+          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
+        }
+      ).listeners.get("editor-agent:result") ?? []) {
+        if (typeof listener === "function") {
+          listener(conflictEvent);
+        } else {
+          listener.handleEvent(conflictEvent);
+        }
+      }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("agent-conflict-banner")).toBeNull();
+    });
+
+    // Editor surface still mounted.
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+  });
+
+  // ── AC2: overlapping edits produce conflict INVALID_EDITS (D3) ──────────
+
+  it("reports conflict INVALID_EDITS when applyTextEdits contains overlapping edits", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    // applyTextEditsToText throws OverlappingPatchEditError for overlapping ranges.
+    // Two edits covering the same characters will trigger this.
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyTextEdits", {
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 10 } },
+              newText: "first",
+            },
+            {
+              range: { start: { line: 0, character: 3 }, end: { line: 0, character: 8 } },
+              newText: "second",
+            },
+          ],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      const results = agentResults();
+      expect(
+        results.some((r) => r.status === "conflict" && r.conflict?.code === "INVALID_EDITS"),
+      ).toBe(true);
+    });
+
+    // Buffer must remain unchanged (non-destructive).
+    expect(surface.props?.buffer?.content.text).toBe("const value = 1;\n");
+  });
+
+  // ── applyPatch review UI: Accept / Reject (D3) ───────────────────────────
+
+  it("shows Accept and Reject buttons after a queued applyPatch action arrives", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    // The server pre-validates applyPatch and emits the action with textEdits populated
+    // (a whole-document-replace). Simulate what the server emits to the browser.
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyPatch", {
+          target: { file: "src/app.ts" },
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+              newText: "const value = 42;\n",
+            },
+          ],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-patch-accept")).toBeInTheDocument();
+      expect(screen.getByTestId("agent-patch-reject")).toBeInTheDocument();
+    });
+  });
+
+  it("Accept applies the modified content and reports succeeded", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyPatch", {
+          target: { file: "src/app.ts" },
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+              newText: "const value = 99;\n",
+            },
+          ],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-patch-accept")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByTestId("agent-patch-accept"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
+    });
+
+    // The normal editor surface is restored.
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+
+    // postAgentResult was called with succeeded.
+    await waitFor(() => {
+      expect(agentResults().some((r) => r.status === "succeeded")).toBe(true);
+    });
+  });
+
+  it("Reject keeps the buffer unchanged and reports failed", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyPatch", {
+          target: { file: "src/app.ts" },
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+              newText: "const value = 77;\n",
+            },
+          ],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-patch-reject")).toBeInTheDocument();
+    });
+
+    // Capture the buffer content before rejecting.
+    const contentBefore = surface.props?.buffer?.content.text;
+
+    await userEvent.click(screen.getByTestId("agent-patch-reject"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("agent-patch-reject")).toBeNull();
+    });
+
+    // The normal editor surface is restored with the original content.
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+    expect(surface.props?.buffer?.content.text).toBe(contentBefore);
+
+    // postAgentResult was called with failed.
+    await waitFor(() => {
+      expect(
+        agentResults().some(
+          (r) => r.status === "failed" && r.message === "Patch rejected by user.",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("reports failed (not conflict) when applyPatch arrives with no textEdits", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyPatch", {
+          target: { file: "src/app.ts" },
+          // No textEdits — server failed to derive them.
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(agentResults().some((r) => r.status === "failed")).toBe(true);
+    });
+
+    // Review UI must not appear.
+    expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
+    expect(screen.queryByTestId("agent-patch-reject")).toBeNull();
+  });
+
+  it("reports conflict OUT_OF_SCOPE when applyPatch targets a file not open in this pane", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyPatch", {
+          target: { file: "other/file.ts" },
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } },
+              newText: "x",
+            },
+          ],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        agentResults().some((r) => r.status === "conflict" && r.conflict?.code === "OUT_OF_SCOPE"),
+      ).toBe(true);
+    });
+
+    // Review UI must not appear.
+    expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
+  });
+
+  // ── F6: sessionId filter — conflict for a different sessionId does NOT show banner ────────────
+
+  it("does not show AgentConflictBanner when a conflict result arrives for a different sessionId", async () => {
+    const { source } = await renderedAgentSession1394();
+
+    act(() => {
+      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
+        data: JSON.stringify({
+          schemaVersion: "1",
+          eventId: "ev-other",
+          type: "result",
+          result: {
+            schemaVersion: "1",
+            actionId: "a-other",
+            // A different sessionId — must be filtered out by onAgentResult (F6).
+            sessionId: "completely-different-session",
+            status: "conflict",
+            conflict: { code: "DIRTY", message: "Dirty in another pane." },
+          },
+        }),
+      });
+      for (const listener of (
+        source as unknown as {
+          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
+        }
+      ).listeners.get("editor-agent:result") ?? []) {
+        if (typeof listener === "function") {
+          listener(conflictEvent);
+        } else {
+          listener.handleEvent(conflictEvent);
+        }
+      }
+    });
+
+    // Give React a chance to render; the banner must NOT appear.
+    await act(async () => {});
+    expect(screen.queryByTestId("agent-conflict-banner")).toBeNull();
+
+    // Editor surface must remain mounted.
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+  });
+
+  // ── F5: failed persist after DIRTY conflict keeps banner visible ─────────────────────────────
+
+  it("keeps AgentConflictBanner visible when onSave fails to persist (F5)", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    // Surface the DIRTY conflict banner.
+    act(() => {
+      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
+        data: JSON.stringify({
+          schemaVersion: "1",
+          eventId: "ev-dirty-save",
+          type: "result",
+          result: {
+            schemaVersion: "1",
+            actionId: "a-dirty-save",
+            sessionId,
+            status: "conflict",
+            message: "The target buffer has unsaved changes.",
+            conflict: { code: "DIRTY", message: "The target buffer has unsaved changes." },
+          },
+        }),
+      });
+      for (const listener of (
+        source as unknown as {
+          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
+        }
+      ).listeners.get("editor-agent:result") ?? []) {
+        if (typeof listener === "function") {
+          listener(conflictEvent);
+        } else {
+          listener.handleEvent(conflictEvent);
+        }
+      }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
+    });
+
+    // Make the buffer dirty.
+    act(() => {
+      surface.props?.onContentChange({ text: "dirty content\n", sizeBytes: 14 }, "human");
+    });
+    // Confirm dirty state: toolbar Save aria-disabled flips to "false".
+    // The toolbar Save has data-tip; the banner Save does not.
+    await waitFor(() => {
+      const allSaves = screen.getAllByRole("button", { name: /^Save$/u });
+      const toolbarBtn = allSaves.find((btn) => btn.hasAttribute("data-tip"));
+      expect(toolbarBtn).toHaveAttribute("aria-disabled", "false");
+    });
+
+    // Use a never-resolving save so we can assert the banner stays visible while saving is
+    // in progress (the banner is dismissed ONLY when persist resolves ok===true; a pending
+    // or rejected save must keep it). Reset first: afterEach uses vi.clearAllMocks(), which does
+    // NOT drain a mockResolvedValueOnce queued by an earlier test in the suite — without this
+    // reset the save would consume that leaked success value and wrongly dismiss the banner.
+    vi.mocked(saveFilesContent).mockReset();
+    vi.mocked(saveFilesContent).mockReturnValueOnce(new Promise(() => {}));
+
+    // Click the Save button inside the banner (DIRTY renders a Save button in the banner;
+    // the toolbar also has one — target unambiguously with `within`).
+    const banner = screen.getByTestId("agent-conflict-banner");
+    await userEvent.click(within(banner).getByRole("button", { name: "Save" }));
+
+    // The save is in-flight and has not resolved, so the banner must still be present.
+    // React should have set saveStatus to "saving" but agentConflict stays non-null.
+    await act(async () => {});
+    expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
   });
 });

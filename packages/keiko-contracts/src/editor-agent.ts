@@ -22,9 +22,11 @@ export interface EditorAgentSessionSnapshot {
   readonly activeFile: string | null;
   readonly cursor: { readonly line: number; readonly character: number } | null;
   readonly selection: LanguageRange | null;
-  readonly diagnosticsSummary:
-    | { readonly errors: number; readonly warnings: number; readonly infos: number }
-    | null;
+  readonly diagnosticsSummary: {
+    readonly errors: number;
+    readonly warnings: number;
+    readonly infos: number;
+  } | null;
   readonly documentVersion?: EditorDocumentVersion | undefined;
   readonly activeFileContentHash?: string | undefined;
   readonly textMode: EditorAgentSnapshotTextMode;
@@ -50,16 +52,20 @@ export interface EditorAgentAction {
   readonly idempotencyKey: string;
   readonly sessionId: string;
   readonly type: EditorAgentActionType;
-  readonly target?: {
-    readonly paneId?: string | undefined;
-    readonly file?: string | undefined;
-    readonly toPaneId?: string | undefined;
-    readonly splitDirection?: "row" | "column" | undefined;
-    readonly selection?: LanguageRange | undefined;
-  } | undefined;
+  readonly target?:
+    | {
+        readonly paneId?: string | undefined;
+        readonly file?: string | undefined;
+        readonly toPaneId?: string | undefined;
+        readonly splitDirection?: "row" | "column" | undefined;
+        readonly selection?: LanguageRange | undefined;
+      }
+    | undefined;
   readonly expectedDocumentVersion?: EditorDocumentVersion | undefined;
   readonly expectedContentHash?: string | undefined;
-  readonly textEdits?: readonly { readonly range: LanguageRange; readonly newText: string }[] | undefined;
+  readonly textEdits?:
+    | readonly { readonly range: LanguageRange; readonly newText: string }[]
+    | undefined;
   readonly patch?: string | undefined;
 }
 
@@ -73,7 +79,13 @@ export interface EditorAgentActionResult {
   readonly message?: string | undefined;
   readonly conflict?:
     | {
-        readonly code: "DIRTY" | "VERSION_MISMATCH" | "CONTENT_HASH_MISMATCH" | "NO_ACTIVE_SESSION";
+        readonly code:
+          | "DIRTY"
+          | "VERSION_MISMATCH"
+          | "CONTENT_HASH_MISMATCH"
+          | "NO_ACTIVE_SESSION"
+          | "INVALID_EDITS"
+          | "OUT_OF_SCOPE";
         readonly message: string;
       }
     | undefined;
@@ -203,8 +215,12 @@ function isDocumentVersion(value: unknown): value is EditorDocumentVersion {
   );
 }
 
-function isPosition(value: unknown): value is { readonly line: number; readonly character: number } {
-  return isRecord(value) && isNonNegativeInteger(value.line) && isNonNegativeInteger(value.character);
+function isPosition(
+  value: unknown,
+): value is { readonly line: number; readonly character: number } {
+  return (
+    isRecord(value) && isNonNegativeInteger(value.line) && isNonNegativeInteger(value.character)
+  );
 }
 
 function isRange(value: unknown): value is LanguageRange {
@@ -257,16 +273,23 @@ export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAge
     isUndefinedOr(value.activeFileContentHash, isSha256Hex),
     isSnapshotTextMode(value.textMode),
     isUndefinedOr(value.text, isString),
-    isUndefinedOr(value.textTruncated, (candidate): candidate is boolean => typeof candidate === "boolean"),
+    isUndefinedOr(
+      value.textTruncated,
+      (candidate): candidate is boolean => typeof candidate === "boolean",
+    ),
     isNonNegativeInteger(value.updatedAt),
   ].every(Boolean);
 }
 
 function isActionType(value: unknown): value is EditorAgentActionType {
-  return typeof value === "string" && EDITOR_AGENT_ACTION_TYPES.includes(value as EditorAgentActionType);
+  return (
+    typeof value === "string" && EDITOR_AGENT_ACTION_TYPES.includes(value as EditorAgentActionType)
+  );
 }
 
-function isSplitDirection(value: unknown): value is NonNullable<NonNullable<EditorAgentAction["target"]>["splitDirection"]> {
+function isSplitDirection(
+  value: unknown,
+): value is NonNullable<NonNullable<EditorAgentAction["target"]>["splitDirection"]> {
   return value === "row" || value === "column";
 }
 
@@ -282,7 +305,9 @@ function isActionTarget(value: unknown): value is NonNullable<EditorAgentAction[
   ].every(Boolean);
 }
 
-function isTextEdit(value: unknown): value is { readonly range: LanguageRange; readonly newText: string } {
+function isTextEdit(
+  value: unknown,
+): value is { readonly range: LanguageRange; readonly newText: string } {
   return isRecord(value) && isRange(value.range) && typeof value.newText === "string";
 }
 
@@ -323,6 +348,95 @@ export function isEditorAgentActionResult(value: unknown): value is EditorAgentA
   );
 }
 
+const EDITOR_AGENT_CONFLICT_CODES: readonly NonNullable<
+  EditorAgentActionResult["conflict"]
+>["code"][] = [
+  "DIRTY",
+  "VERSION_MISMATCH",
+  "CONTENT_HASH_MISMATCH",
+  "NO_ACTIVE_SESSION",
+  "INVALID_EDITS",
+  "OUT_OF_SCOPE",
+];
+
+export function isEditorAgentConflictCode(
+  value: unknown,
+): value is NonNullable<EditorAgentActionResult["conflict"]>["code"] {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_CONFLICT_CODES.includes(
+      value as NonNullable<EditorAgentActionResult["conflict"]>["code"],
+    )
+  );
+}
+
+function validateAgentTextEdit(
+  edit: { readonly range: LanguageRange; readonly newText: string },
+  index: number,
+): string | null {
+  const { start, end } = edit.range;
+  const label = String(index);
+  if (start.line < 0 || start.character < 0 || end.line < 0 || end.character < 0) {
+    return `Edit ${label} has a negative line or character coordinate.`;
+  }
+  if (end.line < start.line || (end.line === start.line && end.character < start.character)) {
+    return `Edit ${label} has an inverted range (end before start).`;
+  }
+  return null;
+}
+
+function positionLessThan(
+  a: { readonly line: number; readonly character: number },
+  b: { readonly line: number; readonly character: number },
+): boolean {
+  return a.line < b.line || (a.line === b.line && a.character < b.character);
+}
+
+// Half-open ranges [start, end) overlap iff the later edit starts strictly before the earlier
+// edit ends. Adjacency (next.start === current.end) does not overlap and is allowed.
+function rangesOverlap(current: LanguageRange, next: LanguageRange): boolean {
+  return positionLessThan(next.start, current.end);
+}
+
+function overlapError(
+  edits: readonly { readonly range: LanguageRange; readonly newText: string }[],
+): string | null {
+  const ordered = edits
+    .map((edit, index) => ({ edit, index }))
+    .sort((a, b) => (positionLessThan(a.edit.range.start, b.edit.range.start) ? -1 : 1));
+  for (let i = 1; i < ordered.length; i += 1) {
+    const current = ordered[i - 1];
+    const next = ordered[i];
+    if (current === undefined || next === undefined) continue;
+    if (rangesOverlap(current.edit.range, next.edit.range)) {
+      const [lo, hi] = [current.index, next.index].sort((x, y) => x - y);
+      return `Edits ${String(lo)} and ${String(hi)} overlap.`;
+    }
+  }
+  return null;
+}
+
+export function validateAgentTextEdits(
+  edits: readonly { readonly range: LanguageRange; readonly newText: string }[],
+): string | null {
+  let index = 0;
+  for (const edit of edits) {
+    const error = validateAgentTextEdit(edit, index);
+    if (error !== null) return error;
+    index += 1;
+  }
+  return overlapError(edits);
+}
+
+export function isContainedAgentPath(candidate: string): boolean {
+  if (candidate.length === 0) return false;
+  if (candidate.startsWith("/")) return false;
+  if (/^[A-Za-z]:/u.test(candidate)) return false;
+  if (candidate.includes("\u0000")) return false;
+  const segments = candidate.split(/[/\\]/u);
+  return !segments.includes("..");
+}
+
 function parseBridgeSnapshotRequest(
   value: Record<string, unknown>,
 ): EditorAgentParse<EditorAgentBridgeSnapshotRequest> {
@@ -339,7 +453,9 @@ function parseBridgeSnapshotRequest(
   };
 }
 
-function parseReadSnapshotRequest(value: Record<string, unknown>): EditorAgentParse<EditorAgentSnapshotRequest> {
+function parseReadSnapshotRequest(
+  value: Record<string, unknown>,
+): EditorAgentParse<EditorAgentSnapshotRequest> {
   if (value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION) {
     return { ok: false, errors: ["schemaVersion must be 1"] };
   }
@@ -367,7 +483,9 @@ export function parseEditorAgentSnapshotRequest(
   value: unknown,
 ): EditorAgentParse<EditorAgentSnapshotRequest | EditorAgentBridgeSnapshotRequest> {
   if (!isRecord(value)) return { ok: false, errors: ["request must be an object"] };
-  return value.kind === "snapshot" ? parseBridgeSnapshotRequest(value) : parseReadSnapshotRequest(value);
+  return value.kind === "snapshot"
+    ? parseBridgeSnapshotRequest(value)
+    : parseReadSnapshotRequest(value);
 }
 
 export function parseEditorAgentActionsPostBody(
