@@ -295,6 +295,20 @@ export {
   parseLanguageServiceRequest,
 } from "./language-service.js";
 
+// ─── Editor language mode map (Issue #1379, Epic #1491, ADR-0067) ──────────────────
+// The single canonical, frozen const table of the known source-language universe shared by the
+// browser editor tier and the server language service. `plaintext` is intentionally excluded (it is
+// the editor's render fallback, not a registry language). Strict leaf: pure const tables + pure
+// functions, no other keiko-* imports, no clock/crypto/randomness.
+export type { EditorLanguageMode } from "./editor-language-mode-map.js";
+export {
+  EDITOR_LANGUAGE_MODE_MAP,
+  EDITOR_LANGUAGE_MODE_IDS,
+  EDITOR_LANGUAGE_MODE_BY_EXTENSION,
+  inferEditorLanguageModeId,
+  isEditorLanguageModeId,
+} from "./editor-language-mode-map.js";
+
 // ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
 // Wire request/response for the governed `POST /api/editor/completion` route: deterministic
 // language-service completion (#1198) merged with gated model-assisted completion (#1210) over
