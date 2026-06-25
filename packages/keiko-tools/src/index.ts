@@ -98,6 +98,76 @@ export { WorkspaceToolHost } from "./registry.js";
 // every name it exports so the shim at src/tools/terminal-policy.ts can forward from here.
 export * from "./terminal-policy.js";
 
+// ─── Governed Git mutation execution kernel (Issue #472, Epic #470) ──────────────────
+// The deterministic preflight/orchestration kernel for governed local Git writes. The Node
+// execution adapter lives on the `./internal/git-mutation` subpath (it carries the spawn effect);
+// the pure surface — lifecycle taxonomy, preflight evaluators, the narrow adapter port + closed
+// command table, and the orchestrator — is re-exported here.
+export {
+  GIT_MUTATION_FAILURE_CATEGORIES,
+  GIT_MUTATION_LIFECYCLE_PHASES,
+  GIT_MUTATION_PHASE_ORDER,
+  GIT_MUTATION_STATUSES,
+  gitMutationCategoryForExecutionError,
+  gitMutationCategoryForExecutionResult,
+  gitMutationFailureIsRecoverable,
+  isGitMutationFailureCategory,
+  isGitMutationLifecyclePhase,
+  isGitMutationStatus,
+  type GitMutationFailureCategory,
+  type GitMutationLifecyclePhase,
+  type GitMutationStatus,
+} from "./git-mutation-taxonomy.js";
+export {
+  evaluateGitPreflight,
+  GIT_PREFLIGHT_FINDING_CODES,
+  gitPreflightRemediationFor,
+  isGitPreflightFindingCode,
+  type GitPreflightFinding,
+  type GitPreflightFindingCode,
+  type GitPreflightRemediation,
+  type GitPreflightReport,
+  type GitPreflightSeverity,
+  type GitWorktreeSnapshot,
+} from "./git-mutation-preflight.js";
+export {
+  buildAbortArgv,
+  buildBranchCreateArgv,
+  buildCommitArgv,
+  buildRecoveryArgv,
+  buildStageArgv,
+  buildUnstageArgv,
+  GIT_MUTATION_ALLOWED_SUBCOMMANDS,
+  GIT_MUTATION_COMMAND_RULES,
+  gitMutationPlanIsGoverned,
+  GitMutationArgvError,
+  type GitAbortExecRequest,
+  type GitBranchCreateExecRequest,
+  type GitCommitExecRequest,
+  type GitLocalMutationAdapter,
+  type GitMutationArgvPlan,
+  type GitRecoveryExecRequest,
+  type GitStageExecRequest,
+  type GitUnstageExecRequest,
+} from "./git-mutation-adapter.js";
+export {
+  createInMemoryGitMutationJournal,
+  gitMutationOutcomeFailureCategory,
+  runGitMutation,
+  type GitAbortCommand,
+  type GitBranchCreateCommand,
+  type GitCommitCommand,
+  type GitMutationCommand,
+  type GitMutationJournal,
+  type GitMutationLifecycleResult,
+  type GitMutationOrchestratorDeps,
+  type GitMutationOutcome,
+  type GitMutationRequest,
+  type GitRecoveryCommand,
+  type GitStageCommand,
+  type GitUnstageCommand,
+} from "./git-mutation-orchestrator.js";
+
 // ─── Browser sub-surface (ADR-0017) ─────────────────────────────────────────────────
 export { BROWSER_ERROR_CODES, BrowserToolError, type BrowserErrorCode } from "./browser/errors.js";
 export {
