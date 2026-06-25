@@ -1,5 +1,5 @@
 import { createRef, type RefObject } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
@@ -21,6 +21,24 @@ function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
     zoom: 1,
     ...patch,
   };
+}
+
+function figmaViewWindow(patch: Partial<AppWindow> = {}): AppWindow {
+  const { cfg: patchCfg, ...windowPatch } = patch;
+  const cfg = {
+    snapshotRunId: "figma-run-1",
+    selectedScreenIdsJson: JSON.stringify(["screen-1"]),
+    selectedScreenName: "Frame 1",
+    ...(patchCfg ?? {}),
+  };
+  return appWindow({
+    id: "figma-view-1",
+    type: "figmaView",
+    w: 360,
+    h: 320,
+    ...windowPatch,
+    cfg,
+  });
 }
 
 function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
@@ -84,6 +102,89 @@ function workspaceRef(rect: DOMRect = domRect()): RefObject<HTMLElement> {
   const element = document.createElement("div");
   vi.spyOn(element, "getBoundingClientRect").mockReturnValue(rect);
   return { current: element };
+}
+
+function installAutoGrowHarness(): {
+  fireResize: () => void;
+  flushAnimationFrame: () => void;
+  observerCount: () => number;
+  restore: () => void;
+} {
+  const callbacks: ResizeObserverCallback[] = [];
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrameId = 1;
+  const originalResizeObserver = globalThis.ResizeObserver;
+  const originalRequestAnimationFrame = window.requestAnimationFrame;
+  const originalCancelAnimationFrame = window.cancelAnimationFrame;
+
+  class MockResizeObserver implements ResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      callbacks.push(callback);
+    }
+
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: MockResizeObserver,
+  });
+  window.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
+    const id = nextFrameId;
+    nextFrameId += 1;
+    frames.set(id, callback);
+    return id;
+  }) as typeof window.requestAnimationFrame;
+  window.cancelAnimationFrame = ((id: number): void => {
+    frames.delete(id);
+  }) as typeof window.cancelAnimationFrame;
+
+  const flushAnimationFrame = (): void => {
+    const entry = frames.entries().next().value as [number, FrameRequestCallback] | undefined;
+    if (entry === undefined) return;
+    const [id, callback] = entry;
+    frames.delete(id);
+    callback(0);
+  };
+
+  return {
+    fireResize: () => {
+      callbacks.at(-1)?.([], {} as ResizeObserver);
+      flushAnimationFrame();
+    },
+    flushAnimationFrame,
+    observerCount: () => callbacks.length,
+    restore: () => {
+      if (originalResizeObserver === undefined) {
+        Reflect.deleteProperty(globalThis, "ResizeObserver");
+      } else {
+        Object.defineProperty(globalThis, "ResizeObserver", {
+          configurable: true,
+          writable: true,
+          value: originalResizeObserver,
+        });
+      }
+      window.requestAnimationFrame = originalRequestAnimationFrame;
+      window.cancelAnimationFrame = originalCancelAnimationFrame;
+    },
+  };
+}
+
+function setBodyMetrics(
+  element: HTMLElement,
+  metrics: { readonly clientHeight: number; readonly scrollHeight: number },
+): void {
+  Object.defineProperty(element, "clientHeight", {
+    configurable: true,
+    value: metrics.clientHeight,
+  });
+  Object.defineProperty(element, "scrollHeight", {
+    configurable: true,
+    value: metrics.scrollHeight,
+  });
 }
 
 describe("WindowFrame content zoom controls", () => {
@@ -463,6 +564,70 @@ describe("WindowFrame content zoom controls", () => {
     expect(document.body.style.cursor).toBe("");
   });
 
+  it("resizes from the south handle upward without moving the window origin", () => {
+    const focus = vi.fn();
+    const update = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ focus, update })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const handle = container.querySelector<HTMLElement>(".wz-s");
+    expect(handle).not.toBeNull();
+
+    fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+    expect(document.body.style.cursor).toBe("ns-resize");
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 100, clientY: 60 });
+    fireEvent.pointerUp(window);
+
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(update).toHaveBeenLastCalledWith("agents-1", {
+      x: 40,
+      y: 40,
+      w: 420,
+      h: 280,
+      max: false,
+    });
+    expect(document.body.style.cursor).toBe("");
+  });
+
+  it("cleans up south resize listeners on pointer cancel and window blur", () => {
+    const update = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ update })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const handle = container.querySelector<HTMLElement>(".wz-s");
+    expect(handle).not.toBeNull();
+
+    fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+    expect(document.body.style.cursor).toBe("ns-resize");
+    fireEvent.pointerCancel(window);
+    expect(document.body.style.cursor).toBe("");
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 100, clientY: 60 });
+    expect(update).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+    expect(document.body.style.cursor).toBe("ns-resize");
+    window.dispatchEvent(new Event("blur"));
+    expect(document.body.style.cursor).toBe("");
+    fireEvent.pointerMove(window, { buttons: 1, clientX: 100, clientY: 60 });
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it("ignores duplicate resize pointer moves with unchanged geometry", () => {
     const update = vi.fn();
     const { container } = render(
@@ -485,6 +650,104 @@ describe("WindowFrame content zoom controls", () => {
     fireEvent.pointerUp(window);
 
     expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-grows a Figma View window before a manual resize", async () => {
+    registerWindowRender("figmaView", () => <div>Figma view fixture</div>);
+    const harness = installAutoGrowHarness();
+    const update = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={figmaViewWindow()}
+        top
+        connState={null}
+        view={{ x: 0, y: 0, zoom: 1 }}
+        api={api({ update })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    try {
+      const body = container.querySelector<HTMLElement>(".win-body");
+      expect(body).not.toBeNull();
+      setBodyMetrics(body as HTMLElement, { clientHeight: 280, scrollHeight: 340 });
+      await waitFor(() => expect(harness.observerCount()).toBeGreaterThan(0));
+      harness.fireResize();
+
+      await waitFor(() => expect(update).toHaveBeenCalledWith("figma-view-1", { h: 380 }));
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it("suppresses Figma View auto-grow after manual resize until the content key changes", async () => {
+    registerWindowRender("figmaView", () => <div>Figma view fixture</div>);
+    const harness = installAutoGrowHarness();
+    const update = vi.fn();
+    const testApi = api({ update });
+    const view = { x: 0, y: 0, zoom: 1 };
+    const wsRef = createRef<HTMLElement>();
+    const { container, rerender } = render(
+      <WindowFrame
+        win={figmaViewWindow({ h: 360 })}
+        top
+        connState={null}
+        view={view}
+        api={testApi}
+        wsRef={wsRef}
+      />,
+    );
+
+    try {
+      const handle = container.querySelector<HTMLElement>(".wz-s");
+      expect(handle).not.toBeNull();
+      fireEvent.pointerDown(handle as HTMLElement, { clientX: 100, clientY: 100 });
+      fireEvent.pointerMove(window, { buttons: 1, clientX: 100, clientY: 60 });
+      fireEvent.pointerUp(window);
+
+      expect(update).toHaveBeenLastCalledWith("figma-view-1", {
+        x: 40,
+        y: 40,
+        w: 360,
+        h: 320,
+        max: false,
+      });
+
+      update.mockClear();
+      const body = container.querySelector<HTMLElement>(".win-body");
+      expect(body).not.toBeNull();
+      setBodyMetrics(body as HTMLElement, { clientHeight: 320, scrollHeight: 390 });
+      await waitFor(() => expect(harness.observerCount()).toBeGreaterThan(0));
+      harness.fireResize();
+      expect(update).not.toHaveBeenCalled();
+
+      const observerCountBeforeContentChange = harness.observerCount();
+      rerender(
+        <WindowFrame
+          win={figmaViewWindow({
+            h: 320,
+            cfg: {
+              snapshotRunId: "figma-run-1",
+              selectedScreenIdsJson: JSON.stringify(["screen-2"]),
+              selectedScreenName: "Frame 2",
+            },
+          })}
+          top
+          connState={null}
+          view={view}
+          api={testApi}
+          wsRef={wsRef}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(harness.observerCount()).toBeGreaterThan(observerCountBeforeContentChange),
+      );
+      harness.fireResize();
+      await waitFor(() => expect(update).toHaveBeenCalledWith("figma-view-1", { h: 390 }));
+    } finally {
+      harness.restore();
+    }
   });
 
   it("cleans up a stale resize session when moves arrive after button release", () => {
