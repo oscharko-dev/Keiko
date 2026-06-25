@@ -8,7 +8,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseRunRequest } from "./run-request.js";
-import type { RunRequest } from "./run-request.js";
+import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
 import { ActiveRunLimitError, type RunRecord } from "./runs.js";
 import { SSE_HEADERS, writeEvent, readyMessage } from "./sse.js";
@@ -17,8 +17,17 @@ import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentRedactionSecrets } from "./deps.js";
+import {
+  VOICE_TRANSCRIPT_SCHEMA_VERSION,
+  type CommittedVoiceTranscriptProjection,
+  type VoiceProfile,
+} from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { validateWorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
+import { approvalTokenInputFor, createApprovalToken } from "./governed-workflow.js";
+import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
+import { evaluateSpokenActionGovernance } from "./voice-action-governance.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -88,6 +97,70 @@ function resolveRunModel(parsed: RunRequest, deps: UiHandlerDeps): ModelPort | u
   return parsed.kind === "verify" ? VERIFY_NOOP_MODEL : deps.modelPortFactory(parsed.modelId);
 }
 
+function validateTextGovernedHandoff(parsed: RunRequest): RouteResult | null {
+  if (parsed.governedHandoff === undefined || parsed.governedHandoffVoiceOrigin !== undefined) {
+    return null;
+  }
+  const validation = validateWorkflowHandoffRequest(parsed.governedHandoff);
+  if (!validation.ok) {
+    return { status: 400, body: errorBody("BAD_REQUEST", validation.reasons.join("; ")) };
+  }
+  const expectedToken = createApprovalToken(approvalTokenInputFor(parsed.governedHandoff));
+  if (parsed.governedHandoff.userApprovalToken !== expectedToken) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "governedHandoff approval token does not match the request."),
+    };
+  }
+  return null;
+}
+
+function serverTrustedVoiceProfile(deps: UiHandlerDeps): VoiceProfile {
+  if (isVoiceRealtimeCapable(deps)) {
+    return "full-realtime";
+  }
+  if (isVoiceDictationCapable(deps)) {
+    return "speech-to-text";
+  }
+  return "none";
+}
+
+function committedProjectionFor(origin: RunVoiceOrigin): CommittedVoiceTranscriptProjection {
+  return {
+    schemaVersion: VOICE_TRANSCRIPT_SCHEMA_VERSION,
+    segments: [],
+    text: origin.committedText,
+    segmentCount: origin.committedSegments,
+  };
+}
+
+function applyVoiceGovernance(parsed: RunRequest, deps: UiHandlerDeps): RunRequest | RouteResult {
+  if (parsed.governedHandoffVoiceOrigin === undefined) {
+    const invalidTextHandoff = validateTextGovernedHandoff(parsed);
+    return invalidTextHandoff ?? parsed;
+  }
+  if (parsed.governedHandoff === undefined) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "voiceOrigin requires governedHandoff.") };
+  }
+  const trustedProfile = serverTrustedVoiceProfile(deps);
+  const decision = evaluateSpokenActionGovernance({
+    projection: committedProjectionFor(parsed.governedHandoffVoiceOrigin),
+    profile: trustedProfile,
+    turnIndex: parsed.governedHandoffVoiceOrigin.turnIndex,
+    source: parsed.governedHandoffVoiceOrigin.source,
+    request: parsed.governedHandoff,
+    providedConfirmationDigest: parsed.governedHandoffVoiceOrigin.confirmationDigest,
+  });
+  if (!decision.allowed) {
+    return { status: 403, body: errorBody("VOICE_ACTION_DENIED", decision.reason) };
+  }
+  return {
+    ...parsed,
+    governedHandoffVoiceOrigin: undefined,
+    governedHandoffVoiceAction: decision.audit,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -135,16 +208,20 @@ export async function handleCreateRun(
   if ("code" in parsed) {
     return { status: 400, body: errorBody(parsed.code, parsed.message) };
   }
-  const unregistered = rejectUnregisteredWorkspace(parsed, deps);
+  const governed = applyVoiceGovernance(parsed, deps);
+  if ("status" in governed) {
+    return governed;
+  }
+  const unregistered = rejectUnregisteredWorkspace(governed, deps);
   if (unregistered !== null) {
     return unregistered;
   }
-  const model = resolveRunModel(parsed, deps);
+  const model = resolveRunModel(governed, deps);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   const engineCtx: EngineContext = {
-    request: parsed,
+    request: governed,
     model,
     registry: deps.registry,
     evidence: {

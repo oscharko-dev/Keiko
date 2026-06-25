@@ -6,10 +6,17 @@
 import { describe, expect, it } from "vitest";
 import {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  explainConversationIneligibility,
   INFILLING_ALIGNMENTS,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
+  isConversationEligibleModel,
+  isVoiceCapability,
   modelSupportsInfilling,
+  modelSupportsRealtimeVoice,
+  modelSupportsSpeechInput,
+  modelSupportsSpeechOutput,
+  VOICE_PROVIDER_LOCALITIES,
 } from "./gateway.js";
 import type {
   CompletionModelSelection,
@@ -105,10 +112,12 @@ describe("isAsYouTypeCompletionModel", () => {
 });
 
 describe("CONVERSATION_CAPABILITY_CONTRACT_VERSION", () => {
-  it("is not bumped by the additive-optional #1210 fields", () => {
-    // supportsInfilling / infillingAlignment are optional additive fields; like the Epic #761
-    // determinism flags they must NOT bump the structural contract version.
-    expect(CONVERSATION_CAPABILITY_CONTRACT_VERSION).toBe(2);
+  it("is 3 after the structural #493 voice ModelKind addition", () => {
+    // #143 set it to 2 (image/document/workflow flags). #493 added the "voice" ModelKind — a
+    // STRUCTURAL change (a new literal discriminant member) that bumps the version to 3. Additive
+    // OPTIONAL flags (Epic #761 determinism, #1210 infilling, and the #493 voice sub-capability
+    // flags) never bump it; only the new kind did.
+    expect(CONVERSATION_CAPABILITY_CONTRACT_VERSION).toBe(3);
   });
 });
 
@@ -128,5 +137,71 @@ describe("CompletionModelSelection serialisability (AC3)", () => {
       degradeReason: "only-base-infilling-model",
     };
     expect(JSON.parse(JSON.stringify(selection))).toEqual(selection);
+  });
+});
+
+// ─── Voice capability (Issue #493, ADR-0058 D2/D5/D7) ──────────────────────────
+
+const voiceCap = (overrides: Partial<ModelCapability> = {}): ModelCapability =>
+  cap({
+    id: "voice-model",
+    kind: "voice",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    workflowEligible: false,
+    voiceProviderLocality: "azure-foundry",
+    ...overrides,
+  });
+
+describe("VOICE_PROVIDER_LOCALITIES", () => {
+  it("enumerates the three provider localities", () => {
+    expect(VOICE_PROVIDER_LOCALITIES).toEqual(["azure-foundry", "customer-hosted", "local-only"]);
+  });
+});
+
+describe("voice capability predicates", () => {
+  it("isVoiceCapability is true only for the voice kind", () => {
+    expect(isVoiceCapability(voiceCap({ supportsSpeechInput: true }))).toBe(true);
+    expect(isVoiceCapability(cap({ kind: "chat" }))).toBe(false);
+    expect(isVoiceCapability(cap({ kind: "embedding" }))).toBe(false);
+  });
+
+  it("modelSupportsSpeechInput requires kind voice AND the flag (fail-closed)", () => {
+    expect(modelSupportsSpeechInput(voiceCap({ supportsSpeechInput: true }))).toBe(true);
+    expect(modelSupportsSpeechInput(voiceCap({ supportsSpeechInput: false }))).toBe(false);
+    expect(modelSupportsSpeechInput(voiceCap())).toBe(false);
+    // A chat model can never advertise voice input even if the flag leaks in.
+    expect(modelSupportsSpeechInput(cap({ kind: "chat", supportsSpeechInput: true }))).toBe(false);
+  });
+
+  it("modelSupportsSpeechOutput requires kind voice AND the flag", () => {
+    expect(modelSupportsSpeechOutput(voiceCap({ supportsSpeechOutput: true }))).toBe(true);
+    expect(modelSupportsSpeechOutput(voiceCap({ supportsSpeechOutput: false }))).toBe(false);
+    expect(modelSupportsSpeechOutput(cap({ kind: "chat", supportsSpeechOutput: true }))).toBe(
+      false,
+    );
+  });
+
+  it("modelSupportsRealtimeVoice requires kind voice AND the flag", () => {
+    expect(modelSupportsRealtimeVoice(voiceCap({ supportsRealtimeVoice: true }))).toBe(true);
+    expect(modelSupportsRealtimeVoice(voiceCap({ supportsRealtimeVoice: false }))).toBe(false);
+    expect(modelSupportsRealtimeVoice(cap({ kind: "chat", supportsRealtimeVoice: true }))).toBe(
+      false,
+    );
+  });
+});
+
+describe("explainConversationIneligibility for voice", () => {
+  it("classifies a voice model as voice-only (never conversation-eligible)", () => {
+    const model = voiceCap({ supportsSpeechInput: true });
+    expect(isConversationEligibleModel(model)).toBe(false);
+    expect(explainConversationIneligibility(model)).toBe("voice-only");
+  });
+
+  it("still returns undefined for a chat model", () => {
+    expect(explainConversationIneligibility(cap({ kind: "chat" }))).toBeUndefined();
   });
 });

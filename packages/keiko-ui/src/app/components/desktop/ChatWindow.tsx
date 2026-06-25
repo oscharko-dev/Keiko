@@ -12,6 +12,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
+  type Ref,
   type SyntheticEvent,
   type WheelEvent,
 } from "react";
@@ -42,6 +43,26 @@ import { Toggle } from "./widgets/shared/Toggle";
 import { FileIcon } from "./widgets/shared/projectTree";
 import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
+import {
+  supportsDictation,
+  supportsRealtimeVoice,
+  supportsSpeechOutput,
+  supportsVoiceRecap,
+  useVoiceCapability,
+} from "./hooks/useVoiceCapability";
+import { useDictation, type DictationController } from "./hooks/useDictation";
+import { dictationCaptureSupported } from "./hooks/dictation-recorder";
+import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./VoiceDictation";
+import { useRealtimeVoice, type RealtimeVoiceController } from "./hooks/useRealtimeVoice";
+import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
+import { VoiceRealtimeButton, VoiceRealtimeStatusFromController } from "./VoiceRealtime";
+import { useVoicePlayback, type VoicePlaybackBinding } from "./hooks/useVoicePlayback";
+import { VoicePlaybackMuteButton, VoicePlaybackStatusFromBinding } from "./VoicePlayback";
+import {
+  useVoiceSessionRecap,
+  type VoiceSessionRecapController,
+} from "./hooks/voice-session-recap";
+import { VoiceRecapButton, VoiceRecapPanel } from "./VoiceRecap";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { formatUserError } from "./format-error";
@@ -76,10 +97,6 @@ interface ChatWindowProps {
   readonly openEditorFile?: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
 }
-
-// AC #1 — voice is not yet implemented. Gate on a constant so that when the
-// capability flag arrives the removal is a one-line change, not a search.
-const VOICE_SUPPORTED = false;
 
 // Stable id for the no-model alert so aria-describedby chains can reference it.
 const NO_MODEL_ALERT_ID = "cmp-no-model-alert";
@@ -1090,6 +1107,27 @@ interface ComposerBarProps {
   // Issue #151 — when true, the budget for the next send exceeds the model's
   // window and the send button must be focusable but inert.
   readonly budgetExceeded: boolean;
+  // Issue #495 — capability-gated dictation. The mic affordance renders only when
+  // `voiceDictationVisible` is true (STT advertised + browser can capture). `dictation` is the
+  // composer-local state machine and `micButtonRef` lets the preview return focus to the button.
+  readonly voiceDictationVisible: boolean;
+  readonly dictation: DictationController;
+  readonly micButtonRef: Ref<HTMLButtonElement>;
+  // Issue #497 — capability-gated realtime voice. The button renders only when the deployment
+  // advertises full-realtime AND the browser can open a WebRTC peer connection.
+  readonly voiceRealtimeVisible: boolean;
+  readonly realtime: RealtimeVoiceController;
+  readonly realtimeButtonRef: Ref<HTMLButtonElement>;
+  // Issue #501 — capability-gated assistant speech output. The mute toggle renders only when the
+  // deployment advertises speech output; a no-voice / STT-only deployment shows nothing (AC1).
+  readonly voiceSpeechOutputVisible: boolean;
+  readonly playback: VoicePlaybackBinding;
+  readonly playbackButtonRef: Ref<HTMLButtonElement>;
+  // Issue #504 — capability-gated voice session recap. The button renders only when the deployment
+  // captures a user transcript; it is inert until there is committed content to review (AC1).
+  readonly voiceRecapVisible: boolean;
+  readonly recap: VoiceSessionRecapController;
+  readonly recapButtonRef: Ref<HTMLButtonElement>;
 }
 
 function ComposerBar({
@@ -1101,6 +1139,18 @@ function ComposerBar({
   controlsNarrow = false,
   barCompact = false,
   budgetExceeded,
+  voiceDictationVisible,
+  dictation,
+  micButtonRef,
+  voiceRealtimeVisible,
+  realtime,
+  realtimeButtonRef,
+  voiceSpeechOutputVisible,
+  playback,
+  playbackButtonRef,
+  voiceRecapVisible,
+  recap,
+  recapButtonRef,
 }: ComposerBarProps): ReactNode {
   const {
     models,
@@ -1203,12 +1253,53 @@ function ComposerBar({
             }}
           />
         </div>
-        {/* AC #1: voice button omitted — VOICE_SUPPORTED is false.
-            When the capability flag arrives, render this block only when VOICE_SUPPORTED is true. */}
-        {VOICE_SUPPORTED ? (
-          <button type="button" className="cmp-icon ui-tip" aria-label="Voice" data-tip="Voice">
-            <Icons.mic size={16} />
-          </button>
+        {/* Issue #495 — capability-gated dictation. Rendered only when the deployment advertises
+            speech-to-text and the browser can capture audio; a no-voice deployment shows no mic at
+            all so the composer stays clean and fully text-capable (AC1). The button is STT dictation
+            only and never implies full voice conversation (AC5). */}
+        {voiceDictationVisible ? (
+          <VoiceDictationButton
+            phase={dictation.phase}
+            onStart={dictation.start}
+            onStop={dictation.stop}
+            buttonRef={micButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : null}
+        {/* Issue #497 — capability-gated realtime voice. Rendered only when full-realtime is
+            advertised and the browser supports WebRTC; a no-voice / STT-only deployment shows
+            nothing new (AC1/AC3/AC4). */}
+        {voiceRealtimeVisible ? (
+          <VoiceRealtimeButton
+            phase={realtime.phase}
+            onStart={realtime.start}
+            onStop={realtime.stop}
+            buttonRef={realtimeButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : null}
+        {/* Issue #501 — capability-gated assistant speech-output mute toggle. Rendered only when the
+            deployment advertises speech output; a no-voice / STT-only deployment shows nothing new, so
+            the assistant answers in text with no playback control (AC1). */}
+        {voiceSpeechOutputVisible ? (
+          <VoicePlaybackMuteButton
+            muted={playback.snapshot.muted}
+            onToggle={playback.toggleMute}
+            buttonRef={playbackButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : null}
+        {/* Issue #504 — capability-gated voice session recap. Rendered only when the deployment captures
+            a user transcript; inert until there is committed content to review, so it never produces a
+            side effect from an empty session (AC1). */}
+        {voiceRecapVisible ? (
+          <VoiceRecapButton
+            committedSegmentCount={recap.committedSegmentCount}
+            busy={recap.busy}
+            onTrigger={recap.trigger}
+            buttonRef={recapButtonRef}
+            compact={controlsNarrow}
+          />
         ) : null}
       </div>
       {/* AC #2: visually-hidden hint for screen readers when send is blocked by empty draft */}
@@ -1413,6 +1504,50 @@ function ComposerCore({
     },
     [addPendingAttachment],
   );
+
+  // Issue #495 — capability-gated composer dictation. The probe is non-blocking: the composer
+  // renders fully while `useVoiceCapability` resolves, and the mic affordance appears only once the
+  // deployment advertises speech-to-text AND the browser can capture audio. A no-voice / unsupported
+  // environment shows no voice control at all, so the composer stays clean and fully text-capable.
+  const voiceCapability = useVoiceCapability();
+  const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
+  // Issue #497 — realtime voice gate: reuse the already-fetched voiceCapability probe (no second
+  // fetch). Only true when full-realtime is advertised AND the browser can open a WebRTC connection.
+  const voiceRealtimeVisible =
+    supportsRealtimeVoice(voiceCapability) && realtimeVoiceTransportSupported();
+  // Issue #501 — assistant speech-output gate: reuse the already-fetched voiceCapability probe (no
+  // second fetch). Only true when the deployment advertises speech output; STT-only and no-voice
+  // deployments leave it false, so no playback control appears and Keiko answers in text (AC1).
+  const voiceSpeechOutputVisible = supportsSpeechOutput(voiceCapability);
+  // Issue #504 — voice session recap gate: reuse the already-fetched voiceCapability probe (no second
+  // fetch). Only true when the deployment captures a user transcript (speech-to-text / full-realtime);
+  // playback-only and no-voice deployments leave it false, so no recap control appears (AC1).
+  const voiceRecapVisible = supportsVoiceRecap(voiceCapability);
+  const micButtonRef = useRef<HTMLButtonElement>(null);
+  const realtimeButtonRef = useRef<HTMLButtonElement>(null);
+  const playbackButtonRef = useRef<HTMLButtonElement>(null);
+  const recapButtonRef = useRef<HTMLButtonElement>(null);
+  // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
+  // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
+  const insertTranscript = useCallback(
+    (text: string): void => {
+      setDraft(draft.trim().length === 0 ? text : `${draft.replace(/\s+$/u, "")} ${text}`);
+      taRef.current?.focus();
+    },
+    [draft, setDraft],
+  );
+  const dictation = useDictation({ onInsert: insertTranscript });
+  const realtime = useRealtimeVoice({});
+  // Issue #501 — assistant speech-output playback binding. Driven by the resolved voice profile; a
+  // non-playback profile yields a dormant controller (AC1). Replay is policy-gated and off by default.
+  const playback = useVoicePlayback({ profile: voiceCapability?.profile ?? "none" });
+  // Issue #504 — voice session recap. Derives memory candidates from the COMMITTED voice transcript via
+  // the additive recap route, then lists them through the EXISTING review queue. Live committed-transcript
+  // segments are not yet surfaced by the composer (the #500 voice-transcript-segments store is not consumed
+  // by the live realtime/dictation hooks yet); useVoiceSessionRecap's `segments` prop is the seam for that
+  // future wiring. Until segments are supplied the controller is correctly inert
+  // (committedSegmentCount === 0), so the button shows but cannot trigger a side effect.
+  const recap = useVoiceSessionRecap({ profile: voiceCapability?.profile ?? "none" });
 
   const repositoryRoots = useMemo(
     () => connectedRepositoryRoots(activeChat, activeProject?.path),
@@ -1642,6 +1777,40 @@ function ComposerCore({
             adjacent to the textarea so SR users hear the state without losing
             composer focus. Hidden when there is nothing to announce. */}
         <SendLifecycleStatus status={sendStatus} />
+        {/* Issue #495 — dictation transcript review / transcribing status / error. Lives in the input
+            stack so it is contextually adjacent to the textarea and announced to assistive tech. It
+            renders nothing while idle or recording (the mic button carries those states). */}
+        {voiceDictationVisible ? (
+          <VoiceDictationPreviewFromController
+            controller={dictation}
+            onAfterDiscard={() => micButtonRef.current?.focus()}
+          />
+        ) : null}
+        {/* Issue #497 — realtime voice status / error. Adjacent to the dictation preview in the
+            input stack. Renders nothing while idle (the button carries that state). */}
+        {voiceRealtimeVisible ? (
+          <VoiceRealtimeStatusFromController
+            controller={realtime}
+            onAfterDismiss={() => realtimeButtonRef.current?.focus()}
+          />
+        ) : null}
+        {/* Issue #501 — assistant speech-output status / controls. Adjacent to the realtime status in
+            the input stack. Renders nothing between spoken turns; while a spoken response is active or
+            freshly settled it announces the state and offers pause / resume / stop / replay (AC1). */}
+        {voiceSpeechOutputVisible ? <VoicePlaybackStatusFromBinding binding={playback} /> : null}
+        {/* Issue #504 — voice session recap candidates. Adjacent to the playback status in the input
+            stack. Renders nothing until a recap is triggered and proposes candidates; the listed
+            candidates use the EXISTING governed accept / edit / reject / forget actions (AC3). */}
+        {voiceRecapVisible ? (
+          <VoiceRecapPanel
+            loading={recap.loading}
+            candidates={recap.candidates}
+            onApprove={recap.approve}
+            onEdit={recap.edit}
+            onReject={recap.reject}
+            onForget={recap.forget}
+          />
+        ) : null}
       </div>
       <div className="cmp-footer-row">
         {/* Issue #151 — context-pressure indicator + clear-history affordance */}
@@ -1662,6 +1831,18 @@ function ComposerCore({
           controlsNarrow={controlsNarrow}
           barCompact={barCompact}
           budgetExceeded={budgetExceeded}
+          voiceDictationVisible={voiceDictationVisible}
+          dictation={dictation}
+          micButtonRef={micButtonRef}
+          voiceRealtimeVisible={voiceRealtimeVisible}
+          realtime={realtime}
+          realtimeButtonRef={realtimeButtonRef}
+          voiceSpeechOutputVisible={voiceSpeechOutputVisible}
+          playback={playback}
+          playbackButtonRef={playbackButtonRef}
+          voiceRecapVisible={voiceRecapVisible}
+          recap={recap}
+          recapButtonRef={recapButtonRef}
         />
       </div>
     </div>

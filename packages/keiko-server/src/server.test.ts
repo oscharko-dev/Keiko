@@ -136,6 +136,90 @@ describe("security headers", () => {
   });
 });
 
+describe("Permissions-Policy microphone scoping (Issue #495)", () => {
+  function voiceConfig(): UiHandlerDeps["config"] {
+    return {
+      providers: [
+        {
+          modelId: "keiko-stt",
+          baseUrl: "https://keiko-stt.invalid",
+          apiKey: "voice-secret-token-1234567890",
+          timeoutMs: 1000,
+          maxRetries: 2,
+          retryBaseDelayMs: 10,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 1000, halfOpenProbes: 1 },
+      capabilities: [
+        {
+          id: "keiko-stt",
+          kind: "voice",
+          contextWindow: 0,
+          maxOutputTokens: 0,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          supportsSpeechInput: true,
+          voiceProviderLocality: "azure-foundry",
+          workflowEligible: false,
+          costClass: "low",
+          latencyClass: "fast",
+          throughputHint: "stt fixture",
+          preferredUseCases: ["Dictation"],
+          knownLimitations: [],
+        },
+      ],
+    };
+  }
+
+  function depsWith(
+    config: UiHandlerDeps["config"],
+    env: Record<string, string> = {},
+  ): UiHandlerDeps {
+    return {
+      config,
+      configPresent: config !== undefined,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env,
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store: createInMemoryUiStore(),
+    };
+  }
+
+  async function permissionsPolicyFor(handlerDeps: UiHandlerDeps): Promise<string> {
+    await closeServer();
+    server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+    const response = await fetchRaw("/");
+    return response.headers.get("permissions-policy") ?? "";
+  }
+
+  it("emits microphone=(self) when a speech-to-text voice provider is configured", async () => {
+    expect(await permissionsPolicyFor(depsWith(voiceConfig()))).toContain("microphone=(self)");
+  });
+
+  it("keeps microphone=() when voice is disabled by policy, even with a provider", async () => {
+    const policy = await permissionsPolicyFor(
+      depsWith(voiceConfig(), { KEIKO_VOICE_DISABLED: "1" }),
+    );
+    expect(policy).toContain("microphone=()");
+    expect(policy).not.toContain("microphone=(self)");
+  });
+
+  it("keeps microphone=() in a no-voice deployment", async () => {
+    expect(await permissionsPolicyFor(depsWith(undefined))).toContain("microphone=()");
+  });
+});
+
 describe("DNS-rebinding defense", () => {
   it("rejects a forged non-loopback Host", async () => {
     const res = await rawRequestWithHost("/api/health", "evil.example.com");

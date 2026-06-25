@@ -3,8 +3,12 @@ import {
   createDefaultEmbeddingCapability,
   isLikelyEmbeddingModelId,
   listCapabilities,
+  modelSupportsRealtimeVoice,
+  modelSupportsSpeechInput,
+  resolveVoiceCapabilityFromCapabilities,
   selectCompletionModelFromCapabilities,
   type CompletionSelectionOptions,
+  type VoiceResolutionOptions,
 } from "./capabilities.js";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
@@ -12,6 +16,7 @@ import type {
   GatewayConfig,
   ModelCapability,
   ModelKind,
+  VoiceCapabilityResolution,
 } from "./types.js";
 
 const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
@@ -108,4 +113,52 @@ export function selectCompletionModel(
   options: CompletionSelectionOptions = {},
 ): CompletionModelSelection {
   return selectCompletionModelFromCapabilities(listConfiguredCapabilities(config), options);
+}
+
+// Voice-capability resolution (Issue #493, ADR-0058 D1/D2). Resolves the configured capabilities
+// and applies the voice profile ladder. Only configured providers are eligible, so a voice
+// capability that names no provider can never be elected — the same fail-closed rule as completion
+// selection. The result is content-free and safe to serialise to the browser (AC4/AC5).
+export function resolveVoiceCapability(
+  config: ConfiguredCapabilitySource,
+  options: VoiceResolutionOptions = {},
+): VoiceCapabilityResolution {
+  return resolveVoiceCapabilityFromCapabilities(listConfiguredCapabilities(config), options);
+}
+
+// Speech-to-text model selection (Issue #494, ADR-0058 D2/D4). Returns the configured voice
+// provider that advertises speech-to-text (dictation), cheapest-first by cost class, or undefined
+// when none is configured. Only configured providers are eligible — the same fail-closed rule as
+// `selectConfiguredModel` — so a voice capability that names no provider can never be elected, and a
+// no-voice deployment yields undefined (the BFF dictation route then answers voice-unavailable, AC1).
+export function selectSpeechToTextModel(config: ConfiguredCapabilitySource): string | undefined {
+  let best: ModelCapability | undefined;
+  for (const capability of listConfiguredCapabilities(config)) {
+    if (!modelSupportsSpeechInput(capability)) {
+      continue;
+    }
+    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
+      best = capability;
+    }
+  }
+  return best?.id;
+}
+
+// Realtime-voice model selection (Issue #497, ADR-0058 D3, ADR-0059). Returns the configured voice
+// provider that advertises realtime voice (full-duplex conversation), cheapest-first by cost class,
+// or undefined when none is configured. Only configured providers are eligible — the same
+// fail-closed rule as `selectSpeechToTextModel` — so a voice capability that names no provider can
+// never be elected, and a no-voice / STT-only deployment yields undefined (the BFF realtime route
+// then answers voice-unavailable and the WebSocket control upgrade stays hard-rejected, AC1/AC3).
+export function selectRealtimeVoiceModel(config: ConfiguredCapabilitySource): string | undefined {
+  let best: ModelCapability | undefined;
+  for (const capability of listConfiguredCapabilities(config)) {
+    if (!modelSupportsRealtimeVoice(capability)) {
+      continue;
+    }
+    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
+      best = capability;
+    }
+  }
+  return best?.id;
 }

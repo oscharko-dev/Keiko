@@ -14,7 +14,11 @@ import {
   type ModelCapability,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import type { ConversationDocumentContextWire } from "@oscharko-dev/keiko-contracts";
+import {
+  isDiscussionMode,
+  type ConversationDocumentContextWire,
+  type DiscussionMode,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationMemoryActionWire,
   ConversationMemoryResultWire,
@@ -336,6 +340,10 @@ export interface SendDesktopChatRequest {
   // validator uses to enforce modality+mime+size before the gateway is called).
   readonly attachments: readonly ConversationAttachment[];
   readonly memory: ParsedConversationMemoryRequest | undefined;
+  // Issue #502 — optional colleague-discussion mode selected for THIS turn only. Turn-local: it
+  // shapes the additive directive block on the latest user turn and is NEVER replayed into
+  // compacted history. An unknown value is dropped to `undefined` (backward-compatible default).
+  readonly discussionMode: DiscussionMode | undefined;
 }
 
 interface ParsedConversationMemoryRequest {
@@ -569,7 +577,15 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
     documentContext: parseDocumentContext(body.documentContext),
     attachments: parseAttachments(body.attachments),
     memory,
+    discussionMode: parseDiscussionMode(body.discussionMode),
   };
+}
+
+// Issue #502 — accepts a known DiscussionMode, otherwise drops to `undefined`. An unknown or
+// missing value is NOT a request error (the field is optional and turn-local); it simply leaves
+// the turn in the default no-mode behaviour.
+function parseDiscussionMode(value: unknown): DiscussionMode | undefined {
+  return isDiscussionMode(value) ? value : undefined;
 }
 
 function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResult | undefined {
@@ -628,13 +644,21 @@ function applyDocumentContextToLatestUserTurn(
   request: SendDesktopChatRequest,
   memoryText: string | undefined,
 ): GatewayConversationMessage[] {
+  // Issue #502 — a selected discussion mode also requires composing the latest user turn (to
+  // prepend the additive directive block), even with no documents or memory.
   if (
     request.documentContext.length === 0 &&
-    (memoryText === undefined || memoryText.length === 0)
+    (memoryText === undefined || memoryText.length === 0) &&
+    request.discussionMode === undefined
   ) {
     return Array.from(history);
   }
-  const composed = composeConversationPrompt(request.content, request.documentContext, memoryText);
+  const composed = composeConversationPrompt(
+    request.content,
+    request.documentContext,
+    memoryText,
+    request.discussionMode,
+  );
   // Replace ONLY the last user turn (the one we just persisted). System and assistant turns
   // are untouched. Walking from the end avoids rewriting a same-text earlier turn.
   const out: GatewayConversationMessage[] = Array.from(history);

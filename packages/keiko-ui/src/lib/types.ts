@@ -17,6 +17,11 @@ export type {
   WorkflowDescriptor,
   WorkflowInputSpec,
   GroundingLimits,
+  VoiceProfile,
+  VoiceProviderLocality,
+  VoiceUnavailableReason,
+  VoiceTransportPosture,
+  VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-contracts";
 
 export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";

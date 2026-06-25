@@ -20811,3 +20811,110 @@ ul.integ {
   content: " *";
   color: var(--text-accent);
 }
+
+/* ── Issue #495 — capability-gated composer dictation ───────────────────────────────────────────
+   The microphone affordance reuses the .cmp-icon shape; the recording state turns it into a clear,
+   high-contrast stop control. The transcript review surface lives in the composer input stack. */
+.cmp-voice[data-recording="true"] {
+  color: var(--feedback-danger);
+  border-color: var(--feedback-danger);
+  background: var(--feedback-danger-surface);
+}
+.cmp-voice-recording {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+/* WCAG 2.3.3 — the recording dot is solid (non-animated) by default; it pulses only under
+   prefers-reduced-motion: no-preference. The solid danger color carries the meaning either way. */
+.cmp-voice-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--feedback-danger);
+  animation: none;
+}
+@keyframes cmp-voice-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cmp-voice[data-recording="true"] .cmp-voice-dot {
+    animation: cmp-voice-pulse 1.2s ease-in-out infinite;
+  }
+}
+.cmp-voice-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.cmp-voice-error {
+  border-color: var(--feedback-danger);
+  background: var(--feedback-danger-surface);
+}
+.cmp-voice-error-text {
+  margin: 0;
+  color: var(--text-primary);
+}
+.cmp-voice-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.cmp-voice-transcript {
+  width: 100%;
+  resize: vertical;
+  min-height: 60px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-primary);
+  color: var(--input-text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 8px 10px;
+}
+.cmp-voice-transcript:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmp-voice-privacy {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.cmp-voice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cmp-voice-btn {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.cmp-voice-btn:hover {
+  background: var(--button-secondary-surface-hover);
+}
+.cmp-voice-btn:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmp-voice-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cmp-voice-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--background-primary);
+}

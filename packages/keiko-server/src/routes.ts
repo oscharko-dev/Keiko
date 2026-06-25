@@ -11,11 +11,14 @@ import type { UiHandlerDeps } from "./deps.js";
 import {
   handleConfig,
   handleModels,
+  handleVoiceCapability,
   handleWorkflows,
   handleWorkspace,
   handleEvidenceList,
   handleEvidenceDetail,
 } from "./read-handlers.js";
+import { handleVoiceTranscribe } from "./voice-handlers.js";
+import { handleVoiceRecapBuild } from "./voice-recap.js";
 import {
   handleCreateRun,
   handleRunEvents,
@@ -216,6 +219,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },
+  { method: "GET", pattern: "/api/voice/capability", handler: handleVoiceCapability },
+  // Issue #494 (Epic #491) — optional, capability-gated STT composer dictation (ADR-0058 D1/D2/D4).
+  // POST a short audio clip (base64 inside the JSON + CSRF envelope) and receive its transcript;
+  // answers VOICE_UNAVAILABLE when no speech-to-text capability is configured/enabled.
+  { method: "POST", pattern: "/api/voice/transcribe", handler: handleVoiceTranscribe },
+  // Issue #504 (Epic #491, ADR-0067) — optional, capability-gated, user-triggered voice session recap.
+  // POST the committed transcript text (content-free counts alongside) and derive memory candidates via
+  // the EXISTING governed capture path; candidates surface in the existing review queue as "proposed".
+  // Answers VOICE_UNAVAILABLE when the deployment is not voice-recap-capable (AC1).
+  { method: "POST", pattern: "/api/voice/recap/build", handler: handleVoiceRecapBuild },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },

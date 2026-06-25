@@ -130,6 +130,7 @@ function workflowFingerprint(request: RunRequest): string {
     modelId: request.modelId,
     governedHandoff: request.governedHandoff ?? null,
     governedHandoffSourceGroundedRunId: request.governedHandoffSourceGroundedRunId ?? null,
+    governedHandoffVoiceAction: request.governedHandoffVoiceAction ?? null,
     workingDirectory: workspaceRoot(request),
     dryRun: true,
     harnessVersion: HARNESS_VERSION,
@@ -494,6 +495,7 @@ function persistOutcome(
         : buildGovernedHandoffEvidence({
             request: ctx.request.governedHandoff,
             sourceGroundedRunId: ctx.request.governedHandoffSourceGroundedRunId,
+            voiceAction: ctx.request.governedHandoffVoiceAction,
           }),
     );
   }
@@ -507,6 +509,7 @@ function persistOutcome(
       : buildGovernedHandoffEvidence({
           request: ctx.request.governedHandoff,
           sourceGroundedRunId: ctx.request.governedHandoffSourceGroundedRunId,
+          voiceAction: ctx.request.governedHandoffVoiceAction,
         }),
   );
 }
