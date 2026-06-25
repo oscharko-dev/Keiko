@@ -60,6 +60,35 @@ import type {
   CdpReachability,
   NormalizedNavigateUrl,
   TerminalCommandDecision,
+  GitMutationFailureCategory,
+  GitMutationLifecyclePhase,
+  GitMutationStatus,
+  GitPreflightFinding,
+  GitPreflightFindingCode,
+  GitPreflightRemediation,
+  GitPreflightReport,
+  GitPreflightSeverity,
+  GitWorktreeSnapshot,
+  GitAbortExecRequest,
+  GitBranchCreateExecRequest,
+  GitCommitExecRequest,
+  GitLocalMutationAdapter,
+  GitMutationArgvPlan,
+  GitRecoveryExecRequest,
+  GitStageExecRequest,
+  GitUnstageExecRequest,
+  GitAbortCommand,
+  GitBranchCreateCommand,
+  GitCommitCommand,
+  GitMutationCommand,
+  GitMutationJournal,
+  GitMutationLifecycleResult,
+  GitMutationOrchestratorDeps,
+  GitMutationOutcome,
+  GitMutationRequest,
+  GitRecoveryCommand,
+  GitStageCommand,
+  GitUnstageCommand,
 } from "./index.js";
 
 describe("keiko-tools public surface", () => {
@@ -119,6 +148,39 @@ describe("keiko-tools public surface", () => {
     expect(typeof tools.CdpClient).toBe("function");
     expect(tools.PERMITTED_CDP_METHODS).toBeDefined();
     expect(typeof tools.createBrowserSessionManager).toBe("function");
+    // Governed Git mutation kernel (#472) — taxonomy:
+    expect(tools.GIT_MUTATION_FAILURE_CATEGORIES).toBeDefined();
+    expect(tools.GIT_MUTATION_LIFECYCLE_PHASES).toBeDefined();
+    expect(tools.GIT_MUTATION_PHASE_ORDER).toBeDefined();
+    expect(tools.GIT_MUTATION_STATUSES).toBeDefined();
+    expect(typeof tools.gitMutationCategoryForExecutionError).toBe("function");
+    expect(typeof tools.gitMutationCategoryForExecutionResult).toBe("function");
+    expect(typeof tools.gitMutationFailureIsRecoverable).toBe("function");
+    expect(typeof tools.isGitMutationFailureCategory).toBe("function");
+    expect(typeof tools.isGitMutationLifecyclePhase).toBe("function");
+    expect(typeof tools.isGitMutationStatus).toBe("function");
+    // Preflight:
+    expect(typeof tools.evaluateGitPreflight).toBe("function");
+    expect(tools.GIT_PREFLIGHT_FINDING_CODES).toBeDefined();
+    expect(typeof tools.gitPreflightRemediationFor).toBe("function");
+    expect(typeof tools.isGitPreflightFindingCode).toBe("function");
+    // Narrow adapter port + closed command table:
+    expect(typeof tools.buildAbortArgv).toBe("function");
+    expect(typeof tools.buildBranchCreateArgv).toBe("function");
+    expect(typeof tools.buildCommitArgv).toBe("function");
+    expect(typeof tools.buildRecoveryArgv).toBe("function");
+    expect(typeof tools.buildStageArgv).toBe("function");
+    expect(typeof tools.buildUnstageArgv).toBe("function");
+    expect(tools.GIT_MUTATION_ALLOWED_SUBCOMMANDS).toBeDefined();
+    expect(tools.GIT_MUTATION_COMMAND_RULES).toBeDefined();
+    expect(typeof tools.gitMutationPlanIsGoverned).toBe("function");
+    expect(typeof tools.GitMutationArgvError).toBe("function");
+    // Orchestrator:
+    expect(typeof tools.createInMemoryGitMutationJournal).toBe("function");
+    expect(typeof tools.gitMutationOutcomeFailureCategory).toBe("function");
+    expect(typeof tools.runGitMutation).toBe("function");
+    // The Node execution adapter is NOT on the main barrel — it lives on ./internal/git-mutation.
+    expect(tools).not.toHaveProperty("createNodeGitMutationAdapter");
   });
 
   it("each type-only export is reachable by name at compile time", () => {
@@ -179,5 +241,34 @@ describe("keiko-tools public surface", () => {
     pin<CdpReachability>();
     pin<NormalizedNavigateUrl>();
     pin<TerminalCommandDecision>();
+    pin<GitMutationFailureCategory>();
+    pin<GitMutationLifecyclePhase>();
+    pin<GitMutationStatus>();
+    pin<GitPreflightFinding>();
+    pin<GitPreflightFindingCode>();
+    pin<GitPreflightRemediation>();
+    pin<GitPreflightReport>();
+    pin<GitPreflightSeverity>();
+    pin<GitWorktreeSnapshot>();
+    pin<GitAbortExecRequest>();
+    pin<GitBranchCreateExecRequest>();
+    pin<GitCommitExecRequest>();
+    pin<GitLocalMutationAdapter>();
+    pin<GitMutationArgvPlan>();
+    pin<GitRecoveryExecRequest>();
+    pin<GitStageExecRequest>();
+    pin<GitUnstageExecRequest>();
+    pin<GitAbortCommand>();
+    pin<GitBranchCreateCommand>();
+    pin<GitCommitCommand>();
+    pin<GitMutationCommand>();
+    pin<GitMutationJournal>();
+    pin<GitMutationLifecycleResult>();
+    pin<GitMutationOrchestratorDeps>();
+    pin<GitMutationOutcome>();
+    pin<GitMutationRequest>();
+    pin<GitRecoveryCommand>();
+    pin<GitStageCommand>();
+    pin<GitUnstageCommand>();
   });
 });
