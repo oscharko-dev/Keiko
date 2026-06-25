@@ -120,7 +120,7 @@ raw audio over the control plane, and it never blocks a non-voice path.
 Voice adds **no new authority**. A spoken action intent (#503) is treated as **untrusted input** that
 _produces_ the existing governed `WorkflowHandoffRequest`
 (`packages/keiko-contracts/src/workflow-handoff.ts`) and routes through the existing chain unchanged:
-`handleGroundedWorkflowHandoff` → dry-run harness loop → `patch:proposed` → human confirms the deterministic
+`POST /api/runs` (`handleCreateRun`) → dry-run harness loop → `patch:proposed` → human confirms the deterministic
 `userApprovalToken` → the single write path `POST /api/runs/:runId/apply`
 (`packages/keiko-server/src/run-handlers.ts`). Voice-originated patches still pass `checkPatchAgainstScope`
 and `createScopedWriter`; voice-triggered commands still pass the deny-by-default command allowlist

@@ -78,6 +78,32 @@ function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}):
   return css.slice(idx, css.indexOf("}", idx) + 1);
 }
 
+describe("Issue #1429 — Agents launcher action row and picker scrollbars", () => {
+  it("keeps the Agents dialog actions sticky and unified inside the dialog flow", () => {
+    const block = cssBlock(".dlg-agent-actions {");
+    expect(block).toContain("justify-content: flex-end");
+    expect(block).toContain("position: sticky");
+    expect(block).toContain("bottom: 0");
+    expect(block).toContain("border-top: 1px solid var(--border-subtle)");
+    expect(block).toContain("background: var(--surface-overlay)");
+    expect(cssBlock(".dlg-agent-actions .dlg-note {")).toContain("margin-right: auto");
+  });
+
+  it("uses token-backed thin scrollbar styling for directory and file pickers", () => {
+    const dirList = cssBlock(".dir-list {");
+    expect(dirList).toContain("scrollbar-width: thin");
+    expect(dirList).toContain("scrollbar-color: var(--border-default) transparent");
+    expect(cssBlock(".file-picker-list {")).toContain("max-height: 260px");
+
+    const thumb = cssBlock(".dir-list::-webkit-scrollbar-thumb {");
+    expect(thumb).toContain("background: var(--border-default)");
+    expect(thumb).toContain("background-clip: padding-box");
+    expect(cssBlock(".dir-list::-webkit-scrollbar-thumb:hover {")).toContain(
+      "background: var(--border-strong)",
+    );
+  });
+});
+
 // ─── Fix 1: WCAG 2.4.7 — focus-visible ───────────────────────────────────────
 
 describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
@@ -307,6 +333,38 @@ describe("Compact model picker", () => {
   });
 });
 
+describe("Prompt Enhancer rendered prompt selection", () => {
+  it("keeps the rendered prompt selectable despite window-level selection guards", () => {
+    const panelBlock = cssBlock(".pe-panel {");
+    expect(panelBlock).toContain("user-select: text");
+    const sectionBlock = cssBlock(".pe-section {");
+    expect(sectionBlock).toContain("user-select: text");
+    const renderedBlock = cssBlock(".pe-rendered {");
+    expect(renderedBlock).toContain("user-select: text");
+    expect(renderedBlock).toContain("-webkit-user-select: text");
+    expect(renderedBlock).toContain("cursor: text");
+    const descendantBlock = cssBlock(".pe-rendered *");
+    expect(descendantBlock).toContain("user-select: text");
+    expect(descendantBlock).toContain("-webkit-user-select: text");
+  });
+});
+
+describe("Chat grounded audit footer density", () => {
+  it("keeps inline Evidence and Context disclosures visually tight inside assistant answers", () => {
+    const inlineBlock = cssBlock(".chatw-grounded-inline {");
+    expect(inlineBlock).toContain("gap: 0");
+    expect(inlineBlock).toContain("padding: 6px 10px");
+
+    const summaryBlock = cssBlock(".chatw-grounded-inline .grounded-evidence-summary {");
+    expect(summaryBlock).toContain("min-height: 27px");
+    expect(summaryBlock).toContain("padding: 3px 0");
+
+    const contextBlock = cssBlock(".chatw-grounded-inline > .ctx-status {");
+    expect(contextBlock).toContain("margin-top: 0");
+    expect(contextBlock).toContain("border-top: 1px solid var(--border-subtle)");
+  });
+});
+
 // ─── Fix 3: WCAG 1.4.3 — light-theme text contrast ───────────────────────────
 
 describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
@@ -437,6 +495,39 @@ describe("WCAG 2.5.8 — footer target size", () => {
   it(".ft-window-trigger keeps at least a 24px hit target", () => {
     const block = cssBlock(".ft-window-trigger");
     expect(block).toContain("min-height: 24px");
+  });
+});
+
+describe("Issue #1426 — footer window chrome clears the right rail", () => {
+  it("reserves the right rail width in the footer and lifts the palette above shell rails", () => {
+    const footer = cssBlock(".footer {");
+    expect(footer).toContain("z-index: var(--z-sticky)");
+    expect(footer).toContain(
+      "padding: 0 calc(var(--space-5) + var(--shell-right-rail-reserve)) 0 var(--space-5)",
+    );
+
+    const palette = cssBlock(".ft-window-palette {");
+    expect(palette).toContain("z-index: var(--z-popover)");
+  });
+
+  it("shares the rail width between shell rails and the footer reserve, with a narrow reset", () => {
+    expect(css).toContain("--shell-rail-width: 50px");
+    expect(css).toContain("--shell-right-rail-reserve: var(--shell-rail-width)");
+    expect(css).toContain("@media (max-width: 700px), (max-height: 430px) {\n  :root {");
+    expect(css).toContain("--shell-rail-width: 44px");
+    expect(css).toContain("@media (max-width: 420px) {\n  :root {");
+    expect(css).toContain("--shell-right-rail-reserve: 0px");
+    expect(cssRule('html[data-keiko-gateway-setup-open="true"] {')).toContain(
+      "--shell-right-rail-reserve: 0px",
+    );
+  });
+
+  it("routes footer and rail tooltips through the governed tooltip layer", () => {
+    const shellTooltip = cssRule(".cmp-mode[data-tip]::after,");
+    expect(shellTooltip).toContain("z-index: var(--z-tooltip)");
+
+    const railTooltip = cssRule(".rail-btn[data-tip]::after,");
+    expect(railTooltip).toContain("z-index: var(--z-tooltip)");
   });
 });
 
@@ -1408,8 +1499,8 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
 describe("Issue #1205 — editor tab truncation", () => {
   it("keeps the tab strip shrinkable inside compact editor cards", () => {
     expect(cssBlock(".ed-tabs {")).toContain("min-width: 0");
-    expect(cssBlock(".ed-tablist {")).toContain("min-width: 0");
-    expect(cssBlock(".ed-tablist {")).toContain("overflow: hidden");
+    expect(cssBlock(".ed-tablist {")).toContain("min-width: min(160px, 100%)");
+    expect(cssBlock(".ed-tablist {")).toContain("overflow: visible");
   });
 
   it("truncates long editor tab labels instead of expanding the header", () => {
@@ -1420,6 +1511,118 @@ describe("Issue #1205 — editor tab truncation", () => {
       expect(block).toContain("white-space: nowrap");
       expect(block).toContain("text-overflow: ellipsis");
     }
+  });
+
+  it("lets the compact hidden-tab chooser escape clipped split panes while open", () => {
+    const overflowBlock = cssBlock(".editor-workspace:has(.ed-tab-summary-menu[open]) .ed-pane,");
+    expect(overflowBlock).toContain(".ed-pane .editor");
+    expect(overflowBlock).toContain("overflow: visible");
+
+    const stackingBlock = cssBlock(
+      ".editor-workspace:has(.ed-tab-summary-menu[open]) .ed-pane:has(.ed-tab-summary-menu[open])",
+    );
+    expect(stackingBlock).toContain("position: relative");
+    expect(stackingBlock).toContain("z-index: var(--z-overlay)");
+  });
+});
+
+describe("Issue #1424 — editor Monaco hover chrome", () => {
+  it("skins diagnostic hovers with Keiko popover tokens inside an editor container query", () => {
+    const hostBlock = cssBlock(".ed-host {");
+    expect(hostBlock).toContain("container-type: inline-size");
+    expect(hostBlock).toContain(
+      "--ed-hover-max-width: min(520px, calc(100vw - 24px), calc(100cqw - 24px))",
+    );
+
+    const compactViewportBlock = cssRuleFrom(css, "@media (max-width: 800px)");
+    expect(compactViewportBlock).toContain(
+      "--ed-hover-max-width: min(280px, calc(100vw - 128px), calc(100cqw - 24px))",
+    );
+
+    const hoverFrameBlock = cssBlock(".ed-host .monaco-editor .monaco-resizable-hover,");
+    expect(hoverFrameBlock).toContain("max-width: var(--ed-hover-max-width) !important");
+    expect(hoverFrameBlock).toContain("overflow: hidden");
+
+    const resizableHoverBlock = cssBlock(".ed-host .monaco-editor .monaco-resizable-hover {");
+    expect(resizableHoverBlock).toContain("border: 1px solid var(--popover-border) !important");
+    expect(resizableHoverBlock).toContain("border-radius: var(--radius-floating) !important");
+    expect(resizableHoverBlock).toContain("background: var(--surface-primary) !important");
+    expect(resizableHoverBlock).toContain("box-shadow: var(--popover-shadow)");
+
+    const monacoHoverBlock = cssBlock(".ed-host .monaco-editor .monaco-hover {", {
+      fromLast: true,
+    });
+    expect(monacoHoverBlock).toContain("color: var(--text-primary) !important");
+    expect(monacoHoverBlock).toContain("font-size: var(--text-body-sm)");
+    expect(monacoHoverBlock).toContain("line-height: var(--leading-normal)");
+  });
+
+  it("wraps Monaco hover content and action rows instead of letting browser-sized panels clip", () => {
+    const contentBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .monaco-hover-content,", {
+      fromLast: true,
+    });
+    expect(contentBlock).toContain("white-space: normal !important");
+    expect(contentBlock).toContain("overflow-wrap: anywhere");
+
+    const codeBlock = cssBlock(".ed-host .monaco-editor .monaco-hover code,");
+    expect(codeBlock).toContain("white-space: pre-wrap");
+    expect(codeBlock).toContain("overflow-wrap: anywhere");
+    expect(codeBlock).toContain("background: var(--surface-inset) !important");
+
+    const actionsBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .hover-row .actions {");
+    expect(actionsBlock).toContain("flex-wrap: wrap");
+    expect(actionsBlock).toContain("border-top: 1px solid var(--border-subtle)");
+    expect(actionsBlock).toContain("background: var(--surface-secondary) !important");
+  });
+
+  it("skins Monaco copy affordances and nested copy tooltips with Keiko feedback states", () => {
+    const copyButtonBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .hover-copy-button {");
+    expect(copyButtonBlock).toContain("border: 1px solid transparent");
+    expect(copyButtonBlock).toContain("border-radius: var(--radius-control)");
+    expect(copyButtonBlock).toContain("background: transparent");
+    expect(copyButtonBlock).toContain("color: var(--text-secondary)");
+    expect(copyButtonBlock).toContain("opacity: 1");
+    expect(copyButtonBlock).toContain("box-shadow: none");
+
+    const copyIconBlock = cssBlock(
+      ".ed-host .monaco-editor .monaco-hover .hover-copy-button.codicon,",
+    );
+    expect(copyIconBlock).toContain("color: currentColor !important");
+
+    const copyHoverBlock = cssBlock(
+      ".ed-host .monaco-editor .monaco-hover .hover-copy-button:hover {",
+    );
+    expect(copyHoverBlock).toContain(
+      "background: color-mix(in oklch, var(--text-primary) 10%, transparent) !important",
+    );
+    expect(copyHoverBlock).toContain("border-color: transparent");
+    expect(copyHoverBlock).toContain("color: var(--text-primary)");
+    expect(copyHoverBlock).toContain(
+      "box-shadow: 0 8px 18px -14px rgb(var(--shadow-ink-rgb) / 0.85)",
+    );
+    expect(copyHoverBlock).not.toContain("var(--border-accent)");
+    expect(copyHoverBlock).not.toContain("var(--text-accent)");
+
+    const copyActiveBlock = cssBlock(
+      ".ed-host .monaco-editor .monaco-hover .hover-copy-button:active {",
+    );
+    expect(copyActiveBlock).toContain("transform: translateY(1px) scale(0.98)");
+    expect(copyActiveBlock).toContain(
+      "background: var(--button-secondary-surface-hover) !important",
+    );
+
+    const workbenchHoverBlock = cssBlock(".monaco-hover.workbench-hover {");
+    expect(workbenchHoverBlock).toContain("max-width: min(220px, calc(100vw - 24px))");
+    expect(workbenchHoverBlock).toContain("border: 1px solid var(--popover-border) !important");
+    expect(workbenchHoverBlock).toContain("border-radius: var(--radius-control) !important");
+    expect(workbenchHoverBlock).toContain("background: var(--surface-primary) !important");
+    expect(workbenchHoverBlock).toContain("box-shadow: var(--popover-shadow) !important");
+
+    const workbenchPointerBlock = cssBlock(".workbench-hover-pointer:after {");
+    expect(workbenchPointerBlock).toContain("background-color: var(--surface-primary) !important");
+    expect(workbenchPointerBlock).toContain(
+      "border-right: 1px solid var(--popover-border) !important",
+    );
   });
 });
 
@@ -1491,7 +1694,9 @@ describe("Issue #1292 — Tier-2 scale tokens consolidated into the product", ()
       "--ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1)",
       "--z-base: 0",
       "--z-modal: 300",
+      "--z-popover: 400",
       "--z-tooltip: 600",
+      "--shell-rail-width: 50px",
     ]) {
       expect(css, `${decl} must be consolidated into globals.css`).toContain(decl);
     }
@@ -1776,8 +1981,13 @@ describe("Issue #1293 — global shell + workspace chrome token migration", () =
   // type, radius, motion) where a token exists; they consume the Tier-2 scales.
   it("adopts the named z-index, spacing and radius scales in the shell (AC1)", () => {
     expect(cssBlock(".ws-shader {")).toContain("z-index: var(--z-base)");
+    expect(cssBlock(".stage {")).toContain("z-index: var(--z-base)");
     expect(cssBlock(".conn-layer {")).toContain("z-index: var(--z-base)");
     expect(cssBlock(".win-port {")).toContain("z-index: var(--z-canvas-window-active)");
+    expect(cssBlock(".rail {")).toContain("z-index: var(--z-rail)");
+    expect(cssBlock(".rail {")).toContain("width: var(--shell-rail-width)");
+    expect(cssRule(".rail:has(")).toContain("z-index: var(--z-nav)");
+    expect(cssBlock(".footer {")).toContain("z-index: var(--z-sticky)");
     expect(cssBlock(".stage {")).toContain("padding: var(--space-4)");
     expect(cssBlock(".ws-zoom {")).toContain("backdrop-filter: blur(var(--blur-md))");
     expect(cssBlock(".ft-gov {")).toContain("border-radius: var(--radius-pill)");
@@ -3886,22 +4096,33 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
   });
 });
 
-// ADR-0057 D2 — drift gate pinning the ContextStatusPanel .ctx-* classes into the single
-// globals.css. Reverting any class definition (or swapping a Tier-3 token for a raw value) fails
-// here, so the panel's styling cannot silently disappear or violate the no-raw-values gate.
-describe("PR6 context status panel — .ctx-* styling pin (ADR-0057 D2)", () => {
-  it("defines the .ctx-status disclosure container and its summary / dl children", () => {
-    for (const selector of [".ctx-status {", ".ctx-status-summary {", ".ctx-status-dl {"]) {
+// ADR-0057 D2 — drift gate pinning the ContextStatusPanel into the shared grounded-evidence
+// disclosure chrome. Context and Evidence must read as one coherent audit stack instead of two
+// unrelated panels.
+describe("PR6 context status panel — shared evidence disclosure styling pin (ADR-0057 D2)", () => {
+  it("defines the .ctx-status container and shared grounded-evidence disclosure selectors", () => {
+    for (const selector of [
+      ".ctx-status {",
+      ".ctx-status-dl {",
+      ".grounded-evidence-disclosure {",
+      ".grounded-evidence-summary {",
+      ".grounded-evidence-summary-title {",
+      ".grounded-evidence-summary-meta {",
+      ".grounded-evidence-body {",
+    ]) {
       expect(css.includes(selector), `${selector} must remain in globals.css`).toBe(true);
     }
     expect(
-      css.includes(".ctx-status-summary:hover {"),
-      "the quiet summary must brighten on hover",
+      css.includes(".grounded-evidence-summary:hover {"),
+      "the shared quiet summary must brighten on hover",
     ).toBe(true);
   });
 
-  it("styles the .ctx-* classes only with existing Tier-3 semantic tokens (no raw values)", () => {
-    const block = css.slice(css.indexOf(".ctx-status {"), css.indexOf(".chatw-typing-row {"));
+  it("styles the shared Context/Evidence disclosure with existing semantic tokens", () => {
+    const block = css.slice(
+      css.indexOf(".grounded-evidence-disclosure {"),
+      css.indexOf(".grounded-citations-wrap {"),
+    );
     expect(block.length).toBeGreaterThan(0);
     for (const token of [
       "var(--border-subtle)",

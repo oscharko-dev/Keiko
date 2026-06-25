@@ -4,13 +4,28 @@
   "appPath": "packages/keiko-ui/out",
   "route": "/",
   "shotCount": 72,
-  "modes": ["dark", "light", "dark-hc", "light-hc", "reduced-motion", "forced-colors"],
-  "viewports": ["desktop", "tablet", "mobile"],
+  "modes": [
+    "dark",
+    "light",
+    "dark-hc",
+    "light-hc",
+    "reduced-motion",
+    "forced-colors"
+  ],
+  "viewports": [
+    "desktop",
+    "tablet",
+    "mobile"
+  ],
   "scenarios": [
     {
       "id": "shell",
       "description": "empty workspace shell",
-      "requiredSelectors": [".header", ".workspace", ".stage"]
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ]
     },
     {
       "id": "workspace-chat-quality",
@@ -46,11 +61,15 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "dark",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 782,
+      "textLen": 812,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -69,7 +88,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1778,
+      "textLen": 1808,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -87,7 +106,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1656,
+      "textLen": 1686,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -105,7 +124,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1190,
+      "textLen": 1220,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -116,11 +135,15 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "light",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 782,
+      "textLen": 812,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -139,7 +162,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1778,
+      "textLen": 1808,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -157,7 +180,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1656,
+      "textLen": 1686,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -175,7 +198,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1190,
+      "textLen": 1220,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -186,11 +209,15 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "dark-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 782,
+      "textLen": 812,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -209,7 +236,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1778,
+      "textLen": 1808,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -227,7 +254,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1656,
+      "textLen": 1686,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -245,7 +272,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1190,
+      "textLen": 1220,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -256,11 +283,15 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "light-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 782,
+      "textLen": 812,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -279,7 +310,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1778,
+      "textLen": 1808,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -297,7 +328,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1656,
+      "textLen": 1686,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -315,7 +346,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1190,
+      "textLen": 1220,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -326,11 +357,15 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "reduced-motion",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 782,
+      "textLen": 812,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -349,7 +384,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1778,
+      "textLen": 1808,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -367,7 +402,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1656,
+      "textLen": 1686,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -385,7 +420,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1190,
+      "textLen": 1220,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -396,11 +431,15 @@
       "description": "empty workspace shell",
       "viewport": "desktop",
       "mode": "forced-colors",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 782,
+      "textLen": 812,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -419,7 +458,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1778,
+      "textLen": 1808,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -437,7 +476,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1656,
+      "textLen": 1686,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -455,7 +494,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1190,
+      "textLen": 1220,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -466,11 +505,15 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "dark",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -489,7 +532,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -507,7 +550,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -525,7 +568,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -536,11 +579,15 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "light",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -559,7 +606,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -577,7 +624,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -595,7 +642,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -606,11 +653,15 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "dark-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -629,7 +680,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -647,7 +698,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -665,7 +716,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -676,11 +727,15 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "light-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -699,7 +754,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -717,7 +772,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -735,7 +790,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -746,11 +801,15 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "reduced-motion",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -769,7 +828,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -787,7 +846,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -805,7 +864,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -816,11 +875,15 @@
       "description": "empty workspace shell",
       "viewport": "tablet",
       "mode": "forced-colors",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -839,7 +902,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -857,7 +920,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -875,7 +938,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -886,11 +949,15 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "dark",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -909,7 +976,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -927,7 +994,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -945,7 +1012,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -956,11 +1023,15 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "light",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -979,7 +1050,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -997,7 +1068,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1015,7 +1086,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1026,11 +1097,15 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "dark-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1049,7 +1124,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1067,7 +1142,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1085,7 +1160,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1096,11 +1171,15 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "light-hc",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1119,7 +1198,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1137,7 +1216,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1155,7 +1234,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1166,11 +1245,15 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "reduced-motion",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1189,7 +1272,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1207,7 +1290,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1225,7 +1308,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1236,11 +1319,15 @@
       "description": "empty workspace shell",
       "viewport": "mobile",
       "mode": "forced-colors",
-      "requiredSelectors": [".header", ".workspace", ".stage"],
+      "requiredSelectors": [
+        ".header",
+        ".workspace",
+        ".stage"
+      ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 776,
+      "textLen": 806,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1259,7 +1346,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1772,
+      "textLen": 1802,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1277,7 +1364,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1650,
+      "textLen": 1680,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1295,7 +1382,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1184,
+      "textLen": 1214,
       "missingRequiredSelectors": [],
       "pageErrors": []
     }

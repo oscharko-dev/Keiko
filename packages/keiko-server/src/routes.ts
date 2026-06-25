@@ -21,7 +21,6 @@ import { handleVoiceTranscribe } from "./voice-handlers.js";
 import { handleVoiceRecapBuild } from "./voice-recap.js";
 import {
   handleCreateRun,
-  handleCreateChatRun,
   handleRunEvents,
   handleCancelRun,
   handleGetRun,
@@ -70,7 +69,7 @@ import {
 } from "./memory-consolidation-handlers.js";
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
-import { handleGroundedWorkflowHandoff } from "./grounded-handoff.js";
+import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCreateTerminalExecution,
@@ -83,6 +82,7 @@ import {
   handleFilesContent,
   handleFilesDirectories,
   handleFilesPreview,
+  handleFilesSearch,
   handleFilesTree,
 } from "./files.js";
 import { handleEditorLanguage, handleEditorLanguageCapabilities } from "./editor/languageRoutes.js";
@@ -229,6 +229,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // the EXISTING governed capture path; candidates surface in the existing review queue as "proposed".
   // Answers VOICE_UNAVAILABLE when the deployment is not voice-recap-capable (AC1).
   { method: "POST", pattern: "/api/voice/recap/build", handler: handleVoiceRecapBuild },
+  { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
@@ -246,8 +247,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "DELETE", pattern: "/api/projects", handler: handleDeleteProject },
   { method: "GET", pattern: "/api/chats", handler: handleListChats },
   { method: "POST", pattern: "/api/chats", handler: handleCreateChat },
-  // Issue #66 — composer launch path: persist chat pair and start the run as one BFF operation.
-  { method: "POST", pattern: "/api/chats/runs", handler: handleCreateChatRun },
   { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },
   { method: "GET", pattern: "/api/chats/messages", handler: handleListMessages },
@@ -262,11 +261,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
   // Issue #185 — grounded repository-aware Q&A. Composes #179-#183 behind the chat-scope binding.
   { method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },
-  {
-    method: "POST",
-    pattern: "/api/chats/messages/grounded/handoff",
-    handler: handleGroundedWorkflowHandoff,
-  },
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
@@ -285,6 +279,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Desktop files — selected-root browser, preview, and editor control plane.
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
+  { method: "GET", pattern: "/api/files/search", handler: handleFilesSearch },
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
   { method: "GET", pattern: "/api/files/content", handler: handleFilesContent },
   { method: "PATCH", pattern: "/api/files/content", handler: handleFilesContent },

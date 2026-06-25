@@ -5,11 +5,15 @@ import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type KeyboardEvent,
+  type PointerEvent,
   type ReactNode,
   type Ref,
+  type SyntheticEvent,
   type WheelEvent,
 } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
@@ -22,19 +26,21 @@ import KeikoSelect from "./KeikoSelect";
 import { NumberControlStepper } from "./NumberControlStepper";
 import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
+  repositoryReferenceRoots,
+  sanitizeRepositoryEvidenceText,
+  type OpenRepositoryReference,
+  type RepositoryReferenceRoot,
+} from "./repositoryReferences";
+import {
   AttachButton,
   AttachDropZone,
   AttachmentStrip,
   AttachRejectionAlert,
   SentDocumentsNote,
 } from "./AttachmentStrip";
-import {
-  isRunSummaryMessage,
-  LaunchGroundedWorkflowButton,
-  LaunchWorkflowButton,
-  RunSummaryCard,
-} from "./WorkflowHandoff";
+import { isRunSummaryMessage, RunSummaryCard } from "./WorkflowHandoff";
 import { Toggle } from "./widgets/shared/Toggle";
+import { FileIcon } from "./widgets/shared/projectTree";
 import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import {
@@ -57,7 +63,8 @@ import {
   type VoiceSessionRecapController,
 } from "./hooks/voice-session-recap";
 import { VoiceRecapButton, VoiceRecapPanel } from "./VoiceRecap";
-import { updateChat } from "@/lib/api";
+import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
+import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { formatUserError } from "./format-error";
 import {
   fetchCapsules,
@@ -68,13 +75,14 @@ import {
 import type {
   Chat,
   ChatMessage,
+  ChatConnectedScope,
   ChatLocalKnowledgeScope,
   ConversationMemoryActionWire,
   ConversationMemoryResultWire,
+  FilesSearchResult,
   GroundedAnswer as GroundedAnswerWire,
   GroundedAnswerContextSummary as GroundedAnswerContextSummaryWire,
   ModelCapability,
-  ProjectWithAvailability,
 } from "@/lib/types";
 
 interface ChatWindowProps {
@@ -85,6 +93,8 @@ interface ChatWindowProps {
   readonly barCompact?: boolean;
   readonly workflowCompact?: boolean;
   readonly linkedRoot?: string | null;
+  readonly linkedRoots?: readonly string[];
+  readonly openEditorFile?: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
 }
 
@@ -104,7 +114,6 @@ const COMPOSER_PLACEHOLDER = "Ask Keiko...";
 // uiux-fix F042 (C308/C322) — keep the visible send tooltip short and
 // consistent; the keyboard hint remains in accessible descriptions.
 const SEND_TOOLTIP = "Send message";
-
 function timeLabel(timestamp: number): string {
   const date = new Date(timestamp);
   const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -128,6 +137,33 @@ function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
       (m.role === "assistant" && m.content.length > 0) ||
       isRunSummaryMessage(m),
   );
+}
+
+interface ConversationTurn {
+  readonly id: string;
+  readonly user: ChatMessage | null;
+  readonly responses: readonly ChatMessage[];
+}
+
+function conversationTurns(messages: readonly ChatMessage[]): readonly ConversationTurn[] {
+  const turns: ConversationTurn[] = [];
+  let current: { id: string; user: ChatMessage | null; responses: ChatMessage[] } | null = null;
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      current = { id: message.id, user: message, responses: [] };
+      turns.push(current);
+      continue;
+    }
+
+    if (current === null) {
+      current = { id: message.id, user: null, responses: [] };
+      turns.push(current);
+    }
+    current.responses.push(message);
+  }
+
+  return turns;
 }
 
 // No fallback to a placeholder model id — when no eligible models are
@@ -154,102 +190,200 @@ function onComposerKeyDown(
 // lenticular 【n】, fullwidth ［n］ — mirroring citation-attacher's tolerance) are
 // stripped together with their leading whitespace so copied prose stays clean.
 const CITATION_MARKER_PATTERN = /\s*[[【［]\d+[\]】］]/g;
+const COLLAPSIBLE_ANSWER_MIN_CHARS = 1800;
+const COLLAPSIBLE_ANSWER_MIN_LINES = 32;
 
 export function copyableMessageText(content: string): string {
-  return content.replace(CITATION_MARKER_PATTERN, "");
+  return sanitizeRepositoryEvidenceText(content).replace(CITATION_MARKER_PATTERN, "");
+}
+
+async function writeTextWithFallback(text: string): Promise<void> {
+  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
+  if (writeText !== undefined && navigator.clipboard !== undefined) {
+    try {
+      await writeText.call(navigator.clipboard, text);
+      return;
+    } catch {
+      // Keep the manual-selection fallback below available for restricted clipboard contexts.
+    }
+  }
+
+  if (typeof document === "undefined" || document.body === null) {
+    throw new Error("clipboard-unavailable");
+  }
+
+  const previousFocus =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.inset = "0 auto auto -9999px";
+  textarea.style.width = "1px";
+  textarea.style.height = "1px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  try {
+    textarea.focus();
+    textarea.select();
+    const copied = typeof document.execCommand === "function" && document.execCommand("copy");
+    if (!copied) throw new Error("clipboard-fallback-failed");
+  } finally {
+    textarea.remove();
+    previousFocus?.focus();
+  }
+}
+
+function isCollapsibleAssistantAnswer(content: string): boolean {
+  return (
+    content.length >= COLLAPSIBLE_ANSWER_MIN_CHARS ||
+    content.split(/\r\n|\r|\n/u).length >= COLLAPSIBLE_ANSWER_MIN_LINES
+  );
 }
 
 // uiux-fix F042 (C208) — quiet per-bubble copy affordance for assistant
 // responses. Mirrors SafeMarkdown's code-block CopyButton: clipboard guard for
 // non-secure contexts, announced status (WCAG 4.1.3), width-stable label swap.
 function MessageCopyButton({ content }: { readonly content: string }): ReactNode {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [status, setStatus] = useState("");
 
   const handleCopy = useCallback(() => {
-    if (typeof navigator === "undefined" || navigator.clipboard?.writeText === undefined) {
-      setStatus("Copy unavailable: the clipboard requires a secure (HTTPS) connection.");
-      return;
-    }
-    void navigator.clipboard.writeText(copyableMessageText(content)).then(
+    void writeTextWithFallback(copyableMessageText(content)).then(
       () => {
-        setCopied(true);
-        setStatus("Message copied");
+        setCopyState("copied");
+        setStatus("Answer copied");
         setTimeout(() => {
-          setCopied(false);
+          setCopyState("idle");
           setStatus("");
         }, 1500);
       },
       () => {
-        /* ignore clipboard errors */
+        setCopyState("failed");
+        setStatus("Clipboard access failed. Select the answer manually and copy it.");
       },
     );
   }, [content]);
 
+  const copied = copyState === "copied";
+  const failed = copyState === "failed";
+
   return (
-    <>
+    <div className="chat-msg-copy-wrap">
       <button
         type="button"
         className="chat-msg-copy ui-tip"
-        aria-label={copied ? "Copied" : "Copy message"}
-        data-tip={copied ? "Copied" : "Copy message"}
+        aria-label={copied ? "Copied" : "Copy answer"}
+        data-tip={copied ? "Copied" : "Copy answer"}
         data-copied={copied ? "true" : "false"}
+        data-failed={failed ? "true" : "false"}
         onClick={handleCopy}
       >
-        {copied ? "Copied" : "Copy"}
+        <Icons.copy size={13} aria-hidden="true" />
+        <span>{copied ? "Copied" : "Copy answer"}</span>
       </button>
-      <span role="status" className="sr-only">
+      <span role="status" className="chat-msg-copy-status">
         {status}
       </span>
-    </>
+    </div>
   );
 }
 
 function ChatBubble({
   message,
   onOpenRunResult,
+  repositoryRoots,
+  openRepositoryReference,
   streaming = false,
+  layout = "stack",
 }: {
   readonly message: ChatMessage;
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  readonly repositoryRoots: readonly RepositoryReferenceRoot[];
+  readonly openRepositoryReference: OpenRepositoryReference | undefined;
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
   // so the DS 0.4.0 streaming caret blinks at the growing edge of the text.
   readonly streaming?: boolean;
+  readonly layout?: "stack" | "turn";
 }): ReactNode {
+  const contentId = useId();
+  const [collapsed, setCollapsed] = useState(false);
+  const isRunSummary = isRunSummaryMessage(message);
+  const isUser = message.role === "user";
+  const canCollapse = !isUser && !isRunSummary && isCollapsibleAssistantAnswer(message.content);
+
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
   // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat
   // without weakening evidence semantics (the BFF's persisted runId is still the source of
   // truth; this surface is read-only and never exposes apply/exec — AC#4).
-  if (isRunSummaryMessage(message)) {
+  if (isRunSummary) {
     return <RunSummaryCard message={message} onOpenResult={onOpenRunResult} />;
   }
-  const isUser = message.role === "user";
   return (
-    <article className="chat-msg" data-role={message.role}>
+    <article className="chat-msg" data-role={message.role} data-layout={layout}>
       <div className="chat-msg-bubble">
         {isUser ? <div className="chat-msg-role">You</div> : <KeikoMessageMark />}
-        {isUser ? (
-          message.content
-        ) : (
-          // AC #1 / #2: assistant responses render as safe markdown.
-          // User messages remain plain text — no markdown interpretation.
-          // SM-1: wrapped in a per-message boundary so a parser/render defect
-          // degrades this one bubble to plain text instead of crashing the view.
-          <SafeMarkdownBoundary source={message.content} />
-        )}
-        {/* Issue #1296 — DS 0.4.0 streaming caret at the live edge of the growing
-            assistant turn. Decorative (the lifecycle status announces "Receiving
-            response…" politely), so it is hidden from assistive tech. */}
-        {streaming && !isUser ? <span className="ai-stream-cursor" aria-hidden="true" /> : null}
+        <div
+          id={isUser ? undefined : contentId}
+          className="chat-msg-content"
+          data-collapsed={!isUser && collapsed ? "true" : "false"}
+          data-collapsible={canCollapse ? "true" : "false"}
+        >
+          {isUser ? (
+            message.content
+          ) : (
+            // AC #1 / #2: assistant responses render as safe markdown.
+            // User messages remain plain text — no markdown interpretation.
+            // SM-1: wrapped in a per-message boundary so a parser/render defect
+            // degrades this one bubble to plain text instead of crashing the view.
+            <SafeMarkdownBoundary
+              source={message.content}
+              repositoryRoots={repositoryRoots}
+              openRepositoryReference={openRepositoryReference}
+            />
+          )}
+          {/* Issue #1296 — DS 0.4.0 streaming caret at the live edge of the growing
+              assistant turn. Decorative (the lifecycle status announces "Receiving
+              response…" politely), so it is hidden from assistive tech. */}
+          {streaming && !isUser ? <span className="ai-stream-cursor" aria-hidden="true" /> : null}
+        </div>
         {/* uiux-fix F041 (C176) — full date+time stays reachable via title.
-            uiux-fix F042 (C208) — footer row: timestamp left, assistant-only
-            copy action right (revealed on bubble hover / keyboard focus). */}
+            uiux-fix F042 (C208) — footer row: timestamp left, assistant-only actions right. */}
         <div className="chat-msg-foot">
           <div className="chat-msg-time" title={new Date(message.timestamp).toLocaleString()}>
             {timeLabel(message.timestamp)}
           </div>
-          {isUser ? null : <MessageCopyButton content={message.content} />}
+          {isUser ? null : (
+            <div className="chat-msg-actions">
+              <MessageCopyButton content={message.content} />
+              {canCollapse ? (
+                <button
+                  type="button"
+                  className="chat-msg-collapse"
+                  aria-controls={contentId}
+                  aria-expanded={!collapsed}
+                  onClick={() => {
+                    setCollapsed((current) => !current);
+                  }}
+                >
+                  <Icons.chevron size={12} aria-hidden="true" />
+                  <span>{collapsed ? "Expand answer" : "Collapse answer"}</span>
+                </button>
+              ) : null}
+            </div>
+          )}
         </div>
+        {!isUser && message.groundedAnswer !== undefined ? (
+          <div className="chatw-grounded chatw-grounded-inline">
+            <GroundedAnswer
+              answer={message.groundedAnswer}
+              busy={false}
+              repositoryRoots={repositoryRoots}
+              openRepositoryReference={openRepositoryReference}
+            />
+            <ContextStatusPanel contextSummary={contextSummaryOf(message.groundedAnswer)} />
+          </div>
+        ) : null}
       </div>
     </article>
   );
@@ -286,6 +420,682 @@ function TypingBubble(): ReactNode {
   );
 }
 
+interface ConversationThreadProps {
+  readonly messages: readonly ChatMessage[];
+  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  readonly repositoryRoots: readonly RepositoryReferenceRoot[];
+  readonly openRepositoryReference: OpenRepositoryReference | undefined;
+  readonly sending: boolean;
+  readonly sendStatus: SendStatus;
+  readonly activeChat: Chat | undefined;
+  readonly onCancelGrounded: () => void;
+}
+
+function ConversationThread({
+  messages,
+  onOpenRunResult,
+  repositoryRoots,
+  openRepositoryReference,
+  sending,
+  sendStatus,
+  activeChat,
+  onCancelGrounded,
+}: ConversationThreadProps): ReactNode {
+  const turns = useMemo(() => conversationTurns(messages), [messages]);
+  return (
+    <div className="chatw-thread">
+      {turns.map((turn) => (
+        <div className="chat-turn" key={turn.id}>
+          <div className="chat-turn-cell chat-turn-prompt">
+            {turn.user !== null ? (
+              <ChatBubble
+                message={turn.user}
+                onOpenRunResult={onOpenRunResult}
+                repositoryRoots={repositoryRoots}
+                openRepositoryReference={openRepositoryReference}
+                layout="turn"
+              />
+            ) : null}
+          </div>
+          <div className="chat-turn-cell chat-turn-answer">
+            {turn.responses.map((response, index) => (
+              <ChatBubble
+                key={response.id}
+                message={response}
+                onOpenRunResult={onOpenRunResult}
+                repositoryRoots={repositoryRoots}
+                openRepositoryReference={openRepositoryReference}
+                layout="turn"
+                streaming={
+                  sendStatus === "streaming" &&
+                  response.role === "assistant" &&
+                  turn === turns[turns.length - 1] &&
+                  index === turn.responses.length - 1
+                }
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+      {sending && sendStatus !== "streaming" ? (
+        <div className="chat-turn chat-turn-pending">
+          <div className="chat-turn-cell chat-turn-prompt" />
+          <div className="chat-turn-cell chat-turn-answer">
+            <div className="chatw-typing-row">
+              <TypingBubble />
+              {hasGroundingScope(activeChat) ? (
+                <button
+                  type="button"
+                  className="grounded-cancel-btn"
+                  aria-label="Cancel grounded request"
+                  onClick={onCancelGrounded}
+                >
+                  Cancel
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const REPOSITORY_FILE_SEARCH_LIMIT = 24;
+const MAX_REPOSITORY_FOCUS_PATHS = 50;
+
+interface RepositoryRootOption {
+  readonly root: string;
+  readonly label: string;
+}
+
+interface ComposerRepositoryReference {
+  readonly id: string;
+  readonly root: string;
+  readonly path: string;
+  readonly name: string;
+  readonly directory: string;
+  readonly verified: boolean;
+  readonly source: "picker" | "draft";
+}
+
+function effectiveConnectedScopes(chat: Chat): readonly ChatConnectedScope[] {
+  if (chat.connectedScopes !== undefined) return chat.connectedScopes;
+  return chat.connectedScope !== undefined ? [chat.connectedScope] : [];
+}
+
+function rootDisplayName(root: string): string {
+  const normalized = root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  const parts = normalized.split("/").filter((part) => part.length > 0);
+  return parts[parts.length - 1] ?? root;
+}
+
+function connectedRepositoryRoots(
+  chat: Chat | undefined,
+  activeProjectPath: string | undefined,
+): readonly RepositoryRootOption[] {
+  if (chat === undefined) return [];
+  const fallbackRoot = activeProjectPath ?? chat.projectPath;
+  const seen = new Set<string>();
+  const roots: RepositoryRootOption[] = [];
+  for (const scope of effectiveConnectedScopes(chat)) {
+    const root = scope.root ?? fallbackRoot;
+    if (root.length === 0 || seen.has(root)) continue;
+    seen.add(root);
+    roots.push({ root, label: rootDisplayName(root) });
+  }
+  return roots;
+}
+
+function normalizedRepositoryRoot(root: string): string {
+  return root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+}
+
+function repositoryRootContains(parentRoot: string, childRoot: string): boolean {
+  const parent = normalizedRepositoryRoot(parentRoot);
+  const child = normalizedRepositoryRoot(childRoot);
+  return parent.length > 0 && child.length > parent.length && child.startsWith(`${parent}/`);
+}
+
+function omitAncestorRepositoryRoots(roots: readonly string[]): readonly string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const root of roots) {
+    const trimmed = root.trim();
+    if (trimmed.length === 0 || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    unique.push(trimmed);
+  }
+  return unique.filter(
+    (root) =>
+      !unique.some((candidate) => candidate !== root && repositoryRootContains(root, candidate)),
+  );
+}
+
+function repositoryReferenceRootPaths(args: {
+  readonly chat: Chat | undefined;
+  readonly activeProjectPath: string | undefined;
+  readonly linkedRoot: string | null;
+  readonly linkedRoots: readonly string[];
+}): readonly string[] {
+  const roots = connectedRepositoryRoots(args.chat, args.activeProjectPath).map(
+    (root) => root.root,
+  );
+  if (args.linkedRoots.length > 0) {
+    roots.push(...args.linkedRoots);
+  } else if (args.linkedRoot !== null) {
+    roots.push(args.linkedRoot);
+  }
+  return omitAncestorRepositoryRoots(roots);
+}
+
+function normalizedRepositoryPath(path: string): string {
+  return path.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+}
+
+function appendRepositoryReference(draft: string, path: string): string {
+  const mention = `@${path}`;
+  if (draft.split(/\s+/u).includes(mention)) return draft;
+  const trimmed = draft.trimEnd();
+  return trimmed.length === 0 ? mention : `${trimmed} ${mention}`;
+}
+
+function repositoryReferenceId(root: string, path: string): string {
+  return `${root}\u0001${path}`;
+}
+
+function repositoryReferenceFromResult(
+  result: FilesSearchResult,
+  source: ComposerRepositoryReference["source"] = "picker",
+): ComposerRepositoryReference {
+  return {
+    id: repositoryReferenceId(result.root, result.path),
+    root: result.root,
+    path: result.path,
+    name: result.name,
+    directory: result.directory,
+    verified: true,
+    source,
+  };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function repositoryReferenceMentionPattern(path: string): RegExp {
+  return new RegExp(`(^|\\s)@${escapeRegExp(path)}(?=$|\\s)`, "gu");
+}
+
+function removeRepositoryReferenceFromDraft(draft: string, path: string): string {
+  const next = draft
+    .replace(repositoryReferenceMentionPattern(path), "$1")
+    .replace(/[ \t]{2,}/gu, " ");
+  return next.trim().length === 0 ? "" : next;
+}
+
+const COMPOSER_REPOSITORY_REFERENCE_PATTERN =
+  /(^|\s)@((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9]{0,15})(?=$|\s)/gu;
+
+function repositoryReferenceMentionPaths(draft: string): readonly string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  COMPOSER_REPOSITORY_REFERENCE_PATTERN.lastIndex = 0;
+  for (;;) {
+    const match = COMPOSER_REPOSITORY_REFERENCE_PATTERN.exec(draft);
+    if (match === null) break;
+    const path = normalizedRepositoryPath(match[2] ?? "");
+    if (path.length === 0 || seen.has(path)) continue;
+    seen.add(path);
+    paths.push(path);
+  }
+  return paths;
+}
+
+function syntheticRepositoryReferenceFromPath(
+  path: string,
+  selectedRoot: string,
+  roots: readonly RepositoryRootOption[],
+): ComposerRepositoryReference | null {
+  const normalized = normalizedRepositoryPath(path);
+  if (normalized.length === 0 || normalized.includes("..")) return null;
+  const root = selectedRoot.length > 0 ? selectedRoot : (roots[0]?.root ?? "");
+  if (root.length === 0) return null;
+  const segments = normalized.split("/").filter((segment) => segment.length > 0);
+  const name = segments[segments.length - 1] ?? normalized;
+  const directory = segments.length > 1 ? segments.slice(0, -1).join("/") : "";
+  return {
+    id: repositoryReferenceId(root, normalized),
+    root,
+    path: normalized,
+    name,
+    directory,
+    verified: false,
+    source: "draft",
+  };
+}
+
+function mergeComposerRepositoryReference(
+  current: readonly ComposerRepositoryReference[],
+  reference: ComposerRepositoryReference,
+): readonly ComposerRepositoryReference[] {
+  if (current.some((item) => item.id === reference.id)) return current;
+  return [...current, reference];
+}
+
+function synchronizeComposerRepositoryReferences(args: {
+  readonly current: readonly ComposerRepositoryReference[];
+  readonly draft: string;
+  readonly selectedRoot: string;
+  readonly roots: readonly RepositoryRootOption[];
+  readonly searchResults: readonly FilesSearchResult[];
+}): readonly ComposerRepositoryReference[] {
+  return repositoryReferenceMentionPaths(args.draft)
+    .map((path) => {
+      const existing = args.current.find((reference) => reference.path === path);
+      if (existing?.verified === true) return existing;
+      const searchResult = args.searchResults.find((result) => result.path === path);
+      if (searchResult !== undefined) return repositoryReferenceFromResult(searchResult, "draft");
+      return existing ?? syntheticRepositoryReferenceFromPath(path, args.selectedRoot, args.roots);
+    })
+    .filter((reference): reference is ComposerRepositoryReference => reference !== null);
+}
+
+interface RepositoryMentionRange {
+  readonly start: number;
+  readonly end: number;
+  readonly query: string;
+}
+
+function repositoryMentionAtCursor(value: string, cursor: number): RepositoryMentionRange | null {
+  const boundedCursor = Math.max(0, Math.min(cursor, value.length));
+  const prefix = value.slice(0, boundedCursor);
+  const atIndex = prefix.lastIndexOf("@");
+  if (atIndex < 0) return null;
+  const before = atIndex === 0 ? "" : (prefix[atIndex - 1] ?? "");
+  if (before.length > 0 && !/\s|[(\[{]/u.test(before)) return null;
+  const query = prefix.slice(atIndex + 1);
+  if (query.includes("@") || /\s/u.test(query)) return null;
+  return { start: atIndex, end: boundedCursor, query };
+}
+
+function replaceRepositoryMention(
+  draft: string,
+  mention: RepositoryMentionRange,
+  path: string,
+): { readonly value: string; readonly cursor: number } {
+  const reference = `@${path}`;
+  const prefix = draft.slice(0, mention.start);
+  const suffix = draft.slice(mention.end);
+  const needsSpace = suffix.length === 0 || !/^[\s.,;:!?)}\]]/u.test(suffix);
+  const inserted = needsSpace ? `${reference} ` : reference;
+  return {
+    value: `${prefix}${inserted}${suffix}`,
+    cursor: prefix.length + inserted.length,
+  };
+}
+
+function mergeRepositoryFileScope(
+  chat: Chat,
+  root: string,
+  path: string,
+  now: () => number = Date.now,
+): { readonly scopes: readonly ChatConnectedScope[]; readonly changed: boolean } {
+  const filePath = normalizedRepositoryPath(path);
+  if (filePath.length === 0) {
+    throw new Error("Select a repository file first.");
+  }
+  const currentScopes = effectiveConnectedScopes(chat);
+  const nextScopes: ChatConnectedScope[] = [];
+  let merged = false;
+  let changed = false;
+
+  for (const scope of currentScopes) {
+    const scopeRoot = scope.root ?? chat.projectPath;
+    if (scope.kind === "files" && scopeRoot === root) {
+      merged = true;
+      if (scope.relativePaths.includes(filePath)) {
+        nextScopes.push(scope);
+        continue;
+      }
+      if (scope.relativePaths.length >= MAX_REPOSITORY_FOCUS_PATHS) {
+        throw new Error(
+          `This Files source already references ${String(MAX_REPOSITORY_FOCUS_PATHS)} files.`,
+        );
+      }
+      nextScopes.push({
+        ...scope,
+        root,
+        relativePaths: [...scope.relativePaths, filePath],
+        connectedAtMs: now(),
+      });
+      changed = true;
+      continue;
+    }
+    nextScopes.push(scope);
+  }
+
+  if (!merged) {
+    nextScopes.push({
+      kind: "files",
+      root,
+      relativePaths: [filePath],
+      connectedAtMs: now(),
+    });
+    changed = true;
+  }
+
+  return { scopes: nextScopes, changed };
+}
+
+function resultDirectoryLabel(result: FilesSearchResult): string {
+  return result.directory.length === 0 ? "Repository root" : result.directory;
+}
+
+function fileRoleLabel(role: FilesSearchResult["fileRole"] | undefined): string {
+  switch (role) {
+    case "source":
+      return "Source";
+    case "test":
+      return "Test";
+    case "config":
+      return "Config";
+    case "docs":
+      return "Docs";
+    case "generated":
+      return "Generated";
+    case "asset":
+      return "Asset";
+    case "other":
+    case undefined:
+      return "File";
+  }
+}
+
+function fileRoleClassName(role: FilesSearchResult["fileRole"] | undefined): string {
+  return `repo-focus-badge repo-focus-badge-${role ?? "other"}`;
+}
+
+function fileSearchResultClassName(result: FilesSearchResult): string {
+  const secondary = result.fileRole === "generated" || result.fileRole === "asset";
+  return `repo-focus-result${secondary ? " repo-focus-result-secondary" : ""}`;
+}
+
+function matchQualityLabel(quality: FilesSearchResult["matchQuality"] | undefined): string {
+  switch (quality) {
+    case "exact":
+      return "Exact match";
+    case "strong":
+      return "Strong match";
+    case "path":
+      return "Path match";
+    case "weak":
+    case undefined:
+      return "Weak match";
+  }
+}
+
+function formatRepositoryFocusError(error: unknown): string {
+  return formatUserError(error, "Unable to reference repository file.");
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    error.name === "AbortError"
+  );
+}
+
+interface RepositoryFileSearchState {
+  readonly results: readonly FilesSearchResult[];
+  readonly searching: boolean;
+  readonly message: string;
+  readonly error: string | null;
+}
+
+function useRepositoryFileSearch(
+  open: boolean,
+  selectedRoot: string,
+  query: string,
+): RepositoryFileSearchState {
+  const [results, setResults] = useState<readonly FilesSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [message, setMessage] = useState("Type after @ to search connected repository files.");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setSearching(false);
+      setResults([]);
+      setError(null);
+      return undefined;
+    }
+    const trimmed = query.trim();
+    if (selectedRoot.length === 0 || trimmed.length === 0) {
+      setSearching(false);
+      setResults([]);
+      setMessage("Type after @ to search connected repository files.");
+      setError(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    let cancelled = false;
+    setSearching(true);
+    setError(null);
+    setMessage("Searching repository files...");
+    const searchTimer = window.setTimeout(() => {
+      void fetchFilesSearch(selectedRoot, trimmed, REPOSITORY_FILE_SEARCH_LIMIT, {
+        signal: controller.signal,
+      })
+        .then((response) => {
+          if (cancelled) return;
+          setResults(response.results);
+          if (response.results.length === 0) {
+            setMessage("No matching repository files.");
+          } else {
+            const count = response.results.length;
+            setMessage(
+              `${String(count)} ${count === 1 ? "file" : "files"} found${response.truncated ? "; refine query; search scanned limit reached." : "."}`,
+            );
+          }
+        })
+        .catch((caught: unknown) => {
+          if (cancelled || isAbortError(caught)) return;
+          setResults([]);
+          setError(formatRepositoryFocusError(caught));
+          setMessage("Repository search failed.");
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 120);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(searchTimer);
+      controller.abort();
+    };
+  }, [open, query, selectedRoot]);
+
+  return { results, searching, message, error };
+}
+
+interface RepositoryFilePickerPanelProps {
+  readonly roots: readonly RepositoryRootOption[];
+  readonly selectedRoot: string;
+  readonly onRootChange: (root: string) => void;
+  readonly search: RepositoryFileSearchState;
+  readonly pickingPath: string | null;
+  readonly highlightedIndex: number;
+  readonly pickError: string | null;
+  readonly onPick: (result: FilesSearchResult) => void;
+  readonly onClose: () => void;
+}
+
+function RepositoryFilePickerPanel({
+  roots,
+  selectedRoot,
+  onRootChange,
+  search,
+  pickingPath,
+  highlightedIndex,
+  pickError,
+  onPick,
+  onClose,
+}: RepositoryFilePickerPanelProps): ReactNode {
+  const activeRoot = roots.find((root) => root.root === selectedRoot) ?? roots[0];
+  const displayedError = pickError ?? search.error;
+  const stopPickerPointer = (event: SyntheticEvent): void => {
+    event.stopPropagation();
+  };
+  const pickFromPointer = (event: PointerEvent<HTMLButtonElement>, result: FilesSearchResult) => {
+    if (event.button !== 0 || pickingPath !== null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onPick(result);
+  };
+  return (
+    // The dialog must be a pointer boundary inside draggable workspace windows.
+    // Actual selection controls remain semantic buttons below.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
+    <div
+      className="repo-focus-popover"
+      role="dialog"
+      aria-label="Reference repository file"
+      onPointerDown={stopPickerPointer}
+      onMouseDown={stopPickerPointer}
+    >
+      <div className="repo-focus-head">
+        <div>
+          <span className="repo-focus-title">Repository file</span>
+          <span className="repo-focus-subtitle">{activeRoot?.label ?? "Connected source"}</span>
+        </div>
+        <button
+          type="button"
+          className="repo-focus-close"
+          aria-label="Close repository file picker"
+          onClick={onClose}
+        >
+          <Icons.close size={13} />
+        </button>
+      </div>
+      {roots.length > 1 ? (
+        <KeikoSelect
+          triggerClassName="repo-focus-source-select"
+          value={selectedRoot}
+          ariaLabel="Repository source"
+          menuTitle="Connected repositories"
+          menuClassName="repo-focus-source-menu"
+          menuMinWidth={240}
+          sections={[
+            {
+              options: roots.map((root) => ({
+                value: root.root,
+                label: root.label,
+              })),
+            },
+          ]}
+          onValueChange={onRootChange}
+        />
+      ) : null}
+      <div className="repo-focus-message" role={displayedError === null ? "status" : "alert"}>
+        {displayedError ?? (search.searching ? "Searching repository files..." : search.message)}
+      </div>
+      {search.results.length > 0 ? (
+        <div className="repo-focus-results" role="listbox" aria-label="Repository file results">
+          {search.results.map((result, index) => (
+            <button
+              key={`${result.root}:${result.path}`}
+              type="button"
+              className={fileSearchResultClassName(result)}
+              role="option"
+              aria-selected={index === highlightedIndex ? "true" : "false"}
+              data-highlighted={index === highlightedIndex ? "true" : "false"}
+              aria-label={`Reference ${result.path}`}
+              disabled={pickingPath !== null}
+              onPointerDown={(event) => pickFromPointer(event, result)}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (event.detail === 0 && pickingPath === null) onPick(result);
+              }}
+            >
+              <span className="repo-focus-result-main">
+                <span className="repo-focus-result-name">{result.name}</span>
+                <span className="repo-focus-result-badges" aria-hidden="true">
+                  <span className={fileRoleClassName(result.fileRole)}>
+                    {fileRoleLabel(result.fileRole)}
+                  </span>
+                  {result.rootKind === "nested-git-root" ? (
+                    <span className="repo-focus-badge repo-focus-badge-root">Nested repo</span>
+                  ) : null}
+                </span>
+              </span>
+              <span className="repo-focus-result-path">{resultDirectoryLabel(result)}</span>
+              <span className="sr-only">
+                {`${fileRoleLabel(result.fileRole)}; ${matchQualityLabel(result.matchQuality)}${result.rootKind === "nested-git-root" ? "; nested repository root" : ""}.`}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface RepositoryReferenceStripProps {
+  readonly references: readonly ComposerRepositoryReference[];
+  readonly onRemove: (id: string) => void;
+}
+
+function RepositoryReferenceStrip({
+  references,
+  onRemove,
+}: RepositoryReferenceStripProps): ReactNode {
+  if (references.length === 0) return null;
+  return (
+    <div className="repo-token-strip" role="list" aria-label="Referenced repository files">
+      {references.map((reference) => (
+        <div
+          key={reference.id}
+          className={`repo-token${reference.verified ? "" : " repo-token-unverified"}`}
+          role="listitem"
+          title={
+            reference.verified
+              ? `${reference.path} — ${reference.root}`
+              : `Reference not verified yet — ${reference.path} — ${reference.root}`
+          }
+        >
+          <span className="repo-token-icon" aria-hidden="true">
+            <FileIcon name={reference.name} />
+          </span>
+          <span className="repo-token-main">
+            <span className="repo-token-name">{reference.name}</span>
+            <span className="repo-token-path">
+              {reference.directory.length === 0
+                ? rootDisplayName(reference.root)
+                : reference.directory}
+            </span>
+          </span>
+          {reference.verified ? null : (
+            <span className="repo-token-status" aria-label="Reference not verified yet">
+              Unverified
+            </span>
+          )}
+          <button
+            type="button"
+            className="repo-token-remove"
+            aria-label={`Remove repository reference ${reference.path}`}
+            onClick={() => onRemove(reference.id)}
+          >
+            <Icons.close size={12} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface ComposerBarProps {
   readonly session: ChatSessionApi;
   readonly ready: boolean;
@@ -294,7 +1104,6 @@ interface ComposerBarProps {
   readonly compact?: boolean;
   readonly controlsNarrow?: boolean;
   readonly barCompact?: boolean;
-  readonly workflowCompact?: boolean;
   // Issue #151 — when true, the budget for the next send exceeds the model's
   // window and the send button must be focusable but inert.
   readonly budgetExceeded: boolean;
@@ -329,7 +1138,6 @@ function ComposerBar({
   compact = false,
   controlsNarrow = false,
   barCompact = false,
-  workflowCompact = false,
   budgetExceeded,
   voiceDictationVisible,
   dictation,
@@ -353,7 +1161,6 @@ function ComposerBar({
     loading,
     sending,
     cancelSend,
-    launchWorkflowFromConversation,
   } = session;
   // AC #1 / AC #4: when no eligible model is configured the send button must be
   // focusable (so screen-reader users discover the error) but must not submit.
@@ -402,11 +1209,6 @@ function ComposerBar({
           anyModelSupportsAttachments={models.some(
             (m) => m.supportsImageInput || m.supportsDocumentInput,
           )}
-        />
-        <LaunchWorkflowButton
-          selectedModel={selectedModelCapability}
-          compact={workflowCompact}
-          launch={launchWorkflowFromConversation}
         />
         {/* AC #3: loading state — show a "Loading models…" option while bootstrapping */}
         <div
@@ -625,7 +1427,6 @@ interface ComposerCoreProps {
   readonly compact?: boolean;
   readonly controlsNarrow?: boolean;
   readonly barCompact?: boolean;
-  readonly workflowCompact?: boolean;
 }
 
 function ComposerCore({
@@ -636,7 +1437,6 @@ function ComposerCore({
   compact = false,
   controlsNarrow = false,
   barCompact = false,
-  workflowCompact = false,
 }: ComposerCoreProps): ReactNode {
   const {
     draft,
@@ -652,6 +1452,9 @@ function ComposerCore({
     removePendingAttachment,
     budget,
     clearHistory,
+    activeChat,
+    activeProject,
+    replaceChat,
   } = session;
   // Issue #151 — budget can be undefined while bootstrapping; treat that as
   // not-exceeded so the composer remains submittable. CB-F1: a runtime-configured
@@ -746,6 +1549,179 @@ function ComposerCore({
   // (committedSegmentCount === 0), so the button shows but cannot trigger a side effect.
   const recap = useVoiceSessionRecap({ profile: voiceCapability?.profile ?? "none" });
 
+  const repositoryRoots = useMemo(
+    () => connectedRepositoryRoots(activeChat, activeProject?.path),
+    [activeChat, activeProject?.path],
+  );
+  const repositoryRootKey = repositoryRoots.map((root) => root.root).join("\u0001");
+  const [selectedRepositoryRoot, setSelectedRepositoryRoot] = useState(
+    repositoryRoots[0]?.root ?? "",
+  );
+  const [repositoryMention, setRepositoryMention] = useState<RepositoryMentionRange | null>(null);
+  const [repositoryPickingPath, setRepositoryPickingPath] = useState<string | null>(null);
+  const [repositoryPickError, setRepositoryPickError] = useState<string | null>(null);
+  const [repositoryHighlightedIndex, setRepositoryHighlightedIndex] = useState(0);
+  const [repositoryReferences, setRepositoryReferences] = useState<
+    readonly ComposerRepositoryReference[]
+  >([]);
+  const repositoryPickerOpen = repositoryMention !== null && repositoryRoots.length > 0;
+  const repositorySearch = useRepositoryFileSearch(
+    repositoryPickerOpen,
+    selectedRepositoryRoot,
+    repositoryMention?.query ?? "",
+  );
+
+  useEffect(() => {
+    if (repositoryRoots.length === 0) {
+      setSelectedRepositoryRoot("");
+      setRepositoryMention(null);
+      return;
+    }
+    if (!repositoryRoots.some((root) => root.root === selectedRepositoryRoot)) {
+      setSelectedRepositoryRoot(repositoryRoots[0]?.root ?? "");
+    }
+  }, [repositoryRootKey, repositoryRoots, selectedRepositoryRoot]);
+
+  useEffect(() => {
+    setRepositoryHighlightedIndex(0);
+  }, [repositoryMention?.query, repositorySearch.results]);
+
+  useEffect(() => {
+    setRepositoryReferences((current) =>
+      synchronizeComposerRepositoryReferences({
+        current,
+        draft,
+        selectedRoot: selectedRepositoryRoot,
+        roots: repositoryRoots,
+        searchResults: repositorySearch.results,
+      }),
+    );
+  }, [draft, repositoryRootKey, repositoryRoots, repositorySearch.results, selectedRepositoryRoot]);
+
+  const updateRepositoryMentionFromTextarea = useCallback(
+    (value: string, cursor: number): void => {
+      if (repositoryRoots.length === 0) {
+        setRepositoryMention(null);
+        return;
+      }
+      const mention = repositoryMentionAtCursor(value, cursor);
+      setRepositoryMention(mention);
+      if (mention !== null) setRepositoryPickError(null);
+    },
+    [repositoryRoots.length],
+  );
+
+  const insertRepositoryFileReference = useCallback(
+    async (result: FilesSearchResult): Promise<void> => {
+      if (activeChat === undefined) return;
+      setRepositoryPickingPath(result.path);
+      setRepositoryPickError(null);
+      try {
+        const merged = mergeRepositoryFileScope(activeChat, result.root, result.path);
+        if (merged.changed) {
+          const response = await updateChat(activeChat.id, { connectedScopes: merged.scopes });
+          replaceChat(response.chat);
+        }
+        const fallbackCursor = taRef.current?.selectionStart ?? draft.length;
+        const mention = repositoryMention ?? repositoryMentionAtCursor(draft, fallbackCursor);
+        const next =
+          mention === null
+            ? (() => {
+                const value = appendRepositoryReference(draft, result.path);
+                return { value, cursor: value.length };
+              })()
+            : replaceRepositoryMention(draft, mention, result.path);
+        setRepositoryReferences((current) =>
+          mergeComposerRepositoryReference(current, repositoryReferenceFromResult(result)),
+        );
+        setDraft(next.value);
+        setRepositoryMention(null);
+        requestAnimationFrame(() => {
+          taRef.current?.focus();
+          taRef.current?.setSelectionRange(next.cursor, next.cursor);
+        });
+      } catch (caught) {
+        setRepositoryPickError(formatRepositoryFocusError(caught));
+      } finally {
+        setRepositoryPickingPath(null);
+      }
+    },
+    [activeChat, draft, replaceChat, repositoryMention, setDraft],
+  );
+
+  const removeRepositoryReference = useCallback(
+    (id: string): void => {
+      const reference = repositoryReferences.find((item) => item.id === id);
+      if (reference === undefined) return;
+      setRepositoryReferences((current) => current.filter((item) => item.id !== id));
+      setDraft(removeRepositoryReferenceFromDraft(draft, reference.path));
+      requestAnimationFrame(() => {
+        taRef.current?.focus();
+      });
+    },
+    [draft, repositoryReferences, setDraft],
+  );
+
+  const handleDraftChange = useCallback(
+    (event: ChangeEvent<HTMLTextAreaElement>): void => {
+      const next = event.target.value;
+      setDraft(next);
+      updateRepositoryMentionFromTextarea(next, event.target.selectionStart ?? next.length);
+    },
+    [setDraft, updateRepositoryMentionFromTextarea],
+  );
+
+  const handleDraftSelect = useCallback(
+    (event: SyntheticEvent<HTMLTextAreaElement>): void => {
+      if (repositoryMention === null) return;
+      const target = event.currentTarget;
+      updateRepositoryMentionFromTextarea(
+        target.value,
+        target.selectionStart ?? target.value.length,
+      );
+    },
+    [repositoryMention, updateRepositoryMentionFromTextarea],
+  );
+
+  const handleDraftKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+      if (repositoryPickerOpen) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setRepositoryMention(null);
+          return;
+        }
+        if (event.key === "ArrowDown" && repositorySearch.results.length > 0) {
+          event.preventDefault();
+          setRepositoryHighlightedIndex((current) =>
+            Math.min(repositorySearch.results.length - 1, current + 1),
+          );
+          return;
+        }
+        if (event.key === "ArrowUp" && repositorySearch.results.length > 0) {
+          event.preventDefault();
+          setRepositoryHighlightedIndex((current) => Math.max(0, current - 1));
+          return;
+        }
+        if ((event.key === "Enter" || event.key === "Tab") && repositorySearch.results.length > 0) {
+          event.preventDefault();
+          const picked =
+            repositorySearch.results[repositoryHighlightedIndex] ?? repositorySearch.results[0];
+          if (picked !== undefined) void insertRepositoryFileReference(picked);
+          return;
+        }
+      }
+      onComposerKeyDown(sendMessage)(event);
+    },
+    [
+      insertRepositoryFileReference,
+      repositoryHighlightedIndex,
+      repositoryPickerOpen,
+      repositorySearch.results,
+      sendMessage,
+    ],
+  );
+
   return (
     <div className={`cmp-box${compact ? " cmp-box-compact" : ""}`}>
       <div className="cmp-input-stack">
@@ -758,12 +1734,40 @@ function ComposerCore({
           value={draft}
           aria-label="Chat message"
           placeholder={placeholder}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={onComposerKeyDown(sendMessage)}
+          onChange={handleDraftChange}
+          onSelect={handleDraftSelect}
+          onKeyDown={handleDraftKeyDown}
           // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
           // fully editable while a send is in flight so the next message can be
           // pre-typed during streaming. Re-submit stays blocked by the isInFlight
           // guard in useChatSession, and the primary button is "Cancel" meanwhile.
+        />
+        {repositoryPickerOpen ? (
+          <div className="repo-focus repo-focus-inline">
+            <span className="sr-only" role="status" aria-live="polite">
+              {repositoryPickError ?? repositorySearch.error ?? repositorySearch.message}
+            </span>
+            <RepositoryFilePickerPanel
+              roots={repositoryRoots}
+              selectedRoot={selectedRepositoryRoot}
+              onRootChange={(next) => {
+                setSelectedRepositoryRoot(next);
+                setRepositoryHighlightedIndex(0);
+              }}
+              search={repositorySearch}
+              pickingPath={repositoryPickingPath}
+              highlightedIndex={repositoryHighlightedIndex}
+              pickError={repositoryPickError}
+              onPick={(result) => {
+                void insertRepositoryFileReference(result);
+              }}
+              onClose={() => setRepositoryMention(null)}
+            />
+          </div>
+        ) : null}
+        <RepositoryReferenceStrip
+          references={repositoryReferences}
+          onRemove={removeRepositoryReference}
         />
         {/* Chip strip below the textarea, above the composer bar (AC #3) */}
         <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
@@ -826,7 +1830,6 @@ function ComposerCore({
           compact={compact}
           controlsNarrow={controlsNarrow}
           barCompact={barCompact}
-          workflowCompact={workflowCompact}
           budgetExceeded={budgetExceeded}
           voiceDictationVisible={voiceDictationVisible}
           dictation={dictation}
@@ -1341,32 +2344,19 @@ function contextSummaryOf(
 
 function GroundedAnswerPanel({
   chat,
-  answer,
   busy,
-  selectedModelId,
-  launchGroundedWorkflowHandoff,
 }: {
   readonly chat: Chat | undefined;
-  readonly answer: GroundedAnswerWire | undefined;
   readonly busy: boolean;
-  readonly selectedModelId: string | undefined;
-  readonly launchGroundedWorkflowHandoff: ChatSessionApi["launchGroundedWorkflowHandoff"];
 }): ReactNode {
   if (chat === undefined) return null;
   // Show the grounded panel when the chat has ANY scope binding (folder or connector, singular or
   // plural). This covers the legacy single-source fields and the #532/#189 plural list fields.
   if (!hasGroundingScope(chat)) return null;
-  if (answer === undefined && !busy) return null;
+  if (!busy) return null;
   return (
     <div className="chatw-grounded">
-      <GroundedAnswer answer={answer} busy={busy} />
-      <ContextStatusPanel contextSummary={contextSummaryOf(answer)} />
-      <LaunchGroundedWorkflowButton
-        answer={answer}
-        modelId={selectedModelId}
-        busy={busy}
-        launch={launchGroundedWorkflowHandoff}
-      />
+      <GroundedAnswer answer={undefined} busy={busy} />
     </div>
   );
 }
@@ -1727,6 +2717,9 @@ export function ChatWindow({
   controlsNarrow = false,
   barCompact = false,
   workflowCompact = false,
+  linkedRoot = null,
+  linkedRoots = [],
+  openEditorFile,
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
@@ -1741,9 +2734,9 @@ export function ChatWindow({
     selectedModel,
     sendMessage,
     cancelGrounded,
+    activeProject,
     activeChat,
     replaceChat,
-    latestGrounded,
     latestMemory,
     lastSentDocuments,
     memoryEnabled,
@@ -1752,13 +2745,23 @@ export function ChatWindow({
     setMemoryBudgetTokens,
     acceptMemoryCandidate,
     rejectMemoryCandidate,
-    launchGroundedWorkflowHandoff,
     forgetMemoryAction,
   } = session;
   // AC #1: block ready when no model is available — do not allow submission.
   const ready = draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
   const visible = visibleOnly(messages);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const repositoryRoots = useMemo(() => {
+    return repositoryReferenceRoots(
+      repositoryReferenceRootPaths({
+        chat: activeChat,
+        activeProjectPath: activeProject?.path,
+        linkedRoot,
+        linkedRoots,
+      }),
+    );
+  }, [activeChat, activeProject?.path, linkedRoot, linkedRoots]);
+  const openRepositoryReference: OpenRepositoryReference | undefined = openEditorFile;
   // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND
   // streaming content growth (lastContent dependency), but only while the
   // reader is near the bottom; never yank someone who scrolled up into the
@@ -1771,7 +2774,6 @@ export function ChatWindow({
   const effectiveCompact = compact || mini;
   const effectiveControlsNarrow = controlsNarrow || mini || effectiveMinimal || workflowCompact;
   const effectiveBarCompact = barCompact || effectiveMinimal;
-  const effectiveWorkflowCompact = workflowCompact || mini || effectiveMinimal;
   useEffect(() => {
     if (sending && !prevSendingRef.current) stickRef.current = true;
     prevSendingRef.current = sending;
@@ -1835,40 +2837,17 @@ export function ChatWindow({
           )
         ) : (
           <div className="chatw-log">
-            {visible.map((message, index) => (
-              <ChatBubble
-                key={message.id}
-                message={message}
-                onOpenRunResult={onOpenRunResult}
-                streaming={
-                  sendStatus === "streaming" &&
-                  index === visible.length - 1 &&
-                  message.role === "assistant"
-                }
-              />
-            ))}
-            {sending && sendStatus !== "streaming" ? (
-              <div className="chatw-typing-row">
-                <TypingBubble />
-                {hasGroundingScope(activeChat) ? (
-                  <button
-                    type="button"
-                    className="grounded-cancel-btn"
-                    aria-label="Cancel grounded request"
-                    onClick={cancelGrounded}
-                  >
-                    Cancel
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-            <GroundedAnswerPanel
-              chat={activeChat}
-              answer={latestGrounded}
-              busy={sending}
-              selectedModelId={selectedModel}
-              launchGroundedWorkflowHandoff={launchGroundedWorkflowHandoff}
+            <ConversationThread
+              messages={visible}
+              onOpenRunResult={onOpenRunResult}
+              repositoryRoots={repositoryRoots}
+              openRepositoryReference={openRepositoryReference}
+              sending={sending}
+              sendStatus={sendStatus}
+              activeChat={activeChat}
+              onCancelGrounded={cancelGrounded}
             />
+            <GroundedAnswerPanel chat={activeChat} busy={sending} />
             {/* Issue #148 — disclose which attached documents contributed extracted context. */}
             <SentDocumentsNote documents={lastSentDocuments} />
           </div>
@@ -1892,7 +2871,6 @@ export function ChatWindow({
               compact={effectiveCompact}
               controlsNarrow={effectiveControlsNarrow}
               barCompact={effectiveBarCompact}
-              workflowCompact={effectiveWorkflowCompact}
             />
             {error !== undefined ? (
               <ErrorNoticeFromError
@@ -1924,7 +2902,6 @@ export function ChatWindow({
               compact={effectiveCompact}
               controlsNarrow={effectiveControlsNarrow}
               barCompact={effectiveBarCompact}
-              workflowCompact={effectiveWorkflowCompact}
             />
             {error !== undefined ? (
               <ErrorNoticeFromError

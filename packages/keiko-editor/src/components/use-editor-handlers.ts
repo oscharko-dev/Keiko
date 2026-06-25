@@ -7,7 +7,7 @@
  * DOM/Monaco edges are touched only inside the returned callbacks/effect, never at module scope.
  */
 import { type OnChange, type OnMount } from "@monaco-editor/react";
-import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, type MutableRefObject } from "react";
 
 import { buildSaveRequest } from "./save-state.js";
 import type { KeikoCodeEditorProps } from "./types.js";
@@ -34,6 +34,7 @@ import {
   createEditorRequestId,
   DEFAULT_COMPLETION_CONTEXT_BUDGET_BYTES,
   DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
+  editorRangeToMonaco,
 } from "./completion-bridge.js";
 import { MONACO_BUILTIN_ACTION_IDS } from "./command-actions.js";
 import {
@@ -56,14 +57,64 @@ interface EditorRefs {
   readonly editorRef: MutableRefObject<MountEditor | null>;
   readonly viewStateRef: MutableRefObject<unknown>;
   readonly disposeRef: MutableRefObject<(() => void) | null>;
+  readonly revealDecorationIdsRef: MutableRefObject<string[]>;
+  readonly revealTimeoutRef: MutableRefObject<number | null>;
 }
 
 function useEditorRefs(): EditorRefs {
-  return {
-    editorRef: useRef<MountEditor | null>(null),
-    viewStateRef: useRef<unknown>(null),
-    disposeRef: useRef<(() => void) | null>(null),
+  const editorRef = useRef<MountEditor | null>(null);
+  const viewStateRef = useRef<unknown>(null);
+  const disposeRef = useRef<(() => void) | null>(null);
+  const revealDecorationIdsRef = useRef<string[]>([]);
+  const revealTimeoutRef = useRef<number | null>(null);
+  return useMemo(
+    () => ({ editorRef, viewStateRef, disposeRef, revealDecorationIdsRef, revealTimeoutRef }),
+    [editorRef, viewStateRef, disposeRef, revealDecorationIdsRef, revealTimeoutRef],
+  );
+}
+
+function clearRevealDecoration(refs: EditorRefs): void {
+  if (refs.revealTimeoutRef.current !== null) {
+    window.clearTimeout(refs.revealTimeoutRef.current);
+    refs.revealTimeoutRef.current = null;
+  }
+  const editor = refs.editorRef.current;
+  if (editor === null || refs.revealDecorationIdsRef.current.length === 0) return;
+  refs.revealDecorationIdsRef.current = editor.deltaDecorations(
+    refs.revealDecorationIdsRef.current,
+    [],
+  );
+}
+
+function applyRevealRequest(
+  refs: EditorRefs,
+  revealRequest: KeikoCodeEditorProps["revealRequest"],
+): void {
+  const editor = refs.editorRef.current;
+  if (editor === null || revealRequest === undefined) return;
+  const monacoRange = editorRangeToMonaco(revealRequest.range);
+  const safeRange = {
+    startLineNumber: Math.max(1, monacoRange.startLineNumber),
+    startColumn: 1,
+    endLineNumber: Math.max(monacoRange.startLineNumber, monacoRange.endLineNumber),
+    endColumn: Math.max(1, monacoRange.endColumn),
   };
+  clearRevealDecoration(refs);
+  editor.focus();
+  editor.setSelection(safeRange);
+  editor.revealRangeInCenterIfOutsideViewport(safeRange);
+  refs.revealDecorationIdsRef.current = editor.deltaDecorations([], [
+    {
+      range: safeRange,
+      options: {
+        isWholeLine: true,
+        className: "keiko-editor-reference-target",
+      },
+    },
+  ]);
+  refs.revealTimeoutRef.current = window.setTimeout(() => {
+    clearRevealDecoration(refs);
+  }, 2400);
 }
 
 function useSaveEmitter(
@@ -335,6 +386,7 @@ function useMountHandler(
         formatting: buildFormattingWiring(latestProps, `${streamId}:formatting`),
         commands: buildCommandsWiring(latestProps),
       });
+      applyRevealRequest(refs, latestProps.current.revealRequest);
     },
     [
       refs,
@@ -356,6 +408,7 @@ function useUnmountDisposal(refs: EditorRefs): void {
   const { editorRef, viewStateRef, disposeRef } = refs;
   useEffect((): (() => void) => {
     return (): void => {
+      clearRevealDecoration(refs);
       if (editorRef.current !== null) {
         viewStateRef.current = captureViewState(editorRef.current);
       }
@@ -364,6 +417,12 @@ function useUnmountDisposal(refs: EditorRefs): void {
       editorRef.current = null;
     };
   }, [editorRef, viewStateRef, disposeRef]);
+}
+
+function useRevealRequest(props: KeikoCodeEditorProps, refs: EditorRefs): void {
+  useEffect(() => {
+    applyRevealRequest(refs, props.revealRequest);
+  }, [props.revealRequest?.id, refs]);
 }
 
 /** Wire change/mount handlers and unmount disposal; returns the handlers for `<Editor>`. */
@@ -378,5 +437,6 @@ export function useEditorHandlers(props: KeikoCodeEditorProps, readOnly: boolean
     void editor.getAction(MONACO_BUILTIN_ACTION_IDS.format)?.run();
   }, [readOnly, refs.editorRef]);
   useUnmountDisposal(refs);
+  useRevealRequest(props, refs);
   return { onChange, onMount, formatDocument };
 }

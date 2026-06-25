@@ -130,6 +130,7 @@ function workflowFingerprint(request: RunRequest): string {
     modelId: request.modelId,
     governedHandoff: request.governedHandoff ?? null,
     governedHandoffSourceGroundedRunId: request.governedHandoffSourceGroundedRunId ?? null,
+    governedHandoffVoiceAction: request.governedHandoffVoiceAction ?? null,
     workingDirectory: workspaceRoot(request),
     dryRun: true,
     harnessVersion: HARNESS_VERSION,

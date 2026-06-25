@@ -21,12 +21,13 @@ import type {
   EvidenceManifest,
   GroundedAnswer,
   GroundedAskRequest,
-  GroundedWorkflowHandoffRequest,
-  GroundedWorkflowHandoffResponse,
   FilesDirectoryListing,
   FilesContentResponse,
   FilesPreviewResponse,
+  FilesSearchResponse,
   FilesTreeResponse,
+  GatewayReadinessOptions,
+  GatewayReadinessReport,
   EditorDocumentVersion,
   EditorCompletionContextSelectors,
   EditorCompletionWireRequest,
@@ -260,6 +261,19 @@ export async function setupGateway(body: GatewaySetupInput): Promise<GatewaySetu
   return response;
 }
 
+export async function runGatewayReadiness(
+  modelId?: string,
+  options?: GatewayReadinessOptions,
+): Promise<GatewayReadinessReport> {
+  return fetchJson<GatewayReadinessReport>("/api/gateway/readiness", {
+    method: "POST",
+    body: JSON.stringify({
+      ...(modelId === undefined ? {} : { modelId }),
+      ...(options === undefined ? {} : { options }),
+    }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Route 4 — workflows
 // ---------------------------------------------------------------------------
@@ -279,6 +293,16 @@ export interface StartRunInput {
   modelId: string;
   apply?: boolean;
   limits?: Record<string, unknown>;
+  governedHandoff?: Record<string, unknown>;
+  governedHandoffSourceGroundedRunId?: string;
+  voiceOrigin?: {
+    readonly profile: string;
+    readonly turnIndex: number;
+    readonly source: string;
+    readonly committedSegments: number;
+    readonly committedText: string;
+    readonly confirmationDigest?: string | undefined;
+  };
 }
 
 export async function startRun(
@@ -301,39 +325,6 @@ export async function enhancePrompt(
     method: "POST",
     body: JSON.stringify(body),
     ...(signal === undefined ? {} : { signal }),
-  });
-}
-
-export interface StartChatRunInput {
-  chatId: string;
-  projectPath: string;
-  run: StartRunInput;
-  user: {
-    content: string;
-    timestamp: number;
-  };
-  summary: {
-    content: string;
-    timestamp: number;
-  };
-}
-
-export async function startChatRun(body: StartChatRunInput): Promise<{
-  run: { runId: string; fingerprint: string };
-  messages: MessagesResponse["messages"];
-}> {
-  return fetchJson("/api/chats/runs", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
-export async function startGroundedWorkflowHandoff(
-  body: GroundedWorkflowHandoffRequest,
-): Promise<GroundedWorkflowHandoffResponse> {
-  return fetchJson("/api/chats/messages/grounded/handoff", {
-    method: "POST",
-    body: JSON.stringify(body),
   });
 }
 
@@ -909,6 +900,19 @@ export async function fetchFilesTree(root: string, path = ""): Promise<FilesTree
   params.set("root", root);
   if (path.length > 0) params.set("path", path);
   return fetchJson(`/api/files/tree?${params.toString()}`);
+}
+
+export async function fetchFilesSearch(
+  root: string,
+  query: string,
+  limit?: number,
+  init?: Pick<RequestInit, "signal">,
+): Promise<FilesSearchResponse> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  params.set("q", query);
+  if (limit !== undefined) params.set("limit", String(limit));
+  return fetchJson(`/api/files/search?${params.toString()}`, init);
 }
 
 export async function fetchFilesPreview(root: string, path: string): Promise<FilesPreviewResponse> {

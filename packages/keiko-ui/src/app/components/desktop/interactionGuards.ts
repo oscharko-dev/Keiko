@@ -60,6 +60,7 @@ export function isInteractiveSurfaceTarget(target: EventTarget | null): boolean 
         "[role='radio']",
         "[role='switch']",
         "[role='tab']",
+        "[data-text-selectable='true']",
         ".dlg-overlay",
         ".mc-dialog-backdrop",
         ".cmdk-overlay",
@@ -94,6 +95,7 @@ export function isInteractiveControlTarget(target: EventTarget | null): boolean 
         "[role='radio']",
         "[role='switch']",
         "[role='tab']",
+        "[data-text-selectable='true']",
       ].join(","),
     ) !== null
   );
@@ -102,8 +104,9 @@ export function isInteractiveControlTarget(target: EventTarget | null): boolean 
 export function isTextEntryTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return (
-    target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']") !==
-    null
+    target.closest(
+      "input, textarea, select, [contenteditable='true'], [contenteditable=''], [data-text-selectable='true']",
+    ) !== null
   );
 }
 
@@ -129,6 +132,7 @@ export function isHandToolKeyIgnoredTarget(target: EventTarget | null): boolean 
         "[role='radio']",
         "[role='switch']",
         "[role='tab']",
+        "[data-text-selectable='true']",
       ].join(","),
     ) !== null
   );

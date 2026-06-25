@@ -93,8 +93,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
     clearHistory: vi.fn(),
-    launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
-    launchGroundedWorkflowHandoff: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -680,6 +678,80 @@ describe("FilePreview", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("boom");
     expect(alert.textContent ?? "").not.toMatch(/excluded from the read surface for safety/i);
+  });
+
+  it("refreshes the open preview and confirms the updated file content", async () => {
+    vi.mocked(fetchFilesPreview)
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "hello.txt",
+        name: "hello.txt",
+        sizeBytes: 10,
+        modifiedAt: 1,
+        extension: "txt",
+        mime: "text/plain",
+        symlink: false,
+        kind: "text",
+        content: "old value\n",
+        truncated: false,
+        maxBytes: 1_000_000,
+      })
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "hello.txt",
+        name: "hello.txt",
+        sizeBytes: 10,
+        modifiedAt: 2,
+        extension: "txt",
+        mime: "text/plain",
+        symlink: false,
+        kind: "text",
+        content: "new value\n",
+        truncated: false,
+        maxBytes: 1_000_000,
+      });
+
+    render(<FilePreview root="/repo" path="hello.txt" onClose={() => undefined} />);
+
+    const previewRegion = await screen.findByRole("region", { name: "File preview: hello.txt" });
+    expect(previewRegion).toHaveTextContent("old value");
+    await userEvent.click(screen.getByRole("button", { name: "Refresh preview" }));
+
+    await waitFor(() => expect(fetchFilesPreview).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(previewRegion).toHaveTextContent("new value"));
+    expect(screen.getByRole("status")).toHaveTextContent("Reloaded");
+    expect(previewRegion).not.toHaveTextContent("old value");
+  });
+
+  it("keeps the last loaded preview visible when a manual refresh fails", async () => {
+    vi.mocked(fetchFilesPreview)
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "hello.txt",
+        name: "hello.txt",
+        sizeBytes: 10,
+        modifiedAt: 1,
+        extension: "txt",
+        mime: "text/plain",
+        symlink: false,
+        kind: "text",
+        content: "old value\n",
+        truncated: false,
+        maxBytes: 1_000_000,
+      })
+      .mockRejectedValueOnce(new Error("disk read failed"));
+
+    render(<FilePreview root="/repo" path="hello.txt" onClose={() => undefined} />);
+
+    const previewRegion = await screen.findByRole("region", { name: "File preview: hello.txt" });
+    expect(previewRegion).toHaveTextContent("old value");
+    await userEvent.click(screen.getByRole("button", { name: "Refresh preview" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("disk read failed");
+    expect(screen.getByText("Refresh failed")).toBeInTheDocument();
+    expect(previewRegion).toHaveTextContent("old value");
+    expect(fetchFilesPreview).toHaveBeenCalledTimes(2);
   });
 
   it("does not render a direct chat connector for the previewed file", async () => {

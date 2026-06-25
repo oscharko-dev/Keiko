@@ -89,7 +89,11 @@ async function chooseComboboxOption(
 
 async function renderAgentDialog(
   onConfirm = vi.fn(),
-  filesContext: { readonly id: string; readonly root: string; readonly activeFilePath?: string } = {
+  filesContext: {
+    readonly id: string;
+    readonly root: string;
+    readonly activeFilePath?: string;
+  } | null = {
     id: "files-1",
     root: "/repo",
     activeFilePath: "/repo/src/app.ts",
@@ -106,9 +110,7 @@ async function renderAgentDialog(
     />,
   );
   await waitFor(() =>
-    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
-      "example-chat-model",
-    ),
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("example-chat-model"),
   );
   return onConfirm;
 }
@@ -333,6 +335,138 @@ describe("NewWindowDialog agents: start-run contract", () => {
     );
   });
 
+  it("keeps Repository Browse disabled without a seed while manual repository entry remains available", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "example-chat-model" })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+
+    render(
+      <NewWindowDialog
+        type="agents"
+        types={WIN_TYPES}
+        filesContext={null}
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("Repository is required.")).toBeInTheDocument());
+    const repositoryInput = screen.getByPlaceholderText("/absolute/repository/path");
+    expect(repositoryInput).not.toHaveAttribute("disabled");
+    const repositoryBrowse = screen.getByRole("button", { name: "Browse" });
+    expect(repositoryBrowse).toBeDisabled();
+    expect(repositoryBrowse).toHaveAttribute("aria-describedby", "agent-repository-browse-help");
+    expect(
+      screen.getByText("Enter an absolute repository path to enable Browse."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(repositoryBrowse);
+
+    expect(fetchFilesDirectories).not.toHaveBeenCalled();
+    expect(screen.queryByRole("group", { name: "Directory picker" })).toBeNull();
+  });
+
+  it("seeds Repository Browse from the first online registered project when no Files context is connected", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "example-chat-model" })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({
+      projects: [project("/offline", "Offline", false), project("/repo", "Repo", true)],
+    });
+    vi.mocked(fetchFilesDirectories).mockResolvedValueOnce({
+      path: "/repo",
+      parent: null,
+      roots: [],
+      entries: [],
+    });
+
+    render(
+      <NewWindowDialog
+        type="agents"
+        types={WIN_TYPES}
+        filesContext={null}
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const repositoryBrowse = await screen.findByRole("button", { name: "Browse" });
+    await waitFor(() => expect(repositoryBrowse).not.toBeDisabled());
+    await user.click(repositoryBrowse);
+
+    expect(screen.getByPlaceholderText("/absolute/repository/path")).toHaveValue("/repo");
+    expect(await screen.findByRole("group", { name: "Directory picker" })).toBeInTheDocument();
+    expect(fetchFilesDirectories).toHaveBeenCalledWith("/repo", "/repo");
+  });
+
+  it("disables Source file Browse until the repository path is selected and registered", async () => {
+    const user = userEvent.setup();
+    await renderAgentDialog(vi.fn(), null);
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [],
+    });
+
+    const sourceBrowse = screen.getByRole("button", { name: "Browse source file" });
+    expect(sourceBrowse).toBeDisabled();
+    expect(sourceBrowse).toHaveAttribute("aria-describedby", "agent-source-file-browse-help");
+    expect(
+      screen.getByText("Select a registered repository before browsing source files."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("/absolute/repository/path"), {
+      target: { value: "/repo" },
+    });
+
+    await waitFor(() => expect(sourceBrowse).not.toBeDisabled());
+    await user.click(sourceBrowse);
+
+    expect(await screen.findByRole("group", { name: "File picker" })).toBeInTheDocument();
+    expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "");
+  });
+
+  it("renders Bugfix Agent Cancel and Start actions together without the outer footer", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    mockAgentDependencies();
+
+    render(
+      <NewWindowDialog
+        type="agents"
+        types={WIN_TYPES}
+        filesContext={{ id: "files-1", root: "/repo" }}
+        onConfirm={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
+        "example-chat-model",
+      ),
+    );
+    await chooseComboboxOption(
+      user,
+      screen.getByRole("combobox", { name: "Agent" }),
+      "Bugfix Agent",
+    );
+
+    const startButton = screen.getByRole("button", { name: "Start Bugfix Agent" });
+    const actions = startButton.closest(".dlg-agent-actions");
+    expect(actions).not.toBeNull();
+    expect(
+      within(actions as HTMLElement).getByRole("button", { name: "Cancel" }),
+    ).toBeInTheDocument();
+    expect(document.querySelector(".dlg-foot")).toBeNull();
+
+    await user.click(within(actions as HTMLElement).getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps bug-investigation disabled until evidence exists and then starts with the full report", async () => {
     const user = userEvent.setup();
     await renderAgentDialog(vi.fn(), { id: "files-1", root: "/repo" });
@@ -343,9 +477,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
       "Bugfix Agent",
     );
     expect(screen.getByText(/Bugfix Agent requires an observed behavior/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start Bugfix Agent" })).toHaveAttribute(
-      "disabled",
-    );
+    expect(screen.getByRole("button", { name: "Start Bugfix Agent" })).toHaveAttribute("disabled");
 
     fireEvent.change(screen.getByPlaceholderText("Describe the observed bug."), {
       target: { value: "Answer ignores the attached PDF." },
@@ -475,10 +607,7 @@ describe("NewWindowDialog agents: start-run contract", () => {
 describe("NewWindowDialog directory picker", () => {
   it("loads registered projects for Files windows and selects a browsed root", async () => {
     vi.mocked(fetchProjects).mockResolvedValue({
-      projects: [
-        project(),
-        project("/offline", "Offline", false),
-      ],
+      projects: [project(), project("/offline", "Offline", false)],
     });
     vi.mocked(fetchFilesDirectories).mockResolvedValueOnce({
       path: "/repo",
@@ -539,10 +668,7 @@ describe("NewWindowDialog directory picker", () => {
 describe("NewWindowDialog dialog controls and Files defaults", () => {
   it("prefills the first available Files project without using offline roots", async () => {
     vi.mocked(fetchProjects).mockResolvedValue({
-      projects: [
-        project("/offline", "Offline", false),
-        project(),
-      ],
+      projects: [project("/offline", "Offline", false), project()],
     });
 
     render(
@@ -597,15 +723,15 @@ describe("NewWindowDialog dialog controls and Files defaults", () => {
 
   it("supports global Escape and traps Tab inside the modal buttons", () => {
     const onClose = vi.fn();
-    render(
-      <NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={vi.fn()} onClose={onClose} />,
-    );
+    render(<NewWindowDialog type="chat" types={WIN_TYPES} onConfirm={vi.fn()} onClose={onClose} />);
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
 
     const dialog = screen.getByRole("dialog");
-    const closeButton = within(dialog).getAllByRole("button", { name: "Cancel" })[0] as HTMLButtonElement;
+    const closeButton = within(dialog).getAllByRole("button", {
+      name: "Cancel",
+    })[0] as HTMLButtonElement;
     const openButton = within(dialog).getByRole("button", { name: "Open Chat" });
 
     closeButton.focus();

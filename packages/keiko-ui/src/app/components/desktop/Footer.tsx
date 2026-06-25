@@ -103,12 +103,11 @@ export function Footer({
       <span className="ft-window-wrap" ref={windowPaletteRef}>
         <button
           type="button"
-          className="ft-seg ft-accent ft-window-trigger ui-tip"
+          className="ft-seg ft-accent ft-window-trigger"
           aria-atomic="true"
           aria-expanded={windowPaletteOpen}
           aria-controls="footer-window-palette"
           disabled={winCount === 0}
-          data-tip="Open windows"
           onClick={onToggleWindowPalette}
         >
           <Icons.tile size={13} /> {windowLabel}
@@ -117,7 +116,7 @@ export function Footer({
           <div
             id="footer-window-palette"
             className="ft-window-palette"
-            role="menu"
+            role="group"
             aria-label="Open windows"
           >
             <div className="ft-window-palette-head">Open windows</div>
@@ -134,7 +133,6 @@ export function Footer({
                     key={win.id}
                     type="button"
                     className="ft-window-card"
-                    role="menuitem"
                     data-minimized={win.minimized === true ? "true" : "false"}
                     aria-label={`${actionLabel} ${def.title} window${sub !== null ? ` - ${sub}` : ""}`}
                     onClick={() => onSelectWindow(win.id)}

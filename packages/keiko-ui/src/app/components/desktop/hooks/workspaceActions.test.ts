@@ -5,6 +5,11 @@
 import { describe, expect, it } from "vitest";
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
 import {
+  activeEditorPane,
+  createEditorLayoutStateV2,
+  serializeEditorLayoutStateV2,
+} from "@oscharko-dev/keiko-contracts";
+import {
   MAX_SCOPES,
   appendConnectorScope,
   appendScope,
@@ -39,6 +44,19 @@ function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-
 
 function scope(root: string, connectedAtMs = 1): ChatConnectedScope {
   return { kind: "workspace-root", relativePaths: [], root, connectedAtMs };
+}
+
+function editorLayoutJson(root: string, file: string, openFiles: readonly string[]): string {
+  return serializeEditorLayoutStateV2(
+    createEditorLayoutStateV2({
+      root,
+      file,
+      openFiles,
+      defaultSidebarWidth: 260,
+      minSidebarWidth: 180,
+      maxSidebarWidth: 440,
+    }),
+  );
 }
 
 describe("effectiveScopes", () => {
@@ -1309,6 +1327,161 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
     h.add("qiRun", { runId: "qi-run-1" });
     h.add("qiRun", { runId: "qi-run-2" });
     expect(h.cards()).toHaveLength(2);
+  });
+});
+
+describe("makeMutations.openEditorFile", () => {
+  function harness(initial: readonly AppWindow[] = [], vp: typeof layoutViewport | null = layoutViewport): {
+    readonly openEditorFile: ReturnType<typeof makeMutations>["openEditorFile"];
+    readonly wins: () => readonly AppWindow[];
+  } {
+    const store = { value: [...initial] as AppWindow[] | null };
+    const zc: MutableRefObject<number> = { current: 10 };
+    const winsRef: MutableRefObject<AppWindow[]> = { current: store.value ?? [] };
+    const { openEditorFile } = makeMutations({
+      setWins: (update) => {
+        applyState(store, update);
+        winsRef.current = store.value ?? [];
+      },
+      zc,
+      worldVP: () => vp,
+      winsRef,
+    });
+    return { openEditorFile, wins: () => store.value ?? [] };
+  }
+
+  it("reuses the editor for the same root and reveals the requested line range", () => {
+    const editor = {
+      ...win(
+        "editor",
+        { root: "/repo", file: "src/old.ts", openFiles: ["src/old.ts"] },
+        "editor-1",
+      ),
+      minimized: true,
+    };
+    const h = harness([editor, win("chat", {}, "chat-1")]);
+
+    const result = h.openEditorFile({
+      root: "/repo/",
+      path: "/packages/keiko-harness/src/context.ts",
+      lineStart: 50,
+      lineEnd: 57,
+    });
+
+    expect(result).toEqual({ ok: true, windowId: "editor-1" });
+    const editors = h.wins().filter((w) => w.type === "editor");
+    expect(editors).toHaveLength(1);
+    expect(editors[0]).toMatchObject({
+      id: "editor-1",
+      minimized: false,
+      cfg: {
+        root: "/repo",
+        file: "packages/keiko-harness/src/context.ts",
+        openFiles: ["src/old.ts", "packages/keiko-harness/src/context.ts"],
+        revealLineStart: 50,
+        revealLineEnd: 57,
+      },
+    });
+    expect(typeof editors[0]?.cfg["revealRequestId"]).toBe("string");
+  });
+
+  it("updates a reused editor's persisted layout so a stale active tab cannot override the target", () => {
+    const staleFile = "packages/keiko-harness/src/context.test.ts";
+    const targetFile = "packages/keiko-harness/src/context.ts";
+    const h = harness([
+      win(
+        "editor",
+        {
+          root: "/repo",
+          file: staleFile,
+          openFiles: [staleFile],
+          layoutJson: editorLayoutJson("/repo", staleFile, [staleFile]),
+        },
+        "editor-1",
+      ),
+    ]);
+
+    const result = h.openEditorFile({
+      root: "/repo",
+      path: targetFile,
+      lineStart: 50,
+      lineEnd: 57,
+    });
+
+    expect(result).toEqual({ ok: true, windowId: "editor-1" });
+    const editor = h.wins().find((w) => w.id === "editor-1");
+    if (editor === undefined) throw new Error("Expected reused editor window.");
+    expect(editor.cfg).toMatchObject({
+      file: targetFile,
+      openFiles: [staleFile, targetFile],
+      revealLineStart: 50,
+      revealLineEnd: 57,
+    });
+    const openFiles = editor.cfg["openFiles"];
+    const layout = createEditorLayoutStateV2({
+      root: "/repo",
+      file: String(editor.cfg["file"] ?? ""),
+      openFiles: Array.isArray(openFiles) ? openFiles : [],
+      layoutJson: typeof editor.cfg["layoutJson"] === "string" ? editor.cfg["layoutJson"] : undefined,
+      defaultSidebarWidth: 260,
+      minSidebarWidth: 180,
+      maxSidebarWidth: 440,
+    });
+    expect(activeEditorPane(layout).activeFile).toBe(targetFile);
+    expect(activeEditorPane(layout).openFiles).toEqual([staleFile, targetFile]);
+  });
+
+  it("opens a new editor for a new root without duplicating an existing different-root editor", () => {
+    const h = harness([
+      win("editor", { root: "/repo-a", file: "src/a.ts", openFiles: ["src/a.ts"] }, "editor-a"),
+    ]);
+
+    const result = h.openEditorFile({ root: "/repo-b", path: "src/b.ts", lineStart: 8 });
+
+    expect(result.ok).toBe(true);
+    expect(h.wins().filter((w) => w.type === "editor")).toHaveLength(2);
+    const opened = h.wins().find((w) => w.type === "editor" && w.id !== "editor-a");
+    expect(opened).toMatchObject({
+      type: "editor",
+      cfg: {
+        root: "/repo-b",
+        file: "src/b.ts",
+        openFiles: ["src/b.ts"],
+        revealLineStart: 8,
+        revealLineEnd: 8,
+      },
+    });
+  });
+
+  it("returns a user-facing error when viewport geometry is unavailable", () => {
+    const h = harness([], null);
+
+    const result = h.openEditorFile({ root: "/repo", path: "src/a.ts" });
+
+    expect(result).toEqual({
+      ok: false,
+      message: "Unable to open editor because the workspace viewport is not ready.",
+    });
+    expect(h.wins()).toEqual([]);
+  });
+
+  it("returns success synchronously even when React defers the queued state updater", () => {
+    const editor = win("editor", { root: "/repo", file: "src/old.ts" }, "editor-1");
+    const queued: SetStateAction<AppWindow[] | null>[] = [];
+    const winsRef: MutableRefObject<AppWindow[]> = { current: [editor] };
+    const { openEditorFile } = makeMutations({
+      setWins: (update) => {
+        queued.push(update);
+      },
+      zc: { current: 1 },
+      worldVP: () => layoutViewport,
+      winsRef,
+    });
+
+    const result = openEditorFile({ root: "/repo", path: "src/new.ts", lineStart: 3 });
+
+    expect(result).toEqual({ ok: true, windowId: "editor-1" });
+    expect(queued).toHaveLength(1);
   });
 });
 

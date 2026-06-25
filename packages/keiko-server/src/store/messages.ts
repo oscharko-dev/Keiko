@@ -8,6 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   ChatMessage,
   ChatRole,
+  GroundedAnswer,
   NewChatMessage,
   UpdateChatMessagePatch,
   WorkflowStatus,
@@ -40,9 +41,20 @@ interface MessageRow {
   readonly workflow_status: string | null;
   readonly short_result: string | null;
   readonly task_type: string | null;
+  readonly grounded_answer_json: string | null;
+}
+
+function parseGroundedAnswer(raw: string | null): GroundedAnswer | undefined {
+  if (raw === null) return undefined;
+  try {
+    return JSON.parse(raw) as GroundedAnswer;
+  } catch {
+    return undefined;
+  }
 }
 
 function rowToMessage(row: MessageRow): ChatMessage {
+  const groundedAnswer = parseGroundedAnswer(row.grounded_answer_json);
   return {
     id: row.id,
     chatId: row.chat_id,
@@ -54,11 +66,12 @@ function rowToMessage(row: MessageRow): ChatMessage {
     workflowStatus: (row.workflow_status ?? undefined) as WorkflowStatus | undefined,
     shortResult: row.short_result ?? undefined,
     taskType: row.task_type ?? undefined,
+    ...(groundedAnswer === undefined ? {} : { groundedAnswer }),
   };
 }
 
 const COLUMNS =
-  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type";
+  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json";
 
 const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, rowid ASC`;
 const SQL_LIST_LIMITED = `${SQL_LIST} LIMIT ?`;
@@ -66,8 +79,8 @@ const SQL_FIND_BY_ID = `SELECT ${COLUMNS} FROM chat_messages WHERE id = ? LIMIT 
 const SQL_CHAT_EXISTS = "SELECT 1 FROM chats WHERE id = ?";
 const SQL_INSERT = `
 INSERT INTO chat_messages
-  (id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  (id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING ${COLUMNS}
 `;
 
@@ -100,6 +113,9 @@ function validateRunSummaryScope(msg: NewChatMessage): void {
   if (hasRunSummaryFields(msg) && (msg.role !== "system" || msg.runId === undefined)) {
     throw invalidRequest("Run summary fields require a system message with runId.");
   }
+  if (msg.groundedAnswer !== undefined && msg.role !== "assistant") {
+    throw invalidRequest("Grounded answer metadata requires an assistant message.");
+  }
 }
 
 function validateMessage(msg: NewChatMessage): void {
@@ -120,6 +136,20 @@ function processShortResult(
   if (raw === undefined) return null;
   const redacted = redactString(raw);
   return redacted.length > MAX_SHORT_RESULT ? redacted.slice(0, MAX_SHORT_RESULT) : redacted;
+}
+
+function processGroundedAnswer(
+  raw: GroundedAnswer | undefined,
+  redactString: (s: string) => string,
+): string | null {
+  if (raw === undefined) return null;
+  const redacted = redactString(JSON.stringify(raw));
+  try {
+    JSON.parse(redacted);
+  } catch {
+    throw invalidRequest("Grounded answer metadata is invalid.");
+  }
+  return redacted;
 }
 
 export function listMessages(db: DatabaseSync, chatId: string): readonly ChatMessage[] {
@@ -154,6 +184,7 @@ export function insertMessage(
   const chatExists = db.prepare(SQL_CHAT_EXISTS).get(msg.chatId) !== undefined;
   if (!chatExists) throw notFound("Chat");
   const shortResult = processShortResult(msg.shortResult, redactString);
+  const groundedAnswer = processGroundedAnswer(msg.groundedAnswer, redactString);
   const row = db
     .prepare(SQL_INSERT)
     .get(
@@ -167,7 +198,29 @@ export function insertMessage(
       msg.workflowStatus ?? null,
       shortResult,
       msg.taskType ?? null,
+      groundedAnswer,
     ) as unknown as MessageRow;
+  return rowToMessage(row);
+}
+
+export function attachGroundedAnswer(
+  db: DatabaseSync,
+  id: string,
+  answer: GroundedAnswer,
+  redactString: (s: string) => string,
+): ChatMessage {
+  const groundedAnswer = processGroundedAnswer(answer, redactString);
+  const row = db
+    .prepare(
+      `
+        UPDATE chat_messages
+        SET grounded_answer_json = ?
+        WHERE id = ? AND role = 'assistant'
+        RETURNING ${COLUMNS}
+      `,
+    )
+    .get(groundedAnswer, id) as unknown as MessageRow | undefined;
+  if (row === undefined) throw notFound("Message");
   return rowToMessage(row);
 }
 
