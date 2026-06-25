@@ -155,6 +155,7 @@ const ACTION_HINT_BY_PREFLIGHT_FINDING: Readonly<
   "detached-head": "recover-via-strategy",
   "branch-already-exists": "retry",
   "base-branch-missing": "retry",
+  "switch-target-missing": "retry",
   "no-changes-to-stage": "stage-changes",
   "nothing-staged-to-unstage": "stage-changes",
   "nothing-staged-to-commit": "stage-changes",

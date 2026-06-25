@@ -88,6 +88,31 @@ describe("node git mutation adapter — successful local mutations", () => {
     expect(git(["branch", "--list", "feature/x"])).toContain("feature/x");
   });
 
+  it("switches HEAD to an existing branch through the governed boundary (#475)", async () => {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const ad = adapter();
+    await ad.stage({ pathspecs: ["a.txt"] });
+    await ad.commit({ message: "base", allowEmpty: false });
+    const startBranch = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+    await ad.createBranch({ branchName: "feature/x", startPointRefHash: "HEAD" });
+
+    const switched = await ad.switchBranch({ branchName: "feature/x" });
+    expect(switched.outcome).toBe("succeeded");
+    expect(git(["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("feature/x");
+    expect(git(["rev-parse", "--abbrev-ref", "HEAD"]).trim()).not.toBe(startBranch);
+  });
+
+  it("reports precondition-failed when switching to a non-existent branch (#475)", async () => {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const ad = adapter();
+    await ad.stage({ pathspecs: ["a.txt"] });
+    await ad.commit({ message: "base", allowEmpty: false });
+
+    const failed = await ad.switchBranch({ branchName: "feature/does-not-exist" });
+    expect(failed.outcome).toBe("failed");
+    expect(failed.errorCode).toBe("precondition-failed");
+  });
+
   it("unstages a staged file", async () => {
     writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
     const ad = adapter();

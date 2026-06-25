@@ -61,6 +61,11 @@ export interface GitBranchCreateCommand {
   readonly startPointRefHash: string;
 }
 
+export interface GitBranchSwitchCommand {
+  readonly kind: "branch-switch";
+  readonly branchName: string;
+}
+
 export interface GitStageCommand {
   readonly kind: "stage";
   readonly pathspecs: readonly string[];
@@ -93,6 +98,7 @@ export interface GitRecoveryCommand {
 
 export type GitMutationCommand =
   | GitBranchCreateCommand
+  | GitBranchSwitchCommand
   | GitStageCommand
   | GitUnstageCommand
   | GitCommitCommand
@@ -195,6 +201,8 @@ function deriveResolvedInputs(
         baseBranchName: command.baseBranchName,
         startPointRefHash: command.startPointRefHash,
       };
+    case "branch-switch":
+      return { kind: "branch-switch", branchName: command.branchName };
     case "stage":
       return {
         kind: "stage",
@@ -234,7 +242,9 @@ function targetBranchName(
   command: GitMutationCommand,
   snapshot: GitWorktreeSnapshot,
 ): string | undefined {
-  if (command.kind === "branch-create") {
+  if (command.kind === "branch-create" || command.kind === "branch-switch") {
+    // For create, the new branch; for switch, the branch HEAD will point at after the switch — both
+    // are what a branch-pattern policy constraint must be evaluated against.
     return command.branchName;
   }
   return snapshot.currentBranchName;
@@ -273,6 +283,7 @@ function previewFileCount(
     case "recovery":
       return command.affectedPathspecs.length;
     case "branch-create":
+    case "branch-switch":
     case "abort":
       return undefined;
     default:
@@ -393,6 +404,8 @@ function dispatchExecution(
         branchName: command.branchName,
         startPointRefHash: command.startPointRefHash,
       });
+    case "branch-switch":
+      return adapter.switchBranch({ branchName: command.branchName });
     case "stage":
       return adapter.stage({ pathspecs: command.pathspecs });
     case "unstage":

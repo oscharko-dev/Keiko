@@ -133,6 +133,7 @@ export {
 export {
   buildAbortArgv,
   buildBranchCreateArgv,
+  buildBranchSwitchArgv,
   buildCommitArgv,
   buildRecoveryArgv,
   buildStageArgv,
@@ -143,6 +144,7 @@ export {
   GitMutationArgvError,
   type GitAbortExecRequest,
   type GitBranchCreateExecRequest,
+  type GitBranchSwitchExecRequest,
   type GitCommitExecRequest,
   type GitLocalMutationAdapter,
   type GitMutationArgvPlan,
@@ -156,6 +158,7 @@ export {
   runGitMutation,
   type GitAbortCommand,
   type GitBranchCreateCommand,
+  type GitBranchSwitchCommand,
   type GitCommitCommand,
   type GitMutationCommand,
   type GitMutationJournal,
@@ -173,6 +176,12 @@ export {
   type GitDeliveryEvidenceBuildInput,
   type GitDeliveryEvidenceSnapshot,
 } from "./git-mutation-evidence.js";
+
+// ─── Governed local Git flows: commit-intent summary (Issue #475) ──────────────────────────────
+// The PURE commit-intent summarizer reduces staged paths into the content-free GitCommitChangeSummary.
+// The live worktree READER carries the Node spawn effect and is therefore NOT re-exported here; it is
+// reachable via the `./internal/git-mutation` subpath (alongside createNodeGitMutationAdapter).
+export { MAX_COMMIT_SUMMARY_AREAS, summarizeStagedChangeset } from "./git-commit-intent-node.js";
 
 // ─── Browser sub-surface (ADR-0017) ─────────────────────────────────────────────────
 export { BROWSER_ERROR_CODES, BrowserToolError, type BrowserErrorCode } from "./browser/errors.js";

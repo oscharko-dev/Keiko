@@ -51,6 +51,7 @@ export type GitPreflightFindingCode =
   | "detached-head"
   | "branch-already-exists"
   | "base-branch-missing"
+  | "switch-target-missing"
   | "no-changes-to-stage"
   | "nothing-staged-to-unstage"
   | "nothing-staged-to-commit"
@@ -68,6 +69,7 @@ export const GIT_PREFLIGHT_FINDING_CODES: readonly GitPreflightFindingCode[] = [
   "detached-head",
   "branch-already-exists",
   "base-branch-missing",
+  "switch-target-missing",
   "no-changes-to-stage",
   "nothing-staged-to-unstage",
   "nothing-staged-to-commit",
@@ -97,6 +99,7 @@ const FINDING_REMEDIATION: Readonly<Record<GitPreflightFindingCode, GitPreflight
   "detached-head": "user-actionable",
   "branch-already-exists": "user-actionable",
   "base-branch-missing": "user-actionable",
+  "switch-target-missing": "user-actionable",
   "no-changes-to-stage": "user-actionable",
   "nothing-staged-to-unstage": "user-actionable",
   "nothing-staged-to-commit": "user-actionable",
@@ -182,6 +185,24 @@ function preflightBranchCreate(
   }
   if (snapshot.headDetached) {
     findings.push(advisory("detached-head"));
+  }
+  return findings;
+}
+
+function preflightBranchSwitch(
+  inputs: Extract<GitDeliveryResolvedInputs, { kind: "branch-switch" }>,
+  snapshot: GitWorktreeSnapshot,
+): readonly GitPreflightFinding[] {
+  const findings: GitPreflightFinding[] = [];
+  // The switch target must be an existing local branch (the governed flow switches between known
+  // branches; creating-then-switching is a branch-create followed by a branch-switch). The branch the
+  // worktree is already on is trivially "existing", so a redundant switch is not blocked.
+  if (!branchExists(snapshot, inputs.branchName)) {
+    findings.push(blocking("switch-target-missing"));
+  }
+  if (snapshot.operationInProgress !== undefined) {
+    // Switching mid-merge/rebase abandons the sequencing operation's context; surface without halting.
+    findings.push(advisory("operation-in-progress"));
   }
   return findings;
 }
@@ -306,6 +327,7 @@ type PreflightDispatch = { readonly [K in GitDeliveryActionKind]: PreflightEvalu
 
 const PREFLIGHT_DISPATCH: PreflightDispatch = {
   "branch-create": preflightBranchCreate,
+  "branch-switch": preflightBranchSwitch,
   stage: preflightStage,
   unstage: preflightUnstage,
   commit: preflightCommit,

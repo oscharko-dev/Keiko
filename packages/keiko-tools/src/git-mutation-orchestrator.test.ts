@@ -70,6 +70,7 @@ function fakeAdapter(behavior: GitDeliveryExecutionResult | (() => never)): Fake
   return {
     adapter: {
       createBranch: run,
+      switchBranch: run,
       stage: run,
       unstage: run,
       commit: run,
@@ -145,6 +146,42 @@ describe("orchestrator — successful execution", () => {
     const first = await runGitMutation(request(), fixed());
     const second = await runGitMutation(request(), fixed());
     expect(second).toEqual(first);
+  });
+});
+
+// ─── #475: governed branch-switch ──────────────────────────────────────────────────────────────
+
+describe("orchestrator — branch-switch", () => {
+  const SWITCH: GitMutationCommand = { kind: "branch-switch", branchName: "feature/x" };
+
+  it("executes a switch to an existing branch and targets the switched-to branch", async () => {
+    const fake = fakeAdapter(exec("succeeded"));
+    const result = await runGitMutation(
+      request(SWITCH),
+      deps(fake.adapter, {
+        snapshot: snapshot({ existingLocalBranchNames: ["main", "feature/x"] }),
+      }),
+    );
+    expect(result.outcome.status).toBe("succeeded");
+    expect(result.phaseReached).toBe("result");
+    expect(fake.callCount()).toBe(1);
+    // The policy/preview target is the branch HEAD will point at after the switch.
+    expect(result.envelope.preview?.affectedBranchName).toBe("feature/x");
+    expect(result.envelope.kind).toBe("branch-switch");
+  });
+
+  it("blocks at preflight when the switch target does not exist (never calls the adapter)", async () => {
+    const fake = fakeAdapter(exec("succeeded"));
+    const result = await runGitMutation(
+      request(SWITCH),
+      deps(fake.adapter, { snapshot: snapshot({ existingLocalBranchNames: ["main"] }) }),
+    );
+    expect(result.outcome.status).toBe("blocked");
+    expect(result.phaseReached).toBe("preflight");
+    expect(fake.callCount()).toBe(0);
+    if (result.outcome.status === "blocked" && result.outcome.category === "preflight-block") {
+      expect(result.outcome.findings.map((f) => f.code)).toContain("switch-target-missing");
+    }
   });
 });
 

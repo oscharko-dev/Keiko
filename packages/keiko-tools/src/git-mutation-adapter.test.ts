@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAbortArgv,
   buildBranchCreateArgv,
+  buildBranchSwitchArgv,
   buildCommitArgv,
   buildRecoveryArgv,
   buildStageArgv,
@@ -21,6 +22,15 @@ describe("argv builders — fixed, governed argument vectors", () => {
     expect(buildBranchCreateArgv({ branchName: "feature/x", startPointRefHash: "abc123" })).toEqual(
       [["branch", "feature/x", "abc123"]],
     );
+  });
+
+  it("branch-switch builds `git switch <name>` (branch-only, no path checkout)", () => {
+    expect(buildBranchSwitchArgv({ branchName: "feature/x" })).toEqual([["switch", "feature/x"]]);
+  });
+
+  it("branch-switch rejects a flag-injecting branch name", () => {
+    expect(() => buildBranchSwitchArgv({ branchName: "-D" })).toThrow(GitMutationArgvError);
+    expect(() => buildBranchSwitchArgv({ branchName: "" })).toThrow(GitMutationArgvError);
   });
 
   it("stage places pathspecs after the `--` sentinel", () => {
@@ -178,6 +188,7 @@ describe("boundary complementarity with the read-only terminal policy", () => {
     // branch operand, which the terminal policy denies.)
     const plans = [
       ...buildBranchCreateArgv({ branchName: "feature/x", startPointRefHash: "abc123" }),
+      ...buildBranchSwitchArgv({ branchName: "feature/x" }),
       ...buildStageArgv({ pathspecs: ["a.ts"] }),
       ...buildUnstageArgv({ pathspecs: ["a.ts"] }),
       ...buildCommitArgv({ message: "m", allowEmpty: false }),
