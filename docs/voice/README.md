@@ -10,7 +10,8 @@ The authoritative decision record is
 expand each decision into detailed contracts that the child issues (#493–#506) reference. Epic closure is
 recorded by Issue [#506](https://github.com/oscharko-dev/Keiko/issues/506) in
 [production-readiness.md](production-readiness.md) and
-[ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md) (documentation only).
+[ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md) (documentation only). The epic-level
+coordination closure ledger is recorded in [epic-491-closure.md](epic-491-closure.md).
 
 ## Documents
 
@@ -34,6 +35,7 @@ recorded by Issue [#506](https://github.com/oscharko-dev/Keiko/issues/506) in
 | [evaluation-harness.md](evaluation-harness.md)               | Implemented (#505): capstone evaluation harness proving all six deployment profiles are machine-checkable and Acceptance Criteria 1–6 hold structurally without a live voice provider; CI-safe deterministic suite at the keiko-contracts boundary; eleven dimensions mapping to ACs ([ADR-0068](../adr/ADR-0068-voice-evaluation-harness.md)).                                |
 
 | [production-readiness.md](production-readiness.md) | Closure (#506): the formal production-readiness gate for regulated deployments — the AC1–AC6 closure checklist, capability-matrix evidence, security/privacy review record, dependency/supply-chain confirmation, deployment-profile references, and named known limitations ([ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md)). |
+| [epic-491-closure.md](epic-491-closure.md) | Closure: the epic-level coordination closure record — the Definition-of-Done acceptance ledger, child delivery rollup, and the independent re-verification performed at epic closure. Distinct from the #506 regulated-readiness gate. |
 
 ## Core invariants (summary)
 
