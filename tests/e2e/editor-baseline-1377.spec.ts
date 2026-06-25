@@ -54,7 +54,10 @@ function tabHit(pane: Locator, file: string): Locator {
 }
 
 function tabFor(pane: Locator, file: string): Locator {
-  return pane.locator(EDITOR_SELECTORS.tab).filter({ hasText: file });
+  // The dirty/active state lives on the outer `.ed-tab` span that wraps the file's `.ed-tab-hit`.
+  return pane.locator(
+    `${EDITOR_SELECTORS.tab}:has(${EDITOR_SELECTORS.tabHit}[data-tip="${file}"])`,
+  );
 }
 
 function closeButton(pane: Locator, file: string): Locator {
@@ -263,7 +266,8 @@ async function scenarioAccessibility(page: Page): Promise<void> {
   await expect(workspace.locator(EDITOR_SELECTORS.tablist)).toHaveCount(1);
   await expect(pane.getByRole("tab", { name: APP_FILE })).toBeVisible();
 
-  // Alt+Arrow switches the active tab from the keyboard while focus stays within the tablist.
+  // Alt+ArrowRight reorders the active tab within the tablist via the keyboard; focus stays on a
+  // tab so a keyboard user does not lose their place.
   const appTab = tabHit(pane, APP_FILE);
   await appTab.focus();
   await appTab.press("Alt+ArrowRight");
@@ -293,6 +297,8 @@ async function scenarioAccessibility(page: Page): Promise<void> {
   await closeButton(pane, APP_FILE).click();
   const dialog = workspace.locator(EDITOR_SELECTORS.dirtyDialog);
   await expect(dialog).toBeVisible();
+  // The modal labels itself via its heading, takes focus on open, and Escape dismisses it.
+  await expect(dialog).toHaveAttribute("aria-labelledby", EDITOR_SELECTORS.dirtyDialogTitleId);
   await expect(dialog).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
