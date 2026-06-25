@@ -22,6 +22,9 @@ export * as DiscussionEval from "./discussion/index.js";
 // Voice Session Recap evaluation suite (Epic #491, Issue #504; ADR-0067). Exposed as a single auditable
 // namespace, mirroring the `DiscussionEval` convention above.
 export * as VoiceRecapEval from "./voice-recap/index.js";
+// Voice Digital Twin evaluation suite (Epic #491, Issue #505 — the capstone; ADR-0068). Exposed as a
+// single auditable namespace, mirroring the `VoiceRecapEval` convention above.
+export * as VoiceTwinEval from "./voice-twin/index.js";
 export {
   ALL_FIXTURES,
   SUITE_NAMES,
