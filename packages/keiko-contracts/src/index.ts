@@ -183,11 +183,14 @@ export type {
 } from "./editor-agent.js";
 export {
   EDITOR_AGENT_SCHEMA_VERSION,
+  isContainedAgentPath,
   isEditorAgentAction,
   isEditorAgentActionResult,
+  isEditorAgentConflictCode,
   isEditorAgentSessionSnapshot,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
+  validateAgentTextEdits,
 } from "./editor-agent.js";
 
 // ─── Language service (Issue #1198) ───────────────────────────────────────────────

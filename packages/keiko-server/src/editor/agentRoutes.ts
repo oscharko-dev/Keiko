@@ -1,16 +1,33 @@
 import type { ServerResponse } from "node:http";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
+  isContainedAgentPath,
   isEditorAgentAction,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
+  validateAgentTextEdits,
   type EditorAgentAction,
   type EditorAgentActionResult,
   type EditorAgentEvent,
   type EditorAgentSessionSnapshot,
   type EditorAgentSnapshotTextMode,
+  type LanguageRange,
 } from "@oscharko-dev/keiko-contracts";
-import { errorBody, STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
+import {
+  computeFileContent,
+  validatePatch,
+  type PatchFileChange,
+  type PatchValidation,
+} from "@oscharko-dev/keiko-tools";
+import { resolveWithinWorkspace, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  errorBody,
+  STREAMING,
+  type HandlerOutcome,
+  type RouteContext,
+  type RouteResult,
+} from "../routes.js";
 import { SSE_HEADERS, readyMessage } from "../sse.js";
 import { readJsonObject } from "../files.js";
 
@@ -51,7 +68,10 @@ function emit(event: EditorAgentEventPayload): void {
   for (const subscriber of subscribers) subscriber(envelope);
 }
 
-function utf8Prefix(text: string, maxBytes: number): { readonly text: string; readonly truncated: boolean } {
+function utf8Prefix(
+  text: string,
+  maxBytes: number,
+): { readonly text: string; readonly truncated: boolean } {
   let bytes = 0;
   let end = 0;
   for (const char of text) {
@@ -98,7 +118,8 @@ function documentVersionConflict(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
 ): EditorAgentActionResult | null {
-  if (action.expectedDocumentVersion === undefined || snapshot.documentVersion === undefined) return null;
+  if (action.expectedDocumentVersion === undefined || snapshot.documentVersion === undefined)
+    return null;
   return action.expectedDocumentVersion.contentHash === snapshot.documentVersion.contentHash
     ? null
     : conflict(action, "VERSION_MISMATCH", "The active document version no longer matches.");
@@ -108,13 +129,182 @@ function contentHashConflict(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
 ): EditorAgentActionResult | null {
-  if (action.expectedContentHash === undefined || snapshot.activeFileContentHash === undefined) return null;
+  if (action.expectedContentHash === undefined || snapshot.activeFileContentHash === undefined)
+    return null;
   return action.expectedContentHash === snapshot.activeFileContentHash
     ? null
-    : conflict(action, "CONTENT_HASH_MISMATCH", "The active document content hash no longer matches.");
+    : conflict(
+        action,
+        "CONTENT_HASH_MISMATCH",
+        "The active document content hash no longer matches.",
+      );
 }
 
-function targetFile(action: EditorAgentAction, snapshot: EditorAgentSessionSnapshot): string | null {
+function containmentConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionResult | null {
+  const file = targetFile(action, snapshot);
+  if (file === null) return null;
+  return isContainedAgentPath(file)
+    ? null
+    : conflict(action, "OUT_OF_SCOPE", "The target file escapes the workspace root.");
+}
+
+function textEditsConflict(action: EditorAgentAction): EditorAgentActionResult | null {
+  if (action.type !== "applyTextEdits") return null;
+  const error = validateAgentTextEdits(action.textEdits ?? []);
+  return error === null ? null : conflict(action, "INVALID_EDITS", error);
+}
+
+function workspaceInfoFromRoot(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+const OUT_OF_SCOPE_REJECTION_CODES = new Set(["path-unsafe", "path-denied", "binary"]);
+
+function mapPatchValidation(
+  action: EditorAgentAction,
+  validation: PatchValidation,
+): EditorAgentActionResult | null {
+  if (validation.files.length > 1) {
+    return conflict(
+      action,
+      "OUT_OF_SCOPE",
+      "Multi-file patches are not supported on the agent action path.",
+    );
+  }
+  const scopeRejection = validation.reasons.find((reason) =>
+    OUT_OF_SCOPE_REJECTION_CODES.has(reason.code),
+  );
+  if (scopeRejection !== undefined) {
+    return conflict(action, "OUT_OF_SCOPE", scopeRejection.message);
+  }
+  const firstReason = validation.reasons.at(0);
+  if (firstReason !== undefined) {
+    return conflict(action, "INVALID_EDITS", firstReason.message);
+  }
+  const firstConflict = validation.conflicts.at(0);
+  if (firstConflict !== undefined) {
+    return conflict(action, "INVALID_EDITS", firstConflict.reason);
+  }
+  if (validation.ok && validation.files.length === 0) {
+    return conflict(action, "INVALID_EDITS", "Patch contains no applicable file change.");
+  }
+  return null;
+}
+
+function patchValidationConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionResult | null {
+  if (action.type !== "applyPatch") return null;
+  const validation = validatePatch(
+    workspaceInfoFromRoot(snapshot.workspaceRoot),
+    action.patch ?? "",
+    {
+      fs: nodeWorkspaceFs,
+    },
+  );
+  return mapPatchValidation(action, validation);
+}
+
+interface AgentTextEdit {
+  readonly range: LanguageRange;
+  readonly newText: string;
+}
+
+function wholeDocumentReplaceEdit(currentContent: string, postImage: string): AgentTextEdit {
+  const currentLineCount = currentContent.split("\n").length;
+  return {
+    range: {
+      start: { line: 0, character: 0 },
+      end: { line: currentLineCount + 1, character: 0 },
+    },
+    newText: postImage,
+  };
+}
+
+function deriveSingleFilePostImage(
+  file: PatchFileChange,
+  snapshot: EditorAgentSessionSnapshot,
+): AgentTextEdit | null {
+  const absolute = resolveWithinWorkspace(snapshot.workspaceRoot, file.path);
+  const exists = nodeWorkspaceFs.exists(absolute);
+  const currentContent = exists ? nodeWorkspaceFs.readFileUtf8(absolute) : "";
+  const outcome = computeFileContent(file, exists ? currentContent : undefined);
+  if (outcome.content === null || outcome.conflicts.length > 0) return null;
+  return wholeDocumentReplaceEdit(currentContent, outcome.content);
+}
+
+// Translates a queued, preflight-validated single-file applyPatch into the contract textEdits the
+// browser reviews and applies. Computing the post-image with keiko-tools' tested single-file apply
+// logic against the current on-disk content guarantees the cross-cutting invariant
+// applyTextEditsToText(currentContent, edits) === patchedSingleFileContent. Returns null when the
+// patch is not the expected single-file shape or its post-image cannot be derived (including any
+// filesystem/path error), so the caller fails the action rather than emitting an un-appliable one.
+// keiko-tools strips a/ b/ git prefixes; both the patch path and snapshot.activeFile are
+// workspace-relative POSIX paths. Normalize a leading ./ and backslashes so a legitimately
+// matching same-file patch is not rejected on a cosmetic difference.
+function normalizeWorkspaceRelativePath(path: string): string {
+  return path.replace(/\\/gu, "/").replace(/^\.\//u, "");
+}
+
+function deriveAgentPatchTextEdits(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): readonly AgentTextEdit[] | null {
+  // Intentional re-validation: preflight already validated this patch, but validatePatch is
+  // deterministic and pure over (workspace, patch, fs), so deriving here keeps this function
+  // self-contained without threading mutable validation state through the queue path.
+  const validation = validatePatch(
+    workspaceInfoFromRoot(snapshot.workspaceRoot),
+    action.patch ?? "",
+    { fs: nodeWorkspaceFs },
+  );
+  const file = validation.files.at(0);
+  if (!validation.ok || validation.files.length !== 1 || file === undefined) return null;
+  // The post-image is derived from the patch's file content but the browser applies it to the
+  // open buffer. Refuse to apply a patch that targets a different file than the open buffer.
+  if (
+    snapshot.activeFile === null ||
+    normalizeWorkspaceRelativePath(file.path) !==
+      normalizeWorkspaceRelativePath(snapshot.activeFile)
+  ) {
+    return null;
+  }
+  try {
+    const edit = deriveSingleFilePostImage(file, snapshot);
+    return edit === null ? null : [edit];
+  } catch {
+    return null;
+  }
+}
+
+function emitAgentAction(action: EditorAgentAction, snapshot: EditorAgentSessionSnapshot): boolean {
+  if (action.type !== "applyPatch") {
+    emit({ type: "action", action });
+    return true;
+  }
+  const textEdits = deriveAgentPatchTextEdits(action, snapshot);
+  if (textEdits === null) return false;
+  emit({ type: "action", action: { ...action, textEdits } });
+  return true;
+}
+
+function targetFile(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): string | null {
   return action.target?.file ?? snapshot.activeFile;
 }
 
@@ -151,7 +341,10 @@ function preflight(action: EditorAgentAction): EditorAgentActionResult | null {
   return (
     dirtyBufferConflict(action, snapshot) ??
     documentVersionConflict(action, snapshot) ??
-    contentHashConflict(action, snapshot)
+    contentHashConflict(action, snapshot) ??
+    containmentConflict(action, snapshot) ??
+    textEditsConflict(action) ??
+    patchValidationConflict(action, snapshot)
   );
 }
 
@@ -202,7 +395,10 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
     if (replay.requestBody !== requestBody) {
       return {
         status: 409,
-        body: errorBody("IDEMPOTENCY_CONFLICT", "Idempotency-Key was reused with a different action."),
+        body: errorBody(
+          "IDEMPOTENCY_CONFLICT",
+          "Idempotency-Key was reused with a different action.",
+        ),
       };
     }
     return { status: 200, body: { result: replay.result } };
@@ -210,7 +406,28 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
   const failed = preflight(action);
   if (failed !== null) {
     idempotency.set(action.idempotencyKey, { requestBody, result: failed });
+    emit({ type: "result", result: failed });
     return { status: 409, body: { result: failed } };
+  }
+  return queueAndEmitAction(action, requestBody);
+}
+
+function failedResult(action: EditorAgentAction, message: string): EditorAgentActionResult {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: action.actionId,
+    sessionId: action.sessionId,
+    status: "failed",
+    message,
+  };
+}
+
+function queueAndEmitAction(action: EditorAgentAction, requestBody: string): RouteResult {
+  const snapshot = sessions.get(action.sessionId);
+  if (snapshot === undefined || !emitAgentAction(action, snapshot)) {
+    const result = failedResult(action, "Patch could not be prepared for review.");
+    idempotency.set(action.idempotencyKey, { requestBody, result });
+    return { status: 409, body: { result } };
   }
   const result: EditorAgentActionResult = {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
@@ -219,7 +436,6 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
     status: "queued",
   };
   idempotency.set(action.idempotencyKey, { requestBody, result });
-  emit({ type: "action", action });
   return { status: 202, body: { result } };
 }
 

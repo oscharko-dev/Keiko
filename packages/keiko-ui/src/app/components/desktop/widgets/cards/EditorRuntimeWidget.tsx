@@ -77,6 +77,7 @@ import {
   type EditorSymbolsResolver,
   type InlineCompletionTelemetrySnapshot,
   type KeikoEditorLoadState,
+  type PatchPreviewModel,
   type TestGenerationPreview,
 } from "@oscharko-dev/keiko-editor";
 import {
@@ -106,7 +107,9 @@ import {
 } from "../../../../../lib/editor-language";
 import type {
   EditorAgentAction,
+  EditorAgentActionResult,
   EditorAgentActionResultRequest,
+  EditorAgentEvent,
   EditorAgentPaneSnapshot,
   EditorCompletionContextSelectors,
   EditorDocumentVersion,
@@ -118,6 +121,7 @@ import { EDITOR_AGENT_SCHEMA_VERSION } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import { FileIcon } from "../shared/projectTree";
+import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import {
@@ -358,6 +362,49 @@ function summarizePaths(paths: readonly string[]): string {
   return `${paths[0] ?? ""}, ${paths[1] ?? ""} +${String(paths.length - 2)} more`;
 }
 
+/**
+ * Build a minimal, synthetic {@link PatchPreviewModel} for an agent applyPatch pending review
+ * (Issue #1394, ADR-0058 D3). The model is not derived from a patch diff string; it is built
+ * directly from the pre-computed original and modified text so that the KeikoDiffEditor can render
+ * the diff without any browser-side patch parsing.
+ */
+function buildAgentPatchDiffModel(
+  original: string,
+  modified: string,
+  filePath: string | undefined,
+): PatchPreviewModel {
+  const uri = filePath ?? "agent-patch";
+  const language = inferMonacoLanguageId(filePath ?? "");
+  const hasChanges = original !== modified;
+  return {
+    patchId: "agent-patch-pending",
+    status: "previewed",
+    provenance: { origin: "applied-patch" },
+    files: [
+      {
+        uri,
+        displayPath: filePath ?? "Patch",
+        status: "modified",
+        diffable: true,
+        original,
+        modified,
+        language,
+        hasChanges,
+        truncated: false,
+      },
+    ],
+    fileCount: 1,
+    totalFileCount: 1,
+    omittedFileCount: 0,
+    createdCount: 0,
+    modifiedCount: 1,
+    deletedCount: 0,
+    binaryCount: 0,
+    unsupportedCount: 0,
+    truncated: false,
+  };
+}
+
 export default function EditorRuntimeWidget({
   windowId,
   paneId,
@@ -478,6 +525,23 @@ export default function EditorRuntimeWidget({
   const [recoverySnapshot, setRecoverySnapshot] = useState<EditorHotExitSnapshotV1 | null>(null);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [activeContentHash, setActiveContentHash] = useState<string | null>(null);
+  // Issue #1394 (ADR-0058 D3/D4): conflict banner and applyPatch review state.
+  const [agentConflict, setAgentConflict] = useState<{
+    readonly code: AgentConflictCode;
+    readonly message: string;
+  } | null>(null);
+  const [agentPatchPending, setAgentPatchPending] = useState<{
+    readonly action: EditorAgentAction;
+    readonly original: string;
+    readonly modified: string;
+  } | null>(null);
+  // A11Y-2: focus the Accept button whenever a patch review appears.
+  const patchAcceptButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (agentPatchPending !== null) {
+      patchAcceptButtonRef.current?.focus();
+    }
+  }, [agentPatchPending]);
   const sessionCacheRef = useRef(new Map<string, EditorFileSessionSnapshot>());
   const activeSessionKeyRef = useRef<string | null>(null);
   activeSessionKeyRef.current =
@@ -1392,7 +1456,10 @@ export default function EditorRuntimeWidget({
       action: EditorAgentAction,
       status: "succeeded" | "failed" | "conflict",
       message?: string,
+      conflictCode?: AgentConflictCode,
     ): void => {
+      const conflict: EditorAgentActionResult["conflict"] =
+        conflictCode !== undefined ? { code: conflictCode, message: message ?? "" } : undefined;
       const body: EditorAgentActionResultRequest = {
         schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
         kind: "result",
@@ -1402,6 +1469,7 @@ export default function EditorRuntimeWidget({
           sessionId: action.sessionId,
           status,
           ...(message === undefined ? {} : { message }),
+          ...(conflict === undefined ? {} : { conflict }),
         },
       };
       void postEditorAgentActionResult(body).catch(() => {
@@ -1411,78 +1479,171 @@ export default function EditorRuntimeWidget({
     [],
   );
 
-  const executeAgentAction = useCallback(
+  // Issue #1394 (ADR-0058 D3): apply text edits, guarded for read-only/large-file buffers (AC4 risk #5).
+  const applyAgentTextEditsAction = useCallback(
     (action: EditorAgentAction): void => {
-      if (action.sessionId !== agentSessionId) return;
+      if (action.textEdits === undefined) {
+        postAgentResult(action, "failed", "Missing text edits.");
+        return;
+      }
+      if (largeFileDegraded) {
+        postAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
+        return;
+      }
+      const mapped = action.textEdits.map((edit) => ({
+        range: {
+          start: { line: edit.range.start.line, column: edit.range.start.character },
+          end: { line: edit.range.end.line, column: edit.range.end.character },
+        },
+        newText: edit.newText,
+      }));
       try {
-        switch (action.type) {
-          case "openFile":
-          case "focusTab":
-            if (action.target?.file === undefined) {
-              postAgentResult(action, "failed", "Missing target file.");
-              return;
-            }
-            onSelectOpenFile?.(action.target.file);
-            postAgentResult(action, "succeeded");
-            return;
-          case "format":
-            if (!formattingEnabled) {
-              postAgentResult(action, "failed", "Formatting is unavailable for this language.");
-              return;
-            }
-            setFormatRequestNonce((value) => value + 1);
-            postAgentResult(action, "succeeded");
-            return;
-          case "save":
-            void persist(contentRef.current).then((ok) => {
-              postAgentResult(action, ok ? "succeeded" : "failed", ok ? undefined : "Save failed.");
-            });
-            return;
-          case "applyTextEdits":
-            if (action.textEdits === undefined) {
-              postAgentResult(action, "failed", "Missing text edits.");
-              return;
-            }
-            setContent((current) =>
-              applyTextEditsToText(
-                current,
-                action.textEdits?.map((edit) => ({
-                  range: {
-                    start: { line: edit.range.start.line, column: edit.range.start.character },
-                    end: { line: edit.range.end.line, column: edit.range.end.character },
-                  },
-                  newText: edit.newText,
-                })) ?? [],
-              ),
-            );
-            setFileModel((model) =>
-              model === null
-                ? model
-                : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
-            );
-            setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
-            postAgentResult(action, "succeeded");
-            return;
-          case "moveTab":
-          case "splitPane":
-          case "setSelection":
-          case "applyPatch":
-            postAgentResult(
-              action,
-              "failed",
-              "Action must be executed by the editor layout controller.",
-            );
-            return;
-        }
+        // F2: compute BEFORE setContent so OverlappingPatchEditError is caught by this try/catch.
+        const next = applyTextEditsToText(contentRef.current, mapped);
+        setContent(next);
+        setFileModel((model) =>
+          model === null
+            ? model
+            : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
+        );
+        setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+        postAgentResult(action, "succeeded");
       } catch (error) {
+        // OverlappingPatchEditError is not re-exported by @oscharko-dev/keiko-editor; identify by name.
+        const isOverlap = error instanceof Error && error.name === "OverlappingPatchEditError";
+        if (isOverlap) {
+          postAgentResult(action, "conflict", error.message, "INVALID_EDITS");
+        } else {
+          postAgentResult(
+            action,
+            "failed",
+            error instanceof Error ? error.message : "Action failed.",
+          );
+        }
+      }
+    },
+    [largeFileDegraded, postAgentResult],
+  );
+
+  // Issue #1394 (ADR-0058 D3): applyPatch — server pre-validates and emits textEdits; the browser
+  // computes modified content and enters an explicit review state (AC user-review-before-destructive).
+  const applyAgentPatchAction = useCallback(
+    (action: EditorAgentAction): void => {
+      const targetFile = action.target?.file;
+      if (targetFile !== undefined && targetFile !== file) {
         postAgentResult(
           action,
-          "failed",
-          error instanceof Error ? error.message : "Action failed.",
+          "conflict",
+          "Patch targets a file not open in this pane.",
+          "OUT_OF_SCOPE",
+        );
+        return;
+      }
+      if (action.textEdits === undefined || action.textEdits.length === 0) {
+        postAgentResult(action, "failed", "Patch could not be prepared for review.");
+        return;
+      }
+      if (largeFileDegraded) {
+        postAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
+        return;
+      }
+      const mapped = action.textEdits.map((edit) => ({
+        range: {
+          start: { line: edit.range.start.line, column: edit.range.start.character },
+          end: { line: edit.range.end.line, column: edit.range.end.character },
+        },
+        newText: edit.newText,
+      }));
+      try {
+        const original = contentRef.current;
+        const modified = applyTextEditsToText(original, mapped);
+        setAgentPatchPending({ action, original, modified });
+      } catch (error) {
+        const isOverlap = error instanceof Error && error.name === "OverlappingPatchEditError";
+        postAgentResult(
+          action,
+          isOverlap ? "conflict" : "failed",
+          error instanceof Error ? error.message : "Patch application failed.",
+          isOverlap ? "INVALID_EDITS" : undefined,
         );
       }
     },
-    [agentSessionId, formattingEnabled, onSelectOpenFile, persist, postAgentResult],
+    [contentRef, file, largeFileDegraded, postAgentResult],
+  );
+
+  const executeAgentAction = useCallback(
+    (action: EditorAgentAction): void => {
+      if (action.sessionId !== agentSessionId) return;
+      switch (action.type) {
+        case "openFile":
+        case "focusTab":
+          if (action.target?.file === undefined) {
+            postAgentResult(action, "failed", "Missing target file.");
+            return;
+          }
+          onSelectOpenFile?.(action.target.file);
+          postAgentResult(action, "succeeded");
+          return;
+        case "format":
+          if (!formattingEnabled) {
+            postAgentResult(action, "failed", "Formatting is unavailable for this language.");
+            return;
+          }
+          setFormatRequestNonce((value) => value + 1);
+          postAgentResult(action, "succeeded");
+          return;
+        case "save":
+          void persist(contentRef.current).then((ok) => {
+            postAgentResult(action, ok ? "succeeded" : "failed", ok ? undefined : "Save failed.");
+          });
+          return;
+        case "applyTextEdits":
+          applyAgentTextEditsAction(action);
+          return;
+        case "applyPatch":
+          applyAgentPatchAction(action);
+          return;
+        case "moveTab":
+        case "splitPane":
+        case "setSelection":
+          postAgentResult(
+            action,
+            "failed",
+            "Action must be executed by the editor layout controller.",
+          );
+          return;
+      }
+    },
+    [
+      agentSessionId,
+      applyAgentPatchAction,
+      applyAgentTextEditsAction,
+      contentRef,
+      formattingEnabled,
+      onSelectOpenFile,
+      persist,
+      postAgentResult,
+    ],
+  );
+
+  // Issue #1394 (ADR-0058 D4): observe conflict results from the SSE stream and surface them via the
+  // AgentConflictBanner. The action listener already runs on the same EventSource; we reuse a single
+  // connection and add a second event type listener for "editor-agent:result".
+  const onAgentResult = useCallback(
+    (event: MessageEvent<string>): void => {
+      try {
+        const parsed = JSON.parse(event.data) as EditorAgentEvent;
+        if (parsed.type !== "result" || parsed.result.status !== "conflict") return;
+        // F6: filter by sessionId so a conflict for another pane does not pop this banner.
+        if (parsed.result.sessionId !== agentSessionId) return;
+        const { conflict } = parsed.result;
+        if (conflict === undefined) return;
+        setAgentConflict({ code: conflict.code, message: conflict.message });
+      } catch {
+        // Ignore malformed SSE frames.
+      }
+    },
+    [agentSessionId],
   );
 
   useEffect(() => {
@@ -1497,11 +1658,13 @@ export default function EditorRuntimeWidget({
       }
     };
     source.addEventListener("editor-agent:action", onAction);
+    source.addEventListener("editor-agent:result", onAgentResult);
     return () => {
       source.removeEventListener("editor-agent:action", onAction);
+      source.removeEventListener("editor-agent:result", onAgentResult);
       source.close();
     };
-  }, [executeAgentAction]);
+  }, [executeAgentAction, onAgentResult]);
 
   const recoveryDiskChanged =
     recoverySnapshot !== null &&
@@ -1509,8 +1672,80 @@ export default function EditorRuntimeWidget({
     version !== null &&
     recoverySnapshot.savedContentHash !== version.contentHash;
 
+  // Issue #1394 (ADR-0058 D3): handlers for the agent-patch review Accept/Reject buttons.
+  const handleAgentPatchAccept = useCallback((): void => {
+    if (agentPatchPending === null) return;
+    if (largeFileDegraded) {
+      postAgentResult(
+        agentPatchPending.action,
+        "failed",
+        "Editor is read-only; cannot apply agent edits.",
+      );
+      setAgentPatchPending(null);
+      return;
+    }
+    setContent(agentPatchPending.modified);
+    setFileModel((model) =>
+      model === null
+        ? model
+        : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
+    );
+    setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+    postAgentResult(agentPatchPending.action, "succeeded");
+    setAgentPatchPending(null);
+  }, [agentPatchPending, largeFileDegraded, postAgentResult]);
+
+  const handleAgentPatchReject = useCallback((): void => {
+    if (agentPatchPending === null) return;
+    postAgentResult(agentPatchPending.action, "failed", "Patch rejected by user.");
+    setAgentPatchPending(null);
+  }, [agentPatchPending, postAgentResult]);
+
   let panel: ReactNode;
-  if (testGenerationPreview !== null) {
+  if (agentPatchPending !== null) {
+    const patchDiffModel = buildAgentPatchDiffModel(
+      agentPatchPending.original,
+      agentPatchPending.modified,
+      file,
+    );
+    panel = (
+      <>
+        {/* A11Y-3: label the diff review surface and provide an sr-only instruction */}
+        <div aria-label={`Agent patch review for ${file ?? "this file"}`}>
+          <span className="sr-only">
+            Agent generated a patch. Review the changes and accept to apply or reject to discard.
+          </span>
+          <EditorDiffSurface
+            model={patchDiffModel}
+            loadState={{ status: "ready" }}
+            themeVariant={themeVariant}
+          />
+        </div>
+        <div className="ed-toolbar-actions">
+          {/* A11Y-1: explicit aria-labels; A11Y-2: ref for focus management */}
+          <button
+            ref={patchAcceptButtonRef}
+            type="button"
+            className="ed-save"
+            data-testid="agent-patch-accept"
+            aria-label="Accept agent patch and apply changes"
+            onClick={handleAgentPatchAccept}
+          >
+            Accept
+          </button>
+          <button
+            type="button"
+            className="ed-reload"
+            data-testid="agent-patch-reject"
+            aria-label="Reject agent patch and discard changes"
+            onClick={handleAgentPatchReject}
+          >
+            Reject
+          </button>
+        </div>
+      </>
+    );
+  } else if (testGenerationPreview !== null) {
     panel = (
       <EditorDiffSurface
         model={testGenerationPreview.model}
@@ -1808,6 +2043,34 @@ export default function EditorRuntimeWidget({
           ) : null}
           {recoveryNotice !== null ? <span>{recoveryNotice}</span> : null}
         </div>
+      ) : null}
+      {agentConflict !== null ? (
+        <AgentConflictBanner
+          code={agentConflict.code}
+          message={agentConflict.message}
+          onSave={
+            agentConflict.code === "DIRTY"
+              ? () => {
+                  // F5: only dismiss the banner when persist succeeds (returns true).
+                  void persist(contentRef.current).then((ok) => {
+                    if (ok) setAgentConflict(null);
+                  });
+                }
+              : undefined
+          }
+          onReload={
+            agentConflict.code === "VERSION_MISMATCH" ||
+            agentConflict.code === "CONTENT_HASH_MISMATCH"
+              ? () => {
+                  reload();
+                  setAgentConflict(null);
+                }
+              : undefined
+          }
+          onDismiss={() => {
+            setAgentConflict(null);
+          }}
+        />
       ) : null}
       <div className="ed-host" id={tabpanelId} role="tabpanel" aria-labelledby={tabId}>
         {panel}
