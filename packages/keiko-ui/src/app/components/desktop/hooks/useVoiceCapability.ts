@@ -94,3 +94,19 @@ export function supportsSpeechOutput(resolution: VoiceCapabilityResolution | und
     (resolution.profile === "speech-output" || resolution.profile === "full-realtime")
   );
 }
+
+// True only when the resolved capability permits a voice session recap (Issue #504). The recap derives
+// memory candidates from the COMMITTED transcript, so it is gated on the same capability as committed
+// transcript capture: `speech-to-text` and `full-realtime` (the two profiles that capture user speech).
+// `speech-output` (playback only) and `none` return false, so a recap surface never appears where no
+// user transcript is captured — mirroring `voiceRecapAllowed(profile)` in the contract. `undefined`
+// (unresolved / failed) and any unavailable resolution both return false, so a slow or failed probe
+// never lights up the recap UI. The SERVER enforces this against the deployment capability, not the
+// client-claimed profile; this predicate only governs whether the optional surface is shown.
+export function supportsVoiceRecap(resolution: VoiceCapabilityResolution | undefined): boolean {
+  return (
+    resolution !== undefined &&
+    resolution.available &&
+    (resolution.profile === "speech-to-text" || resolution.profile === "full-realtime")
+  );
+}

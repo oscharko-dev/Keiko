@@ -1649,3 +1649,34 @@ export {
   validateSpokenActionProposal,
   validateSpokenActionAuditRecord,
 } from "./voice-action-intent.js";
+
+// ─── Voice session recap (Issue #504 / Epic #491; ADR-0067) ──────────────────────
+// User-triggered recap of a voice session's committed transcript that derives memory candidates via the
+// EXISTING governed `extractCandidatesFromUserText` path and surfaces them in the existing review queue.
+// Pure, content-free leaf module: descriptors and the audit record carry no raw text/audio, only
+// enums/counts/durations. The committed transcript roll-up reuses `VoiceTranscriptEvidenceSummary`.
+export type {
+  VoiceSessionRecapSchemaVersion,
+  VoiceRecapCandidateStatus,
+  VoiceRecapCommittedSpanDescriptor,
+  VoiceRecapAssistantTurnSource,
+  VoiceRecapAssistantTurnDescriptor,
+  VoiceSessionRecapEvidenceSummary,
+  VoiceSessionRecapAuditRecord,
+  VoiceSessionRecapAuditInput,
+  VoiceSessionRecapCandidateCounts,
+  VoiceSessionRecapValidationResult,
+} from "./voice-session-recap.js";
+export {
+  VOICE_SESSION_RECAP_SCHEMA_VERSION,
+  VOICE_RECAP_CANDIDATE_STATUSES,
+  VOICE_RECAP_ASSISTANT_TURN_SOURCES,
+  isVoiceSessionRecapSchemaVersionSupported,
+  voiceRecapAllowed,
+  isVoiceRecapCandidateStatus,
+  assertNeverVoiceRecapCandidateStatus,
+  isVoiceRecapAssistantTurnSource,
+  buildVoiceSessionRecapAuditRecord,
+  summarizeVoiceSessionRecap,
+  validateVoiceSessionRecapAuditRecord,
+} from "./voice-session-recap.js";

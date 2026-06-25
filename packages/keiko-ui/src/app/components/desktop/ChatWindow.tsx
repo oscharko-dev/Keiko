@@ -41,6 +41,7 @@ import {
   supportsDictation,
   supportsRealtimeVoice,
   supportsSpeechOutput,
+  supportsVoiceRecap,
   useVoiceCapability,
 } from "./hooks/useVoiceCapability";
 import { useDictation, type DictationController } from "./hooks/useDictation";
@@ -51,6 +52,11 @@ import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
 import { VoiceRealtimeButton, VoiceRealtimeStatusFromController } from "./VoiceRealtime";
 import { useVoicePlayback, type VoicePlaybackBinding } from "./hooks/useVoicePlayback";
 import { VoicePlaybackMuteButton, VoicePlaybackStatusFromBinding } from "./VoicePlayback";
+import {
+  useVoiceSessionRecap,
+  type VoiceSessionRecapController,
+} from "./hooks/voice-session-recap";
+import { VoiceRecapButton, VoiceRecapPanel } from "./VoiceRecap";
 import { updateChat } from "@/lib/api";
 import { formatUserError } from "./format-error";
 import {
@@ -308,6 +314,11 @@ interface ComposerBarProps {
   readonly voiceSpeechOutputVisible: boolean;
   readonly playback: VoicePlaybackBinding;
   readonly playbackButtonRef: Ref<HTMLButtonElement>;
+  // Issue #504 — capability-gated voice session recap. The button renders only when the deployment
+  // captures a user transcript; it is inert until there is committed content to review (AC1).
+  readonly voiceRecapVisible: boolean;
+  readonly recap: VoiceSessionRecapController;
+  readonly recapButtonRef: Ref<HTMLButtonElement>;
 }
 
 function ComposerBar({
@@ -329,6 +340,9 @@ function ComposerBar({
   voiceSpeechOutputVisible,
   playback,
   playbackButtonRef,
+  voiceRecapVisible,
+  recap,
+  recapButtonRef,
 }: ComposerBarProps): ReactNode {
   const {
     models,
@@ -470,6 +484,18 @@ function ComposerBar({
             muted={playback.snapshot.muted}
             onToggle={playback.toggleMute}
             buttonRef={playbackButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : null}
+        {/* Issue #504 — capability-gated voice session recap. Rendered only when the deployment captures
+            a user transcript; inert until there is committed content to review, so it never produces a
+            side effect from an empty session (AC1). */}
+        {voiceRecapVisible ? (
+          <VoiceRecapButton
+            committedSegmentCount={recap.committedSegmentCount}
+            busy={recap.busy}
+            onTrigger={recap.trigger}
+            buttonRef={recapButtonRef}
             compact={controlsNarrow}
           />
         ) : null}
@@ -690,9 +716,14 @@ function ComposerCore({
   // second fetch). Only true when the deployment advertises speech output; STT-only and no-voice
   // deployments leave it false, so no playback control appears and Keiko answers in text (AC1).
   const voiceSpeechOutputVisible = supportsSpeechOutput(voiceCapability);
+  // Issue #504 — voice session recap gate: reuse the already-fetched voiceCapability probe (no second
+  // fetch). Only true when the deployment captures a user transcript (speech-to-text / full-realtime);
+  // playback-only and no-voice deployments leave it false, so no recap control appears (AC1).
+  const voiceRecapVisible = supportsVoiceRecap(voiceCapability);
   const micButtonRef = useRef<HTMLButtonElement>(null);
   const realtimeButtonRef = useRef<HTMLButtonElement>(null);
   const playbackButtonRef = useRef<HTMLButtonElement>(null);
+  const recapButtonRef = useRef<HTMLButtonElement>(null);
   // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
@@ -707,6 +738,13 @@ function ComposerCore({
   // Issue #501 — assistant speech-output playback binding. Driven by the resolved voice profile; a
   // non-playback profile yields a dormant controller (AC1). Replay is policy-gated and off by default.
   const playback = useVoicePlayback({ profile: voiceCapability?.profile ?? "none" });
+  // Issue #504 — voice session recap. Derives memory candidates from the COMMITTED voice transcript via
+  // the additive recap route, then lists them through the EXISTING review queue. Live committed-transcript
+  // segments are not yet surfaced by the composer (the #500 voice-transcript-segments store is not consumed
+  // by the live realtime/dictation hooks yet); useVoiceSessionRecap's `segments` prop is the seam for that
+  // future wiring. Until segments are supplied the controller is correctly inert
+  // (committedSegmentCount === 0), so the button shows but cannot trigger a side effect.
+  const recap = useVoiceSessionRecap({ profile: voiceCapability?.profile ?? "none" });
 
   return (
     <div className={`cmp-box${compact ? " cmp-box-compact" : ""}`}>
@@ -756,6 +794,19 @@ function ComposerCore({
             the input stack. Renders nothing between spoken turns; while a spoken response is active or
             freshly settled it announces the state and offers pause / resume / stop / replay (AC1). */}
         {voiceSpeechOutputVisible ? <VoicePlaybackStatusFromBinding binding={playback} /> : null}
+        {/* Issue #504 — voice session recap candidates. Adjacent to the playback status in the input
+            stack. Renders nothing until a recap is triggered and proposes candidates; the listed
+            candidates use the EXISTING governed accept / edit / reject / forget actions (AC3). */}
+        {voiceRecapVisible ? (
+          <VoiceRecapPanel
+            loading={recap.loading}
+            candidates={recap.candidates}
+            onApprove={recap.approve}
+            onEdit={recap.edit}
+            onReject={recap.reject}
+            onForget={recap.forget}
+          />
+        ) : null}
       </div>
       <div className="cmp-footer-row">
         {/* Issue #151 — context-pressure indicator + clear-history affordance */}
@@ -786,6 +837,9 @@ function ComposerCore({
           voiceSpeechOutputVisible={voiceSpeechOutputVisible}
           playback={playback}
           playbackButtonRef={playbackButtonRef}
+          voiceRecapVisible={voiceRecapVisible}
+          recap={recap}
+          recapButtonRef={recapButtonRef}
         />
       </div>
     </div>

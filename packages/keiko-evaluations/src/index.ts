@@ -19,6 +19,9 @@ export * as PromptEnhancerEval from "./promptEnhancer/index.js";
 // Discussion Intelligence evaluation suite (Epic #491, Issue #502; ADR-0065). Exposed as a single
 // auditable namespace, mirroring the `PromptEnhancerEval` convention above.
 export * as DiscussionEval from "./discussion/index.js";
+// Voice Session Recap evaluation suite (Epic #491, Issue #504; ADR-0067). Exposed as a single auditable
+// namespace, mirroring the `DiscussionEval` convention above.
+export * as VoiceRecapEval from "./voice-recap/index.js";
 export {
   ALL_FIXTURES,
   SUITE_NAMES,

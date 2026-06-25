@@ -18,6 +18,7 @@ import {
   handleEvidenceDetail,
 } from "./read-handlers.js";
 import { handleVoiceTranscribe } from "./voice-handlers.js";
+import { handleVoiceRecapBuild } from "./voice-recap.js";
 import {
   handleCreateRun,
   handleCreateChatRun,
@@ -223,6 +224,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // POST a short audio clip (base64 inside the JSON + CSRF envelope) and receive its transcript;
   // answers VOICE_UNAVAILABLE when no speech-to-text capability is configured/enabled.
   { method: "POST", pattern: "/api/voice/transcribe", handler: handleVoiceTranscribe },
+  // Issue #504 (Epic #491, ADR-0067) — optional, capability-gated, user-triggered voice session recap.
+  // POST the committed transcript text (content-free counts alongside) and derive memory candidates via
+  // the EXISTING governed capture path; candidates surface in the existing review queue as "proposed".
+  // Answers VOICE_UNAVAILABLE when the deployment is not voice-recap-capable (AC1).
+  { method: "POST", pattern: "/api/voice/recap/build", handler: handleVoiceRecapBuild },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
