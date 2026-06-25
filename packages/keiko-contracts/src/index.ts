@@ -1559,3 +1559,51 @@ export {
   PROMPT_ENHANCEMENT_MODEL_AVAILABILITIES,
   validatePromptEnhancementWireRequest,
 } from "./prompt-enhancer-bff.js";
+
+// ─── Discussion intelligence (Issue #502 / Epic #491; ADR-0065) ──────────────────
+// Text-first colleague-like discussion contract (5 modes, disagreement structure, confidence bridge,
+// interruption-recovery turn model). Reuses the prompt-enhancer citation/contradiction/grounding vocab
+// and the voice transcript capability gate (no parallel stack). Pure, content-free leaf module.
+export type {
+  DiscussionMode,
+  ConfidenceLevel,
+  DisagreementFacet,
+  DiscussionDirective,
+  DiscussionModePlan,
+  DiscussionTurnStatus,
+  DiscussionTurnContext,
+  DiscussionTurnSummary,
+  DiscussionValidationResult,
+} from "./discussion-intelligence.js";
+export {
+  DISCUSSION_INTELLIGENCE_SCHEMA_VERSION,
+  DISCUSSION_MODES,
+  DISCUSSION_CONFIDENCE_LEVELS,
+  DISAGREEMENT_FACETS,
+  DISCUSSION_DIRECTIVES,
+  DISCUSSION_DIRECTIVE_TEMPLATES,
+  DISCUSSION_DIRECTIVE_FACETS,
+  DISCUSSION_MODE_PLANS,
+  DISCUSSION_TURN_STATUSES,
+  DISCUSSION_TURN_STATUS_TRANSITIONS,
+  isDiscussionIntelligenceSchemaVersionSupported,
+  isDiscussionMode,
+  assertNeverDiscussionMode,
+  confidenceLevelFromScore,
+  assertNeverDiscussionDirective,
+  discussionModePlan,
+  discussionDirectivesCoverFacets,
+  voiceCanDriveDiscussion,
+  isDiscussionTurnStatus,
+  canTransitionDiscussionTurnStatus,
+  assertNeverDiscussionTurnStatus,
+  discussionTopicIdReasons,
+  isValidDiscussionTopicId,
+  beginDiscussionTurn,
+  applyDiscussionInterruption,
+  applyDiscussionRecovery,
+  resolveDiscussionTurn,
+  summarizeDiscussionTurn,
+  validateDiscussionTurnContext,
+  validateDiscussionModePlan,
+} from "./discussion-intelligence.js";
