@@ -109,10 +109,11 @@ evidence schema the other two layers consume. It exports:
 **`packages/keiko-tools/src/git-mutation-evidence.ts`** (new pure builder): the single function
 that projects a `GitMutationLifecycleResult` into a `GitDeliveryEvidenceRecord`.
 
-- `buildGitDeliveryEvidenceRecord(lifecycleResult, correlation, deps)` — pure over injected
-  `deps.now` (clock), `deps.newId` (id generator), and `deps.sha256Hex` (from
-  `@oscharko-dev/keiko-security`). The `sha256Hex` injected dependency keeps the builder pure and
-  testable without live crypto IO.
+- `buildGitDeliveryEvidenceRecord(input, deps)` — pure over injected `deps.now` (clock) and
+  `deps.hash` (an optional SHA-256 hex function that defaults to `@oscharko-dev/keiko-security`'s
+  `sha256Hex`). There is no id generator: the `evidenceId` is deterministically derived as
+  `gde-${hash(workflowRunIdHash:actionId).slice(0, 40)}`, so the same attempt is addressable
+  identically. The injected hash keeps the builder pure and testable without live crypto IO.
 - Maps `GitMutationOutcome.status` → `GitDeliveryEvidenceOutcomeClass` via a total switch; maps
   `GitMutationLifecyclePhase` → `GitDeliveryEvidenceLifecyclePhase` via a total exhaustive switch
   (D5 compile guarantee).
@@ -125,16 +126,19 @@ that projects a `GitMutationLifecycleResult` into a `GitDeliveryEvidenceRecord`.
 
 **`packages/keiko-server/src/gitDelivery/`** (new server module group):
 
-- `gitDeliveryEvidenceLedger.ts` — a bounded, date-bucketed, append-only ledger that implements
-  a `GitDeliveryEvidenceLedger` port (analogous to `GitMutationJournal` and the `EvidenceStore`
-  port). `append(record)` uses `EvidenceStore.update` (bounded append, fail-closed on corrupt
-  entry). `readAll()` returns the full contents. `buildAuditPacket()` wraps `readAll()` into a
-  `GitDeliveryAuditPacket`. The ledger never throws into the caller: a storage failure is caught,
-  logged at trace level, and returns void. The write is always best-effort (Force 5).
-- `gitDeliveryEvidenceRoute.ts` — a capability-gated `GET /api/git-delivery/evidence` route
-  registered as a sibling `ROUTE_GROUP` in `routes.ts`. Protected by `isGitDeliveryTrusted` and
-  subject to the same CSRF protection as every other BFF route. Returns a `GitDeliveryAuditPacket`.
-  Re-applies `deepRedactStrings(record, auditRedactor)` at read (defense-in-depth, D3).
+- `mutationEvidenceLedger.ts` — a bounded, date-bucketed (`git-delivery-evidence-YYYY-MM-DD`),
+  append-only ledger. `recordGitDeliveryMutationEvidence(options, record)` redacts every string leaf
+  (`deepRedactStrings`) and appends via `EvidenceStore.update` (bounded to the most recent N records
+  per bucket, fail-closed on a corrupt bucket document). The ledger never throws into the caller: a
+  storage failure is reported through an injectable `onPersistError` sink and returns void — audit
+  write is always best-effort (Force 5).
+- `evidenceRoutes.ts` — a capability-gated `GET /api/git-delivery/evidence` route registered as a
+  sibling `GIT_DELIVERY_EVIDENCE_ROUTE_GROUP` in `routes.ts`. Gated by `isGitDeliveryTrusted` (the
+  default-false `KEIKO_GIT_DELIVERY_ENABLED` deployment flag), returning a content-free `404` when
+  the surface is off. Being a `GET`, it is not covered by the central CSRF guard; the env flag is the
+  access control. It collects a bounded recent window (clamped `days`/`limit`), re-validates each
+  record through the contract guard (dropping tampered records), builds a `GitDeliveryAuditPacket`,
+  and re-applies `deps.redactor` at read (defense-in-depth, D3).
 
 ### D2 — Reuse, not duplication
 
@@ -164,28 +168,38 @@ or SHA-256 hash.
 Sensitive identifiers are hashed before they enter the record type:
 
 - Approval token: already hash-only on the contract envelope; the record carries only the hash.
-- Provider `externalId` → `externalIdHash` (SHA-256 hex via injected `deps.sha256Hex`).
+- Provider `externalId` → `externalIdHash` (SHA-256 hex via the injected `deps.hash`).
 - Remote alias and branch name → `remoteRefHash`.
 - Repository path → `repoIdHash`.
 
-Local branch names (`affectedBranchName`, `baseBranchName`) are retained as content-free repo
-context, consistent with the #473 action-sheet projection which carries the same branch name fields.
+Local branch names (`targetBranchName`, `affectedBranchName`) and approver user ids
+(`requiredApprovers`, `approvedByUserId`) are retained in clear text as deliberate governance
+provenance — which branch was acted on, and who approved — consistent with the #473 action-sheet
+projection. They are governance metadata, not secrets, so they are not hashed; the issue's AC2
+explicitly requires preserving approval provenance. Echoed branch names are stripped of
+bidirectional/zero-width/BOM format characters at the builder so a crafted ref cannot visually spoof
+an audit row.
 
 Defense-in-depth: `deepRedactStrings(record, auditRedactor)` (injected `deps.redactor`) is applied
-at persist in `gitDeliveryEvidenceLedger.ts` AND re-applied at export read in
-`gitDeliveryEvidenceRoute.ts`. Any future additive field that inadvertently carries a sensitive
-string is caught at both the write boundary and the read boundary, not only where the type was
-written.
+at persist in `mutationEvidenceLedger.ts` AND re-applied at export read in `evidenceRoutes.ts`. This
+redactor is a **backstop, not the primary control**: it scrubs secret-SHAPED strings
+(`sk-`/`Bearer`/`gh*`/`AKIA`/PEM/`KEY=value`, etc.) and configured literals only — it does not redact
+arbitrary free-form text such as file paths or hostnames. The primary content-free guarantee is the
+builder's by-construction hashing above; any new raw string field added to `GitDeliveryEvidenceRecord`
+MUST be hashed at `buildGitDeliveryEvidenceRecord`, never assumed to be redactor-covered.
 
 ### D4 — Correlation (AC1)
 
-Every evidence record carries a `correlation` field that holds the content-free, hashed triggering
-workflow run id (`sourceGroundedRunId` from the envelope's `GitDeliveryEvidenceRef`, if present, or
-a hash of the `actionId` as a stable fallback). This makes every attempt — succeeded, blocked,
-rejected, failed, recovery-required — correlatable across a session without storing raw identifiers.
-The `GitDeliveryEvidenceRef` already defined on the contract envelope (`sourceGroundedRunId` +
-`evidenceManifestStableIdHash`, `git-delivery.ts` lines 394–399) is the bidirectional join key
-between the envelope and the ledger record; this ADR does not add a new linking scheme.
+Every evidence record carries a `correlation` field whose `workflowRunIdHash` is the SHA-256 hash of
+a required caller-supplied `input.workflowRunId` (the triggering workflow's run id), together with the
+envelope `actionId` and an optional `attemptSequence`. Hashing the run id keeps the ledger
+correlatable without storing a raw, potentially sensitive identifier. This makes every attempt —
+succeeded, blocked, rejected, failed, recovery-required, approval-required — correlatable across a
+session. The optional `GitDeliveryEvidenceRef` already defined on the contract envelope
+(`sourceGroundedRunId` + `evidenceManifestStableIdHash`, `git-delivery.ts` lines 394–399) is carried
+through verbatim as the forward link from the envelope to a persisted evidence manifest when a caller
+supplies one; this ADR does not add a new linking scheme. After a server restart, correlation
+continuity depends on the caller re-supplying a stable `workflowRunId`.
 
 Correlation context is in-memory on the orchestrator side. After a server restart, correlation
 between a new attempt and a prior session's records is not available — this is the same limitation
@@ -349,8 +363,8 @@ ADR-0019 rules 2–3). It does not import `keiko-server` or `keiko-ui`. The buil
 clock, id-generation, and hashing effects are injected, so no direct crypto IO appears in the
 module. ADR-0019 rules 2–4 are satisfied.
 
-**`keiko-server/src/gitDelivery/gitDeliveryEvidenceLedger.ts`** and
-**`gitDeliveryEvidenceRoute.ts`** sit in `keiko-server`, the permitted composition and wiring layer
+**`keiko-server/src/gitDelivery/mutationEvidenceLedger.ts`** and
+**`evidenceRoutes.ts`** sit in `keiko-server`, the permitted composition and wiring layer
 (ADR-0019 rule 6). They depend on `keiko-contracts` (evidence record types), `keiko-evidence`
 (`EvidenceStore`, `deepRedactStrings`), and `keiko-security` (`auditRedactor`,
 `isGitDeliveryTrusted`). No domain package depends on `keiko-server`. The GET route is a sibling
@@ -361,6 +375,6 @@ No backward dependency is introduced: `keiko-contracts` does not import `keiko-t
 `keiko-tools` does not import `keiko-server`, and neither domain package imports `keiko-ui` or
 `keiko-server`. The dependency graph remains a DAG.
 
-No code has been written for #474 on this branch yet (confirmed: `find` on
-`packages/*/src/git-delivery-evidence*` and `packages/*/src/git-mutation-evidence*` returns no
-results), so there is no existing implementation to check for drift against this ADR.
+This boundary review was conducted against the committed implementation (the three new modules and
+their colocated tests). No boundary violations were found, and the dependency direction
+(contracts ← tools ← server) holds across every new module.

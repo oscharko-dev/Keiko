@@ -346,4 +346,50 @@ describe("buildGitDeliveryEvidenceRecord — sections and determinism", () => {
     expect(record.riskClass).toBe("local-mutation");
     expect(record.riskSeverity).toBe(1);
   });
+
+  // Regression: the kernel evaluates policy eagerly even when preflight halts first, so a
+  // preflight-blocked envelope can carry a "blocked" policyDecision. That policy reason must NOT
+  // become the record's blockReason — it would contradict the preflight disposition.
+  it("does not attach a policy block reason to a preflight-blocked attempt", () => {
+    const preflightBlockedWithPolicyDenial = lifecycle(
+      {
+        status: "blocked",
+        category: "preflight-block",
+        findings: [
+          {
+            code: "no-changes-to-stage",
+            severity: "blocking",
+            remediation: "user-actionable",
+            phase: "preflight",
+          },
+        ],
+      },
+      "preflight",
+      { policyDecision: { outcome: "blocked", reason: "risk-class-ceiling" } },
+    );
+    const record = build(preflightBlockedWithPolicyDenial);
+    expect(record.outcomeClass).toBe("blocked");
+    expect(record.phaseReached).toBe("preflight");
+    expect(record.policyOutcome).toBe("blocked");
+    expect(record.blockReason).toBeUndefined();
+    expect(record.recovery.disposition).toBe("user-fixable");
+    expect(record.recovery.actionHint).toBe("stage-changes");
+  });
+
+  it("strips bidirectional/zero-width format characters from echoed branch names", () => {
+    // U+202E (right-to-left override) via escape so no bidi char appears in this source file.
+    const rtlOverride = "\u202E";
+    const spoofed = lifecycle({ status: "succeeded", executionResult: SUCCEEDED_EXEC }, "result", {
+      executionResult: SUCCEEDED_EXEC,
+      preview: {
+        schemaVersion: "1",
+        affectedBranchName: `feature/${rtlOverride}evil`,
+        wouldCreateRemoteBranch: false,
+        wouldTriggerChecks: false,
+      },
+    });
+    const record = build(spoofed);
+    expect(record.preview?.affectedBranchName).toBe("feature/evil");
+    expect(record.repoContext.targetBranchName).toBe("feature/x");
+  });
 });

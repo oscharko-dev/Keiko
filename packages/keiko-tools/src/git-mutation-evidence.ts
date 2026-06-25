@@ -235,6 +235,19 @@ function recoveryFor(
 
 // ─── Section projections ─────────────────────────────────────────────────────────────────────
 
+// Branch names are echoed raw into the audit record (they are git refs, not secrets). Strip
+// bidirectional/zero-width/BOM format characters so a crafted ref cannot visually spoof which branch
+// an audit row refers to when the export is rendered. Mirrors the action-sheet route's boundary
+// scanner; git ref rules already bar C0/C1 controls and spaces, so only the format-char set is removed.
+const UNSAFE_FORMAT_CHARS = new RegExp(
+  "[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF]",
+  "gu",
+);
+
+function sanitizeRef(value: string): string {
+  return value.replace(UNSAFE_FORMAT_CHARS, "");
+}
+
 function approvalFor(approval: GitDeliveryApprovalRequirement): GitDeliveryEvidenceApproval {
   if (!approval.required) {
     return { required: false };
@@ -256,7 +269,7 @@ function previewFor(
   }
   return {
     ...(preview.affectedBranchName !== undefined
-      ? { affectedBranchName: preview.affectedBranchName }
+      ? { affectedBranchName: sanitizeRef(preview.affectedBranchName) }
       : {}),
     ...(preview.estimatedFileCount !== undefined
       ? { estimatedFileCount: preview.estimatedFileCount }
@@ -299,7 +312,7 @@ function repoContextFor(
   const target = inputs.kind === "branch-create" ? inputs.branchName : snapshot.currentBranchName;
   return {
     ...(repoId !== undefined ? { repoIdHash: hash(repoId) } : {}),
-    ...(target !== undefined ? { targetBranchName: target } : {}),
+    ...(target !== undefined ? { targetBranchName: sanitizeRef(target) } : {}),
     headDetached: snapshot.headDetached,
     stagedFileCount: snapshot.stagedFileCount,
     unstagedFileCount: snapshot.unstagedFileCount,
@@ -323,6 +336,15 @@ function effectiveBlockReason(
 ): GitDeliveryBlockReason | undefined {
   if (outcome.status === "blocked" && outcome.category === "policy-block") {
     return outcome.blockReason;
+  }
+  // The kernel evaluates policy eagerly (prepareLifecycle) even when preflight halts the lifecycle
+  // first, so a preflight-blocked envelope can still carry a "blocked" policyDecision that was never
+  // the terminal enforcement. Recording that policy reason here would contradict the preflight
+  // disposition, so a preflight-blocked attempt (the only remaining "blocked" category) carries no
+  // policy block reason — its cause is a preflight finding, reflected in recovery.actionHint and
+  // phaseReached === "preflight".
+  if (outcome.status === "blocked") {
+    return undefined;
   }
   return envelope.policyDecision.outcome === "blocked" ? envelope.policyDecision.reason : undefined;
 }

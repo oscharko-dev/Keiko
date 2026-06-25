@@ -274,11 +274,16 @@ export function gitDeliveryRecoveryDispositionForBlockReason(
 // list states what the export does NOT overcome (the trust-boundary text mirrors EvidenceReport).
 
 export const GIT_DELIVERY_AUDIT_PACKET_KNOWN_LIMITATIONS: readonly string[] = [
-  "Records are content-free: counts, flags, branch names, typed codes, and SHA-256 hashes only. " +
-    "Diff content, file paths, command output, and secrets are never recorded and cannot be " +
-    "recovered from this export.",
-  "Remote identifiers, the provider external id, and the repository identity are stored as " +
-    "irreversible SHA-256 hashes; the export cannot reveal the underlying values.",
+  "Records are content-free by construction: sensitive identifiers are hashed in the builder, and " +
+    "diff content, file paths, command output, and secrets are never recorded. The persist- and " +
+    "export-time redactors are a defence-in-depth backstop that scrubs secret-SHAPED strings and " +
+    "configured literals only — they do not redact arbitrary free-form text, so any new raw field " +
+    "must be hashed at the builder rather than relied upon to be redacted.",
+  "Remote identifiers, the provider external id, and the repository identity are stored as SHA-256 " +
+    "hashes that are irreversible to preimage; low-entropy inputs (e.g. a remote alias or a " +
+    "repository path) may remain confirmable by an operator who enumerates candidate values.",
+  "Local branch names and approver user ids are retained in clear text as deliberate governance " +
+    "provenance (which branch was acted on, who approved); they are not secrets and are not hashed.",
   "Provider-side outcomes (merge-block reasons, remote rejections) are produced only by the " +
     "provider execution slices; a local-only deployment records local-kernel outcomes.",
   "Workflow correlation uses a hashed run id supplied by the caller; correlation across a server " +
@@ -509,6 +514,7 @@ export function isGitDeliveryAuditPacket(value: unknown): value is GitDeliveryAu
     isFiniteNumber(value.generatedAtMs) &&
     isFiniteNumber(value.recordCount) &&
     Array.isArray(value.records) &&
+    value.recordCount === value.records.length &&
     value.records.every(isGitDeliveryEvidenceRecord) &&
     isOutcomeClassCounts(value.outcomeClassCounts) &&
     isDispositionCounts(value.recoveryDispositionCounts) &&

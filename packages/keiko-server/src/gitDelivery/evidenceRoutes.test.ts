@@ -117,6 +117,39 @@ describe("GET /api/git-delivery/evidence — aggregation (AC1/AC4)", () => {
     expect(packet.recoveryDispositionCounts["policy-forbidden"]).toBe(1);
   });
 
+  it("aggregates records across multiple date buckets within the window, oldest first", () => {
+    const store = createInMemoryEvidenceStore();
+    const redactString = (input: string): string => redact(input);
+    const dayBefore = Date.UTC(2026, 5, 20, 9, 0, 0);
+    recordGitDeliveryMutationEvidence(
+      { evidenceStore: store, redactString },
+      record({ evidenceId: "gde-older", recordedAtMs: dayBefore }),
+    );
+    recordGitDeliveryMutationEvidence(
+      { evidenceStore: store, redactString },
+      record({ evidenceId: "gde-newer", recordedAtMs: NOW }),
+    );
+    const result = handler(ctx("days=7&limit=200"), deps(ENABLED, store));
+    const packet = result.body as GitDeliveryAuditPacket;
+    expect(packet.recordCount).toBe(2);
+    expect(packet.records.map((r) => r.evidenceId)).toStrictEqual(["gde-older", "gde-newer"]);
+  });
+
+  it("excludes a bucket older than the days window", () => {
+    const store = createInMemoryEvidenceStore();
+    const redactString = (input: string): string => redact(input);
+    const longAgo = Date.UTC(2026, 4, 1, 9, 0, 0);
+    recordGitDeliveryMutationEvidence(
+      { evidenceStore: store, redactString },
+      record({ evidenceId: "gde-ancient", recordedAtMs: longAgo }),
+    );
+    recordGitDeliveryMutationEvidence({ evidenceStore: store, redactString }, record());
+    const result = handler(ctx("days=7&limit=200"), deps(ENABLED, store));
+    const packet = result.body as GitDeliveryAuditPacket;
+    expect(packet.recordCount).toBe(1);
+    expect(packet.records[0]?.evidenceId).toBe("gde-route-00000000000000000000000000000000");
+  });
+
   it("honours the limit query bound", () => {
     const store = createInMemoryEvidenceStore();
     const redactString = (input: string): string => redact(input);

@@ -136,8 +136,13 @@ export const createHandleGitDeliveryEvidenceExport = (
     );
     const nowMs = now();
     const all = collectRecords(deps.evidenceStore, recentRunIds(nowMs, days));
-    const records = all.length > limit ? all.slice(all.length - limit) : all;
-    const packet = buildGitDeliveryAuditPacket(records, nowMs);
+    const truncated = all.length > limit;
+    const records = truncated ? all.slice(all.length - limit) : all;
+    const windowNote =
+      `This export is a bounded window: the most recent ${String(records.length)} record(s) ` +
+      `across the last ${String(days)} day(s)` +
+      (truncated ? `, truncated to the ${String(limit)}-record limit.` : ".");
+    const packet = buildGitDeliveryAuditPacket(records, nowMs, [windowNote]);
     return { status: 200, body: deps.redactor(packet) };
   };
 };
