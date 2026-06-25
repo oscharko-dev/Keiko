@@ -15,6 +15,7 @@
 // No raw source content (snapshot text, text edits, patch bodies) is logged anywhere in this path.
 
 import type { ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
   editorAgentWritePreconditionError,
@@ -55,13 +56,32 @@ const MAX_AGENT_BODY_BYTES = 1_048_576;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = 64 * 1024;
 
 interface QueuedRecord {
-  readonly requestBody: string;
+  readonly requestHash: string;
   readonly result: EditorAgentActionResult;
 }
 
 // HTTP-level idempotency: a replayed Idempotency-Key returns the original outcome; a key reused with a
-// different action body is a 409. This is request de-duplication and stays at the route edge.
+// different action body is a 409. This is request de-duplication and stays at the route edge. The map
+// is bounded (FIFO eviction) and stores only a hash of the request body, so it cannot grow without
+// limit or retain raw action content (text edits, patch bodies) on a long-lived server.
+const MAX_IDEMPOTENCY_ENTRIES = 1024;
 const idempotency = new Map<string, QueuedRecord>();
+
+function hashRequest(body: string): string {
+  return createHash("sha256").update(body).digest("hex");
+}
+
+function rememberIdempotency(
+  key: string,
+  requestHash: string,
+  result: EditorAgentActionResult,
+): void {
+  if (!idempotency.has(key) && idempotency.size >= MAX_IDEMPOTENCY_ENTRIES) {
+    const oldest = idempotency.keys().next().value;
+    if (oldest !== undefined) idempotency.delete(oldest);
+  }
+  idempotency.set(key, { requestHash, result });
+}
 
 function isRouteResult(value: unknown): value is RouteResult {
   return typeof value === "object" && value !== null && "status" in value && "body" in value;
@@ -409,10 +429,10 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
     return { status: 200, body: { result } };
   }
   const action = parsed.value;
-  const requestBody = JSON.stringify(action);
+  const requestHash = hashRequest(JSON.stringify(action));
   const replay = idempotency.get(action.idempotencyKey);
   if (replay !== undefined) {
-    if (replay.requestBody !== requestBody) {
+    if (replay.requestHash !== requestHash) {
       return {
         status: 409,
         body: errorBody(
@@ -425,11 +445,11 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
   }
   const failed = preflight(action);
   if (failed !== null) {
-    idempotency.set(action.idempotencyKey, { requestBody, result: failed });
+    rememberIdempotency(action.idempotencyKey, requestHash, failed);
     editorAgentRegistry.reportResult(failed);
     return { status: 409, body: { result: failed } };
   }
-  return queueAndEmitAction(action, requestBody);
+  return queueAndEmitAction(action, requestHash);
 }
 
 function failedResult(action: EditorAgentAction, message: string): EditorAgentActionResult {
@@ -442,18 +462,20 @@ function failedResult(action: EditorAgentAction, message: string): EditorAgentAc
   };
 }
 
-function queueAndEmitAction(action: EditorAgentAction, requestBody: string): RouteResult {
+function queueAndEmitAction(action: EditorAgentAction, requestHash: string): RouteResult {
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
   const emitAction = snapshot === undefined ? null : buildEmitAction(action, snapshot);
   if (emitAction === null) {
     const result = failedResult(action, "Patch could not be prepared for review.");
-    idempotency.set(action.idempotencyKey, { requestBody, result });
+    rememberIdempotency(action.idempotencyKey, requestHash, result);
     return { status: 409, body: { result } };
   }
   const outcome = editorAgentRegistry.queueAction(action, emitAction);
-  idempotency.set(action.idempotencyKey, { requestBody, result: outcome.result });
+  rememberIdempotency(action.idempotencyKey, requestHash, outcome.result);
   if (outcome.kind === "rejected") {
-    return { status: 429, body: { result: outcome.result } };
+    // QUEUE_FULL is backpressure (429); a duplicate in-flight actionId is a conflict (409).
+    const status = outcome.result.failure?.code === "QUEUE_FULL" ? 429 : 409;
+    return { status, body: { result: outcome.result } };
   }
   return { status: 202, body: { result: outcome.result } };
 }

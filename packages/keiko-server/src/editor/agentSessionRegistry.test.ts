@@ -233,4 +233,57 @@ describe("editor agent session registry", () => {
     expect(scheduler.pending()).toBe(0);
     scheduler.fireAll();
   });
+
+  it("correlates results per session: a cross-session result cannot clear another session's slot", () => {
+    const scheduler = fakeScheduler();
+    const registry = createEditorAgentRegistry(scheduler);
+    const a = action({ sessionId: "session-A", actionId: "shared-id", idempotencyKey: "kA" });
+    registry.queueAction(a, a);
+    expect(registry.pendingCount("session-A")).toBe(1);
+    expect(scheduler.pending()).toBe(1);
+
+    // A result reusing the SAME actionId but a DIFFERENT sessionId must not touch session A's slot.
+    registry.reportResult({
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: "shared-id",
+      sessionId: "session-B",
+      status: "succeeded",
+    });
+    expect(registry.pendingCount("session-A")).toBe(1);
+    expect(scheduler.pending()).toBe(1);
+
+    // Session A still self-heals on its own timeout.
+    scheduler.fireAll();
+    expect(registry.pendingCount("session-A")).toBe(0);
+  });
+
+  it("rejects a second action that reuses an in-flight actionId, preserving the first's deadline", () => {
+    const scheduler = fakeScheduler();
+    const registry = createEditorAgentRegistry(scheduler);
+    const first = action({ actionId: "dup", idempotencyKey: "k1" });
+    const second = action({ actionId: "dup", idempotencyKey: "k2", type: "format" });
+    expect(registry.queueAction(first, first).kind).toBe("queued");
+
+    const rejected = registry.queueAction(second, second);
+    expect(rejected.kind).toBe("rejected");
+    expect(rejected.result.status).toBe("failed");
+    // No QUEUE_FULL code — it is a duplicate, not backpressure.
+    expect(rejected.result.failure).toBeUndefined();
+    // The first action keeps exactly one armed timer; it is not superseded.
+    expect(registry.pendingCount("session-1")).toBe(1);
+    expect(scheduler.pending()).toBe(1);
+  });
+
+  it("bounds the session registry, evicting the oldest idle session", () => {
+    const registry = createEditorAgentRegistry({ ...fakeScheduler(), maxSessions: 2 });
+    registry.registerSnapshot(snapshot("session-1"));
+    registry.registerSnapshot(snapshot("session-2"));
+    // session-2 is kept live by a bridge, so the oldest IDLE session (session-1) is evicted on overflow.
+    registry.connect("session-2", () => undefined);
+    registry.registerSnapshot(snapshot("session-3"));
+
+    expect(registry.snapshotFor("session-1")).toBeUndefined();
+    expect(registry.snapshotFor("session-2")?.sessionId).toBe("session-2");
+    expect(registry.snapshotFor("session-3")?.sessionId).toBe("session-3");
+  });
 });

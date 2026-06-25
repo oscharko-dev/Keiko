@@ -3,13 +3,14 @@
 // The server COORDINATES; the browser bridge OWNS live editor mutation (ADR-0060). This module is the
 // single owner of the in-memory, non-persistent control-plane state that the BFF routes operate over:
 //
-//   1. Session registry  — the latest snapshot each browser bridge has published.
+//   1. Session registry  — the latest snapshot each browser bridge has published (bounded).
 //   2. Bridge liveness    — which sessions currently hold at least one live SSE connection. A queued
 //                           action is only meaningful when a live bridge can execute it; otherwise the
 //                           route answers a structured NO_ACTIVE_BRIDGE conflict (AC1).
 //   3. Bounded action queue — in-flight actions awaiting a browser result, each armed with a timeout so
-//                           a silent bridge cannot strand the queue (AC2). The per-session depth is
-//                           bounded so a runaway agent cannot grow the queue without limit (perf).
+//                           a silent bridge cannot strand the queue (AC2). The queue is keyed PER
+//                           SESSION so a result, timeout, or re-queue for one session can never touch
+//                           another session's slots; the per-session depth is bounded (perf).
 //   4. Event bus          — fan-out of session/action/result events, scoped per session so an action
 //                           for one session never reaches another session's bridge (bounded fan-out).
 //
@@ -29,9 +30,11 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 // A queued action the bridge never acknowledges within ACTION_TIMEOUT_MS is failed and evicted so the
-// bounded queue self-heals (AC2). MAX_QUEUED_PER_SESSION bounds the in-flight depth per session.
+// bounded queue self-heals (AC2). MAX_QUEUED_PER_SESSION bounds the in-flight depth per session;
+// MAX_SESSIONS bounds the snapshot registry so a long-lived server cannot grow it without limit.
 export const EDITOR_AGENT_ACTION_TIMEOUT_MS = 15_000;
 export const EDITOR_AGENT_MAX_QUEUED_PER_SESSION = 64;
+export const EDITOR_AGENT_MAX_SESSIONS = 256;
 
 export type EditorAgentSubscriber = (event: EditorAgentEvent) => void;
 
@@ -40,6 +43,8 @@ export interface EditorAgentRegistryOptions {
   readonly actionTimeoutMs?: number | undefined;
   // Maximum in-flight (queued, not yet resolved) actions per session before QUEUE_FULL backpressure.
   readonly maxQueuedPerSession?: number | undefined;
+  // Maximum registered session snapshots before the oldest idle session is evicted.
+  readonly maxSessions?: number | undefined;
   // Injection seams so unit tests drive the action timeout deterministically. Production uses an
   // unref'd setTimeout so a pending action never keeps the process alive.
   readonly setTimer?: ((handler: () => void, ms: number) => unknown) | undefined;
@@ -58,19 +63,21 @@ export interface EditorAgentRegistry {
   hasLiveBridge(sessionId: string): boolean;
   liveBridgeCount(sessionId: string): number;
   connect(sessionId: string | undefined, send: EditorAgentSubscriber): () => void;
-  // Admits `action` to the bounded queue (arming its timeout) and fans out `emitAction` — the route
-  // passes the possibly patch-derived envelope to broadcast, keyed for lifecycle by the original
-  // action's id/session. The caller MUST have already cleared preflight policy.
+  // Admits `action` to the bounded per-session queue (arming its timeout) and fans out `emitAction` —
+  // the route passes the possibly patch-derived envelope to broadcast, keyed for lifecycle by the
+  // original action's (sessionId, actionId). The caller MUST have already cleared preflight policy.
+  // A second admit for an actionId already in flight for that session is rejected (no silent
+  // supersede), so the first action's deadline is preserved.
   queueAction(action: EditorAgentAction, emitAction: EditorAgentAction): EditorAgentQueueOutcome;
-  // Fans out a result event. A result whose actionId matches a queued action also clears its timeout
-  // and frees the queue slot; unknown results (preflight conflicts, late acks) are fanned out as-is.
+  // Fans out a result event. A result whose (sessionId, actionId) matches a queued action also clears
+  // its timeout and frees that session's slot; any other result (preflight conflicts, late or
+  // cross-session acks) is fanned out as-is without touching the queue.
   reportResult(result: EditorAgentActionResult): void;
   pendingCount(sessionId: string): number;
   reset(): void;
 }
 
 interface PendingAction {
-  readonly sessionId: string;
   readonly timer: unknown;
 }
 
@@ -83,10 +90,12 @@ interface RegistryState {
   readonly sessions: Map<string, EditorAgentSessionSnapshot>;
   readonly bridges: Map<string, Set<EditorAgentSubscriber>>;
   readonly observers: Set<EditorAgentSubscriber>;
-  readonly pending: Map<string, PendingAction>;
-  readonly queueDepth: Map<string, number>;
+  // sessionId -> actionId -> pending entry. Session-scoped so no cross-session interference is possible
+  // and the per-session depth is exactly the inner map's size (no separate counter to drift).
+  readonly pending: Map<string, Map<string, PendingAction>>;
   readonly actionTimeoutMs: number;
   readonly maxQueuedPerSession: number;
+  readonly maxSessions: number;
   readonly setTimer: (handler: () => void, ms: number) => unknown;
   readonly clearTimer: (handle: unknown) => void;
   eventSeq: number;
@@ -155,20 +164,21 @@ function emit(state: RegistryState, payload: EditorAgentEventPayload): void {
   });
 }
 
-function decrementDepth(state: RegistryState, sessionId: string): void {
-  const depth = state.queueDepth.get(sessionId) ?? 0;
-  if (depth <= 1) {
-    state.queueDepth.delete(sessionId);
-    return;
-  }
-  state.queueDepth.set(sessionId, depth - 1);
+function clearPending(state: RegistryState, sessionId: string, actionId: string): boolean {
+  const inner = state.pending.get(sessionId);
+  const entry = inner?.get(actionId);
+  if (inner === undefined || entry === undefined) return false;
+  state.clearTimer(entry.timer);
+  inner.delete(actionId);
+  if (inner.size === 0) state.pending.delete(sessionId);
+  return true;
 }
 
 function onTimeout(state: RegistryState, action: EditorAgentAction): void {
-  const entry = state.pending.get(action.actionId);
-  if (entry === undefined) return;
-  state.pending.delete(action.actionId);
-  decrementDepth(state, entry.sessionId);
+  const inner = state.pending.get(action.sessionId);
+  if (inner?.get(action.actionId) === undefined) return;
+  inner.delete(action.actionId);
+  if (inner.size === 0) state.pending.delete(action.sessionId);
   emit(state, {
     type: "result",
     result: lifecycleFailure(
@@ -209,9 +219,23 @@ function queueActionImpl(
   action: EditorAgentAction,
   emitAction: EditorAgentAction,
 ): EditorAgentQueueOutcome {
-  const existing = state.pending.get(action.actionId);
-  const depth = state.queueDepth.get(action.sessionId) ?? 0;
-  if (existing === undefined && depth >= state.maxQueuedPerSession) {
+  const inner = state.pending.get(action.sessionId);
+  if (inner?.get(action.actionId) !== undefined) {
+    // A second admit for an actionId already in flight would otherwise strand the first action's
+    // deadline; reject it instead so the first action still self-heals (AC2). Pure rejection — the
+    // existing slot/timer are untouched.
+    return {
+      kind: "rejected",
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: action.actionId,
+        sessionId: action.sessionId,
+        status: "failed",
+        message: "An action with this id is already in flight for this session.",
+      },
+    };
+  }
+  if ((inner?.size ?? 0) >= state.maxQueuedPerSession) {
     return {
       kind: "rejected",
       result: lifecycleFailure(
@@ -221,17 +245,12 @@ function queueActionImpl(
       ),
     };
   }
-  // Re-queue of the same action id keeps the depth and clears the stale timer; a fresh action counts a
-  // new in-flight slot.
-  if (existing === undefined) {
-    state.queueDepth.set(action.sessionId, depth + 1);
-  } else {
-    state.clearTimer(existing.timer);
-  }
+  const slots = inner ?? new Map<string, PendingAction>();
+  if (inner === undefined) state.pending.set(action.sessionId, slots);
   const timer = state.setTimer(() => {
     onTimeout(state, action);
   }, state.actionTimeoutMs);
-  state.pending.set(action.actionId, { sessionId: action.sessionId, timer });
+  slots.set(action.actionId, { timer });
   emit(state, { type: "action", action: emitAction });
   return {
     kind: "queued",
@@ -245,22 +264,33 @@ function queueActionImpl(
 }
 
 function reportResultImpl(state: RegistryState, result: EditorAgentActionResult): void {
-  const entry = state.pending.get(result.actionId);
-  if (entry !== undefined) {
-    state.clearTimer(entry.timer);
-    state.pending.delete(result.actionId);
-    decrementDepth(state, entry.sessionId);
-  }
+  // Correlate strictly by (sessionId, actionId): a result can only resolve its own session's slot, so
+  // a mismatched or cross-session result is fanned out for visibility without disturbing the queue.
+  clearPending(state, result.sessionId, result.actionId);
   emit(state, { type: "result", result });
 }
 
+// Bound the snapshot registry: when over the cap, evict the oldest session that is neither bridged nor
+// has in-flight actions (so active work is never disrupted), preferring the just-registered session
+// last. If every other session is busy the registry is left slightly over the soft cap.
+function evictOldestIdleSession(state: RegistryState, keepSessionId: string): void {
+  for (const sessionId of state.sessions.keys()) {
+    if (sessionId === keepSessionId) continue;
+    if ((state.bridges.get(sessionId)?.size ?? 0) > 0) continue;
+    if ((state.pending.get(sessionId)?.size ?? 0) > 0) continue;
+    state.sessions.delete(sessionId);
+    return;
+  }
+}
+
 function resetImpl(state: RegistryState): void {
-  for (const entry of state.pending.values()) state.clearTimer(entry.timer);
+  for (const inner of state.pending.values()) {
+    for (const entry of inner.values()) state.clearTimer(entry.timer);
+  }
   state.sessions.clear();
   state.bridges.clear();
   state.observers.clear();
   state.pending.clear();
-  state.queueDepth.clear();
   state.eventSeq = 0;
 }
 
@@ -272,9 +302,9 @@ export function createEditorAgentRegistry(
     bridges: new Map(),
     observers: new Set(),
     pending: new Map(),
-    queueDepth: new Map(),
     actionTimeoutMs: options.actionTimeoutMs ?? EDITOR_AGENT_ACTION_TIMEOUT_MS,
     maxQueuedPerSession: options.maxQueuedPerSession ?? EDITOR_AGENT_MAX_QUEUED_PER_SESSION,
+    maxSessions: options.maxSessions ?? EDITOR_AGENT_MAX_SESSIONS,
     setTimer: options.setTimer ?? defaultSetTimer,
     clearTimer: options.clearTimer ?? defaultClearTimer,
     eventSeq: 0,
@@ -282,6 +312,9 @@ export function createEditorAgentRegistry(
   return {
     registerSnapshot: (snapshot): void => {
       state.sessions.set(snapshot.sessionId, snapshot);
+      if (state.sessions.size > state.maxSessions) {
+        evictOldestIdleSession(state, snapshot.sessionId);
+      }
       emit(state, { type: "session", snapshot });
     },
     listSessions: (): readonly EditorAgentSessionSnapshot[] => [...state.sessions.values()],
@@ -297,7 +330,7 @@ export function createEditorAgentRegistry(
     reportResult: (result): void => {
       reportResultImpl(state, result);
     },
-    pendingCount: (sessionId): number => state.queueDepth.get(sessionId) ?? 0,
+    pendingCount: (sessionId): number => state.pending.get(sessionId)?.size ?? 0,
     reset: (): void => {
       resetImpl(state);
     },

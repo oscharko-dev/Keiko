@@ -1058,6 +1058,24 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     expect(actionFailureCode(overflow.body)).toBe("QUEUE_FULL");
   });
 
+  it("rejects a second action reusing an in-flight actionId with 409 (distinct idempotency key)", async () => {
+    await registerSnapshotOnly();
+    connectBridge("session-1");
+    const first = await handleEditorAgentActions(
+      context(action({ actionId: "dup", idempotencyKey: "k1" })),
+    );
+    expect(first.status).toBe(202);
+
+    // A distinct idempotency key clears the route-level replay guard, but the registry rejects the
+    // re-used in-flight actionId so the first action's deadline is preserved (409, not 429).
+    const second = await handleEditorAgentActions(
+      context(action({ actionId: "dup", idempotencyKey: "k2" })),
+    );
+    expect(second.status).toBe(409);
+    expect(actionResultStatus(second.body)).toBe("failed");
+    expect(actionFailureCode(second.body)).toBeUndefined();
+  });
+
   it("scopes action fan-out to the target session's bridge plus global observers (perf)", async () => {
     await registerSnapshotOnly();
     const bridge1 = connectBridge("session-1");
