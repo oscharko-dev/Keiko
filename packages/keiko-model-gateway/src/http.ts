@@ -169,7 +169,13 @@ export function _resetWarnedCaBundlePaths(): void {
   warnedCaBundlePaths.clear();
 }
 
-function bodyToString(body: BodyInit | null | undefined): string | undefined {
+// Normalizes a request body for the Node-based egress fallbacks (proxy tunnels and the custom-CA
+// path). String and URLSearchParams bodies are serialized as before; a typed-array body
+// (`Uint8Array`/`Buffer`) is forwarded verbatim so a binary payload — e.g. the multipart
+// `audio/transcriptions` body of the voice STT seam (ADR-0058 D4) — survives a corporate proxy
+// without UTF-8 corruption. `ClientRequest.end()` accepts both string and `Uint8Array` chunks.
+// Other BodyInit shapes (Blob, FormData, streams) remain unsupported on the fallback paths.
+function bodyToWire(body: BodyInit | null | undefined): string | Uint8Array | undefined {
   if (body === undefined || body === null) {
     return undefined;
   }
@@ -179,7 +185,10 @@ function bodyToString(body: BodyInit | null | undefined): string | undefined {
   if (body instanceof URLSearchParams) {
     return body.toString();
   }
-  throw new TypeError("gateway HTTP fallback supports string request bodies only");
+  if (body instanceof Uint8Array) {
+    return body;
+  }
+  throw new TypeError("gateway HTTP fallback supports string and byte request bodies only");
 }
 
 // Converts a Node IncomingMessage into a streaming web Response, enforcing the
@@ -249,7 +258,7 @@ function fetchWithCaBundle(
   egress?: OutboundHttpEgressConfig,
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = bodyToString(init.body);
+  const body = bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
@@ -593,7 +602,7 @@ function fetchHttpViaProxy(
   ca: readonly string[],
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = bodyToString(init.body);
+  const body = bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
   if (hasForwardedCredentialHeader(headers)) {
     throw new OutboundHttpEgressError(
@@ -645,7 +654,7 @@ async function fetchHttpsViaProxy(
   ca: readonly string[],
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = bodyToString(init.body);
+  const body = bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
   if (!Object.prototype.hasOwnProperty.call(headers, "connection")) {
     headers.connection = "close";

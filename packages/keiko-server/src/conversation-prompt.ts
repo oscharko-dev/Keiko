@@ -5,7 +5,12 @@
 // are exported so the test suite and the gateway can assert the separation contract directly.
 // No IO, no redaction (the extractor already redacted), no error throwing.
 
-import type { ConversationDocumentContextWire } from "@oscharko-dev/keiko-contracts";
+import type {
+  ConversationDocumentContextWire,
+  DiscussionMode,
+} from "@oscharko-dev/keiko-contracts";
+
+import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 
 export const CONVERSATION_USER_BLOCK_HEADER = "User message:";
 export const CONVERSATION_CONTEXT_BLOCK_HEADER = "Attached document context:";
@@ -26,7 +31,10 @@ function renderDocumentBlock(doc: ConversationDocumentContextWire): string {
   return `${header}\n${doc.text}${marker}\n${CONVERSATION_DOCUMENT_SEPARATOR}`;
 }
 
-export function composeConversationPrompt(
+// Composes the user-message body: the labeled user block followed by the optional memory and
+// document-context blocks, in their fixed order. Returns the bare draft when neither memory nor
+// document context is present (the legacy single-string form).
+function composeUserMessageBody(
   draft: string,
   documentContext: readonly ConversationDocumentContextWire[],
   memoryContextText?: string,
@@ -46,4 +54,22 @@ export function composeConversationPrompt(
     blocks.push(`${CONVERSATION_CONTEXT_BLOCK_HEADER}\n${contextBlocks}`);
   }
   return blocks.join("\n\n");
+}
+
+// Issue #502 — the `discussionMode` PARAMETER is appended last in the signature (for backward-compat:
+// when it is omitted the return value is byte-identical to the pre-#502 composer). The rendered
+// directive BLOCK, however, is prepended BEFORE the user-message body when a mode is present — see the
+// return below. The block (content-free templates, see discussion-prompt.ts) is a labeled section
+// inserted between the system prompt and the user message; `CONVERSATION_SYSTEM_PROMPT` is never touched.
+export function composeConversationPrompt(
+  draft: string,
+  documentContext: readonly ConversationDocumentContextWire[],
+  memoryContextText?: string,
+  discussionMode?: DiscussionMode,
+): string {
+  const body = composeUserMessageBody(draft, documentContext, memoryContextText);
+  if (discussionMode === undefined) {
+    return body;
+  }
+  return `${composeDiscussionDirectiveBlock(discussionMode)}\n\n${body}`;
 }
