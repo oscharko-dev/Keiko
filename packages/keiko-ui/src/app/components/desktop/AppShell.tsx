@@ -174,12 +174,14 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
 // cases the contract folds to "outside-root" — a filesystem-root ("/") root and an empty root — are
 // handled locally to keep behavior identical.
 function editorRelativePath(root: string, file: string): string | null {
-  const comparableRoot = root.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
-  if (/^\/+$/u.test(root.trim().replace(/\\/gu, "/"))) {
+  const slashedRoot = root.trim().replace(/\\/gu, "/");
+  // `^\/+$` is anchored at both ends, so it stays linear on adversarial all-slash input.
+  if (/^\/+$/u.test(slashedRoot)) {
     const comparableFile = file.trim().replace(/\\/gu, "/");
     return comparableFile.length === 0 ? "" : comparableFile.replace(/^\/+/u, "");
   }
-  if (comparableRoot.length === 0) return "";
+  // Past the all-slash guard, an empty root is the only way the stripped root is empty.
+  if (slashedRoot.length === 0) return "";
   const resolution = resolveWorkspaceFileIdentifier(root, file);
   if (resolution.kind === "relative") return resolution.path;
   if (resolution.kind === "outside-root") return null;

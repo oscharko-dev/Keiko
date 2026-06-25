@@ -57,11 +57,16 @@ function isAbsoluteLike(path: string): boolean {
 
 // Backslash -> slash, collapse repeated slashes, strip a trailing slash. Pure lexical
 // normalization shared by root and candidate so prefix comparison is stable across separators.
+// Implemented with split/join (no quantified, anchored regex) so it stays strictly linear on
+// adversarial input such as a path of many repeated slashes (avoids polynomial backtracking).
 function toPosix(path: string): string {
-  return path
-    .replace(/\\/gu, "/")
-    .replace(/\/{2,}/gu, "/")
-    .replace(/\/+$/u, "");
+  const slashed = path.replace(/\\/gu, "/");
+  const collapsed = slashed
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .join("/");
+  if (collapsed.length === 0) return "";
+  return slashed.startsWith("/") ? `/${collapsed}` : collapsed;
 }
 
 // When `child` is the workspace root return ""; when it is lexically nested under `root` return

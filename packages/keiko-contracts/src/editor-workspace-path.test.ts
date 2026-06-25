@@ -65,6 +65,19 @@ describe("resolveWorkspaceFileIdentifier", () => {
     });
   });
 
+  it("collapses repeated slashes without polynomial backtracking on adversarial input", () => {
+    expect(resolveWorkspaceFileIdentifier("/repo", "/repo//src///a.ts")).toEqual({
+      kind: "relative",
+      path: "src/a.ts",
+    });
+    // A long run of leading slashes must normalize linearly (regression guard for the ReDoS fix).
+    const adversarial = `${"/".repeat(50_000)}x`;
+    expect(resolveWorkspaceFileIdentifier("/repo", adversarial)).toEqual({
+      kind: "outside-root",
+      candidate: "/x",
+    });
+  });
+
   it("matches the root prefix case-insensitively but preserves candidate casing", () => {
     expect(resolveWorkspaceFileIdentifier("/Repo", "/repo/Src/A.ts")).toEqual({
       kind: "relative",
