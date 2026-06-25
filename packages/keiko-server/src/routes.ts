@@ -171,6 +171,8 @@ import {
 } from "./promptEnhancer/index.js";
 import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
+import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
+import { GIT_DELIVERY_COMMIT_ROUTE_GROUP } from "./gitDelivery/commitRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -610,6 +612,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Registered as a sibling group so concurrent #470 epic merges stay mechanically merge-safe.
   ...GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP,
   ...GIT_DELIVERY_EVIDENCE_ROUTE_GROUP,
+  // #475 governed local write flows: branch create/switch, staging, and commit preview/execute. These
+  // EXECUTE through the #472 kernel + #474 evidence ledger; gated by the same capability flag and CSRF.
+  ...GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP,
+  ...GIT_DELIVERY_COMMIT_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured
