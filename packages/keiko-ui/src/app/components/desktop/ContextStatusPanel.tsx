@@ -14,9 +14,26 @@ import { formatTokens } from "@/lib/format";
 import { MetricRow, humanizeToken } from "./GroundedAnswer";
 import type { ContextBudgetPressure, GroundedAnswerContextSummary } from "@/lib/types";
 
+const ASSEMBLED_TOKEN_HINT =
+  "Conservative assembled-context estimate for this grounded answer, produced by the context allocator's keiko-conservative-utf8-v1 token estimator. It is separate from the live composer context below.";
+
 // Sentence-case the four-value pressure enum for the metric column (e.g. "moderate" → "Moderate").
 function pressureLabel(pressure: ContextBudgetPressure): string {
   return pressure.charAt(0).toUpperCase() + pressure.slice(1);
+}
+
+function populatedLaneCount(laneCounts: GroundedAnswerContextSummary["laneCounts"]): number {
+  return Object.values(laneCounts).filter((count) => count > 0).length;
+}
+
+function contextSummaryMeta(contextSummary: GroundedAnswerContextSummary): string {
+  const lanes = populatedLaneCount(contextSummary.laneCounts);
+  return [
+    `${formatTokens(contextSummary.totalEstimatedTokens)} est. assembled tokens`,
+    `${pressureLabel(contextSummary.budgetPressure)} pressure`,
+    `${lanes.toLocaleString("en-US")} ${lanes === 1 ? "lane" : "lanes"}`,
+    contextSummary.compactionActive ? "Compaction active" : "Compaction inactive",
+  ].join(" · ");
 }
 
 // Per-lane rows: only lanes that actually carried items (count > 0), so the panel does not list
@@ -50,22 +67,35 @@ export function ContextStatusPanel({
     return null;
   }
   return (
-    <details className="ctx-status">
-      <summary className="ctx-status-summary" aria-label="Why this context?">
-        Why this context?
+    <details className="ctx-status grounded-evidence-disclosure">
+      <summary
+        className="ctx-status-summary grounded-evidence-summary"
+        aria-label="Context assembly details"
+        title={ASSEMBLED_TOKEN_HINT}
+      >
+        <span className="grounded-evidence-summary-title">Context</span>
+        <span className="grounded-evidence-summary-meta">
+          {contextSummaryMeta(contextSummary)}
+        </span>
       </summary>
-      <dl className="ctx-status-dl grounded-context-pack-dl">
-        <MetricRow
-          label="Estimated"
-          value={`${formatTokens(contextSummary.totalEstimatedTokens)} tok`}
-        />
-        <MetricRow label="Budget pressure" value={pressureLabel(contextSummary.budgetPressure)} />
-        <LaneRows laneCounts={contextSummary.laneCounts} />
-        <MetricRow
-          label="Compaction"
-          value={contextSummary.compactionActive ? "Active" : "Inactive"}
-        />
-      </dl>
+      <div className="ctx-status-body grounded-evidence-body">
+        <dl className="ctx-status-dl grounded-context-pack-dl">
+          <MetricRow
+            label="Estimator"
+            value="keiko-conservative-utf8-v1"
+          />
+          <MetricRow
+            label="Assembled estimate"
+            value={`${formatTokens(contextSummary.totalEstimatedTokens)} tok`}
+          />
+          <MetricRow label="Budget pressure" value={pressureLabel(contextSummary.budgetPressure)} />
+          <LaneRows laneCounts={contextSummary.laneCounts} />
+          <MetricRow
+            label="Compaction"
+            value={contextSummary.compactionActive ? "Active" : "Inactive"}
+          />
+        </dl>
+      </div>
     </details>
   );
 }

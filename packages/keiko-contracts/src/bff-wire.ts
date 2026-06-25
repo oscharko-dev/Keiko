@@ -34,7 +34,6 @@ import type {
   KnowledgeSourceId,
 } from "./local-knowledge.js";
 import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
-import type { ExpectedCheck, WorkflowKind } from "./workflow-handoff.js";
 // Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
 // ContextLaneId is a fixed 8-member string literal union, never a path; ContextBudgetPressure
 // is a 4-value enum. Importing these is intra-package (contracts → contracts), not a sibling edge.
@@ -199,6 +198,7 @@ export interface ChatMessage {
   readonly workflowStatus: WorkflowStatus | undefined;
   readonly shortResult: string | undefined;
   readonly taskType: string | undefined;
+  readonly groundedAnswer?: GroundedAnswer | undefined;
 }
 
 export interface CreateChatOptions {
@@ -242,6 +242,7 @@ export interface NewChatMessage {
   readonly workflowStatus: WorkflowStatus | undefined;
   readonly shortResult: string | undefined;
   readonly taskType: string | undefined;
+  readonly groundedAnswer?: GroundedAnswer | undefined;
 }
 
 // Issue #66 — partial PATCH for a run-summary system message. Every field is independently
@@ -302,23 +303,6 @@ export interface MessagesResponse {
 
 export interface MessageResponse {
   readonly message: ChatMessage;
-}
-
-export interface GroundedWorkflowHandoffRequest {
-  readonly assistantMessageId: string;
-  readonly chatId: string;
-  readonly modelId: string;
-  readonly workflowKind: WorkflowKind;
-  readonly input: Record<string, unknown>;
-  readonly editablePaths: readonly string[];
-  readonly expectedChecks?: readonly ExpectedCheck[] | undefined;
-  readonly unknowns?: readonly string[] | undefined;
-  readonly requestedAtMs: number;
-}
-
-export interface GroundedWorkflowHandoffResponse {
-  readonly run: { readonly runId: string; readonly fingerprint: string };
-  readonly messages: readonly ChatMessage[];
 }
 
 // ─── Desktop chat bootstrap (BFF /api/desktop/chat/bootstrap) ─────────────────────
@@ -1049,6 +1033,40 @@ export interface FilesTreeResponse {
   readonly truncated: boolean;
 }
 
+export interface FilesSearchResult {
+  readonly root: string;
+  readonly path: string;
+  readonly name: string;
+  readonly directory: string;
+  readonly extension: string | null;
+  readonly sizeBytes: number;
+  readonly modifiedAt: number;
+  readonly fileRole?: FilesSearchFileRole | undefined;
+  readonly matchQuality?: FilesSearchMatchQuality | undefined;
+  readonly rootKind?: FilesSearchRootKind | undefined;
+}
+
+export type FilesSearchFileRole =
+  | "source"
+  | "test"
+  | "config"
+  | "docs"
+  | "generated"
+  | "asset"
+  | "other";
+
+export type FilesSearchMatchQuality = "exact" | "strong" | "path" | "weak";
+
+export type FilesSearchRootKind = "selected-root" | "nested-git-root";
+
+export interface FilesSearchResponse {
+  readonly root: string;
+  readonly query: string;
+  readonly results: readonly FilesSearchResult[];
+  readonly truncated: boolean;
+  readonly scannedFileCount: number;
+}
+
 export interface FilesPreviewBase {
   readonly root: string;
   readonly path: string;
@@ -1173,6 +1191,59 @@ export interface BrowserEventEnvelope {
   readonly kind: BrowserEventKind;
   readonly sessionId: string;
   readonly payload: Readonly<Record<string, unknown>>;
+}
+
+// ─── Gateway readiness checks (non-mutating model capability probes) ─────────────
+
+export type GatewayReadinessProbeName =
+  | "chat"
+  | "streaming"
+  | "tool_calling"
+  | "json_schema"
+  | "reasoning"
+  | "image_input"
+  | "document_input"
+  | "long_context";
+
+export type GatewayReadinessProbeStatus = "passed" | "failed" | "unsupported" | "skipped";
+
+export type GatewayReadinessOverallStatus = "ready" | "partial" | "failed";
+
+export interface GatewayReadinessProbeResult {
+  readonly name: GatewayReadinessProbeName;
+  readonly status: GatewayReadinessProbeStatus;
+  readonly latencyMs: number;
+  readonly evidence: string;
+  readonly warning?: string | undefined;
+}
+
+export interface GatewayReadinessVerifiedCapabilities {
+  readonly streaming?: boolean | undefined;
+  readonly toolCalling?: boolean | undefined;
+  readonly structuredOutput?: boolean | undefined;
+  readonly reasoningOutput?: boolean | undefined;
+  readonly imageInput?: boolean | undefined;
+  readonly documentInput?: boolean | undefined;
+  readonly testedContextTokens?: number | undefined;
+}
+
+export interface GatewayReadinessOptions {
+  readonly probes?: readonly GatewayReadinessProbeName[] | undefined;
+  readonly includeDeepProbes?: boolean | undefined;
+  readonly maxContextTokens?: number | undefined;
+}
+
+export interface GatewayReadinessRequest {
+  readonly modelId?: string | undefined;
+  readonly options?: GatewayReadinessOptions | undefined;
+}
+
+export interface GatewayReadinessReport {
+  readonly modelId: string;
+  readonly checkedAt: string;
+  readonly overallStatus: GatewayReadinessOverallStatus;
+  readonly probes: readonly GatewayReadinessProbeResult[];
+  readonly verifiedCapabilities: GatewayReadinessVerifiedCapabilities;
 }
 
 // ─── Prompt Enhancer BFF wire surface (Epic #1307 / Issue #1314) ───────────────────

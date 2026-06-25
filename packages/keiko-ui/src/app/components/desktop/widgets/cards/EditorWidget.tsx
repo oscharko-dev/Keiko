@@ -216,7 +216,12 @@ function DirtyCloseDialog(props: {
         </ul>
         {props.pending.error !== undefined ? <p role="alert">{props.pending.error}</p> : null}
         <div className="ed-dialog-actions">
-          <button type="button" className="ed-save" onClick={props.onSave} disabled={props.pending.saving}>
+          <button
+            type="button"
+            className="ed-save"
+            onClick={props.onSave}
+            disabled={props.pending.saving}
+          >
             {props.pending.saving ? "Saving..." : "Save"}
           </button>
           <button
@@ -481,7 +486,11 @@ export function EditorWidget({
       const normalizedFile = normalizeEditorFile(normalizedRoot, nextFile);
       if (normalizedRoot.length === 0 || normalizedFile.length === 0) return;
       const paneId = currentPane.id;
-      const nextLayout = editorLayoutReducer(layout, { type: "open-file", paneId, file: normalizedFile });
+      const nextLayout = editorLayoutReducer(layout, {
+        type: "open-file",
+        paneId,
+        file: normalizedFile,
+      });
       setWorkspaceRoot(normalizedRoot);
       commitLayout(nextLayout, normalizedRoot);
     },
@@ -570,6 +579,19 @@ export function EditorWidget({
     [resizeSidebarTo],
   );
 
+  const resizeSidebarBy = useCallback(
+    (delta: number): void => {
+      commitLayout(
+        editorLayoutReducer(layout, {
+          type: "set-sidebar",
+          width: clampNumber(layout.sidebarWidth + delta, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
+          collapsed: false,
+        }),
+      );
+    },
+    [commitLayout, layout],
+  );
+
   const resizeSplitTo = useCallback(
     (split: EditorLayoutSplitNode, rect: DOMRect, clientX: number, clientY: number): void => {
       const raw =
@@ -581,6 +603,19 @@ export function EditorWidget({
           type: "resize-split",
           splitId: split.id,
           ratio: clampNumber(raw, MIN_SPLIT_RATIO, MAX_SPLIT_RATIO),
+        }),
+      );
+    },
+    [commitLayout, layout],
+  );
+
+  const resizeSplitBy = useCallback(
+    (split: EditorLayoutSplitNode, delta: number): void => {
+      commitLayout(
+        editorLayoutReducer(layout, {
+          type: "resize-split",
+          splitId: split.id,
+          ratio: clampNumber(split.ratio + delta, MIN_SPLIT_RATIO, MAX_SPLIT_RATIO),
         }),
       );
     },
@@ -616,6 +651,36 @@ export function EditorWidget({
       window.addEventListener("mouseup", up, { once: true });
     },
     [resizeSplitTo],
+  );
+
+  const handleSidebarResizerKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>): void => {
+      const step = event.shiftKey ? 32 : 12;
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        resizeSidebarBy(-step);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        resizeSidebarBy(step);
+      }
+    },
+    [resizeSidebarBy],
+  );
+
+  const handleSplitResizerKeyDown = useCallback(
+    (split: EditorLayoutSplitNode, event: KeyboardEvent<HTMLButtonElement>): void => {
+      const step = event.shiftKey ? 10 : 2;
+      const decrementKey = split.direction === "row" ? "ArrowLeft" : "ArrowUp";
+      const incrementKey = split.direction === "row" ? "ArrowRight" : "ArrowDown";
+      if (event.key === decrementKey) {
+        event.preventDefault();
+        resizeSplitBy(split, -step);
+      } else if (event.key === incrementKey) {
+        event.preventDefault();
+        resizeSplitBy(split, step);
+      }
+    },
+    [resizeSplitBy],
   );
 
   const capturePointer = useCallback((event: PointerEvent<HTMLButtonElement>): void => {
@@ -695,28 +760,28 @@ export function EditorWidget({
     <span className="ed-pane-actions" aria-label="Editor split controls">
       <button
         type="button"
-        className="ed-icon-action"
+        className="ed-icon-action ui-tip"
         aria-label={`Split ${pane.activeFile || "editor"} right`}
-        title="Split right"
+        data-tip="Split right"
         onClick={() => splitPane(pane.id, "row")}
       >
         <Icons.split size={14} />
       </button>
       <button
         type="button"
-        className="ed-icon-action"
+        className="ed-icon-action ui-tip"
         aria-label={`Split ${pane.activeFile || "editor"} down`}
-        title="Split down"
+        data-tip="Split down"
         onClick={() => splitPane(pane.id, "column")}
       >
-        <Icons.tile size={14} />
+        <Icons.panelDown size={14} />
       </button>
       {editorLayoutPaneIds(layout).length > 1 ? (
         <button
           type="button"
-          className="ed-icon-action"
+          className="ed-icon-action ui-tip"
           aria-label={`Close split ${pane.activeFile || "editor"}`}
-          title="Close split"
+          data-tip="Close split"
           onClick={() => closePane(pane.id)}
         >
           <Icons.close size={14} />
@@ -804,9 +869,9 @@ export function EditorWidget({
         {renderNode(node.first)}
         <button
           type="button"
-          className="ed-pane-resizer"
+          className="ed-pane-resizer ui-tip"
           aria-label="Resize editor split"
-          title="Resize editor split"
+          data-tip="Resize editor split"
           onPointerDown={capturePointer}
           onPointerMove={(event) => {
             if (event.buttons !== 1) return;
@@ -818,6 +883,7 @@ export function EditorWidget({
           onPointerUp={releasePointer}
           onPointerCancel={releasePointer}
           onMouseDown={(event) => beginSplitMouseResize(node, event)}
+          onKeyDown={(event) => handleSplitResizerKeyDown(node, event)}
         />
         {renderNode(node.second)}
       </div>
@@ -835,9 +901,9 @@ export function EditorWidget({
       {layout.sidebarCollapsed ? (
         <button
           type="button"
-          className="ed-sidebar-restore"
+          className="ed-sidebar-restore ui-tip"
           aria-label="Show project tree"
-          title="Show project tree"
+          data-tip="Show project tree"
           onClick={toggleSidebar}
         >
           <Icons.sidebar size={15} />
@@ -848,9 +914,9 @@ export function EditorWidget({
             <div className="ed-sidebar-chrome">
               <button
                 type="button"
-                className="ed-icon-action"
+                className="ed-icon-action ui-tip"
                 aria-label="Hide project tree"
-                title="Hide project tree"
+                data-tip="Hide project tree"
                 onClick={toggleSidebar}
               >
                 <Icons.sidebar size={14} />
@@ -866,14 +932,15 @@ export function EditorWidget({
           </aside>
           <button
             type="button"
-            className="ed-sidebar-resizer"
+            className="ed-sidebar-resizer ui-tip"
             aria-label="Resize project tree"
-            title="Resize project tree"
+            data-tip="Resize project tree"
             onPointerDown={capturePointer}
             onPointerMove={resizeSidebar}
             onPointerUp={releasePointer}
             onPointerCancel={releasePointer}
             onMouseDown={beginSidebarMouseResize}
+            onKeyDown={handleSidebarResizerKeyDown}
           />
         </>
       )}

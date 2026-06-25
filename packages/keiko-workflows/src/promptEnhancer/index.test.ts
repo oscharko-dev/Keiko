@@ -55,6 +55,10 @@ function run(
   });
 }
 
+function trustedRenderedPrompt(renderedPrompt: string): string {
+  return renderedPrompt.replace(/## Input \([\s\S]*?\n\n## Steps/u, "## Steps");
+}
+
 describe("runPromptEnhancement", () => {
   it("assembles a complete, content-light enhanced prompt with every section", () => {
     const result = run({
@@ -77,6 +81,35 @@ describe("runPromptEnhancement", () => {
       reason: "evidence-store-not-configured",
     });
     expect(result.groundingReadiness.status).toBeDefined();
+  });
+
+  it("produces semantically distinct rendered prompts for unrelated German drafts", () => {
+    const results = [
+      run({
+        text: "Schreibe einen robusten Prompt fuer Code-Review und Optimierung.",
+        missingInformationStrategy: "assume",
+      }),
+      run({ text: "Backe mir einen Kuchen.", missingInformationStrategy: "assume" }),
+      run({
+        text: "Plane eine zweiwoechige Japan-Reise im Oktober.",
+        missingInformationStrategy: "assume",
+      }),
+      run({
+        text: "Schreibe einen Kuendigungsbrief fuer meinen Mobilfunkvertrag.",
+        missingInformationStrategy: "assume",
+      }),
+    ];
+
+    const trustedBodies = results.map((result) => trustedRenderedPrompt(result.renderedPrompt));
+    expect(new Set(trustedBodies).size).toBe(results.length);
+    expect(results[0]?.renderedPrompt).toMatch(/software review and optimization/i);
+    expect(results[0]?.renderedPrompt).toMatch(/test recommendations|verification steps/i);
+    expect(results[1]?.renderedPrompt).toMatch(/baking|recipe/i);
+    expect(results[1]?.renderedPrompt).toMatch(/ingredients|oven temperature|servings/i);
+    expect(results[2]?.renderedPrompt).toMatch(/travel itinerary planning/i);
+    expect(results[2]?.renderedPrompt).toMatch(/day-by-day route|transport|budget/i);
+    expect(results[3]?.renderedPrompt).toMatch(/formal letter|contract communication/i);
+    expect(results[3]?.renderedPrompt).toMatch(/recipient|contract|confirmation/i);
   });
 
   it("is deterministic: identical requests produce identical results", () => {

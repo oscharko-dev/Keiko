@@ -21,6 +21,7 @@ import {
   acquireGrabbingBodyStyle,
   isInteractiveControlTarget,
   isPrimaryActivationPointer,
+  isTextEntryTarget,
   isWindowDragPointer,
 } from "../interactionGuards";
 import { hasConnectablePeer, subText } from "./connectionUtils";
@@ -120,6 +121,7 @@ function selectBody(
   linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined,
   updateCfg: (patch: AppWindow["cfg"]) => void,
   openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null,
+  openEditorFile: WorkspaceApi["openEditorFile"],
 ): BodySelection {
   const def = WIN_TYPES[type];
   if (type === "chat") {
@@ -150,6 +152,7 @@ function selectBody(
         linkedImageSources,
         updateCfg,
         openWindow,
+        openEditorFile,
       }),
     };
   }
@@ -170,6 +173,7 @@ function selectBody(
       linkedImageSources,
       updateCfg,
       openWindow,
+      openEditorFile,
     }),
   };
 }
@@ -180,6 +184,16 @@ function shouldAutoGrowWindow(type: WindowType, cfg: Record<string, unknown>): b
     typeof cfg["selectedScreenIdsJson"] === "string" &&
     cfg["selectedScreenIdsJson"].length > 0
   );
+}
+
+function autoGrowContentKey(type: WindowType, cfg: Record<string, unknown>): string | null {
+  if (!shouldAutoGrowWindow(type, cfg)) return null;
+  const snapshotRunId = typeof cfg["snapshotRunId"] === "string" ? cfg["snapshotRunId"] : "";
+  const selectedScreenIdsJson =
+    typeof cfg["selectedScreenIdsJson"] === "string" ? cfg["selectedScreenIdsJson"] : "";
+  const selectedScreenName =
+    typeof cfg["selectedScreenName"] === "string" ? cfg["selectedScreenName"] : "";
+  return `${snapshotRunId}\n${selectedScreenIdsJson}\n${selectedScreenName}`;
 }
 
 interface DragGeometry {
@@ -333,18 +347,27 @@ export function WindowFrame({
   const [draggingWindow, setDraggingWindow] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const autoGrowSuppressedKeyRef = useRef<string | null>(null);
   const zoom = win.zoom ?? 1;
+  const currentAutoGrowContentKey = autoGrowContentKey(win.type, win.cfg);
   const receivesFilesContext =
-    win.type === "chat" || win.type === "agents" || win.type === "quality" || win.type === "editor";
+    win.type === "chat" ||
+    win.type === "agents" ||
+    win.type === "quality" ||
+    win.type === "editor" ||
+    win.type === "promptEnhancer";
   const receivesFocusedFileContext =
-    win.type === "agents" || win.type === "quality" || win.type === "editor";
+    win.type === "agents" ||
+    win.type === "quality" ||
+    win.type === "editor" ||
+    win.type === "promptEnhancer";
   const receivesConnectorContext = win.type === "quality" || win.type === "editor";
   const linkedRoot = receivesFilesContext ? api.linkedFilesRoot(win.id) : null;
   const linkedFilePath = receivesFocusedFileContext
     ? api.linkedFilesContext(win.id)?.activeFilePath
     : undefined;
   const linkedRoots =
-    win.type === "quality"
+    win.type === "quality" || win.type === "promptEnhancer"
       ? api.linkedAllFilesRoots(win.id)
       : linkedRoot !== null
         ? [linkedRoot]
@@ -370,6 +393,10 @@ export function WindowFrame({
     (type: WindowType, cfg?: AppWindow["cfg"]): string | null => api.add(type, cfg),
     [api],
   );
+  const openEditorFile = useCallback<WorkspaceApi["openEditorFile"]>(
+    (request) => api.openEditorFile(request),
+    [api],
+  );
   const { mode: bodyMode, node: body } = selectBody(
     win.id,
     win.type,
@@ -386,6 +413,7 @@ export function WindowFrame({
     linkedImageSources,
     updateCfg,
     openWindow,
+    openEditorFile,
   );
 
   const setZoom = useCallback(
@@ -394,12 +422,26 @@ export function WindowFrame({
   );
 
   useEffect(() => {
+    if (autoGrowSuppressedKeyRef.current !== currentAutoGrowContentKey) {
+      autoGrowSuppressedKeyRef.current = null;
+    }
+  }, [currentAutoGrowContentKey]);
+
+  const suppressAutoGrowForManualResize = useCallback((): void => {
+    if (currentAutoGrowContentKey !== null) {
+      autoGrowSuppressedKeyRef.current = currentAutoGrowContentKey;
+    }
+  }, [currentAutoGrowContentKey]);
+
+  useEffect(() => {
     if (!shouldAutoGrowWindow(win.type, win.cfg) || win.max || bodyMode !== "full") return;
+    if (currentAutoGrowContentKey === null) return;
     const body = bodyRef.current;
     if (body === null) return;
     let frame: number | null = null;
     const measure = (): void => {
       frame = null;
+      if (autoGrowSuppressedKeyRef.current === currentAutoGrowContentKey) return;
       const overflow = body.scrollHeight - body.clientHeight;
       if (overflow <= AUTO_GROW_EPSILON_PX) return;
       const nextHeight = Math.ceil(win.h + overflow);
@@ -428,7 +470,7 @@ export function WindowFrame({
       }
       observer?.disconnect();
     };
-  }, [api, bodyMode, win.cfg, win.h, win.id, win.max, win.type]);
+  }, [api, bodyMode, currentAutoGrowContentKey, win.cfg, win.h, win.id, win.max, win.type]);
 
   useEffect(
     () => () => {
@@ -440,6 +482,10 @@ export function WindowFrame({
 
   const focusWindowForTarget = useCallback(
     (target: EventTarget | null): void => {
+      if (isTextEntryTarget(target)) {
+        window.setTimeout(() => api.focus(win.id), 180);
+        return;
+      }
       if (isInteractiveControlTarget(target)) {
         window.setTimeout(() => api.focus(win.id), 0);
         return;
@@ -506,31 +552,73 @@ export function WindowFrame({
         const z = view.zoom;
         const previousCursor = document.body.style.cursor;
         let active = true;
-        const cleanup = (): void => {
+        let pending: ResizeStart | null = null;
+        let frame: number | null = null;
+        const flushPendingResize = (): void => {
+          frame = null;
+          if (pending === null) return;
+          const next = pending;
+          pending = null;
+          if (sameResizeGeometry(last, next)) return;
+          last = next;
+          api.update(win.id, { ...next, max: false });
+        };
+        const cancelScheduledResize = (): void => {
+          if (frame === null) return;
+          if (typeof window.cancelAnimationFrame === "function") {
+            window.cancelAnimationFrame(frame);
+          } else {
+            window.clearTimeout(frame);
+          }
+          frame = null;
+        };
+        const scheduleResize = (next: ResizeStart): void => {
+          if (pending !== null && sameResizeGeometry(pending, next)) return;
+          if (pending === null && sameResizeGeometry(last, next)) return;
+          suppressAutoGrowForManualResize();
+          pending = next;
+          if (frame !== null) return;
+          frame =
+            typeof window.requestAnimationFrame === "function"
+              ? window.requestAnimationFrame(flushPendingResize)
+              : window.setTimeout(flushPendingResize, 0);
+        };
+        const schedulePendingFlush = (): void => {
+          if (pending === null || frame !== null) return;
+          frame =
+            typeof window.requestAnimationFrame === "function"
+              ? window.requestAnimationFrame(flushPendingResize)
+              : window.setTimeout(flushPendingResize, 0);
+        };
+        const cleanup = (flushPending = false): void => {
           if (!active) return;
           active = false;
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", end);
           window.removeEventListener("pointercancel", end);
           window.removeEventListener("blur", end);
+          if (flushPending) {
+            schedulePendingFlush();
+          } else {
+            cancelScheduledResize();
+            pending = null;
+          }
           document.body.style.cursor = previousCursor;
           if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
         };
         const end = (): void => {
-          cleanup();
+          cleanup(true);
         };
         const move = (ev: PointerEvent): void => {
           if (!active) return;
           if (ev.buttons === 0) {
-            cleanup();
+            cleanup(true);
             return;
           }
           const dx = (ev.clientX - sx) / z;
           const dy = (ev.clientY - sy) / z;
           const next = applyResizeDelta(start, dir, dx, dy, win.type);
-          if (sameResizeGeometry(last, next)) return;
-          last = next;
-          api.update(win.id, { ...next, max: false });
+          scheduleResize(next);
         };
         document.body.style.cursor = resizeCursor(dir);
         window.addEventListener("pointermove", move);
@@ -539,7 +627,7 @@ export function WindowFrame({
         window.addEventListener("blur", end);
         resizeCleanupRef.current = cleanup;
       },
-    [api, win.id, win.x, win.y, win.w, win.h, win.type, view.zoom],
+    [api, win.id, win.x, win.y, win.w, win.h, win.type, view.zoom, suppressAutoGrowForManualResize],
   );
 
   // Stop propagation BEFORE delegating, so the parent .window's onPointerDown

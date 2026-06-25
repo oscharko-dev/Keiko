@@ -66,28 +66,6 @@ export interface ConnectedContextEvidencePlanRingInput {
   readonly kind: string;
 }
 
-export interface ConnectedContextEvidencePlanInput {
-  readonly planId: string;
-  readonly state: string;
-  readonly createdAtMs?: number | undefined;
-  readonly anchors?: readonly ConnectedContextEvidencePlanAnchorInput[] | undefined;
-  readonly rings?: readonly ConnectedContextEvidencePlanRingInput[] | undefined;
-  readonly clarification?:
-    | {
-        readonly reason?: string | undefined;
-      }
-    | undefined;
-}
-
-export interface ConnectedContextEvidencePlanAnchorInput {
-  readonly term: string;
-  readonly kind: string;
-}
-
-export interface ConnectedContextEvidencePlanRingInput {
-  readonly kind: string;
-}
-
 export interface ConnectedContextEvidenceContext {
   readonly store: EvidenceStore;
   readonly env: EnvSource;

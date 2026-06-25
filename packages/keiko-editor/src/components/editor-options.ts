@@ -112,10 +112,9 @@ export function buildEditorOptions(
     foldingStrategy: "auto",
     occurrencesHighlight: degraded ? "off" : "singleFile",
     find: { addExtraSpaceOnTop: false, seedSearchStringFromSelection: "always" },
-    // Enabled only when a governed hover provider is wired (Issue #1201). The bridge renders quick
-    // info as an inert Markdown code fence, so the vendored DOMPurify sink only processes HTML-escaped
-    // text; no Markdown-rendering hover content originates from the editor itself.
-    hover: { enabled: hoverEnabled },
+    // Force below-line placement so top-of-editor diagnostics do not render under Keiko window chrome.
+    // The bridge renders quick info as inert Markdown, so hover remains the only enabled Markdown sink.
+    hover: { enabled: hoverEnabled, above: false },
     quickSuggestions: false,
     quickSuggestionsDelay: 0,
     suggestOnTriggerCharacters: true,

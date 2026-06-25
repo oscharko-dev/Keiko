@@ -226,6 +226,12 @@ export const Icons = {
     </Ico>
   ),
   check: (p: IcoProps): ReactNode => <Ico {...p} d="M5 12.5l4.5 4.5L19 6.5" />,
+  copy: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <rect x="8" y="8" width="10" height="10" rx="2" />
+      <path d="M6 14 H5.8 A1.8 1.8 0 0 1 4 12.2 V6.8 A1.8 1.8 0 0 1 5.8 5 H11.2 A1.8 1.8 0 0 1 13 6.8 V7" />
+    </Ico>
+  ),
   /* Lift: info ring open at the top seam + stem. */
   info: (p: IcoProps): ReactNode => (
     <Ico {...p}>
@@ -334,6 +340,13 @@ export const Icons = {
     <Ico {...p}>
       <path d="M13.50 4.50 H18.00 A2.5 2.5 0 0 1 20.50 7.00 V17.00 A2.5 2.5 0 0 1 18.00 19.50 H6.00 A2.5 2.5 0 0 1 3.50 17.00 V7.00 A2.5 2.5 0 0 1 6.00 4.50 H10.50" />
       <path d="M14.5 5 V19" />
+    </Ico>
+  ),
+  /* Lift: panel frame with one top seam + bottom divider. */
+  panelDown: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M13.50 4.50 H18.00 A2.5 2.5 0 0 1 20.50 7.00 V17.00 A2.5 2.5 0 0 1 18.00 19.50 H6.00 A2.5 2.5 0 0 1 3.50 17.00 V7.00 A2.5 2.5 0 0 1 6.00 4.50 H10.50" />
+      <path d="M5 14.5 H19" />
     </Ico>
   ),
   /* Lift: open top diamond (seam) + two stacked sheets. */

@@ -285,10 +285,9 @@ export function chooseDefaultModel(models: readonly ModelCapability[]): string {
   return models[0]?.id ?? "";
 }
 
-// Issue #153 — single source of truth lives in @/lib/workflow-eligibility so the in-chat
-// launcher (ChatWindow → WorkflowHandoff) and this legacy modal cannot drift. The thin
-// alias below preserves the historical `isAgentWorkflowModel` export name so the existing
-// NewWindowDialog.test imports keep resolving.
+// Issue #153 — single source of truth lives in @/lib/workflow-eligibility. The thin alias below
+// preserves the historical `isAgentWorkflowModel` export name so NewWindowDialog.test imports keep
+// resolving.
 export const isAgentWorkflowModel = isWorkflowEligibleModel;
 
 function toPosix(value: string): string {
@@ -551,8 +550,7 @@ function validationMessage(
     return "Explain plan requires a file path.";
   }
   if (workflow === "unit-test-generation") {
-    if (fields.unitFilePath.trim().length === 0)
-      return "Unit Test Agent requires a source file.";
+    if (fields.unitFilePath.trim().length === 0) return "Unit Test Agent requires a source file.";
   }
   if (workflow === "bug-investigation") {
     if (fields.bugDescription.trim().length === 0)
@@ -647,6 +645,7 @@ interface AgentLauncherProps {
   readonly setDirectoryField: (key: string | null) => void;
   readonly setDialogError: (message: string | null) => void;
   readonly onConfirm: (cfg: Cfg) => void;
+  readonly onClose: () => void;
 }
 
 function AgentLauncher({
@@ -656,9 +655,9 @@ function AgentLauncher({
   setDirectoryField,
   setDialogError,
   onConfirm,
+  onClose,
 }: AgentLauncherProps): ReactNode {
-  const [workflow, setWorkflow] =
-    useState<ProductionAgentWorkflowId>("unit-test-generation");
+  const [workflow, setWorkflow] = useState<ProductionAgentWorkflowId>("unit-test-generation");
   const [workspaceRoot, setWorkspaceRoot] = useState(filesContext?.root ?? "");
   const [modelId, setModelId] = useState("");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
@@ -680,10 +679,16 @@ function AgentLauncher({
   const registered = workspace.length > 0 && projects.includes(workspace);
   const validation = validationMessage(workflow, workspace, modelId, fields);
   const canStart = validation === null && registered && !starting && !loading;
-  const selectedAgent =
-    AGENT_WORKFLOWS.find((item) => item.id === workflow) ?? AGENT_WORKFLOWS[0]!;
+  const selectedAgent = AGENT_WORKFLOWS.find((item) => item.id === workflow) ?? AGENT_WORKFLOWS[0]!;
   const startLabel =
     workflow === "unit-test-generation" ? "Start Unit Test Agent" : "Start Bugfix Agent";
+  const firstAvailableProjectRoot = projects[0] ?? "";
+  const repositoryBrowseSeed =
+    workspace.length > 0 ? workspace : (filesContext?.root ?? firstAvailableProjectRoot);
+  const canBrowseRepository = repositoryBrowseSeed.length > 0;
+  const repositoryBrowseHelperId = "agent-repository-browse-help";
+  const canBrowseSourceFile = registered;
+  const sourceBrowseHelperId = "agent-source-file-browse-help";
 
   useEffect(() => {
     let cancelled = false;
@@ -789,6 +794,12 @@ function AgentLauncher({
     }
   };
 
+  const openRepositoryPicker = (): void => {
+    if (!canBrowseRepository) return;
+    if (workspace.length === 0) setWorkspaceRoot(repositoryBrowseSeed);
+    setDirectoryField("agentWorkspace");
+  };
+
   const renderAgentFields = (): ReactNode => {
     if (workflow === "unit-test-generation") {
       return (
@@ -810,11 +821,20 @@ function AgentLauncher({
               type="button"
               className="dlg-btn dlg-dirbtn"
               aria-label="Browse source file"
-              onClick={() => setDirectoryField("unitSourceFile")}
+              disabled={!canBrowseSourceFile}
+              aria-describedby={!canBrowseSourceFile ? sourceBrowseHelperId : undefined}
+              onClick={() => {
+                if (canBrowseSourceFile) setDirectoryField("unitSourceFile");
+              }}
             >
               Browse
             </button>
           </span>
+          {!canBrowseSourceFile ? (
+            <span id={sourceBrowseHelperId} className="dlg-note">
+              Select a registered repository before browsing source files.
+            </span>
+          ) : null}
           {directoryField === "unitSourceFile" ? (
             <FilePicker
               root={workspace}
@@ -938,21 +958,27 @@ function AgentLauncher({
             className="dlg-input mono"
             value={workspaceRoot}
             placeholder="/absolute/repository/path"
-            onClick={() => setDirectoryField("agentWorkspace")}
             onChange={(event) => setWorkspaceRoot(event.target.value)}
           />
           <button
             type="button"
             className="dlg-btn dlg-dirbtn"
-            onClick={() => setDirectoryField("agentWorkspace")}
+            disabled={!canBrowseRepository}
+            aria-describedby={!canBrowseRepository ? repositoryBrowseHelperId : undefined}
+            onClick={openRepositoryPicker}
           >
             Browse
           </button>
         </span>
+        {!canBrowseRepository ? (
+          <span id={repositoryBrowseHelperId} className="dlg-note">
+            Enter an absolute repository path to enable Browse.
+          </span>
+        ) : null}
         {directoryField === "agentWorkspace" ? (
           <DirectoryPicker
-            value={workspaceRoot}
-            projectId={registered ? workspace : undefined}
+            value={repositoryBrowseSeed}
+            projectId={projects.includes(repositoryBrowseSeed) ? repositoryBrowseSeed : undefined}
             onSelect={setWorkspaceRoot}
             onClose={() => setDirectoryField(null)}
           />
@@ -989,16 +1015,6 @@ function AgentLauncher({
         {renderAgentFields()}
       </div>
       <div className="dlg-agent-actions">
-        <button
-          type="button"
-          className="dlg-btn dlg-primary"
-          disabled={!canStart}
-          aria-busy={starting}
-          aria-describedby={!canStart && !starting ? "agent-start-validation" : undefined}
-          onClick={() => void startAgent()}
-        >
-          {starting ? "Starting…" : startLabel}
-        </button>
         {loading ? (
           <span id="agent-start-validation" className="dlg-note" role="status">
             Loading models and projects…
@@ -1011,6 +1027,19 @@ function AgentLauncher({
             {validation}
           </span>
         ) : null}
+        <button type="button" className="dlg-btn" onClick={onClose}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="dlg-btn dlg-primary"
+          disabled={!canStart}
+          aria-busy={starting}
+          aria-describedby={!canStart && !starting ? "agent-start-validation" : undefined}
+          onClick={() => void startAgent()}
+        >
+          {starting ? "Starting…" : startLabel}
+        </button>
       </div>
     </>
   );
@@ -1199,6 +1228,7 @@ export function NewWindowDialog({
               setDirectoryField={setDirectoryField}
               setDialogError={setDialogError}
               onConfirm={onConfirm}
+              onClose={onClose}
             />
           ) : (
             fields.length === 0 && (
@@ -1239,16 +1269,16 @@ export function NewWindowDialog({
             </div>
           ) : null}
         </div>
-        <div className="dlg-foot">
-          <button type="button" className="dlg-btn" onClick={onClose}>
-            Cancel
-          </button>
-          {type !== "agents" ? (
+        {type !== "agents" ? (
+          <div className="dlg-foot">
+            <button type="button" className="dlg-btn" onClick={onClose}>
+              Cancel
+            </button>
             <button type="button" className="dlg-btn dlg-primary" onClick={submit}>
               {cta}
             </button>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

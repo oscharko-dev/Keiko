@@ -75,6 +75,16 @@ describe("runMigrations", () => {
     expect(names).toContain("task_type");
   });
 
+  it("v6 adds grounded_answer_json to chat_messages", () => {
+    const db = openMem();
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(6);
+    const cols = db.prepare("PRAGMA table_info(chat_messages)").all() as { name: string }[];
+    const names = cols.map((c) => c.name);
+    expect(names).toContain("grounded_answer_json");
+  });
+
   it("v3 adds connected_scope columns to chats, existing rows null", () => {
     // Issue #184 — additive migration: connected_scope_paths (TEXT) + connected_scope_at (INTEGER)
     // on the chats table. Validates the columns are present AND that an existing row inserted

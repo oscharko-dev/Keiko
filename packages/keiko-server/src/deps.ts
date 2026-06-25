@@ -157,6 +157,9 @@ export interface UiHandlerDeps {
         egress?: GatewayEgressConfig,
       ) => Promise<GatewayModelDiscoveryOutput>)
     | undefined;
+  // Test seam for the non-mutating gateway readiness probes. Production uses globalThis.fetch via
+  // the existing gateway HTTP transport; route tests inject a deterministic fetch implementation.
+  readonly gatewayReadinessFetch?: typeof fetch | undefined;
   // Test seam for Figma PAT setup. Production performs a bounded Figma /v1/me request.
   readonly figmaCredentialTester?:
     | ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>)

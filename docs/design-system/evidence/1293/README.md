@@ -49,9 +49,11 @@ shell surfaces route through `--surface-*`/`--background-*`/`--nav-*` (AC2), and
   colour_ (`var(--accent-text)`) it IS migrated to the `--text-accent` semantic alias (or `--focus-ring` for
   focus outlines).
 - **Raw values with no equal token** are kept and remain documented exceptions: one-off radii (`7px`, `8px`,
-  `10px`), one-off type sizes (`13.5px`, `11.5px`), `font-weight: 560`/`700`, the non-scale `z-index` of the
-  rail (`12000`, sits above all canvas windows), `color-mix`/gradient maths and `white`/`rgba` endpoints, and
-  the `oklch(1 0 0 / 0.0x)` top-bevel insets (approved deviation A9).
+  `10px`), one-off type sizes (`13.5px`, `11.5px`), `font-weight: 560`/`700`,
+  `color-mix`/gradient maths and `white`/`rgba` endpoints, and the `oklch(1 0 0 / 0.0x)` top-bevel insets
+  (approved deviation A9). The former raw rail `z-index: 12000` exception was retired by #1426; rails now
+  consume the named `--z-rail` layer and footer/palette chrome consumes the governed sticky/popover/tooltip
+  layers.
 
 ## Computed-value proof — no visual change (`computed-value-proof.json`)
 

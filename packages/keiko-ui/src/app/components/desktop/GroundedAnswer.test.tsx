@@ -2,7 +2,7 @@
 // with ContextPackSummary coverage and an axe-based a11y smoke.
 
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GroundedAnswer } from "./GroundedAnswer";
 import type {
   GroundedAnswer as GroundedAnswerType,
@@ -112,6 +112,19 @@ function answer(overrides: Partial<GroundedAnswerType> = {}): GroundedAnswerType
   return { ...base, ...overrides } as GroundedAnswerType;
 }
 
+function openEvidenceDisclosure(container: HTMLElement): HTMLDetailsElement {
+  const disclosure = container.querySelector("details.grounded-evidence-disclosure");
+  if (!(disclosure instanceof HTMLDetailsElement)) {
+    throw new Error("expected grounded evidence disclosure");
+  }
+  const summary = disclosure.querySelector("summary");
+  if (summary === null) {
+    throw new Error("expected grounded evidence summary");
+  }
+  fireEvent.click(summary);
+  return disclosure;
+}
+
 describe("GroundedAnswer", () => {
   it("renders nothing when answer is undefined and not busy", () => {
     const { container } = render(<GroundedAnswer answer={undefined} busy={false} />);
@@ -134,6 +147,20 @@ describe("GroundedAnswer", () => {
     expect(screen.queryByText(/Inspected 1 file/)).not.toBeInTheDocument();
     // The evidence surfaces stay rendered.
     expect(screen.getByText("src/foo.ts:10-25")).toBeInTheDocument();
+  });
+
+  it("collapses the evidence audit by default and opens it on demand", () => {
+    const { container } = render(<GroundedAnswer answer={answer()} busy={false} />);
+    const disclosure = container.querySelector("details.grounded-evidence-disclosure");
+    expect(disclosure).toBeInstanceOf(HTMLDetailsElement);
+    expect((disclosure as HTMLDetailsElement).open).toBe(false);
+    expect(container.querySelector(".grounded-evidence-summary-title")).toHaveTextContent(
+      "Evidence",
+    );
+    expect(screen.getByText(/1 citation.*5 \/ 32 files read/)).toBeInTheDocument();
+
+    const opened = openEvidenceDisclosure(container);
+    expect(opened.open).toBe(true);
   });
 
   it("renders the path-free ranking rationale panel when a ranking summary is present (M2)", () => {
@@ -164,8 +191,7 @@ describe("GroundedAnswer", () => {
       }),
     });
     render(<GroundedAnswer answer={a} busy={false} />);
-    const notice = screen.getByText(/Partial coverage/);
-    expect(notice).toBeInTheDocument();
+    expect(screen.getAllByText(/Partial coverage/).length).toBeGreaterThan(0);
     // 3 + 2 = 5 files not searched, with each reason quantified.
     expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
     expect(screen.getByText(/3 larger than 2 MB/)).toBeInTheDocument();
@@ -190,7 +216,7 @@ describe("GroundedAnswer", () => {
       }),
     });
     render(<GroundedAnswer answer={a} busy={false} />);
-    expect(screen.getByText(/Partial coverage/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Partial coverage/).length).toBeGreaterThan(0);
     expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
     expect(screen.getByText(/1 a scanned document with no text layer/)).toBeInTheDocument();
     expect(screen.getByText(/1 a password-protected document/)).toBeInTheDocument();
@@ -358,6 +384,68 @@ describe("GroundedAnswer", () => {
     );
   });
 
+  it("opens connected-context citations in the editor when repository navigation is available", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <GroundedAnswer
+        answer={answer({
+          citations: [
+            citation({
+              stableId: "a",
+              scopePath: "src/foo.ts",
+              lineRange: { startLine: 1, endLine: 4 },
+            }),
+          ],
+        })}
+        busy={false}
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open src/foo.ts at lines 1-4 in editor" }));
+
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "src/foo.ts",
+      lineStart: 1,
+      lineEnd: 4,
+    });
+  });
+
+  it("opens root-level connected-context citations in the editor", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <GroundedAnswer
+        answer={answer({
+          citations: [
+            citation({
+              stableId: "package-lock",
+              scopePath: "package-lock.json",
+              lineRange: { startLine: 1, endLine: 48 },
+            }),
+          ],
+        })}
+        busy={false}
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open package-lock.json at lines 1-48 in editor",
+      }),
+    );
+
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "package-lock.json",
+      lineStart: 1,
+      lineEnd: 48,
+    });
+  });
+
   it("renders the scopePath alone when the citation has no lineRange", () => {
     const a = answer({
       citations: [citation({ lineRange: undefined, scopePath: "src/qux.ts", stableId: "q" })],
@@ -410,6 +498,27 @@ describe("GroundedAnswer", () => {
     expect(
       screen.getByText("Not used: 3 excerpts (binary: 1, low relevance: 2)"),
     ).toBeInTheDocument();
+  });
+
+  it("uses the context pack as the canonical omitted-count source", () => {
+    render(
+      <GroundedAnswer
+        answer={answer({
+          omittedCount: 99,
+          contextPack: contextPack({
+            omittedCount: 3,
+            omittedCounts: { ...OMITTED_COUNTS_ZERO, binary: 1, "low-relevance": 2 },
+          }),
+        })}
+        busy={false}
+      />,
+    );
+
+    expect(screen.getByText(/1 citation.*5 \/ 32 files read.*3 not used/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Not used: 3 excerpts (binary: 1, low relevance: 2)"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/99 not used|Not used: 99/)).not.toBeInTheDocument();
   });
 
   it("does not render an omitted line when count is 0", () => {
@@ -544,11 +653,12 @@ describe("GroundedAnswer", () => {
     );
     const { container } = render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
     expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(8);
-    const toggle = screen.getByRole("button", { name: "Show all 12 sources" });
+    openEvidenceDisclosure(container);
+    const toggle = screen.getByRole("button", { name: "Show all 12 citations" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(toggle);
     expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(12);
-    const collapse = screen.getByRole("button", { name: "Show fewer sources" });
+    const collapse = screen.getByRole("button", { name: "Show fewer citations" });
     expect(collapse).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(collapse);
     expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(8);
@@ -566,7 +676,7 @@ describe("GroundedAnswer", () => {
       ),
     ];
     render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
-    // The weakest source is the one folded behind the disclosure, regardless of wire order.
+    // The weakest citation is the one folded behind the disclosure, regardless of wire order.
     expect(screen.queryByText(/src\/low\.ts/)).not.toBeInTheDocument();
     expect(screen.getByText(/src\/hi-0\.ts/)).toBeInTheDocument();
   });
@@ -627,7 +737,8 @@ describe("GroundedAnswer", () => {
     };
     const { container } = render(<GroundedAnswer answer={a} busy={false} />);
     expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(8);
-    fireEvent.click(screen.getByRole("button", { name: "Show all 10 sources" }));
+    openEvidenceDisclosure(container);
+    fireEvent.click(screen.getByRole("button", { name: "Show all 10 citations" }));
     expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(10);
   });
 
