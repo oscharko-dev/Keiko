@@ -9,8 +9,9 @@
  *
  * - DIRTY: Save + Dismiss (the user saves the dirty buffer so the agent can re-try)
  * - VERSION_MISMATCH / CONTENT_HASH_MISMATCH: Reload + Dismiss (stale token — reload refreshes it)
- * - INVALID_EDITS / OUT_OF_SCOPE / PRECONDITION_REQUIRED: Dismiss only (agent errors, user cannot
- *   self-resolve — the agent must re-issue the action correctly)
+ * - INVALID_EDITS / OUT_OF_SCOPE / PRECONDITION_REQUIRED / NO_ACTIVE_SESSION / NO_ACTIVE_BRIDGE:
+ *   Dismiss only (agent errors or an unavailable bridge — the user cannot self-resolve, the agent must
+ *   re-issue the action once a live bridge is connected)
  *
  * Uses the existing `.ai-danger` / `.ai-danger-h` / `.ai-danger-act` classes; no new CSS classes.
  */
@@ -41,6 +42,8 @@ function conflictTitle(code: AgentConflictCode): string {
       return "Action out of scope";
     case "NO_ACTIVE_SESSION":
       return "No active editor session";
+    case "NO_ACTIVE_BRIDGE":
+      return "No live editor bridge";
     case "PRECONDITION_REQUIRED":
       return "Missing write precondition";
   }

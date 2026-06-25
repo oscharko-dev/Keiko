@@ -1,9 +1,9 @@
 /**
  * Tests for AgentConflictBanner (Issue #1394, ADR-0058 D4).
  *
- * Covers: role=alert + data-testid; ai-danger class; all six conflict codes; correct
- * affordance groups per code (Save/Dismiss, Reload/Dismiss, Dismiss-only); handler
- * wiring; and jest-axe a11y for each code variant.
+ * Covers: role=alert + data-testid; ai-danger class; representative conflict codes across each
+ * affordance group (Save/Dismiss, Reload/Dismiss, Dismiss-only), including the Issue #1392
+ * NO_ACTIVE_BRIDGE code; handler wiring; and jest-axe a11y for each code variant.
  */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -200,6 +200,18 @@ describe("AgentConflictBanner — OUT_OF_SCOPE affordances", () => {
 describe("AgentConflictBanner — NO_ACTIVE_SESSION affordances", () => {
   it("renders only Dismiss for NO_ACTIVE_SESSION", () => {
     renderBanner("NO_ACTIVE_SESSION");
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
+  });
+});
+
+// ─── NO_ACTIVE_BRIDGE: Dismiss only (Issue #1392) ────────────────────────────
+
+describe("AgentConflictBanner — NO_ACTIVE_BRIDGE affordances", () => {
+  it("renders the title and only Dismiss for NO_ACTIVE_BRIDGE", () => {
+    renderBanner("NO_ACTIVE_BRIDGE", { message: "No live browser bridge is connected." });
+    expect(screen.getByText("No live editor bridge")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();

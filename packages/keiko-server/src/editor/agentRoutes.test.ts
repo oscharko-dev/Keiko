@@ -11,6 +11,7 @@ import {
   type EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import { STREAMING, type RouteContext } from "../routes.js";
+import { EDITOR_AGENT_ACTION_TIMEOUT_MS } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentStateForTests,
   handleEditorAgentActions,
@@ -83,7 +84,69 @@ function action(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
   };
 }
 
-// Register a snapshot and return for chaining.
+// Connect a session-scoped SSE bridge so the session is "live" (Issue #1392). Returns the captured
+// frames plus a close() that drops the bridge. Bridge liveness gates action queueing: without a live
+// bridge a queued action is answered NO_ACTIVE_BRIDGE (AC1).
+function connectBridge(sessionId: string | undefined): {
+  readonly frames: () => string;
+  readonly close: () => void;
+} {
+  const writes: string[] = [];
+  const closeHandlers: (() => void)[] = [];
+  const res = {
+    writeHead: vi.fn(),
+    write: vi.fn((chunk: string) => {
+      writes.push(chunk);
+      return true;
+    }),
+    on: vi.fn((event: string, cb: () => void) => {
+      if (event === "close") closeHandlers.push(cb);
+    }),
+    end: vi.fn(),
+    destroy: vi.fn(),
+  } as unknown as ServerResponse;
+  const req = { on: vi.fn() } as unknown as IncomingMessage;
+  const query = sessionId === undefined ? "" : `?sessionId=${encodeURIComponent(sessionId)}`;
+  handleEditorAgentEvents({
+    req,
+    res,
+    params: {},
+    url: new URL(`http://localhost/api/editor/agent/events${query}`),
+  });
+  return {
+    frames: (): string => writes.join(""),
+    close: (): void => {
+      for (const cb of closeHandlers) cb();
+    },
+  };
+}
+
+function actionFailureCode(body: unknown): string | undefined {
+  if (!isRecord(body) || !isRecord(body.result) || !isRecord(body.result.failure)) {
+    return undefined;
+  }
+  return typeof body.result.failure.code === "string" ? body.result.failure.code : undefined;
+}
+
+// Register a snapshot WITHOUT connecting a bridge, so the session is registered but not live.
+async function registerSnapshotOnly(
+  overrides: Partial<EditorAgentSessionSnapshot> = {},
+): Promise<void> {
+  await handleEditorAgentSnapshot(
+    context(
+      {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        kind: "snapshot",
+        snapshot: { ...snapshot(), ...overrides },
+      },
+      "/api/editor/agent/snapshot",
+    ),
+  );
+}
+
+// Register a snapshot AND connect its live bridge, so a following action can be queued. The existing
+// preflight-conflict tests reach their structural conflict before the liveness gate regardless, but
+// the tests that expect a 202 queue need a live bridge present.
 async function registerSnapshot(workspaceRoot?: string, activeFile?: string): Promise<void> {
   await handleEditorAgentSnapshot(
     context(
@@ -95,10 +158,12 @@ async function registerSnapshot(workspaceRoot?: string, activeFile?: string): Pr
       "/api/editor/agent/snapshot",
     ),
   );
+  connectBridge("session-1");
 }
 
 afterEach(() => {
   _resetEditorAgentStateForTests();
+  vi.useRealTimers();
 });
 
 // ─── Original tests (unchanged) ────────────────────────────────────────────────────────────────
@@ -891,5 +956,155 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       expect(result.status).toBe(202);
       expect(actionResultStatus(result.body)).toBe("queued");
     });
+  });
+});
+
+// ─── Issue #1392: bridge liveness, queue timeout/cleanup, bounded queue, scoped fan-out ──────────
+
+function navAction(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
+  return action({
+    type: "setSelection",
+    expectedContentHash: undefined,
+    expectedDocumentVersion: undefined,
+    ...overrides,
+  });
+}
+
+describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () => {
+  it("returns NO_ACTIVE_BRIDGE when a snapshot is registered but no bridge is connected (AC1)", async () => {
+    await registerSnapshotOnly();
+    const result = await handleEditorAgentActions(context(action()));
+    expect(result.status).toBe(409);
+    expect(actionResultStatus(result.body)).toBe("conflict");
+    expect(actionConflictCode(result.body)).toBe("NO_ACTIVE_BRIDGE");
+  });
+
+  it("queues for a live bridge, then NO_ACTIVE_BRIDGE once the bridge disconnects (AC1)", async () => {
+    await registerSnapshotOnly();
+    const bridge = connectBridge("session-1");
+    const queued = await handleEditorAgentActions(context(action()));
+    expect(queued.status).toBe(202);
+
+    bridge.close();
+    const afterClose = await handleEditorAgentActions(
+      context(action({ idempotencyKey: "ik-after-close", actionId: "a-after-close" })),
+    );
+    expect(afterClose.status).toBe(409);
+    expect(actionConflictCode(afterClose.body)).toBe("NO_ACTIVE_BRIDGE");
+  });
+
+  it("times out a queued action, emits TIMED_OUT over SSE, and frees the queue (AC2)", async () => {
+    vi.useFakeTimers();
+    await registerSnapshotOnly();
+    const bridge = connectBridge("session-1");
+
+    const queued = await handleEditorAgentActions(context(action()));
+    expect(queued.status).toBe(202);
+
+    vi.advanceTimersByTime(EDITOR_AGENT_ACTION_TIMEOUT_MS + 1);
+
+    expect(bridge.frames()).toContain("event: editor-agent:result");
+    expect(bridge.frames()).toContain("TIMED_OUT");
+
+    // The freed slot lets the same action id be queued again.
+    const requeued = await handleEditorAgentActions(
+      context(action({ idempotencyKey: "ik-requeue" })),
+    );
+    expect(requeued.status).toBe(202);
+  });
+
+  it("clears the pending timeout when the bridge reports a result (no late TIMED_OUT)", async () => {
+    vi.useFakeTimers();
+    await registerSnapshotOnly();
+    const bridge = connectBridge("session-1");
+    await handleEditorAgentActions(context(action()));
+
+    const reported = await handleEditorAgentActions(
+      context({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        kind: "result",
+        result: {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          actionId: "action-1",
+          sessionId: "session-1",
+          status: "succeeded",
+        },
+      }),
+    );
+    expect(reported.status).toBe(200);
+
+    vi.advanceTimersByTime(EDITOR_AGENT_ACTION_TIMEOUT_MS + 1);
+    expect(bridge.frames()).toContain("succeeded");
+    expect(bridge.frames()).not.toContain("TIMED_OUT");
+  });
+
+  it("bounds the per-session queue and answers QUEUE_FULL with 429 (perf)", async () => {
+    await registerSnapshotOnly();
+    connectBridge("session-1");
+    let lastStatus = 0;
+    for (let i = 0; i < 64; i += 1) {
+      const res = await handleEditorAgentActions(
+        context(navAction({ actionId: `a-${String(i)}`, idempotencyKey: `k-${String(i)}` })),
+      );
+      lastStatus = res.status;
+    }
+    expect(lastStatus).toBe(202);
+
+    const overflow = await handleEditorAgentActions(
+      context(navAction({ actionId: "a-overflow", idempotencyKey: "k-overflow" })),
+    );
+    expect(overflow.status).toBe(429);
+    expect(actionResultStatus(overflow.body)).toBe("failed");
+    expect(actionFailureCode(overflow.body)).toBe("QUEUE_FULL");
+  });
+
+  it("scopes action fan-out to the target session's bridge plus global observers (perf)", async () => {
+    await registerSnapshotOnly();
+    const bridge1 = connectBridge("session-1");
+    const bridge2 = connectBridge("session-2");
+    const observer = connectBridge(undefined);
+
+    await handleEditorAgentActions(
+      context(navAction({ actionId: "a-fan", idempotencyKey: "k-fan" })),
+    );
+
+    expect(bridge1.frames()).toContain("event: editor-agent:action");
+    expect(observer.frames()).toContain("event: editor-agent:action");
+    expect(bridge2.frames()).not.toContain("event: editor-agent:action");
+  });
+
+  it("never writes raw source content to logs", async () => {
+    const sink = vi.fn();
+    vi.spyOn(console, "log").mockImplementation(sink);
+    vi.spyOn(console, "info").mockImplementation(sink);
+    vi.spyOn(console, "warn").mockImplementation(sink);
+    vi.spyOn(console, "error").mockImplementation(sink);
+    vi.spyOn(console, "debug").mockImplementation(sink);
+
+    await registerSnapshotOnly({ text: "TOP_SECRET_SOURCE", textMode: "activeFile" });
+    connectBridge("session-1");
+    await handleEditorAgentActions(
+      context(
+        action({
+          type: "applyTextEdits",
+          expectedContentHash: HASH,
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+              newText: "TOP_SECRET_EDIT",
+            },
+          ],
+        }),
+      ),
+    );
+
+    const logged = sink.mock.calls
+      .flat()
+      .map((arg) => JSON.stringify(arg))
+      .join(" ");
+    expect(logged).not.toContain("TOP_SECRET_SOURCE");
+    expect(logged).not.toContain("TOP_SECRET_EDIT");
+
+    vi.restoreAllMocks();
   });
 });

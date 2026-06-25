@@ -160,9 +160,10 @@ export {
   isEditorHotExitSnapshotV1,
 } from "./editor-hot-exit.js";
 
-// ─── Editor agent API (Issue #1391) ─────────────────────────────────────────────
+// ─── Editor agent API (Issues #1391, #1392) ─────────────────────────────────────
 export type {
   EditorAgentAction,
+  EditorAgentActionFailure,
   EditorAgentActionQueuedResponse,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
@@ -172,6 +173,7 @@ export type {
   EditorAgentBridgeSnapshotRequest,
   EditorAgentConflictCode,
   EditorAgentEvent,
+  EditorAgentFailureCode,
   EditorAgentPaneSnapshot,
   EditorAgentParse,
   EditorAgentParseFail,
@@ -185,6 +187,7 @@ export type {
 export {
   DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
   EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_FAILURE_CODES,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_WRITE_ACTION_TYPES,
   editorAgentActionHasWritePrecondition,
@@ -194,6 +197,7 @@ export {
   isEditorAgentActionResult,
   isEditorAgentConflictCode,
   isEditorAgentEvent,
+  isEditorAgentFailureCode,
   isEditorAgentSessionSnapshot,
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,

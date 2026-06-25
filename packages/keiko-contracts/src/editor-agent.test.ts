@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
   EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_FAILURE_CODES,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_WRITE_ACTION_TYPES,
   editorAgentActionHasWritePrecondition,
@@ -11,6 +12,7 @@ import {
   isEditorAgentActionResult,
   isEditorAgentConflictCode,
   isEditorAgentEvent,
+  isEditorAgentFailureCode,
   isEditorAgentSessionSnapshot,
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
@@ -330,11 +332,12 @@ describe("isContainedAgentPath (Issue #1394)", () => {
 });
 
 describe("isEditorAgentConflictCode (Issue #1394)", () => {
-  it("returns true for all seven valid conflict codes", () => {
+  it("returns true for all eight valid conflict codes", () => {
     expect(isEditorAgentConflictCode("DIRTY")).toBe(true);
     expect(isEditorAgentConflictCode("VERSION_MISMATCH")).toBe(true);
     expect(isEditorAgentConflictCode("CONTENT_HASH_MISMATCH")).toBe(true);
     expect(isEditorAgentConflictCode("NO_ACTIVE_SESSION")).toBe(true);
+    expect(isEditorAgentConflictCode("NO_ACTIVE_BRIDGE")).toBe(true);
     expect(isEditorAgentConflictCode("INVALID_EDITS")).toBe(true);
     expect(isEditorAgentConflictCode("OUT_OF_SCOPE")).toBe(true);
     expect(isEditorAgentConflictCode("PRECONDITION_REQUIRED")).toBe(true);
@@ -624,9 +627,10 @@ describe("write-action precondition rule (Issue #1391 AC2)", () => {
 });
 
 describe("conflict-code taxonomy (Issue #1391 AC3)", () => {
-  it("enumerates the full structured taxonomy including PRECONDITION_REQUIRED", () => {
+  it("enumerates the full structured taxonomy including PRECONDITION_REQUIRED and NO_ACTIVE_BRIDGE", () => {
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("PRECONDITION_REQUIRED");
-    expect(EDITOR_AGENT_CONFLICT_CODES.length).toBe(7);
+    expect(EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
+    expect(EDITOR_AGENT_CONFLICT_CODES.length).toBe(8);
     for (const code of EDITOR_AGENT_CONFLICT_CODES) {
       expect(isEditorAgentConflictCode(code)).toBe(true);
     }
@@ -635,5 +639,49 @@ describe("conflict-code taxonomy (Issue #1391 AC3)", () => {
   it("recognises the new PRECONDITION_REQUIRED code", () => {
     const code: EditorAgentConflictCode = "PRECONDITION_REQUIRED";
     expect(isEditorAgentConflictCode(code)).toBe(true);
+  });
+});
+
+describe("failure-code taxonomy (Issue #1392)", () => {
+  it("enumerates exactly the lifecycle failure codes", () => {
+    expect([...EDITOR_AGENT_FAILURE_CODES]).toEqual(["TIMED_OUT", "QUEUE_FULL"]);
+    for (const code of EDITOR_AGENT_FAILURE_CODES) {
+      expect(isEditorAgentFailureCode(code)).toBe(true);
+    }
+  });
+
+  it("keeps the conflict and failure taxonomies disjoint", () => {
+    expect(isEditorAgentFailureCode("NO_ACTIVE_BRIDGE")).toBe(false);
+    expect(isEditorAgentConflictCode("TIMED_OUT")).toBe(false);
+    expect(isEditorAgentFailureCode("")).toBe(false);
+    expect(isEditorAgentFailureCode(42)).toBe(false);
+    expect(isEditorAgentFailureCode(null)).toBe(false);
+  });
+
+  it("validates a result carrying a structured failure detail", () => {
+    const base = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: "action-1",
+      sessionId: "session-1",
+    } as const;
+    expect(
+      isEditorAgentActionResult({
+        ...base,
+        status: "failed",
+        failure: { code: "TIMED_OUT", message: "timed out" },
+      }),
+    ).toBe(true);
+    // An out-of-taxonomy failure code cannot pass the guard.
+    expect(
+      isEditorAgentActionResult({
+        ...base,
+        status: "failed",
+        failure: { code: "NOPE", message: "bad" },
+      }),
+    ).toBe(false);
+    // A failure detail missing its message is rejected.
+    expect(
+      isEditorAgentActionResult({ ...base, status: "failed", failure: { code: "QUEUE_FULL" } }),
+    ).toBe(false);
   });
 });
