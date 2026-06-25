@@ -101,7 +101,7 @@ function capturingEvidenceStore(): { store: EvidenceStore; count: () => number }
   const docs = new Map<string, string>();
   return {
     store: {
-      put: (runId, json) => {
+      put: (runId, json): string => {
         docs.set(runId, json);
         return runId;
       },
@@ -109,7 +109,7 @@ function capturingEvidenceStore(): { store: EvidenceStore; count: () => number }
       get: (runId) => docs.get(runId),
       delete: (runId) => docs.delete(runId),
     },
-    count: () => {
+    count: (): number => {
       let n = 0;
       for (const json of docs.values()) {
         const doc = JSON.parse(json) as { records?: unknown[] };
@@ -160,7 +160,11 @@ function seams(overrides: Partial<GitDeliveryExecutionSeams> = {}): GitDeliveryE
 }
 
 async function closeServer(): Promise<void> {
-  await new Promise<void>((res) => server.close(() => res()));
+  await new Promise<void>((res) => {
+    server.close(() => {
+      res();
+    });
+  });
 }
 
 async function startBound(overrides: Partial<UiHandlerDeps> = {}): Promise<void> {

@@ -43,7 +43,10 @@ describe("summarizeStagedChangeset", () => {
   });
 
   it("caps the carried area tokens at MAX_COMMIT_SUMMARY_AREAS but keeps the true count", () => {
-    const paths = Array.from({ length: MAX_COMMIT_SUMMARY_AREAS + 5 }, (_v, i) => `area${i}/f.ts`);
+    const paths = Array.from(
+      { length: MAX_COMMIT_SUMMARY_AREAS + 5 },
+      (_v, i) => `area${String(i)}/f.ts`,
+    );
     const summary = summarizeStagedChangeset(paths);
     expect(summary.areaCount).toBe(MAX_COMMIT_SUMMARY_AREAS + 5);
     expect(summary.areas).toHaveLength(MAX_COMMIT_SUMMARY_AREAS);

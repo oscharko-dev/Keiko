@@ -123,7 +123,7 @@ function capturingEvidenceStore(throwOnPut = false): CapturingStore {
   };
   return {
     evidenceStore,
-    records: () => {
+    records: (): readonly unknown[] => {
       const out: unknown[] = [];
       for (const json of docs.values()) {
         const doc = JSON.parse(json) as { records?: unknown[] };
@@ -178,7 +178,11 @@ function seams(overrides: Partial<GitDeliveryExecutionSeams> = {}): GitDeliveryE
 }
 
 async function closeServer(): Promise<void> {
-  await new Promise<void>((res) => server.close(() => res()));
+  await new Promise<void>((res) => {
+    server.close(() => {
+      res();
+    });
+  });
 }
 
 async function startBound(overrides: Partial<UiHandlerDeps> = {}): Promise<void> {
