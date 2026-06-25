@@ -309,6 +309,25 @@ export {
   isEditorLanguageModeId,
 } from "./editor-language-mode-map.js";
 
+// ─── Editor built-in capability registry (Issue #1380, Epic #1491, ADR-0068) ──────────────────
+// The single canonical, frozen const table of per-language BROWSER built-in editor capabilities:
+// syntax highlighting, bracket matching, and how "Format Document" is served (Monaco's bundled
+// worker, the Keiko language-service bridge, or none). Sits beside the source-language mode map, not
+// inside it (ADR-0068 D2): browser formatting reachability is an editor-tier concern, not server
+// capability. Strict leaf: pure const tables + pure functions, no other keiko-* imports, no
+// clock/crypto/randomness. Coherence with the mode map is test-pinned (ADR-0068 D6).
+export type {
+  EditorBuiltinCapability,
+  EditorBuiltinFormattingSource,
+} from "./editor-builtin-capabilities.js";
+export {
+  EDITOR_BUILTIN_CAPABILITIES,
+  EDITOR_BUILTIN_CAPABILITY_BY_LANGUAGE,
+  editorBuiltinCapability,
+  editorBuiltinDocumentFormatting,
+  isBuiltinFormattingAvailable,
+} from "./editor-builtin-capabilities.js";
+
 // ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
 // Wire request/response for the governed `POST /api/editor/completion` route: deterministic
 // language-service completion (#1198) merged with gated model-assisted completion (#1210) over

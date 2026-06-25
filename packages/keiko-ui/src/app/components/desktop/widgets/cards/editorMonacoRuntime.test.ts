@@ -10,6 +10,16 @@ interface MonacoLanguageSummary {
 
 const getLanguages = vi.fn<() => MonacoLanguageSummary[]>(() => []);
 const registerLanguage = vi.fn();
+
+// Side-effect-only basic-languages contributions register the language id + Monarch grammar for
+// css/scss/less/html (ADR-0068 D5). The bootstrap module must import all four; each factory records
+// its evaluation so the test can assert the import graph pins them.
+const basicLanguageImports = new Set<string>();
+function trackBasicLanguageImport(languageId: string): Record<string, never> {
+  basicLanguageImports.add(languageId);
+  return {};
+}
+
 vi.mock("@monaco-editor/react", () => ({ loader: { config } }));
 vi.mock("monaco-editor/esm/vs/editor/editor.api.js", () => ({
   editor: {},
@@ -28,6 +38,18 @@ vi.mock("monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js", () =
 vi.mock("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js", () => ({}));
+vi.mock("monaco-editor/esm/vs/basic-languages/css/css.contribution.js", () =>
+  trackBasicLanguageImport("css"),
+);
+vi.mock("monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js", () =>
+  trackBasicLanguageImport("scss"),
+);
+vi.mock("monaco-editor/esm/vs/basic-languages/less/less.contribution.js", () =>
+  trackBasicLanguageImport("less"),
+);
+vi.mock("monaco-editor/esm/vs/basic-languages/html/html.contribution.js", () =>
+  trackBasicLanguageImport("html"),
+);
 vi.mock("monaco-editor/esm/vs/language/css/monaco.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/language/html/monaco.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/language/json/monaco.contribution.js", () => ({}));
@@ -89,6 +111,17 @@ describe("ensureMonacoRuntime", () => {
     expect(second.supported).toBe(true);
     expect(config).toHaveBeenCalledTimes(1);
     expect(registerLanguage).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the css/scss/less/html basic-languages contributions at bootstrap (ADR-0068 D5)", async () => {
+    // Importing the module evaluates its side-effect contribution imports; each mock factory records
+    // the language it stands in for. The factories run on first evaluation, so by the time this test
+    // imports the module all four basic-languages contributions are present in the import graph.
+    await import("./editorMonacoRuntime");
+    expect(basicLanguageImports.has("css")).toBe(true);
+    expect(basicLanguageImports.has("scss")).toBe(true);
+    expect(basicLanguageImports.has("less")).toBe(true);
+    expect(basicLanguageImports.has("html")).toBe(true);
   });
 
   it("does not register JSON twice when Monaco already has it", async () => {

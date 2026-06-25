@@ -14,6 +14,7 @@ import {
 } from "./formatting-bridge.js";
 import type { MonacoCancellationToken } from "./completion-bridge.js";
 import type { EditorFormattingResolver, EditorTextEdit } from "../types.js";
+import { EDITOR_BUILTIN_CAPABILITIES } from "@oscharko-dev/keiko-contracts";
 
 function model(text = "const x   =   1;\n", version = 1): MonacoFormattingModel {
   return {
@@ -236,5 +237,33 @@ describe("registerKeikoFormattingProvider", () => {
 
   it("exposes the governed eligible languages", () => {
     expect(FORMATTING_ELIGIBLE_LANGUAGES).toEqual(["typescript", "javascript"]);
+  });
+});
+
+describe("FORMATTING_ELIGIBLE_LANGUAGES ↔ registry coherence (ADR-0068 D7)", () => {
+  // No double-registration: the Keiko bridge must register a DocumentFormattingEditProvider for
+  // EXACTLY the languages the registry routes to "keiko-language-service" — never for a
+  // "monaco-builtin" language (Monaco's bundled worker owns those; two providers would compete for
+  // "Format Document"), and never dropping a language-service language. Pinning set equality means a
+  // future shift of either side fails this test instead of silently shadowing or under-formatting.
+  it("equals exactly the registry's keiko-language-service set", () => {
+    const registryLanguageServiceIds = EDITOR_BUILTIN_CAPABILITIES.filter(
+      (capability) => capability.documentFormatting === "keiko-language-service",
+    )
+      .map((capability) => capability.languageId)
+      .sort((a, b) => a.localeCompare(b));
+    const eligible = [...FORMATTING_ELIGIBLE_LANGUAGES].sort((a, b) => a.localeCompare(b));
+    expect(eligible).toEqual(registryLanguageServiceIds);
+  });
+
+  it("never overlaps the monaco-builtin set (no competing provider)", () => {
+    const monacoBuiltinIds = new Set(
+      EDITOR_BUILTIN_CAPABILITIES.filter(
+        (capability) => capability.documentFormatting === "monaco-builtin",
+      ).map((capability) => capability.languageId),
+    );
+    for (const eligible of FORMATTING_ELIGIBLE_LANGUAGES) {
+      expect(monacoBuiltinIds.has(eligible)).toBe(false);
+    }
   });
 });
