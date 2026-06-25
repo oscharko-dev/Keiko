@@ -78,3 +78,19 @@ export function supportsRealtimeVoice(resolution: VoiceCapabilityResolution | un
     resolution.transport.webrtcMedia
   );
 }
+
+// True only when the resolved capability advertises optional assistant speech output — the providers
+// that may speak the assistant's reply (text-to-speech or realtime speech output). This is the Issue
+// #501 gate: it is satisfied by the `speech-output` profile and by `full-realtime` (which also speaks),
+// but NEVER by `speech-to-text` (dictation does not imply the assistant can speak — AC1) or `none`.
+// Reuses the same module-cached probe (no second fetch). `undefined` (unresolved/failed) and any
+// unavailable resolution both return false, so a slow or failed probe never lights up the playback UI
+// and Keiko answers in text with no broken playback affordance (AC1).
+export function supportsSpeechOutput(resolution: VoiceCapabilityResolution | undefined): boolean {
+  return (
+    resolution !== undefined &&
+    resolution.available &&
+    resolution.capabilities.speechOutput &&
+    (resolution.profile === "speech-output" || resolution.profile === "full-realtime")
+  );
+}

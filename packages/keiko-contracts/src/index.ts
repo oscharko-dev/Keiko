@@ -524,6 +524,41 @@ export {
   summarizeVoiceTranscript,
 } from "./voice-transcript.js";
 
+// ─── Voice assistant speech-output playback lifecycle (Issue #501 / Epic #491; ADR-0064) ──
+export type {
+  VoicePlaybackPhase,
+  VoicePlaybackFailureKind,
+  VoicePlaybackEffect,
+  VoicePlaybackTurnSummary,
+} from "./voice-playback.js";
+export {
+  VOICE_PLAYBACK_SCHEMA_VERSION,
+  VOICE_PLAYBACK_PHASES,
+  VOICE_PLAYBACK_ACTIVE_PHASES,
+  VOICE_PLAYBACK_SETTLED_PHASES,
+  VOICE_PLAYBACK_FAILURE_KINDS,
+  VOICE_PLAYBACK_PHASE_REPLAY,
+  VOICE_PLAYBACK_PHASE_REDACTION,
+  VOICE_PLAYBACK_AUDIO_PLANE,
+  VOICE_PLAYBACK_TRANSITIONS,
+  VOICE_PLAYBACK_EFFECTS,
+  isVoicePlaybackSchemaVersionSupported,
+  isVoicePlaybackPhase,
+  isVoicePlaybackFailureKind,
+  isVoicePlaybackEffect,
+  voicePlaybackPhaseReplayClass,
+  voicePlaybackPhaseRedactionClass,
+  isActiveVoicePlaybackPhase,
+  isSettledVoicePlaybackPhase,
+  canTransitionVoicePlayback,
+  assertNeverVoicePlaybackPhase,
+  mapVoicePlaybackPhaseToWireState,
+  voicePlaybackAllowedForProfile,
+  voicePlaybackInterruptAllowedForProfile,
+  initialVoicePlaybackPhase,
+  summarizeVoicePlaybackTurn,
+} from "./voice-playback.js";
+
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {
   NetworkPolicy,
