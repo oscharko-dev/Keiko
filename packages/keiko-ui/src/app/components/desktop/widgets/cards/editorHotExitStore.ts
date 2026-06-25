@@ -47,6 +47,22 @@ function snapshotBytes(snapshot: EditorHotExitSnapshotV1): number {
   return new TextEncoder().encode(JSON.stringify(snapshot)).length;
 }
 
+// All writes and deletes are funnelled through one promise chain so a delete dispatched after a
+// write runs after it, never concurrently. This closes the discard/in-flight-write race: when an
+// explicit Discard deletes a snapshot while the editor's dirty-write effect still has a write in
+// flight for the same key, serialization guarantees the delete is the last word and the discarded
+// buffer is not resurrected. Reads are not serialized — they never mutate.
+let storeMutationQueue: Promise<unknown> = Promise.resolve();
+
+function serializeMutation<T>(op: () => Promise<T>): Promise<T> {
+  const run = storeMutationQueue.then(op, op);
+  storeMutationQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 async function allSnapshots(db: IDBDatabase): Promise<EditorHotExitSnapshotV1[]> {
   const tx = db.transaction(STORE_NAME, "readonly");
   const raw = await requestToPromise<unknown[]>(tx.objectStore(STORE_NAME).getAll());
@@ -111,31 +127,35 @@ export async function readEditorHotExitSnapshot(
 
 export async function writeEditorHotExitSnapshot(snapshot: EditorHotExitSnapshotV1): Promise<void> {
   if (snapshot.schemaVersion !== EDITOR_HOT_EXIT_SCHEMA_VERSION) return;
-  const db = await openDb();
-  if (db === null) return;
-  try {
-    await prune(db, snapshot.updatedAt, snapshot);
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).put(snapshot, key(snapshot.workspaceRoot, snapshot.relativePath));
-    await txDone(tx);
-  } finally {
-    db.close();
-  }
+  return serializeMutation(async () => {
+    const db = await openDb();
+    if (db === null) return;
+    try {
+      await prune(db, snapshot.updatedAt, snapshot);
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      tx.objectStore(STORE_NAME).put(snapshot, key(snapshot.workspaceRoot, snapshot.relativePath));
+      await txDone(tx);
+    } finally {
+      db.close();
+    }
+  });
 }
 
 export async function deleteEditorHotExitSnapshot(
   workspaceRoot: string,
   relativePath: string,
 ): Promise<void> {
-  const db = await openDb();
-  if (db === null) return;
-  try {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).delete(key(workspaceRoot, relativePath));
-    await txDone(tx);
-  } finally {
-    db.close();
-  }
+  return serializeMutation(async () => {
+    const db = await openDb();
+    if (db === null) return;
+    try {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      tx.objectStore(STORE_NAME).delete(key(workspaceRoot, relativePath));
+      await txDone(tx);
+    } finally {
+      db.close();
+    }
+  });
 }
 
 export { EDITOR_HOT_EXIT_TTL_MS };

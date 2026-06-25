@@ -723,6 +723,57 @@ describe("EditorWidget — conflict and error", () => {
     expect(surface.props?.saveStatus).toBe("conflict");
   });
 
+  it("focuses the reload-file confirmation and closes it on Escape without reloading (Issue #1376)", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "edited\n", sizeBytes: 7 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("conflict");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    await waitFor(() => {
+      expect(dialog).toHaveFocus();
+    });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull();
+    });
+    expect(fetchFilesContent).toHaveBeenCalledTimes(1);
+    expect(surface.props?.fileModel.dirty).toBe(true);
+  });
+
+  it("deletes the hot-exit snapshot when a dirty conflict reload is confirmed (Issue #1376)", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "edited\n", sizeBytes: 7 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("conflict");
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    // Isolate the delete caused by confirming the discard from the clean-buffer delete fired on load.
+    vi.mocked(deleteEditorHotExitSnapshot).mockClear();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ modifiedAt: 5 }));
+    await userEvent.click(await screen.findByRole("button", { name: "Discard and reload" }));
+
+    // The discarded edits' snapshot is removed so the reload does not immediately re-offer them.
+    await waitFor(() => {
+      expect(deleteEditorHotExitSnapshot).toHaveBeenCalledWith("/repo", "src/app.ts");
+    });
+  });
+
   it("treats a STALE_SESSION 409 as a recoverable conflict (Issue #1197)", async () => {
     await renderLoaded();
     vi.mocked(saveFilesContent).mockRejectedValueOnce(
@@ -2516,6 +2567,21 @@ describe("EditorWidget — hot-exit recovery", () => {
     expect(screen.queryByText("Recovered unsaved editor changes are available.")).toBeNull();
   });
 
+  it("offers recovery even when the snapshot hash equals the disk version hash (AC3 false-negative guard)", async () => {
+    // The buffer content differs from disk, yet the snapshot's recorded contentHash coincides with
+    // the server-issued version hash (divergent hash normalizations). The removed content-AND-hash
+    // gate suppressed this legitimate recovery offer; gating on content alone must still offer it.
+    // This case fails under the previous condition and is the regression guard for the AC3 fix.
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n", contentHash: "a".repeat(64) }),
+    );
+    await renderLoaded();
+
+    expect(
+      await screen.findByText("Recovered unsaved editor changes are available."),
+    ).toBeInTheDocument();
+  });
+
   it("does not offer recovery when the snapshot matches the on-disk content (AC3)", async () => {
     vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
       recoverySnapshotFixture({ content: "const value = 1;\n" }),
@@ -2564,5 +2630,57 @@ describe("EditorWidget — hot-exit recovery", () => {
       expect(deleteEditorHotExitSnapshot).toHaveBeenCalledWith("/repo", "src/app.ts");
     });
     expect(screen.queryByText(/Recovered editor changes/)).toBeNull();
+  });
+
+  it("compares against the disk baseline even after the buffer is edited before Compare (AC4)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n", savedContentHash: "f".repeat(64) }),
+    );
+    await renderLoaded();
+    await screen.findByText("Recovered editor changes are available, and the disk file changed.");
+
+    // Edit the freshly-loaded buffer before opening Compare; the diff's "on disk" side must remain
+    // the captured disk baseline, not the now-edited live buffer.
+    act(() => {
+      surface.props?.onContentChange({ text: "typed over disk\n", sizeBytes: 16 }, "human");
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await waitFor(() => {
+      expect(diffSurface.props).not.toBeNull();
+    });
+    expect(diffSurface.props?.model.files[0]?.original).toBe("const value = 1;\n");
+    expect(diffSurface.props?.model.files[0]?.modified).toBe("recovered edits\n");
+  });
+
+  it("has no axe violations in the recovery banner or the compare panel (a11y)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n", savedContentHash: "f".repeat(64) }),
+    );
+    const view = await renderLoaded();
+    await screen.findByText("Recovered editor changes are available, and the disk file changed.");
+    expect(await axe(view.container)).toHaveNoViolations();
+
+    await userEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await waitFor(() => {
+      expect(diffSurface.props).not.toBeNull();
+    });
+    expect(await axe(view.container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations in the reload-file confirmation modal (a11y)", async () => {
+    const view = await renderLoaded();
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "edited\n", sizeBytes: 7 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("conflict");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    expect(await axe(view.container)).toHaveNoViolations();
   });
 });

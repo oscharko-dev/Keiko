@@ -283,31 +283,10 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   const relativePath = "packages/keiko-cli/src/run.ts";
   const absolutePath = join(projectPath, relativePath);
   writeFileSync(absolutePath, "", "utf8");
-  await seedFilesWindow(page, projectPath);
   const assertNoPageErrors = collectPageErrors(page);
+  const editorWindow = await openSmokeEditor(page, projectPath, relativePath);
 
-  await page.goto("/");
-  const filesWindow = page.getByRole("region", { name: /^Files/u });
-  await expect(filesWindow).toBeVisible();
-
-  await openTreePath(filesWindow, "packages");
-  await openTreePath(filesWindow, "packages/keiko-cli");
-  await openTreePath(filesWindow, "packages/keiko-cli/src");
-  await openTreePath(filesWindow, relativePath);
-  await expect(filesWindow.getByRole("region", { name: "File preview: run.ts" })).toBeVisible();
-  await filesWindow.getByRole("button", { name: "Open in editor" }).click();
-
-  const editorWindow = page.getByRole("region", {
-    name: /Editor.*packages\/keiko-cli\/src\/run\.ts/u,
-  });
-  await expect(editorWindow).toBeVisible();
-  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
-  await expect(filesWindow).toBeHidden();
-  await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
-
-  // Issue #1205: dirty/saved/conflict state is communicated by the unified status bar (the editor's
-  // own footer is suppressed in the card). The save field is the visible indicator; a conflict also
-  // fires the status bar's assertive alert region.
+  // Issue #1205: dirty/saved/conflict state is communicated by the unified status bar's save field.
   const saveField = editorWindow.locator('[data-field="save"]');
   const savedText = "export const e2eFixture = 'saved in browser smoke';\n";
   await replaceMonacoText(page, editorWindow, savedText);
@@ -325,9 +304,22 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   await expect(editorWindow.getByRole("alert")).toContainText("Save conflict");
   await expect(saveField).toHaveText("Conflict");
 
+  // Issue #1376 (D1/AC1): reloading from disk over the dirty conflict buffer routes through an
+  // explicit discard confirmation before the disk content replaces the unsaved edits.
   await editorWindow.getByRole("button", { name: "Reload" }).click();
+  await editorWindow.getByRole("button", { name: "Discard and reload" }).click();
   await expect(saveField).toHaveText("Saved");
   await expect(editorWindow.getByText("external edit")).toBeVisible();
+
+  // Issue #1376 (AC1/D4): a dirty tab close is gated by the in-app dialog (no native confirm), and
+  // Cancel preserves the buffer.
+  await replaceMonacoText(page, editorWindow, "export const e2eFixture = 'dirty again';\n");
+  await editorWindow.getByRole("button", { name: `Close ${relativePath}` }).click();
+  const dirtyDialog = editorWindow.getByRole("dialog", { name: "Unsaved editor changes" });
+  await expect(dirtyDialog).toBeVisible();
+  await dirtyDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dirtyDialog).toBeHidden();
+  await expect(saveField).toHaveText("Unsaved");
 
   await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
   await expect(editorWindow).toBeHidden();

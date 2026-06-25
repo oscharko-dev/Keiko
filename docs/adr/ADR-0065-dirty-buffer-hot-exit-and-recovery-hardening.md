@@ -55,8 +55,14 @@ and the "no native `window.confirm` in close flows" guarantee (D4) had no execut
 previously dead `reload-file` reason is wired: the conflict reload now routes through an explicit
 modal acknowledgement in `EditorRuntimeWidget` that reuses the same dialog surface (`ed-dialog`
 classes, `role="dialog"`, `aria-modal`, focus + Escape) as the close flows. A clean buffer reloads
-immediately; a dirty buffer cannot be discarded by a reload without the user confirming. No
-destructive in-app editor action overwrites a dirty buffer without an explicit policy step.
+immediately; a dirty buffer cannot be discarded by a reload without the user confirming. Confirming
+the reload also deletes the buffer's hot-exit snapshot, so the freshly loaded disk content is not
+immediately re-offered as a recovery. No destructive in-app editor action overwrites a dirty buffer
+without an explicit policy step.
+
+The agent-conflict banner's reload (the `VERSION_MISMATCH` / `CONTENT_HASH_MISMATCH` path from the
+agent-patch governance surface) is intentionally left on the direct reload: agent patch-application
+policy is owned by a separate epic and is explicitly out of scope for this issue.
 
 Window close is deliberately **not** wired to a blocking dialog. Unsaved work that survives a window
 or page close is protected by the hot-exit snapshot (restored on reopen) plus the `beforeunload`
@@ -73,6 +79,12 @@ deletes the buffer's snapshot from the EditorWidget side, because the runtime wi
 otherwise delete it has already unmounted with the closed tab. Window close intentionally does not
 delete, preserving the snapshot for recovery.
 
+All store writes and deletes are funnelled through a single promise chain (`serializeMutation`), so a
+delete dispatched after a write runs after it rather than concurrently. This closes the discard race:
+when an explicit Discard deletes a snapshot while the runtime's dirty-write effect still has a write
+in flight for the same key, serialization makes the delete the last word so the discarded buffer is
+not resurrected. Reads are not serialized.
+
 ### D3 — Recovery is offered on content difference alone
 
 The recovery-offer gate is the content comparison `snapshot.content !== diskContent`. The redundant
@@ -82,18 +94,36 @@ only mask a real offer.
 ### D4 — Disk-conflict "Compare" is a real diff; no native dialogs remain
 
 The disk-conflict recovery offers Compare, Keep local, Use disk, and Cancel. Compare opens a true
-side-by-side diff (on-disk content versus the recovered buffer) through the same `EditorDiffSurface`
-used for agent-patch review, rather than a prose notice. No editor close or reload flow uses
+side-by-side diff through the same `EditorDiffSurface` used for agent-patch review, rather than a
+prose notice. Its "on disk" side is the disk content captured when recovery was offered, not the live
+buffer, so the comparison stays accurate even if the buffer is edited before Compare is opened.
+Opening Compare moves focus to its primary action, and the recovery banner is suppressed while the
+compare view is open so its actions are not duplicated. No editor close or reload flow uses
 `window.confirm`/`alert`; every decision is a React modal.
+
+### Known limitations
+
+- Hot-exit snapshots are keyed by `(workspaceRoot, relativePath)` with no pane dimension. When the
+  same file is open and dirty in two split panes, discarding one pane's close deletes the single
+  shared snapshot; the other pane's runtime re-writes it on its next edit. This single-key design
+  predates this issue.
+- A single snapshot whose own bytes exceed the 8&nbsp;MiB cap is still written (eviction cannot make
+  room for it). The per-file size guard in `EditorRuntimeWidget` blocks oversized writes upstream when
+  the server supplies a limit; the cap remains a best-effort multi-file budget.
 
 ### D5 — Acceptance criteria gain executable coverage without touching `globals.css`
 
-New tests cover the dirty-close contract builder (dedup/empty-drop/order/all reasons), the prune cap
-accounting (incoming snapshot counted; overwrite not double-counted), the discard snapshot deletion
-(AC5), the reload-file confirmation (AC1/D1), the recovery offer/restore/compare/use-disk flows
-(AC3/AC4), and a regression asserting an in-app dirty close never calls `window.confirm` (D4). All UI
-changes reuse existing CSS classes, so the visual-regression `globals.css` hash gate is not
-triggered. Tests assert on file paths and markers only and never print buffer contents.
+New unit/component tests cover the dirty-close contract builder (dedup/empty-drop/order/all reasons),
+the prune cap accounting (incoming snapshot counted; an unrelated snapshot is not over-evicted against
+an overwritten predecessor's bytes), the discard snapshot deletion (AC5), the reload-file confirmation
+and its snapshot deletion (AC1/D1), the recovery offer including the content-hash false-negative guard
+and the disk-baseline compare (AC3/AC4), `axe` checks for the new modal and compare panel, and a
+regression asserting an in-app dirty close never calls `window.confirm` (D4). The gating
+`release-smoke.spec.ts @smoke` browser test exercises the conflict reload-confirm, the dirty-tab-close
+dialog with Cancel-preserves and Discard, and that no native confirm is used — the requested browser
+evidence for the dirty-close and reload flows, against the real app. All UI changes reuse existing CSS
+classes, so the visual-regression `globals.css` hash gate is not triggered. Tests assert on file paths
+and markers only and never print buffer contents.
 
 ## Consequences
 
