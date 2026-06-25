@@ -150,6 +150,7 @@ import {
   GIT_DELIVERY_EXECUTION_OUTCOMES,
   GIT_DELIVERY_MERGE_BLOCK_REASONS,
   isGitDeliveryActionKind,
+  isGitDeliveryRemoteTargetPolicy,
   gitDeliveryDefaultRiskClass,
   evaluateGitPolicy,
   parseGitDeliveryActionEnvelope,
@@ -574,6 +575,7 @@ describe("keiko-contracts package surface", () => {
 
     // Value-level functions are reachable.
     expect(typeof isGitDeliveryActionKind).toBe("function");
+    expect(typeof isGitDeliveryRemoteTargetPolicy).toBe("function");
     expect(typeof gitDeliveryDefaultRiskClass).toBe("function");
     expect(typeof evaluateGitPolicy).toBe("function");
     expect(typeof parseGitDeliveryActionEnvelope).toBe("function");

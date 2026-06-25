@@ -12,6 +12,7 @@ import {
   isGitDeliveryProviderDescriptor,
   isGitDeliveryPullRequestState,
   isGitDeliveryPullRequestStatus,
+  isGitDeliveryRemoteTargetPolicy,
 } from "./git-delivery-provider.js";
 
 describe("provider status guards", () => {
@@ -224,5 +225,81 @@ describe("isGitDeliveryProviderDescriptor", () => {
         capabilities: [7],
       }),
     ).toBe(false);
+  });
+
+  it("rejects a descriptor whose capabilities contain an unknown capability string", () => {
+    // "warp-drive" is not a GitDeliveryProviderCapability — the guard must reject it.
+    expect(
+      isGitDeliveryProviderDescriptor({
+        schemaVersion: GIT_DELIVERY_PROVIDER_SCHEMA_VERSION,
+        providerInstanceId: "inst-1",
+        capabilities: ["warp-drive"],
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts a descriptor with the known capability 'branch-protection'", () => {
+    expect(
+      isGitDeliveryProviderDescriptor({
+        schemaVersion: GIT_DELIVERY_PROVIDER_SCHEMA_VERSION,
+        providerInstanceId: "inst-1",
+        capabilities: ["branch-protection"],
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("isGitDeliveryRemoteTargetPolicy", () => {
+  it("accepts a valid remote target policy with typed exact and prefix patterns", () => {
+    expect(
+      isGitDeliveryRemoteTargetPolicy({
+        allowedPushTargetPatterns: [
+          { matchKind: "exact", value: "main" },
+          { matchKind: "prefix", value: "release/" },
+        ],
+        forcePushGloballyDenied: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts an empty allowedPushTargetPatterns (no restriction)", () => {
+    expect(
+      isGitDeliveryRemoteTargetPolicy({
+        allowedPushTargetPatterns: [],
+        forcePushGloballyDenied: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects a policy whose patterns contain a raw string instead of a typed pattern", () => {
+    expect(
+      isGitDeliveryRemoteTargetPolicy({
+        allowedPushTargetPatterns: ["main"],
+        forcePushGloballyDenied: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a policy whose pattern has a bad matchKind", () => {
+    expect(
+      isGitDeliveryRemoteTargetPolicy({
+        allowedPushTargetPatterns: [{ matchKind: "glob", value: "main*" }],
+        forcePushGloballyDenied: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a policy whose forcePushGloballyDenied is not a boolean", () => {
+    expect(
+      isGitDeliveryRemoteTargetPolicy({
+        allowedPushTargetPatterns: [],
+        forcePushGloballyDenied: "yes",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a non-object value", () => {
+    expect(isGitDeliveryRemoteTargetPolicy(null)).toBe(false);
+    expect(isGitDeliveryRemoteTargetPolicy("policy")).toBe(false);
   });
 });
