@@ -152,6 +152,20 @@ export type {
   EditorDirtyCloseResolution,
 } from "./editor-dirty-close.js";
 export { createEditorDirtyCloseIntent } from "./editor-dirty-close.js";
+// ─── Root-relative project-tree file-identifier contract (Issue #1374) ──────────
+// Single tested place that turns a possibly-absolute candidate into the root-relative file
+// identifier the Files/editor BFF requires, so the editor never triggers the absolute-path load
+// failure. Reuses isContainedAgentPath; introduces no new workspace/project-tree subsystem.
+export type {
+  RootRelativeFileIdentifier,
+  WorkspaceFileIdentifierResolution,
+  WorkspaceFileTarget,
+} from "./editor-workspace-path.js";
+export {
+  isRootRelativeFileIdentifier,
+  resolveWorkspaceFileIdentifier,
+  selectWorkspaceFileTarget,
+} from "./editor-workspace-path.js";
 export type { EditorHotExitSnapshotV1 } from "./editor-hot-exit.js";
 export {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,

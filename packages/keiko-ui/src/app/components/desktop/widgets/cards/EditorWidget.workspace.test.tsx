@@ -114,6 +114,9 @@ vi.mock("./FilesWidget", () => ({
       <button type="button" onClick={() => onOpenFile("", "package.json")}>
         Open file without root
       </button>
+      <button type="button" onClick={() => onOpenFile("/repo", "/other/project/main.py")}>
+        Open absolute file outside root
+      </button>
       <button type="button" onClick={() => onRootChange("/next")}>
         Open next root
       </button>
@@ -326,6 +329,51 @@ describe("EditorWidget workspace session", () => {
         openFiles: ["src/a.ts"],
       }),
     );
+  });
+
+  it("drops an absolute file outside the root to a non-blocking empty selection (#1374 AC1)", () => {
+    // A persisted/aliased cfg.file that is absolute but does not live under the configured root
+    // must never reach the BFF as an absolute path (which would 400 BAD_PATH). It resolves to no
+    // active file so the editor renders its usable empty state instead of a failed load.
+    const onWorkspaceChange = vi.fn();
+    render(
+      <EditorWidget
+        root="/repo"
+        file="/elsewhere/x.ts"
+        openFiles={["/elsewhere/x.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("");
+    expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("");
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
+  });
+
+  it("selects a containing root when a single absolute file outside the root is opened (#1374 AC3)", () => {
+    const onWorkspaceChange = vi.fn();
+    render(<EditorWidget root="/repo" onWorkspaceChange={onWorkspaceChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open absolute file outside root" }));
+
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project");
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("main.py");
+    expect(onWorkspaceChange).toHaveBeenCalledWith(
+      expect.objectContaining({ root: "/other/project", file: "main.py" }),
+    );
+  });
+
+  it("remains mounted and usable after changing to a different root (#1374 AC4)", () => {
+    const onWorkspaceChange = vi.fn();
+    render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
+
+    // A root change resets to an empty pane on the new root; the embedded tree (its sidebar) is
+    // still rendered, so the editor stays interactive even if the new root later fails to load.
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next");
+    expect(screen.getByTestId("files-probe")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open next root" })).toBeEnabled();
   });
 
   it("ignores empty root, file, and tab-selection intents from embedded controls", () => {

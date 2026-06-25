@@ -334,6 +334,60 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   assertNoPageErrors();
 });
 
+test("arbitrary folder opening keeps root-relative ids with clear error and empty states @smoke", async ({
+  page,
+}) => {
+  // Issue #1374: opening an arbitrary developer workspace must keep every file identifier
+  // ROOT-RELATIVE (never an absolute path that the BFF rejects with 400 BAD_PATH), support parent
+  // navigation, and render clear non-blocking states for unavailable and empty roots without
+  // breaking the app. The temp fixture stands in for a project root (the local worktree path itself
+  // contains a deny-listed `.claude` segment, so it cannot be opened as a root).
+  const projectPath = createProjectFixture();
+  mkdirSync(join(projectPath, "empty-folder"), { recursive: true });
+  await seedFilesWindow(page, projectPath);
+  const assertNoPageErrors = collectPageErrors(page);
+
+  await page.goto("/");
+  const filesWindow = page.getByRole("region", { name: /^Files/u });
+  await expect(filesWindow).toBeVisible();
+
+  // Opening the project root works and a nested package folder navigates without failure (AC1/AC2).
+  await openTreePath(filesWindow, "packages");
+  await openTreePath(filesWindow, "packages/keiko-cli");
+  await expect(
+    filesWindow.locator('button.tr-row[data-path="packages/keiko-cli/src"]'),
+  ).toBeVisible();
+
+  // AC2: every visible tree identifier is root-relative — none is an absolute machine path.
+  const identifiers = await filesWindow
+    .locator("button.tr-row")
+    .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-path") ?? ""));
+  expect(identifiers.length).toBeGreaterThan(0);
+  expect(
+    identifiers.every(
+      (id) =>
+        id.length > 0 && !id.startsWith("/") && !/^[A-Za-z]:/u.test(id) && !id.includes(":\\"),
+    ),
+  ).toBe(true);
+
+  // Parent navigation: stepping up from a nested folder lists the folder we came from.
+  await filesWindow.getByRole("button", { name: "Open parent folder" }).click();
+  await expect(filesWindow.locator('button.tr-row[data-path="packages/keiko-cli"]')).toBeVisible();
+
+  // D3/AC4: an unavailable root renders a clear, non-blocking error and the app stays alive.
+  const rootInput = filesWindow.getByRole("textbox", { name: /Folder path/u });
+  await rootInput.fill(`${projectPath}/does-not-exist-1374`);
+  await rootInput.press("Enter");
+  await expect(filesWindow.getByRole("alert")).toBeVisible();
+
+  // Recovery to an empty folder shows the clear empty state (no editor failure).
+  await rootInput.fill(join(projectPath, "empty-folder"));
+  await rootInput.press("Enter");
+  await expect(filesWindow.getByText("Empty folder.")).toBeVisible();
+
+  assertNoPageErrors();
+});
+
 test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, command palette @smoke", async ({
   page,
 }, testInfo) => {

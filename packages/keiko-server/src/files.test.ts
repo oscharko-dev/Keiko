@@ -407,6 +407,38 @@ describe("desktop files browser", () => {
     });
   });
 
+  it("rejects an absolute file identifier on the content and tree endpoints (#1374 AC1)", async () => {
+    // The editor must hand the BFF a ROOT-RELATIVE path; an absolute identifier (the historic
+    // "absolute-path editor load failure") is rejected before any file is touched. The client-side
+    // root-relative file-identifier contract (keiko-contracts) guarantees this never happens, and
+    // this test pins the server half of that contract.
+    await expect(
+      readFilesContent(store, root, join(root, "src", "app.ts"), buildRedactor({})),
+    ).rejects.toMatchObject({ status: 400, code: "BAD_PATH" });
+    await expect(readFilesTree(store, root, join(root, "src"))).rejects.toMatchObject({
+      status: 400,
+      code: "BAD_PATH",
+    });
+  });
+
+  it("bounds a large directory tree to a truncated, capped entry set (#1374 performance)", async () => {
+    const wideDir = join(root, "wide");
+    await mkdir(wideDir);
+    // One more than the server's MAX_DIRECTORY_ENTRIES (1000) cap so truncation is forced.
+    const entryCount = 1_001;
+    await Promise.all(
+      Array.from({ length: entryCount }, (_unused, index) =>
+        writeFile(join(wideDir, `f${String(index).padStart(4, "0")}.txt`), "x\n"),
+      ),
+    );
+
+    const tree = await readFilesTree(store, root, "wide");
+
+    expect(tree.truncated).toBe(true);
+    expect(tree.entries.length).toBe(1_000);
+    expect(tree.entries.every((entry) => entry.path.startsWith("wide/"))).toBe(true);
+  });
+
   it("marks symlink escapes unreadable and rejects traversal through them", async () => {
     extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-outside-")));
     await writeFile(join(extraRoot, "secret.txt"), "outside\n");

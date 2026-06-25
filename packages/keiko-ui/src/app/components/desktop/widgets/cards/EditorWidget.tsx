@@ -22,6 +22,8 @@ import {
   editorLayoutPaneIds,
   editorLayoutPanes,
   editorLayoutReducer,
+  resolveWorkspaceFileIdentifier,
+  selectWorkspaceFileTarget,
   serializeEditorLayoutStateV2,
   type EditorDirtyCloseIntent,
   type EditorLayoutNode,
@@ -80,22 +82,14 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function normalizeComparablePath(path: string): string {
-  return path.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
-}
-
+// Root-relative file-identifier contract (Issue #1374): turn a configured/persisted file (which
+// may be absolute, e.g. from an older session or a symlink-aliased root) into the root-relative
+// identifier the BFF requires. An absolute path that does not live under `root` resolves to "" so
+// the editor renders its non-blocking empty state instead of sending an absolute path that the BFF
+// would reject with 400 BAD_PATH. Single-sources the conversion through @oscharko-dev/keiko-contracts.
 function normalizeEditorFile(root: string, file: string | undefined): string {
-  const rawFile = file?.trim() ?? "";
-  if (root.trim().length === 0 || rawFile.length === 0) return rawFile;
-  const normalizedRoot = normalizeComparablePath(root);
-  const normalizedFile = normalizeComparablePath(rawFile);
-  const rootCmp = normalizedRoot.toLowerCase();
-  const fileCmp = normalizedFile.toLowerCase();
-  if (fileCmp === rootCmp) return "";
-  if (fileCmp.startsWith(`${rootCmp}/`)) {
-    return normalizedFile.slice(normalizedRoot.length + 1).replace(/^\/+/u, "");
-  }
-  return rawFile;
+  const resolution = resolveWorkspaceFileIdentifier(root, file);
+  return resolution.kind === "relative" ? resolution.path : "";
 }
 
 function normalizeEditorOpenFiles(
@@ -482,17 +476,19 @@ export function EditorWidget({
 
   const openFile = useCallback(
     (nextRoot: string, nextFile: string): void => {
-      const normalizedRoot = nextRoot.trim();
-      const normalizedFile = normalizeEditorFile(normalizedRoot, nextFile);
-      if (normalizedRoot.length === 0 || normalizedFile.length === 0) return;
+      // Resolve to a {root, file} pair: a root-relative or absolute-inside-root candidate keeps
+      // `nextRoot`; a single absolute file outside it selects its containing directory as the root
+      // (AC3). An unresolvable candidate is dropped so the editor stays on its current usable state.
+      const target = selectWorkspaceFileTarget(nextRoot, nextFile);
+      if (target === null || target.file.length === 0) return;
       const paneId = currentPane.id;
       const nextLayout = editorLayoutReducer(layout, {
         type: "open-file",
         paneId,
-        file: normalizedFile,
+        file: target.file,
       });
-      setWorkspaceRoot(normalizedRoot);
-      commitLayout(nextLayout, normalizedRoot);
+      setWorkspaceRoot(target.root);
+      commitLayout(nextLayout, target.root);
     },
     [commitLayout, currentPane.id, layout],
   );
