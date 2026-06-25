@@ -847,12 +847,13 @@ export async function fetchFilesSearch(
   root: string,
   query: string,
   limit?: number,
+  init?: Pick<RequestInit, "signal">,
 ): Promise<FilesSearchResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   params.set("q", query);
   if (limit !== undefined) params.set("limit", String(limit));
-  return fetchJson(`/api/files/search?${params.toString()}`);
+  return fetchJson(`/api/files/search?${params.toString()}`, init);
 }
 
 export async function fetchFilesPreview(root: string, path: string): Promise<FilesPreviewResponse> {

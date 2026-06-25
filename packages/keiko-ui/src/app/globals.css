@@ -3255,6 +3255,16 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   opacity: 0.6;
   cursor: progress;
 }
+.repo-focus-result-secondary {
+  opacity: 0.82;
+}
+.repo-focus-result-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 8px;
+}
 .repo-focus-result-name {
   overflow: hidden;
   font-size: 12px;
@@ -3262,12 +3272,138 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.repo-focus-result-badges {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.repo-focus-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 96px;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: color-mix(in oklch, var(--card-surface) 84%, var(--surface-elevated));
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.repo-focus-badge-source,
+.repo-focus-badge-test {
+  border-color: color-mix(in oklch, var(--feedback-success) 42%, var(--border-subtle));
+  color: color-mix(in oklch, var(--feedback-success) 78%, var(--text-primary));
+}
+.repo-focus-badge-config,
+.repo-focus-badge-docs {
+  border-color: color-mix(in oklch, var(--accent-line) 72%, var(--border-subtle));
+  color: color-mix(in oklch, var(--accent) 72%, var(--text-primary));
+}
+.repo-focus-badge-generated,
+.repo-focus-badge-asset {
+  border-color: var(--border-subtle);
+  color: var(--text-tertiary);
+}
+.repo-focus-badge-root {
+  border-color: color-mix(in oklch, var(--feedback-warning) 45%, var(--border-subtle));
+  color: color-mix(in oklch, var(--feedback-warning) 78%, var(--text-primary));
+}
 .repo-focus-result-path {
   overflow: hidden;
   color: var(--text-tertiary);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.repo-token-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 2px;
+}
+.repo-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(340px, 100%);
+  min-height: 34px;
+  padding: 5px 7px 5px 6px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--accent) 7%, var(--card-surface));
+  color: var(--text-primary);
+}
+.repo-token-unverified {
+  border-color: var(--border-subtle);
+  background: color-mix(in oklch, var(--surface-elevated) 76%, var(--card-surface));
+}
+.repo-token-icon {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  flex: none;
+  place-items: center;
+}
+.repo-token-icon .fi-img,
+.repo-token-icon .fi-fallback {
+  width: 15px;
+  height: 15px;
+}
+.repo-token-main {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+.repo-token-name,
+.repo-token-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repo-token-name {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.repo-token-path {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+.repo-token-status {
+  flex: none;
+  padding: 2px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.repo-token-remove {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+.repo-token-remove:hover {
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
+}
+.repo-token-remove:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* ---------- ATTACHMENT SURFACES (Issue #147) ---------- */
@@ -14077,6 +14213,9 @@ html[data-keiko-gateway-setup-open="true"] {
   box-shadow: var(--popover-shadow);
 }
 .repo-ref-root {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
   min-height: 26px;
   padding: 4px 8px;
   border: 0;
@@ -14086,6 +14225,13 @@ html[data-keiko-gateway-setup-open="true"] {
   font: 12px var(--font-ui);
   text-align: left;
   cursor: pointer;
+}
+.repo-ref-root-path {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .repo-ref-root:hover,
 .repo-ref-root:focus-visible {

@@ -511,6 +511,21 @@ describe("ChatWindow repository file focus picker", () => {
           extension: "ts",
           sizeBytes: 42,
           modifiedAt: 123,
+          fileRole: "source",
+          matchQuality: "exact",
+          rootKind: "nested-git-root",
+        },
+        {
+          root: "/repo",
+          path: "dist/coding-context.js",
+          name: "coding-context.js",
+          directory: "dist",
+          extension: "js",
+          sizeBytes: 84,
+          modifiedAt: 456,
+          fileRole: "generated",
+          matchQuality: "strong",
+          rootKind: "selected-root",
         },
       ],
       truncated: false,
@@ -537,10 +552,22 @@ describe("ChatWindow repository file focus picker", () => {
     const result = await screen.findByRole("option", {
       name: "Reference src/context/coding-context.ts",
     });
+    expect(result).toHaveTextContent("Source");
+    expect(result).toHaveTextContent("Nested repo");
+    const generatedResult = screen.getByRole("option", {
+      name: "Reference dist/coding-context.js",
+    });
+    expect(generatedResult).toHaveTextContent("Generated");
+    expect(generatedResult).toHaveClass("repo-focus-result-secondary");
     await user.click(result);
 
     await waitFor(() => {
-      expect(fetchFilesSearchMock).toHaveBeenCalledWith("/repo", "coding", 24);
+      expect(fetchFilesSearchMock).toHaveBeenCalledWith(
+        "/repo",
+        "coding",
+        24,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
         connectedScopes: [
           expect.objectContaining({
@@ -553,6 +580,237 @@ describe("ChatWindow repository file focus picker", () => {
     });
     expect(replaceChat).toHaveBeenCalledWith(updated);
     expect(setDraft).toHaveBeenCalledWith("Explain this @src/context/coding-context.ts ");
+    expect(screen.getByRole("list", { name: "Referenced repository files" })).toHaveTextContent(
+      "coding-context.ts",
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Remove repository reference src/context/coding-context.ts",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("debounces repository searches and aborts stale in-flight requests", async () => {
+    const signals: AbortSignal[] = [];
+    fetchFilesSearchMock.mockImplementation((_root, query, _limit, init) => {
+      if (init?.signal !== undefined && init.signal !== null) signals.push(init.signal);
+      if (query === "ra") {
+        return new Promise<never>(() => undefined);
+      }
+      return Promise.resolve({
+        root: "/repo",
+        query,
+        results: [
+          {
+            root: "/repo",
+            path: "src/range.ts",
+            name: "range.ts",
+            directory: "src",
+            extension: "ts",
+            sizeBytes: 42,
+            modifiedAt: 123,
+            fileRole: "source",
+            matchQuality: "exact",
+            rootKind: "selected-root",
+          },
+        ],
+        truncated: false,
+        scannedFileCount: 10,
+      });
+    });
+
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [
+            {
+              kind: "workspace-root",
+              root: "/repo",
+              relativePaths: [],
+              connectedAtMs: 1,
+            },
+          ],
+        }),
+        draft: "",
+      }),
+    );
+
+    const input = screen.getByRole("textbox", { name: "Chat message" });
+    fireEvent.change(input, {
+      target: { value: "@ra", selectionStart: "@ra".length },
+    });
+
+    await waitFor(() => {
+      expect(fetchFilesSearchMock).toHaveBeenCalledWith(
+        "/repo",
+        "ra",
+        24,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+    expect(signals[0]?.aborted).toBe(false);
+
+    fireEvent.change(input, {
+      target: { value: "@range", selectionStart: "@range".length },
+    });
+
+    await waitFor(() => expect(signals[0]?.aborted).toBe(true));
+    await screen.findByRole("option", { name: "Reference src/range.ts" });
+    expect(fetchFilesSearchMock).toHaveBeenCalledWith(
+      "/repo",
+      "range",
+      24,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("removes typed repository references from the chip strip and draft", async () => {
+    const user = userEvent.setup();
+    const setDraft = vi.fn();
+    const existingScope = {
+      kind: "files" as const,
+      root: "/repo",
+      relativePaths: ["src/context/coding-context.ts"],
+      connectedAtMs: 1,
+    };
+    fetchFilesSearchMock.mockResolvedValue({
+      root: "/repo",
+      query: "coding",
+      results: [
+        {
+          root: "/repo",
+          path: "src/context/coding-context.ts",
+          name: "coding-context.ts",
+          directory: "src/context",
+          extension: "ts",
+          sizeBytes: 42,
+          modifiedAt: 123,
+        },
+      ],
+      truncated: false,
+      scannedFileCount: 10,
+    });
+
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [existingScope],
+          connectedScope: existingScope,
+        }),
+        draft: "",
+        setDraft,
+      }),
+    );
+
+    const input = screen.getByRole("textbox", { name: "Chat message" });
+    await user.type(input, "Explain this @coding");
+    await user.click(
+      await screen.findByRole("option", {
+        name: "Reference src/context/coding-context.ts",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Remove repository reference src/context/coding-context.ts",
+      }),
+    );
+
+    expect(screen.queryByRole("list", { name: "Referenced repository files" })).toBeNull();
+    expect(setDraft).toHaveBeenLastCalledWith("Explain this ");
+  });
+
+  it("clears the draft when removing the only typed repository reference", async () => {
+    const user = userEvent.setup();
+    const setDraft = vi.fn();
+    const existingScope = {
+      kind: "files" as const,
+      root: "/repo",
+      relativePaths: ["src/range.ts"],
+      connectedAtMs: 1,
+    };
+    fetchFilesSearchMock.mockResolvedValue({
+      root: "/repo",
+      query: "range",
+      results: [
+        {
+          root: "/repo",
+          path: "src/range.ts",
+          name: "range.ts",
+          directory: "src",
+          extension: "ts",
+          sizeBytes: 42,
+          modifiedAt: 123,
+        },
+      ],
+      truncated: false,
+      scannedFileCount: 10,
+    });
+
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [existingScope],
+          connectedScope: existingScope,
+        }),
+        draft: "",
+        setDraft,
+      }),
+    );
+
+    const input = screen.getByRole("textbox", { name: "Chat message" });
+    await user.type(input, "@range");
+    await user.click(
+      await screen.findByRole("option", {
+        name: "Reference src/range.ts",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Remove repository reference src/range.ts",
+      }),
+    );
+
+    expect(screen.queryByRole("list", { name: "Referenced repository files" })).toBeNull();
+    expect(setDraft).toHaveBeenLastCalledWith("");
+  });
+
+  it("reconstructs unverified repository chips from an existing draft", async () => {
+    const user = userEvent.setup();
+    const setDraft = vi.fn();
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [
+            {
+              kind: "workspace-root",
+              root: "/repo",
+              relativePaths: [],
+              connectedAtMs: 1,
+            },
+          ],
+        }),
+        draft: "Explain @packages/keiko-editor/src/range.ts",
+        setDraft,
+      }),
+    );
+
+    const list = await screen.findByRole("list", { name: "Referenced repository files" });
+    expect(list).toHaveTextContent("range.ts");
+    expect(list).toHaveTextContent("Unverified");
+    expect(list).toHaveAccessibleName("Referenced repository files");
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Remove repository reference packages/keiko-editor/src/range.ts",
+      }),
+    );
+
+    expect(screen.queryByRole("list", { name: "Referenced repository files" })).toBeNull();
+    expect(setDraft).toHaveBeenLastCalledWith("Explain ");
   });
 
   it("creates a focused Files scope when only the repository root is connected", async () => {
@@ -1763,11 +2021,14 @@ describe("ChatWindow message copy", () => {
       { linkedRoot: "/repo", openEditorFile },
     );
 
-    await user.click(
-      screen.getByRole("button", {
-        name: "Open packages/keiko-harness/src/context.ts at lines 50-57 in editor",
-      }),
-    );
+    const referenceButton = screen.getByRole("button", {
+      name: "Open packages/keiko-harness/src/context.ts at lines 50-57 in editor",
+    });
+    expect(referenceButton).toHaveTextContent("context.ts:50-57");
+    expect(referenceButton).not.toHaveTextContent("packages/keiko-harness");
+    expect(referenceButton).toHaveAttribute("title", "packages/keiko-harness/src/context.ts:50-57");
+
+    await user.click(referenceButton);
 
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/repo",
@@ -1778,6 +2039,201 @@ describe("ChatWindow message copy", () => {
     expect(
       screen.getByText("Opened packages/keiko-harness/src/context.ts in editor."),
     ).toHaveAttribute("role", "status");
+  });
+
+  it("surfaces a clear status when repository references have no connected root", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [],
+          connectedScope: undefined,
+        }),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Check src/context.ts:50 before this change.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+      { linkedRoot: null, openEditorFile },
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Open src/context.ts at line 50 in editor" }),
+    );
+
+    expect(openEditorFile).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("Connect a Files window to open repository references."),
+    ).toHaveAttribute("role", "alert");
+  });
+
+  it("opens assistant repository references from chat connected scope roots", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/Users/dev/Projects/Keiko",
+          connectedScopes: [
+            {
+              kind: "files",
+              root: "/Users/dev/Projects/Keiko",
+              relativePaths: ["packages/keiko-editor/src/range.ts"],
+              connectedAtMs: 1,
+            },
+          ],
+        }),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Use packages/keiko-editor/src/range.ts:10 for this behavior.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+      { openEditorFile },
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open packages/keiko-editor/src/range.ts at line 10 in editor",
+      }),
+    );
+
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/Users/dev/Projects/Keiko",
+      path: "packages/keiko-editor/src/range.ts",
+      lineStart: 10,
+      lineEnd: 10,
+    });
+  });
+
+  it("prefers nested chat repository roots over linked parent folder roots", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/Users/dev/Projects",
+          connectedScopes: [
+            {
+              kind: "workspace-root",
+              root: "/Users/dev/Projects",
+              relativePaths: [],
+              connectedAtMs: 1,
+            },
+            {
+              kind: "files",
+              root: "/Users/dev/Projects/Keiko",
+              relativePaths: ["packages/keiko-editor/src/range.ts"],
+              connectedAtMs: 2,
+            },
+          ],
+        }),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Use packages/keiko-editor/src/range.ts:10 for this behavior.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+      { linkedRoot: "/Users/dev/Projects", openEditorFile },
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open packages/keiko-editor/src/range.ts at line 10 in editor",
+      }),
+    );
+
+    expect(screen.queryByRole("dialog", { name: "Select repository source" })).toBeNull();
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/Users/dev/Projects/Keiko",
+      path: "packages/keiko-editor/src/range.ts",
+      lineStart: 10,
+      lineEnd: 10,
+    });
+  });
+
+  it("normalizes legacy parent-prefixed repository references against nested roots", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/Users/dev/Projects",
+          connectedScopes: [
+            {
+              kind: "workspace-root",
+              root: "/Users/dev/Projects",
+              relativePaths: [],
+              connectedAtMs: 1,
+            },
+            {
+              kind: "files",
+              root: "/Users/dev/Projects/Keiko",
+              relativePaths: ["packages/keiko-editor/src/range.ts"],
+              connectedAtMs: 2,
+            },
+          ],
+        }),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Use Keiko/packages/keiko-editor/src/range.ts:10 for legacy citations.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+      { linkedRoot: "/Users/dev/Projects", openEditorFile },
+    );
+
+    const referenceButton = screen.getByRole("button", {
+      name: "Open Keiko/packages/keiko-editor/src/range.ts at line 10 in editor",
+    });
+    expect(referenceButton).toHaveTextContent("range.ts:10");
+
+    await user.click(referenceButton);
+
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/Users/dev/Projects/Keiko",
+      path: "packages/keiko-editor/src/range.ts",
+      lineStart: 10,
+      lineEnd: 10,
+    });
   });
 
   it("requires a root choice for assistant repository references when multiple roots are connected", async () => {

@@ -263,8 +263,118 @@ describe("desktop files browser", () => {
       name: "coding-context.ts",
       directory: "src/context",
       extension: "ts",
+      fileRole: "source",
+      matchQuality: "exact",
+      rootKind: "selected-root",
     });
     expect(result.scannedFileCount).toBeGreaterThan(0);
+  });
+
+  it("rebases file search results to nested Git repository roots", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-parent-")));
+    const repo = join(extraRoot, "Keiko");
+    await mkdir(join(repo, ".git"), { recursive: true });
+    await mkdir(join(repo, "packages", "keiko-editor", "src"), { recursive: true });
+    await writeFile(join(repo, "package.json"), '{"name":"keiko"}\n');
+    await writeFile(
+      join(repo, "packages", "keiko-editor", "src", "range.ts"),
+      "export const range = 1;\n",
+    );
+
+    const result = await searchFiles(store, extraRoot, "range", 10, buildRedactor({}));
+
+    expect(result.root).toBe(extraRoot);
+    expect(result.results[0]).toMatchObject({
+      root: repo,
+      path: "packages/keiko-editor/src/range.ts",
+      name: "range.ts",
+      directory: "packages/keiko-editor/src",
+      extension: "ts",
+      fileRole: "source",
+      matchQuality: "exact",
+      rootKind: "nested-git-root",
+    });
+  });
+
+  it("prefers source repository files over generated parent-folder assets", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-ranking-")));
+    const repo = join(extraRoot, "Keiko");
+    await mkdir(join(repo, ".git"), { recursive: true });
+    await mkdir(join(repo, "packages", "keiko-editor", "src"), { recursive: true });
+    await mkdir(join(extraRoot, "StorybookStatic", "assets"), { recursive: true });
+    await writeFile(
+      join(repo, "packages", "keiko-editor", "src", "range.ts"),
+      "export const sourceRange = 1;\n",
+    );
+    await writeFile(join(extraRoot, "StorybookStatic", "assets", "range.ts"), "generated\n");
+
+    const result = await searchFiles(store, extraRoot, "range", 10, buildRedactor({}));
+
+    expect(result.results[0]).toMatchObject({
+      root: repo,
+      path: "packages/keiko-editor/src/range.ts",
+      name: "range.ts",
+      directory: "packages/keiko-editor/src",
+      fileRole: "source",
+      rootKind: "nested-git-root",
+    });
+    expect(result.results).toContainEqual(
+      expect.objectContaining({
+        path: "StorybookStatic/assets/range.ts",
+        fileRole: "generated",
+        rootKind: "selected-root",
+      }),
+    );
+  });
+
+  it("classifies docs, config, and test search results", async () => {
+    await mkdir(join(root, "docs"), { recursive: true });
+    await mkdir(join(root, "tests"), { recursive: true });
+    await writeFile(join(root, "docs", "usage.md"), "# Usage\n");
+    await writeFile(join(root, "vitest.config.ts"), "export default {};\n");
+    await writeFile(join(root, "tests", "range.test.ts"), "import { it } from 'vitest';\n");
+
+    const docs = await searchFiles(store, root, "usage", 10, buildRedactor({}));
+    const config = await searchFiles(store, root, "vitest", 10, buildRedactor({}));
+    const test = await searchFiles(store, root, "range.test", 10, buildRedactor({}));
+
+    expect(docs.results[0]).toMatchObject({
+      path: "docs/usage.md",
+      fileRole: "docs",
+      matchQuality: "exact",
+      rootKind: "selected-root",
+    });
+    expect(config.results[0]).toMatchObject({
+      path: "vitest.config.ts",
+      fileRole: "config",
+      matchQuality: "strong",
+      rootKind: "selected-root",
+    });
+    expect(test.results[0]).toMatchObject({
+      path: "tests/range.test.ts",
+      fileRole: "test",
+      matchQuality: "exact",
+      rootKind: "selected-root",
+    });
+  });
+
+  it("does not rebase file search results to Git roots outside the selected root", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-subroot-")));
+    const repo = join(extraRoot, "repo");
+    const selectedRoot = join(repo, "src");
+    await mkdir(join(repo, ".git"), { recursive: true });
+    await mkdir(selectedRoot, { recursive: true });
+    await writeFile(join(selectedRoot, "app.ts"), "export const app = true;\n");
+
+    const result = await searchFiles(store, selectedRoot, "app", 10, buildRedactor({}));
+
+    expect(result.root).toBe(selectedRoot);
+    expect(result.results[0]).toMatchObject({
+      root: selectedRoot,
+      path: "app.ts",
+      name: "app.ts",
+      directory: "",
+    });
   });
 
   it("keeps repository file search inside the selected root and deny list", async () => {

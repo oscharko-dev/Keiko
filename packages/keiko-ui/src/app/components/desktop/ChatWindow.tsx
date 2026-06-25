@@ -39,6 +39,7 @@ import {
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, RunSummaryCard } from "./WorkflowHandoff";
 import { Toggle } from "./widgets/shared/Toggle";
+import { FileIcon } from "./widgets/shared/projectTree";
 import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
@@ -180,8 +181,7 @@ export function copyableMessageText(content: string): string {
 }
 
 async function writeTextWithFallback(text: string): Promise<void> {
-  const writeText =
-    typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
+  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
   if (writeText !== undefined && navigator.clipboard !== undefined) {
     try {
       await writeText.call(navigator.clipboard, text);
@@ -492,6 +492,16 @@ interface RepositoryRootOption {
   readonly label: string;
 }
 
+interface ComposerRepositoryReference {
+  readonly id: string;
+  readonly root: string;
+  readonly path: string;
+  readonly name: string;
+  readonly directory: string;
+  readonly verified: boolean;
+  readonly source: "picker" | "draft";
+}
+
 function effectiveConnectedScopes(chat: Chat): readonly ChatConnectedScope[] {
   if (chat.connectedScopes !== undefined) return chat.connectedScopes;
   return chat.connectedScope !== undefined ? [chat.connectedScope] : [];
@@ -520,6 +530,48 @@ function connectedRepositoryRoots(
   return roots;
 }
 
+function normalizedRepositoryRoot(root: string): string {
+  return root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+}
+
+function repositoryRootContains(parentRoot: string, childRoot: string): boolean {
+  const parent = normalizedRepositoryRoot(parentRoot);
+  const child = normalizedRepositoryRoot(childRoot);
+  return parent.length > 0 && child.length > parent.length && child.startsWith(`${parent}/`);
+}
+
+function omitAncestorRepositoryRoots(roots: readonly string[]): readonly string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const root of roots) {
+    const trimmed = root.trim();
+    if (trimmed.length === 0 || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    unique.push(trimmed);
+  }
+  return unique.filter(
+    (root) =>
+      !unique.some((candidate) => candidate !== root && repositoryRootContains(root, candidate)),
+  );
+}
+
+function repositoryReferenceRootPaths(args: {
+  readonly chat: Chat | undefined;
+  readonly activeProjectPath: string | undefined;
+  readonly linkedRoot: string | null;
+  readonly linkedRoots: readonly string[];
+}): readonly string[] {
+  const roots = connectedRepositoryRoots(args.chat, args.activeProjectPath).map(
+    (root) => root.root,
+  );
+  if (args.linkedRoots.length > 0) {
+    roots.push(...args.linkedRoots);
+  } else if (args.linkedRoot !== null) {
+    roots.push(args.linkedRoot);
+  }
+  return omitAncestorRepositoryRoots(roots);
+}
+
 function normalizedRepositoryPath(path: string): string {
   return path.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
 }
@@ -529,6 +581,107 @@ function appendRepositoryReference(draft: string, path: string): string {
   if (draft.split(/\s+/u).includes(mention)) return draft;
   const trimmed = draft.trimEnd();
   return trimmed.length === 0 ? mention : `${trimmed} ${mention}`;
+}
+
+function repositoryReferenceId(root: string, path: string): string {
+  return `${root}\u0001${path}`;
+}
+
+function repositoryReferenceFromResult(
+  result: FilesSearchResult,
+  source: ComposerRepositoryReference["source"] = "picker",
+): ComposerRepositoryReference {
+  return {
+    id: repositoryReferenceId(result.root, result.path),
+    root: result.root,
+    path: result.path,
+    name: result.name,
+    directory: result.directory,
+    verified: true,
+    source,
+  };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function repositoryReferenceMentionPattern(path: string): RegExp {
+  return new RegExp(`(^|\\s)@${escapeRegExp(path)}(?=$|\\s)`, "gu");
+}
+
+function removeRepositoryReferenceFromDraft(draft: string, path: string): string {
+  const next = draft
+    .replace(repositoryReferenceMentionPattern(path), "$1")
+    .replace(/[ \t]{2,}/gu, " ");
+  return next.trim().length === 0 ? "" : next;
+}
+
+const COMPOSER_REPOSITORY_REFERENCE_PATTERN =
+  /(^|\s)@((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9]{0,15})(?=$|\s)/gu;
+
+function repositoryReferenceMentionPaths(draft: string): readonly string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  COMPOSER_REPOSITORY_REFERENCE_PATTERN.lastIndex = 0;
+  for (;;) {
+    const match = COMPOSER_REPOSITORY_REFERENCE_PATTERN.exec(draft);
+    if (match === null) break;
+    const path = normalizedRepositoryPath(match[2] ?? "");
+    if (path.length === 0 || seen.has(path)) continue;
+    seen.add(path);
+    paths.push(path);
+  }
+  return paths;
+}
+
+function syntheticRepositoryReferenceFromPath(
+  path: string,
+  selectedRoot: string,
+  roots: readonly RepositoryRootOption[],
+): ComposerRepositoryReference | null {
+  const normalized = normalizedRepositoryPath(path);
+  if (normalized.length === 0 || normalized.includes("..")) return null;
+  const root = selectedRoot.length > 0 ? selectedRoot : (roots[0]?.root ?? "");
+  if (root.length === 0) return null;
+  const segments = normalized.split("/").filter((segment) => segment.length > 0);
+  const name = segments[segments.length - 1] ?? normalized;
+  const directory = segments.length > 1 ? segments.slice(0, -1).join("/") : "";
+  return {
+    id: repositoryReferenceId(root, normalized),
+    root,
+    path: normalized,
+    name,
+    directory,
+    verified: false,
+    source: "draft",
+  };
+}
+
+function mergeComposerRepositoryReference(
+  current: readonly ComposerRepositoryReference[],
+  reference: ComposerRepositoryReference,
+): readonly ComposerRepositoryReference[] {
+  if (current.some((item) => item.id === reference.id)) return current;
+  return [...current, reference];
+}
+
+function synchronizeComposerRepositoryReferences(args: {
+  readonly current: readonly ComposerRepositoryReference[];
+  readonly draft: string;
+  readonly selectedRoot: string;
+  readonly roots: readonly RepositoryRootOption[];
+  readonly searchResults: readonly FilesSearchResult[];
+}): readonly ComposerRepositoryReference[] {
+  return repositoryReferenceMentionPaths(args.draft)
+    .map((path) => {
+      const existing = args.current.find((reference) => reference.path === path);
+      if (existing?.verified === true) return existing;
+      const searchResult = args.searchResults.find((result) => result.path === path);
+      if (searchResult !== undefined) return repositoryReferenceFromResult(searchResult, "draft");
+      return existing ?? syntheticRepositoryReferenceFromPath(path, args.selectedRoot, args.roots);
+    })
+    .filter((reference): reference is ComposerRepositoryReference => reference !== null);
 }
 
 interface RepositoryMentionRange {
@@ -622,8 +775,59 @@ function resultDirectoryLabel(result: FilesSearchResult): string {
   return result.directory.length === 0 ? "Repository root" : result.directory;
 }
 
+function fileRoleLabel(role: FilesSearchResult["fileRole"] | undefined): string {
+  switch (role) {
+    case "source":
+      return "Source";
+    case "test":
+      return "Test";
+    case "config":
+      return "Config";
+    case "docs":
+      return "Docs";
+    case "generated":
+      return "Generated";
+    case "asset":
+      return "Asset";
+    case "other":
+    case undefined:
+      return "File";
+  }
+}
+
+function fileRoleClassName(role: FilesSearchResult["fileRole"] | undefined): string {
+  return `repo-focus-badge repo-focus-badge-${role ?? "other"}`;
+}
+
+function fileSearchResultClassName(result: FilesSearchResult): string {
+  const secondary = result.fileRole === "generated" || result.fileRole === "asset";
+  return `repo-focus-result${secondary ? " repo-focus-result-secondary" : ""}`;
+}
+
+function matchQualityLabel(quality: FilesSearchResult["matchQuality"] | undefined): string {
+  switch (quality) {
+    case "exact":
+      return "Exact match";
+    case "strong":
+      return "Strong match";
+    case "path":
+      return "Path match";
+    case "weak":
+    case undefined:
+      return "Weak match";
+  }
+}
+
 function formatRepositoryFocusError(error: unknown): string {
   return formatUserError(error, "Unable to reference repository file.");
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    error.name === "AbortError"
+  );
 }
 
 interface RepositoryFileSearchState {
@@ -659,34 +863,41 @@ function useRepositoryFileSearch(
       return undefined;
     }
 
+    const controller = new AbortController();
     let cancelled = false;
     setSearching(true);
     setError(null);
     setMessage("Searching repository files...");
-    void fetchFilesSearch(selectedRoot, trimmed, REPOSITORY_FILE_SEARCH_LIMIT)
-      .then((response) => {
-        if (cancelled) return;
-        setResults(response.results);
-        if (response.results.length === 0) {
-          setMessage("No matching repository files.");
-        } else {
-          const count = response.results.length;
-          setMessage(
-            `${String(count)} ${count === 1 ? "file" : "files"} found${response.truncated ? "; refine the query for more." : "."}`,
-          );
-        }
+    const searchTimer = window.setTimeout(() => {
+      void fetchFilesSearch(selectedRoot, trimmed, REPOSITORY_FILE_SEARCH_LIMIT, {
+        signal: controller.signal,
       })
-      .catch((caught: unknown) => {
-        if (cancelled) return;
-        setResults([]);
-        setError(formatRepositoryFocusError(caught));
-        setMessage("Repository search failed.");
-      })
-      .finally(() => {
-        if (!cancelled) setSearching(false);
-      });
+        .then((response) => {
+          if (cancelled) return;
+          setResults(response.results);
+          if (response.results.length === 0) {
+            setMessage("No matching repository files.");
+          } else {
+            const count = response.results.length;
+            setMessage(
+              `${String(count)} ${count === 1 ? "file" : "files"} found${response.truncated ? "; refine query; search scanned limit reached." : "."}`,
+            );
+          }
+        })
+        .catch((caught: unknown) => {
+          if (cancelled || isAbortError(caught)) return;
+          setResults([]);
+          setError(formatRepositoryFocusError(caught));
+          setMessage("Repository search failed.");
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 120);
     return () => {
       cancelled = true;
+      window.clearTimeout(searchTimer);
+      controller.abort();
     };
   }, [open, query, selectedRoot]);
 
@@ -780,7 +991,7 @@ function RepositoryFilePickerPanel({
             <button
               key={`${result.root}:${result.path}`}
               type="button"
-              className="repo-focus-result"
+              className={fileSearchResultClassName(result)}
               role="option"
               aria-selected={index === highlightedIndex ? "true" : "false"}
               data-highlighted={index === highlightedIndex ? "true" : "false"}
@@ -792,12 +1003,78 @@ function RepositoryFilePickerPanel({
                 if (event.detail === 0 && pickingPath === null) onPick(result);
               }}
             >
-              <span className="repo-focus-result-name">{result.name}</span>
+              <span className="repo-focus-result-main">
+                <span className="repo-focus-result-name">{result.name}</span>
+                <span className="repo-focus-result-badges" aria-hidden="true">
+                  <span className={fileRoleClassName(result.fileRole)}>
+                    {fileRoleLabel(result.fileRole)}
+                  </span>
+                  {result.rootKind === "nested-git-root" ? (
+                    <span className="repo-focus-badge repo-focus-badge-root">Nested repo</span>
+                  ) : null}
+                </span>
+              </span>
               <span className="repo-focus-result-path">{resultDirectoryLabel(result)}</span>
+              <span className="sr-only">
+                {`${fileRoleLabel(result.fileRole)}; ${matchQualityLabel(result.matchQuality)}${result.rootKind === "nested-git-root" ? "; nested repository root" : ""}.`}
+              </span>
             </button>
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+interface RepositoryReferenceStripProps {
+  readonly references: readonly ComposerRepositoryReference[];
+  readonly onRemove: (id: string) => void;
+}
+
+function RepositoryReferenceStrip({
+  references,
+  onRemove,
+}: RepositoryReferenceStripProps): ReactNode {
+  if (references.length === 0) return null;
+  return (
+    <div className="repo-token-strip" role="list" aria-label="Referenced repository files">
+      {references.map((reference) => (
+        <div
+          key={reference.id}
+          className={`repo-token${reference.verified ? "" : " repo-token-unverified"}`}
+          role="listitem"
+          title={
+            reference.verified
+              ? `${reference.path} — ${reference.root}`
+              : `Reference not verified yet — ${reference.path} — ${reference.root}`
+          }
+        >
+          <span className="repo-token-icon" aria-hidden="true">
+            <FileIcon name={reference.name} />
+          </span>
+          <span className="repo-token-main">
+            <span className="repo-token-name">{reference.name}</span>
+            <span className="repo-token-path">
+              {reference.directory.length === 0
+                ? rootDisplayName(reference.root)
+                : reference.directory}
+            </span>
+          </span>
+          {reference.verified ? null : (
+            <span className="repo-token-status" aria-label="Reference not verified yet">
+              Unverified
+            </span>
+          )}
+          <button
+            type="button"
+            className="repo-token-remove"
+            aria-label={`Remove repository reference ${reference.path}`}
+            onClick={() => onRemove(reference.id)}
+          >
+            <Icons.close size={12} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1149,6 +1426,9 @@ function ComposerCore({
   const [repositoryPickingPath, setRepositoryPickingPath] = useState<string | null>(null);
   const [repositoryPickError, setRepositoryPickError] = useState<string | null>(null);
   const [repositoryHighlightedIndex, setRepositoryHighlightedIndex] = useState(0);
+  const [repositoryReferences, setRepositoryReferences] = useState<
+    readonly ComposerRepositoryReference[]
+  >([]);
   const repositoryPickerOpen = repositoryMention !== null && repositoryRoots.length > 0;
   const repositorySearch = useRepositoryFileSearch(
     repositoryPickerOpen,
@@ -1170,6 +1450,18 @@ function ComposerCore({
   useEffect(() => {
     setRepositoryHighlightedIndex(0);
   }, [repositoryMention?.query, repositorySearch.results]);
+
+  useEffect(() => {
+    setRepositoryReferences((current) =>
+      synchronizeComposerRepositoryReferences({
+        current,
+        draft,
+        selectedRoot: selectedRepositoryRoot,
+        roots: repositoryRoots,
+        searchResults: repositorySearch.results,
+      }),
+    );
+  }, [draft, repositoryRootKey, repositoryRoots, repositorySearch.results, selectedRepositoryRoot]);
 
   const updateRepositoryMentionFromTextarea = useCallback(
     (value: string, cursor: number): void => {
@@ -1204,6 +1496,9 @@ function ComposerCore({
                 return { value, cursor: value.length };
               })()
             : replaceRepositoryMention(draft, mention, result.path);
+        setRepositoryReferences((current) =>
+          mergeComposerRepositoryReference(current, repositoryReferenceFromResult(result)),
+        );
         setDraft(next.value);
         setRepositoryMention(null);
         requestAnimationFrame(() => {
@@ -1217,6 +1512,19 @@ function ComposerCore({
       }
     },
     [activeChat, draft, replaceChat, repositoryMention, setDraft],
+  );
+
+  const removeRepositoryReference = useCallback(
+    (id: string): void => {
+      const reference = repositoryReferences.find((item) => item.id === id);
+      if (reference === undefined) return;
+      setRepositoryReferences((current) => current.filter((item) => item.id !== id));
+      setDraft(removeRepositoryReferenceFromDraft(draft, reference.path));
+      requestAnimationFrame(() => {
+        taRef.current?.focus();
+      });
+    },
+    [draft, repositoryReferences, setDraft],
   );
 
   const handleDraftChange = useCallback(
@@ -1322,6 +1630,10 @@ function ComposerCore({
             />
           </div>
         ) : null}
+        <RepositoryReferenceStrip
+          references={repositoryReferences}
+          onRemove={removeRepositoryReference}
+        />
         {/* Chip strip below the textarea, above the composer bar (AC #3) */}
         <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
         {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
@@ -2241,6 +2553,7 @@ export function ChatWindow({
     selectedModel,
     sendMessage,
     cancelGrounded,
+    activeProject,
     activeChat,
     replaceChat,
     latestMemory,
@@ -2258,9 +2571,15 @@ export function ChatWindow({
   const visible = visibleOnly(messages);
   const scrollRef = useRef<HTMLDivElement>(null);
   const repositoryRoots = useMemo(() => {
-    const roots = linkedRoots.length > 0 ? linkedRoots : linkedRoot === null ? [] : [linkedRoot];
-    return repositoryReferenceRoots(roots);
-  }, [linkedRoot, linkedRoots]);
+    return repositoryReferenceRoots(
+      repositoryReferenceRootPaths({
+        chat: activeChat,
+        activeProjectPath: activeProject?.path,
+        linkedRoot,
+        linkedRoots,
+      }),
+    );
+  }, [activeChat, activeProject?.path, linkedRoot, linkedRoots]);
   const openRepositoryReference: OpenRepositoryReference | undefined = openEditorFile;
   // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND
   // streaming content growth (lastContent dependency), but only while the
@@ -2347,10 +2666,7 @@ export function ChatWindow({
               activeChat={activeChat}
               onCancelGrounded={cancelGrounded}
             />
-            <GroundedAnswerPanel
-              chat={activeChat}
-              busy={sending}
-            />
+            <GroundedAnswerPanel chat={activeChat} busy={sending} />
             {/* Issue #148 — disclose which attached documents contributed extracted context. */}
             <SentDocumentsNote documents={lastSentDocuments} />
           </div>

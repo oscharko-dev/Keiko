@@ -87,6 +87,9 @@ export interface FilesSearchResult {
   readonly extension: string | null;
   readonly sizeBytes: number;
   readonly modifiedAt: number;
+  readonly fileRole: FilesSearchFileRole;
+  readonly matchQuality: FilesSearchMatchQuality;
+  readonly rootKind: FilesSearchRootKind;
 }
 
 export interface FilesSearchResponse {
@@ -96,6 +99,19 @@ export interface FilesSearchResponse {
   readonly truncated: boolean;
   readonly scannedFileCount: number;
 }
+
+export type FilesSearchFileRole =
+  | "source"
+  | "test"
+  | "config"
+  | "docs"
+  | "generated"
+  | "asset"
+  | "other";
+
+export type FilesSearchMatchQuality = "exact" | "strong" | "path" | "weak";
+
+export type FilesSearchRootKind = "selected-root" | "nested-git-root";
 
 interface FilesPreviewBase {
   readonly root: string;
@@ -608,6 +624,235 @@ function fileSearchScore(relativePath: string, query: string): number {
   return 1_000 + relativePath.length;
 }
 
+const GENERATED_FILE_SEARCH_SEGMENTS = new Set([
+  ".next",
+  ".turbo",
+  "build",
+  "coverage",
+  "dist",
+  "out",
+  "storybook-static",
+  "storybookstatic",
+  "target",
+]);
+
+const SOURCE_FILE_SEARCH_SEGMENTS = new Set([
+  "__tests__",
+  "app",
+  "components",
+  "lib",
+  "packages",
+  "scripts",
+  "src",
+  "test",
+  "tests",
+]);
+
+const SOURCE_FILE_SEARCH_EXTENSIONS = new Set([
+  "astro",
+  "c",
+  "cc",
+  "cjs",
+  "cpp",
+  "cs",
+  "css",
+  "go",
+  "h",
+  "hpp",
+  "html",
+  "java",
+  "js",
+  "jsx",
+  "kt",
+  "kts",
+  "mjs",
+  "mts",
+  "php",
+  "py",
+  "rb",
+  "rs",
+  "scala",
+  "scss",
+  "sh",
+  "svelte",
+  "swift",
+  "ts",
+  "tsx",
+  "vue",
+]);
+
+const TEST_FILE_SEARCH_SEGMENTS = new Set(["__tests__", "__test__", "spec", "test", "tests"]);
+
+const DOCS_FILE_SEARCH_SEGMENTS = new Set(["doc", "docs", "documentation"]);
+
+const DOCS_FILE_SEARCH_EXTENSIONS = new Set(["adoc", "md", "mdx", "rst", "txt"]);
+
+const CONFIG_FILE_SEARCH_NAMES = new Set([
+  ".babelrc",
+  ".editorconfig",
+  ".env.example",
+  ".eslintrc",
+  ".gitattributes",
+  ".gitignore",
+  ".npmrc",
+  ".prettierrc",
+  "dockerfile",
+  "package.json",
+  "tsconfig.json",
+  "vite.config.ts",
+  "vitest.config.ts",
+]);
+
+const CONFIG_FILE_SEARCH_EXTENSIONS = new Set([
+  "config",
+  "conf",
+  "ini",
+  "json",
+  "jsonc",
+  "lock",
+  "toml",
+  "yaml",
+  "yml",
+]);
+
+const ASSET_FILE_SEARCH_EXTENSIONS = new Set([
+  "avif",
+  "gif",
+  "ico",
+  "jpeg",
+  "jpg",
+  "map",
+  "png",
+  "svg",
+  "webp",
+  "woff",
+  "woff2",
+]);
+
+interface FileSearchPathParts {
+  readonly lowerSegments: readonly string[];
+  readonly lowerName: string;
+  readonly extension: string;
+}
+
+function fileSearchPathParts(relativePath: string): FileSearchPathParts {
+  const normalized = relativePath.replaceAll("\\", "/");
+  const lowerSegments = normalized
+    .toLocaleLowerCase()
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  const lowerName = basename(normalized).toLocaleLowerCase();
+  const extension = extensionOf(lowerName)?.toLocaleLowerCase() ?? "";
+  return { lowerSegments, lowerName, extension };
+}
+
+function fileSearchQualityScore(relativePath: string): number {
+  const normalized = relativePath.replaceAll("\\", "/");
+  const lowerSegments = normalized
+    .toLocaleLowerCase()
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  const extension = extensionOf(basename(normalized))?.toLocaleLowerCase() ?? "";
+  let score = 0;
+
+  if (lowerSegments.some((segment) => GENERATED_FILE_SEARCH_SEGMENTS.has(segment))) {
+    score += 20_000;
+  }
+  if (lowerSegments.includes("assets") && /\b[a-f0-9]{7,}\b/u.test(basename(normalized))) {
+    score += 2_000;
+  }
+  if (lowerSegments.some((segment) => SOURCE_FILE_SEARCH_SEGMENTS.has(segment))) {
+    score -= 250;
+  }
+  if (SOURCE_FILE_SEARCH_EXTENSIONS.has(extension)) {
+    score -= 100;
+  }
+  if (lowerSegments.includes("src")) {
+    score -= 200;
+  }
+  return score;
+}
+
+function fileSearchPathHasSegment(
+  parts: FileSearchPathParts,
+  segments: ReadonlySet<string>,
+): boolean {
+  return parts.lowerSegments.some((segment) => segments.has(segment));
+}
+
+function fileSearchPathIsGenerated(parts: FileSearchPathParts): boolean {
+  return fileSearchPathHasSegment(parts, GENERATED_FILE_SEARCH_SEGMENTS);
+}
+
+function fileSearchPathIsAsset(parts: FileSearchPathParts): boolean {
+  return (
+    parts.lowerSegments.includes("assets") || ASSET_FILE_SEARCH_EXTENSIONS.has(parts.extension)
+  );
+}
+
+function fileSearchPathIsTest(parts: FileSearchPathParts): boolean {
+  return (
+    fileSearchPathHasSegment(parts, TEST_FILE_SEARCH_SEGMENTS) ||
+    /\.(?:spec|test)\.[^.]+$/u.test(parts.lowerName)
+  );
+}
+
+function fileSearchPathIsDocs(parts: FileSearchPathParts): boolean {
+  return (
+    fileSearchPathHasSegment(parts, DOCS_FILE_SEARCH_SEGMENTS) ||
+    DOCS_FILE_SEARCH_EXTENSIONS.has(parts.extension)
+  );
+}
+
+function fileSearchPathIsConfig(parts: FileSearchPathParts): boolean {
+  return (
+    CONFIG_FILE_SEARCH_NAMES.has(parts.lowerName) ||
+    CONFIG_FILE_SEARCH_EXTENSIONS.has(parts.extension)
+  );
+}
+
+function fileSearchPathIsSource(parts: FileSearchPathParts): boolean {
+  return (
+    fileSearchPathHasSegment(parts, SOURCE_FILE_SEARCH_SEGMENTS) ||
+    SOURCE_FILE_SEARCH_EXTENSIONS.has(parts.extension)
+  );
+}
+
+const FILE_SEARCH_ROLE_MATCHERS: readonly [
+  FilesSearchFileRole,
+  (parts: FileSearchPathParts) => boolean,
+][] = [
+  ["generated", fileSearchPathIsGenerated],
+  ["asset", fileSearchPathIsAsset],
+  ["test", fileSearchPathIsTest],
+  ["docs", fileSearchPathIsDocs],
+  ["config", fileSearchPathIsConfig],
+  ["source", fileSearchPathIsSource],
+];
+
+function fileSearchRole(relativePath: string): FilesSearchFileRole {
+  const parts = fileSearchPathParts(relativePath);
+  return FILE_SEARCH_ROLE_MATCHERS.find(([_role, matches]) => matches(parts))?.[0] ?? "other";
+}
+
+function fileSearchMatchQuality(relativePath: string, query: string): FilesSearchMatchQuality {
+  const lowerPath = relativePath.toLocaleLowerCase();
+  const lowerName = basename(relativePath).toLocaleLowerCase();
+  const lowerQuery = query.toLocaleLowerCase();
+  const nameStem = lowerName.replace(/\.[^.]+$/u, "");
+
+  if (lowerName === lowerQuery || lowerPath === lowerQuery || nameStem === lowerQuery) {
+    return "exact";
+  }
+  if (lowerName.startsWith(lowerQuery) || lowerName.includes(lowerQuery)) {
+    return "strong";
+  }
+  if (lowerPath.startsWith(lowerQuery) || lowerPath.includes(lowerQuery)) {
+    return "path";
+  }
+  return "weak";
+}
+
 function directoryOf(relativePath: string): string {
   const dir = pathPosix.dirname(relativePath);
   return dir === "." ? "" : dir;
@@ -626,8 +871,15 @@ interface FileSearchStackEntry {
 interface FileSearchState {
   candidates: FileSearchCandidate[];
   stack: FileSearchStackEntry[];
+  gitRootCache: Map<string, string | null>;
   scannedFileCount: number;
   scanTruncated: boolean;
+}
+
+interface FileSearchResolvedPath {
+  readonly root: string;
+  readonly relativePath: string;
+  readonly rootKind: FilesSearchRootKind;
 }
 
 function entryVisibleToFileSearch(
@@ -636,10 +888,92 @@ function entryVisibleToFileSearch(
   redactor: FilesMetadataRedactor,
 ): boolean {
   return (
-    metadataIsSafe(relativePath, redactor) &&
-    !pathIsDenied(relativePath) &&
-    !entry.isSymbolicLink()
+    metadataIsSafe(relativePath, redactor) && !pathIsDenied(relativePath) && !entry.isSymbolicLink()
   );
+}
+
+async function hasGitMarker(directory: string): Promise<boolean> {
+  try {
+    await lstat(join(directory, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function nearestGitRoot(
+  startDirectory: string,
+  cache: Map<string, string | null>,
+): Promise<string | null> {
+  let current = resolve(startDirectory);
+  const visited: string[] = [];
+  for (;;) {
+    const cached = cache.get(current);
+    if (cached !== undefined) {
+      for (const directory of visited) cache.set(directory, cached);
+      return cached;
+    }
+    visited.push(current);
+    if (await hasGitMarker(current)) {
+      for (const directory of visited) cache.set(directory, current);
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      for (const directory of visited) cache.set(directory, null);
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function canExposeFileSearchGitRoot(
+  selectedRoot: ResolvedProjectRoot,
+  gitRoot: string,
+  redactor: FilesMetadataRedactor,
+): boolean {
+  return (
+    gitRoot !== selectedRoot.realRoot &&
+    isContained(selectedRoot.realRoot, gitRoot) &&
+    !pathIsDenied(gitRoot) &&
+    metadataIsSafe(gitRoot, redactor)
+  );
+}
+
+function canExposeFileSearchRelativePath(
+  relativePath: string,
+  redactor: FilesMetadataRedactor,
+): boolean {
+  return (
+    relativePath.length > 0 &&
+    !relativePath.startsWith("../") &&
+    !pathPosix.isAbsolute(relativePath) &&
+    !pathIsDenied(relativePath) &&
+    metadataIsSafe(relativePath, redactor)
+  );
+}
+
+async function resolveFileSearchResultPath(args: {
+  readonly root: ResolvedProjectRoot;
+  readonly relativePath: string;
+  readonly nativePath: string;
+  readonly redactor: FilesMetadataRedactor;
+  readonly state: FileSearchState;
+}): Promise<FileSearchResolvedPath> {
+  const fallback: FileSearchResolvedPath = {
+    root: args.root.root,
+    relativePath: args.relativePath,
+    rootKind: "selected-root",
+  };
+  const gitRoot = await nearestGitRoot(dirname(args.nativePath), args.state.gitRootCache);
+  if (gitRoot === null || !canExposeFileSearchGitRoot(args.root, gitRoot, args.redactor)) {
+    return fallback;
+  }
+
+  const rebasedPath = rootRelativePosixPath(gitRoot, args.nativePath);
+  if (!canExposeFileSearchRelativePath(rebasedPath, args.redactor)) return fallback;
+
+  return { root: gitRoot, relativePath: rebasedPath, rootKind: "nested-git-root" };
 }
 
 async function addFileSearchCandidate(args: {
@@ -649,6 +983,7 @@ async function addFileSearchCandidate(args: {
   readonly nativePath: string;
   readonly entryName: string;
   readonly tokens: readonly string[];
+  readonly redactor: FilesMetadataRedactor;
   readonly state: FileSearchState;
 }): Promise<void> {
   if (!matchesSearch(args.relativePath, args.tokens)) return;
@@ -658,16 +993,28 @@ async function addFileSearchCandidate(args: {
   } catch {
     return;
   }
+  const resolvedPath = await resolveFileSearchResultPath({
+    root: args.root,
+    relativePath: args.relativePath,
+    nativePath: args.nativePath,
+    redactor: args.redactor,
+    state: args.state,
+  });
   args.state.candidates.push({
-    score: fileSearchScore(args.relativePath, args.query),
+    score:
+      fileSearchScore(resolvedPath.relativePath, args.query) +
+      fileSearchQualityScore(resolvedPath.relativePath),
     result: {
-      root: args.root.root,
-      path: args.relativePath,
+      root: resolvedPath.root,
+      path: resolvedPath.relativePath,
       name: args.entryName,
-      directory: directoryOf(args.relativePath),
+      directory: directoryOf(resolvedPath.relativePath),
       extension: extensionOf(args.entryName),
       sizeBytes: info.size,
       modifiedAt: info.mtimeMs,
+      fileRole: fileSearchRole(resolvedPath.relativePath),
+      matchQuality: fileSearchMatchQuality(resolvedPath.relativePath, args.query),
+      rootKind: resolvedPath.rootKind,
     },
   });
 }
@@ -701,6 +1048,7 @@ async function collectFileSearchEntry(args: {
     nativePath,
     entryName: args.entry.name,
     tokens: args.tokens,
+    redactor: args.redactor,
     state: args.state,
   });
 }
@@ -743,6 +1091,7 @@ async function collectFileSearchResults(args: {
   const state: FileSearchState = {
     candidates: [],
     stack: [{ path: args.root.realRoot, relativePath: "" }],
+    gitRootCache: new Map(),
     scannedFileCount: 0,
     scanTruncated: false,
   };
