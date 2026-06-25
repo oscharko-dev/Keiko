@@ -388,10 +388,8 @@ function openUiLogStdio(options: LifecycleOptions): UiLogStdio {
   mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
   const logPath = logFile(options);
   const stdoutFd = openSync(logPath, "a", 0o600);
-  let stderrFd: number | undefined;
   try {
-    stderrFd = openSync(logPath, "a", 0o600);
-    const stderrLogFd = stderrFd;
+    const stderrLogFd = openSync(logPath, "a", 0o600);
     return {
       logPath,
       stdio: ["ignore", stdoutFd, stderrLogFd],
@@ -402,7 +400,6 @@ function openUiLogStdio(options: LifecycleOptions): UiLogStdio {
     };
   } catch (error) {
     closeSync(stdoutFd);
-    if (stderrFd !== undefined) closeSync(stderrFd);
     throw error;
   }
 }
