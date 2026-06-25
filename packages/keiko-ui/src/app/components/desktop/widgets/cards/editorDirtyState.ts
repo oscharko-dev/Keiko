@@ -9,7 +9,7 @@ import { editorLayoutPanes, type EditorLayoutStateV2 } from "@oscharko-dev/keiko
  * that owns a tab. Because it is keyed by pane id, it must be re-homed onto the
  * layout whenever a layout operation moves a file between panes or collapses a
  * pane; otherwise a dirty flag is orphaned on a pane that no longer holds the
- * file (Issue #1375 AC3).
+ * file (Issue #1375 AC3, ADR-0064).
  */
 export type EditorDirtyByPane = Readonly<Record<string, Readonly<Record<string, true>>>>;
 
