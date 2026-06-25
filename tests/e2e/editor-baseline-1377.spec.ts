@@ -54,7 +54,10 @@ function tabHit(pane: Locator, file: string): Locator {
 }
 
 function tabFor(pane: Locator, file: string): Locator {
-  return pane.locator(EDITOR_SELECTORS.tab).filter({ hasText: file });
+  // The dirty/active state lives on the outer `.ed-tab` span that wraps the file's `.ed-tab-hit`.
+  return pane.locator(
+    `${EDITOR_SELECTORS.tab}:has(${EDITOR_SELECTORS.tabHit}[data-tip="${file}"])`,
+  );
 }
 
 function closeButton(pane: Locator, file: string): Locator {
