@@ -186,6 +186,16 @@ function shouldAutoGrowWindow(type: WindowType, cfg: Record<string, unknown>): b
   );
 }
 
+function autoGrowContentKey(type: WindowType, cfg: Record<string, unknown>): string | null {
+  if (!shouldAutoGrowWindow(type, cfg)) return null;
+  const snapshotRunId = typeof cfg["snapshotRunId"] === "string" ? cfg["snapshotRunId"] : "";
+  const selectedScreenIdsJson =
+    typeof cfg["selectedScreenIdsJson"] === "string" ? cfg["selectedScreenIdsJson"] : "";
+  const selectedScreenName =
+    typeof cfg["selectedScreenName"] === "string" ? cfg["selectedScreenName"] : "";
+  return `${snapshotRunId}\n${selectedScreenIdsJson}\n${selectedScreenName}`;
+}
+
 interface DragGeometry {
   readonly z: number;
   readonly vpx0: number;
@@ -337,7 +347,9 @@ export function WindowFrame({
   const [draggingWindow, setDraggingWindow] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const autoGrowSuppressedKeyRef = useRef<string | null>(null);
   const zoom = win.zoom ?? 1;
+  const currentAutoGrowContentKey = autoGrowContentKey(win.type, win.cfg);
   const receivesFilesContext =
     win.type === "chat" ||
     win.type === "agents" ||
@@ -410,12 +422,26 @@ export function WindowFrame({
   );
 
   useEffect(() => {
+    if (autoGrowSuppressedKeyRef.current !== currentAutoGrowContentKey) {
+      autoGrowSuppressedKeyRef.current = null;
+    }
+  }, [currentAutoGrowContentKey]);
+
+  const suppressAutoGrowForManualResize = useCallback((): void => {
+    if (currentAutoGrowContentKey !== null) {
+      autoGrowSuppressedKeyRef.current = currentAutoGrowContentKey;
+    }
+  }, [currentAutoGrowContentKey]);
+
+  useEffect(() => {
     if (!shouldAutoGrowWindow(win.type, win.cfg) || win.max || bodyMode !== "full") return;
+    if (currentAutoGrowContentKey === null) return;
     const body = bodyRef.current;
     if (body === null) return;
     let frame: number | null = null;
     const measure = (): void => {
       frame = null;
+      if (autoGrowSuppressedKeyRef.current === currentAutoGrowContentKey) return;
       const overflow = body.scrollHeight - body.clientHeight;
       if (overflow <= AUTO_GROW_EPSILON_PX) return;
       const nextHeight = Math.ceil(win.h + overflow);
@@ -444,7 +470,7 @@ export function WindowFrame({
       }
       observer?.disconnect();
     };
-  }, [api, bodyMode, win.cfg, win.h, win.id, win.max, win.type]);
+  }, [api, bodyMode, currentAutoGrowContentKey, win.cfg, win.h, win.id, win.max, win.type]);
 
   useEffect(
     () => () => {
@@ -549,6 +575,7 @@ export function WindowFrame({
         const scheduleResize = (next: ResizeStart): void => {
           if (pending !== null && sameResizeGeometry(pending, next)) return;
           if (pending === null && sameResizeGeometry(last, next)) return;
+          suppressAutoGrowForManualResize();
           pending = next;
           if (frame !== null) return;
           frame =
@@ -600,7 +627,7 @@ export function WindowFrame({
         window.addEventListener("blur", end);
         resizeCleanupRef.current = cleanup;
       },
-    [api, win.id, win.x, win.y, win.w, win.h, win.type, view.zoom],
+    [api, win.id, win.x, win.y, win.w, win.h, win.type, view.zoom, suppressAutoGrowForManualResize],
   );
 
   // Stop propagation BEFORE delegating, so the parent .window's onPointerDown
