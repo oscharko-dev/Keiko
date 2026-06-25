@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
@@ -58,6 +66,25 @@ function makeRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-lifecycle-"));
   tempRoots.push(root);
   return root;
+}
+
+function childLogFds(opts: SpawnOptions): { readonly stdoutFd: number; readonly stderrFd: number } {
+  expect(Array.isArray(opts.stdio)).toBe(true);
+  const stdio = opts.stdio as readonly unknown[];
+  expect(stdio[0]).toBe("ignore");
+  expect(typeof stdio[1]).toBe("number");
+  expect(typeof stdio[2]).toBe("number");
+  return { stdoutFd: stdio[1] as number, stderrFd: stdio[2] as number };
+}
+
+function requireCapturedLogFds(
+  logFds: { readonly stdoutFd: number; readonly stderrFd: number } | undefined,
+): { readonly stdoutFd: number; readonly stderrFd: number } {
+  expect(logFds).toBeDefined();
+  if (logFds === undefined) {
+    throw new Error("Expected child log file descriptors to be captured");
+  }
+  return logFds;
 }
 
 afterEach(() => {
@@ -155,13 +182,21 @@ describe("runLifecycleCli", () => {
 
     expect(code).toBe(0);
     expect(spawned).toHaveLength(1);
-    expect(spawned[0]?.args).toEqual(
+    const spawn = spawned[0];
+    if (spawn === undefined) {
+      throw new Error("Expected keiko start to spawn the UI process");
+    }
+    expect(spawn.args).toEqual(
       expect.arrayContaining(["ui", "--port", "4321", "--host", "127.0.0.1"]),
     );
-    expect(spawned[0]?.opts.argv0).toBe("Keiko");
-    expect(spawned[0]?.opts.env).toMatchObject({
+    expect(spawn.opts.argv0).toBe("Keiko");
+    expect(spawn.opts.env).toMatchObject({
       KEIKO_STATE_DIR: join(root, ".keiko-test"),
     });
+    const logFds = childLogFds(spawn.opts);
+    expect(logFds.stdoutFd).not.toBe(logFds.stderrFd);
+    expect(() => fstatSync(logFds.stdoutFd)).toThrow();
+    expect(() => fstatSync(logFds.stderrFd)).toThrow();
     expect(readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8")).toBe("12345\n");
     expect(existsSync(join(root, ".keiko-test", "ui.log"))).toBe(true);
     expect(c.out()).toContain("Keiko UI running");
@@ -584,6 +619,39 @@ describe("runLifecycleCli", () => {
 
     expect(code).toBe(1);
     expect(c.err()).toContain("failed to spawn");
+    expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
+  });
+
+  it("closes UI log descriptors when spawning the UI process throws", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    let logFds: { readonly stdoutFd: number; readonly stderrFd: number } | undefined;
+
+    const code = await runLifecycleCli(
+      "start",
+      [],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn: (_command, _args, opts) => {
+          logFds = childLogFds(opts);
+          throw new Error("spawn failed");
+        },
+        fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("failed to spawn");
+    const capturedLogFds = requireCapturedLogFds(logFds);
+    expect(capturedLogFds.stdoutFd).not.toBe(capturedLogFds.stderrFd);
+    expect(() => fstatSync(capturedLogFds.stdoutFd)).toThrow();
+    expect(() => fstatSync(capturedLogFds.stderrFd)).toThrow();
     expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
   });
 

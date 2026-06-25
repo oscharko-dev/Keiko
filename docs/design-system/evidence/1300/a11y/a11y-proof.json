@@ -2,10 +2,10 @@
   "issue": 1300,
   "epic": 1290,
   "tool": "axe-core 4.12.0",
-  "postCssSha256": "56e352d7327fe14f5756ca95a11fb81ccb5692a07bf17dd298497b65a6cc75d0",
+  "postCssSha256": "d1d7734a693736ed1325c57efee8988dc5def5c43635985be70e955eba1e1e4e",
   "run": {
-    "generatedAt": "2026-06-25T06:24:34.639Z",
-    "repoHeadSha": "d9ec1057ac1acd1654f6a54b381ef8b022570e9e"
+    "generatedAt": "2026-06-25T06:52:34.711Z",
+    "repoHeadSha": "047adb7913cf4919cac26aa22dbe8feb0cd200f1"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",
