@@ -48,6 +48,11 @@ export type KeikoEditorLoadState =
   | { readonly status: "ready" }
   | { readonly status: "error"; readonly message: string };
 
+export interface EditorRevealRequest {
+  readonly id: string;
+  readonly range: EditorRange;
+}
+
 /** The next buffer content the component emits on a human edit. */
 export interface EditorContentDelta {
   readonly text: string;
@@ -85,6 +90,7 @@ export interface KeikoCodeEditorProps {
   readonly onSaveRequested: (request: EditorSaveRequest) => void;
   readonly onSelectionChange?: ((selection: EditorRange | null) => void) | undefined;
   readonly onCursorChange?: ((position: EditorPosition) => void) | undefined;
+  readonly revealRequest?: EditorRevealRequest | undefined;
   readonly onRuntimeError?: ((message: string) => void) | undefined;
   /**
    * Host-injected completion resolver (Issue #1199). When present, the editor registers a Monaco

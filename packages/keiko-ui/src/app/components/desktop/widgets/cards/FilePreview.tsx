@@ -40,6 +40,8 @@ interface PreviewError {
   readonly denied: boolean;
 }
 
+type PreviewRefreshStatus = "idle" | "refreshing" | "refreshed" | "failed";
+
 function classifyError(error: unknown): PreviewError {
   if (error instanceof ApiError && error.code === "DENIED") {
     return { message: DENIED_PREVIEW_MESSAGE, denied: true };
@@ -129,10 +131,10 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
   const [preview, setPreview] = useState<FilesPreviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<PreviewError | null>(null);
-  // Bumping retryKey re-runs the fetch effect — transient failures (network, 500) get the
-  // same Retry affordance the file tree already offers (audit F044 C348).
-  const [retryKey, setRetryKey] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshStatus, setRefreshStatus] = useState<PreviewRefreshStatus>("idle");
   const backRef = useRef<HTMLButtonElement | null>(null);
+  const loadTargetRef = useRef<{ readonly root: string; readonly path: string } | null>(null);
 
   // Focus management (WCAG 2.4.3): opening the preview unmounts the focused tree row, which
   // would drop focus onto document.body. Move it onto the Back button so keyboard and
@@ -152,15 +154,29 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
 
   useEffect(() => {
     let cancelled = false;
+    const previousTarget = loadTargetRef.current;
+    const targetChanged =
+      previousTarget === null || previousTarget.root !== root || previousTarget.path !== path;
+    const isManualRefresh = previousTarget !== null && !targetChanged && refreshKey > 0;
+    loadTargetRef.current = { root, path };
+
     setLoading(true);
     setError(null);
-    setPreview(null);
+    setRefreshStatus(isManualRefresh ? "refreshing" : "idle");
+    if (!isManualRefresh) setPreview(null);
+
     void fetchFilesPreview(root, path)
       .then((response) => {
-        if (!cancelled) setPreview(response);
+        if (!cancelled) {
+          setPreview(response);
+          if (isManualRefresh) setRefreshStatus("refreshed");
+        }
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(classifyError(err));
+        if (!cancelled) {
+          setError(classifyError(err));
+          if (isManualRefresh) setRefreshStatus("failed");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -168,7 +184,15 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     return () => {
       cancelled = true;
     };
-  }, [path, root, retryKey]);
+  }, [path, root, refreshKey]);
+
+  useEffect(() => {
+    if (refreshStatus !== "refreshed") return undefined;
+    const timer = window.setTimeout(() => setRefreshStatus("idle"), 2400);
+    return () => window.clearTimeout(timer);
+  }, [refreshStatus]);
+
+  const refreshPreview = (): void => setRefreshKey((key) => key + 1);
 
   const denied = error?.denied === true;
   const lang =
@@ -186,6 +210,14 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
   const shouldHighlight = preview?.kind === "text" && preview.content.length <= MAX_HIGHLIGHT_BYTES;
   const canOpenInEditor =
     onOpenInEditor !== undefined && preview?.kind === "text" && !preview.truncated;
+  const refreshStatusText =
+    refreshStatus === "refreshing"
+      ? "Refreshing..."
+      : refreshStatus === "refreshed"
+        ? "Reloaded"
+        : refreshStatus === "failed"
+          ? "Refresh failed"
+          : "";
   const lines: readonly (readonly Token[])[] =
     preview?.kind === "text"
       ? shouldHighlight
@@ -215,6 +247,27 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         </span>
         <span className="fpv-lang mono">{lang}</span>
         <span className="spacer" />
+        <button
+          className="fpv-back fpv-refresh"
+          type="button"
+          onClick={refreshPreview}
+          disabled={loading}
+          data-state={refreshStatus}
+          title={loading ? "Refreshing preview" : "Refresh preview"}
+          aria-label={loading ? "Refreshing preview" : "Refresh preview"}
+        >
+          <Icons.reset size={14} />
+        </button>
+        {refreshStatusText.length > 0 ? (
+          <span
+            className="fpv-status mono"
+            data-state={refreshStatus}
+            role="status"
+            aria-live="polite"
+          >
+            {refreshStatusText}
+          </span>
+        ) : null}
         {canOpenInEditor ? (
           <button
             className="fpv-back"
@@ -237,7 +290,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         </button>
       </div>
 
-      {loading ? (
+      {loading && preview === null ? (
         <div className="fpv-state" role="status">
           Loading preview…
         </div>
@@ -250,7 +303,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
             <button
               type="button"
               className="fpv-retry"
-              onClick={() => setRetryKey((key) => key + 1)}
+              onClick={refreshPreview}
             >
               Retry
             </button>

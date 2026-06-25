@@ -83,8 +83,9 @@ async function postRecapBuild(request: VoiceRecapBuildRequest): Promise<VoiceRec
     },
     body: JSON.stringify(request),
   });
-  if (!res.ok) {
-    throw new Error(`voice recap build failed: HTTP ${res.status.toString()}`);
+  if (res.ok !== true) {
+    const status = Number.isFinite(res.status) ? res.status.toString() : "unknown";
+    throw new Error(`voice recap build failed: HTTP ${status}`);
   }
   return res.json() as Promise<VoiceRecapBuildResponse>;
 }

@@ -230,6 +230,54 @@ describe("generateEnhancedPrompt — no fabrication and segregated input (AC3)",
   });
 });
 
+describe("generateEnhancedPrompt — intent-specific shaping", () => {
+  it("changes trusted sections for unrelated user drafts instead of only changing the input JSON", () => {
+    const codeReview = generateFor(
+      {
+        taskClass: "prompt-optimization",
+        domain: "software",
+        recommendedProfile: "technical",
+      },
+      { text: "Schreibe einen robusten Prompt fuer Code-Review und Optimierung." },
+    );
+    const cake = generateFor(
+      { recommendedProfile: "precise" },
+      { text: "Backe mir einen Kuchen." },
+    );
+    const travel = generateFor(
+      { taskClass: "decision-support", recommendedProfile: "precise" },
+      { text: "Plane eine zweiwoechige Japan-Reise im Oktober." },
+    );
+    const letter = generateFor(
+      { taskClass: "writing-editing", domain: "legal", recommendedProfile: "fast" },
+      { text: "Schreibe einen Kuendigungsbrief fuer meinen Mobilfunkvertrag." },
+    );
+
+    const trustedBodies = [codeReview, cake, travel, letter].map((prompt) => trustedText(prompt));
+    expect(new Set(trustedBodies).size).toBe(4);
+
+    expect(trustedText(codeReview)).toMatch(/software review and optimization/i);
+    expect(trustedText(codeReview)).toMatch(/test recommendations|verification steps/i);
+    expect(trustedText(cake)).toMatch(/baking|recipe/i);
+    expect(trustedText(cake)).toMatch(/ingredients|oven temperature|servings/i);
+    expect(trustedText(travel)).toMatch(/travel itinerary planning/i);
+    expect(trustedText(travel)).toMatch(/day-by-day route|transport|budget/i);
+    expect(trustedText(letter)).toMatch(/formal letter|contract communication/i);
+    expect(trustedText(letter)).toMatch(/recipient|contract|confirmation/i);
+  });
+
+  it("keeps arbitrary raw phrasing out of trusted intent sections", () => {
+    const prompt = generateFor(
+      { recommendedProfile: "precise" },
+      { text: "Backe mir einen Kuchen mit SENTINELZZZ." },
+    );
+
+    expect(prompt.input).toContain("SENTINELZZZ");
+    expect(trustedText(prompt)).not.toContain("SENTINELZZZ");
+    expect(trustedText(prompt)).toMatch(/recipe and baking guidance/i);
+  });
+});
+
 describe("generateEnhancedPrompt — authority and safety (AC4)", () => {
   it("never grants authority: every prompt states it is data, not an authorization", () => {
     for (const id of PROMPT_ENHANCEMENT_PROFILE_IDS) {
@@ -351,6 +399,21 @@ describe("generateEnhancedPrompt — profile shaping (AC2)", () => {
     expect(prompt.taskDecomposition.length).toBeLessThanOrEqual(2);
     expect(prompt.qualityCriteria.length).toBeLessThanOrEqual(2);
     expect(prompt.qualityCriteria.some((q) => /token efficiency/i.test(q))).toBe(true);
+  });
+
+  it("does not apply a specialized intent frame from task-class bonus alone", () => {
+    const prompt = generateFor(
+      { taskClass: "writing-editing", domain: "business", recommendedProfile: "fast" },
+      { text: "Proofread and tighten this one-sentence status update." },
+    );
+
+    expect(prompt.role).toBe("You are a skilled writing editor.");
+    expect(prompt.context.some((entry) => /formal letter|contract communication/i.test(entry))).toBe(
+      false,
+    );
+    expect(prompt.uncertaintyHandling.some((entry) => /recipient|contract data/i.test(entry))).toBe(
+      false,
+    );
   });
 
   it("gives research a deeper task decomposition than fast", () => {

@@ -3,6 +3,12 @@
 // a selected local project workspaceRoot; verify adds targetFiles-specific validation on top.
 
 import { describe, expect, it } from "vitest";
+import {
+  DEFAULT_PATCH_SCOPE_LIMITS,
+  WORKFLOW_HANDOFF_SCHEMA_VERSION,
+  type WorkflowHandoffRequest,
+} from "@oscharko-dev/keiko-contracts/workflow-handoff";
+import { approvalTokenInputFor, createApprovalToken } from "./governed-workflow.js";
 import { parseRunRequest } from "./run-request.js";
 
 function ok(
@@ -20,6 +26,26 @@ function bad(value: ReturnType<typeof parseRunRequest>): asserts value is {
   if (!("code" in value)) {
     throw new Error("expected BAD_REQUEST, got success");
   }
+}
+
+function validGovernedHandoff(): WorkflowHandoffRequest {
+  const draft: WorkflowHandoffRequest = {
+    schemaVersion: WORKFLOW_HANDOFF_SCHEMA_VERSION,
+    contextPackStableId: `p-${"a".repeat(64)}`,
+    workflowKind: "verification",
+    patchScope: {
+      schemaVersion: WORKFLOW_HANDOFF_SCHEMA_VERSION,
+      editablePaths: ["src/app.ts"],
+      readOnlyPaths: ["src/lib.ts"],
+      evidenceAtomIds: ["atom-1"],
+      limits: DEFAULT_PATCH_SCOPE_LIMITS,
+      expectedChecks: ["verify"],
+      unknowns: [],
+    },
+    requestedAtMs: 1_700_000_000_000,
+    userApprovalToken: "0".repeat(64),
+  };
+  return { ...draft, userApprovalToken: createApprovalToken(approvalTokenInputFor(draft)) };
 }
 
 describe("parseRunRequest verify variant", () => {
@@ -272,5 +298,69 @@ describe("parseRunRequest Agent V1 workflow shapes", () => {
     );
     bad(result);
     expect(result.message).toMatch(/requires at least one/);
+  });
+});
+
+describe("parseRunRequest governed voice-origin transport", () => {
+  it("keeps governedHandoff and voiceOrigin as additive run metadata", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        taskType: "verify",
+        modelId: "m",
+        input: { workspaceRoot: "/repo" },
+        governedHandoff: validGovernedHandoff(),
+        governedHandoffSourceGroundedRunId: "grounded-run-1",
+        voiceOrigin: {
+          profile: "speech-to-text",
+          turnIndex: 4,
+          source: "dictation",
+          committedSegments: 2,
+          committedText: "show me the open runs",
+        },
+      }),
+    );
+    ok(result);
+    expect(result.governedHandoff?.workflowKind).toBe("verification");
+    expect(result.governedHandoffSourceGroundedRunId).toBe("grounded-run-1");
+    expect(result.governedHandoffVoiceOrigin).toMatchObject({
+      profile: "speech-to-text",
+      source: "dictation",
+      turnIndex: 4,
+      committedSegments: 2,
+      committedText: "show me the open runs",
+    });
+  });
+
+  it("rejects voiceOrigin without governedHandoff", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        taskType: "verify",
+        modelId: "m",
+        input: { workspaceRoot: "/repo" },
+        voiceOrigin: {
+          profile: "speech-to-text",
+          turnIndex: 1,
+          source: "dictation",
+          committedSegments: 1,
+          committedText: "show me the open runs",
+        },
+      }),
+    );
+    bad(result);
+    expect(result.message).toMatch(/voiceOrigin requires governedHandoff/);
+  });
+
+  it("rejects client-supplied governedHandoffVoiceAction audit records", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        taskType: "verify",
+        modelId: "m",
+        input: { workspaceRoot: "/repo" },
+        governedHandoff: validGovernedHandoff(),
+        governedHandoffVoiceAction: { outcome: "routed" },
+      }),
+    );
+    bad(result);
+    expect(result.message).toMatch(/server-generated/);
   });
 });

@@ -120,8 +120,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
     clearHistory: vi.fn(),
-    launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
-    launchGroundedWorkflowHandoff: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -147,7 +145,7 @@ describe("BudgetIndicator", () => {
   it("renders an approximate-token info affordance disclosing the estimate is approximate", () => {
     render(<BudgetIndicator budget={makeBudget()} onClearHistory={vi.fn()} />);
     expect(
-      screen.getByLabelText(/Token counts are approximate. Actual model usage may vary./),
+      screen.getByLabelText(/Approximate next-request context.*UTF-8 bytes \/ 4/),
     ).toBeInTheDocument();
   });
 
@@ -223,9 +221,10 @@ describe("BudgetIndicator", () => {
   // the icon is focusable and carries the data-tip text revealed on focus via CSS.
   it("exposes the approximate-tokens hint to keyboard users (focusable data-tip icon)", () => {
     render(<BudgetIndicator budget={makeBudget()} onClearHistory={vi.fn()} />);
-    const icon = screen.getByLabelText(/Token counts are approximate/);
+    const icon = screen.getByLabelText(/Approximate next-request context/);
     expect(icon.getAttribute("tabindex")).toBe("0");
-    expect(icon.getAttribute("data-tip")).toMatch(/Actual model usage may vary/);
+    expect(icon.getAttribute("data-tip")).toMatch(/actual provider tokenization may vary/);
+    expect(icon.getAttribute("data-tip")).toMatch(/attached to the next request/);
   });
 });
 

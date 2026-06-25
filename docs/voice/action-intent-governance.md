@@ -331,7 +331,7 @@ voiceOrigin?: {
 }
 ```
 
-In `resolveGroundedHandoffLaunch`, after the existing `buildGovernedHandoffRequest` produces a request:
+In `handleCreateRun` (`POST /api/runs`), after the existing `governedHandoff` request is parsed:
 
 1. If `voiceOrigin` is absent: the path is unchanged. Text-originated requests proceed as before
    (byte-identical).
@@ -346,9 +346,9 @@ routed workflow's actual `workflowKind` or `patchScope` effect. The effect class
 determines confirmation requirements. The load-bearing authority remains `validateWorkflowHandoffRequest`
 and `checkPatchAgainstScope`, which gate a voice request identically to a text request. Effect
 classification is defense-in-depth layering: it adds a precondition but is not itself the authority
-for approval. On the grounded-handoff route, the `userApprovalToken` is server-built from request
-details and the deployment secret (not a user secret); the token equality check is redundant
-defense-in-depth that adds verification but is not the sole gating authority.
+for approval. On the current run route, the `userApprovalToken` is verified against the canonical
+request details; the token equality check is redundant defense-in-depth that adds verification but is
+not the sole gating authority.
 
 ### Enforcement order
 

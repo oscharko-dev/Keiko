@@ -273,6 +273,20 @@ const TOOL_TYPES: readonly WindowType[] = [
   "relationships",
 ];
 
+export function opensDirectlyFromPalette(type: WindowType): boolean {
+  return type === "connector";
+}
+
+function focusCreatedWindow(id: string): void {
+  requestAnimationFrame(() => {
+    const el = document.querySelector<HTMLElement>(`[data-window-id="${id}"]`);
+    if (el === null) return;
+    const target =
+      el.querySelector<HTMLElement>("textarea, input, select, button, [tabindex]") ?? el;
+    target.focus();
+  });
+}
+
 export function buildAppShellCommands(
   api: WorkspaceApi,
   toggleTool: (type: WindowType) => void,
@@ -579,10 +593,18 @@ function AppShellInner(): ReactNode {
     },
     [ws.api],
   );
-  const pick = useCallback((type: WindowType): void => {
-    setPalOpen(false);
-    setPending(type);
-  }, []);
+  const pick = useCallback(
+    (type: WindowType): void => {
+      setPalOpen(false);
+      if (opensDirectlyFromPalette(type)) {
+        const createdId = ws.api.add(type);
+        if (createdId !== null) focusCreatedWindow(createdId);
+        return;
+      }
+      setPending(type);
+    },
+    [ws.api],
+  );
   const confirmNew = useCallback(
     (cfg: Cfg): void => {
       // Side effects live outside the setPending updater: StrictMode double-invokes updater
@@ -609,13 +631,7 @@ function AppShellInner(): ReactNode {
       // <body>. The dialog's unmount cleanup restores the trigger synchronously before this rAF
       // runs, so the handoff wins.
       if (createdId !== null) {
-        requestAnimationFrame(() => {
-          const el = document.querySelector<HTMLElement>(`[data-window-id="${createdId}"]`);
-          if (el === null) return;
-          const target =
-            el.querySelector<HTMLElement>("textarea, input, select, button, [tabindex]") ?? el;
-          target.focus();
-        });
+        focusCreatedWindow(createdId);
       }
     },
     [pending, ws.api],

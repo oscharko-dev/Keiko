@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { fetchConfig, fetchModels } from "@/lib/api";
+import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
 import type {
   ConversationIneligibilityReason,
+  GatewayReadinessProbeResult,
+  GatewayReadinessReport,
   ModelCapability,
   SafeGatewayConfig,
 } from "@/lib/types";
@@ -103,7 +105,207 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
   );
 }
 
-function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): ReactNode {
+type ReadinessRunState =
+  | { readonly status: "idle" }
+  | { readonly status: "running"; readonly deep: boolean }
+  | { readonly status: "done"; readonly report: GatewayReadinessReport }
+  | { readonly status: "error"; readonly message: string };
+
+type ReportCopyState = "idle" | "copied" | "failed";
+
+function readinessErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  return "Readiness check failed. The gateway configuration was not changed.";
+}
+
+async function writeTextWithFallback(text: string): Promise<void> {
+  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
+  if (writeText !== undefined && navigator.clipboard !== undefined) {
+    try {
+      await writeText.call(navigator.clipboard, text);
+      return;
+    } catch {
+      // Try the selection-backed path below for restricted clipboard contexts.
+    }
+  }
+
+  if (typeof document === "undefined" || document.body === null) {
+    throw new Error("clipboard-unavailable");
+  }
+
+  const previousFocus =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.inset = "0 auto auto -9999px";
+  textarea.style.width = "1px";
+  textarea.style.height = "1px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  try {
+    textarea.focus();
+    textarea.select();
+    const copied = typeof document.execCommand === "function" && document.execCommand("copy");
+    if (!copied) throw new Error("clipboard-fallback-failed");
+  } finally {
+    textarea.remove();
+    previousFocus?.focus();
+  }
+}
+
+function capabilityLine(report: GatewayReadinessReport): string {
+  const capabilities = report.verifiedCapabilities;
+  const values = [
+    ["streaming", capabilities.streaming],
+    ["toolCalling", capabilities.toolCalling],
+    ["structuredOutput", capabilities.structuredOutput],
+    ["reasoningOutput", capabilities.reasoningOutput],
+    ["imageInput", capabilities.imageInput],
+    ["documentInput", capabilities.documentInput],
+  ] as const;
+  const rendered = values.map(([name, enabled]) => `${name}=${enabled === true ? "yes" : "no"}`);
+  if (capabilities.testedContextTokens !== undefined) {
+    rendered.push(`testedContextTokens=${capabilities.testedContextTokens.toString()}`);
+  }
+  return rendered.join(", ");
+}
+
+function probeLine(probe: GatewayReadinessProbeResult): string {
+  const warning = probe.warning === undefined ? "" : ` Warning: ${probe.warning}`;
+  return `- ${probe.name}: ${probe.status} (${probe.latencyMs.toString()} ms) ${probe.evidence}${warning}`;
+}
+
+export function formatGatewayReadinessReport(report: GatewayReadinessReport): string {
+  return [
+    "Keiko Gateway Readiness Report",
+    `Model: ${report.modelId}`,
+    `Checked at: ${report.checkedAt}`,
+    `Overall status: ${report.overallStatus}`,
+    `Verified capabilities: ${capabilityLine(report)}`,
+    "",
+    "Probes:",
+    ...report.probes.map(probeLine),
+    "",
+    "Raw JSON:",
+    JSON.stringify(report, null, 2),
+  ].join("\n");
+}
+
+function probePassed(report: GatewayReadinessReport, name: string): boolean {
+  return report.probes.some((probe) => probe.name === name && probe.status === "passed");
+}
+
+function firstActionableProbeMessage(report: GatewayReadinessReport): string | undefined {
+  const issue = report.probes.find(
+    (probe) => probe.status !== "passed" && probe.status !== "skipped",
+  );
+  return issue?.warning ?? issue?.evidence;
+}
+
+function ReadinessReportCopyButton({
+  report,
+}: {
+  readonly report: GatewayReadinessReport;
+}): ReactNode {
+  const [copyState, setCopyState] = useState<ReportCopyState>("idle");
+  const [status, setStatus] = useState("");
+
+  async function handleCopy(): Promise<void> {
+    try {
+      await writeTextWithFallback(formatGatewayReadinessReport(report));
+      setCopyState("copied");
+      setStatus("Readiness report copied.");
+    } catch {
+      setCopyState("failed");
+      setStatus("Clipboard access failed. Select and copy the report details manually.");
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="ml-check secondary"
+        data-copied={copyState === "copied" ? "true" : "false"}
+        data-failed={copyState === "failed" ? "true" : "false"}
+        onClick={() => {
+          void handleCopy();
+        }}
+      >
+        <Icons.copy size={12} aria-hidden="true" />
+        {copyState === "copied" ? "Copied" : "Copy report"}
+      </button>
+      <span
+        className="ml-url mono"
+        role={copyState === "failed" ? "alert" : "status"}
+        aria-live="polite"
+      >
+        {status}
+      </span>
+    </>
+  );
+}
+
+function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undefined }): ReactNode {
+  if (state === undefined || state.status === "idle") return null;
+  if (state.status === "running") {
+    return (
+      <div className="ml-readiness" role="status">
+        Checking {state.deep ? "deep" : "basic"} readiness…
+      </div>
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <div className="ml-readiness ml-readiness-error" role="alert">
+        {state.message}
+      </div>
+    );
+  }
+  const report = state.report;
+  const workingToday = probePassed(report, "chat");
+  const warning = firstActionableProbeMessage(report);
+  return (
+    <div className="ml-readiness">
+      <div className="ml-rrow">
+        <div className="ml-rsummary" role={report.overallStatus === "failed" ? "alert" : "status"}>
+          <div className="ml-rhead">
+            <span className={"ml-rstatus " + report.overallStatus}>
+              {workingToday ? "Working today" : "Not verified"}
+            </span>
+            <span className="ml-rtime mono">{new Date(report.checkedAt).toLocaleTimeString()}</span>
+          </div>
+          <div className="ml-rbadges" aria-label="Verified capabilities">
+            {probePassed(report, "streaming") ? <span>Streaming</span> : null}
+            {probePassed(report, "tool_calling") ? <span>Tools</span> : null}
+            {probePassed(report, "json_schema") ? <span>JSON</span> : null}
+            {probePassed(report, "reasoning") ? <span>Reasoning</span> : null}
+            {probePassed(report, "image_input") ? <span>Image</span> : null}
+            {probePassed(report, "document_input") ? <span>PDF</span> : null}
+            {report.verifiedCapabilities.testedContextTokens !== undefined ? (
+              <span>{report.verifiedCapabilities.testedContextTokens.toLocaleString()} ctx</span>
+            ) : null}
+          </div>
+          {warning !== undefined ? <div className="ml-rwarn">{warning}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModelCapabilityRow({
+  model,
+  readiness,
+  onRunReadiness,
+}: {
+  readonly model: ModelCapability;
+  readonly readiness: ReadinessRunState | undefined;
+  readonly onRunReadiness: (modelId: string, deep: boolean) => void;
+}): ReactNode {
   const conversationEligible = isConversationEligibleModel(model);
   const embeddingReady = model.kind === "embedding";
   const statusClass = conversationEligible || embeddingReady ? "connected" : "ineligible";
@@ -127,7 +329,32 @@ function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): Rea
           tools {model.toolCalling ? "yes" : "no"} · structured{" "}
           {model.structuredOutput ? "yes" : "no"} · {model.costClass}/{model.latencyClass}
         </div>
+        <ReadinessSummary state={readiness} />
       </div>
+      {conversationEligible ? (
+        <div className="ml-actions">
+          <button
+            type="button"
+            className="ml-check"
+            disabled={readiness?.status === "running"}
+            onClick={() => onRunReadiness(model.id, false)}
+          >
+            <Icons.activity size={13} />
+            Run readiness check
+          </button>
+          <button
+            type="button"
+            className="ml-check secondary"
+            disabled={readiness?.status === "running"}
+            onClick={() => onRunReadiness(model.id, true)}
+          >
+            Deep probes
+          </button>
+          {readiness?.status === "done" ? (
+            <ReadinessReportCopyButton report={readiness.report} />
+          ) : null}
+        </div>
+      ) : null}
       <span className={"ml-status " + statusClass} title={statusTitle} aria-hidden="true" />
     </div>
   );
@@ -139,8 +366,9 @@ function GeneralPrefs(): ReactNode {
   const [bgBrightness, setBgBrightness] = useState<number>(readWorkspaceBackgroundBrightness);
   const [gridStrength, setGridStrength] = useState<number>(readWorkspaceGridStrength);
   const [frameBorderStrength, setFrameBorderStrength] = useState<number>(readFrameBorderStrength);
-  const [frameInnerGlowStrength, setFrameInnerGlowStrength] =
-    useState<number>(readFrameInnerGlowStrength);
+  const [frameInnerGlowStrength, setFrameInnerGlowStrength] = useState<number>(
+    readFrameInnerGlowStrength,
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -393,6 +621,7 @@ export function SettingsPanel(): ReactNode {
   const [configPresent, setConfigPresent] = useState(false);
   const [loadingModels, setLoadingModels] = useState(true);
   const [modelError, setModelError] = useState<string | undefined>();
+  const [readiness, setReadiness] = useState<Record<string, ReadinessRunState>>({});
   const [setupOpen, setSetupOpen] = useState(false);
   // uiux-fix C287: bumping the tick re-runs the load effect (Retry button).
   const [reloadTick, setReloadTick] = useState(0);
@@ -442,6 +671,22 @@ export function SettingsPanel(): ReactNode {
         ? "Gateway connected, but none of the discovered models can be used for conversation. Add a chat-capable deployment."
         : "Keiko can use the configured gateway models for chat and agent workflows.";
   const gatewayStatusTone = gatewayConfigured ? "connected" : "untested";
+
+  async function handleRunReadiness(modelId: string, deep: boolean): Promise<void> {
+    setReadiness((current) => ({ ...current, [modelId]: { status: "running", deep } }));
+    try {
+      const report = await runGatewayReadiness(
+        modelId,
+        deep ? { includeDeepProbes: true } : undefined,
+      );
+      setReadiness((current) => ({ ...current, [modelId]: { status: "done", report } }));
+    } catch (error) {
+      setReadiness((current) => ({
+        ...current,
+        [modelId]: { status: "error", message: readinessErrorMessage(error) },
+      }));
+    }
+  }
 
   return (
     <div className="set">
@@ -537,7 +782,14 @@ export function SettingsPanel(): ReactNode {
             ) : (
               <div className="set-list">
                 {models.map((model) => (
-                  <ModelCapabilityRow key={model.id} model={model} />
+                  <ModelCapabilityRow
+                    key={model.id}
+                    model={model}
+                    readiness={readiness[model.id]}
+                    onRunReadiness={(modelId, deep) => {
+                      void handleRunReadiness(modelId, deep);
+                    }}
+                  />
                 ))}
               </div>
             )}

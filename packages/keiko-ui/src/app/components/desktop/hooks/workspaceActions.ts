@@ -5,7 +5,19 @@ import { canConnect, snapMap } from "../windows/connectionUtils";
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
-import type { FilesWindowContext, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
+import {
+  activeEditorPane,
+  createEditorLayoutStateV2,
+  editorLayoutOpenFiles,
+  editorLayoutReducer,
+  serializeEditorLayoutStateV2,
+} from "@oscharko-dev/keiko-contracts";
+import type {
+  FilesWindowContext,
+  OpenEditorFileResult,
+  ViewportWorld,
+  WorkspaceApi,
+} from "./useWorkspace.types";
 import type {
   CapsuleSetId,
   KnowledgeCapsuleId,
@@ -13,6 +25,10 @@ import type {
   QualityIntelligenceImageSource,
 } from "@oscharko-dev/keiko-contracts";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+
+const EDITOR_DEFAULT_SIDEBAR_WIDTH = 260;
+const EDITOR_MIN_SIDEBAR_WIDTH = 180;
+const EDITOR_MAX_SIDEBAR_WIDTH = 440;
 
 function addPosition(
   vp: ViewportWorld,
@@ -30,12 +46,91 @@ interface MutateArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly zc: MutableRefObject<number>;
   readonly worldVP: () => ViewportWorld | null;
+  readonly winsRef?: MutableRefObject<AppWindow[]>;
 }
 
 type Mutations = Pick<
   WorkspaceApi,
-  "update" | "focus" | "close" | "minimize" | "restore" | "maximize" | "add" | "toggleTool"
+  | "update"
+  | "focus"
+  | "close"
+  | "minimize"
+  | "restore"
+  | "maximize"
+  | "add"
+  | "openEditorFile"
+  | "toggleTool"
 >;
+
+function normalizeEditorOpenRoot(root: string): string {
+  return root.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
+}
+
+function normalizeEditorOpenPath(path: string): string {
+  return path.trim().replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+}
+
+function editorCfgString(cfg: AppWindow["cfg"], key: string): string | undefined {
+  const value = cfg[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function mergeEditorCfgOpenFiles(cfg: AppWindow["cfg"], file: string): readonly string[] {
+  const out: string[] = [];
+  const add = (value: unknown): void => {
+    if (typeof value !== "string") return;
+    const normalized = normalizeEditorOpenPath(value);
+    if (normalized.length === 0 || out.includes(normalized)) return;
+    out.push(normalized);
+  };
+  if (Array.isArray(cfg["openFiles"])) {
+    for (const value of cfg["openFiles"]) add(value);
+  }
+  add(cfg["file"]);
+  add(file);
+  return out;
+}
+
+function editorOpenLayoutPatch(
+  cfg: AppWindow["cfg"],
+  root: string,
+  file: string,
+): Pick<AppWindow["cfg"], "file" | "openFiles" | "layoutJson"> {
+  const currentFile = normalizeEditorOpenPath(editorCfgString(cfg, "file") ?? "");
+  const layout = createEditorLayoutStateV2({
+    root,
+    file: currentFile,
+    openFiles: mergeEditorCfgOpenFiles(cfg, file),
+    layoutJson: editorCfgString(cfg, "layoutJson"),
+    defaultSidebarWidth: EDITOR_DEFAULT_SIDEBAR_WIDTH,
+    minSidebarWidth: EDITOR_MIN_SIDEBAR_WIDTH,
+    maxSidebarWidth: EDITOR_MAX_SIDEBAR_WIDTH,
+  });
+  const opened = editorLayoutReducer(layout, {
+    type: "open-file",
+    paneId: activeEditorPane(layout).id,
+    file,
+  });
+  return {
+    file,
+    openFiles: editorLayoutOpenFiles(opened),
+    layoutJson: serializeEditorLayoutStateV2(opened),
+  };
+}
+
+function revealCfg(
+  lineStart: number | undefined,
+  lineEnd: number | undefined,
+): Record<string, string | number> {
+  if (lineStart === undefined) return {};
+  const safeStart = Math.max(1, Math.floor(lineStart));
+  const safeEnd = Math.max(safeStart, Math.floor(lineEnd ?? safeStart));
+  return {
+    revealLineStart: safeStart,
+    revealLineEnd: safeEnd,
+    revealRequestId: `${Date.now().toString(36)}:${safeStart.toString()}:${safeEnd.toString()}`,
+  };
+}
 
 function makeUpdate(setWins: MutateArgs["setWins"]): WorkspaceApi["update"] {
   return (id, patch) =>
@@ -216,6 +311,95 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
   };
 }
 
+function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
+  const { setWins, zc, worldVP, winsRef } = args;
+  return ({ root, path, lineStart, lineEnd }) => {
+    const normalizedRoot = normalizeEditorOpenRoot(root);
+    const normalizedPath = normalizeEditorOpenPath(path);
+    if (normalizedRoot.length === 0) {
+      return { ok: false, message: "Select a repository source before opening file references." };
+    }
+    if (normalizedPath.length === 0 || normalizedPath.includes("..")) {
+      return { ok: false, message: "This repository reference is not a valid file path." };
+    }
+    const vp = worldVP();
+    if (vp === null) {
+      return {
+        ok: false,
+        message: "Unable to open editor because the workspace viewport is not ready.",
+      };
+    }
+    const reveal = revealCfg(lineStart, lineEnd);
+    const currentWins = winsRef?.current ?? [];
+    const existing = currentWins.find((w) => {
+      if (w.type !== "editor") return false;
+      const existingRoot = typeof w.cfg["root"] === "string" ? w.cfg["root"] : "";
+      return normalizeEditorOpenRoot(existingRoot) === normalizedRoot;
+    });
+    if (existing !== undefined) {
+      const targetId = existing.id;
+      const result: OpenEditorFileResult = { ok: true, windowId: targetId };
+      setWins((ws) => {
+        if (ws === null) return ws;
+        return ws.map((w) => {
+          if (w.id !== targetId) return w;
+          const layoutPatch = editorOpenLayoutPatch(w.cfg, normalizedRoot, normalizedPath);
+          return {
+            ...w,
+            minimized: false,
+            z: ++zc.current,
+            cfg: {
+              ...w.cfg,
+              root: normalizedRoot,
+              ...layoutPatch,
+              ...reveal,
+            },
+          };
+        });
+      });
+      return result;
+    }
+    const t = WIN_TYPES.editor;
+    const { x, y } = addPosition(vp, t.w, t.h, currentWins.length, 40);
+    const id = `editor-${Date.now().toString(36)}`;
+    const result: OpenEditorFileResult = { ok: true, windowId: id };
+    setWins((ws) => {
+      const list = ws ?? [];
+      return [
+        ...list,
+        {
+          id,
+          type: "editor",
+          x,
+          y,
+          w: Math.max(t.w, t.min.w),
+          h: Math.max(t.h, t.min.h),
+          z: ++zc.current,
+          cfg: {
+            root: normalizedRoot,
+            file: normalizedPath,
+            openFiles: [normalizedPath],
+            layoutJson: serializeEditorLayoutStateV2(
+              createEditorLayoutStateV2({
+                root: normalizedRoot,
+                file: normalizedPath,
+                openFiles: [normalizedPath],
+                defaultSidebarWidth: EDITOR_DEFAULT_SIDEBAR_WIDTH,
+                minSidebarWidth: EDITOR_MIN_SIDEBAR_WIDTH,
+                maxSidebarWidth: EDITOR_MAX_SIDEBAR_WIDTH,
+              }),
+            ),
+            ...reveal,
+          },
+          max: false,
+          zoom: 1,
+        },
+      ];
+    });
+    return result;
+  };
+}
+
 function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
   const { setWins, zc, worldVP } = args;
   return (type) => {
@@ -251,6 +435,7 @@ export function makeMutations(args: MutateArgs): Mutations {
     restore: makeRestore(args.setWins, args.zc),
     maximize: makeMaximize(args),
     add: makeAdd(args),
+    openEditorFile: makeOpenEditorFile(args),
     toggleTool: makeToggleTool(args),
   };
 }

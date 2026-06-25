@@ -251,6 +251,18 @@ function snapshot(overrides: Partial<EditorHotExitSnapshotV1> = {}): EditorHotEx
   };
 }
 
+async function expectRejectedMessage(promise: Promise<unknown>, message: string): Promise<void> {
+  await promise.then(
+    () => {
+      throw new Error(`Expected promise to reject with ${message}`);
+    },
+    (error: unknown) => {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(message);
+    },
+  );
+}
+
 beforeEach(() => {
   installIndexedDb();
 });
@@ -296,13 +308,15 @@ describe("editorHotExitStore", () => {
   it("surfaces IndexedDB request and transaction failures to callers", async () => {
     installIndexedDb(new StaticIndexedDb(new RequestErrorDatabase()));
 
-    await expect(readEditorHotExitSnapshot("/repo", "src/app.ts")).rejects.toThrow(
+    await expectRejectedMessage(
+      readEditorHotExitSnapshot("/repo", "src/app.ts"),
       "IndexedDB request failed.",
     );
-    await expect(writeEditorHotExitSnapshot(snapshot())).rejects.toThrow("request failed");
+    await expectRejectedMessage(writeEditorHotExitSnapshot(snapshot()), "request failed");
 
     installIndexedDb(new StaticIndexedDb(new AbortDatabase()));
-    await expect(writeEditorHotExitSnapshot(snapshot())).rejects.toThrow(
+    await expectRejectedMessage(
+      writeEditorHotExitSnapshot(snapshot()),
       "IndexedDB transaction aborted.",
     );
   });

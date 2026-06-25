@@ -29,6 +29,27 @@ describe("SafeMarkdown — code block", () => {
     const langBadge = document.querySelector(".sm-code-lang");
     expect(langBadge?.textContent).toBe("typescript");
   });
+
+  it("renders highlighted token spans and non-selectable line numbers", () => {
+    render(<SafeMarkdown source={"```typescript\nconst answer = 42;\n```"} />);
+
+    expect(document.querySelector(".hl-key")?.textContent).toBe("const");
+    expect(document.querySelector(".hl-num")?.textContent).toBe("42");
+    expect(document.querySelector(".sm-code-line-no")?.textContent).toBe("1");
+    expect(document.querySelector(".sm-code-line-src")?.textContent).toContain("answer");
+  });
+
+  it("marks long code blocks as internally scrollable", () => {
+    const longCode = Array.from(
+      { length: 32 },
+      (_, index) => `const line${String(index)} = ${String(index)};`,
+    ).join("\n");
+    render(<SafeMarkdown source={`\`\`\`typescript\n${longCode}\n\`\`\``} />);
+
+    expect(document.querySelector(".sm-code-block-frame")).toHaveAttribute("data-long", "true");
+    expect(document.querySelector(".sm-pre")).toHaveAttribute("data-long", "true");
+    expect(document.querySelector(".sm-code-line-src")?.textContent).toContain("line0");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -51,6 +72,7 @@ describe("SafeMarkdown — copy button interaction", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("console.log('hi');");
     });
+    expect(await screen.findByText("Code copied")).toBeInTheDocument();
 
     // Restore original descriptor
     if (clipboardDescriptor !== undefined) {
@@ -73,8 +95,33 @@ describe("SafeMarkdown — copy button without clipboard API", () => {
     render(<SafeMarkdown source={"```js\nconsole.log('hi');\n```"} />);
     const copyBtn = screen.getByRole("button", { name: "Copy code block" });
     expect(() => fireEvent.click(copyBtn)).not.toThrow();
+    expect(
+      screen.getByText("Clipboard unavailable. Select the code manually and copy it."),
+    ).toBeInTheDocument();
 
     // Restore original descriptor
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  it("surfaces clipboard write failures", async () => {
+    const writeText = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockRejectedValue(new Error("denied"));
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(<SafeMarkdown source={"```js\nconsole.log('hi');\n```"} />);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code block" }));
+
+    expect(
+      await screen.findByText("Clipboard access failed. Select the code manually and copy it."),
+    ).toBeInTheDocument();
+
     if (clipboardDescriptor !== undefined) {
       Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
     }
@@ -94,6 +141,211 @@ describe("SafeMarkdown — safe link", () => {
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("href")).toBe("https://docs.example.com");
+  });
+});
+
+describe("SafeMarkdown — repository references", () => {
+  it("renders conservative repository references as editor-open controls", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source="See packages/keiko-harness/src/context.ts:50-57 for the boundary test."
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    const reference = screen.getByRole("button", {
+      name: "Open packages/keiko-harness/src/context.ts at lines 50-57 in editor",
+    });
+    expect(reference.querySelector(".fi-img")).toHaveAttribute(
+      "src",
+      "/assets/icons/typescript.svg",
+    );
+    fireEvent.click(reference);
+
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "packages/keiko-harness/src/context.ts",
+      lineStart: 50,
+      lineEnd: 57,
+    });
+  });
+
+  it("uses the shared file-type icons for repository references", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source="Compare packages/keiko-harness/src/context.ts and packages/keiko-ui/package.json for config."
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    const tsReference = screen.getByRole("button", {
+      name: "Open packages/keiko-harness/src/context.ts in editor",
+    });
+    const jsonReference = screen.getByRole("button", {
+      name: "Open packages/keiko-ui/package.json in editor",
+    });
+
+    expect(tsReference.querySelector(".fi-img")).toHaveAttribute(
+      "src",
+      "/assets/icons/typescript.svg",
+    );
+    expect(jsonReference.querySelector(".fi-img")).toHaveAttribute("src", "/assets/icons/json.svg");
+  });
+
+  it("renders root-level repository files and bracket citations as editor-open controls", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source="TypeScript is resolved in [package-lock.json:1-48]. Scripts are in [package.json]."
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    const lockReference = screen.getByRole("button", {
+      name: "Open package-lock.json at lines 1-48 in editor",
+    });
+    const packageReference = screen.getByRole("button", {
+      name: "Open package.json in editor",
+    });
+
+    expect(lockReference).toHaveTextContent("package-lock.json:1-48");
+    expect(packageReference).toHaveTextContent("package.json");
+    expect(lockReference.querySelector(".fi-img")).toHaveAttribute("src", "/assets/icons/json.svg");
+    expect(packageReference.querySelector(".fi-img")).toHaveAttribute(
+      "src",
+      "/assets/icons/json.svg",
+    );
+
+    fireEvent.click(lockReference);
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "package-lock.json",
+      lineStart: 1,
+      lineEnd: 48,
+    });
+  });
+
+  it("keeps sentence punctuation outside repository reference controls", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source="Review packages/keiko-harness/src/context.ts."
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    const reference = screen.getByRole("button", {
+      name: "Open packages/keiko-harness/src/context.ts in editor",
+    });
+    expect(reference).toHaveTextContent("context.ts");
+    expect(reference).toHaveAttribute("title", "packages/keiko-harness/src/context.ts");
+    expect(document.querySelector(".sm-p")?.textContent).toBe("Review context.ts.");
+  });
+
+  it("collapses grounded source metadata and duplicate repository references", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source="1. Assertion [packages/keiko-harness/src/context.ts:49-58] [source: api] packages/keiko-harness/src/context.ts:49-58."
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    const references = screen.getAllByRole("button", {
+      name: "Open packages/keiko-harness/src/context.ts at lines 49-58 in editor",
+    });
+    expect(references).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("source: api");
+    expect(document.body.textContent).not.toContain("[packages/keiko-harness");
+    expect(document.body.textContent).toContain("Assertion context.ts:49-58.");
+  });
+
+  it("renders repository-looking text as a health-checked reference when no repository root is connected", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source="See packages/keiko-harness/src/context.ts:50."
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    const reference = screen.getByRole("button", {
+      name: "Open packages/keiko-harness/src/context.ts at line 50 in editor",
+    });
+    expect(reference).toHaveTextContent("context.ts:50");
+    fireEvent.click(reference);
+    expect(
+      screen.getByText("Connect a Files window to open repository references."),
+    ).toHaveAttribute("role", "alert");
+    expect(openReference).not.toHaveBeenCalled();
+  });
+
+  it("rejects absolute paths, parent traversal, URLs, and code-block content", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source={[
+          "No links: /repo/src/a.ts ../src/a.ts https://example.com/src/a.ts",
+          "",
+          "```ts",
+          "import x from 'packages/keiko-harness/src/context.ts';",
+          "```",
+        ].join("\n")}
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Open .*src\/a\.ts/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open packages\/keiko-harness/ })).toBeNull();
+    expect(openReference).not.toHaveBeenCalled();
+  });
+
+  it("does not linkify ordinary domains when root-level file references are enabled", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source="No repository link for docs.example.com or [docs.example.com], but package.json is local."
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /docs\.example\.com/ })).toBeNull();
+    expect(document.body.textContent).toContain("[docs.example.com]");
+    expect(screen.getByRole("button", { name: "Open package.json in editor" })).toBeInTheDocument();
+  });
+
+  it("linkifies inline code only when the entire inline code is a repository reference", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source="Open `@packages/keiko-harness/src/context.ts:12`, not `see packages/keiko-harness/src/context.ts`."
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open packages/keiko-harness/src/context.ts at line 12 in editor",
+      }),
+    );
+
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "packages/keiko-harness/src/context.ts",
+      lineStart: 12,
+      lineEnd: 12,
+    });
+    expect(screen.getByText("see packages/keiko-harness/src/context.ts")).toBeInTheDocument();
   });
 });
 

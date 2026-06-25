@@ -227,7 +227,10 @@ describe("EditorWidget workspace session", () => {
     const onWorkspaceChange = vi.fn();
     render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    const splitRight = screen.getByRole("button", { name: "Split src/a.ts right" });
+    expect(splitRight).toHaveAttribute("data-tip", "Split right");
+    expect(splitRight).not.toHaveAttribute("title");
+    fireEvent.click(splitRight);
 
     expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
     expect(screen.getAllByTestId("runtime-file").map((node) => node.textContent)).toEqual([
@@ -666,6 +669,8 @@ describe("EditorWidget workspace session", () => {
         }) as DOMRect,
     );
     const sidebarResizer = screen.getByRole("button", { name: "Resize project tree" });
+    expect(sidebarResizer).toHaveAttribute("data-tip", "Resize project tree");
+    expect(sidebarResizer).not.toHaveAttribute("title");
     sidebarResizer.setPointerCapture = vi.fn();
     sidebarResizer.hasPointerCapture = vi.fn(() => true);
     sidebarResizer.releasePointerCapture = vi.fn();
@@ -696,6 +701,8 @@ describe("EditorWidget workspace session", () => {
         }) as DOMRect,
     );
     const splitResizer = screen.getByRole("button", { name: "Resize editor split" });
+    expect(splitResizer).toHaveAttribute("data-tip", "Resize editor split");
+    expect(splitResizer).not.toHaveAttribute("title");
     splitResizer.setPointerCapture = vi.fn();
     splitResizer.hasPointerCapture = vi.fn(() => true);
     splitResizer.releasePointerCapture = vi.fn();
@@ -720,7 +727,10 @@ describe("EditorWidget workspace session", () => {
       <EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts down" }));
+    const splitDown = screen.getByRole("button", { name: "Split src/a.ts down" });
+    expect(splitDown).toHaveAttribute("data-tip", "Split down");
+    expect(splitDown).not.toHaveAttribute("title");
+    fireEvent.click(splitDown);
     const splitRoot = container.querySelector(".ed-panes.column") as HTMLElement;
     splitRoot.getBoundingClientRect = vi.fn(
       () =>
@@ -737,6 +747,7 @@ describe("EditorWidget workspace session", () => {
         }) as DOMRect,
     );
     const splitResizer = screen.getByRole("button", { name: "Resize editor split" });
+    expect(splitResizer).toHaveAttribute("data-tip", "Resize editor split");
     splitResizer.setPointerCapture = vi.fn();
     splitResizer.hasPointerCapture = vi.fn(() => false);
     splitResizer.releasePointerCapture = vi.fn();
@@ -753,5 +764,43 @@ describe("EditorWidget workspace session", () => {
     const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
     expect(JSON.parse(String(lastPatch?.layoutJson)).tree.ratio).toBe(80);
     expect(splitResizer.releasePointerCapture).toHaveBeenCalledWith(3);
+  });
+
+  it("resizes the sidebar and editor split from keyboard arrows", () => {
+    const onWorkspaceChange = vi.fn();
+    const { container } = render(
+      <EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />,
+    );
+    const workspace = container.querySelector(".editor-workspace") as HTMLElement;
+    workspace.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          left: 0,
+          top: 0,
+          width: 900,
+          height: 600,
+          right: 900,
+          bottom: 600,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+
+    const sidebarResizer = screen.getByRole("button", { name: "Resize project tree" });
+    fireEvent.keyDown(sidebarResizer, { key: "ArrowRight" });
+    let lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    expect(JSON.parse(String(lastPatch?.layoutJson))).toEqual(
+      expect.objectContaining({ sidebarWidth: 272 }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    const splitResizer = screen.getByRole("button", { name: "Resize editor split" });
+    fireEvent.keyDown(splitResizer, { key: "ArrowRight" });
+    lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    expect(JSON.parse(String(lastPatch?.layoutJson)).tree.ratio).toBe(52);
+
+    fireEvent.keyDown(splitResizer, { key: "ArrowDown" });
+    expect(onWorkspaceChange.mock.calls.at(-1)?.[0]).toEqual(lastPatch);
   });
 });

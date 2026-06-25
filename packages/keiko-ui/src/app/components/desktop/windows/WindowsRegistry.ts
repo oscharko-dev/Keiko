@@ -3,6 +3,7 @@ import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
 } from "@oscharko-dev/keiko-contracts";
+import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import type { IconName } from "../Icons";
 import type { AppWindow } from "./types";
 
@@ -103,6 +104,7 @@ export interface WindowRenderContext {
    * Returns the new/focused window id, or null when the workspace viewport is not ready.
    */
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
+  readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
 }
 
 export interface WindowTypeDef {
@@ -412,7 +414,6 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 380,
     min: { w: 220, h: 180 },
     config: [],
-    cta: "Select connector",
   },
   localKnowledge: {
     title: "Local Knowledge",
@@ -447,10 +448,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     icon: "spark",
     accent: true,
     desc: "Turn a raw prompt into a governed, reviewable Enhanced Prompt",
-    w: 460,
-    h: 620,
-    min: { w: 340, h: 360 },
-    tiny: { w: 280, h: 220 },
+    w: 880,
+    h: 720,
+    min: { w: 520, h: 420 },
+    tiny: { w: 320, h: 240 },
     tool: true,
     singleton: true,
   },

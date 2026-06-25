@@ -300,7 +300,9 @@ describe("createVoiceSessionRecapBinding — default IO", () => {
 
     const binding = createVoiceSessionRecapBinding({ profile: "speech-to-text" });
     binding.setSegments([segment({ text: "fact", state: "committed" })]);
-    await expect(binding.trigger()).rejects.toThrow(/HTTP 403/u);
+    const error = await binding.trigger().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/HTTP 403/u);
     vi.unstubAllGlobals();
   });
 

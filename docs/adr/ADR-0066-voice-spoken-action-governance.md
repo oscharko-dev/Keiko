@@ -182,11 +182,11 @@ Forbidden substrings (apikey, secret, password, credential, bearer, baseurl, end
 privatekey, accesskey, token, etc.) are scanned across the contract module as a test invariant to ensure
 no template or constant leaks credentials or provider details.
 
-**On the grounded-handoff route:** The `userApprovalToken` is server-built from request details and the
-deployment secret—it is not a user secret. The real enforcing gate is `validateWorkflowHandoffRequest`
+**On the current `POST /api/runs` path:** The `userApprovalToken` is verified against canonical
+request details and is not a user secret. The real enforcing gate is `validateWorkflowHandoffRequest`
 and `checkPatchAgainstScope`, which independently gate a voice request identically to a text request.
 The approval-token equality check is redundant defense-in-depth: it adds a verification layer but is
-not the sole gating authority on the grounded-handoff path.
+not the sole gating authority on the run path.
 
 ### D7 — State machine with terminal invalidation states (AC4)
 

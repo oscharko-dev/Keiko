@@ -1,9 +1,9 @@
-import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -15,11 +15,6 @@ import {
   type VoiceTranscriptSource,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
-  DEFAULT_EXPLORATION_BUDGET,
-  type ConnectedContextPack,
-} from "@oscharko-dev/keiko-contracts/connected-context";
-import {
   DEFAULT_PATCH_SCOPE_LIMITS,
   WORKFLOW_HANDOFF_SCHEMA_VERSION,
   type WorkflowHandoffRequest,
@@ -29,9 +24,8 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "./deps.js";
 import { approvalTokenInputFor, createApprovalToken } from "./governed-workflow.js";
-import { handleGroundedWorkflowHandoff } from "./grounded-handoff.js";
+import { handleCreateRun } from "./run-handlers.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
-import { clearAllGroundedTurns, rememberGroundedTurn } from "./grounded-turn-registry.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import {
@@ -359,7 +353,9 @@ describe("evaluateSpokenActionGovernance — audit records are content-free (AC5
         expect(keys).not.toContain(forbidden);
       }
       const serialized = JSON.stringify(decision.audit);
-      expect(serialized).not.toContain(params.projection.text === "" ? " " : params.projection.text);
+      if (params.projection.text.length > 0) {
+        expect(serialized).not.toContain(params.projection.text);
+      }
     }
   });
 
@@ -378,10 +374,11 @@ describe("evaluateSpokenActionGovernance — audit records are content-free (AC5
   });
 });
 
-// Route-level wiring (grounded-handoff.ts). The deny and bad-request paths short-circuit before any run
-// is started, but `store.createProject` still validates that the workspace path exists on disk, so each
+// Route-level wiring (POST /api/runs). The deny and bad-request paths short-circuit before any run is
+// started, but `store.createProject` still validates that the workspace path exists on disk, so each
 // test seeds a real temporary directory (created in beforeEach, removed in afterEach). This proves the
-// route returns the right status for each voiceOrigin disposition without launching a run.
+// current run route returns the right status for each voiceOrigin disposition without reviving retired
+// chat-handoff endpoints.
 let ROUTE_WORKSPACE = "";
 
 function fakeReq(body: string): IncomingMessage {
@@ -399,72 +396,7 @@ function routeCtx(body: string): RouteContext {
     req: fakeReq(body),
     res: fakeRes(),
     params: {},
-    url: new URL("http://localhost/api/chats/messages/grounded/handoff"),
-  };
-}
-
-function routePack(): ConnectedContextPack {
-  return {
-    schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-    stableId: "pl-0123456789abcdef",
-    scope: {
-      schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-      scopeId: "cs-route",
-      workspaceRoot: ROUTE_WORKSPACE,
-      kind: "directory",
-      relativePaths: ["src"],
-      conversationId: "chat-route",
-      connectedAtMs: 1_700_000_000_000,
-    },
-    query: {
-      kind: "natural-language",
-      text: "context",
-      caseSensitive: false,
-      maxResults: 50,
-      emittedAtMs: 1_700_000_000_000,
-    },
-    budget: { ...DEFAULT_EXPLORATION_BUDGET },
-    usage: {
-      searchCalls: 1,
-      filesRead: 1,
-      excerptBytes: 10,
-      modelInputTokens: 5,
-      modelOutputTokens: 2,
-      elapsedMs: 9,
-      rerankCalls: 0,
-    },
-    files: [
-      {
-        scopePath: "src/add.ts",
-        role: "read-only",
-        selectionReason: "ranked",
-        excerpts: [
-          {
-            atom: {
-              schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-              stableId: "atom-route-1",
-              scopePath: "src/add.ts",
-              lineRange: { startLine: 1, endLine: 2 },
-              score: 0.9,
-              provenance: {
-                kind: "lexical-search",
-                tool: "repo.searchText",
-                queryFingerprint: "fp-route",
-              },
-              redactionState: "redacted",
-              emittedAtMs: 1_700_000_000_000,
-              ledgerRef: undefined,
-            },
-            content: "x",
-            contentBytes: 1,
-          },
-        ],
-      },
-    ],
-    omitted: [],
-    uncertainty: [],
-    emittedAtMs: 1_700_000_000_000,
-    ledgerRef: undefined,
+    url: new URL("http://localhost/api/runs"),
   };
 }
 
@@ -521,37 +453,25 @@ interface RouteHandoffOptions {
   readonly voiceOrigin?: Record<string, unknown>;
 }
 
-function routeHandoffBody(chatId: string, options: RouteHandoffOptions = {}): string {
+function routeHandoffBody(options: RouteHandoffOptions = {}): string {
   return JSON.stringify({
-    assistantMessageId: "assistant-route",
-    chatId,
+    taskType: "verify",
     modelId: "test-model",
-    workflowKind: "verification",
-    input: { targetFiles: ["src/add.ts"] },
-    editablePaths: [],
-    requestedAtMs: 1_700_000_000_000,
+    input: { workspaceRoot: ROUTE_WORKSPACE, targetFiles: ["src/add.ts"] },
+    governedHandoff: validRequest(),
+    governedHandoffSourceGroundedRunId: "grounded-route-1",
     ...(options.voiceOrigin === undefined ? {} : { voiceOrigin: options.voiceOrigin }),
   });
 }
 
-describe("handleGroundedWorkflowHandoff — voiceOrigin wiring (Issue #503)", () => {
+describe("handleCreateRun — voiceOrigin wiring (Issue #503)", () => {
   let store: UiStore;
   let deps: UiHandlerDeps;
-  let chatId: string;
 
   beforeEach((): void => {
     ROUTE_WORKSPACE = mkdtempSync(join(tmpdir(), "keiko-voice-route-"));
     store = createInMemoryUiStore();
-    const project = store.createProject(ROUTE_WORKSPACE, "fixture");
-    const chat = store.createChat(project.path, "Voice route", "test-model");
-    chatId = chat.id;
-    rememberGroundedTurn({
-      assistantMessageId: "assistant-route",
-      chatId: chat.id,
-      workspaceRoot: ROUTE_WORKSPACE,
-      evidenceRunId: "grounded-route-1",
-      packs: [routePack()],
-    });
+    store.createProject(ROUTE_WORKSPACE, "fixture");
     deps = depsWithConfig(VOICE_CAPABLE_CONFIG);
   });
 
@@ -573,15 +493,14 @@ describe("handleGroundedWorkflowHandoff — voiceOrigin wiring (Issue #503)", ()
   }
 
   afterEach((): void => {
-    clearAllGroundedTurns();
     store.close();
     rmSync(ROUTE_WORKSPACE, { recursive: true, force: true });
   });
 
   it("denies a confirmation-requiring voice action with no digest (403 VOICE_ACTION_DENIED)", async () => {
-    const result = await handleGroundedWorkflowHandoff(
+    const result = await handleCreateRun(
       routeCtx(
-        routeHandoffBody(chatId, {
+        routeHandoffBody({
           voiceOrigin: {
             profile: "speech-to-text",
             turnIndex: 1,
@@ -603,9 +522,9 @@ describe("handleGroundedWorkflowHandoff — voiceOrigin wiring (Issue #503)", ()
     // The deployment has no voice provider configured, so the server-trusted profile is `none`
     // regardless of the client's claimed `speech-to-text` profile and valid-looking digest. AC1 must be
     // enforced against deployment reality, not the untrusted client claim.
-    const result = await handleGroundedWorkflowHandoff(
+    const result = await handleCreateRun(
       routeCtx(
-        routeHandoffBody(chatId, {
+        routeHandoffBody({
           voiceOrigin: {
             profile: "speech-to-text",
             turnIndex: 1,
@@ -631,9 +550,9 @@ describe("handleGroundedWorkflowHandoff — voiceOrigin wiring (Issue #503)", ()
       ...depsWithConfig(VOICE_CAPABLE_CONFIG),
       env: { KEIKO_VOICE_DISABLED: "1" },
     };
-    const result = await handleGroundedWorkflowHandoff(
+    const result = await handleCreateRun(
       routeCtx(
-        routeHandoffBody(chatId, {
+        routeHandoffBody({
           voiceOrigin: {
             profile: "speech-to-text",
             turnIndex: 1,
@@ -652,9 +571,9 @@ describe("handleGroundedWorkflowHandoff — voiceOrigin wiring (Issue #503)", ()
   });
 
   it("rejects a malformed voiceOrigin profile with 400 before governance runs", async () => {
-    const result = await handleGroundedWorkflowHandoff(
+    const result = await handleCreateRun(
       routeCtx(
-        routeHandoffBody(chatId, {
+        routeHandoffBody({
           voiceOrigin: {
             profile: "telepathy",
             turnIndex: 1,
@@ -670,9 +589,9 @@ describe("handleGroundedWorkflowHandoff — voiceOrigin wiring (Issue #503)", ()
   });
 
   it("rejects an oversized committedText with 400", async () => {
-    const result = await handleGroundedWorkflowHandoff(
+    const result = await handleCreateRun(
       routeCtx(
-        routeHandoffBody(chatId, {
+        routeHandoffBody({
           voiceOrigin: {
             profile: "speech-to-text",
             turnIndex: 1,
@@ -688,9 +607,9 @@ describe("handleGroundedWorkflowHandoff — voiceOrigin wiring (Issue #503)", ()
   });
 
   it("rejects a malformed confirmationDigest with 400", async () => {
-    const result = await handleGroundedWorkflowHandoff(
+    const result = await handleCreateRun(
       routeCtx(
-        routeHandoffBody(chatId, {
+        routeHandoffBody({
           voiceOrigin: {
             profile: "speech-to-text",
             turnIndex: 1,
@@ -710,9 +629,9 @@ describe("handleGroundedWorkflowHandoff — voiceOrigin wiring (Issue #503)", ()
     // A read-only committed transcript needs no confirmation, so on a voice-capable deployment the
     // governance allows the handoff and the run starts — proving the audit/evidence threading reaches
     // run start rather than short-circuiting on a 4xx.
-    const result = await handleGroundedWorkflowHandoff(
+    const result = await handleCreateRun(
       routeCtx(
-        routeHandoffBody(chatId, {
+        routeHandoffBody({
           voiceOrigin: {
             profile: "speech-to-text",
             turnIndex: 1,
@@ -725,16 +644,17 @@ describe("handleGroundedWorkflowHandoff — voiceOrigin wiring (Issue #503)", ()
       deps,
     );
     expect(result.status).toBe(202);
-    const body = result.body as { run?: unknown };
-    expect(body.run).toBeDefined();
+    const body = result.body as { runId?: unknown; fingerprint?: unknown };
+    expect(body.runId).toBeDefined();
+    expect(body.fingerprint).toBeDefined();
   });
 
   it("allows a read-only realtime voice action on a full-realtime deployment (202)", async () => {
     // A full-realtime deployment resolves the server-trusted `full-realtime` profile, which can drive a
     // realtime-source spoken action. The read-only transcript needs no confirmation, so the run starts.
-    const result = await handleGroundedWorkflowHandoff(
+    const result = await handleCreateRun(
       routeCtx(
-        routeHandoffBody(chatId, {
+        routeHandoffBody({
           voiceOrigin: {
             profile: "full-realtime",
             turnIndex: 1,
@@ -747,12 +667,13 @@ describe("handleGroundedWorkflowHandoff — voiceOrigin wiring (Issue #503)", ()
       depsWithConfig(VOICE_REALTIME_CONFIG),
     );
     expect(result.status).toBe(202);
-    const body = result.body as { run?: unknown };
-    expect(body.run).toBeDefined();
+    const body = result.body as { runId?: unknown; fingerprint?: unknown };
+    expect(body.runId).toBeDefined();
+    expect(body.fingerprint).toBeDefined();
   });
 
   it("leaves the text path byte-identical: absent voiceOrigin produces no voice 4xx", async () => {
-    const result = await handleGroundedWorkflowHandoff(routeCtx(routeHandoffBody(chatId)), deps);
+    const result = await handleCreateRun(routeCtx(routeHandoffBody()), deps);
     // No voiceOrigin → governance is a no-op. The request proceeds past parsing/governance; any later
     // failure is unrelated to voice. Crucially it is NOT a voice denial.
     if (result.status >= 400) {

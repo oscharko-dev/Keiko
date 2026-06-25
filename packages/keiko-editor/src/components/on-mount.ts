@@ -23,6 +23,7 @@ import {
   registerKeikoCompletionProvider,
   type MonacoDisposable,
   type MonacoLanguagesRegistrar,
+  type MonacoRange,
 } from "./completion-bridge.js";
 import {
   INLINE_COMPLETION_ELIGIBLE_LANGUAGES,
@@ -172,6 +173,12 @@ export interface MountEditor {
     listener: (event: { selection: monaco.Selection }) => void,
   ): monaco.IDisposable;
   focus(): void;
+  setSelection(range: MonacoRange): void;
+  revealRangeInCenterIfOutsideViewport(range: MonacoRange): void;
+  deltaDecorations(
+    oldDecorations: string[],
+    newDecorations: monaco.editor.IModelDeltaDecoration[],
+  ): string[];
   getContainerDomNode(): HTMLElement;
   saveViewState(): unknown;
   restoreViewState(state: unknown): void;
