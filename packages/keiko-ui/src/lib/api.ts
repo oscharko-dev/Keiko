@@ -1438,3 +1438,73 @@ export async function fetchGitDeliveryCommitExecute(
     ...(signal === undefined ? {} : { signal }),
   });
 }
+
+// ─── Governed remote publish (Issue #476, Epic #470) ────────────────────────────────────────────
+
+export interface GitDeliveryPushInput {
+  readonly projectId: string;
+  readonly remoteAlias: string;
+  readonly remoteBranchName: string;
+  readonly sourceBranchName: string;
+  readonly forcePush?: boolean | undefined;
+  readonly setUpstreamTracking?: boolean | undefined;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export interface GitDeliveryPushPreviewResponse {
+  readonly schemaVersion: "1";
+  readonly remoteAlias: string;
+  readonly remoteBranchName: string;
+  readonly sourceBranchName: string;
+  readonly riskClass: string;
+  readonly wouldCreateRemoteBranch: boolean;
+  readonly wouldTriggerChecks: boolean;
+  readonly forceBlocked: boolean;
+  readonly preflightBlockingCodes: readonly string[];
+  readonly preflightAdvisoryCodes: readonly string[];
+  readonly policyOutcome: string;
+  readonly policyBlockReason?: string;
+}
+
+export interface GitDeliveryPushExecuteResponse extends GitDeliveryMutationResponse {
+  readonly publishRejectionReason?: string;
+  readonly recoveryDisposition?: string;
+  readonly recoveryActionHint?: string;
+}
+
+function gitDeliveryPushBody(input: GitDeliveryPushInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    remoteAlias: input.remoteAlias,
+    remoteBranchName: input.remoteBranchName,
+    sourceBranchName: input.sourceBranchName,
+    ...(input.forcePush === undefined ? {} : { forcePush: input.forcePush }),
+    ...(input.setUpstreamTracking === undefined
+      ? {}
+      : { setUpstreamTracking: input.setUpstreamTracking }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+export async function fetchGitDeliveryPushPreview(
+  input: GitDeliveryPushInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushPreviewResponse> {
+  return fetchJson("/api/git-delivery/push/preview", {
+    method: "POST",
+    body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPushExecute(
+  input: GitDeliveryPushInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushExecuteResponse> {
+  return fetchJson("/api/git-delivery/push/execute", {
+    method: "POST",
+    body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}

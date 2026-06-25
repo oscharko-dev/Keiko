@@ -21,12 +21,23 @@ import {
   fetchGitDeliveryCommitPreview,
   fetchGitDeliveryLocalBranchCreate,
   fetchGitDeliveryLocalBranchSwitch,
+  fetchGitDeliveryPushExecute,
+  fetchGitDeliveryPushPreview,
   fetchGitDeliveryStage,
   fetchGitDeliveryUnstage,
   type GitDeliveryCommitPreviewResponse,
   type GitDeliveryMutationResponse,
+  type GitDeliveryPushPreviewResponse,
 } from "@/lib/api";
 import { Icons } from "../../Icons";
+
+// The outcome of any governed action. Push execute adds the publish-rejection / recovery fields; they
+// are optional so a branch/staging/commit outcome (which omits them) is assignable.
+type GovernedGitOutcome = GitDeliveryMutationResponse & {
+  readonly publishRejectionReason?: string;
+  readonly recoveryDisposition?: string;
+  readonly recoveryActionHint?: string;
+};
 
 // ─── Injected client (DI seam for tests) ────────────────────────────────────────────────────────
 
@@ -37,6 +48,8 @@ export interface GovernedGitFlowClient {
   readonly unstage: typeof fetchGitDeliveryUnstage;
   readonly commitPreview: typeof fetchGitDeliveryCommitPreview;
   readonly commitExecute: typeof fetchGitDeliveryCommitExecute;
+  readonly pushPreview: typeof fetchGitDeliveryPushPreview;
+  readonly pushExecute: typeof fetchGitDeliveryPushExecute;
 }
 
 const DEFAULT_CLIENT: GovernedGitFlowClient = {
@@ -46,6 +59,8 @@ const DEFAULT_CLIENT: GovernedGitFlowClient = {
   unstage: fetchGitDeliveryUnstage,
   commitPreview: fetchGitDeliveryCommitPreview,
   commitExecute: fetchGitDeliveryCommitExecute,
+  pushPreview: fetchGitDeliveryPushPreview,
+  pushExecute: fetchGitDeliveryPushExecute,
 };
 
 // ─── Label maps (typed codes → human text; never colour-alone) ──────────────────────────────────
@@ -151,7 +166,7 @@ function MutationOutcome({
   outcome,
   error,
 }: {
-  readonly outcome: GitDeliveryMutationResponse | null;
+  readonly outcome: GovernedGitOutcome | null;
   readonly error: string | null;
 }): ReactNode {
   if (error !== null) {
@@ -167,6 +182,10 @@ function MutationOutcome({
     ...(outcome.preflightFindingCodes ?? []).map((c) => `preflight: ${c}`),
     ...(outcome.requiredApprovers ?? []).map((a) => `approver: ${a}`),
     ...(outcome.executionErrorCode !== undefined ? [`error: ${outcome.executionErrorCode}`] : []),
+    ...(outcome.publishRejectionReason !== undefined
+      ? [`publish rejected: ${outcome.publishRejectionReason}`]
+      : []),
+    ...(outcome.recoveryActionHint !== undefined ? [`recover: ${outcome.recoveryActionHint}`] : []),
     ...(outcome.messageViolations ?? []).map((v) => violationLabel(v)),
   ];
   return (
@@ -470,11 +489,143 @@ function CommitComposer({
   );
 }
 
+// ─── Publish section (governed push: preview + execute) ───────────────────────────────────────────
+
+function PublishPreviewBody({
+  preview,
+}: {
+  readonly preview: GitDeliveryPushPreviewResponse;
+}): ReactNode {
+  return (
+    <div
+      data-testid="ggit-push-preview"
+      style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}
+    >
+      <p style={{ font: "var(--text-body-sm)", color: "var(--text-body)", margin: 0 }}>
+        Target: <code>{preview.remoteAlias}</code> · <code>{preview.remoteBranchName}</code> · risk{" "}
+        {preview.riskClass}
+        {preview.wouldCreateRemoteBranch ? " · creates remote branch" : ""}
+        {preview.forceBlocked ? " · force blocked" : ""}
+      </p>
+      <CodeList
+        label="Preflight findings"
+        testid="ggit-push-findings"
+        items={preview.preflightBlockingCodes.map((c) => ({ key: c, text: c }))}
+      />
+      <p
+        data-testid="ggit-push-policy"
+        style={{ font: "var(--text-body-sm)", color: "var(--text-body)", margin: 0 }}
+      >
+        <Icons.check size={12} /> Policy: {preview.policyOutcome}
+        {preview.policyBlockReason !== undefined ? ` (${preview.policyBlockReason})` : ""}
+      </p>
+    </div>
+  );
+}
+
+interface PublishSectionProps {
+  readonly busy: boolean;
+  readonly client: GovernedGitFlowClient;
+  readonly projectId: string;
+  readonly onExecute: (op: () => Promise<GovernedGitOutcome>) => void;
+}
+
+function PublishSection({ busy, client, projectId, onExecute }: PublishSectionProps): ReactNode {
+  const [remoteAlias, setRemoteAlias] = useState("origin");
+  const [remoteBranch, setRemoteBranch] = useState("");
+  const [sourceBranch, setSourceBranch] = useState("");
+  const [setUpstream, setSetUpstream] = useState(false);
+  const [preview, setPreview] = useState<GitDeliveryPushPreviewResponse | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const ready = remoteAlias !== "" && remoteBranch !== "" && sourceBranch !== "";
+  const input = {
+    projectId,
+    remoteAlias,
+    remoteBranchName: remoteBranch,
+    sourceBranchName: sourceBranch,
+    setUpstreamTracking: setUpstream,
+  } as const;
+  const onPreview = (): void => {
+    setPreviewError(null);
+    void client.pushPreview(input).then(
+      (res) => setPreview(res),
+      (err: unknown) => {
+        setPreview(null);
+        setPreviewError(formatError(err));
+      },
+    );
+  };
+  return (
+    <section style={SECTION_STYLE} aria-label="Publish">
+      <h3 style={HEADING_STYLE}>
+        <Icons.git size={12} /> Publish
+      </h3>
+      <div style={ROW_STYLE}>
+        <label style={{ ...LABEL_STYLE, flex: 1 }}>
+          Remote
+          <input
+            style={FIELD_STYLE}
+            value={remoteAlias}
+            onChange={(e) => setRemoteAlias(e.target.value)}
+            aria-label="Remote alias"
+          />
+        </label>
+        <label style={{ ...LABEL_STYLE, flex: 1 }}>
+          Source branch
+          <input
+            style={FIELD_STYLE}
+            value={sourceBranch}
+            onChange={(e) => setSourceBranch(e.target.value)}
+            aria-label="Source branch"
+          />
+        </label>
+      </div>
+      <label style={LABEL_STYLE}>
+        Remote branch
+        <input
+          style={FIELD_STYLE}
+          value={remoteBranch}
+          onChange={(e) => setRemoteBranch(e.target.value)}
+          aria-label="Remote branch"
+        />
+      </label>
+      <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+        <input
+          type="checkbox"
+          checked={setUpstream}
+          onChange={(e) => setSetUpstream(e.target.checked)}
+          aria-label="Set upstream tracking"
+        />
+        Set upstream tracking
+      </label>
+      <div style={ROW_STYLE}>
+        <button type="button" style={GHOST_BTN} disabled={busy || !ready} onClick={onPreview}>
+          Preview push
+        </button>
+        <button
+          type="button"
+          style={PRIMARY_BTN}
+          disabled={busy || !ready}
+          onClick={() => onExecute(() => client.pushExecute(input))}
+        >
+          Push
+        </button>
+      </div>
+      {previewError !== null ? (
+        <p role="alert" style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}>
+          <Icons.info size={12} /> {previewError}
+        </p>
+      ) : null}
+      {preview !== null ? <PublishPreviewBody preview={preview} /> : null}
+    </section>
+  );
+}
+
 // ─── Async action runner (shared busy + outcome + error state) ────────────────────────────────────
 
 interface FlowState {
   readonly busy: boolean;
-  readonly outcome: GitDeliveryMutationResponse | null;
+  readonly outcome: GovernedGitOutcome | null;
   readonly error: string | null;
 }
 
@@ -485,7 +636,7 @@ function useGovernedGitActions(
   readonly flow: FlowState;
   readonly preview: GitDeliveryCommitPreviewResponse | null;
   readonly previewError: string | null;
-  readonly runMutation: (op: () => Promise<GitDeliveryMutationResponse>) => void;
+  readonly runMutation: (op: () => Promise<GovernedGitOutcome>) => void;
   readonly runPreview: (messageDraft: string) => void;
 } {
   const [flow, setFlow] = useState<FlowState>({ busy: false, outcome: null, error: null });
@@ -493,7 +644,7 @@ function useGovernedGitActions(
   const [previewError, setPreviewError] = useState<string | null>(null);
   const seqRef = useRef(0);
 
-  const runMutation = useCallback((op: () => Promise<GitDeliveryMutationResponse>): void => {
+  const runMutation = useCallback((op: () => Promise<GovernedGitOutcome>): void => {
     const seq = seqRef.current + 1;
     seqRef.current = seq;
     setFlow({ busy: true, outcome: null, error: null });
@@ -632,6 +783,12 @@ function GovernedGitFlowBody({
         previewError={previewError}
         onPreview={runPreview}
         onExecute={(message) => runMutation(() => client.commitExecute({ projectId, message }))}
+      />
+      <PublishSection
+        busy={flow.busy}
+        client={client}
+        projectId={projectId}
+        onExecute={runMutation}
       />
       <MutationOutcome outcome={flow.outcome} error={flow.error} />
     </div>

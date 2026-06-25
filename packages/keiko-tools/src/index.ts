@@ -177,6 +177,37 @@ export {
   type GitDeliveryEvidenceSnapshot,
 } from "./git-mutation-evidence.js";
 
+// ─── Governed remote publish gateway (Issue #476, Epic #470; ADR-0063) ──────────────────────────
+// The SEPARATE remote execution authority for governed push. The pure surface — push command, narrow
+// remote adapter port, dedicated push allowlist, argv builder, rejection taxonomy, and the runGitPublish
+// orchestrator — is re-exported here. The Node push executor (createNodeGitPublishAdapter) carries the
+// spawn effect and is reachable on the `./internal/git-mutation` subpath, alongside the other Node git
+// effects, never the package barrel.
+export {
+  buildPushArgv,
+  classifyGitPublishRejection,
+  evaluateGitPublishEffectivePolicy,
+  GIT_PUBLISH_ALLOWED_SUBCOMMANDS,
+  GIT_PUBLISH_COMMAND_RULES,
+  GIT_PUBLISH_REJECTION_REASONS,
+  gitPublishArgvIsGoverned,
+  gitPublishRejectionFor,
+  gitPublishRejectionToErrorCode,
+  GitPublishArgvError,
+  isGitPublishRejectionReason,
+  runGitPublish,
+  type GitPublishEffectivePolicy,
+  type GitPublishExecRequest,
+  type GitPublishExecResult,
+  type GitPublishLifecycleResult,
+  type GitPublishOrchestratorDeps,
+  type GitPublishRejection,
+  type GitPublishRejectionReason,
+  type GitPublishRequest,
+  type GitPushCommand,
+  type GitRemotePublishAdapter,
+} from "./git-publish-gateway.js";
+
 // ─── Governed local Git flows: commit-intent summary (Issue #475) ──────────────────────────────
 // The PURE commit-intent summarizer reduces staged paths into the content-free GitCommitChangeSummary.
 // The live worktree READER carries the Node spawn effect and is therefore NOT re-exported here; it is

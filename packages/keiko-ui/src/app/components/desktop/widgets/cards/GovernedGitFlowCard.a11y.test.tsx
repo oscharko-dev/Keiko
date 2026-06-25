@@ -7,7 +7,25 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { GovernedGitFlowCard, type GovernedGitFlowClient } from "./GovernedGitFlowCard";
-import type { GitDeliveryCommitPreviewResponse, GitDeliveryMutationResponse } from "@/lib/api";
+import type {
+  GitDeliveryCommitPreviewResponse,
+  GitDeliveryMutationResponse,
+  GitDeliveryPushPreviewResponse,
+} from "@/lib/api";
+
+const PUSH_PREVIEW: GitDeliveryPushPreviewResponse = {
+  schemaVersion: "1",
+  remoteAlias: "origin",
+  remoteBranchName: "feat/x",
+  sourceBranchName: "feat/x",
+  riskClass: "publish",
+  wouldCreateRemoteBranch: true,
+  wouldTriggerChecks: true,
+  forceBlocked: false,
+  preflightBlockingCodes: [],
+  preflightAdvisoryCodes: [],
+  policyOutcome: "constrained",
+};
 
 const PREVIEW: GitDeliveryCommitPreviewResponse = {
   schemaVersion: "1",
@@ -39,6 +57,8 @@ function makeClient(): GovernedGitFlowClient {
     unstage: vi.fn(async () => OK),
     commitPreview: vi.fn(async () => PREVIEW),
     commitExecute: vi.fn(async () => OK),
+    pushPreview: vi.fn(async () => PUSH_PREVIEW),
+    pushExecute: vi.fn(async () => ({ ...OK, actionKind: "push" })),
   };
 }
 

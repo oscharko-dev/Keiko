@@ -58,6 +58,7 @@ export type GitPreflightFindingCode =
   | "untracked-files-impacted"
   | "no-upstream-configured"
   | "nothing-to-push"
+  | "non-fast-forward"
   | "remote-alias-missing"
   | "remote-unreachable"
   | "operation-in-progress"
@@ -76,6 +77,7 @@ export const GIT_PREFLIGHT_FINDING_CODES: readonly GitPreflightFindingCode[] = [
   "untracked-files-impacted",
   "no-upstream-configured",
   "nothing-to-push",
+  "non-fast-forward",
   "remote-alias-missing",
   "remote-unreachable",
   "operation-in-progress",
@@ -106,6 +108,7 @@ const FINDING_REMEDIATION: Readonly<Record<GitPreflightFindingCode, GitPreflight
   "untracked-files-impacted": "user-actionable",
   "no-upstream-configured": "user-actionable",
   "nothing-to-push": "user-actionable",
+  "non-fast-forward": "user-actionable",
   "remote-alias-missing": "user-actionable",
   "remote-unreachable": "user-actionable",
   "operation-in-progress": "user-actionable",
@@ -268,7 +271,14 @@ function preflightPush(
   if (snapshot.remoteReachable === false) {
     findings.push(blocking("remote-unreachable"));
   }
-  if (snapshot.aheadCount === 0 && !inputs.forcePush) {
+  if (snapshot.behindCount > 0 && !inputs.forcePush) {
+    // The local branch is behind its upstream: a normal (non-force) push cannot fast-forward and the
+    // remote will reject it. Detected here from the tracking-ref distance (best-effort, no network
+    // probe); the authoritative signal is the execution-time rejection classification in the publish
+    // gateway. Blocking so an obviously-doomed push is stopped before it reaches the remote.
+    findings.push(blocking("non-fast-forward"));
+  }
+  if (snapshot.aheadCount === 0 && snapshot.behindCount === 0 && !inputs.forcePush) {
     findings.push(advisory("nothing-to-push"));
   }
   return findings;

@@ -191,6 +191,7 @@ const FINDING_RECOVERY_HINT: Readonly<
   "untracked-files-impacted": "stage-changes",
   "no-upstream-configured": "configure-upstream",
   "nothing-to-push": "retry",
+  "non-fast-forward": "resolve-conflicts",
   "remote-alias-missing": "configure-upstream",
   "remote-unreachable": "retry",
   "operation-in-progress": "abort-in-progress-operation",

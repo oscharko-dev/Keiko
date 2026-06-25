@@ -196,9 +196,26 @@ describe("preflight — push (upstream readiness and remote reachability)", () =
     expect(codes(push, snapshot({ remoteReachable: false }))).toContain("remote-unreachable");
   });
 
-  it("advises a no-op push when nothing is ahead", () => {
-    const report = evaluateGitPreflight(push, snapshot({ aheadCount: 0 }));
+  it("advises a no-op push when nothing is ahead or behind", () => {
+    const report = evaluateGitPreflight(push, snapshot({ aheadCount: 0, behindCount: 0 }));
     expect(report.advisory.map((f) => f.code)).toContain("nothing-to-push");
+  });
+
+  it("blocks a non-fast-forward push when the branch is behind its upstream", () => {
+    const report = evaluateGitPreflight(push, snapshot({ aheadCount: 1, behindCount: 2 }));
+    expect(report.ok).toBe(false);
+    expect(report.blocking.map((f) => f.code)).toContain("non-fast-forward");
+  });
+
+  it("does not advise no-op when behind (the non-fast-forward block takes precedence)", () => {
+    const report = evaluateGitPreflight(push, snapshot({ aheadCount: 0, behindCount: 3 }));
+    expect(report.advisory.map((f) => f.code)).not.toContain("nothing-to-push");
+    expect(report.blocking.map((f) => f.code)).toContain("non-fast-forward");
+  });
+
+  it("does not block a force push that is behind (force is governed by policy, not preflight)", () => {
+    const report = evaluateGitPreflight({ ...push, forcePush: true }, snapshot({ behindCount: 2 }));
+    expect(report.blocking.map((f) => f.code)).not.toContain("non-fast-forward");
   });
 });
 
