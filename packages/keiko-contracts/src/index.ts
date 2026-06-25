@@ -1583,3 +1583,37 @@ export {
   gitDeliverySuggestedRecoveryStrategy,
   buildGitDeliveryActionSheet,
 } from "./git-delivery-action-sheet.js";
+
+// git-delivery-evidence.ts (Issue #474, Epic #470; ADR-0061)
+// The retrospective, content-free audit record produced for every governed Git mutation attempt,
+// the exportable audit packet, the AC1 outcome-class vocabulary, the AC3 three-way recovery
+// disposition, and the deterministic recovery-disposition derivations.
+export type {
+  GitDeliveryEvidenceOutcomeClass,
+  GitDeliveryRecoveryDisposition,
+  GitDeliveryEvidenceLifecyclePhase,
+  GitDeliveryRecoveryMetadata,
+  GitDeliveryEvidenceCorrelation,
+  GitDeliveryEvidenceApproval,
+  GitDeliveryEvidencePreviewSummary,
+  GitDeliveryEvidenceExecution,
+  GitDeliveryEvidenceRepoContext,
+  GitDeliveryEvidenceRecord,
+  GitDeliveryAuditPacket,
+} from "./git-delivery-evidence.js";
+export {
+  GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
+  GIT_DELIVERY_EVIDENCE_OUTCOME_CLASSES,
+  GIT_DELIVERY_RECOVERY_DISPOSITIONS,
+  GIT_DELIVERY_EVIDENCE_LIFECYCLE_PHASES,
+  isGitDeliveryEvidenceOutcomeClass,
+  isGitDeliveryRecoveryDisposition,
+  isGitDeliveryEvidenceLifecyclePhase,
+  isGitDeliveryRecoveryMetadata,
+  isGitDeliveryEvidenceRecord,
+  isGitDeliveryAuditPacket,
+  gitDeliveryRecoveryDispositionForExecutionError,
+  gitDeliveryRecoveryDispositionForBlockReason,
+  buildGitDeliveryAuditPacket,
+  GIT_DELIVERY_AUDIT_PACKET_KNOWN_LIMITATIONS,
+} from "./git-delivery-evidence.js";
