@@ -118,6 +118,7 @@ import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
+import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
 import {
   postEditorAgentResult,
   useEditorAgentBridge,
@@ -1582,11 +1583,14 @@ export default function EditorRuntimeWidget({
     ],
   );
 
+  // Issue #1395 — bump on any agent activity so the recent-actions audit panel re-fetches its feed.
+  const [auditRefreshNonce, setAuditRefreshNonce] = useState(0);
   const { agentSelectionRequest, consumeSelectionRequest } = useEditorAgentBridge({
     agentSessionId,
     controllers: agentControllers,
     registerSnapshot: registerAgentSnapshot,
     onConflict: setAgentConflict,
+    onAgentActivity: () => setAuditRefreshNonce((nonce) => nonce + 1),
   });
 
   const recoveryDiskChanged =
@@ -2019,6 +2023,7 @@ export default function EditorRuntimeWidget({
           }}
         />
       ) : null}
+      <EditorAgentActionsPanel agentSessionId={agentSessionId} refreshNonce={auditRefreshNonce} />
       <div className="ed-host" id={tabpanelId} role="tabpanel" aria-labelledby={tabId}>
         {panel}
       </div>

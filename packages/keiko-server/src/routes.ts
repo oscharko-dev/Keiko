@@ -97,6 +97,7 @@ import { handleEditorTestGeneration } from "./editor/testGenerationRoutes.js";
 import { handleEditorPatchApply } from "./editor/patchApplyRoutes.js";
 import {
   handleEditorAgentActions,
+  handleEditorAgentAudit,
   handleEditorAgentEvents,
   handleEditorAgentSessions,
   handleEditorAgentSnapshot,
@@ -346,6 +347,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/editor/agent/events",
     handler: handleEditorAgentEvents,
+  },
+  // Issue #1395 (ADR-0062) — read-only bounded audit feed of recent agent editor actions.
+  {
+    method: "GET",
+    pattern: "/api/editor/agent/audit",
+    handler: handleEditorAgentAudit,
   },
   {
     method: "POST",

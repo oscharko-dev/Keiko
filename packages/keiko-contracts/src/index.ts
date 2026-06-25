@@ -205,6 +205,33 @@ export {
   validateAgentTextEdits,
 } from "./editor-agent.js";
 
+// ─── Editor agent governance, policy, and audit (Issue #1395, ADR-0062) ─────────
+export type {
+  EditorAgentActionAuditInput,
+  EditorAgentActionAuditRecord,
+  EditorAgentActionDenyReason,
+  EditorAgentActionDisposition,
+  EditorAgentActionEffectClass,
+  EditorAgentActionPolicyContext,
+  EditorAgentActionPolicyDecision,
+  EditorAgentActionReviewReason,
+  EditorAgentAuditResponse,
+} from "./editor-agent-governance.js";
+export {
+  EDITOR_AGENT_ACTION_DENY_REASONS,
+  EDITOR_AGENT_ACTION_DISPOSITIONS,
+  EDITOR_AGENT_ACTION_EFFECT_CLASS,
+  EDITOR_AGENT_ACTION_REVIEW_REASONS,
+  EDITOR_AGENT_AUDIT_SCHEMA_VERSION,
+  EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS,
+  buildEditorAgentActionAuditRecord,
+  classifyEditorAgentAction,
+  isEditorAgentActionAuditRecord,
+  isEditorAgentActionDisposition,
+  isEditorAgentActionEffectClass,
+  isMutatingEditorAgentAction,
+} from "./editor-agent-governance.js";
+
 // ─── Language service (Issue #1198) ───────────────────────────────────────────────
 // Provider-pluggable, language-agnostic deterministic language-intelligence contracts
 // (completion, diagnostics, hover, document symbols). Owned by #1198, disjoint from the
