@@ -1607,3 +1607,45 @@ export {
   validateDiscussionTurnContext,
   validateDiscussionModePlan,
 } from "./discussion-intelligence.js";
+
+// ─── Spoken action intent governance (Issue #503 / Epic #491; ADR-0066) ──────────
+// Deterministic, fail-closed normalization + confirmation layer that sits IN FRONT OF the existing
+// governed-handoff governance for UNTRUSTED spoken transcripts. Adds preconditions, removes none. Pure,
+// content-free leaf module: the audit record carries no raw text/audio, only enums/counts/digest.
+export type {
+  SpokenActionEffectClass,
+  SpokenActionEffectMarkers,
+  SpokenActionState,
+  SpokenActionOutcome,
+  SpokenActionConfirmationInput,
+  SpokenActionProposal,
+  SpokenActionAuditInput,
+  SpokenActionAuditRecord,
+  SpokenActionValidationResult,
+} from "./voice-action-intent.js";
+export {
+  VOICE_ACTION_INTENT_SCHEMA_VERSION,
+  SPOKEN_ACTION_EFFECT_CLASSES,
+  SPOKEN_ACTION_EFFECT_REQUIRES_CONFIRMATION,
+  SPOKEN_ACTION_EFFECT_MARKERS,
+  SPOKEN_ACTION_STATES,
+  SPOKEN_ACTION_TERMINAL_STATES,
+  SPOKEN_ACTION_STATE_TRANSITIONS,
+  SPOKEN_ACTION_OUTCOMES,
+  isVoiceActionIntentSchemaVersionSupported,
+  isSpokenActionEffectClass,
+  assertNeverSpokenActionEffectClass,
+  spokenActionRequiresConfirmation,
+  classifySpokenActionEffect,
+  isSpokenActionState,
+  canTransitionSpokenAction,
+  isTerminalSpokenActionState,
+  assertNeverSpokenActionState,
+  voiceCanProposeAction,
+  isSpokenActionOutcome,
+  canonicalizeSpokenActionConfirmation,
+  normalizeSpokenActionProposal,
+  buildSpokenActionAuditRecord,
+  validateSpokenActionProposal,
+  validateSpokenActionAuditRecord,
+} from "./voice-action-intent.js";
