@@ -34,7 +34,7 @@
  *     which needs a human-driven edit before the agent fires; the dirty-write server path is fully
  *     covered by the unit tests in agentRoutes.test.ts).
  */
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,28 +56,6 @@ function createWorkspace(): { root: string; filePath: string; relPath: string; c
   return { root, filePath, relPath, content };
 }
 
-/** Poll GET /api/editor/agent/sessions until at least one session is registered, then return it. */
-async function waitForAgentSession(
-  request: APIRequestContext,
-  maxMs = 15_000,
-): Promise<{ sessionId: string; workspaceRoot: string }> {
-  const deadline = Date.now() + maxMs;
-  while (Date.now() < deadline) {
-    const res = await request.get("/api/editor/agent/sessions");
-    if (res.ok()) {
-      const body = (await res.json()) as {
-        sessions: readonly { sessionId: string; workspaceRoot: string }[];
-      };
-      if (body.sessions.length > 0) {
-        const first = body.sessions[0];
-        if (first !== undefined) return first;
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  throw new Error("No agent session registered within timeout — editor pane did not mount.");
-}
-
 /** Build a minimal valid agent action body. */
 function agentActionBody(
   sessionId: string,
@@ -94,26 +72,60 @@ function agentActionBody(
   };
 }
 
-/** POST a result to the agent actions endpoint (browser reporting back to server). */
-async function postAgentResultBack(
+/** POST /api/editor/agent/actions with an applyPatch action; returns { status, httpStatus, code }. */
+async function postApplyPatch(
   request: APIRequestContext,
   sessionId: string,
-  actionId: string,
-  status: "succeeded" | "failed" | "conflict",
+  patch: string,
+): Promise<{ httpStatus: number; status: string; code: string | undefined }> {
+  const patchId = `e2e-patch-${String(Date.now())}`;
+  const res = await request.post("/api/editor/agent/actions", {
+    headers: MUTATION_HEADERS,
+    data: JSON.stringify(
+      agentActionBody(sessionId, "applyPatch", {
+        actionId: patchId,
+        idempotencyKey: patchId,
+        patch,
+      }),
+    ),
+  });
+  const body = (await res.json()) as { result: { status: string; conflict?: { code: string } } };
+  return { httpStatus: res.status(), status: body.result.status, code: body.result.conflict?.code };
+}
+
+/** POST /api/editor/agent/snapshot to register a synthetic agent session. Asserts res.ok(). */
+async function registerAgentSnapshot(
+  request: APIRequestContext,
+  {
+    sessionId,
+    root,
+    relPath,
+    dirtyFiles = [],
+  }: { sessionId: string; root: string; relPath: string; dirtyFiles?: string[] },
 ): Promise<void> {
-  await request.post("/api/editor/agent/actions", {
+  const res = await request.post("/api/editor/agent/snapshot", {
     headers: MUTATION_HEADERS,
     data: JSON.stringify({
       schemaVersion: AGENT_SCHEMA_VERSION,
-      kind: "result",
-      result: {
+      kind: "snapshot",
+      snapshot: {
         schemaVersion: AGENT_SCHEMA_VERSION,
-        actionId,
         sessionId,
-        status,
+        windowId: "e2e-window",
+        workspaceRoot: root,
+        activePaneId: "pane-1",
+        panes: [{ paneId: "pane-1", activeFile: relPath, openFiles: [relPath] }],
+        dirtyFiles,
+        activeFile: relPath,
+        cursor: null,
+        selection: null,
+        diagnosticsSummary: null,
+        textMode: "none",
+        updatedAt: Date.now(),
       },
     }),
   });
+  expect(res.ok()).toBe(true);
 }
 
 // ─── AC3: Conflict banner appears and is non-destructive ─────────────────────
@@ -125,49 +137,14 @@ test("AC3: conflict result from SSE causes AgentConflictBanner to appear without
   const { root, relPath } = createWorkspace();
 
   try {
-    // Navigate to the editor for the seeded file. The packaged app exposes a workspace editor at
-    // a URL whose path depends on how the app encodes the root and file. We open the root URL and
-    // use the BFF to discover what the app exposes.
+    // Navigate to the root of the app and wait for it to load.
     // NOTE: The packaged app's workspace editor route is not a stable public deep-link URL.
-    // The approach used here: open the root, navigate the project tree if needed, then wait for
-    // the agent session to register via the BFF once the editor pane mounts.
-    //
-    // Since the packaged app requires a project to be selected, we instead drive the agent
-    // session by navigating directly to the editor API to register a synthetic session, then
-    // inject a conflict result via the SSE event path. The banner is a pure React component;
-    // the full integration is verified here by checking the data-testid in the live DOM.
-    //
-    // Full project-tree navigation from scratch is not achievable in this harness without
-    // a project pre-configured in the app config or a deep-link URL contract. The approach
-    // below is the maximum achievable: register a synthetic agent session via the BFF
-    // (the same registration path the UI uses), emit a conflict result, and assert the banner.
+    // The approach: register a synthetic agent session via the BFF (same path the UI uses),
+    // emit a conflict result, and assert the BFF accepts it. Banner DOM assertion is deferred
+    // to manual browser capture (requires a pre-configured project or deep-link URL contract).
 
-    // Register a synthetic session so the SSE stream has context.
     const sessionId = `e2e-ac3-${String(Date.now())}`;
-    const snapshotBody = {
-      schemaVersion: AGENT_SCHEMA_VERSION,
-      kind: "snapshot",
-      snapshot: {
-        schemaVersion: AGENT_SCHEMA_VERSION,
-        sessionId,
-        windowId: "e2e-window",
-        workspaceRoot: root,
-        activePaneId: "pane-1",
-        panes: [{ paneId: "pane-1", activeFile: relPath, openFiles: [relPath] }],
-        dirtyFiles: [],
-        activeFile: relPath,
-        cursor: null,
-        selection: null,
-        diagnosticsSummary: null,
-        textMode: "none",
-        updatedAt: Date.now(),
-      },
-    };
-    const regRes = await request.post("/api/editor/agent/snapshot", {
-      headers: MUTATION_HEADERS,
-      data: JSON.stringify(snapshotBody),
-    });
-    expect(regRes.ok()).toBe(true);
+    await registerAgentSnapshot(request, { sessionId, root, relPath });
 
     // Emit a conflict result for the session.
     const conflictBody = {
@@ -189,19 +166,9 @@ test("AC3: conflict result from SSE causes AgentConflictBanner to appear without
     // The server echoes the result back; it does not return 409 for result payloads.
     expect(conflictRes.ok()).toBe(true);
 
-    // The AgentConflictBanner is rendered inside EditorRuntimeWidget which is only present when
-    // the user has navigated to an editor pane. In the packaged app this requires full navigation.
-    // The banner's testid + SSE wiring are fully covered by the unit tests; here we verify the
-    // BFF accepts the conflict result payload without error (the minimum assertable surface when
-    // the editor pane is not open in the live app during this harness run).
-    //
-    // LIMITATION: Asserting data-testid=agent-conflict-banner in the live DOM requires the editor
-    // pane to be mounted, which requires the user to have navigated to a workspace file. In this
-    // harness we do not have a pre-configured project or deep-link URL, so this assertion is
-    // deferred to manual browser capture. The BFF round-trip is verified above.
-    //
-    // To assert the banner in the real DOM: open the app, navigate to any file in an editor pane,
-    // then run the BFF round-trip above — the banner will appear at data-testid=agent-conflict-banner.
+    // LIMITATION: Asserting data-testid=agent-conflict-banner requires the editor pane to be
+    // mounted. In this harness we have no pre-configured project, so this is deferred to manual
+    // browser capture. To assert: navigate to a workspace file, run the BFF round-trip above.
     void page;
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -214,42 +181,14 @@ test("AC4: applied text edits can be undone via Monaco's undo stack (regression 
   page,
   request,
 }) => {
-  const { root, relPath, content } = createWorkspace();
+  const { root, relPath } = createWorkspace();
 
   try {
-    // Navigate to the root of the app and wait for it to load.
     await page.goto("/");
     await expect(page.locator("body")).toBeVisible();
 
-    // Register a synthetic session so the BFF has a session to dispatch actions to.
-    // In the packaged app with a navigated-to editor pane, the UI registers the session
-    // automatically. Here we register it synthetically and then post an applyTextEdits action.
-    // If an editor pane happens to be open (e.g. from a prior test run with state), the action
-    // will be dispatched to it via SSE.
     const sessionId = `e2e-ac4-${String(Date.now())}`;
-    const regRes = await request.post("/api/editor/agent/snapshot", {
-      headers: MUTATION_HEADERS,
-      data: JSON.stringify({
-        schemaVersion: AGENT_SCHEMA_VERSION,
-        kind: "snapshot",
-        snapshot: {
-          schemaVersion: AGENT_SCHEMA_VERSION,
-          sessionId,
-          windowId: "e2e-window",
-          workspaceRoot: root,
-          activePaneId: "pane-1",
-          panes: [{ paneId: "pane-1", activeFile: relPath, openFiles: [relPath] }],
-          dirtyFiles: [],
-          activeFile: relPath,
-          cursor: null,
-          selection: null,
-          diagnosticsSummary: null,
-          textMode: "none",
-          updatedAt: Date.now(),
-        },
-      }),
-    });
-    expect(regRes.ok()).toBe(true);
+    await registerAgentSnapshot(request, { sessionId, root, relPath });
 
     // Post an applyTextEdits action.
     const actionId = `e2e-ac4-apply-${String(Date.now())}`;
@@ -261,10 +200,7 @@ test("AC4: applied text edits can be undone via Monaco's undo stack (regression 
           idempotencyKey: actionId,
           textEdits: [
             {
-              range: {
-                start: { line: 0, character: 7 },
-                end: { line: 0, character: 12 },
-              },
+              range: { start: { line: 0, character: 7 }, end: { line: 0, character: 12 } },
               newText: "CHANGED",
             },
           ],
@@ -273,26 +209,14 @@ test("AC4: applied text edits can be undone via Monaco's undo stack (regression 
     });
     expect(applyRes.ok()).toBe(true);
 
-    // The action is queued (202) and dispatched to any open editor pane via SSE.
     const applyBody = (await applyRes.json()) as { result: { status: string } };
     expect(applyBody.result.status).toBe("queued");
 
-    // LIMITATION: Asserting the Monaco undo stack requires the editor to be mounted in the live
-    // DOM, which requires the user to have navigated to the workspace file. The undo proof via
-    // page.evaluate(editor.trigger('keyboard','undo',null)) is only possible when the Monaco
-    // instance is live. Since the packaged app does not expose a deep-link URL for editor panes
-    // without a pre-configured project, the undo assertion is deferred to manual browser capture.
-    //
-    // What IS verified here: the applyTextEdits action passes preflight (202 queued) and the
-    // server dispatches it. The executeEdits+pushUndoStop wiring is exercised by the unit tests
-    // in EditorWidget.test.tsx (which confirm the buffer content changes via surface.props), and
-    // the ADR-0058 claim that @monaco-editor/react 4.7.0 uses executeEdits+pushUndoStop for
-    // non-read-only buffers is verified by reading node_modules/@monaco-editor/react/dist/index.js.
-    //
-    // To assert undo in the live DOM: open the app, navigate to src/widget.ts in the test
-    // workspace, then run the applyTextEdits POST above. The buffer will change. Then call:
-    //   page.evaluate(() => window.__monacoEditors[0]?.trigger('keyboard','undo',null))
-    // and assert the original text is restored.
+    // LIMITATION: Asserting Monaco undo requires the editor mounted in the live DOM, which
+    // requires the user to have navigated to the workspace file. The undo proof via
+    // page.evaluate(editor.trigger('keyboard','undo',null)) is only possible with a live Monaco
+    // instance. What IS verified: applyTextEdits passes preflight (202 queued). The
+    // executeEdits+pushUndoStop wiring is covered by EditorWidget.test.tsx unit tests.
     void page;
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -300,6 +224,42 @@ test("AC4: applied text edits can be undone via Monaco's undo stack (regression 
 });
 
 // ─── applyPatch review: server validates; browser shows Accept/Reject ─────────
+
+// Patch fixtures used by the applyPatch test below.
+const PATCH_VALID_SINGLE = [
+  "--- a/src/widget.ts",
+  "+++ b/src/widget.ts",
+  "@@ -1,1 +1,1 @@",
+  "-export const VALUE = 1;",
+  "+export const VALUE = 42;",
+].join("\n");
+const PATCH_MALFORMED = "this is not a diff";
+const PATCH_BINARY = [
+  "diff --git a/img.png b/img.png",
+  "GIT binary patch",
+  "literal 5",
+  "IcmZQz",
+  "",
+].join("\n");
+const PATCH_MULTI_FILE = [
+  "--- a/src/widget.ts",
+  "+++ b/src/widget.ts",
+  "@@ -1,1 +1,1 @@",
+  "-export const VALUE = 1;",
+  "+export const VALUE = 100;",
+  "--- a/src/other.ts",
+  "+++ b/src/other.ts",
+  "@@ -1,1 +1,1 @@",
+  "-export const Y = 2;",
+  "+export const Y = 200;",
+].join("\n");
+const PATCH_PATH_ESCAPE = [
+  "--- a/../etc/passwd",
+  "+++ b/../etc/passwd",
+  "@@ -1,1 +1,1 @@",
+  "-root:x:0:0",
+  "+evil:x:0:0",
+].join("\n");
 
 test("applyPatch: valid single-file patch is queued by server (202); invalid patch is rejected (409 INVALID_EDITS)", async ({
   request,
@@ -309,158 +269,41 @@ test("applyPatch: valid single-file patch is queued by server (202); invalid pat
   try {
     // Register session with the real workspace root so validatePatch can read files from disk.
     const sessionId = `e2e-patch-${String(Date.now())}`;
-    const regRes = await request.post("/api/editor/agent/snapshot", {
-      headers: MUTATION_HEADERS,
-      data: JSON.stringify({
-        schemaVersion: AGENT_SCHEMA_VERSION,
-        kind: "snapshot",
-        snapshot: {
-          schemaVersion: AGENT_SCHEMA_VERSION,
-          sessionId,
-          windowId: "e2e-window",
-          workspaceRoot: root,
-          activePaneId: "pane-1",
-          panes: [{ paneId: "pane-1", activeFile: relPath, openFiles: [relPath] }],
-          dirtyFiles: [],
-          activeFile: relPath,
-          cursor: null,
-          selection: null,
-          diagnosticsSummary: null,
-          textMode: "none",
-          updatedAt: Date.now(),
-        },
-      }),
-    });
-    expect(regRes.ok()).toBe(true);
+    await registerAgentSnapshot(request, { sessionId, root, relPath });
 
     // The pre-image is already written; confirm the file exists.
     expect(content).toBe("export const VALUE = 1;\n");
     void filePath; // already written in createWorkspace.
 
     // Valid single-file patch: should be queued (202).
-    const validDiff = [
-      "--- a/src/widget.ts",
-      "+++ b/src/widget.ts",
-      "@@ -1,1 +1,1 @@",
-      "-export const VALUE = 1;",
-      "+export const VALUE = 42;",
-    ].join("\n");
-
-    const validPatchId = `e2e-valid-patch-${String(Date.now())}`;
-    const validRes = await request.post("/api/editor/agent/actions", {
-      headers: MUTATION_HEADERS,
-      data: JSON.stringify(
-        agentActionBody(sessionId, "applyPatch", {
-          actionId: validPatchId,
-          idempotencyKey: validPatchId,
-          patch: validDiff,
-        }),
-      ),
-    });
-    expect(validRes.status()).toBe(202);
-    const validBody = (await validRes.json()) as { result: { status: string } };
-    expect(validBody.result.status).toBe("queued");
+    const valid = await postApplyPatch(request, sessionId, PATCH_VALID_SINGLE);
+    expect(valid.httpStatus).toBe(202);
+    expect(valid.status).toBe("queued");
 
     // Malformed patch: should be rejected with INVALID_EDITS.
-    const badPatchId = `e2e-bad-patch-${String(Date.now())}`;
-    const badRes = await request.post("/api/editor/agent/actions", {
-      headers: MUTATION_HEADERS,
-      data: JSON.stringify(
-        agentActionBody(sessionId, "applyPatch", {
-          actionId: badPatchId,
-          idempotencyKey: badPatchId,
-          patch: "this is not a diff",
-        }),
-      ),
-    });
-    expect(badRes.status()).toBe(409);
-    const badBody = (await badRes.json()) as {
-      result: { status: string; conflict?: { code: string } };
-    };
-    expect(badBody.result.status).toBe("conflict");
-    expect(badBody.result.conflict?.code).toBe("INVALID_EDITS");
+    const bad = await postApplyPatch(request, sessionId, PATCH_MALFORMED);
+    expect(bad.httpStatus).toBe(409);
+    expect(bad.status).toBe("conflict");
+    expect(bad.code).toBe("INVALID_EDITS");
 
     // Binary patch: should be rejected with OUT_OF_SCOPE.
-    const binaryPatchId = `e2e-binary-patch-${String(Date.now())}`;
-    const binaryRes = await request.post("/api/editor/agent/actions", {
-      headers: MUTATION_HEADERS,
-      data: JSON.stringify(
-        agentActionBody(sessionId, "applyPatch", {
-          actionId: binaryPatchId,
-          idempotencyKey: binaryPatchId,
-          patch: [
-            "diff --git a/img.png b/img.png",
-            "GIT binary patch",
-            "literal 5",
-            "IcmZQz",
-            "",
-          ].join("\n"),
-        }),
-      ),
-    });
-    expect(binaryRes.status()).toBe(409);
-    const binaryBody = (await binaryRes.json()) as {
-      result: { status: string; conflict?: { code: string } };
-    };
-    expect(binaryBody.result.status).toBe("conflict");
-    expect(binaryBody.result.conflict?.code).toBe("OUT_OF_SCOPE");
+    const binary = await postApplyPatch(request, sessionId, PATCH_BINARY);
+    expect(binary.httpStatus).toBe(409);
+    expect(binary.status).toBe("conflict");
+    expect(binary.code).toBe("OUT_OF_SCOPE");
 
     // Multi-file patch: should be rejected with OUT_OF_SCOPE.
-    const multiPatchId = `e2e-multi-patch-${String(Date.now())}`;
     writeFileSync(join(root, "src", "other.ts"), "export const Y = 2;\n", "utf8");
-    const multiRes = await request.post("/api/editor/agent/actions", {
-      headers: MUTATION_HEADERS,
-      data: JSON.stringify(
-        agentActionBody(sessionId, "applyPatch", {
-          actionId: multiPatchId,
-          idempotencyKey: multiPatchId,
-          patch: [
-            "--- a/src/widget.ts",
-            "+++ b/src/widget.ts",
-            "@@ -1,1 +1,1 @@",
-            "-export const VALUE = 1;",
-            "+export const VALUE = 100;",
-            "--- a/src/other.ts",
-            "+++ b/src/other.ts",
-            "@@ -1,1 +1,1 @@",
-            "-export const Y = 2;",
-            "+export const Y = 200;",
-          ].join("\n"),
-        }),
-      ),
-    });
-    expect(multiRes.status()).toBe(409);
-    const multiBody = (await multiRes.json()) as {
-      result: { status: string; conflict?: { code: string } };
-    };
-    expect(multiBody.result.status).toBe("conflict");
-    expect(multiBody.result.conflict?.code).toBe("OUT_OF_SCOPE");
+    const multi = await postApplyPatch(request, sessionId, PATCH_MULTI_FILE);
+    expect(multi.httpStatus).toBe(409);
+    expect(multi.status).toBe("conflict");
+    expect(multi.code).toBe("OUT_OF_SCOPE");
 
-    // Path-escape patch: should be rejected with OUT_OF_SCOPE.
-    const escapePatchId = `e2e-escape-patch-${String(Date.now())}`;
-    const escapeRes = await request.post("/api/editor/agent/actions", {
-      headers: MUTATION_HEADERS,
-      data: JSON.stringify(
-        agentActionBody(sessionId, "applyPatch", {
-          actionId: escapePatchId,
-          idempotencyKey: escapePatchId,
-          patch: [
-            "--- a/../etc/passwd",
-            "+++ b/../etc/passwd",
-            "@@ -1,1 +1,1 @@",
-            "-root:x:0:0",
-            "+evil:x:0:0",
-          ].join("\n"),
-        }),
-      ),
-    });
-    expect(escapeRes.status()).toBe(409);
-    const escapeBody = (await escapeRes.json()) as {
-      result: { status: string; conflict?: { code: string } };
-    };
-    expect(escapeBody.result.status).toBe("conflict");
-    // Path-unsafe paths map to OUT_OF_SCOPE.
-    expect(escapeBody.result.conflict?.code).toBe("OUT_OF_SCOPE");
+    // Path-escape patch: should be rejected with OUT_OF_SCOPE (path-unsafe paths map to OUT_OF_SCOPE).
+    const escape = await postApplyPatch(request, sessionId, PATCH_PATH_ESCAPE);
+    expect(escape.httpStatus).toBe(409);
+    expect(escape.status).toBe("conflict");
+    expect(escape.code).toBe("OUT_OF_SCOPE");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -475,28 +318,7 @@ test("AC5: applyTextEdits with an absolute target.file path is rejected as OUT_O
 
   try {
     const sessionId = `e2e-scope-${String(Date.now())}`;
-    await request.post("/api/editor/agent/snapshot", {
-      headers: MUTATION_HEADERS,
-      data: JSON.stringify({
-        schemaVersion: AGENT_SCHEMA_VERSION,
-        kind: "snapshot",
-        snapshot: {
-          schemaVersion: AGENT_SCHEMA_VERSION,
-          sessionId,
-          windowId: "e2e-window",
-          workspaceRoot: root,
-          activePaneId: "pane-1",
-          panes: [{ paneId: "pane-1", activeFile: relPath, openFiles: [relPath] }],
-          dirtyFiles: [],
-          activeFile: relPath,
-          cursor: null,
-          selection: null,
-          diagnosticsSummary: null,
-          textMode: "none",
-          updatedAt: Date.now(),
-        },
-      }),
-    });
+    await registerAgentSnapshot(request, { sessionId, root, relPath });
 
     const actionId = `e2e-abs-${String(Date.now())}`;
     const res = await request.post("/api/editor/agent/actions", {
@@ -536,28 +358,7 @@ test("AC2: applyTextEdits with an inverted range is rejected as INVALID_EDITS by
 
   try {
     const sessionId = `e2e-inv-${String(Date.now())}`;
-    await request.post("/api/editor/agent/snapshot", {
-      headers: MUTATION_HEADERS,
-      data: JSON.stringify({
-        schemaVersion: AGENT_SCHEMA_VERSION,
-        kind: "snapshot",
-        snapshot: {
-          schemaVersion: AGENT_SCHEMA_VERSION,
-          sessionId,
-          windowId: "e2e-window",
-          workspaceRoot: root,
-          activePaneId: "pane-1",
-          panes: [{ paneId: "pane-1", activeFile: relPath, openFiles: [relPath] }],
-          dirtyFiles: [],
-          activeFile: relPath,
-          cursor: null,
-          selection: null,
-          diagnosticsSummary: null,
-          textMode: "none",
-          updatedAt: Date.now(),
-        },
-      }),
-    });
+    await registerAgentSnapshot(request, { sessionId, root, relPath });
 
     const actionId = `e2e-inv-range-${String(Date.now())}`;
     const res = await request.post("/api/editor/agent/actions", {
