@@ -7,6 +7,7 @@
 // are enforced by the workflow/harness entry points the engine calls; the BFF never reimplements
 // them.
 
+import type { SpokenActionAuditRecord } from "@oscharko-dev/keiko-contracts";
 import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 
 export type RunKind = "unit-tests" | "bug-investigation" | "explain-plan" | "verify";
@@ -22,6 +23,9 @@ export interface RunRequest {
   // Present only for governed grounded-context workflow launches.
   readonly governedHandoff?: WorkflowHandoffRequest | undefined;
   readonly governedHandoffSourceGroundedRunId?: string | undefined;
+  // Present only for voice-originated governed handoffs (Issue #503): the content-free audit record of
+  // the spoken action that governed this run, threaded by the grounded-handoff route into evidence.
+  readonly governedHandoffVoiceAction?: SpokenActionAuditRecord | undefined;
 }
 
 export interface RunRequestError {

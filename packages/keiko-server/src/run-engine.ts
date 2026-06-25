@@ -494,6 +494,7 @@ function persistOutcome(
         : buildGovernedHandoffEvidence({
             request: ctx.request.governedHandoff,
             sourceGroundedRunId: ctx.request.governedHandoffSourceGroundedRunId,
+            voiceAction: ctx.request.governedHandoffVoiceAction,
           }),
     );
   }
@@ -507,6 +508,7 @@ function persistOutcome(
       : buildGovernedHandoffEvidence({
           request: ctx.request.governedHandoff,
           sourceGroundedRunId: ctx.request.governedHandoffSourceGroundedRunId,
+          voiceAction: ctx.request.governedHandoffVoiceAction,
         }),
   );
 }

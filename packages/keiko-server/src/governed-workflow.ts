@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { sep } from "node:path";
+import type { SpokenActionAuditRecord } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceGovernedWorkflowHandoff } from "@oscharko-dev/keiko-contracts/evidence";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
@@ -15,6 +16,9 @@ import { resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 export interface GovernedWorkflowHandoffContext {
   readonly request: WorkflowHandoffRequest;
   readonly sourceGroundedRunId?: string | undefined;
+  // Additive (Issue #503): the content-free audit record of the spoken action that governed this handoff,
+  // present only when the handoff was voice-originated. Absent on the text path (additive-optional).
+  readonly voiceAction?: SpokenActionAuditRecord | undefined;
 }
 
 function sha256Hex(value: string): string {
@@ -133,6 +137,10 @@ export function buildGovernedHandoffEvidence(
     evidenceAtomCount: handoff.request.patchScope.evidenceAtomIds.length,
     expectedChecks: [...handoff.request.patchScope.expectedChecks],
     approvalTokenHash: sha256Hex(handoff.request.userApprovalToken),
+    // Additive-optional: the text path passes no `voiceAction`, so the field stays absent and the emitted
+    // evidence is byte-identical to the pre-#503 shape. A voice-originated handoff threads its content-free
+    // audit record here.
+    ...(handoff.voiceAction === undefined ? {} : { voiceAction: handoff.voiceAction }),
   };
 }
 

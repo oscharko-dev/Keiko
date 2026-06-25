@@ -14,9 +14,18 @@ import {
   type WorkflowHandoffRequest,
   validateWorkflowHandoffRequest,
 } from "@oscharko-dev/keiko-contracts/workflow-handoff";
+import {
+  VOICE_TRANSCRIPT_SCHEMA_VERSION,
+  isVoiceTranscriptSource,
+  type CommittedVoiceTranscriptProjection,
+  type SpokenActionAuditRecord,
+  type VoiceProfile,
+  type VoiceTranscriptSource,
+} from "@oscharko-dev/keiko-contracts";
 import { createAuditRedactor } from "@oscharko-dev/keiko-evidence";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
+import { evaluateSpokenActionGovernance } from "./voice-action-governance.js";
 import { currentRedactionSecrets, type UiHandlerDeps } from "./deps.js";
 import {
   approvalTokenInputFor,
@@ -26,6 +35,7 @@ import {
   readOnlyPathsForPacks,
 } from "./governed-workflow.js";
 import { lookupGroundedTurn } from "./grounded-turn-registry.js";
+import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
 import { startRun, type EngineContext } from "./run-engine.js";
 import { parseRunRequest, type RunRequest } from "./run-request.js";
 import { ActiveRunLimitError } from "./runs.js";
@@ -205,6 +215,19 @@ function parseExpectedChecks(
   return parsed;
 }
 
+// Optional voice provenance for a spoken-action-originated handoff (Issue #503). Absent on the text path,
+// which keeps the entire request byte-identical. `committedText` is the transcript the UI committed; the
+// server recomputes classification + the expected confirmation digest from it and never trusts the
+// client-supplied `confirmationDigest` blindly.
+interface ParsedVoiceOrigin {
+  readonly profile: VoiceProfile;
+  readonly turnIndex: number;
+  readonly source: VoiceTranscriptSource;
+  readonly committedSegments: number;
+  readonly committedText: string;
+  readonly confirmationDigest: string | undefined;
+}
+
 interface ParsedGroundedHandoffBody {
   readonly assistantMessageId: string;
   readonly chatId: string;
@@ -215,6 +238,95 @@ interface ParsedGroundedHandoffBody {
   readonly expectedChecks: readonly ExpectedCheck[];
   readonly unknowns: readonly string[];
   readonly requestedAtMs: number;
+  readonly voiceOrigin: ParsedVoiceOrigin | undefined;
+}
+
+const VOICE_PROFILES: readonly VoiceProfile[] = [
+  "none",
+  "speech-to-text",
+  "speech-output",
+  "full-realtime",
+] as const;
+
+// Bounds mirror the rest of this parser: a committed transcript seed is capped well below the 256 KiB
+// body limit, and the confirmation digest is a fixed-width sha256 hex. These guard against oversized or
+// malformed voice provenance before any governance runs.
+const MAX_VOICE_COMMITTED_TEXT_CHARS = 8192;
+const MAX_VOICE_TURN_INDEX = 1_000_000;
+const MAX_VOICE_COMMITTED_SEGMENTS = 10_000;
+const CONFIRMATION_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+
+function isVoiceProfile(value: unknown): value is VoiceProfile {
+  return typeof value === "string" && (VOICE_PROFILES as readonly string[]).includes(value);
+}
+
+function isBoundedNonNegativeInteger(value: unknown, max: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= max;
+}
+
+function parseConfirmationDigest(value: unknown): string | undefined | RouteResult {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || !CONFIRMATION_DIGEST_PATTERN.test(value)) {
+    return badField("voiceOrigin.confirmationDigest", "must be a 64-char lowercase sha256 hex");
+  }
+  return value;
+}
+
+function parseVoiceOriginFields(value: Record<string, unknown>): ParsedVoiceOrigin | RouteResult {
+  if (!isVoiceProfile(value.profile)) {
+    return badField("voiceOrigin.profile", "is invalid");
+  }
+  if (!isBoundedNonNegativeInteger(value.turnIndex, MAX_VOICE_TURN_INDEX)) {
+    return badField("voiceOrigin.turnIndex", "must be a bounded non-negative integer");
+  }
+  if (!isVoiceTranscriptSource(value.source)) {
+    return badField("voiceOrigin.source", "is invalid");
+  }
+  if (!isBoundedNonNegativeInteger(value.committedSegments, MAX_VOICE_COMMITTED_SEGMENTS)) {
+    return badField("voiceOrigin.committedSegments", "must be a bounded non-negative integer");
+  }
+  if (
+    typeof value.committedText !== "string" ||
+    value.committedText.length > MAX_VOICE_COMMITTED_TEXT_CHARS
+  ) {
+    return badField("voiceOrigin.committedText", "must be a string within the size limit");
+  }
+  const confirmationDigest = parseConfirmationDigest(value.confirmationDigest);
+  if (isRouteResult(confirmationDigest)) {
+    return confirmationDigest;
+  }
+  return {
+    profile: value.profile,
+    turnIndex: value.turnIndex,
+    source: value.source,
+    committedSegments: value.committedSegments,
+    committedText: value.committedText,
+    confirmationDigest,
+  };
+}
+
+function parseVoiceOrigin(
+  body: Record<string, unknown>,
+): ParsedVoiceOrigin | undefined | RouteResult {
+  const value = body.voiceOrigin;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return badField("voiceOrigin", "must be an object");
+  }
+  return parseVoiceOriginFields(value);
+}
+
+function committedProjectionFor(origin: ParsedVoiceOrigin): CommittedVoiceTranscriptProjection {
+  return {
+    schemaVersion: VOICE_TRANSCRIPT_SCHEMA_VERSION,
+    segments: [],
+    text: origin.committedText,
+    segmentCount: origin.committedSegments,
+  };
 }
 
 interface RequiredGroundedHandoffFields {
@@ -294,12 +406,17 @@ function parseBody(raw: string): ParsedGroundedHandoffBody | RouteResult {
   if (isRouteResult(expectedChecks)) {
     return expectedChecks;
   }
+  const voiceOrigin = parseVoiceOrigin(body);
+  if (isRouteResult(voiceOrigin)) {
+    return voiceOrigin;
+  }
   return {
     ...required,
     editablePaths,
     expectedChecks,
     unknowns,
     requestedAtMs,
+    voiceOrigin,
   };
 }
 
@@ -510,6 +627,58 @@ interface ResolvedGroundedHandoffLaunch {
   readonly model: ModelPort;
 }
 
+interface VoiceGovernanceResult {
+  readonly voiceAction: SpokenActionAuditRecord | undefined;
+}
+
+// Resolves the voice profile the running deployment actually supports, folding in
+// `KEIKO_VOICE_DISABLED` and the configured providers via the shared capability helpers. AC1 must be
+// enforced against deployment reality, not the client-supplied `voiceOrigin.profile`: a no-voice or
+// policy-disabled deployment yields `none` regardless of what the client claims. Realtime-capable
+// deployments can drive any spoken action, so they resolve to the broadest profile.
+function serverTrustedVoiceProfile(deps: UiHandlerDeps): VoiceProfile {
+  if (isVoiceRealtimeCapable(deps)) {
+    return "full-realtime";
+  }
+  if (isVoiceDictationCapable(deps)) {
+    return "speech-to-text";
+  }
+  return "none";
+}
+
+// Spoken-action precondition layer (Issue #503, AC6). On the text path (`voiceOrigin` undefined) this is a
+// no-op and the request stays byte-identical. When voice-originated, it re-runs the deterministic
+// governance over the already-built handoff request using the SERVER-TRUSTED profile (resolved from
+// deployment capability, never the client claim) and recomputes classification + expected digest (the
+// client digest is never trusted), returning a 403 on the first failing precondition. A deployment with
+// no voice capability is rejected up front, so AC1 holds against reality. The CSRF / approval-token /
+// patch-scope gates are untouched and still apply independently.
+function applyVoiceGovernance(
+  request: WorkflowHandoffRequest,
+  voiceOrigin: ParsedVoiceOrigin | undefined,
+  deps: UiHandlerDeps,
+): VoiceGovernanceResult | RouteResult {
+  if (voiceOrigin === undefined) {
+    return { voiceAction: undefined };
+  }
+  const trustedProfile = serverTrustedVoiceProfile(deps);
+  if (trustedProfile === "none") {
+    return { status: 403, body: errorBody("VOICE_ACTION_DENIED", "no-voice-capability") };
+  }
+  const decision = evaluateSpokenActionGovernance({
+    projection: committedProjectionFor(voiceOrigin),
+    profile: trustedProfile,
+    turnIndex: voiceOrigin.turnIndex,
+    source: voiceOrigin.source,
+    request,
+    providedConfirmationDigest: voiceOrigin.confirmationDigest,
+  });
+  if (!decision.allowed) {
+    return { status: 403, body: errorBody("VOICE_ACTION_DENIED", decision.reason) };
+  }
+  return { voiceAction: decision.audit };
+}
+
 function resolveGroundedHandoffLaunch(
   body: ParsedGroundedHandoffBody,
   deps: UiHandlerDeps,
@@ -539,10 +708,15 @@ function resolveGroundedHandoffLaunch(
   if (isRouteResult(baseRequest)) {
     return baseRequest;
   }
+  const governed = applyVoiceGovernance(governedHandoff, body.voiceOrigin, deps);
+  if (isRouteResult(governed)) {
+    return governed;
+  }
   const request: RunRequest = {
     ...baseRequest,
     governedHandoff,
     governedHandoffSourceGroundedRunId: record.evidenceRunId,
+    governedHandoffVoiceAction: governed.voiceAction,
   };
   const model = resolveRunModel(request, deps);
   if (model === undefined) {
