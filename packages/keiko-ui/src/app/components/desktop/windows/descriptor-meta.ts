@@ -216,6 +216,18 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "evidence-reference",
   },
+  // Epic #470, Issue #475 — Governed local Git flow. Drives the governed mutation kernel (preflight +
+  // policy + approval + execute) over the local repository and records evidence; every mutation is a
+  // user-confirmed action. Trust spans the git tool boundary and the evidence ledger.
+  governedGit: {
+    lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
+    // Crosses keiko-workspace path containment (operates on a project's git worktree), drives governed
+    // tools, and produces audit evidence. fs-reference persistence keeps the project path across reloads
+    // (evidence-reference would strip the slash-bearing path, leaving a broken empty window on restore).
+    trustBoundary: ["ui", "fs", "tool", "evidence"],
+    authority: "user-confirm",
+    persistence: "fs-reference",
+  },
 };
 
 // ─── Module-evaluation validation ─────────────────────────────────────────

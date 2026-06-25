@@ -184,6 +184,7 @@ const FINDING_RECOVERY_HINT: Readonly<
   "detached-head": "configure-upstream",
   "branch-already-exists": "adjust-policy-target",
   "base-branch-missing": "adjust-policy-target",
+  "switch-target-missing": "adjust-policy-target",
   "no-changes-to-stage": "stage-changes",
   "nothing-staged-to-unstage": "stage-changes",
   "nothing-staged-to-commit": "stage-changes",

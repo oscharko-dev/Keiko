@@ -18,6 +18,7 @@ export const GIT_DELIVERY_SCHEMA_VERSION = "1" as const;
 
 export type GitDeliveryActionKind =
   | "branch-create"
+  | "branch-switch"
   | "stage"
   | "unstage"
   | "commit"
@@ -30,6 +31,7 @@ export type GitDeliveryActionKind =
 
 export const GIT_DELIVERY_ACTION_KINDS: readonly GitDeliveryActionKind[] = [
   "branch-create",
+  "branch-switch",
   "stage",
   "unstage",
   "commit",
@@ -73,6 +75,7 @@ export const GIT_DELIVERY_ACTION_RISK_DEFAULTS: Readonly<
   Record<GitDeliveryActionKind, GitDeliveryRiskClass>
 > = {
   "branch-create": "local-mutation",
+  "branch-switch": "local-mutation",
   stage: "local-mutation",
   unstage: "local-mutation",
   commit: "local-mutation",
@@ -93,6 +96,13 @@ export interface GitDeliveryBranchCreateInputs {
   readonly branchName: string;
   readonly baseBranchName: string;
   readonly startPointRefHash: string; // opaque commit SHA
+}
+
+// A local checkout of an EXISTING branch (no new ref is created — that is branch-create). Carries the
+// target branch name in the clear, consistent with the snapshot's branch-name policy.
+export interface GitDeliveryBranchSwitchInputs {
+  readonly kind: "branch-switch";
+  readonly branchName: string;
 }
 
 export interface GitDeliveryStageInputs {
@@ -208,6 +218,7 @@ export interface GitDeliveryRecoveryInputs {
 // The discriminated union. Exhaustive on kind.
 export type GitDeliveryResolvedInputs =
   | GitDeliveryBranchCreateInputs
+  | GitDeliveryBranchSwitchInputs
   | GitDeliveryStageInputs
   | GitDeliveryUnstageInputs
   | GitDeliveryCommitInputs
@@ -417,6 +428,7 @@ export interface GitDeliveryActionEnvelopeFor<I extends GitDeliveryResolvedInput
 
 export type GitDeliveryActionEnvelope =
   | GitDeliveryActionEnvelopeFor<GitDeliveryBranchCreateInputs>
+  | GitDeliveryActionEnvelopeFor<GitDeliveryBranchSwitchInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryStageInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryUnstageInputs>
   | GitDeliveryActionEnvelopeFor<GitDeliveryCommitInputs>
@@ -650,6 +662,10 @@ function isBranchCreateInputs(value: Record<string, unknown>): boolean {
   );
 }
 
+function isBranchSwitchInputs(value: Record<string, unknown>): boolean {
+  return isNonEmptyString(value.branchName);
+}
+
 function isStageInputs(value: Record<string, unknown>): boolean {
   return isNonNegativeInteger(value.pathCount) && isBoolean(value.includesUntracked);
 }
@@ -724,6 +740,7 @@ const RESOLVED_INPUT_GUARDS: Readonly<
   Record<GitDeliveryActionKind, (value: Record<string, unknown>) => boolean>
 > = {
   "branch-create": isBranchCreateInputs,
+  "branch-switch": isBranchSwitchInputs,
   stage: isStageInputs,
   unstage: isUnstageInputs,
   commit: isCommitInputs,

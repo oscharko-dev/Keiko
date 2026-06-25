@@ -69,6 +69,35 @@ describe("preflight — branch-create", () => {
   });
 });
 
+describe("preflight — branch-switch (#475)", () => {
+  it("blocks when the switch target is not an existing local branch", () => {
+    const report = evaluateGitPreflight(
+      { kind: "branch-switch", branchName: "feature/missing" },
+      snapshot({ existingLocalBranchNames: ["main", "develop"] }),
+    );
+    expect(report.ok).toBe(false);
+    expect(report.blocking.map((f) => f.code)).toContain("switch-target-missing");
+  });
+
+  it("permits a switch to an existing branch (and to the current branch)", () => {
+    expect(codes({ kind: "branch-switch", branchName: "develop" }, snapshot())).not.toContain(
+      "switch-target-missing",
+    );
+    expect(codes({ kind: "branch-switch", branchName: "main" }, snapshot())).not.toContain(
+      "switch-target-missing",
+    );
+  });
+
+  it("surfaces an advisory when a sequencing operation is in progress", () => {
+    const report = evaluateGitPreflight(
+      { kind: "branch-switch", branchName: "develop" },
+      snapshot({ operationInProgress: "rebase" }),
+    );
+    expect(report.ok).toBe(true);
+    expect(report.advisory.map((f) => f.code)).toContain("operation-in-progress");
+  });
+});
+
 describe("preflight — stage / unstage", () => {
   it("blocks staging when no paths are provided", () => {
     const report = evaluateGitPreflight(

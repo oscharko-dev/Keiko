@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  GIT_DELIVERY_ACTION_KINDS,
   GIT_DELIVERY_ACTION_RISK_DEFAULTS,
   GIT_DELIVERY_RISK_CLASS_SEVERITY,
   GIT_DELIVERY_SCHEMA_VERSION,
@@ -47,9 +48,19 @@ describe("git-delivery action-kind / risk-class guards", () => {
   it("isGitDeliveryActionKind accepts known kinds and rejects unknowns", () => {
     expect(isGitDeliveryActionKind("commit")).toBe(true);
     expect(isGitDeliveryActionKind("recovery")).toBe(true);
+    expect(isGitDeliveryActionKind("branch-switch")).toBe(true);
     expect(isGitDeliveryActionKind("rm")).toBe(false);
     expect(isGitDeliveryActionKind(42)).toBe(false);
     expect(isGitDeliveryActionKind(undefined)).toBe(false);
+  });
+
+  it("GIT_DELIVERY_ACTION_KINDS pins the cardinality and includes branch-switch", () => {
+    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(11);
+    expect(GIT_DELIVERY_ACTION_KINDS).toContain("branch-switch");
+    expect(new Set(GIT_DELIVERY_ACTION_KINDS).size).toBe(GIT_DELIVERY_ACTION_KINDS.length);
+    // The risk-default table is exhaustive over the kinds (one entry per kind).
+    expect(Object.keys(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toHaveLength(11);
+    expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS["branch-switch"]).toBe("local-mutation");
   });
 
   it("isGitDeliveryRiskClass discriminates the four classes", () => {
@@ -262,6 +273,7 @@ describe("parseGitDeliveryResolvedInputs", () => {
   it("parses every action kind on the ok path", () => {
     const cases: readonly Record<string, unknown>[] = [
       { kind: "branch-create", branchName: "f", baseBranchName: "main", startPointRefHash: "h" },
+      { kind: "branch-switch", branchName: "main" },
       { kind: "stage", pathCount: 2, includesUntracked: false },
       { kind: "unstage", pathCount: 1 },
       { kind: "commit", messageByteLength: 10, stagedPathCount: 1, allowEmptyCommit: false },
@@ -336,6 +348,21 @@ describe("parseGitDeliveryResolvedInputs", () => {
     if (!result.ok) {
       expect(result.errors[0]).toContain('kind "stage"');
     }
+  });
+
+  it("accepts a branch-switch with a non-empty branchName and rejects an empty one", () => {
+    const ok = parseGitDeliveryResolvedInputs({ kind: "branch-switch", branchName: "main" });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.value.kind).toBe("branch-switch");
+    }
+    const empty = parseGitDeliveryResolvedInputs({ kind: "branch-switch", branchName: "" });
+    expect(empty.ok).toBe(false);
+    if (!empty.ok) {
+      expect(empty.errors[0]).toContain('kind "branch-switch"');
+    }
+    const missing = parseGitDeliveryResolvedInputs({ kind: "branch-switch" });
+    expect(missing.ok).toBe(false);
   });
 });
 

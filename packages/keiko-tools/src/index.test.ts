@@ -167,6 +167,7 @@ describe("keiko-tools public surface", () => {
     // Narrow adapter port + closed command table:
     expect(typeof tools.buildAbortArgv).toBe("function");
     expect(typeof tools.buildBranchCreateArgv).toBe("function");
+    expect(typeof tools.buildBranchSwitchArgv).toBe("function");
     expect(typeof tools.buildCommitArgv).toBe("function");
     expect(typeof tools.buildRecoveryArgv).toBe("function");
     expect(typeof tools.buildStageArgv).toBe("function");
@@ -181,6 +182,11 @@ describe("keiko-tools public surface", () => {
     expect(typeof tools.runGitMutation).toBe("function");
     // The Node execution adapter is NOT on the main barrel — it lives on ./internal/git-mutation.
     expect(tools).not.toHaveProperty("createNodeGitMutationAdapter");
+    // #475: the pure commit-intent summarizer IS on the barrel; the spawn-effect reader is NOT (it
+    // is reachable via ./internal/git-mutation alongside the Node adapter).
+    expect(typeof tools.summarizeStagedChangeset).toBe("function");
+    expect(tools.MAX_COMMIT_SUMMARY_AREAS).toBeDefined();
+    expect(tools).not.toHaveProperty("readGitWorktreeSnapshot");
   });
 
   it("each type-only export is reachable by name at compile time", () => {

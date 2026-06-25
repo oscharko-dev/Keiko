@@ -19,6 +19,7 @@ import {
 import {
   buildAbortArgv,
   buildBranchCreateArgv,
+  buildBranchSwitchArgv,
   buildCommitArgv,
   buildRecoveryArgv,
   buildStageArgv,
@@ -181,6 +182,7 @@ export function createNodeGitMutationAdapter(
   const ctx = buildRunContext(deps);
   return {
     createBranch: (req) => execPlan(ctx, () => buildBranchCreateArgv(req)),
+    switchBranch: (req) => execPlan(ctx, () => buildBranchSwitchArgv(req)),
     stage: (req) => execPlan(ctx, () => buildStageArgv(req)),
     unstage: (req) => execPlan(ctx, () => buildUnstageArgv(req)),
     commit: (req) => execPlan(ctx, () => buildCommitArgv(req)),
@@ -188,3 +190,14 @@ export function createNodeGitMutationAdapter(
     recover: (req) => execPlan(ctx, () => buildRecoveryArgv(req)),
   };
 }
+
+// The read-only worktree snapshot reader (Issue #475) carries the same Node spawn effect as this
+// adapter, so it is exposed on the SAME `./internal/git-mutation` subpath rather than the pure barrel.
+// Its inspection allowlist is structurally separate from the mutation rules.
+export {
+  GIT_WORKTREE_READ_COMMAND_RULES,
+  GitWorktreeReadError,
+  readGitWorktreeSnapshot,
+  readStagedPaths,
+  type NodeGitWorktreeReaderDeps,
+} from "./git-worktree-snapshot-node.js";

@@ -34,6 +34,10 @@ export interface GitBranchCreateExecRequest {
   readonly startPointRefHash: string;
 }
 
+export interface GitBranchSwitchExecRequest {
+  readonly branchName: string;
+}
+
 export interface GitStageExecRequest {
   readonly pathspecs: readonly string[];
 }
@@ -65,6 +69,7 @@ export interface GitRecoveryExecRequest {
 
 export interface GitLocalMutationAdapter {
   createBranch(req: GitBranchCreateExecRequest): Promise<GitDeliveryExecutionResult>;
+  switchBranch(req: GitBranchSwitchExecRequest): Promise<GitDeliveryExecutionResult>;
   stage(req: GitStageExecRequest): Promise<GitDeliveryExecutionResult>;
   unstage(req: GitUnstageExecRequest): Promise<GitDeliveryExecutionResult>;
   commit(req: GitCommitExecRequest): Promise<GitDeliveryExecutionResult>;
@@ -79,6 +84,7 @@ export interface GitLocalMutationAdapter {
 
 export const GIT_MUTATION_ALLOWED_SUBCOMMANDS: readonly string[] = Object.freeze([
   "branch",
+  "switch",
   "add",
   "restore",
   "commit",
@@ -200,6 +206,14 @@ export function buildBranchCreateArgv(req: GitBranchCreateExecRequest): GitMutat
       assertRef(req.startPointRefHash, "startPointRefHash"),
     ],
   ];
+}
+
+// Switch HEAD to an EXISTING local branch. `git switch` (never `checkout`) is branch-only: it cannot
+// be coerced into a path checkout, so it carries no file-overwrite surface. The branch operand is a
+// bare positional guarded by assertRef (non-empty, NUL-free, no leading "-" flag-injection), mirroring
+// branch-create; switch takes no pathspecs so no "--" sentinel is needed.
+export function buildBranchSwitchArgv(req: GitBranchSwitchExecRequest): GitMutationArgvPlan {
+  return [["switch", assertRef(req.branchName, "branchName")]];
 }
 
 export function buildStageArgv(req: GitStageExecRequest): GitMutationArgvPlan {

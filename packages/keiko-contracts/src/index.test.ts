@@ -571,7 +571,7 @@ describe("keiko-contracts package surface", () => {
     expect(GIT_DELIVERY_PROVIDER_SCHEMA_VERSION).toBe("1");
 
     // Count assertions are intentional surface pins; bump deliberately when #472+ extends the surface.
-    expect(GIT_DELIVERY_ACTION_KINDS.length).toBe(10);
+    expect(GIT_DELIVERY_ACTION_KINDS.length).toBe(11);
     expect(GIT_DELIVERY_RISK_CLASSES.length).toBe(4);
     expect(GIT_DELIVERY_BLOCK_REASONS.length).toBe(6);
     expect(GIT_DELIVERY_PROVIDER_CAPABILITIES.length).toBe(5);
