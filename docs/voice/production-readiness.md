@@ -163,9 +163,11 @@ and the no-voice baseline, and is the AC4 evidence:
   ([deployment-profile-matrix.md](deployment-profile-matrix.md) intro; [architecture.md](architecture.md) §3),
   and **No-voice** is the default and regulated baseline where Keiko is fully usable (§2, §3 no-voice row).
 - **Same build serves all cells.** Only configuration and runtime capability metadata differ (§3 reading
-  rule). The voice-twin evaluation encodes all three environment profiles (`VOICE_ENVIRONMENT_PROFILES` in
-  [`profiles.ts`](../../packages/keiko-evaluations/src/voice-twin/profiles.ts)) and proves the expected
-  effective profile and egress class per cell.
+  rule). The voice-twin evaluation enumerates all three environment profiles (`VOICE_ENVIRONMENT_PROFILES` in
+  [`types.ts`](../../packages/keiko-evaluations/src/voice-twin/types.ts)) and derives the expected effective
+  profile and egress class per cell (`effectiveVoiceProfile` / `egressDestinationClassFor` /
+  `VOICE_ENVIRONMENT_DESCRIPTORS` in
+  [`profiles.ts`](../../packages/keiko-evaluations/src/voice-twin/profiles.ts)).
 
 AC4 is fully satisfied by existing documentation with no outstanding action.
 
