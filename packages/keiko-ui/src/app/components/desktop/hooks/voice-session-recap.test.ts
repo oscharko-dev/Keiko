@@ -160,9 +160,10 @@ describe("createVoiceSessionRecapBinding — trigger (AC2)", () => {
     expect(io.buildRecap).toHaveBeenCalledTimes(1);
     const request = io.buildRecap.mock.calls[0]?.[0];
     // Only the committed segment's text is submitted — partial / discarded excluded by construction.
-    expect(request?.committedText).toBe("I live in Berlin");
-    expect(request?.segmentCount).toBe(1);
-    expect(request?.committedChars).toBe("I live in Berlin".length);
+    expect(request?.committedSpans).toEqual(["I live in Berlin"]);
+    // The full transcript summary is sent (server overrides segmentCount/committedChars itself, but the
+    // descriptive counts ride along). The committed projection holds exactly one committed segment.
+    expect(request?.transcript.committedCount).toBe(1);
     expect(onTriggered).toHaveBeenCalledWith({ candidatesProposed: 2, candidatesRejected: 1 });
     expect(binding.snapshot().lastResult).toEqual(result);
   });
@@ -182,7 +183,21 @@ describe("createVoiceSessionRecapBinding — trigger (AC2)", () => {
     ]);
     await binding.trigger();
     const request = io.buildRecap.mock.calls[0]?.[0];
-    expect(request?.committedText).toBe("corrected text");
+    expect(request?.committedSpans).toEqual(["corrected text"]);
+    // The full summary records the correction (the committed projection alone could not).
+    expect(request?.transcript.correctedCount).toBe(1);
+  });
+
+  it("sends each committed utterance as its own span (per-utterance extraction)", async () => {
+    const io = spyIo();
+    const binding = createVoiceSessionRecapBinding({ profile: "full-realtime", io });
+    binding.setSegments([
+      segment({ id: "a", seq: 1, text: "I prefer dark mode", state: "committed" }),
+      segment({ id: "b", seq: 2, text: "I live in Berlin", state: "committed" }),
+    ]);
+    await binding.trigger();
+    const request = io.buildRecap.mock.calls[0]?.[0];
+    expect(request?.committedSpans).toEqual(["I prefer dark mode", "I live in Berlin"]);
   });
 });
 
@@ -236,23 +251,42 @@ describe("createVoiceSessionRecapBinding — review actions delegate (AC3)", () 
 // ─── Default IO wiring (real fetch + memory-api) ─────────────────────────────────
 
 describe("createVoiceSessionRecapBinding — default IO", () => {
-  it("POSTs the committed text to the recap route and returns the parsed counts", async () => {
-    const fetchMock = vi.fn(async () => ({
+  it("POSTs the committed spans and parses the REAL flat server response shape", async () => {
+    // Regression guard: the server replies with FLAT counts + proposalIds (ADR-0067 D5). If the counts
+    // were ever re-nested under `summary`, `candidatesProposed`/`candidatesRejected` would read as
+    // undefined here and the observer assertion below would fail.
+    const onTriggered = vi.fn();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
       ok: true,
       status: 200,
-      json: async () => ({ candidatesProposed: 3, candidatesRejected: 0 }),
-    })) as unknown as typeof fetch;
-    vi.stubGlobal("fetch", fetchMock);
+      json: async () => ({ candidatesProposed: 3, candidatesRejected: 0, proposalIds: ["m-1"] }),
+    }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const binding = createVoiceSessionRecapBinding({ profile: "full-realtime" });
+    const binding = createVoiceSessionRecapBinding({
+      profile: "full-realtime",
+      observer: { onTriggered },
+    });
     binding.setSegments([segment({ text: "default io fact", state: "committed" })]);
     const result = await binding.trigger();
 
-    expect(result).toEqual({ candidatesProposed: 3, candidatesRejected: 0 });
+    expect(result).toEqual({ candidatesProposed: 3, candidatesRejected: 0, proposalIds: ["m-1"] });
+    // The observer must receive DEFINED numeric counts — proof the flat shape parsed correctly.
+    const event = onTriggered.mock.calls[0]?.[0] as
+      | { candidatesProposed: number; candidatesRejected: number }
+      | undefined;
+    expect(typeof event?.candidatesProposed).toBe("number");
+    expect(typeof event?.candidatesRejected).toBe("number");
+    expect(event?.candidatesProposed).toBe(3);
+    expect(event?.candidatesRejected).toBe(0);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/voice/recap/build",
       expect.objectContaining({ method: "POST" }),
     );
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const sent = JSON.parse(String(requestInit.body)) as VoiceRecapBuildRequest;
+    expect(sent.committedSpans).toEqual(["default io fact"]);
+    expect(sent.transcript.committedCount).toBe(1);
     vi.unstubAllGlobals();
   });
 

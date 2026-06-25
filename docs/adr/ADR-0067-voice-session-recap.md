@@ -44,7 +44,7 @@ that derives memory candidates exclusively from the committed transcript project
 The five-artifact plan follows the established pattern of ADR-0063 through ADR-0066:
 
 - **Artifact A**: contract leaf `packages/keiko-contracts/src/voice-session-recap.ts`
-- **Artifact B**: server `packages/keiko-server/src/voice-recap-handlers.ts`
+- **Artifact B**: server `packages/keiko-server/src/voice-recap.ts`
 - **Artifact C**: keiko-ui hook `hooks/voice-session-recap.ts` + visible component `VoiceRecap.tsx`
 - **Artifact D**: eval `packages/keiko-evaluations/src/voice-recap/`
 - **Artifact E**: docs `docs/voice/session-recap.md` + this ADR
@@ -186,22 +186,30 @@ THE existing governed entry point for user-text-derived candidates. It automatic
 - `buildProposal`: produces a `MemoryProposal` with `initialStatus: "proposed"`.
 
 The recap server function does not implement a new extractor, a new policy interpreter, or a new
-secret-scanner. It calls the existing API and collects `CaptureOutcome[]`. Outcomes with kind
-`"rejected"` are counted in the audit record; outcomes with kind `"candidate"` or `"update"` are
-written to the vault as `"proposed"` records.
+secret-scanner. It calls the existing API **once per committed span** and collects the union of the
+resulting `CaptureOutcome[]`. This per-span call mirrors the per-turn chat path (one
+`extractCandidatesFromUserText` call per user utterance) so a session can yield several candidates and
+the governance behaviour is identical to typed chat. Only outcomes of kind `"candidate"` that pass the
+existing `isPersistableMemoryCandidate` filter (public sensitivity, no required approval) are written
+to the vault as `"proposed"` records — exactly the filter the chat handler applies. Every other outcome
+(`"rejected"`, sensitive/approval-gated candidates, and the governance-action kinds `"update"`,
+`"forget"`, `"supersession"`) is counted but never written; these are surfaced as `candidatesRejected`
+in the content-free audit, where "rejected" means "extracted but not surfaced as a proposed candidate".
 
-**Boundary distinction from per-turn capture:** `collectMemoryActions` (chat-handlers.ts:914) runs
+**Boundary distinction from per-turn capture:** `collectMemoryActions` (chat-handlers.ts) runs
 `extractCandidatesFromUserText` on `request.content` — the user's typed message or the STT
-dictation-derived text submitted with the chat request. The recap calls
-`extractCandidatesFromUserText` on the committed projection from the full voice session
-(`selectCommittedVoiceTranscript(segments).text`) — a different input derived from the WebRTC
-transcript store, not from `request.content`. For STT dictation, both inputs may overlap (the
-dictated text becomes `request.content`). See D6 for the explicit deduplication resolution.
+dictation-derived text submitted with the chat request. The recap calls the same function on the
+committed spans of the full voice session (`selectCommittedVoiceTranscript(segments).segments`) — a
+different input derived from the transcript store, not from `request.content`. For STT dictation, both
+inputs may overlap (the dictated text becomes `request.content`). See D6 for the deduplication resolution.
 
-The `captureContext` passed to `extractCandidatesFromUserText` at recap time uses:
-- `initiatorSurface: "voice-recap"` (a new surface identifier string, not a new type)
-- The same project/workspace/user scope resolution the chat handler uses (`buildCaptureContext`)
-- Policy is unchanged: `memoryCapturePolicyForDeps(deps, ...)` as in chat-handlers.ts
+The `captureContext` passed to `extractCandidatesFromUserText` at recap time uses the same
+project/workspace/user scope resolution the chat handler uses (`buildCaptureContext`) and the unchanged
+policy (`memoryCapturePolicyForDeps(deps)`). It does **not** introduce a new provenance surface
+identifier: `CaptureContext` has no `initiatorSurface` field and `MemoryAuditInitiatorSurface` is a
+closed union that does not include `"voice-recap"`. Recap candidates are therefore governed and
+provenance-classified identically to per-turn candidates; differentiation relies on the existing vault
+dedup and review-queue visibility (D6), not on a new provenance tag.
 
 ### D4 — Candidates surface in the existing review queue; no new mutation surface (AC3)
 
@@ -231,16 +239,26 @@ are byte-identical.
 
 **Handler logic (authoritative spec for implementers):**
 
-1. Capability check: `voiceRecapAllowed(resolvedVoiceCapability.profile)`. If false: return 403 with
-   content-free deny reason `"voice-recap-not-allowed"`.
-2. Body: the client sends `{ committedText: string, segmentCount: number, committedChars: number }`.
-   The server validates: `committedText.trim().length > 0`; else return 400. Body size is capped
-   (recommended: 16 KB) with 413 if exceeded.
-3. Call `extractCandidatesFromUserText(body.committedText, captureContext, policy)`.
-4. For each `CaptureOutcome` of kind `"candidate"`, insert into the vault as `initialStatus: "proposed"`
-   with `initiatorSurface: "voice-recap"` in provenance. Count all outcomes.
-5. Build and persist `VoiceSessionRecapAuditRecord` via the evidence store.
-6. Return `{ candidatesProposed: number, candidatesRejected: number }` — no transcript text in response.
+1. Capability check **against the deployment profile** via `serverTrustedVoiceProfile(deps)`
+   (`isVoiceRealtimeCapable` / `isVoiceDictationCapable`), not the client-claimed profile (the #503
+   lesson). If `voiceRecapAllowed(profile)` is false: return `503 VOICE_UNAVAILABLE` (content-free,
+   redacted), matching the dictation route posture. The route never reads a `profile` field from the body.
+2. Body: the client sends `{ committedSpans: string[], transcript: VoiceTranscriptEvidenceSummary }`.
+   `committedSpans` is the per-utterance committed text (each committed, non-superseded segment's text);
+   `transcript` is the content-free `summarizeVoiceTranscript(segments)` roll-up (counts only). The raw
+   byte size is capped (16 KB) with `413` before parsing; invalid JSON returns `400`. An empty
+   `committedSpans` makes the route dormant (no extraction, no side effect — AC1).
+3. For each span, call `extractCandidatesFromUserText(span, captureContext, policy)` and union the
+   `CaptureOutcome[]`.
+4. Persist only `"candidate"` outcomes that pass `isPersistableMemoryCandidate` (the existing chat-path
+   filter) into the vault as `initialStatus: "proposed"`. `candidatesProposed` counts the inserted
+   records; `candidatesRejected` counts every other extracted outcome (see D3).
+5. Build and persist the content-free `VoiceSessionRecapAuditRecord` via the evidence store. The
+   transcript roll-up's segment-state counts (corrected/discarded/highest-seq) come from the client's
+   content-free `transcript` summary; `segmentCount` and `committedChars` are recomputed server-side
+   from `committedSpans` so the audit's character count matches exactly what was extracted.
+6. Return `{ candidatesProposed: number, candidatesRejected: number, proposalIds: string[] }` — counts
+   and vault ids only; no transcript text in the response.
 
 **The text-chat path (`captureMemoryActions`) is untouched.** The recap route is invoked only by
 explicit user action. It does not modify the chat request/response cycle, does not intercept
@@ -260,16 +278,14 @@ which `captureMemoryActions` processes per-turn. If the user then triggers a rec
 text would be submitted again to `extractCandidatesFromUserText`, potentially proposing the same
 candidate a second time.
 
-The deduplication mechanism relies on three layers:
+The deduplication mechanism relies on two existing layers (the recap adds no new dedup code and no new
+provenance tag — see D3):
 
-1. **Provenance differentiation**: per-turn proposals carry `initiatorSurface: "conversational"`;
-   recap proposals carry `initiatorSurface: "voice-recap"`. The vault records both; a human reviewer
-   can distinguish them in the review queue.
-2. **Scope-and-body dedup in the vault**: the existing memory vault detects proposals with
+1. **Scope-and-body dedup in the vault**: the existing memory vault detects proposals with
    identical `scope + body` and produces `CaptureOutcome` of kind `"supersession"` or raises a
    conflict, rather than creating exact duplicates. This is the existing dedup boundary; the recap
    relies on it without new code.
-3. **Review queue visibility and user judgment**: even if a near-duplicate candidate reaches the vault
+2. **Review queue visibility and user judgment**: even if a near-duplicate candidate reaches the vault
    (slightly different normalization), it surfaces in the review queue for explicit user action. A
    user who already accepted a per-turn proposal for the same content will see the recap proposal and
    can reject it.
@@ -301,9 +317,9 @@ boolean (same pattern as `voiceDictationVisible`, `voiceRealtimeVisible`). `voic
 true when `voiceRecapAllowed(voiceCapability.profile) && voiceTranscriptSegmentCount > 0`. The
 component renders:
 
-- A "Review session" button (visible, capability-gated).
-- On trigger: a loading state, then redirects to the existing memory review queue UI filtered by
-  `initiatorSurface: "voice-recap"` where the user uses existing accept/reject/edit/forget actions.
+- A "Review session" button (visible, capability-gated, inert until there is committed content).
+- On trigger: a loading state, then a panel listing the proposed candidates fetched from the existing
+  `GET /api/memory/review-queue`, where the user invokes the existing accept/reject/edit/forget actions.
 - No new modal, no new confirmation flow, no new governance surface.
 
 `design-system/globals.css` is untouched. The component reuses existing token classes.
@@ -363,10 +379,12 @@ The render path that would display the raw committed transcript text to the user
 to trigger recap is **deferred**. This mirrors the deferral posture of ADR-0061 D10, ADR-0062 D10,
 ADR-0065 D10, and ADR-0066 D9.
 
-The `VoiceRecap.tsx` component presents only the candidate count and a redirect to the review queue.
-A future issue may add a summary panel showing the committed transcript. The hook seam for this is
-`binding.committedSegmentCount` (a count, not text) — sufficient to render "you have N committed
-voice turns to review" without surfacing transcript content in the component.
+The `VoiceRecap.tsx` panel lists the proposed candidate bodies (the same reviewable memory text the
+existing MemoriaViva review queue already shows) with the accept/edit/reject/forget actions. What it
+does **not** show is the raw committed transcript preview — the verbatim record of everything said
+during the session before the user triggers recap. A future issue may add that preview; the hook seam
+is `binding.committedSegmentCount` (a count, not text), sufficient to render "you have N committed
+voice turns to review" without surfacing the raw transcript in the component.
 
 ## Consequences
 
@@ -400,14 +418,21 @@ voice turns to review" without surfacing transcript content in the component.
 - The recap is always user-triggered; there is no background extraction. This is a deliberate privacy
   choice (D2) but means sessions where the user forgets to trigger recap lose the ability to review
   committed voice content post-session.
-- Recap candidates carry `initiatorSurface: "voice-recap"` in provenance, making them filterable in
-  the review queue and distinguishable from per-turn proposals. This is a small extension to an
-  existing string field, not a new type.
+- Recap candidates are governed and provenance-classified identically to per-turn proposals; there is
+  no new `initiatorSurface` tag (see D3/D6). They are distinguishable only by the existing vault dedup
+  and by user judgment in the review queue.
 
 ## Deferred / Out of Scope
 
 - **Visible session transcript display**: the render path showing committed transcript text before
   recap trigger is deferred (D10).
+- **Live committed-segment wiring into the composer**: `useVoiceSessionRecap` accepts the committed
+  voice transcript segments via its `segments` prop, but the live realtime/dictation composer does not
+  yet surface the `#500` `voice-transcript-segments` store to `ChatWindow`. Until that upstream store
+  is consumed, the recap button renders (when capability allows) but stays inert
+  (`committedSegmentCount === 0`); the `segments` prop is the documented seam for that future wiring.
+  The recap mechanism (contract, server route, hook, review delegation) is complete and tested against
+  injected segments. This mirrors the render-path deferral posture of ADR-0061/0062/0063.
 - **Automatic recap on session close**: not triggered automatically; user-initiated only (D2).
 - **Discussion mode integration with recap**: if a discussion turn produced a `decide`-mode
   recommendation, any spoken candidate extraction from that text is covered by the same
@@ -507,7 +532,7 @@ for the user to review and tag manually.
 - [`docs/voice/session-recap.md`](../voice/session-recap.md) — the specification companion to this ADR.
 - [`packages/keiko-contracts/src/voice-session-recap.ts`](../../packages/keiko-contracts/src/voice-session-recap.ts) —
   the contract types and functions (Artifact A).
-- [`packages/keiko-server/src/voice-recap-handlers.ts`](../../packages/keiko-server/src/voice-recap-handlers.ts) —
+- [`packages/keiko-server/src/voice-recap.ts`](../../packages/keiko-server/src/voice-recap.ts) —
   the server handler (Artifact B).
 - [`packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts) —
   the UI hook (Artifact C).

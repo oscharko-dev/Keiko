@@ -166,19 +166,25 @@ function recapDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   });
 }
 
+// The FLAT response shape (ADR-0067 D5): counts at the top level, never nested under `summary`.
 interface RecapResponseBody {
-  readonly summary: {
-    readonly candidatesExtracted: number;
-    readonly candidatesProposed: number;
-    readonly candidatesRejected: number;
-    readonly triggeredByUser: boolean;
-    readonly transcript: { readonly committedChars: number; readonly segmentCount: number };
-  };
+  readonly candidatesProposed: number;
+  readonly candidatesRejected: number;
   readonly proposalIds: readonly string[];
 }
 
 function asRecap(body: unknown): RecapResponseBody {
   return body as RecapResponseBody;
+}
+
+// Builds the new request body: a list of per-utterance committed spans + a content-free transcript
+// counts roll-up. The server derives `segmentCount` / `committedChars` itself, so the client roll-up
+// here only carries the descriptive counts.
+function recapBody(
+  committedSpans: readonly string[],
+  transcript: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { committedSpans, transcript };
 }
 
 function reviewQueueIds(vault: MemoryVaultStore): readonly string[] {
@@ -197,7 +203,7 @@ function auditRecords(store: EvidenceStore): readonly Record<string, unknown>[] 
 describe("POST /api/voice/recap/build — capability gate (AC1)", () => {
   it("returns 503 VOICE_UNAVAILABLE when no config is resolved", async () => {
     const result = await handleVoiceRecapBuild(
-      ctx({ committedText: "remember that I prefer dark mode", segmentCount: 1 }),
+      ctx(recapBody(["remember that I prefer dark mode"])),
       depsWith({ memoryVault: makeVault() }),
     );
     expect(result.status).toBe(503);
@@ -207,7 +213,7 @@ describe("POST /api/voice/recap/build — capability gate (AC1)", () => {
   it("is dormant for a no-voice (chat-only) deployment: no extraction, no candidate stored (AC1)", async () => {
     const vault = makeVault();
     const result = await handleVoiceRecapBuild(
-      ctx({ committedText: "remember that I prefer dark mode", segmentCount: 1 }),
+      ctx(recapBody(["remember that I prefer dark mode"])),
       depsWith({ config: CHAT_ONLY_CONFIG, configPresent: true, memoryVault: vault }),
     );
     expect(result.status).toBe(503);
@@ -217,7 +223,7 @@ describe("POST /api/voice/recap/build — capability gate (AC1)", () => {
   it("is dormant when voice is disabled by policy even with a provider (AC1)", async () => {
     const vault = makeVault();
     const result = await handleVoiceRecapBuild(
-      ctx({ committedText: "remember that I prefer dark mode", segmentCount: 1 }),
+      ctx(recapBody(["remember that I prefer dark mode"])),
       depsWith({
         config: VOICE_STT_CONFIG,
         configPresent: true,
@@ -232,7 +238,7 @@ describe("POST /api/voice/recap/build — capability gate (AC1)", () => {
   it("does no audit write when the deployment is not voice-recap-capable (AC1)", async () => {
     const store = createInMemoryEvidenceStore();
     await handleVoiceRecapBuild(
-      ctx({ committedText: "remember that I prefer dark mode", segmentCount: 1 }),
+      ctx(recapBody(["remember that I prefer dark mode"])),
       depsWith({
         config: CHAT_ONLY_CONFIG,
         configPresent: true,
@@ -247,10 +253,7 @@ describe("POST /api/voice/recap/build — capability gate (AC1)", () => {
 describe("POST /api/voice/recap/build — body parsing", () => {
   it("returns 413 when the body exceeds the 16 KB cap", async () => {
     const oversize = "x".repeat(17_000);
-    const result = await handleVoiceRecapBuild(
-      ctx({ committedText: oversize, segmentCount: 1 }),
-      recapDeps(),
-    );
+    const result = await handleVoiceRecapBuild(ctx(recapBody([oversize])), recapDeps());
     expect(result.status).toBe(413);
     expect((result.body as { error: { code: string } }).error.code).toBe("PAYLOAD_TOO_LARGE");
   });
@@ -268,7 +271,7 @@ describe("POST /api/voice/recap/build — body parsing", () => {
 
   it("returns 503 MEMORY_UNAVAILABLE when the vault is not configured", async () => {
     const result = await handleVoiceRecapBuild(
-      ctx({ committedText: "remember that I prefer dark mode", segmentCount: 1 }),
+      ctx(recapBody(["remember that I prefer dark mode"])),
       depsWith({ config: VOICE_STT_CONFIG, configPresent: true }),
     );
     expect(result.status).toBe(503);
@@ -277,41 +280,40 @@ describe("POST /api/voice/recap/build — body parsing", () => {
 });
 
 describe("POST /api/voice/recap/build — dormancy on empty transcript (AC1)", () => {
-  it("returns zero counts and stores nothing when committed text is empty", async () => {
+  it("returns zero counts and stores nothing when committedSpans is empty", async () => {
     const vault = makeVault();
     const result = await handleVoiceRecapBuild(
-      ctx({ committedText: "", segmentCount: 0 }),
+      ctx(recapBody([])),
       recapDeps({ memoryVault: vault }),
     );
     expect(result.status).toBe(200);
     const recap = asRecap(result.body);
-    expect(recap.summary.candidatesExtracted).toBe(0);
-    expect(recap.summary.candidatesProposed).toBe(0);
+    expect(recap.candidatesProposed).toBe(0);
+    expect(recap.candidatesRejected).toBe(0);
     expect(recap.proposalIds).toEqual([]);
     expect(reviewQueueIds(vault)).toEqual([]);
   });
 
-  it("treats a whitespace-only committed text as empty (no candidates)", async () => {
+  it("drops whitespace-only spans, leaving nothing to recap (no candidates)", async () => {
     const vault = makeVault();
     const result = await handleVoiceRecapBuild(
-      ctx({ committedText: "   \n  ", segmentCount: 1 }),
+      ctx(recapBody(["   \n  ", ""])),
       recapDeps({ memoryVault: vault }),
     );
     expect(result.status).toBe(200);
-    expect(asRecap(result.body).summary.candidatesExtracted).toBe(0);
+    expect(asRecap(result.body).candidatesProposed).toBe(0);
     expect(reviewQueueIds(vault)).toEqual([]);
   });
 
-  it("writes an audit record even on an empty transcript (user-triggered)", async () => {
+  it("writes an audit record even on empty committedSpans (user-triggered)", async () => {
     const store = createInMemoryEvidenceStore();
-    await handleVoiceRecapBuild(
-      ctx({ committedText: "", segmentCount: 0 }),
-      recapDeps({ evidenceStore: store }),
-    );
+    await handleVoiceRecapBuild(ctx(recapBody([])), recapDeps({ evidenceStore: store }));
     const records = auditRecords(store);
     expect(records).toHaveLength(1);
     expect(records[0]?.triggeredByUser).toBe(true);
     expect(records[0]?.candidatesProposed).toBe(0);
+    expect(records[0]?.committedSegmentCount).toBe(0);
+    expect(records[0]?.committedChars).toBe(0);
   });
 });
 
@@ -319,12 +321,12 @@ describe("POST /api/voice/recap/build — candidate creation enters proposed sta
   it("persists a public candidate as a 'proposed' memory in the review queue", async () => {
     const vault = makeVault();
     const result = await handleVoiceRecapBuild(
-      ctx({ committedText: "remember that I prefer dark mode", segmentCount: 1 }),
+      ctx(recapBody(["remember that I prefer dark mode"])),
       recapDeps({ memoryVault: vault }),
     );
     expect(result.status).toBe(200);
     const recap = asRecap(result.body);
-    expect(recap.summary.candidatesProposed).toBe(1);
+    expect(recap.candidatesProposed).toBe(1);
     expect(recap.proposalIds).toHaveLength(1);
 
     const queued = vault.listMemories({ status: ["proposed"], includeExpired: true });
@@ -335,28 +337,56 @@ describe("POST /api/voice/recap/build — candidate creation enters proposed sta
     expect(recap.proposalIds[0]).toBe(String(queued[0]?.id));
   });
 
-  it("reports the committed character count without leaking transcript text", async () => {
-    const committed = "remember that I prefer dark mode";
+  it("yields MULTIPLE proposed candidates from MULTIPLE committed spans (per-utterance extraction)", async () => {
+    const vault = makeVault();
     const result = await handleVoiceRecapBuild(
-      ctx({ committedText: committed, segmentCount: 2 }),
-      recapDeps(),
+      ctx(recapBody(["remember that I prefer dark mode", "remember that I live in Berlin"])),
+      recapDeps({ memoryVault: vault }),
     );
+    expect(result.status).toBe(200);
     const recap = asRecap(result.body);
-    expect(recap.summary.transcript.committedChars).toBe(committed.length);
-    expect(recap.summary.transcript.segmentCount).toBe(2);
-    expect(recap.summary.triggeredByUser).toBe(true);
+    expect(recap.candidatesProposed).toBe(2);
+    expect(recap.proposalIds).toHaveLength(2);
+
+    const queued = vault.listMemories({ status: ["proposed"], includeExpired: true });
+    expect(queued).toHaveLength(2);
+    const bodies = queued.map((m) => m.body).join("\n");
+    expect(bodies).toContain("dark mode");
+    expect(bodies).toContain("Berlin");
   });
 
-  it("counts a non-persistable (non-candidate) outcome as rejected without storing it", async () => {
+  it("records server-authoritative segment/char counts in the audit without leaking text", async () => {
+    const store = createInMemoryEvidenceStore();
+    const spans = ["remember that I prefer dark mode", "remember that I live in Berlin"];
+    await handleVoiceRecapBuild(ctx(recapBody(spans)), recapDeps({ evidenceStore: store }));
+    const record = auditRecords(store)[0] ?? {};
+    expect(record.committedSegmentCount).toBe(2);
+    expect(record.committedChars).toBe(spans[0].length + spans[1].length);
+    expect(record.triggeredByUser).toBe(true);
+    const serialized = JSON.stringify(record);
+    expect(serialized).not.toContain("dark mode");
+    expect(serialized).not.toContain("Berlin");
+  });
+
+  it("ignores a client-inflated transcript.segmentCount: the server derives it from the spans", async () => {
+    const store = createInMemoryEvidenceStore();
+    await handleVoiceRecapBuild(
+      ctx(recapBody(["remember that I prefer dark mode"], { segmentCount: 9_999, highestSeq: 5 })),
+      recapDeps({ evidenceStore: store }),
+    );
+    const record = auditRecords(store)[0] ?? {};
+    expect(record.committedSegmentCount).toBe(1);
+  });
+
+  it("counts a non-persistable (non-candidate) outcome without storing it", async () => {
     const vault = makeVault();
     // "what is the weather" matches no capture intent → zero outcomes, zero proposals.
     const result = await handleVoiceRecapBuild(
-      ctx({ committedText: "what is the weather", segmentCount: 1 }),
+      ctx(recapBody(["what is the weather"])),
       recapDeps({ memoryVault: vault }),
     );
     const recap = asRecap(result.body);
-    expect(recap.summary.candidatesExtracted).toBe(0);
-    expect(recap.summary.candidatesProposed).toBe(0);
+    expect(recap.candidatesProposed).toBe(0);
     expect(reviewQueueIds(vault)).toEqual([]);
   });
 });
@@ -366,14 +396,13 @@ describe("POST /api/voice/recap/build — secret rejection (AC6)", () => {
     const vault = makeVault();
     const credential = "AKIA" + "ABCDEFGHIJKLMNOP";
     const result = await handleVoiceRecapBuild(
-      ctx({ committedText: `remember that ${credential}`, segmentCount: 1 }),
+      ctx(recapBody([`remember that ${credential}`])),
       recapDeps({ memoryVault: vault }),
     );
     expect(result.status).toBe(200);
     const recap = asRecap(result.body);
-    expect(recap.summary.candidatesExtracted).toBe(1);
-    expect(recap.summary.candidatesProposed).toBe(0);
-    expect(recap.summary.candidatesRejected).toBe(1);
+    expect(recap.candidatesProposed).toBe(0);
+    expect(recap.candidatesRejected).toBe(1);
     expect(recap.proposalIds).toEqual([]);
     // No memory in ANY status carries the credential text.
     const all = vault.listMemories({ includeExpired: true });
@@ -383,33 +412,33 @@ describe("POST /api/voice/recap/build — secret rejection (AC6)", () => {
   it("rejects a provider base URL before any candidate is created (AC6)", async () => {
     const vault = makeVault();
     const result = await handleVoiceRecapBuild(
-      ctx({
-        committedText: "remember that our provider base URL is https://llm.internal.example.com/v1",
-        segmentCount: 1,
-      }),
+      ctx(
+        recapBody(["remember that our provider base URL is https://llm.internal.example.com/v1"]),
+      ),
       recapDeps({ memoryVault: vault }),
     );
     const recap = asRecap(result.body);
-    expect(recap.summary.candidatesProposed).toBe(0);
+    expect(recap.candidatesProposed).toBe(0);
     expect(reviewQueueIds(vault)).toEqual([]);
   });
 });
 
 describe("POST /api/voice/recap/build — assistant text is never a candidate (AC5)", () => {
-  it("ignores an assistantText field: only committedText feeds extraction", async () => {
+  it("ignores any assistantText field: only committedSpans feed extraction", async () => {
     const vault = makeVault();
     const result = await handleVoiceRecapBuild(
       ctx({
-        committedText: "what is the weather",
-        // An assistant response that, if mistakenly extracted, would produce a candidate.
+        committedSpans: ["what is the weather"],
+        transcript: {},
+        // An assistant response that, if mistakenly extracted, would produce a candidate. The request
+        // shape carries no assistant text at all, so this stray field is structurally ignored.
         assistantText: "remember that I prefer dark mode",
         assistantTurns: [{ schemaVersion: "1", turnIndex: 0, source: "text-response" }],
-        segmentCount: 1,
       }),
       recapDeps({ memoryVault: vault }),
     );
     expect(result.status).toBe(200);
-    expect(asRecap(result.body).summary.candidatesProposed).toBe(0);
+    expect(asRecap(result.body).candidatesProposed).toBe(0);
     expect(reviewQueueIds(vault)).toEqual([]);
   });
 });
@@ -418,16 +447,13 @@ describe("POST /api/voice/recap/build — content-free audit record (AC4)", () =
   it("persists an audit record carrying only counts/enums/bools — no transcript text", async () => {
     const store = createInMemoryEvidenceStore();
     const committed = "remember that I prefer dark mode";
-    await handleVoiceRecapBuild(
-      ctx({ committedText: committed, segmentCount: 3 }),
-      recapDeps({ evidenceStore: store }),
-    );
+    await handleVoiceRecapBuild(ctx(recapBody([committed])), recapDeps({ evidenceStore: store }));
     const records = auditRecords(store);
     expect(records).toHaveLength(1);
     const record = records[0] ?? {};
     expect(record.schemaVersion).toBe("1");
     expect(record.profile).toBe("speech-to-text");
-    expect(record.committedSegmentCount).toBe(3);
+    expect(record.committedSegmentCount).toBe(1);
     expect(record.committedChars).toBe(committed.length);
     expect(record.candidatesProposed).toBe(1);
     expect(record.triggeredByUser).toBe(true);
@@ -442,7 +468,7 @@ describe("POST /api/voice/recap/build — content-free audit record (AC4)", () =
     const store = createInMemoryEvidenceStore();
     const credential = "AKIA" + "ABCDEFGHIJKLMNOP";
     await handleVoiceRecapBuild(
-      ctx({ committedText: `remember that ${credential}`, segmentCount: 1 }),
+      ctx(recapBody([`remember that ${credential}`])),
       recapDeps({ evidenceStore: store }),
     );
     const serialized = JSON.stringify(auditRecords(store)[0] ?? {});

@@ -28,8 +28,10 @@ import {
   type MemoryId,
   type MemoryRecord,
   type VoiceProfile,
+  type VoiceTranscriptEvidenceSummary,
   type VoiceTranscriptSegment,
   selectCommittedVoiceTranscript,
+  summarizeVoiceTranscript,
   voiceRecapAllowed,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -45,13 +47,13 @@ import {
 } from "@/lib/memory-api";
 
 // ─── Wire shapes for the additive recap route ────────────────────────────────────
-// The client sends only the committed text and its content-free counts; the server replies with two
-// counts and never echoes any transcript text (ADR-0067 D5). This request body is the ONLY place the
-// committed text leaves the client, and only to drive the existing extraction path on the BFF.
+// The client sends the per-utterance committed spans (each a committed segment's text) plus a content-free
+// transcript counts roll-up; the server replies with two counts and never echoes any transcript text
+// (ADR-0067 D5). This request body is the ONLY place the committed text leaves the client, and only to
+// drive the existing per-span extraction path on the BFF.
 export interface VoiceRecapBuildRequest {
-  readonly committedText: string;
-  readonly segmentCount: number;
-  readonly committedChars: number;
+  readonly committedSpans: readonly string[];
+  readonly transcript: VoiceTranscriptEvidenceSummary;
 }
 
 export interface VoiceRecapBuildResponse {
@@ -177,6 +179,7 @@ export function createVoiceSessionRecapBinding(
   const active = voiceRecapAllowed(profile);
 
   let committed: CommittedVoiceTranscriptProjection = emptyProjection();
+  let transcriptSummary: VoiceTranscriptEvidenceSummary = summarizeVoiceTranscript([]);
   let lastResult: VoiceRecapBuildResponse | undefined;
 
   function hasCommitted(): boolean {
@@ -189,8 +192,11 @@ export function createVoiceSessionRecapBinding(
 
   function setSegments(segments: readonly VoiceTranscriptSegment[]): void {
     // Even when dormant we project to the empty/committed form so the snapshot stays consistent, but a
-    // dormant profile never reaches `trigger`'s network path (AC1 short-circuits there).
+    // dormant profile never reaches `trigger`'s network path (AC1 short-circuits there). The full
+    // transcript summary is retained alongside so corrected / discarded / highestSeq counts are accurate
+    // (the committed projection alone cannot report superseded or discarded segments).
     committed = selectCommittedVoiceTranscript(segments);
+    transcriptSummary = summarizeVoiceTranscript(segments);
   }
 
   async function trigger(): Promise<VoiceRecapBuildResponse | undefined> {
@@ -199,11 +205,12 @@ export function createVoiceSessionRecapBinding(
     if (!canTrigger()) {
       return undefined;
     }
-    const result = await io.buildRecap({
-      committedText: committed.text,
-      segmentCount: committed.segmentCount,
-      committedChars: committed.text.length,
-    });
+    // Per-utterance committed spans: each committed segment's trimmed text, empties dropped. Partial,
+    // discarded, redacted, and superseded segments are excluded by the committed projection (AC2).
+    const committedSpans = committed.segments
+      .map((segment) => segment.text.trim())
+      .filter((text) => text.length > 0);
+    const result = await io.buildRecap({ committedSpans, transcript: transcriptSummary });
     lastResult = result;
     observer?.onTriggered?.({
       candidatesProposed: result.candidatesProposed,
@@ -255,6 +262,7 @@ export function createVoiceSessionRecapBinding(
 
   function reset(): void {
     committed = emptyProjection();
+    transcriptSummary = summarizeVoiceTranscript([]);
     lastResult = undefined;
   }
 

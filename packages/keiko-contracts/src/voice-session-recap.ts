@@ -50,20 +50,28 @@ export function voiceRecapAllowed(profile: VoiceProfile): boolean {
 
 // ─── Recap candidate lifecycle ──────────────────────────────────────────────────
 // The recap proposes candidates that flow through the EXISTING memory status lifecycle; this union is a
-// strict SUBSET of `MemoryStatus` (memory.ts) projected onto the four states a recap candidate can
-// occupy. It is redeclared here — not imported from `./memory-records.js` — because this leaf is upstream
-// of the memory domain (ADR-0019 / ADR-0067 D1). The mapping is exact:
+// strict SUBSET of `MemoryStatus` (memory.ts) projected onto the states a recap candidate can occupy. It
+// is redeclared here — not imported from `./memory-records.js` — because this leaf is upstream of the
+// memory domain (ADR-0019 / ADR-0067 D1). The lifecycle mirrors `MemoryStatus`:
 //   "proposed"  → MemoryStatus "proposed"  (the ONLY initial state; `buildProposal` initialStatus)
 //   "accepted"  → MemoryStatus "accepted"  (via POST /api/memory/proposals/:id/accept)
 //   "rejected"  → MemoryStatus "rejected"  (via POST /api/memory/proposals/:id/reject)
-//   "forgotten" → MemoryStatus "forgotten" (via POST /api/memory/:id/forget)
+//   "expired"   → MemoryStatus "expired"   (TTL lapse on an un-reviewed proposal — a real review-queue
+//                                            status; `REVIEW_QUEUE_STATUSES` includes "expired")
+//   "forgotten" → MemoryStatus "forgotten" (post-accept forget via POST /api/memory/:id/forget)
 // Terminal transitions delegate to the existing governed endpoints; the recap adds none of its own.
-export type VoiceRecapCandidateStatus = "proposed" | "accepted" | "rejected" | "forgotten";
+export type VoiceRecapCandidateStatus =
+  | "proposed"
+  | "accepted"
+  | "rejected"
+  | "expired"
+  | "forgotten";
 
 export const VOICE_RECAP_CANDIDATE_STATUSES: readonly VoiceRecapCandidateStatus[] = [
   "proposed",
   "accepted",
   "rejected",
+  "expired",
   "forgotten",
 ] as const;
 

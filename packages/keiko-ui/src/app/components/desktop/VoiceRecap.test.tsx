@@ -121,7 +121,7 @@ describe("VoiceRecapPanel", () => {
     const textarea = screen.getByRole("textbox");
     await userEvent.clear(textarea);
     await userEvent.type(textarea, "  new body  ");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save edited candidate" }));
     expect(h.onEdit).toHaveBeenCalledWith("m-2", "new body");
   });
 
@@ -131,7 +131,7 @@ describe("VoiceRecapPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Edit candidate" }));
     await userEvent.clear(screen.getByRole("textbox"));
     await userEvent.type(screen.getByRole("textbox"), "discarded edit");
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel editing candidate" }));
     expect(h.onEdit).not.toHaveBeenCalled();
     expect(screen.getByText("keep")).toBeInTheDocument();
   });
@@ -141,7 +141,7 @@ describe("VoiceRecapPanel", () => {
     render(<VoiceRecapPanel loading={false} candidates={[record("m-4", "body")]} {...h} />);
     await userEvent.click(screen.getByRole("button", { name: "Edit candidate" }));
     await userEvent.clear(screen.getByRole("textbox"));
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save edited candidate" })).toBeDisabled();
   });
 
   it("has no axe violations with listed candidates", async () => {

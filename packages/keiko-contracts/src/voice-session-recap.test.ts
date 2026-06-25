@@ -139,13 +139,19 @@ describe("AC1/AC2 — capability gating", () => {
 });
 
 describe("AC3 — candidate status lifecycle", () => {
-  it("enumerates exactly the governed subset proposed/accepted/rejected/forgotten", () => {
+  it("enumerates the governed subset proposed/accepted/rejected/expired/forgotten", () => {
     expect([...VOICE_RECAP_CANDIDATE_STATUSES]).toEqual([
       "proposed",
       "accepted",
       "rejected",
+      "expired",
       "forgotten",
     ]);
+  });
+
+  it("includes 'expired' as a real review-queue status", () => {
+    expect([...VOICE_RECAP_CANDIDATE_STATUSES]).toContain("expired");
+    expect(isVoiceRecapCandidateStatus("expired")).toBe(true);
   });
 
   it("guards every member and rejects non-members", () => {
@@ -154,7 +160,6 @@ describe("AC3 — candidate status lifecycle", () => {
     }
     expect(isVoiceRecapCandidateStatus("superseded")).toBe(false);
     expect(isVoiceRecapCandidateStatus("conflicted")).toBe(false);
-    expect(isVoiceRecapCandidateStatus("expired")).toBe(false);
     expect(isVoiceRecapCandidateStatus("archived")).toBe(false);
     expect(isVoiceRecapCandidateStatus(42)).toBe(false);
     expect(isVoiceRecapCandidateStatus(undefined)).toBe(false);

@@ -739,9 +739,11 @@ function ComposerCore({
   // non-playback profile yields a dormant controller (AC1). Replay is policy-gated and off by default.
   const playback = useVoicePlayback({ profile: voiceCapability?.profile ?? "none" });
   // Issue #504 — voice session recap. Derives memory candidates from the COMMITTED voice transcript via
-  // the additive recap route, then lists them through the EXISTING review queue. The transcript-store
-  // wiring (committed segments) is deferred (ADR-0067 D10); until segments are supplied the controller is
-  // correctly inert (committedSegmentCount === 0), so the button shows but cannot trigger a side effect.
+  // the additive recap route, then lists them through the EXISTING review queue. Live committed-transcript
+  // segments are not yet surfaced by the composer (the #500 voice-transcript-segments store is not consumed
+  // by the live realtime/dictation hooks yet); useVoiceSessionRecap's `segments` prop is the seam for that
+  // future wiring. Until segments are supplied the controller is correctly inert
+  // (committedSegmentCount === 0), so the button shows but cannot trigger a side effect.
   const recap = useVoiceSessionRecap({ profile: voiceCapability?.profile ?? "none" });
 
   return (

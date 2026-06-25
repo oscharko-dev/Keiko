@@ -109,6 +109,7 @@ function VoiceRecapCandidate({
           <button
             type="button"
             className="cmp-voice-btn cmp-voice-btn-primary"
+            aria-label="Save edited candidate"
             disabled={draft.trim().length === 0}
             onClick={() => {
               onEdit(candidate.id, draft.trim());
@@ -120,6 +121,7 @@ function VoiceRecapCandidate({
           <button
             type="button"
             className="cmp-voice-btn"
+            aria-label="Cancel editing candidate"
             onClick={() => {
               setDraft(candidate.body);
               setEditing(false);

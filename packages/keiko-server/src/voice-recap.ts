@@ -11,11 +11,11 @@
 // deployment answers a deterministic `VOICE_UNAVAILABLE` and does zero memory work. The route is also
 // dormant when the committed transcript is empty: it short-circuits before any extraction or vault write.
 //
-// AC4 / content-free: the request carries the committed transcript text ONCE for extraction (a local BFF
-// boundary); the text is never persisted by the server. The route's response and the persisted
-// `VoiceSessionRecapAuditRecord` carry only counts, enums, booleans, and durations — never transcript
-// text, audio, or assistant response text. Assistant-turn descriptors are context-only and are NEVER
-// passed to candidate extraction (AC5 invariant, mirroring `collectMemoryActions`).
+// AC4 / content-free: the request carries ONLY the per-utterance committed transcript spans (each a local
+// BFF boundary for extraction) plus a content-free transcript counts roll-up; the text is never persisted
+// by the server. No assistant response text is ever part of the request, so it can never reach extraction
+// (AC5). The route's response and the persisted `VoiceSessionRecapAuditRecord` carry only counts, enums,
+// booleans, and durations — never transcript text, audio, or assistant response text.
 //
 // AC5 (text path untouched): this is a SEPARATE additive route. It does not touch `collectMemoryActions`,
 // `captureMemoryActions`, or `CONVERSATION_SYSTEM_PROMPT`; the per-turn chat capture path is byte-identical.
@@ -27,7 +27,6 @@ import {
   voiceRecapAllowed,
   type VoiceProfile,
   type VoiceSessionRecapAuditRecord,
-  type VoiceSessionRecapEvidenceSummary,
   type VoiceTranscriptEvidenceSummary,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -147,22 +146,46 @@ function serverTrustedVoiceProfile(deps: UiHandlerDeps): VoiceProfile {
   return "none";
 }
 
-interface RecapRequest {
-  readonly committedText: string;
-  readonly segmentCount: number;
-}
-
 function nonNegativeIntOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
 }
 
-// Parses the content-free + committed-text recap body. The committed text is the only transcript input;
-// `segmentCount` and `committedChars` are content-free counts the client derives from
-// `selectCommittedVoiceTranscript` and are never used for extraction (AC5). An absent or whitespace-only
-// committed text yields an empty string, which makes the route dormant (no candidates, no side effects).
-function parseRecapRequest(body: Record<string, unknown>): RecapRequest {
-  const committedText = typeof body.committedText === "string" ? body.committedText : "";
-  return { committedText, segmentCount: nonNegativeIntOr(body.segmentCount, 0) };
+// Parses the per-utterance committed spans: keeps only string entries, trims each, and drops empties.
+// These spans are the ONLY transcript input — each is fed to `extractCandidatesFromUserText` individually
+// so a session yields per-utterance candidates. An absent or all-empty list makes the route dormant.
+function parseCommittedSpans(body: Record<string, unknown>): readonly string[] {
+  const raw = Array.isArray(body.committedSpans) ? body.committedSpans : [];
+  const spans: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (trimmed.length > 0) spans.push(trimmed);
+  }
+  return spans;
+}
+
+// Sanitizes the client-supplied transcript counts into a content-free `VoiceTranscriptEvidenceSummary`.
+// `segmentCount` and `committedChars` are SERVER-AUTHORITATIVE (derived from the parsed spans the server
+// actually extracted), so the client cannot inflate them. The remaining descriptive counts come from the
+// client's committed-transcript projection — they are evidence metadata (corrected/discarded/redacted/…),
+// not a governance control, and are clamped to non-negative integers.
+function sanitizeTranscriptSummary(
+  body: Record<string, unknown>,
+  committedSpans: readonly string[],
+): VoiceTranscriptEvidenceSummary {
+  const client = isRecord(body.transcript) ? body.transcript : {};
+  const committedChars = committedSpans.reduce((sum, span) => sum + span.length, 0);
+  return {
+    schemaVersion: "1",
+    segmentCount: committedSpans.length,
+    committedCount: nonNegativeIntOr(client.committedCount, 0),
+    correctedCount: nonNegativeIntOr(client.correctedCount, 0),
+    discardedCount: nonNegativeIntOr(client.discardedCount, 0),
+    redactedCount: nonNegativeIntOr(client.redactedCount, 0),
+    providerErrorCount: nonNegativeIntOr(client.providerErrorCount, 0),
+    committedChars,
+    highestSeq: nonNegativeIntOr(client.highestSeq, 0),
+  };
 }
 
 interface RecapMemoryContext {
@@ -243,8 +266,12 @@ function persistRecapCandidates(
   };
 }
 
+// THE BLOCKER FIX (ADR-0067 D5): the response is FLAT — `candidatesProposed`, `candidatesRejected`, and
+// `proposalIds` at the top level (matching the UI hook's `VoiceRecapBuildResponse`). The counts are NOT
+// nested under `summary`.
 interface RecapResponseBody {
-  readonly summary: VoiceSessionRecapEvidenceSummary;
+  readonly candidatesProposed: number;
+  readonly candidatesRejected: number;
   readonly proposalIds: readonly string[];
 }
 
@@ -254,14 +281,6 @@ function buildRecapResponse(
   persisted: CandidatePersistResult,
   startedAtMs: number,
 ): { readonly body: RecapResponseBody; readonly audit: VoiceSessionRecapAuditRecord } {
-  const summary: VoiceSessionRecapEvidenceSummary = {
-    schemaVersion: "1",
-    transcript,
-    candidatesExtracted: persisted.candidatesExtracted,
-    candidatesRejected: persisted.candidatesRejected,
-    candidatesProposed: persisted.candidatesProposed,
-    triggeredByUser: true,
-  };
   const audit = buildVoiceSessionRecapAuditRecord({
     profile,
     committedSegmentCount: transcript.segmentCount,
@@ -272,7 +291,14 @@ function buildRecapResponse(
     triggeredByUser: true,
     durationMs: Math.max(0, Date.now() - startedAtMs),
   });
-  return { body: { summary, proposalIds: persisted.proposalIds }, audit };
+  return {
+    body: {
+      candidatesProposed: persisted.candidatesProposed,
+      candidatesRejected: persisted.candidatesRejected,
+      proposalIds: persisted.proposalIds,
+    },
+    audit,
+  };
 }
 
 // Persists the content-free audit record under its own evidence id. The record structurally cannot carry
@@ -281,26 +307,21 @@ function persistRecapAudit(deps: UiHandlerDeps, audit: VoiceSessionRecapAuditRec
   deps.evidenceStore.put(`voice-recap-${randomUUID()}`, JSON.stringify(audit));
 }
 
-// Builds the content-free transcript roll-up the recap embeds. The route never receives raw segments —
-// only the joined committed text and the client's content-free `segmentCount` derived from
-// `selectCommittedVoiceTranscript` — so the roll-up reports the authoritative committed character count
-// (the actual submitted text length) and the client's committed segment count (zero when empty). It
-// carries no segment text by construction.
-function transcriptSummaryFor(
-  committedText: string,
-  committedSegmentCount: number,
-): VoiceTranscriptEvidenceSummary {
-  return {
-    schemaVersion: "1",
-    segmentCount: committedSegmentCount,
-    committedCount: committedSegmentCount,
-    correctedCount: 0,
-    discardedCount: 0,
-    redactedCount: 0,
-    providerErrorCount: 0,
-    committedChars: committedText.length,
-    highestSeq: committedSegmentCount,
-  };
+// Extracts candidates from EACH committed span independently and flattens every outcome into one array,
+// so a session with multiple committed utterances yields per-utterance candidates. The request carries
+// ONLY committedSpans + content-free transcript counts — no assistant text can ever reach this path (AC5).
+function extractFromSpans(
+  committedSpans: readonly string[],
+  body: Record<string, unknown>,
+  deps: UiHandlerDeps,
+): readonly CaptureOutcome[] {
+  const context = buildCaptureContext(resolveRecapMemoryContext(body));
+  const policy = memoryCapturePolicyForDeps(deps);
+  const outcomes: CaptureOutcome[] = [];
+  for (const span of committedSpans) {
+    outcomes.push(...extractCandidatesFromUserText(span, context, policy));
+  }
+  return outcomes;
 }
 
 export async function handleVoiceRecapBuild(
@@ -322,17 +343,10 @@ export async function handleVoiceRecapBuild(
     return parsed;
   }
   const startedAtMs = Date.now();
-  const request = parseRecapRequest(parsed);
-  const committedText = request.committedText.trim();
-  const transcript = transcriptSummaryFor(committedText, request.segmentCount);
+  const committedSpans = parseCommittedSpans(parsed);
+  const transcript = sanitizeTranscriptSummary(parsed, committedSpans);
   const outcomes =
-    committedText.length === 0
-      ? []
-      : extractCandidatesFromUserText(
-          committedText,
-          buildCaptureContext(resolveRecapMemoryContext(parsed)),
-          memoryCapturePolicyForDeps(deps),
-        );
+    committedSpans.length === 0 ? [] : extractFromSpans(committedSpans, parsed, deps);
   const persisted = persistRecapCandidates(outcomes, deps.memoryVault);
   const { body, audit } = buildRecapResponse(profile, transcript, persisted, startedAtMs);
   persistRecapAudit(deps, audit);

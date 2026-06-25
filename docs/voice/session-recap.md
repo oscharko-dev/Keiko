@@ -7,7 +7,7 @@ Specification for Epic #491, the deliverable of Issue
 [ADR-0067](../adr/ADR-0067-voice-session-recap.md). It **defines** the recap feature, the data-retention contract, the memory capture integration, the capability gating, and the content-free audit model. The contract lives in
 [`packages/keiko-contracts/src/voice-session-recap.ts`](../../packages/keiko-contracts/src/voice-session-recap.ts);
 the server handler lives in
-[`packages/keiko-server/src/voice-recap-handlers.ts`](../../packages/keiko-server/src/voice-recap-handlers.ts);
+[`packages/keiko-server/src/voice-recap.ts`](../../packages/keiko-server/src/voice-recap.ts);
 the UI hook and component live in
 [`packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts)
 and [`packages/keiko-ui/src/app/components/desktop/VoiceRecap.tsx`](../../packages/keiko-ui/src/app/components/desktop/VoiceRecap.tsx).
@@ -129,13 +129,13 @@ for per-turn capture. This overlap is handled by vault deduplication (see §5).
 ### Extraction timing and flow
 
 1. User presses "Review session" button in the recap control.
-2. UI hook sends `POST /api/voice/recap/build` with the committed text.
-3. Server receives the request and invokes `extractCandidatesFromUserText`.
-4. For each `CaptureOutcome` of kind `"candidate"` or `"update"`: insert into vault with
-   `initialStatus: "proposed"` and `initiatorSurface: "voice-recap"`.
-5. Count rejections and return the proposal count to the client.
-6. Candidates automatically appear in the existing memory review queue, filterable by
-   `initiatorSurface: "voice-recap"`.
+2. UI hook sends `POST /api/voice/recap/build` with the committed text and transcript counts.
+3. Server receives the request and invokes `extractCandidatesFromUserText` once per committed span.
+4. For each `CaptureOutcome` of kind `"candidate"` that passes the `isPersistableMemoryCandidate` filter
+   (public, no required approval): insert into vault with `initialStatus: "proposed"`.
+5. Count rejections (sensitive, approval-gated, and other non-persistable outcomes) and return the proposal
+   count and vault ids to the client.
+6. Candidates automatically appear in the existing memory review queue.
 
 ### Content redaction before candidate storage
 
@@ -167,18 +167,15 @@ transition candidates from proposed to accepted.
 For STT dictation sessions, the same text can produce candidates twice:
 
 1. **Per-turn proposal:** when the user sends a chat request with `request.content` = the STT
-   dictation text, `collectMemoryActions` extracts candidates with `initiatorSurface: "conversational"`.
-2. **Recap proposal:** when the user triggers recap, the same committed text is extracted again with
-   `initiatorSurface: "voice-recap"`.
+   dictation text, `collectMemoryActions` extracts candidates.
+2. **Recap proposal:** when the user triggers recap, the same committed text is extracted again.
 
 **Deduplication layers:**
 
-1. **Provenance differentiation:** proposals carry `initiatorSurface` ("conversational" vs.
-   "voice-recap"), making them distinguishable in the review queue.
-2. **Vault scope+body dedup:** the memory vault detects proposals with identical `scope + body` and
+1. **Vault scope+body dedup:** the memory vault detects proposals with identical `scope + body` and
    either merges them or raises a conflict marker, rather than creating exact duplicates. This is
    the existing vault behavior; recap relies on it without new code.
-3. **Review queue visibility:** if a near-duplicate reaches the queue, the user sees it and can
+2. **Review queue visibility:** if a near-duplicate reaches the queue, the user sees it and can
    reject it explicitly.
 
 **Architecture note:** The recap feature is primarily targeted at full-realtime sessions where
@@ -220,14 +217,14 @@ The recap button reuses existing design-system tokens; no new CSS classes are in
 
 Every type and boundary in the recap feature is content-free by construction:
 
-| Type / Boundary                            | Fields                                      | Never contains           |
-| ------------------------------------------ | ------------------------------------------- | ------------------------ |
-| `VoiceSessionRecapAuditRecord`             | counts, enums, duration, profile            | text, audio, credentials |
-| `VoiceRecapCommittedSpanDescriptor`        | spanIndex, charCount, segmentCount, seq     | transcript text          |
-| `VoiceRecapAssistantTurnDescriptor`        | turnIndex, source enum                      | assistant text, audio    |
-| `POST /api/voice/recap/build` request body | committedText (transient, extraction input) | —                        |
-| `POST /api/voice/recap/build` response     | candidatesProposed, candidatesRejected      | transcript text, audio   |
-| Memory audit record in evidence store      | counts, timestamps, effect enum             | raw transcript           |
+| Type / Boundary                            | Fields                                                           | Never contains           |
+| ------------------------------------------ | ---------------------------------------------------------------- | ------------------------ |
+| `VoiceSessionRecapAuditRecord`             | counts, enums, duration, profile                                 | text, audio, credentials |
+| `VoiceRecapCommittedSpanDescriptor`        | spanIndex, charCount, segmentCount, seq                          | transcript text          |
+| `VoiceRecapAssistantTurnDescriptor`        | turnIndex, source enum                                           | assistant text, audio    |
+| `POST /api/voice/recap/build` request body | committedSpans, transcript roll-up (transient, extraction input) | —                        |
+| `POST /api/voice/recap/build` response     | candidatesProposed, candidatesRejected, proposalIds              | transcript text, audio   |
+| Memory audit record in evidence store      | counts, timestamps, effect enum                                  | raw transcript           |
 
 The contract module is scanned for forbidden substrings as a test invariant: apikey, secret,
 password, credential, bearer, baseurl, endpoint, authorization, privatekey, accesskey, token,
@@ -297,49 +294,75 @@ This preserves the privacy-first principle (ADR-0058).
 
 ```json
 {
-  "committedText": "string (non-empty after trim)",
-  "segmentCount": "number",
-  "committedChars": "number"
+  "committedSpans": ["string (each non-empty after trim)"],
+  "transcript": {
+    "schemaVersion": "1",
+    "segmentCount": "number",
+    "committedCount": "number",
+    "correctedCount": "number",
+    "discardedCount": "number",
+    "redactedCount": "number",
+    "providerErrorCount": "number",
+    "committedChars": "number",
+    "highestSeq": "number"
+  }
 }
 ```
 
 **Capability check:**
 
-- `voiceRecapAllowed(resolvedVoiceCapability.profile)`. If false, return 403 with
-  `{ reason: "voice-recap-not-allowed" }`.
+- `voiceRecapAllowed(serverTrustedVoiceProfile(deps))` against **deployment capability**, not client claim.
+  If false, return `503 VOICE_UNAVAILABLE` (content-free, redacted).
 
 **Validation:**
 
-- `committedText.trim().length > 0` required; else 400 bad request.
-- Body size capped at 16 KB; 413 Payload Too Large if exceeded.
+- At least one non-empty span required in `committedSpans` for non-dormant behavior; empty array is a
+  no-op (AC1).
+- Body size capped at 16 KB; return 413 Payload Too Large if exceeded.
+- Invalid JSON returns 400 bad request.
 
 **Handler logic:**
 
-1. Call `extractCandidatesFromUserText(committedText, buildCaptureContext(...), policy)`.
-2. Build `captureContext` with `initiatorSurface: "voice-recap"`.
-3. For each outcome of kind `"candidate"` or `"update"`: insert into vault as `initialStatus: "proposed"`.
-4. Build and store `VoiceSessionRecapAuditRecord` via the evidence store.
-5. Return `{ candidatesProposed: number; candidatesRejected: number }`.
+1. For each committed span, call `extractCandidatesFromUserText(span, buildCaptureContext(...), policy)`.
+2. Union all resulting `CaptureOutcome[]`.
+3. For each outcome of kind `"candidate"` that passes `isPersistableMemoryCandidate` (public, no required
+   approval): insert into vault as `initialStatus: "proposed"`. Collect the inserted vault ids.
+4. Count every other extracted outcome (sensitive, approval-gated, rejected, update/forget/supersession) as
+   `candidatesRejected`.
+5. Recompute `committedChars` server-side from the submitted spans; build and store `VoiceSessionRecapAuditRecord`
+   via the evidence store with the server-authoritative character count.
+6. Return `{ candidatesProposed: number; candidatesRejected: number; proposalIds: string[] }`.
 
 **Response:**
 
 ```json
 {
   "candidatesProposed": "number",
-  "candidatesRejected": "number"
+  "candidatesRejected": "number",
+  "proposalIds": ["string (vault ids)"]
 }
 ```
 
-No transcript text in request or response.
+No transcript text in request or response. Counts only.
 
-## 13. Acceptance criteria summary
+## 13. Current integration status
+
+**Live composer wiring:** The recap UI hook (`useVoiceSessionRecap`) accepts committed voice transcript segments
+via its `segments` prop; however, the live realtime/dictation composer does not yet feed the committed transcript
+segments from the #500 `voice-transcript-segments` store into `ChatWindow`. As a result, the recap button appears
+(when capability allows) but remains inert (`committedSegmentCount === 0`) until that upstream wiring is
+completed. The recap mechanism itself (contract, server route, hook, review delegation, and evaluation suite) is
+complete and tested against injected segments. The `segments` prop is the documented seam for integrating the live
+store when it becomes available.
+
+## 14. Acceptance criteria summary
 
 | AC  | Acceptance Criterion                                    | Satisfied by                                                                                        | Evidence                                                              |
 | --- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| AC1 | Recap is dormant when voice is unavailable              | `voiceRecapAllowed(profile)` false for `none`/`speech-output`                                       | Hook short-circuits before observer / network; button not rendered    |
+| AC1 | Recap is dormant when voice is unavailable              | `voiceRecapAllowed(profile)` false for `none`/`speech-output`; empty spans → no-op                  | Hook short-circuits before observer / network; button not rendered    |
 | AC2 | Input is committed transcript only                      | `selectCommittedVoiceTranscript()` is sole source; partial/stable/redacted excluded by construction | Projection structure in voice-transcript.ts                           |
 | AC3 | Candidates enter existing review queue as proposed      | `extractCandidatesFromUserText` → `vault.insertMemory(initialStatus:"proposed")`                    | Review queue integration; existing memory endpoints unchanged         |
-| AC4 | No raw audio / transcript text stored beyond extraction | Transient committedText; server never persists it; audit record is content-free                     | Module forbidden-substring scan; server handler tests                 |
+| AC4 | No raw audio / transcript text stored beyond extraction | Transient committedSpans; server never persists them; audit record is content-free                  | Module forbidden-substring scan; server handler tests                 |
 | AC5 | Text-chat path untouched                                | Recap is additive route only; per-turn `collectMemoryActions` unchanged                             | Existing chat-handler tests pass; diff shows no mutations             |
 | AC6 | Secrets rejected before vault insert                    | `extractCandidatesFromUserText` runs `scanForSecrets` internally                                    | Eval fixture with credential string; rejected candidates not proposed |
 
@@ -362,7 +385,7 @@ No transcript text in request or response.
 - [`docs/voice/README.md`](README.md) — index of all voice feature documentation.
 - [`packages/keiko-contracts/src/voice-session-recap.ts`](../../packages/keiko-contracts/src/voice-session-recap.ts) —
   contract types and capability predicates.
-- [`packages/keiko-server/src/voice-recap-handlers.ts`](../../packages/keiko-server/src/voice-recap-handlers.ts) —
+- [`packages/keiko-server/src/voice-recap.ts`](../../packages/keiko-server/src/voice-recap.ts) —
   server handler implementation.
 - [`packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-session-recap.ts) —
   UI hook.
