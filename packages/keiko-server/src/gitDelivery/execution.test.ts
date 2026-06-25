@@ -18,7 +18,7 @@ import {
 import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
 import { buildRedactor } from "../index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { UiStore } from "../store/index.js";
+import { createInMemoryUiStore } from "../store/index.js";
 import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
@@ -294,21 +294,16 @@ describe("gitDeliveryMutationResponse — content-free projection of every outco
 });
 
 describe("resolveProjectWorkspace", () => {
-  function storeWith(paths: readonly string[]): Pick<UiStore, "listProjects"> {
-    return {
-      listProjects: () =>
-        paths.map((p) => ({
-          path: p,
-          name: undefined,
-          favorite: false,
-          createdAt: 0,
-          lastOpenedAt: 0,
-        })),
-    } as Pick<UiStore, "listProjects">;
-  }
   it("resolves a registered project path and rejects an unknown one", () => {
-    const deps = { store: storeWith(["/repo/a"]) as UiStore };
-    expect(resolveProjectWorkspace(deps, "/repo/a")?.root).toBe("/repo/a");
-    expect(resolveProjectWorkspace(deps, "/repo/missing")).toBeUndefined();
+    const store = createInMemoryUiStore();
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-rp-")));
+    try {
+      const proj = store.createProject(dir);
+      expect(resolveProjectWorkspace({ store }, proj.path)?.root).toBe(proj.path);
+      expect(resolveProjectWorkspace({ store }, "/repo/missing")).toBeUndefined();
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
