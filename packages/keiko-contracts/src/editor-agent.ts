@@ -84,7 +84,9 @@ export type EditorAgentActionStatus = "queued" | "succeeded" | "failed" | "confl
 //   - DIRTY                  the target buffer has unsaved changes (a non-`save` write was refused).
 //   - VERSION_MISMATCH       the asserted `expectedDocumentVersion` no longer matches the document.
 //   - CONTENT_HASH_MISMATCH  the asserted `expectedContentHash` no longer matches the document.
-//   - NO_ACTIVE_SESSION      no browser bridge is registered for the action's session.
+//   - NO_ACTIVE_SESSION      no browser bridge has registered a snapshot for the action's session.
+//   - NO_ACTIVE_BRIDGE       a snapshot is registered but no live bridge is connected to execute the
+//                            action (Issue #1392 — the session's SSE bridge has disconnected).
 //   - INVALID_EDITS          the edits/patch are structurally invalid (overlap, inverted, malformed).
 //   - OUT_OF_SCOPE           the target escapes the workspace root or the action is unsupported here.
 //   - PRECONDITION_REQUIRED  a write action omitted the mandatory version/hash precondition (AC2).
@@ -93,6 +95,7 @@ export type EditorAgentConflictCode =
   | "VERSION_MISMATCH"
   | "CONTENT_HASH_MISMATCH"
   | "NO_ACTIVE_SESSION"
+  | "NO_ACTIVE_BRIDGE"
   | "INVALID_EDITS"
   | "OUT_OF_SCOPE"
   | "PRECONDITION_REQUIRED";
@@ -102,10 +105,27 @@ export const EDITOR_AGENT_CONFLICT_CODES: readonly EditorAgentConflictCode[] = [
   "VERSION_MISMATCH",
   "CONTENT_HASH_MISMATCH",
   "NO_ACTIVE_SESSION",
+  "NO_ACTIVE_BRIDGE",
   "INVALID_EDITS",
   "OUT_OF_SCOPE",
   "PRECONDITION_REQUIRED",
 ] as const;
+
+// Issue #1392 — structured lifecycle failure codes (status: "failed") raised AFTER an action is
+// admitted to the bounded queue, distinct from the preflight conflict taxonomy above:
+//   - TIMED_OUT   the connected bridge never reported a result before the action deadline elapsed.
+//   - QUEUE_FULL  the bounded per-session action queue was already saturated when the action arrived.
+export type EditorAgentFailureCode = "TIMED_OUT" | "QUEUE_FULL";
+
+export const EDITOR_AGENT_FAILURE_CODES: readonly EditorAgentFailureCode[] = [
+  "TIMED_OUT",
+  "QUEUE_FULL",
+] as const;
+
+export interface EditorAgentActionFailure {
+  readonly code: EditorAgentFailureCode;
+  readonly message: string;
+}
 
 export interface EditorAgentActionResult {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
@@ -119,6 +139,7 @@ export interface EditorAgentActionResult {
         readonly message: string;
       }
     | undefined;
+  readonly failure?: EditorAgentActionFailure | undefined;
 }
 
 export type EditorAgentEvent =
@@ -414,6 +435,15 @@ function isEditorAgentConflictDetail(value: unknown): boolean {
   );
 }
 
+// Issue #1392 — a failure detail, when present, mirrors the conflict-detail guard against the
+// lifecycle-failure taxonomy, so a "failed" result cannot smuggle an out-of-taxonomy code past it.
+function isEditorAgentFailureDetail(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isRecord(value) && isEditorAgentFailureCode(value.code) && typeof value.message === "string"
+  );
+}
+
 export function isEditorAgentActionResult(value: unknown): value is EditorAgentActionResult {
   return (
     isRecord(value) &&
@@ -422,7 +452,8 @@ export function isEditorAgentActionResult(value: unknown): value is EditorAgentA
     isNonEmptyString(value.sessionId) &&
     isActionStatus(value.status) &&
     (value.message === undefined || typeof value.message === "string") &&
-    isEditorAgentConflictDetail(value.conflict)
+    isEditorAgentConflictDetail(value.conflict) &&
+    isEditorAgentFailureDetail(value.failure)
   );
 }
 
@@ -430,6 +461,13 @@ export function isEditorAgentConflictCode(value: unknown): value is EditorAgentC
   return (
     typeof value === "string" &&
     EDITOR_AGENT_CONFLICT_CODES.includes(value as EditorAgentConflictCode)
+  );
+}
+
+export function isEditorAgentFailureCode(value: unknown): value is EditorAgentFailureCode {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_FAILURE_CODES.includes(value as EditorAgentFailureCode)
   );
 }
 

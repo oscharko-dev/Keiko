@@ -523,9 +523,13 @@ describe("keiko-contracts package surface", () => {
     expect(mod.EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
     // AC1: the content-free default snapshot text mode is exported and is `none`.
     expect(mod.DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE).toBe("none");
-    // AC3: the structured conflict-code taxonomy is exported in full, including PRECONDITION_REQUIRED.
+    // AC3: the structured conflict-code taxonomy is exported in full, including PRECONDITION_REQUIRED
+    // and the Issue #1392 NO_ACTIVE_BRIDGE liveness code.
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("PRECONDITION_REQUIRED");
-    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(7);
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(8);
+    // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
+    expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual(["QUEUE_FULL", "TIMED_OUT"]);
     // AC2: the write-action classification is exported as a single source of truth.
     expect([...mod.EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
       ["applyPatch", "applyTextEdits", "format", "save"].sort(),
@@ -535,6 +539,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.editorAgentWritePreconditionError).toBe("function");
     expect(typeof mod.editorAgentActionHasWritePrecondition).toBe("function");
     expect(typeof mod.isEditorAgentConflictCode).toBe("function");
+    expect(typeof mod.isEditorAgentFailureCode).toBe("function");
   });
 
   it("editor-agent contract type re-exports are reachable through the barrel (#1391)", () => {

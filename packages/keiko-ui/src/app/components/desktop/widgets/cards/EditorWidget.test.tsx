@@ -1630,7 +1630,10 @@ describe("EditorWidget — agent bridge", () => {
     ]);
     const source = FakeSource.instances.at(-1);
     expect(source).toBeDefined();
-    expect(source?.url).toBe("/api/editor/agent/events");
+    // Issue #1392 — the bridge connection carries its session id so the BFF can track liveness.
+    expect(source?.url).toBe(
+      `/api/editor/agent/events?sessionId=${encodeURIComponent(String(snapshot?.sessionId))}`,
+    );
     return { source: source as FakeEventSource, sessionId: String(snapshot?.sessionId) };
   }
 

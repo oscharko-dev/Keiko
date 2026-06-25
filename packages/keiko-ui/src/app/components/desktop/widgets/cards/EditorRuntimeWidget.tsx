@@ -1650,7 +1650,13 @@ export default function EditorRuntimeWidget({
 
   useEffect(() => {
     if (typeof EventSource === "undefined") return;
-    const source = new EventSource("/api/editor/agent/events");
+    // Issue #1392 — carry the session id so the BFF registers this connection as the session's live
+    // browser bridge. Server-side liveness gates action queueing (an action for a session with no live
+    // bridge is answered with a structured NO_ACTIVE_BRIDGE conflict), and event fan-out is scoped to
+    // this session. The client-side session filter in executeAgentAction remains as defense in depth.
+    const source = new EventSource(
+      `/api/editor/agent/events?sessionId=${encodeURIComponent(agentSessionId)}`,
+    );
     const onAction = (event: MessageEvent<string>): void => {
       try {
         const parsed: unknown = JSON.parse(event.data);
@@ -1669,7 +1675,7 @@ export default function EditorRuntimeWidget({
       source.removeEventListener("editor-agent:result", onAgentResult);
       source.close();
     };
-  }, [executeAgentAction, onAgentResult]);
+  }, [agentSessionId, executeAgentAction, onAgentResult]);
 
   const recoveryDiskChanged =
     recoverySnapshot !== null &&

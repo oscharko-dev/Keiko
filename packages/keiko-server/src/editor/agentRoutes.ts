@@ -1,4 +1,21 @@
+// Issue #1392 — BFF routes for the editor-agent control plane: session discovery, snapshot read/write,
+// action queueing, browser result reporting, and the SSE event stream. The durable control-plane state
+// (session registry, live bridge tracking, bounded action queue, timeouts, fan-out) lives in
+// agentSessionRegistry.ts; this module is the HTTP edge that parses requests, enforces *preflight*
+// policy, and threads idempotency. The server only coordinates — it never executes an action or
+// mutates editor/React state (AC5); the browser bridge owns that.
+//
+// Preflight conflicts (status "conflict", HTTP 409) gate admission to the queue. The Issue #1391/#1394
+// structural gates (DIRTY / VERSION / HASH / OUT_OF_SCOPE / INVALID_EDITS / PRECONDITION_REQUIRED) run
+// first; the Issue #1392 liveness gate runs last: an otherwise-valid action for a session with no live
+// browser bridge is answered with NO_ACTIVE_BRIDGE (AC1). Past preflight, the registry can still return
+// a lifecycle failure: QUEUE_FULL (HTTP 429, the bounded queue is saturated) or, asynchronously,
+// TIMED_OUT when the bridge never acknowledges before the deadline (AC2).
+//
+// No raw source content (snapshot text, text edits, patch bodies) is logged anywhere in this path.
+
 import type { ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
   editorAgentWritePreconditionError,
@@ -33,42 +50,41 @@ import {
 } from "../routes.js";
 import { SSE_HEADERS, readyMessage } from "../sse.js";
 import { readJsonObject } from "../files.js";
+import { editorAgentRegistry } from "./agentSessionRegistry.js";
 
 const MAX_AGENT_BODY_BYTES = 1_048_576;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = 64 * 1024;
 
 interface QueuedRecord {
-  readonly requestBody: string;
+  readonly requestHash: string;
   readonly result: EditorAgentActionResult;
 }
 
-const sessions = new Map<string, EditorAgentSessionSnapshot>();
+// HTTP-level idempotency: a replayed Idempotency-Key returns the original outcome; a key reused with a
+// different action body is a 409. This is request de-duplication and stays at the route edge. The map
+// is bounded (FIFO eviction) and stores only a hash of the request body, so it cannot grow without
+// limit or retain raw action content (text edits, patch bodies) on a long-lived server.
+const MAX_IDEMPOTENCY_ENTRIES = 1024;
 const idempotency = new Map<string, QueuedRecord>();
-const subscribers = new Set<(event: EditorAgentEvent) => void>();
-let eventSeq = 0;
 
-type EditorAgentEventPayload =
-  | { readonly type: "session"; readonly snapshot: EditorAgentSessionSnapshot }
-  | { readonly type: "action"; readonly action: EditorAgentAction }
-  | { readonly type: "result"; readonly result: EditorAgentActionResult }
-  | { readonly type: "heartbeat"; readonly updatedAt: number };
+function hashRequest(body: string): string {
+  return createHash("sha256").update(body).digest("hex");
+}
+
+function rememberIdempotency(
+  key: string,
+  requestHash: string,
+  result: EditorAgentActionResult,
+): void {
+  if (!idempotency.has(key) && idempotency.size >= MAX_IDEMPOTENCY_ENTRIES) {
+    const oldest = idempotency.keys().next().value;
+    if (oldest !== undefined) idempotency.delete(oldest);
+  }
+  idempotency.set(key, { requestHash, result });
+}
 
 function isRouteResult(value: unknown): value is RouteResult {
   return typeof value === "object" && value !== null && "status" in value && "body" in value;
-}
-
-function nextEventId(): string {
-  eventSeq += 1;
-  return `editor-agent-${String(eventSeq)}`;
-}
-
-function emit(event: EditorAgentEventPayload): void {
-  const envelope: EditorAgentEvent = {
-    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-    eventId: nextEventId(),
-    ...event,
-  };
-  for (const subscriber of subscribers) subscriber(envelope);
 }
 
 function utf8Prefix(
@@ -293,15 +309,18 @@ function deriveAgentPatchTextEdits(
   }
 }
 
-function emitAgentAction(action: EditorAgentAction, snapshot: EditorAgentSessionSnapshot): boolean {
-  if (action.type !== "applyPatch") {
-    emit({ type: "action", action });
-    return true;
-  }
+// Builds the action envelope to broadcast to the bridge. For applyPatch the contract textEdits are
+// derived (whole-document replace) so the browser reviews a concrete edit; null means the patch could
+// not be prepared and the action must be failed rather than queued. Every other action type is
+// broadcast unchanged.
+function buildEmitAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentAction | null {
+  if (action.type !== "applyPatch") return action;
   const textEdits = deriveAgentPatchTextEdits(action, snapshot);
-  if (textEdits === null) return false;
-  emit({ type: "action", action: { ...action, textEdits } });
-  return true;
+  if (textEdits === null) return null;
+  return { ...action, textEdits };
 }
 
 function targetFile(
@@ -334,15 +353,13 @@ function conflict(
   };
 }
 
-function preflight(action: EditorAgentAction): EditorAgentActionResult | null {
-  const snapshot = sessions.get(action.sessionId);
-  if (snapshot === undefined) {
-    return conflict(action, "NO_ACTIVE_SESSION", "No active browser bridge is registered.");
-  }
+// The Issue #1391/#1394 structural write gates, unchanged: a doubly-invalid write reports its most
+// specific failure. Non-write actions have no structural gate.
+function structuralWriteConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionResult | null {
   if (!isEditorAgentWriteActionType(action.type)) return null;
-  // The structural gates run first so a doubly-invalid write reports its most specific failure; the
-  // precondition gate runs last and rejects any otherwise-valid write that did not pin a revision
-  // (#1391 AC2 — no blind writes).
   return (
     dirtyBufferConflict(action, snapshot) ??
     documentVersionConflict(action, snapshot) ??
@@ -354,8 +371,29 @@ function preflight(action: EditorAgentAction): EditorAgentActionResult | null {
   );
 }
 
+// Returns a structured conflict result when the action must not be admitted to the queue, or null when
+// it is clear to enqueue. The structural gates run first (above); the Issue #1392 liveness gate runs
+// last so any otherwise-valid action for a session with no live bridge is answered with the structured
+// NO_ACTIVE_BRIDGE conflict (AC1) rather than queued where it could never be executed.
+function preflight(action: EditorAgentAction): EditorAgentActionResult | null {
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  if (snapshot === undefined) {
+    return conflict(action, "NO_ACTIVE_SESSION", "No active browser bridge is registered.");
+  }
+  const structural = structuralWriteConflict(action, snapshot);
+  if (structural !== null) return structural;
+  if (!editorAgentRegistry.hasLiveBridge(action.sessionId)) {
+    return conflict(
+      action,
+      "NO_ACTIVE_BRIDGE",
+      "No live browser bridge is connected for this session.",
+    );
+  }
+  return null;
+}
+
 export function handleEditorAgentSessions(): RouteResult {
-  return { status: 200, body: { sessions: [...sessions.values()] } };
+  return { status: 200, body: { sessions: editorAgentRegistry.listSessions() } };
 }
 
 export async function handleEditorAgentSnapshot(ctx: RouteContext): Promise<RouteResult> {
@@ -366,14 +404,10 @@ export async function handleEditorAgentSnapshot(ctx: RouteContext): Promise<Rout
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
   if ("kind" in parsed.value) {
-    sessions.set(parsed.value.snapshot.sessionId, parsed.value.snapshot);
-    emit({ type: "session", snapshot: parsed.value.snapshot });
+    editorAgentRegistry.registerSnapshot(parsed.value.snapshot);
     return { status: 200, body: { snapshot: parsed.value.snapshot } };
   }
-  const selected =
-    parsed.value.sessionId === undefined
-      ? [...sessions.values()][0]
-      : sessions.get(parsed.value.sessionId);
+  const selected = editorAgentRegistry.selectSnapshot(parsed.value.sessionId);
   if (selected === undefined) return { status: 200, body: { snapshot: null } };
   const maxBytes = parsed.value.maxBytes ?? DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES;
   return {
@@ -391,14 +425,14 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
   }
   if (!isEditorAgentAction(parsed.value)) {
     const result = parsed.value.result;
-    emit({ type: "result", result });
+    editorAgentRegistry.reportResult(result);
     return { status: 200, body: { result } };
   }
   const action = parsed.value;
-  const requestBody = JSON.stringify(action);
+  const requestHash = hashRequest(JSON.stringify(action));
   const replay = idempotency.get(action.idempotencyKey);
   if (replay !== undefined) {
-    if (replay.requestBody !== requestBody) {
+    if (replay.requestHash !== requestHash) {
       return {
         status: 409,
         body: errorBody(
@@ -411,11 +445,11 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
   }
   const failed = preflight(action);
   if (failed !== null) {
-    idempotency.set(action.idempotencyKey, { requestBody, result: failed });
-    emit({ type: "result", result: failed });
+    rememberIdempotency(action.idempotencyKey, requestHash, failed);
+    editorAgentRegistry.reportResult(failed);
     return { status: 409, body: { result: failed } };
   }
-  return queueAndEmitAction(action, requestBody);
+  return queueAndEmitAction(action, requestHash);
 }
 
 function failedResult(action: EditorAgentAction, message: string): EditorAgentActionResult {
@@ -428,47 +462,49 @@ function failedResult(action: EditorAgentAction, message: string): EditorAgentAc
   };
 }
 
-function queueAndEmitAction(action: EditorAgentAction, requestBody: string): RouteResult {
-  const snapshot = sessions.get(action.sessionId);
-  if (snapshot === undefined || !emitAgentAction(action, snapshot)) {
+function queueAndEmitAction(action: EditorAgentAction, requestHash: string): RouteResult {
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  const emitAction = snapshot === undefined ? null : buildEmitAction(action, snapshot);
+  if (emitAction === null) {
     const result = failedResult(action, "Patch could not be prepared for review.");
-    idempotency.set(action.idempotencyKey, { requestBody, result });
+    rememberIdempotency(action.idempotencyKey, requestHash, result);
     return { status: 409, body: { result } };
   }
-  const result: EditorAgentActionResult = {
-    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-    actionId: action.actionId,
-    sessionId: action.sessionId,
-    status: "queued",
-  };
-  idempotency.set(action.idempotencyKey, { requestBody, result });
-  return { status: 202, body: { result } };
+  const outcome = editorAgentRegistry.queueAction(action, emitAction);
+  rememberIdempotency(action.idempotencyKey, requestHash, outcome.result);
+  if (outcome.kind === "rejected") {
+    // QUEUE_FULL is backpressure (429); a duplicate in-flight actionId is a conflict (409).
+    const status = outcome.result.failure?.code === "QUEUE_FULL" ? 429 : 409;
+    return { status, body: { result: outcome.result } };
+  }
+  return { status: 202, body: { result: outcome.result } };
 }
 
 export function handleEditorAgentEvents(ctx: RouteContext): HandlerOutcome {
-  openAgentSseStream(ctx.res);
-  ctx.req.on("close", () => {
-    ctx.res.end();
-  });
+  const sessionId = ctx.url.searchParams.get("sessionId") ?? undefined;
+  openAgentSseStream(ctx, sessionId);
   return STREAMING;
 }
 
-function openAgentSseStream(res: ServerResponse): void {
+// Opens the SSE stream and registers the connection as either a session bridge (when `?sessionId=` is
+// present) or a global observer. The disposer drops the subscription — and thus the bridge-liveness
+// contribution — when the response closes (AC1: a dropped bridge makes the session unavailable again).
+function openAgentSseStream(ctx: RouteContext, sessionId: string | undefined): void {
+  const res: ServerResponse = ctx.res;
   res.writeHead(200, SSE_HEADERS);
   const subscriber = (event: EditorAgentEvent): void => {
     const frame = `id: ${event.eventId}\nevent: editor-agent:${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
     if (!res.write(frame)) res.destroy();
   };
-  subscribers.add(subscriber);
+  const dispose = editorAgentRegistry.connect(sessionId, subscriber);
   res.write(readyMessage());
-  res.on("close", () => {
-    subscribers.delete(subscriber);
+  ctx.req.on("close", () => {
+    res.end();
   });
+  res.on("close", dispose);
 }
 
 export function _resetEditorAgentStateForTests(): void {
-  sessions.clear();
   idempotency.clear();
-  subscribers.clear();
-  eventSeq = 0;
+  editorAgentRegistry.reset();
 }
