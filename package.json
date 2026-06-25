@@ -50,6 +50,7 @@
     "test:e2e:editor-fidelity-1295": "playwright test --config playwright.issue-1295-editor-fidelity.config.ts --project=chromium",
     "test:e2e:editor-fidelity-1296": "playwright test --config playwright.issue-1296-editor-agent.config.ts --project=chromium",
     "test:e2e:editor-governance-1395": "playwright test --config playwright.issue-1395-editor-agent.config.ts --project=chromium",
+    "test:e2e:editor-layout-1375": "playwright test --config playwright.issue-1375-editor-layout.config.ts --project=chromium",
     "test:release:smoke": "npm run test:e2e:smoke",
     "release:plan": "node scripts/release-publish.mjs --plan-only",
     "release:publish": "node scripts/release-publish.mjs",

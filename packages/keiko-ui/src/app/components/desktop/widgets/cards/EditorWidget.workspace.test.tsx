@@ -147,7 +147,7 @@ describe("EditorWidget workspace session", () => {
     const pane = screen.getByTestId("runtime-probe").closest(".ed-pane");
     expect(pane).not.toBeNull();
     expect(pane).toHaveAttribute("data-active", "true");
-    expect(screen.queryByRole("button", { name: "Resize editor split" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Resize editor split" })).toBeNull();
     expect(screen.getByTestId("runtime-probe").closest(".ed-panes")).toHaveClass("single");
   });
 
@@ -237,7 +237,7 @@ describe("EditorWidget workspace session", () => {
       "src/a.ts",
       "src/a.ts",
     ]);
-    expect(screen.getByRole("button", { name: "Resize editor split" })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "Resize editor split" })).toBeInTheDocument();
     const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
     expect(lastPatch).toEqual(
       expect.objectContaining({
@@ -484,7 +484,7 @@ describe("EditorWidget workspace session", () => {
     await waitFor(() => {
       expect(screen.getAllByTestId("runtime-probe")).toHaveLength(1);
     });
-    expect(screen.queryByRole("button", { name: "Resize editor split" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Resize editor split" })).toBeNull();
   });
 
   it("supports keyboard tab reordering within a pane", () => {
@@ -700,7 +700,7 @@ describe("EditorWidget workspace session", () => {
           toJSON: () => ({}),
         }) as DOMRect,
     );
-    const splitResizer = screen.getByRole("button", { name: "Resize editor split" });
+    const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
     expect(splitResizer).toHaveAttribute("data-tip", "Resize editor split");
     expect(splitResizer).not.toHaveAttribute("title");
     splitResizer.setPointerCapture = vi.fn();
@@ -746,7 +746,7 @@ describe("EditorWidget workspace session", () => {
           toJSON: () => ({}),
         }) as DOMRect,
     );
-    const splitResizer = screen.getByRole("button", { name: "Resize editor split" });
+    const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
     expect(splitResizer).toHaveAttribute("data-tip", "Resize editor split");
     splitResizer.setPointerCapture = vi.fn();
     splitResizer.hasPointerCapture = vi.fn(() => false);
@@ -795,12 +795,147 @@ describe("EditorWidget workspace session", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
-    const splitResizer = screen.getByRole("button", { name: "Resize editor split" });
+    const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
     fireEvent.keyDown(splitResizer, { key: "ArrowRight" });
     lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
     expect(JSON.parse(String(lastPatch?.layoutJson)).tree.ratio).toBe(52);
 
     fireEvent.keyDown(splitResizer, { key: "ArrowDown" });
     expect(onWorkspaceChange.mock.calls.at(-1)?.[0]).toEqual(lastPatch);
+  });
+});
+
+describe("EditorWidget — Issue #1375 layout regression hardening", () => {
+  it("keeps tab order stable across a reload from persisted layout state (AC1)", () => {
+    const onWorkspaceChange = vi.fn();
+    const { unmount } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+
+    // Reorder a.ts to the end of the strip with two keyboard moves.
+    const reorder = (): void => {
+      fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" }), {
+        key: "ArrowRight",
+        altKey: true,
+      });
+    };
+    reorder();
+    reorder();
+
+    const persisted = String(onWorkspaceChange.mock.calls.at(-1)?.[0]?.layoutJson);
+    expect(JSON.parse(persisted).panes["pane-1"].tabOrder).toEqual([
+      "src/b.ts",
+      "src/c.ts",
+      "src/a.ts",
+    ]);
+    unmount();
+
+    // A reload re-creates the widget from the persisted layout JSON. The order must survive.
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        layoutJson={persisted}
+      />,
+    );
+    expect(screen.getByTestId("runtime-open-files")).toHaveTextContent(
+      "src/b.ts|src/c.ts|src/a.ts",
+    );
+  });
+
+  it("changes only layout, never dirty state, when a clean tab is dragged into a split (AC2)", () => {
+    const { container } = render(
+      <EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />,
+    );
+
+    fireEvent.dragStart(screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" }), {
+      dataTransfer: { effectAllowed: "", setData: vi.fn() },
+    });
+    const rightZone = container.querySelector(".ed-pane-drop-zone.right");
+    expect(rightZone).not.toBeNull();
+    fireEvent.drop(rightZone as Element, { dataTransfer: { effectAllowed: "", setData: vi.fn() } });
+
+    // The drag produced a split (layout change) but introduced no dirty marker.
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+    for (const node of screen.getAllByTestId("runtime-dirty-files")) {
+      expect(node).not.toHaveTextContent("src/");
+    }
+  });
+
+  it("re-homes the dirty marker and active selection when a dirty tab moves panes (AC3)", () => {
+    const onWorkspaceChange = vi.fn();
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    expect(screen.getByTestId("runtime-dirty-files")).toHaveTextContent("src/a.ts");
+
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" }), {
+      key: "ArrowRight",
+      altKey: true,
+      shiftKey: true,
+    });
+
+    // The dirty file now lives in pane-2, which becomes the active pane and selection.
+    expect(screen.getByRole("button", { name: "Tab handle pane-2 src/a.ts" })).toBeInTheDocument();
+    const movedPatch = JSON.parse(String(onWorkspaceChange.mock.calls.at(-1)?.[0]?.layoutJson));
+    expect(movedPatch.activePaneId).toBe("pane-2");
+    expect(movedPatch.panes["pane-2"].activeFile).toBe("src/a.ts");
+    for (const node of screen.getAllByTestId("runtime-dirty-files")) {
+      expect(node).toHaveTextContent("src/a.ts");
+    }
+
+    // Cleaning the file in its NEW pane clears the marker everywhere: no orphaned entry
+    // survives on the pane the tab left (the AC3 regression).
+    fireEvent.click(screen.getByRole("button", { name: "Mark clean pane-2" }));
+    for (const node of screen.getAllByTestId("runtime-dirty-files")) {
+      expect(node).not.toHaveTextContent("src/a.ts");
+    }
+  });
+
+  it("collapses an empty pane back to a single pane when its last tab closes (AC4)", async () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+
+    // pane-2 holds only a.ts; closing it leaves the pane empty and must collapse the split.
+    const closeButtons = screen.getAllByRole("button", { name: "Close a" });
+    fireEvent.click(closeButtons[closeButtons.length - 1] as HTMLElement);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("runtime-probe")).toHaveLength(1);
+    });
+    expect(screen.queryByRole("separator", { name: "Resize editor split" })).toBeNull();
+  });
+
+  it("exposes accessible split-resizer separator semantics that track the ratio (AC5)", () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    const resizer = screen.getByRole("separator", { name: "Resize editor split" });
+    expect(resizer).toHaveAttribute("aria-orientation", "vertical");
+    expect(resizer).toHaveAttribute("aria-valuemin", "15");
+    expect(resizer).toHaveAttribute("aria-valuemax", "85");
+    expect(resizer).toHaveAttribute("aria-valuenow", "50");
+
+    fireEvent.keyDown(resizer, { key: "ArrowRight" });
+    expect(screen.getByRole("separator", { name: "Resize editor split" })).toHaveAttribute(
+      "aria-valuenow",
+      "52",
+    );
   });
 });

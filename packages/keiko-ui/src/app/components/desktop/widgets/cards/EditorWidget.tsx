@@ -33,6 +33,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { Icons } from "../../Icons";
+import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirtyState";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget } from "./FilesWidget";
@@ -269,9 +270,7 @@ export function EditorWidget({
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
   const [layout, setLayout] = useState<EditorLayoutStateV2>(initialLayout);
-  const [dirtyByPane, setDirtyByPane] = useState<
-    Readonly<Record<string, Readonly<Record<string, true>>>>
-  >({});
+  const [dirtyByPane, setDirtyByPane] = useState<EditorDirtyByPane>({});
   const [pendingClose, setPendingClose] = useState<PendingDirtyClose | null>(null);
   const [draggedTab, setDraggedTab] = useState<DraggedTab | null>(null);
   const [saveRequest, setSaveRequest] = useState<EditorExternalSaveRequest | null>(null);
@@ -297,6 +296,10 @@ export function EditorWidget({
     (nextLayout: EditorLayoutStateV2, nextRoot = workspaceRoot): void => {
       const normalized = sanitizeLayoutFiles(nextRoot, nextLayout);
       setLayout(normalized);
+      // Re-home the per-pane dirty index onto the committed layout so a dirty tab
+      // keeps its marker and unsaved-changes prompt as it moves between panes and
+      // no orphaned flag survives on a collapsed pane (Issue #1375 AC3).
+      setDirtyByPane((current) => reconcileEditorDirtyByPane(current, normalized));
       if (nextRoot.length > 0) onWorkspaceChange?.(buildPatch(nextRoot, normalized));
     },
     [buildPatch, onWorkspaceChange, workspaceRoot],
@@ -873,7 +876,15 @@ export function EditorWidget({
         <button
           type="button"
           className="ed-pane-resizer ui-tip"
+          // WAI-ARIA window-splitter pattern: a focusable separator is an interactive widget;
+          // role="separator" with aria-valuenow and Arrow-key handling is its canonical markup.
+          // eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role
+          role="separator"
           aria-label="Resize editor split"
+          aria-orientation={node.direction === "row" ? "vertical" : "horizontal"}
+          aria-valuemin={MIN_SPLIT_RATIO}
+          aria-valuemax={MAX_SPLIT_RATIO}
+          aria-valuenow={Math.round(node.ratio)}
           data-tip="Resize editor split"
           onPointerDown={capturePointer}
           onPointerMove={(event) => {
