@@ -514,6 +514,7 @@ function actionTouchesRemote(kind: GitDeliveryActionKind): boolean {
 function affectedBranchOf(inputs: GitDeliveryResolvedInputs): string | undefined {
   switch (inputs.kind) {
     case "branch-create":
+    case "branch-switch":
       return inputs.branchName;
     case "push":
       return inputs.sourceBranchName;

@@ -1617,3 +1617,44 @@ export {
   buildGitDeliveryAuditPacket,
   GIT_DELIVERY_AUDIT_PACKET_KNOWN_LIMITATIONS,
 } from "./git-delivery-evidence.js";
+
+// git-commit-policy.ts (Issue #475, Epic #470; ADR-0062)
+// The deterministic, content-free commit-message-policy validator: a server-resolved policy shape
+// (conventional-commit, issue-key, sign-off, subject-length) and a pure validator returning typed
+// violation codes only — never any fragment of the message.
+export type {
+  GitCommitConventionalCommitRule,
+  GitCommitIssueKeyRule,
+  GitCommitMessagePolicy,
+  GitCommitMessageViolationCode,
+  GitCommitMessageValidation,
+} from "./git-commit-policy.js";
+export {
+  GIT_COMMIT_POLICY_SCHEMA_VERSION,
+  GIT_COMMIT_MESSAGE_VIOLATION_CODES,
+  KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY,
+  validateGitCommitMessage,
+  isGitCommitMessageViolationCode,
+  isGitCommitMessagePolicy,
+  isGitCommitMessageValidation,
+} from "./git-commit-policy.js";
+
+// git-commit-intent.ts (Issue #475, Epic #470; ADR-0062)
+// The deterministic commit-intent heuristics: a content-free staged-change summary, the quality
+// warning vocabulary, and a pure analyzer producing warnings plus scaffolding suggestions (no model
+// call).
+export type {
+  GitCommitChangeSummary,
+  GitCommitQualityWarningCode,
+  GitCommitIntentAnalysis,
+  GitCommitIntentInput,
+} from "./git-commit-intent.js";
+export {
+  GIT_COMMIT_INTENT_SCHEMA_VERSION,
+  DEFAULT_LARGE_CHANGE_THRESHOLD,
+  GIT_COMMIT_QUALITY_WARNING_CODES,
+  analyzeGitCommitIntent,
+  isGitCommitQualityWarningCode,
+  isGitCommitChangeSummary,
+  isGitCommitIntentAnalysis,
+} from "./git-commit-intent.js";
