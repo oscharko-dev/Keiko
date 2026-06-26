@@ -9,6 +9,7 @@ import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
+import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
@@ -839,6 +840,147 @@ describe("desktop chat routes", () => {
     expect(lastTurn?.content).toContain("Attached document context:");
     expect(lastTurn?.content).toContain("spec.md");
     expect(lastTurn?.content).toContain("Some document content.");
+  });
+
+  // Issue #502 — a selected discussion mode threads the additive directive block onto the latest
+  // user turn for the model call. The mode is turn-local (never persisted to chat history).
+  it("threads the discussion directive block onto the latest user turn for the model call", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Should we ship this?",
+        discussionMode: "challenge",
+      }),
+    });
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as { messages: { role: string; content: string }[] };
+    // The persisted user bubble keeps the raw draft (mode is not part of chat history).
+    expect(body.messages[0]).toMatchObject({ role: "user", content: "Should we ship this?" });
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.role).toBe("user");
+    // Assert the turn STARTS WITH the exact rendered block (not merely contains a snippet), so a
+    // template rewording or a truncated block is caught.
+    expect(lastTurn?.content.startsWith(composeDiscussionDirectiveBlock("challenge"))).toBe(true);
+    expect(lastTurn?.content).toContain("Should we ship this?");
+    // The directive block precedes the draft (additive block, system prompt untouched).
+    const headerIdx = lastTurn?.content.indexOf("Discussion mode directives:") ?? -1;
+    const draftIdx = lastTurn?.content.indexOf("Should we ship this?") ?? -1;
+    expect(headerIdx).toBeGreaterThanOrEqual(0);
+    expect(draftIdx).toBeGreaterThan(headerIdx);
+  });
+
+  it("ignores an unknown discussionMode value (no block, send still succeeds)", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "plain question",
+        discussionMode: "not-a-real-mode",
+      }),
+    });
+    expect(sendRes.status).toBe(200);
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.content).not.toContain("Discussion mode directives:");
+    // With no mode, no docs, and no memory the latest turn stays the bare draft (backward-compatible).
+    expect(lastTurn).toEqual({ role: "user", content: "plain question" });
+  });
+
+  it("sends no directive block when discussionMode is omitted (backward-compatible default)", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "no mode here",
+      }),
+    });
+    expect(sendRes.status).toBe(200);
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.content).not.toContain("Discussion mode directives:");
+  });
+
+  // Issue #502 — the directive block is turn-LOCAL: it is composed only onto the latest user turn for
+  // the current send. When an earlier history turn has the SAME text as the current draft, only the
+  // latest turn may carry the block; the identical earlier turn must stay the bare draft (so a naive
+  // text-match projection cannot leak the block onto a prior message).
+  it("composes the directive block only onto the latest same-text user turn, never an earlier one", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    // First send: same text, NO mode — becomes a verbatim history turn.
+    const first = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Should we ship this?",
+      }),
+    });
+    expect(first.status).toBe(200);
+
+    // Second send: SAME text, WITH a mode.
+    const second = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Should we ship this?",
+        discussionMode: "decide",
+      }),
+    });
+    expect(second.status).toBe(200);
+
+    // The gateway request for the SECOND send carries both user turns.
+    const secondRequest = seenRequests.at(-1);
+    const userTurns = (secondRequest?.messages ?? []).filter((message) => message.role === "user");
+    expect(userTurns.length).toBe(2);
+
+    const expectedBlock = composeDiscussionDirectiveBlock("decide");
+    // Exactly one user turn carries the block — the latest.
+    const turnsWithBlock = userTurns.filter((turn) => turn.content.includes(expectedBlock));
+    expect(turnsWithBlock.length).toBe(1);
+    expect(userTurns.at(-1)?.content.startsWith(expectedBlock)).toBe(true);
+    // The earlier same-text turn is the bare draft (no block, no header).
+    expect(userTurns[0]?.content).toBe("Should we ship this?");
+    expect(userTurns[0]?.content).not.toContain("Discussion mode directives:");
   });
 
   it("rejects a send with a truncationMarker exceeding 256 bytes", async () => {

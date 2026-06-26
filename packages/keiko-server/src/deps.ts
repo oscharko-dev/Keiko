@@ -57,6 +57,10 @@ import type {
   OpenAIEmbeddingBatchRequest,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
+  RealtimeNegotiationOutcome,
+  RealtimeNegotiationRequest,
+  SpeechToTextOutcome,
+  SpeechToTextRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   createRelationshipStorePort,
@@ -213,6 +217,22 @@ export interface UiHandlerDeps {
   // (non-mutating, additive `diagnostics.contextBudget?`). Optional + test seam: injecting
   // `undefined` pins the legacy no-profile code path (observer not invoked, pack byte-identical).
   readonly contextProfile?: ContextProfile | undefined;
+  // Issue #494 (Epic #491) — voice speech-to-text dictation seam (ADR-0058 D4). Lets the BFF
+  // dictation route call the provider-neutral STT adapter without touching global fetch in tests.
+  // Production leaves this undefined and uses requestSpeechToText, so the audio is forwarded once to
+  // the configured provider through the Model Gateway egress seam (gatewayFetch) and never persisted.
+  readonly voiceTranscriptionRequest?:
+    | ((request: SpeechToTextRequest) => Promise<SpeechToTextOutcome>)
+    | undefined;
+  // Issue #497 (Epic #491) — realtime voice proxied-SDP negotiation seam (ADR-0058 D3/D6). Lets the
+  // WebSocket control plane perform the browser↔provider SDP exchange through the provider-neutral
+  // realtime adapter without touching global fetch in tests. Production leaves this undefined and
+  // uses requestRealtimeNegotiation, so the offer is forwarded once to the configured provider
+  // through the Model Gateway egress seam (gatewayFetch); the long-lived credential never reaches the
+  // browser and no SDP is persisted.
+  readonly voiceRealtimeNegotiationRequest?:
+    | ((request: RealtimeNegotiationRequest) => Promise<RealtimeNegotiationOutcome>)
+    | undefined;
 }
 
 export interface BuildHandlerDepsOptions {

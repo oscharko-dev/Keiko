@@ -34,6 +34,7 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
+  type Reducer,
 } from "react";
 import {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
@@ -58,16 +59,21 @@ import {
   testGenerationReducer,
   type EditorBuffer,
   type EditorChangeOrigin,
+  type EditorCompletionQuery,
   type EditorCompletionResolver,
   type EditorContentDelta,
   type EditorDiagnosticsResolver,
+  type EditorDiagnosticsQuery,
   type EditorDiagnosticsSummary,
   type EditorDocumentIdentity,
   type EditorFileModel,
   type EditorHotExitSnapshotV1,
   type EditorFormattingResolver,
+  type EditorFormattingQuery,
   type EditorHoverResolver,
+  type EditorHoverQuery,
   type EditorInlineCompletionResolver,
+  type EditorInlineCompletionQuery,
   type EditorLanguageId,
   type EditorPosition,
   type EditorRange,
@@ -76,9 +82,12 @@ import {
   type EditorSaveStatus,
   type EditorStatusRun,
   type EditorSymbolsResolver,
+  type EditorSymbolsQuery,
   type InlineCompletionTelemetrySnapshot,
   type KeikoEditorLoadState,
   type PatchPreviewModel,
+  type TestGenerationFlowAction,
+  type TestGenerationFlowState,
   type TestGenerationPreview,
 } from "@oscharko-dev/keiko-editor";
 import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts";
@@ -525,7 +534,9 @@ export default function EditorRuntimeWidget({
   const [formatRequestNonce, setFormatRequestNonce] = useState(0);
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
-  const [testGenState, dispatchTestGen] = useReducer(
+  const [testGenState, dispatchTestGen] = useReducer<
+    Reducer<TestGenerationFlowState, TestGenerationFlowAction>
+  >(
     testGenerationReducer,
     IDLE_TEST_GENERATION_STATE,
   );
@@ -865,7 +876,7 @@ export default function EditorRuntimeWidget({
       if (textChangedBeforeReactCommitted) {
         contentRef.current = text;
         setContent(text);
-        setFileModel((model) =>
+        setFileModel((model: EditorFileModel | null) =>
           model === null
             ? model
             : editorFileModelReducer(model, { type: "edited", origin: "human" }),
@@ -916,7 +927,7 @@ export default function EditorRuntimeWidget({
         if (contentRef.current === text) {
           // No edits arrived during the save: adopt the persisted echo and mark the buffer clean.
           setContent(response.content);
-          setFileModel((model) =>
+          setFileModel((model: EditorFileModel | null) =>
             model === null ? model : editorFileModelReducer(model, { type: "saved" }),
           );
           setSaveStatus((status) => saveStatusReducer(status, { type: "succeeded" }));
@@ -968,7 +979,7 @@ export default function EditorRuntimeWidget({
   const onContentChange = useCallback(
     (next: EditorContentDelta, _origin: EditorChangeOrigin): void => {
       setContent(next.text);
-      setFileModel((model) =>
+      setFileModel((model: EditorFileModel | null) =>
         model === null ? model : editorFileModelReducer(model, { type: "edited", origin: "human" }),
       );
       setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
@@ -1052,7 +1063,7 @@ export default function EditorRuntimeWidget({
   // response. A completion failure rejects here and the editor bridge renders nothing (AC4) — it
   // never breaks editing.
   const provideCompletions = useCallback<EditorCompletionResolver>(
-    async (query, signal) => {
+    async (query: EditorCompletionQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return {
           request: query.request.request,
@@ -1101,7 +1112,7 @@ export default function EditorRuntimeWidget({
   // bridge renders nothing (AC1) — it never breaks editing. The server is authoritative for the
   // policy/cost/rate gates and returns zero items when the feature is degraded or disabled.
   const provideInlineCompletions = useCallback<EditorInlineCompletionResolver>(
-    async (query, signal) => {
+    async (query: EditorInlineCompletionQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, items: [] };
       }
@@ -1266,7 +1277,7 @@ export default function EditorRuntimeWidget({
   // maps the wire result into the editor render contract. A failure rejects here and the editor bridge
   // degrades to nothing (no markers / no hover / no outline / no edits) — it never breaks editing.
   const provideDiagnostics = useCallback<EditorDiagnosticsResolver>(
-    async (query, signal) => {
+    async (query: EditorDiagnosticsQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, diagnostics: [] };
       }
@@ -1280,7 +1291,7 @@ export default function EditorRuntimeWidget({
   );
 
   const provideHover = useCallback<EditorHoverResolver>(
-    async (query, signal) => {
+    async (query: EditorHoverQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, hover: { contents: null } };
       }
@@ -1303,7 +1314,7 @@ export default function EditorRuntimeWidget({
   );
 
   const provideSymbols = useCallback<EditorSymbolsResolver>(
-    async (query, signal) => {
+    async (query: EditorSymbolsQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, symbols: [] };
       }
@@ -1317,7 +1328,7 @@ export default function EditorRuntimeWidget({
   );
 
   const provideFormatting = useCallback<EditorFormattingResolver>(
-    async (query, signal) => {
+    async (query: EditorFormattingQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, edits: [] };
       }

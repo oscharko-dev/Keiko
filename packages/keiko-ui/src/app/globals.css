@@ -901,6 +901,10 @@ button {
 }
 .mono {
   font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
 }
 .dot {
   width: 7px;
@@ -3587,6 +3591,43 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   color: var(--text-secondary); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
 }
 
+.chat-memory-budget-label {
+  position: relative;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.chat-memory-budget-label[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 5px 9px;
+  border: 1px solid var(--popover-border);
+  border-radius: 7px;
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  box-shadow: var(--popover-shadow);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+  text-wrap: pretty;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: var(--z-tooltip);
+}
+
+.chat-memory-budget-label[data-tip]:hover::after,
+.chat-memory-budget-label[data-tip]:focus-within::after {
+  opacity: 1;
+}
+
 .chat-memory-budget .number-control-pill {
   --number-stepper-size: 18px;
   --number-stepper-right: 8px;
@@ -5027,12 +5068,21 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .fpv-refresh[data-state="refreshing"] {
   color: var(--accent);
 }
+.fpv-copy {
+  width: 24px;
+  height: 24px;
+}
 .fpv-status {
   flex: none;
   font-size: 10px;
   line-height: 1;
   color: var(--text-secondary);
   white-space: nowrap;
+}
+.fpv-copy-status {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .fpv-status[data-state="refreshed"] {
   color: var(--feedback-success);
@@ -14131,6 +14181,10 @@ html[data-keiko-gateway-setup-open="true"] {
 /* Inline code */
 .sm-inline-code {
   font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
   font-size: 0.86em;
   background: color-mix(in oklch, var(--surface-inset) 78%, transparent);
   border: 1px solid var(--border-subtle);
@@ -14245,6 +14299,10 @@ html[data-keiko-gateway-setup-open="true"] {
   overflow: auto;
   scrollbar-gutter: stable;
   font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
   font-size: 12.75px;
   line-height: 1.7;
   color: var(--ed-fg);
@@ -14260,6 +14318,10 @@ html[data-keiko-gateway-setup-open="true"] {
   min-width: max-content;
   padding: 10px 0;
   font-family: inherit;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
   background: none;
   border: none;
 }
@@ -14282,6 +14344,10 @@ html[data-keiko-gateway-setup-open="true"] {
 .sm-code-line-src {
   padding: 0 18px 0 11px;
   white-space: pre;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
 }
 
 /* Blockquote */
@@ -16514,6 +16580,24 @@ select.qi-select {
 .figma-snapshot-error-status,
 .figma-snapshot-error-remediation {
   color: var(--text-secondary);
+}
+
+/* Issue #1399: click-through from a PAT/credential alert to the Figma access-token settings. */
+.figma-snapshot-error-action {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  border: 1px solid var(--button-secondary-border);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  outline-offset: 2px;
+  min-height: 24px; /* WCAG 2.5.8 */
+}
+.figma-snapshot-error-action:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
 }
 
 /* ── Stored-snapshot notice ───────────────────────────────────────────────── */
@@ -19452,6 +19536,7 @@ ul.integ {
   outline-offset: -2px;
 }
 .fpv-back:focus-visible,
+.fpv-copy:focus-visible,
 .files-root-up:focus-visible,
 .files-root-open:focus-visible,
 .files-refresh:focus-visible,
@@ -21028,4 +21113,111 @@ ul.integ {
 .qi-edit-label[data-required="true"]::after {
   content: " *";
   color: var(--text-accent);
+}
+
+/* ── Issue #495 — capability-gated composer dictation ───────────────────────────────────────────
+   The microphone affordance reuses the .cmp-icon shape; the recording state turns it into a clear,
+   high-contrast stop control. The transcript review surface lives in the composer input stack. */
+.cmp-voice[data-recording="true"] {
+  color: var(--feedback-danger);
+  border-color: var(--feedback-danger);
+  background: var(--feedback-danger-surface);
+}
+.cmp-voice-recording {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+/* WCAG 2.3.3 — the recording dot is solid (non-animated) by default; it pulses only under
+   prefers-reduced-motion: no-preference. The solid danger color carries the meaning either way. */
+.cmp-voice-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--feedback-danger);
+  animation: none;
+}
+@keyframes cmp-voice-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cmp-voice[data-recording="true"] .cmp-voice-dot {
+    animation: cmp-voice-pulse 1.2s ease-in-out infinite;
+  }
+}
+.cmp-voice-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.cmp-voice-error {
+  border-color: var(--feedback-danger);
+  background: var(--feedback-danger-surface);
+}
+.cmp-voice-error-text {
+  margin: 0;
+  color: var(--text-primary);
+}
+.cmp-voice-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.cmp-voice-transcript {
+  width: 100%;
+  resize: vertical;
+  min-height: 60px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-primary);
+  color: var(--input-text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 8px 10px;
+}
+.cmp-voice-transcript:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmp-voice-privacy {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.cmp-voice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cmp-voice-btn {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.cmp-voice-btn:hover {
+  background: var(--button-secondary-surface-hover);
+}
+.cmp-voice-btn:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmp-voice-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cmp-voice-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--background-primary);
 }

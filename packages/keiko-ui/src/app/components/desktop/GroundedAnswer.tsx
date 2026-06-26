@@ -540,7 +540,7 @@ function CoverageNotice({
 }): ReactNode {
   const gaps = COVERAGE_GAP_REASONS.map(({ reason, label }) => ({
     label,
-    count: omittedCounts[reason],
+    count: omittedCounts[reason] ?? 0,
   })).filter((gap) => gap.count > 0);
   const total = gaps.reduce((sum, gap) => sum + gap.count, 0);
   if (total <= 0) return null;
@@ -548,11 +548,11 @@ function CoverageNotice({
   const fileWord = total === 1 ? "file" : "files";
   const verb = total === 1 ? "was" : "were";
   const showDocumentNotice =
-    omittedCounts.binary > 0 ||
-    omittedCounts["unsupported-format"] > 0 ||
-    omittedCounts["no-text-layer"] > 0 ||
-    omittedCounts["malformed-document"] > 0 ||
-    omittedCounts["encrypted-document"] > 0;
+    (omittedCounts.binary ?? 0) > 0 ||
+    (omittedCounts["unsupported-format"] ?? 0) > 0 ||
+    (omittedCounts["no-text-layer"] ?? 0) > 0 ||
+    (omittedCounts["malformed-document"] ?? 0) > 0 ||
+    (omittedCounts["encrypted-document"] ?? 0) > 0;
   return (
     <div className="grounded-coverage-notice" role="note">
       <span className="grounded-coverage-notice-title">Partial coverage</span>

@@ -16,6 +16,7 @@ import type {
 } from "./harness.js";
 import type { AuditSummary } from "./workspace.js";
 import type { VerificationAuditSummary } from "./verification-summary.js";
+import type { SpokenActionAuditRecord } from "./voice-action-intent.js";
 
 // The schema discriminant — distinct from the harness event `schemaVersion`. A breaking change
 // produces "2" as a NEW union member rather than mutating "1" (ADR-0010 D2).
@@ -311,6 +312,10 @@ export interface EvidenceGovernedWorkflowHandoff {
   readonly evidenceAtomCount: number;
   readonly expectedChecks: readonly string[];
   readonly approvalTokenHash: string;
+  // Additive (Issue #503): the content-free audit record of the spoken action that governed this handoff,
+  // present only when the handoff was voice-originated. Absent on the text path (additive-optional, no
+  // evidence schema-version bump). Carries enums/counts/digest only — never raw transcript text or audio.
+  readonly voiceAction?: SpokenActionAuditRecord | undefined;
 }
 
 export interface EvidenceManifest {

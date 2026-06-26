@@ -39,6 +39,28 @@ describe("SafeMarkdown — code block", () => {
     expect(document.querySelector(".sm-code-line-src")?.textContent).toContain("answer");
   });
 
+  it("keeps code operators literal for rendering and copy", async () => {
+    const source = "const f = (x) => x !== null ? x => x : x;";
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(<SafeMarkdown source={`\`\`\`typescript\n${source}\n\`\`\``} />);
+
+    expect(document.querySelector(".sm-code-line-src")?.textContent).toBe(source);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code block" }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(source);
+    });
+
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
   it("marks long code blocks as internally scrollable", () => {
     const longCode = Array.from(
       { length: 32 },

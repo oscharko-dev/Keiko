@@ -637,8 +637,17 @@ export type {
   FinishReason,
   StreamDelta,
   StreamEvent,
+  VoiceProviderLocality,
+  VoiceProfile,
+  VoiceUnavailableReason,
+  VoiceTransportPosture,
+  VoiceCapabilityResolution,
 } from "./gateway.js";
-export { CONVERSATION_CAPABILITY_CONTRACT_VERSION, INFILLING_ALIGNMENTS } from "./gateway.js";
+export {
+  CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  INFILLING_ALIGNMENTS,
+  VOICE_PROVIDER_LOCALITIES,
+} from "./gateway.js";
 export type { ConversationIneligibilityReason } from "./gateway.js";
 export {
   isConversationEligibleModel,
@@ -646,7 +655,165 @@ export {
   modelSupportsInfilling,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
+  isVoiceCapability,
+  modelSupportsSpeechInput,
+  modelSupportsSpeechOutput,
+  modelSupportsRealtimeVoice,
 } from "./gateway.js";
+
+// ─── Voice control / media protocol (Issue #496 / Epic #491; ADR-0059) ──────────
+// Versioned, content-free wire-protocol contract for the optional Voice Digital Twin: the WebSocket
+// control / signaling message catalog, the WebRTC media-plane descriptor, the capability-gating and
+// fallback state table, and the replay / reconnect / redaction classification. Pure types + frozen
+// const tables + pure validators only — no transport (that is Issue #497). `VOICE_PROTOCOL_VERSION`
+// is independent of `CONVERSATION_CAPABILITY_CONTRACT_VERSION` and never bumps it. The protocol reuses
+// the `VoiceProfile` / `VoiceProviderLocality` / `VoiceUnavailableReason` types from gateway.ts.
+export type {
+  VoicePlane,
+  VoiceControlTransport,
+  VoiceMediaTransport,
+  VoiceNegotiationMode,
+  VoiceReplayClass,
+  VoiceRedactionClass,
+  VoiceMessageDirection,
+  VoiceMediaTrackKind,
+  VoiceMediaPlaneDescriptor,
+  VoiceControlMessageKind,
+  VoiceDataChannelEventKind,
+  VoiceSessionCloseReason,
+  VoiceMediaTrackState,
+  VoicePlaybackState,
+  VoicePolicyDecision,
+  VoiceProtocolErrorCode,
+  VoiceSessionCreateMessage,
+  VoiceSessionCreatedMessage,
+  VoiceSessionCloseMessage,
+  VoiceSessionClosedMessage,
+  VoiceCapabilityOfferMessage,
+  VoiceCapabilitySelectMessage,
+  VoiceSdpOfferMessage,
+  VoiceSdpAnswerMessage,
+  VoiceIceCandidateMessage,
+  VoiceMediaTrackStateMessage,
+  VoiceControlCancelMessage,
+  VoiceControlInterruptMessage,
+  VoiceTranscriptPartialMessage,
+  VoiceTranscriptCommittedMessage,
+  VoiceTranscriptDiscardedMessage,
+  VoicePlaybackStateMessage,
+  VoicePolicyDecisionMessage,
+  VoiceErrorMessage,
+  VoiceControlMessage,
+  VoiceProtocolTimeouts,
+  VoiceProtocolValidation,
+} from "./voice-protocol.js";
+export {
+  VOICE_PROTOCOL_VERSION,
+  VOICE_PLANES,
+  VOICE_CONTROL_TRANSPORTS,
+  VOICE_CONTROL_TRANSPORT_V1,
+  VOICE_MEDIA_TRANSPORTS,
+  VOICE_NEGOTIATION_MODES,
+  PREFERRED_VOICE_NEGOTIATION_MODE,
+  VOICE_REPLAY_CLASSES,
+  VOICE_REDACTION_CLASSES,
+  VOICE_MESSAGE_DIRECTIONS,
+  VOICE_MEDIA_TRACK_KINDS,
+  VOICE_MEDIA_PLANE,
+  VOICE_CONTROL_MESSAGE_KINDS,
+  VOICE_DATA_CHANNEL_EVENT_KINDS,
+  VOICE_SESSION_CLOSE_REASONS,
+  VOICE_MEDIA_TRACK_STATES,
+  VOICE_PLAYBACK_STATES,
+  VOICE_POLICY_DECISIONS,
+  VOICE_PROTOCOL_ERROR_CODES,
+  VOICE_CONTROL_MESSAGE_REPLAY,
+  VOICE_CONTROL_MESSAGE_REDACTION,
+  VOICE_PROFILE_ALLOWED_MESSAGE_KINDS,
+  VOICE_PROFILE_MEDIA_TRANSPORT,
+  VOICE_PROFILE_NEGOTIATION_MODE,
+  DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
+  isVoiceProtocolVersionSupported,
+  isVoiceControlMessageKind,
+  isVoiceMessageDirection,
+  isVoiceNegotiationMode,
+  voiceControlMessageReplayClass,
+  voiceControlMessageRedactionClass,
+  isVoiceReplayEligible,
+  voiceMessageAllowedForProfile,
+  assertNeverVoiceControlMessageKind,
+  isVoiceControlMessage,
+  validateVoiceControlMessage,
+} from "./voice-protocol.js";
+
+// ─── Voice transcript segment lifecycle (Issue #500 / Epic #491; ADR-0063) ───────
+export type {
+  VoiceTranscriptSegmentState,
+  VoiceTranscriptProviderErrorKind,
+  VoiceTranscriptSource,
+  VoiceTranscriptSegment,
+  CommittedVoiceTranscriptProjection,
+  VoiceTranscriptEvidenceSummary,
+} from "./voice-transcript.js";
+export {
+  VOICE_TRANSCRIPT_SCHEMA_VERSION,
+  VOICE_TRANSCRIPT_SEGMENT_STATES,
+  VOICE_TRANSCRIPT_CONSUMABLE_STATES,
+  VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS,
+  VOICE_TRANSCRIPT_SOURCES,
+  VOICE_TRANSCRIPT_SEGMENT_REPLAY,
+  VOICE_TRANSCRIPT_SEGMENT_REDACTION,
+  VOICE_TRANSCRIPT_SEGMENT_TRANSITIONS,
+  isVoiceTranscriptSchemaVersionSupported,
+  isVoiceTranscriptSegmentState,
+  isVoiceTranscriptProviderErrorKind,
+  isVoiceTranscriptSource,
+  voiceTranscriptSegmentReplayClass,
+  voiceTranscriptSegmentRedactionClass,
+  canTransitionVoiceTranscriptSegment,
+  isCommittedVoiceTranscriptState,
+  assertNeverVoiceTranscriptSegmentState,
+  mapWireKindToVoiceTranscriptSegmentState,
+  voiceTranscriptCaptureAllowed,
+  voiceTranscriptPreviewAllowed,
+  selectCommittedVoiceTranscript,
+  summarizeVoiceTranscript,
+} from "./voice-transcript.js";
+
+// ─── Voice assistant speech-output playback lifecycle (Issue #501 / Epic #491; ADR-0064) ──
+export type {
+  VoicePlaybackPhase,
+  VoicePlaybackFailureKind,
+  VoicePlaybackEffect,
+  VoicePlaybackTurnSummary,
+} from "./voice-playback.js";
+export {
+  VOICE_PLAYBACK_SCHEMA_VERSION,
+  VOICE_PLAYBACK_PHASES,
+  VOICE_PLAYBACK_ACTIVE_PHASES,
+  VOICE_PLAYBACK_SETTLED_PHASES,
+  VOICE_PLAYBACK_FAILURE_KINDS,
+  VOICE_PLAYBACK_PHASE_REPLAY,
+  VOICE_PLAYBACK_PHASE_REDACTION,
+  VOICE_PLAYBACK_AUDIO_PLANE,
+  VOICE_PLAYBACK_TRANSITIONS,
+  VOICE_PLAYBACK_EFFECTS,
+  isVoicePlaybackSchemaVersionSupported,
+  isVoicePlaybackPhase,
+  isVoicePlaybackFailureKind,
+  isVoicePlaybackEffect,
+  voicePlaybackPhaseReplayClass,
+  voicePlaybackPhaseRedactionClass,
+  isActiveVoicePlaybackPhase,
+  isSettledVoicePlaybackPhase,
+  canTransitionVoicePlayback,
+  assertNeverVoicePlaybackPhase,
+  mapVoicePlaybackPhaseToWireState,
+  voicePlaybackAllowedForProfile,
+  voicePlaybackInterruptAllowedForProfile,
+  initialVoicePlaybackPhase,
+  summarizeVoicePlaybackTurn,
+} from "./voice-playback.js";
 
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {
@@ -2018,3 +2185,124 @@ export {
   isGitMergeReadinessSummary,
   parseGitMergeReadinessSummary,
 } from "./git-merge.js";
+
+// ─── Discussion intelligence (Issue #502 / Epic #491; ADR-0065) ──────────────────
+// Text-first colleague-like discussion contract (5 modes, disagreement structure, confidence bridge,
+// interruption-recovery turn model). Reuses the prompt-enhancer citation/contradiction/grounding vocab
+// and the voice transcript capability gate (no parallel stack). Pure, content-free leaf module.
+export type {
+  DiscussionMode,
+  ConfidenceLevel,
+  DisagreementFacet,
+  DiscussionDirective,
+  DiscussionModePlan,
+  DiscussionTurnStatus,
+  DiscussionTurnContext,
+  DiscussionTurnSummary,
+  DiscussionValidationResult,
+} from "./discussion-intelligence.js";
+export {
+  DISCUSSION_INTELLIGENCE_SCHEMA_VERSION,
+  DISCUSSION_MODES,
+  DISCUSSION_CONFIDENCE_LEVELS,
+  DISAGREEMENT_FACETS,
+  DISCUSSION_DIRECTIVES,
+  DISCUSSION_DIRECTIVE_TEMPLATES,
+  DISCUSSION_DIRECTIVE_FACETS,
+  DISCUSSION_MODE_PLANS,
+  DISCUSSION_TURN_STATUSES,
+  DISCUSSION_TURN_STATUS_TRANSITIONS,
+  isDiscussionIntelligenceSchemaVersionSupported,
+  isDiscussionMode,
+  assertNeverDiscussionMode,
+  confidenceLevelFromScore,
+  assertNeverDiscussionDirective,
+  discussionModePlan,
+  discussionDirectivesCoverFacets,
+  voiceCanDriveDiscussion,
+  isDiscussionTurnStatus,
+  canTransitionDiscussionTurnStatus,
+  assertNeverDiscussionTurnStatus,
+  discussionTopicIdReasons,
+  isValidDiscussionTopicId,
+  beginDiscussionTurn,
+  applyDiscussionInterruption,
+  applyDiscussionRecovery,
+  resolveDiscussionTurn,
+  summarizeDiscussionTurn,
+  validateDiscussionTurnContext,
+  validateDiscussionModePlan,
+} from "./discussion-intelligence.js";
+
+// ─── Spoken action intent governance (Issue #503 / Epic #491; ADR-0066) ──────────
+// Deterministic, fail-closed normalization + confirmation layer that sits IN FRONT OF the existing
+// governed-handoff governance for UNTRUSTED spoken transcripts. Adds preconditions, removes none. Pure,
+// content-free leaf module: the audit record carries no raw text/audio, only enums/counts/digest.
+export type {
+  SpokenActionEffectClass,
+  SpokenActionEffectMarkers,
+  SpokenActionState,
+  SpokenActionOutcome,
+  SpokenActionConfirmationInput,
+  SpokenActionProposal,
+  SpokenActionAuditInput,
+  SpokenActionAuditRecord,
+  SpokenActionValidationResult,
+} from "./voice-action-intent.js";
+export {
+  VOICE_ACTION_INTENT_SCHEMA_VERSION,
+  SPOKEN_ACTION_EFFECT_CLASSES,
+  SPOKEN_ACTION_EFFECT_REQUIRES_CONFIRMATION,
+  SPOKEN_ACTION_EFFECT_MARKERS,
+  SPOKEN_ACTION_STATES,
+  SPOKEN_ACTION_TERMINAL_STATES,
+  SPOKEN_ACTION_STATE_TRANSITIONS,
+  SPOKEN_ACTION_OUTCOMES,
+  isVoiceActionIntentSchemaVersionSupported,
+  isSpokenActionEffectClass,
+  assertNeverSpokenActionEffectClass,
+  spokenActionRequiresConfirmation,
+  classifySpokenActionEffect,
+  isSpokenActionState,
+  canTransitionSpokenAction,
+  isTerminalSpokenActionState,
+  assertNeverSpokenActionState,
+  voiceCanProposeAction,
+  isSpokenActionOutcome,
+  canonicalizeSpokenActionConfirmation,
+  normalizeSpokenActionProposal,
+  buildSpokenActionAuditRecord,
+  validateSpokenActionProposal,
+  validateSpokenActionAuditRecord,
+} from "./voice-action-intent.js";
+
+// ─── Voice session recap (Issue #504 / Epic #491; ADR-0067) ──────────────────────
+// User-triggered recap of a voice session's committed transcript that derives memory candidates via the
+// EXISTING governed `extractCandidatesFromUserText` path and surfaces them in the existing review queue.
+// Pure, content-free leaf module: descriptors and the audit record carry no raw text/audio, only
+// enums/counts/durations. The committed transcript roll-up reuses `VoiceTranscriptEvidenceSummary`.
+export type {
+  VoiceSessionRecapSchemaVersion,
+  VoiceRecapCandidateStatus,
+  VoiceRecapCommittedSpanDescriptor,
+  VoiceRecapAssistantTurnSource,
+  VoiceRecapAssistantTurnDescriptor,
+  VoiceSessionRecapEvidenceSummary,
+  VoiceSessionRecapAuditRecord,
+  VoiceSessionRecapAuditInput,
+  VoiceSessionRecapCandidateCounts,
+  VoiceSessionRecapValidationResult,
+} from "./voice-session-recap.js";
+export {
+  VOICE_SESSION_RECAP_SCHEMA_VERSION,
+  VOICE_RECAP_CANDIDATE_STATUSES,
+  VOICE_RECAP_ASSISTANT_TURN_SOURCES,
+  isVoiceSessionRecapSchemaVersionSupported,
+  voiceRecapAllowed,
+  isVoiceRecapCandidateStatus,
+  assertNeverVoiceRecapCandidateStatus,
+  isVoiceRecapAssistantTurnSource,
+  buildVoiceSessionRecapAuditRecord,
+  summarizeVoiceSessionRecap,
+  validateVoiceSessionRecapAuditRecord,
+} from "./voice-session-recap.js";

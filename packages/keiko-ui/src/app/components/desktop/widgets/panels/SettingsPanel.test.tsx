@@ -6,10 +6,11 @@
 //   - the rendered markup contains no host-name pattern or credential-shape
 //     literal (the no-leak invariant).
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
+import { consumePendingGatewaySetup, requestGatewaySetup } from "../shared/gatewaySetupBus";
 
 const fetchConfigMock = vi.fn();
 const fetchModelsMock = vi.fn();
@@ -102,6 +103,8 @@ function setClipboard(writeText: (text: string) => Promise<void>): PropertyDescr
 
 afterEach(() => {
   vi.clearAllMocks();
+  // Issue #1399: clear any residual gateway-setup latch so it cannot leak across tests.
+  consumePendingGatewaySetup();
   window.localStorage.clear();
   document.documentElement.style.removeProperty("--workspace-bg-brightness");
   document.documentElement.style.removeProperty("--workspace-grid-strength");
@@ -471,5 +474,66 @@ describe("SettingsPanel workspace wallpaper controls", () => {
     expect(document.documentElement.style.getPropertyValue("--frame-inner-glow-strength")).toBe(
       "34%",
     );
+  });
+});
+
+// Issue #1399: the Figma Snapshot PAT error deep-links here via the gateway-setup bus. The panel
+// must open the gateway-setup dialog (Figma access-token section) whether it was already open
+// (live event) or just opened by openWindow (latch read on mount).
+describe("SettingsPanel Figma token deep-link (Issue #1399)", () => {
+  it("opens the gateway-setup dialog on the Figma token section when already open", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    render(<SettingsPanel />);
+    // Wait until config has loaded (preserveExisting depends on it).
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Update credentials" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText(/figma access token/iu)).not.toBeInTheDocument();
+
+    act(() => {
+      requestGatewaySetup();
+    });
+
+    await waitFor(() => expect(screen.getByLabelText(/figma access token/iu)).toBeInTheDocument());
+    // The dialog's Figma section heading confirms the deep-link target.
+    expect(screen.getByRole("heading", { name: "Figma Snapshot" })).toBeInTheDocument();
+  });
+
+  it("opens the dialog after mount when the request was latched before Settings existed", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    // Settings was just opened by openWindow: the request is latched before the panel mounts.
+    requestGatewaySetup();
+    render(<SettingsPanel />);
+
+    await waitFor(() => expect(screen.getByLabelText(/figma access token/iu)).toBeInTheDocument());
+  });
+
+  it("does not open the dialog on a normal mount without a pending request", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    render(<SettingsPanel />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Update credentials" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText(/figma access token/iu)).not.toBeInTheDocument();
+  });
+
+  it("defers opening the dialog when config load fails, then opens after a successful Retry", async () => {
+    // First load fails → the latched request must NOT open the dialog in misleading first-run
+    // wording; the panel shows its own error + Retry. A successful retry then opens it correctly.
+    fetchConfigMock.mockRejectedValueOnce(new Error("HTTP 500"));
+    fetchModelsMock.mockRejectedValueOnce(new Error("HTTP 500"));
+    fetchConfigMock.mockResolvedValue({ config: null, configPresent: true });
+    fetchModelsMock.mockResolvedValue({ models: [chatCapability("test-chat-1")] });
+
+    requestGatewaySetup();
+    render(<SettingsPanel />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Could not load gateway settings");
+    // The dialog must stay closed while config is unresolved.
+    expect(screen.queryByLabelText(/figma access token/iu)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByLabelText(/figma access token/iu)).toBeInTheDocument());
   });
 });

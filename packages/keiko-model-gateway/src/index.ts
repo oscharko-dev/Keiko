@@ -52,14 +52,26 @@ export {
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
   isConversationEligibleModel,
+  isVoiceCapability,
   listCapabilities,
   modelSupportsInfilling,
+  modelSupportsRealtimeVoice,
+  modelSupportsSpeechInput,
+  modelSupportsSpeechOutput,
   resolveCostClass,
+  resolveVoiceCapabilityFromCapabilities,
   selectCheapest,
   selectCompletionModelFromCapabilities,
+  VOICE_PROVIDER_LOCALITIES,
   type CapabilityQuery,
   type CompletionSelectionOptions,
   type ConversationIneligibilityReason,
+  type VoiceCapabilityResolution,
+  type VoiceProfile,
+  type VoiceProviderLocality,
+  type VoiceResolutionOptions,
+  type VoiceTransportPosture,
+  type VoiceUnavailableReason,
 } from "./capabilities.js";
 
 export { CAPABILITY_DATA } from "./capabilities.data.js";
@@ -85,12 +97,32 @@ export {
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
+  resolveVoiceCapability,
   selectCompletionModel,
   selectConfiguredModel,
+  selectRealtimeVoiceModel,
+  selectSpeechToTextModel,
   type ConfiguredCapabilityProvider,
   type ConfiguredCapabilitySource,
   type ModelSelectionQuery,
 } from "./model-selection.js";
+
+export {
+  requestSpeechToText,
+  type SpeechToTextErrorKind,
+  type SpeechToTextOutcome,
+  type SpeechToTextRequest,
+  type SpeechToTextSuccess,
+} from "./speech-to-text-adapter.js";
+
+export {
+  MAX_SDP_BYTES,
+  requestRealtimeNegotiation,
+  type RealtimeNegotiationErrorKind,
+  type RealtimeNegotiationOutcome,
+  type RealtimeNegotiationRequest,
+  type RealtimeNegotiationSuccess,
+} from "./realtime-voice-adapter.js";
 
 export {
   assertCompatibleEmbeddingIdentity,

@@ -11,6 +11,7 @@ import {
   resolveGroundingLimits,
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { VOICE_PROVIDER_LOCALITIES } from "./types.js";
 import type {
   CircuitBreakerConfig,
   CostClass,
@@ -22,6 +23,7 @@ import type {
   ModelKind,
   ModelProviderConfig,
   OutboundHttpEgressConfig,
+  VoiceProviderLocality,
 } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -547,6 +549,110 @@ function resolveInfillingAlignment(
   };
 }
 
+// ─── Voice capability parsing (Issue #493, ADR-0058 D5/D7) ─────────────────────
+// Shared by both the lenient inline parser and the strict top-level parser so the voice invariants
+// are enforced identically. Voice fields are preserved only when declared, so a non-voice capability
+// carries no voice fields at all and a record round-trips exactly (same discipline as the infilling
+// and determinism optionals).
+
+interface DeclaredVoiceFlags {
+  readonly speechInput: boolean | undefined;
+  readonly speechOutput: boolean | undefined;
+  readonly realtimeVoice: boolean | undefined;
+}
+
+// Reads each voice sub-capability flag, present-only (undefined when the operator omitted it).
+function readDeclaredVoiceFlags(raw: Record<string, unknown>, path: string): DeclaredVoiceFlags {
+  return {
+    speechInput:
+      raw.supportsSpeechInput !== undefined
+        ? requireBoolean(raw.supportsSpeechInput, `${path}.supportsSpeechInput`)
+        : undefined,
+    speechOutput:
+      raw.supportsSpeechOutput !== undefined
+        ? requireBoolean(raw.supportsSpeechOutput, `${path}.supportsSpeechOutput`)
+        : undefined,
+    realtimeVoice:
+      raw.supportsRealtimeVoice !== undefined
+        ? requireBoolean(raw.supportsRealtimeVoice, `${path}.supportsRealtimeVoice`)
+        : undefined,
+  };
+}
+
+// Voice fields are meaningful only for `kind: "voice"`. A non-voice capability that declares any of
+// them is rejected — defence in depth alongside the contract predicates, with a clear error.
+function assertNoVoiceFieldsForNonVoiceKind(
+  flags: DeclaredVoiceFlags,
+  localityDeclared: boolean,
+  path: string,
+): void {
+  const anyDeclared =
+    flags.speechInput !== undefined ||
+    flags.speechOutput !== undefined ||
+    flags.realtimeVoice !== undefined ||
+    localityDeclared;
+  if (anyDeclared) {
+    throw new ConfigInvalidError(
+      `${path}: voice capability fields require ${path}.kind to be "voice"`,
+    );
+  }
+}
+
+type ParsedVoiceFields = Partial<
+  Pick<
+    ModelCapability,
+    | "supportsSpeechInput"
+    | "supportsSpeechOutput"
+    | "supportsRealtimeVoice"
+    | "voiceProviderLocality"
+  >
+>;
+
+// Resolves the voice fields for a `kind: "voice"` capability, enforcing the two voice invariants:
+//   1. at least one of speech input / speech output / realtime must be advertised (a voice model
+//      with no advertised capability is meaningless — fail-closed);
+//   2. the provider locality must be declared (providers are represented explicitly, never inferred
+//      from an endpoint URL or environment name — ADR-0058 D7 / the epic invariant).
+function resolveVoiceKindFields(
+  raw: Record<string, unknown>,
+  path: string,
+  flags: DeclaredVoiceFlags,
+): ParsedVoiceFields {
+  if (flags.speechInput !== true && flags.speechOutput !== true && flags.realtimeVoice !== true) {
+    throw new ConfigInvalidError(
+      `${path} with kind "voice" must advertise at least one of supportsSpeechInput, supportsSpeechOutput, or supportsRealtimeVoice`,
+    );
+  }
+  if (raw.voiceProviderLocality === undefined) {
+    throw new ConfigInvalidError(`${path} with kind "voice" must declare voiceProviderLocality`);
+  }
+  const voiceProviderLocality = requireEnum<VoiceProviderLocality>(
+    raw.voiceProviderLocality,
+    `${path}.voiceProviderLocality`,
+    VOICE_PROVIDER_LOCALITIES,
+  );
+  return {
+    ...(flags.speechInput !== undefined ? { supportsSpeechInput: flags.speechInput } : {}),
+    ...(flags.speechOutput !== undefined ? { supportsSpeechOutput: flags.speechOutput } : {}),
+    ...(flags.realtimeVoice !== undefined ? { supportsRealtimeVoice: flags.realtimeVoice } : {}),
+    voiceProviderLocality,
+  };
+}
+
+function parseVoiceCapabilityFields(
+  raw: Record<string, unknown>,
+  path: string,
+  kind: ModelKind,
+): ParsedVoiceFields {
+  const flags = readDeclaredVoiceFlags(raw, path);
+  const localityDeclared = raw.voiceProviderLocality !== undefined;
+  if (kind !== "voice") {
+    assertNoVoiceFieldsForNonVoiceKind(flags, localityDeclared, path);
+    return {};
+  }
+  return resolveVoiceKindFields(raw, path, flags);
+}
+
 function buildProviderCapabilityBody(
   raw: Record<string, unknown>,
   path: string,
@@ -562,6 +668,7 @@ function buildProviderCapabilityBody(
     maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
     ...flags,
     ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
+    ...parseVoiceCapabilityFields(raw, path, kind),
     workflowEligible,
     costClass: requireEnum<CostClass>(raw.costClass ?? "medium", `${path}.costClass`, [
       "low",
@@ -606,6 +713,7 @@ function parseProviderCapability(
     "chat",
     "embedding",
     "ocr-vision",
+    "voice",
   ]);
   // Conservative defaults for the per-provider inline capability path (Issue #143).
   // The strict, no-default surface is parseModelCapability for the top-level
@@ -640,6 +748,10 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "supportsResponseFormat",
   "supportsInfilling",
   "infillingAlignment",
+  "supportsSpeechInput",
+  "supportsSpeechOutput",
+  "supportsRealtimeVoice",
+  "voiceProviderLocality",
   "workflowEligible",
   "costClass",
   "latencyClass",
@@ -728,6 +840,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     "chat",
     "embedding",
     "ocr-vision",
+    "voice",
   ]);
   const workflowEligible = requireBoolean(value.workflowEligible, `${path}.workflowEligible`);
   if (kind !== "chat" && workflowEligible) {
@@ -750,6 +863,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     ),
     ...optionalDeterminismFlags(value, path),
     ...optionalInfillingFlags(value, path, kind),
+    ...parseVoiceCapabilityFields(value, path, kind),
     workflowEligible,
     costClass: requireEnum<CostClass>(value.costClass, `${path}.costClass`, [
       "low",

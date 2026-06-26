@@ -139,6 +139,29 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     vi.restoreAllMocks();
   });
 
+  it("adopts workspace snapshots written by another tab", async () => {
+    render(<Harness />);
+    await waitFor(() => expect(readWins()).toEqual([]));
+
+    persistWorkspace(
+      [
+        filesWindow({ z: 3, cfg: { resolvedRoot: "/repo", activeFilePath: "src/main.ts" } }),
+        appWindow({ id: "chat-1", type: "chat", z: 4 }),
+      ],
+      [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }],
+    );
+    const storageEvent = new Event("storage");
+    Object.defineProperties(storageEvent, {
+      key: { value: WORKSPACE_STORAGE_KEY },
+      newValue: { value: window.localStorage.getItem(WORKSPACE_STORAGE_KEY) },
+      storageArea: { value: window.localStorage },
+    });
+    window.dispatchEvent(storageEvent);
+
+    await waitFor(() => expect(readWins().map((w) => w.id)).toEqual(["files-1", "chat-1"]));
+    expect(readConns()).toEqual([{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }]);
+  });
+
   it("moves and resizes only the frontmost visible window with keyboard chords", async () => {
     persistWorkspace([
       filesWindow({ z: 1 }),

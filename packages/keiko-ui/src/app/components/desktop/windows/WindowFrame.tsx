@@ -708,13 +708,14 @@ export function WindowFrame({
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
   const showHeaderZoom = bodyMode === "full" && ew >= HEADER_ZOOM_MIN_WIDTH_PX;
-  const bodyStyle: CSSProperties = bodyMode === "tiny" ? {} : { zoom };
+  const bodyStyle: CSSProperties = {};
   const sectionStyle: CSSProperties = {
     left: win.x,
     top: win.y,
-    width: win.w,
-    height: win.h,
+    width: ew,
+    height: eh,
     zIndex: win.z,
+    zoom,
   };
 
   return (
