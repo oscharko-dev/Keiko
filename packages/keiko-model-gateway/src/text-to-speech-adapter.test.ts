@@ -28,7 +28,11 @@ function audioResponse(
   if (contentType !== null) {
     headers["content-type"] = contentType;
   }
-  return new Response(bytes, { status, headers });
+  // Copy into an ArrayBuffer-backed Uint8Array so the body is a valid BodyInit (the `new Uint8Array`
+  // array overload yields `Uint8Array<ArrayBuffer>`, unlike `TextEncoder().encode` which is ArrayBufferLike).
+  const body = new Uint8Array(bytes.length);
+  body.set(bytes);
+  return new Response(body, { status, headers });
 }
 
 function bodyText(init: RequestInit): string {
