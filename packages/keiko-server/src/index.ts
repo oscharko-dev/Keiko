@@ -144,6 +144,44 @@ export {
   handleRuntimeCapabilities,
   type RuntimeCapabilityRouteOptions,
 } from "./runtime/capabilityRoutes.js";
+// Issue #1388 (ADR-0070) — governed container engine detection + execution pilot.
+export {
+  detectContainerEngines,
+  DEFAULT_CONTAINER_PROBE_DEADLINE_MS,
+  SUPPORTED_DOCKER_MAJOR,
+  KEIKO_CONTAINERS_DISABLED_ENV,
+  type ContainerProbeDeps,
+} from "./runtime/containerEngineDetector.js";
+export {
+  createContainerRunnerManager,
+  buildContainerRunArgv,
+  DEFAULT_CONTAINER_EXECUTION_POLICY,
+  DEFAULT_CONTAINER_RESOURCE_LIMITS,
+  DEFAULT_CONTAINER_TASKS,
+  type ContainerRunInput,
+  type ContainerRunnerEventEmitter,
+  type ContainerRunnerManager,
+  type ContainerRunnerManagerOptions,
+} from "./runtime/containerRunner.js";
+export {
+  handleContainerCapability,
+  handleContainerCatalog,
+  handleContainerEvents,
+  handleCreateContainerRun,
+  handleDeleteContainerRun,
+} from "./runtime/containerRoutes.js";
+export {
+  ContainerRunnerError,
+  CONTAINER_RUNNER_ERROR_CODES,
+  type ContainerRunnerErrorCode,
+} from "./runtime/containerRunner-errors.js";
+export {
+  appendContainerRunEvidence,
+  buildContainerRunEvidenceEntry,
+  CONTAINER_RUN_EVIDENCE_KIND,
+  type ContainerRunEvidenceEntry,
+  type ContainerRunEvidenceInput,
+} from "./runtime/containerRunner-evidence.js";
 export {
   handleFilesContent,
   handleFilesSearch,
