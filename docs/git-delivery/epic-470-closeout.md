@@ -67,14 +67,28 @@ Protected/shared branch safety is enforced by several independent layers:
 
 ## Project-state note
 
-The code and PR evidence for #472, #477, and #478 is merged into the epic branch. At the time this #479
-artifact was authored, the GitHub issue/project checklist state for those child issues was not fully
-reconciled in the live project board. Epic #470 should not be closed until those child issue records are
-checked, updated with evidence, and closed according to the board workflow. This note does not weaken the
-#479 proof; it prevents overstating formal epic closure while child issue governance metadata is stale.
+The code and PR evidence for every child issue (#471-#479) is merged into the epic branch. When the #479
+artifact was first authored, the GitHub issue and project-board records for #472, #477, and #478 lagged
+behind their merged code, so this summary recorded that epic closure must wait until those records were
+reconciled. That governance gap is now closed:
+
+- #477 (pull request command center) and #478 (merge governance) were reconciled and closed with closure
+  evidence recorded on their issues.
+- #472 (the governed Git mutation execution kernel, merged in PR #1509 / commit `401b08a8`) was
+  re-verified against all five acceptance criteria and four deliverables, then closed with closure
+  evidence. Its deterministic lifecycle, content-free preflight evaluators, narrow adapter with no
+  generic-shell fallback, and structured failure taxonomy are proven by the kernel suites listed in the
+  [verification matrix](verification-matrix.md).
+
+All nine child issues (#471-#479) are now closed with `status: done`, and every Epic #470
+Definition-of-Done and Expected-Verification item is satisfied by the evidence cited above and in the
+verification matrix.
 
 ## Closure decision
 
-The issue #479 closure artifact set is sufficient to show that maintainers can assess rollout and
-support readiness without rerunning ad hoc investigation. Formal epic closure remains gated on the child
-issue/project-state reconciliation named above and the final PR `ci` result for this issue.
+The Epic #470 closure artifact set — this summary, the [verification matrix](verification-matrix.md), the
+[operator runbook](operator-runbook.md), the [policy-pack guidance](policy-pack-guidance.md), the
+per-slice browser manifests, and the merged child-issue evidence — is sufficient for maintainers to
+assess rollout and support readiness without rerunning ad hoc investigation. With all child issues closed
+and this closeout pull request green on the required `ci` check, Epic #470 is ready for formal closure as
+completed.
