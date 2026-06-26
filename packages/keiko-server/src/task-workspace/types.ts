@@ -19,6 +19,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspacePointer, ActiveWorkspacePointerStore } from "./active-store.js";
 import type { WorkspaceInstanceStore } from "./store.js";
+import type { WorkspaceMutexRegistry } from "./mutex.js";
 
 export interface WorkspaceProvisionRequest {
   // The repository request path the route already resolved (realpath'd project/arbitrary root). The
@@ -70,6 +71,11 @@ export interface WorkspaceProvisioningServiceDeps {
   readonly newId: () => string;
   // Optional: how long a provisioning/activation lock stays valid before it is treated as stale.
   readonly lockTtlMs?: number | undefined;
+  // In-process serializer shared across all mutating workspace services (#449, ADR-0093 D1): provision
+  // takes the `prov:<repo>:<task>` key, activate the `ws:<workspaceId>` key, so concurrent same-resource
+  // mutations queue instead of racing. Must be the SAME instance the lifecycle/repair/cleanup services
+  // hold so they serialize against each other on the shared `ws:` keyspace.
+  readonly mutex: WorkspaceMutexRegistry;
 }
 
 // ─── #446 active-binding lifecycle service ──────────────────────────────────────────────────────
@@ -137,6 +143,9 @@ export interface WorkspaceLifecycleServiceDeps {
   readonly newId: () => string;
   // Optional: how long a mutation lock stays valid before it is treated as stale. Mirrors provisioning.
   readonly lockTtlMs?: number | undefined;
+  // The SAME shared in-process serializer the provisioning service holds (#449, ADR-0093 D1): pause /
+  // handoff take the `ws:<workspaceId>` key; the setActive pointer write takes the `active:<repo>` key.
+  readonly mutex: WorkspaceMutexRegistry;
 }
 
 // ─── #447 startup reconciliation + repair services ──────────────────────────────────────────────
@@ -209,6 +218,9 @@ export interface WorkspaceRepairServiceDeps {
   readonly now: () => number;
   readonly newId: () => string;
   readonly lockTtlMs?: number | undefined;
+  // The SAME shared in-process serializer (#449, ADR-0093 D1): repair takes the `ws:<workspaceId>` key so
+  // it cannot race a concurrent activate/pause/cleanup of the same workspace.
+  readonly mutex: WorkspaceMutexRegistry;
 }
 
 // ─── #448 operational health + governed cleanup services ────────────────────────────────────────
@@ -225,7 +237,13 @@ export interface WorkspaceRepairServiceDeps {
 // evidence, managed root, adapter factory, redactor, clock, id). Aliased rather than re-declared so the
 // shape can never drift from the fact-gathering path they reuse.
 export type WorkspaceHealthServiceDeps = WorkspaceReconciliationServiceDeps;
-export type WorkspaceCleanupServiceDeps = WorkspaceReconciliationServiceDeps;
+// Cleanup is the MUTATING counterpart to health, so it carries the shared in-process serializer (#449,
+// ADR-0093 D1) on top of the reconciliation fact-gathering deps: request/complete-cleanup take the
+// `ws:<workspaceId>` key and each orphan sweep takes the orphan's derived `ws:` key, so a governed
+// removal cannot race a concurrent mutation of the same workspace. Health stays read-only (no mutex).
+export interface WorkspaceCleanupServiceDeps extends WorkspaceReconciliationServiceDeps {
+  readonly mutex: WorkspaceMutexRegistry;
+}
 
 export interface WorkspaceHealthService {
   // Live: classify every persisted instance for a repository root (or all repositories) plus any

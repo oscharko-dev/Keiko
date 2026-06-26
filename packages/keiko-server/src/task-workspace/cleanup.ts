@@ -36,6 +36,8 @@ import {
 } from "./managed-root.js";
 import { deriveOrphanId } from "./health.js";
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
+import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
+import { workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
 import {
   appendWorkspaceLifecycleEvidence,
@@ -53,7 +55,6 @@ import type {
   WorkspaceOrphanRefusal,
 } from "./types.js";
 
-const DEFAULT_LOCK_TTL_MS = 5 * 60_000;
 const MAX_FIELD_LENGTH = 512;
 
 interface CleanupCtx {
@@ -67,16 +68,6 @@ function isBoundedNonEmpty(value: unknown): value is string {
 
 function isoFrom(nowMs: number): string {
   return new Date(nowMs).toISOString();
-}
-
-function lockIsLive(lock: WorkspaceInstance["lock"], nowMs: number, ttlMs: number): boolean {
-  if (lock === null) return false;
-  if (lock.expiresAt !== undefined) {
-    const expiry = Date.parse(lock.expiresAt);
-    return Number.isFinite(expiry) ? nowMs < expiry : false;
-  }
-  const acquired = Date.parse(lock.acquiredAt);
-  return Number.isFinite(acquired) ? nowMs - acquired < ttlMs : false;
 }
 
 // The SINGLE filesystem-deletion choke point (SC1). Before `rmSync` it proves: (1) Keiko owns the
@@ -288,13 +279,13 @@ async function removeManagedWorktree(
 }
 
 function cleanupLock(ctx: CleanupCtx, requestedBy: string, nowMs: number): WorkspaceLock {
-  return {
-    lockId: ctx.deps.newId(),
+  return makeWorkspaceLock({
+    newId: ctx.deps.newId,
     owner: requestedBy,
     reason: "cleanup",
-    acquiredAt: isoFrom(nowMs),
-    expiresAt: isoFrom(nowMs + ctx.lockTtlMs),
-  };
+    nowMs,
+    ttlMs: ctx.lockTtlMs,
+  });
 }
 
 // Emits the content-free refusal event and returns the refused result (a successful safety outcome).
@@ -496,7 +487,12 @@ async function cleanupOrphansImpl(
   for (const repositoryId of resolveOrphanRepositoryIds(ctx, request)) {
     const known = knownByRepo.get(repositoryId) ?? new Set<string>();
     for (const leaf of orphanLeavesFor(ctx, repositoryId, known)) {
-      const refusal = await cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven);
+      // Serialize each orphan removal under its derived `ws:` key (#449, ADR-0093 D1) so a sweep cannot
+      // race a concurrent provision that is re-materializing that exact managed directory.
+      const refusal = await ctx.deps.mutex.runExclusive(
+        [workspaceKey(deriveOrphanId(repositoryId, leaf))],
+        () => cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven),
+      );
       if (refusal === undefined) removed += 1;
       else refused.push(refusal);
     }
@@ -518,14 +514,17 @@ function managedRepoDirs(ctx: CleanupCtx): readonly string[] {
 export function createWorkspaceCleanupService(
   deps: WorkspaceCleanupServiceDeps,
 ): WorkspaceCleanupService {
-  const ctx: CleanupCtx = { deps, lockTtlMs: deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS };
+  const ctx: CleanupCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return {
-    // `async` so a synchronous validation throw from requestCleanupImpl surfaces as a rejected promise
-    // (a consistent async contract) rather than escaping the call synchronously.
-    cleanup: async (request: WorkspaceCleanupRequest): Promise<WorkspaceCleanupResult> =>
-      request.mode === "request"
-        ? requestCleanupImpl(ctx, request)
-        : completeCleanupImpl(ctx, request),
+    // Serialized under the workspace's `ws:` key (#449, ADR-0093 D1) so a governed removal cannot race a
+    // concurrent activate/pause/repair of the same workspace. `runExclusive` also turns a synchronous
+    // validation throw from requestCleanupImpl into a rejected promise (the consistent async contract).
+    cleanup: (request: WorkspaceCleanupRequest): Promise<WorkspaceCleanupResult> =>
+      ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
+        request.mode === "request"
+          ? requestCleanupImpl(ctx, request)
+          : completeCleanupImpl(ctx, request),
+      ),
     cleanupOrphans: (
       request: WorkspaceOrphanCleanupRequest,
     ): Promise<WorkspaceOrphanCleanupResult> => cleanupOrphansImpl(ctx, request),

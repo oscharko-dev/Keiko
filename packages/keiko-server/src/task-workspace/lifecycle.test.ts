@@ -23,6 +23,9 @@ import type {
   WorkspaceLifecycleService,
   WorkspaceProvisioningService,
 } from "./types.js";
+import { createWorkspaceMutexRegistry } from "./mutex.js";
+
+const __twMutex = createWorkspaceMutexRegistry();
 
 const REPO_ROOT = "/repo";
 const REPO_ID = deriveRepositoryId(REPO_ROOT);
@@ -120,6 +123,7 @@ beforeEach(() => {
     redactString: (s: string): string => s,
     now: (): number => 1_700_000_000_000,
     newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
   });
 });
 

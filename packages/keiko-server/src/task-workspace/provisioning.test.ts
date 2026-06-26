@@ -28,6 +28,9 @@ import {
   deriveTaskBranchName,
   deriveWorkspaceId,
 } from "./naming.js";
+import { createWorkspaceMutexRegistry } from "./mutex.js";
+
+const __twMutex = createWorkspaceMutexRegistry();
 
 const FIXED_NOW = 1_700_000_000_000;
 
@@ -68,6 +71,7 @@ function makeService(
     redactString: (s: string): string => s,
     now: (): number => FIXED_NOW,
     newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
   });
 }
 

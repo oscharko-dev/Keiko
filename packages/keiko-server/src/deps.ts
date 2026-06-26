@@ -77,6 +77,10 @@ import {
 } from "./task-workspace/active-store.js";
 import { createWorkspaceProvisioningService } from "./task-workspace/provisioning.js";
 import { createWorkspaceLifecycleService } from "./task-workspace/lifecycle.js";
+import {
+  createWorkspaceMutexRegistry,
+  type WorkspaceMutexRegistry,
+} from "./task-workspace/mutex.js";
 import { createWorkspaceReconciliationService } from "./task-workspace/reconciliation.js";
 import { createWorkspaceRepairService } from "./task-workspace/repair.js";
 import { createWorkspaceHealthService } from "./task-workspace/health.js";
@@ -822,6 +826,7 @@ function buildWorkspaceProvisioning(
   resolvedUiDbPath: string,
   evidenceStore: EvidenceStore,
   redactString: (value: string) => string,
+  mutex: WorkspaceMutexRegistry,
 ): WorkspaceProvisioningService | undefined {
   if (options.workspaceProvisioning !== undefined) return options.workspaceProvisioning;
   if (store === undefined) return undefined;
@@ -834,6 +839,7 @@ function buildWorkspaceProvisioning(
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
+    mutex,
   });
 }
 
@@ -848,6 +854,7 @@ function buildWorkspaceLifecycle(
   provisioning: WorkspaceProvisioningService | undefined,
   evidenceStore: EvidenceStore,
   redactString: (value: string) => string,
+  mutex: WorkspaceMutexRegistry,
 ): WorkspaceLifecycleService | undefined {
   if (options.workspaceLifecycle !== undefined) return options.workspaceLifecycle;
   if (
@@ -865,6 +872,7 @@ function buildWorkspaceLifecycle(
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
+    mutex,
   });
 }
 
@@ -905,6 +913,7 @@ function buildWorkspaceRepair(
   resolvedUiDbPath: string,
   evidenceStore: EvidenceStore,
   redactString: (value: string) => string,
+  mutex: WorkspaceMutexRegistry,
 ): WorkspaceRepairService | undefined {
   if (options.workspaceRepair !== undefined) return options.workspaceRepair;
   if (
@@ -925,6 +934,7 @@ function buildWorkspaceRepair(
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
+    mutex,
   });
 }
 
@@ -962,6 +972,7 @@ function buildWorkspaceCleanup(
   resolvedUiDbPath: string,
   evidenceStore: EvidenceStore,
   redactString: (value: string) => string,
+  mutex: WorkspaceMutexRegistry,
 ): WorkspaceCleanupService | undefined {
   if (options.workspaceCleanup !== undefined) return options.workspaceCleanup;
   if (instanceStore === undefined || activePointerStore === undefined) return undefined;
@@ -975,6 +986,7 @@ function buildWorkspaceCleanup(
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
+    mutex,
   });
 }
 
@@ -1127,6 +1139,7 @@ function composeHealthAndCleanup(
   resolvedUiDbPath: string,
   evidenceStore: EvidenceStore,
   redactString: (value: string) => string,
+  mutex: WorkspaceMutexRegistry,
 ): Pick<TaskWorkspaceServices, "workspaceHealth" | "workspaceCleanup"> {
   return {
     workspaceHealth: buildWorkspaceHealth(
@@ -1144,6 +1157,7 @@ function composeHealthAndCleanup(
       resolvedUiDbPath,
       evidenceStore,
       redactString,
+      mutex,
     ),
   };
 }
@@ -1156,6 +1170,7 @@ function composeCoreTaskWorkspaceServices(
   resolvedUiDbPath: string,
   evidenceStore: EvidenceStore,
   redactString: (value: string) => string,
+  mutex: WorkspaceMutexRegistry,
 ): Omit<TaskWorkspaceServices, "workspaceHealth" | "workspaceCleanup"> {
   const workspaceProvisioning = buildWorkspaceProvisioning(
     options,
@@ -1163,6 +1178,7 @@ function composeCoreTaskWorkspaceServices(
     resolvedUiDbPath,
     evidenceStore,
     redactString,
+    mutex,
   );
   return {
     workspaceProvisioning,
@@ -1173,6 +1189,7 @@ function composeCoreTaskWorkspaceServices(
       workspaceProvisioning,
       evidenceStore,
       redactString,
+      mutex,
     ),
     workspaceReconciliation: buildWorkspaceReconciliation(
       options,
@@ -1190,6 +1207,7 @@ function composeCoreTaskWorkspaceServices(
       resolvedUiDbPath,
       evidenceStore,
       redactString,
+      mutex,
     ),
   };
 }
@@ -1202,6 +1220,11 @@ function composeTaskWorkspaceServices(
   evidenceStore: EvidenceStore,
   redactString: (value: string) => string,
 ): TaskWorkspaceServices {
+  // One shared in-process mutex registry across ALL mutating task-workspace services (#449, ADR-0093 D1):
+  // provisioning, lifecycle, repair, and cleanup must serialize against each other on the same `ws:`
+  // keyspace, so they receive the SAME registry instance. Read-only services (reconciliation, health) do
+  // not take it.
+  const mutex = createWorkspaceMutexRegistry();
   const args = [
     options,
     workspaceInstanceStore,
@@ -1209,6 +1232,7 @@ function composeTaskWorkspaceServices(
     resolvedUiDbPath,
     evidenceStore,
     redactString,
+    mutex,
   ] as const;
   return {
     ...composeCoreTaskWorkspaceServices(...args),

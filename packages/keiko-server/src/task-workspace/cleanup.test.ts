@@ -41,6 +41,9 @@ import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceCleanupService, safelyRemoveManagedPath } from "./cleanup.js";
 import { TaskWorkspaceError } from "./errors.js";
 import type { WorkspaceCleanupService, WorkspaceProvisioningService } from "./types.js";
+import { createWorkspaceMutexRegistry } from "./mutex.js";
+
+const __twMutex = createWorkspaceMutexRegistry();
 
 let repoRoot: string;
 let managedRoot: string;
@@ -85,6 +88,7 @@ function provisioning(): WorkspaceProvisioningService {
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
   });
 }
 
@@ -98,6 +102,7 @@ function cleanup(): WorkspaceCleanupService {
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
   });
 }
 

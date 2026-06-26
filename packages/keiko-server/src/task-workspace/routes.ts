@@ -154,7 +154,14 @@ function mapError(error: unknown): RouteResult | undefined {
   if (error instanceof TaskWorkspaceError) {
     const detail =
       error.reasons.length > 0 ? `${error.message}: ${error.reasons.join("; ")}` : error.message;
-    return { status: error.status, body: errorBody(error.code, detail) };
+    // Surface the caller-facing failure class (#449, ADR-0093 D3) alongside the code so a BFF/UI caller
+    // can branch on a stable signal (retryable / repairable / blocked / policy-denied / terminal) instead
+    // of the raw code list. The base body stays the redacted { error: { code, message } } envelope.
+    const base = errorBody(error.code, detail);
+    return {
+      status: error.status,
+      body: { ...base, error: { ...base.error, failureClass: error.failureClass } },
+    };
   }
   if (error instanceof FilesError) {
     return { status: error.status, body: errorBody(error.code, error.message) };
