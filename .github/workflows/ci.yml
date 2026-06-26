@@ -9,6 +9,7 @@ on:
       - feat/prompt-enhancer-1307
       - feat/keiko-establish-governed-end-to-end-git-delivery
       - feat/keiko-voice-digital-twin
+      - feat/keiko-isolated-task-workspaces
       - "release/**"
   pull_request:
     branches:
@@ -18,6 +19,7 @@ on:
       - feat/prompt-enhancer-1307
       - feat/keiko-establish-governed-end-to-end-git-delivery
       - feat/keiko-voice-digital-twin
+      - feat/keiko-isolated-task-workspaces
       - "release/**"
   workflow_dispatch:
 
