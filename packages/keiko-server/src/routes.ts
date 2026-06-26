@@ -83,6 +83,7 @@ import {
   handleFilesTree,
 } from "./files.js";
 import { handleEditorLanguage, handleEditorLanguageCapabilities } from "./editor/languageRoutes.js";
+import { handleEditorLspStatus } from "./editor/lsp/lspStatusRoute.js";
 import {
   handleEditorContext,
   handleEditorLocalKnowledgeRetrieve,
@@ -353,6 +354,13 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/editor/agent/audit",
     handler: handleEditorAgentAudit,
+  },
+  // Issue #1381 (ADR-0069) — read-only, content-free LSP process lifecycle status feed. Env-gated
+  // default-OFF via KEIKO_EDITOR_LSP_STATUS (404 until an operator opts in). No CSP change needed.
+  {
+    method: "GET",
+    pattern: "/api/editor/lsp/status",
+    handler: (ctx, deps) => handleEditorLspStatus(ctx, { env: deps.env }),
   },
   {
     method: "POST",

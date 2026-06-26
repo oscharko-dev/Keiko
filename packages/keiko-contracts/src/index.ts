@@ -328,6 +328,33 @@ export {
   isBuiltinFormattingAvailable,
 } from "./editor-builtin-capabilities.js";
 
+// ─── Governed LSP process manager (Issue #1381, Epic #1491, ADR-0069) ─────────────────────────
+// The status, configuration, error-code, and content-free lifecycle-event vocabulary the long-lived
+// supervised language-server process layer shares across package boundaries: the keiko-server
+// process manager, its status route, and the language-provider registry. `lspStatusToProviderDescriptor`
+// maps a live `LspProcessStatus` onto the existing `LanguageProviderDescriptor` so managed providers
+// flow through `describeLanguageCapabilities()` without a UI change (ADR-0069 D5). Content-free by
+// construction (ADR-0069 D6): `LspLifecycleEvent` carries only enums, ids, counts, and timestamps.
+// Strict leaf: pure types + frozen const tables + throw-free pure functions, no other keiko-*
+// imports, no clock/crypto/randomness.
+export type {
+  LspProcessErrorCode,
+  LspProcessStatus,
+  LspFrameRejectReason,
+  LspNetworkPolicy,
+  LspProcessConfig,
+  LspLifecycleEvent,
+} from "./lsp-process.js";
+export {
+  LSP_PROCESS_SCHEMA_VERSION,
+  LSP_PROCESS_ERROR_CODES,
+  LSP_PROCESS_STATUSES,
+  DEFAULT_LSP_PROCESS_CONFIG,
+  isTerminalLspStatus,
+  lspStatusToProviderDescriptor,
+  parseLspFrameHeader,
+} from "./lsp-process.js";
+
 // ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
 // Wire request/response for the governed `POST /api/editor/completion` route: deterministic
 // language-service completion (#1198) merged with gated model-assisted completion (#1210) over
