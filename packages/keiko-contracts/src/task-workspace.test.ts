@@ -172,6 +172,19 @@ describe("legal transition matrix", () => {
     expect(nextLegalTaskWorkspaceStates("merged")).toEqual(["archived", "cleanup-pending"]);
   });
 
+  it("fails closed on non-state inputs instead of throwing (prototype-chain safe)", () => {
+    // A post-deserialization / wire-supplied non-state must not throw or resolve through the
+    // prototype chain (e.g. "__proto__" -> Object.prototype, "constructor" -> Object). Guards
+    // return false / [] deterministically.
+    for (const bad of ["", "__proto__", "constructor", "toString", "running"] as const) {
+      expect(isLegalTaskWorkspaceTransition(bad as never, "active")).toBe(false);
+      expect(isLegalTaskWorkspaceTransition("active", bad as never)).toBe(false);
+      expect(nextLegalTaskWorkspaceStates(bad as never)).toEqual([]);
+    }
+    expect(isLegalTaskWorkspaceTransition(null as never, "active")).toBe(false);
+    expect(nextLegalTaskWorkspaceStates(42 as never)).toEqual([]);
+  });
+
   it("every successor is itself a known state", () => {
     for (const state of TASK_WORKSPACE_LIFECYCLE_STATES) {
       for (const next of TASK_WORKSPACE_LEGAL_TRANSITIONS[state]) {
@@ -304,6 +317,24 @@ describe("validateTaskWorkspaceTransition", () => {
       context: { ...ALL_PRECONDITIONS_MET, pathContained: false },
     });
     expect(result).toEqual({ ok: false, reasons: ["unmet precondition: path-contained"] });
+  });
+
+  it("fails closed on a non-state from/to without throwing", () => {
+    // An untrusted from/to forwarded by a future consumer must be rejected as illegal, never throw.
+    expect(
+      validateTaskWorkspaceTransition({
+        from: "__proto__" as never,
+        to: "active",
+        context: ALL_PRECONDITIONS_MET,
+      }),
+    ).toEqual({ ok: false, reasons: ["illegal transition from __proto__ to active"] });
+    expect(
+      validateTaskWorkspaceTransition({
+        from: "active",
+        to: "nope" as never,
+        context: ALL_PRECONDITIONS_MET,
+      }),
+    ).toEqual({ ok: false, reasons: ["illegal transition from active to nope"] });
   });
 });
 
@@ -457,6 +488,14 @@ describe("validateWorkspaceInstance", () => {
     expect(validateWorkspaceInstance(validInstance())).toEqual({ ok: true });
   });
 
+  it("rejects an unknown content-bearing key on the persisted record (content-free, SC3)", () => {
+    const result = validateWorkspaceInstance({ ...validInstance(), sourceDiff: "SECRET DIFF" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons).toContain("unknown key not allowed (content-free): sourceDiff");
+    }
+  });
+
   it("accepts a null lock and empty marker/hint arrays", () => {
     expect(
       validateWorkspaceInstance({
@@ -583,6 +622,14 @@ describe("validateWorkspaceBinding", () => {
     expect(validateWorkspaceBinding(validBinding())).toEqual({ ok: true });
   });
 
+  it("rejects an unknown content-bearing key (content-free, SC3)", () => {
+    const result = validateWorkspaceBinding({ ...validBinding(), secretPayload: "x" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons).toContain("unknown key not allowed (content-free): secretPayload");
+    }
+  });
+
   it("rejects a non-object", () => {
     expect(validateWorkspaceBinding(null)).toEqual({
       ok: false,
@@ -642,6 +689,16 @@ describe("validateWorkspaceBinding", () => {
 describe("validateWorkspaceActivation", () => {
   it("accepts a canonical activation", () => {
     expect(validateWorkspaceActivation(validActivation())).toEqual({ ok: true });
+  });
+
+  it("rejects an unknown content-bearing key (content-free, SC3)", () => {
+    const result = validateWorkspaceActivation({ ...validActivation(), rawProviderResponse: "x" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons).toContain(
+        "unknown key not allowed (content-free): rawProviderResponse",
+      );
+    }
   });
 
   it("accepts activation without expectedLifecycleState", () => {

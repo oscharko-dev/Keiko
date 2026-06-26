@@ -13,8 +13,13 @@
 // correlation ids are produced by callers (opaque strings); timestamps are caller-provided ISO strings.
 // CONTENT-FREE invariant (SC3): every persisted/audit field is an opaque id/hash, a count, a boolean
 // flag, an enum, an ISO timestamp string, or a branch/path name — NEVER source text, secrets, tokens,
-// raw provider payloads, or unbounded command output. `validateWorkspaceEvent` enforces this by
-// rejecting any unknown key (WORKSPACE_EVENT_ALLOWED_KEYS).
+// raw provider payloads, or unbounded command output. Enforced at runtime by rejecting any unknown
+// key against a closed allowlist in EVERY persisted-object validator — the audit event
+// (validateWorkspaceEvent / WORKSPACE_EVENT_ALLOWED_KEYS), the durable instance
+// (validateWorkspaceInstance / WORKSPACE_INSTANCE_ALLOWED_KEYS), the binding
+// (validateWorkspaceBinding / WORKSPACE_BINDING_ALLOWED_KEYS), and the activation intent
+// (validateWorkspaceActivation / WORKSPACE_ACTIVATION_ALLOWED_KEYS) — so a downstream persistence
+// layer that trusts `.ok` cannot store smuggled content through any shape.
 
 export const TASK_WORKSPACE_SCHEMA_VERSION = "1" as const;
 
@@ -30,6 +35,24 @@ function isNonEmptyString(input: unknown): input is string {
 
 function isBoolean(input: unknown): input is boolean {
   return typeof input === "boolean";
+}
+
+// Collect "unknown key not allowed" reasons for a content-free object: any key outside the closed
+// allowlist is treated as an attempt to smuggle source text / secrets / tokens / raw payloads, so
+// the validator rejects it (SC3). Shared by the audit-event validator AND the persisted-object
+// validators (instance/binding/activation) so the content-free invariant is enforced uniformly
+// across the durable surface, not only the event stream.
+function unknownKeyReasons(
+  input: Readonly<Record<string, unknown>>,
+  allowedKeys: readonly string[],
+): string[] {
+  const reasons: string[] = [];
+  for (const key of Object.keys(input)) {
+    if (!allowedKeys.includes(key)) {
+      reasons.push(`unknown key not allowed (content-free): ${key}`);
+    }
+  }
+  return reasons;
 }
 
 // ─── Validation result type (same shape as git-repository.ts validators) ────────
@@ -117,16 +140,23 @@ export const TASK_WORKSPACE_LEGAL_TRANSITIONS: Readonly<
   "cleanup-pending": ["archived", "abandoned", "recovery-required"],
 } as const;
 
+// `from`/`to` are guarded with isTaskWorkspaceLifecycleState before the table lookup so a
+// post-deserialization or wire-supplied non-state value (e.g. "", "__proto__", "constructor", a
+// number, null) fails CLOSED — returns false / [] — instead of throwing or resolving to a
+// prototype-chain value. This keeps every exported predicate throw-free on `unknown` input,
+// matching the sibling validators (ADR-0088 D6).
 export function isLegalTaskWorkspaceTransition(
   from: TaskWorkspaceLifecycleState,
   to: TaskWorkspaceLifecycleState,
 ): boolean {
+  if (!isTaskWorkspaceLifecycleState(from) || !isTaskWorkspaceLifecycleState(to)) return false;
   return TASK_WORKSPACE_LEGAL_TRANSITIONS[from].includes(to);
 }
 
 export function nextLegalTaskWorkspaceStates(
   from: TaskWorkspaceLifecycleState,
 ): readonly TaskWorkspaceLifecycleState[] {
+  if (!isTaskWorkspaceLifecycleState(from)) return [];
   return TASK_WORKSPACE_LEGAL_TRANSITIONS[from];
 }
 
@@ -474,13 +504,8 @@ export const WORKSPACE_EVENT_ALLOWED_KEYS: readonly string[] = [
 
 // eslint-disable-next-line complexity
 export function validateWorkspaceEvent(input: unknown): TaskWorkspaceValidation {
-  const reasons: string[] = [];
   if (!isRecord(input)) return { ok: false, reasons: ["event must be an object"] };
-  for (const key of Object.keys(input)) {
-    if (!WORKSPACE_EVENT_ALLOWED_KEYS.includes(key)) {
-      reasons.push(`unknown key not allowed (content-free): ${key}`);
-    }
-  }
+  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_EVENT_ALLOWED_KEYS);
   if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   for (const key of ["eventId", "workspaceId", "taskId", "at", "correlationId"] as const) {
     if (!isNonEmptyString(input[key])) reasons.push(`${key} must be a non-empty string`);
@@ -567,10 +592,37 @@ function validateRecoveryHints(input: unknown, reasons: string[]): void {
   });
 }
 
+// The closed set of top-level keys a persisted WorkspaceInstance may carry. Enforced by
+// validateWorkspaceInstance so the durable record stays content-free (SC3): a #447 persistence layer
+// that trusts `validateWorkspaceInstance(input).ok` cannot store a record carrying a smuggled
+// `sourceDiff` / `commandOutput` / `tokenValue` field. Nested `lock` and `recoveryHints` shapes are
+// validated by their own helpers.
+export const WORKSPACE_INSTANCE_ALLOWED_KEYS: readonly string[] = [
+  "schemaVersion",
+  "workspaceId",
+  "taskId",
+  "repositoryId",
+  "repositoryRoot",
+  "baseBranch",
+  "taskBranch",
+  "managedWorktreePath",
+  "gitdirIdentity",
+  "lifecycleState",
+  "health",
+  "lock",
+  "createdAt",
+  "updatedAt",
+  "lastVerifiedAt",
+  "lastVerifiedHead",
+  "driftMarkers",
+  "recoveryHints",
+  "auditCorrelationId",
+] as const;
+
 // eslint-disable-next-line complexity
 export function validateWorkspaceInstance(input: unknown): TaskWorkspaceValidation {
-  const reasons: string[] = [];
   if (!isRecord(input)) return { ok: false, reasons: ["instance must be an object"] };
+  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_INSTANCE_ALLOWED_KEYS);
   if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   for (const key of [
     "workspaceId",
@@ -619,10 +671,21 @@ export interface WorkspaceBinding {
   readonly editorProjectRoot: string;
 }
 
+// The closed set of keys a WorkspaceBinding may carry (content-free, SC3).
+export const WORKSPACE_BINDING_ALLOWED_KEYS: readonly string[] = [
+  "schemaVersion",
+  "workspaceId",
+  "taskId",
+  "activeRoot",
+  "boundSurfaces",
+  "gitDeliveryRoot",
+  "editorProjectRoot",
+] as const;
+
 // eslint-disable-next-line complexity
 export function validateWorkspaceBinding(input: unknown): TaskWorkspaceValidation {
-  const reasons: string[] = [];
   if (!isRecord(input)) return { ok: false, reasons: ["binding must be an object"] };
+  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_BINDING_ALLOWED_KEYS);
   if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   for (const key of [
     "workspaceId",
@@ -659,9 +722,19 @@ export interface WorkspaceActivation {
   readonly expectedLifecycleState?: TaskWorkspaceLifecycleState;
 }
 
+// The closed set of keys a WorkspaceActivation intent may carry (content-free, SC3).
+export const WORKSPACE_ACTIVATION_ALLOWED_KEYS: readonly string[] = [
+  "schemaVersion",
+  "workspaceId",
+  "taskId",
+  "requestedBy",
+  "acquireLock",
+  "expectedLifecycleState",
+] as const;
+
 export function validateWorkspaceActivation(input: unknown): TaskWorkspaceValidation {
-  const reasons: string[] = [];
   if (!isRecord(input)) return { ok: false, reasons: ["activation must be an object"] };
+  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_ACTIVATION_ALLOWED_KEYS);
   if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   for (const key of ["workspaceId", "taskId", "requestedBy"] as const) {
     if (!isNonEmptyString(input[key])) reasons.push(`${key} must be a non-empty string`);
