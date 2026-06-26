@@ -41,6 +41,7 @@ interface PreviewError {
 }
 
 type PreviewRefreshStatus = "idle" | "refreshing" | "refreshed" | "failed";
+type MetadataCopyTarget = "name" | "path";
 
 function classifyError(error: unknown): PreviewError {
   if (error instanceof ApiError && error.code === "DENIED") {
@@ -75,6 +76,42 @@ function formatDate(timestamp: number): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(timestamp));
+}
+
+function fullPreviewPath(root: string, relativePath: string): string {
+  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  return `${root.replace(/[/\\]+$/u, "")}${separator}${relativePath.replace(/\//gu, separator)}`;
+}
+
+async function writeTextWithFallback(text: string): Promise<void> {
+  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
+  if (writeText !== undefined && navigator.clipboard !== undefined) {
+    try {
+      await writeText.call(navigator.clipboard, text);
+      return;
+    } catch {
+      // Selection-backed copy can still work in restricted clipboard contexts.
+    }
+  }
+
+  if (typeof document === "undefined" || document.body === null) {
+    throw new Error("clipboard-unavailable");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.append(textarea);
+  textarea.select();
+  try {
+    const copied = typeof document.execCommand === "function" && document.execCommand("copy");
+    if (!copied) throw new Error("clipboard-fallback-failed");
+  } finally {
+    textarea.remove();
+  }
 }
 
 function previewKindLabel(preview: FilesPreviewResponse): string {
@@ -133,6 +170,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
   const [error, setError] = useState<PreviewError | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [refreshStatus, setRefreshStatus] = useState<PreviewRefreshStatus>("idle");
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const backRef = useRef<HTMLButtonElement | null>(null);
   const loadTargetRef = useRef<{ readonly root: string; readonly path: string } | null>(null);
 
@@ -193,6 +231,15 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
   }, [refreshStatus]);
 
   const refreshPreview = (): void => setRefreshKey((key) => key + 1);
+  const copyMetadata = (target: MetadataCopyTarget): void => {
+    if (preview === null) return;
+    const value = target === "name" ? preview.name : fullPreviewPath(preview.root, preview.path);
+    setCopyStatus(null);
+    void writeTextWithFallback(value).then(
+      () => setCopyStatus(target === "name" ? "File name copied" : "File path copied"),
+      () => setCopyStatus("Clipboard access failed."),
+    );
+  };
 
   const denied = error?.denied === true;
   const lang =
@@ -245,8 +292,39 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         <span className="fpv-name" title={headerTitle}>
           {headerName}
         </span>
+        {preview !== null ? (
+          <>
+            <button
+              className="fpv-back fpv-copy"
+              type="button"
+              onClick={() => copyMetadata("name")}
+              title="Copy file name"
+              aria-label="Copy file name"
+            >
+              <Icons.copy size={13} />
+            </button>
+            <button
+              className="fpv-back fpv-copy"
+              type="button"
+              onClick={() => copyMetadata("path")}
+              title="Copy file path"
+              aria-label="Copy file path"
+            >
+              <Icons.copy size={13} />
+            </button>
+          </>
+        ) : null}
         <span className="fpv-lang mono">{lang}</span>
         <span className="spacer" />
+        {copyStatus !== null ? (
+          <span
+            className="fpv-status fpv-copy-status"
+            role={copyStatus === "Clipboard access failed." ? "alert" : "status"}
+            aria-live="polite"
+          >
+            {copyStatus}
+          </span>
+        ) : null}
         <button
           className="fpv-back fpv-refresh"
           type="button"
@@ -300,11 +378,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           <span>{error.message}</span>
           {/* Denied is a deliberate safety invariant, not a transient failure — no Retry. */}
           {!error.denied ? (
-            <button
-              type="button"
-              className="fpv-retry"
-              onClick={refreshPreview}
-            >
+            <button type="button" className="fpv-retry" onClick={refreshPreview}>
               Retry
             </button>
           ) : null}
