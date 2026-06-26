@@ -61,6 +61,8 @@ import type {
   RealtimeNegotiationRequest,
   SpeechToTextOutcome,
   SpeechToTextRequest,
+  TextToSpeechOutcome,
+  TextToSpeechRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   createRelationshipStorePort,
@@ -223,6 +225,14 @@ export interface UiHandlerDeps {
   // the configured provider through the Model Gateway egress seam (gatewayFetch) and never persisted.
   readonly voiceTranscriptionRequest?:
     | ((request: SpeechToTextRequest) => Promise<SpeechToTextOutcome>)
+    | undefined;
+  // Issue #1558 (Epic #1556) — voice speech-output synthesis seam (ADR-0089). Lets the BFF synthesis
+  // route call the provider-neutral text-to-speech adapter without touching global fetch in tests.
+  // Production leaves this undefined and uses requestTextToSpeech, so the answer text is forwarded
+  // once to the configured provider through the Model Gateway egress seam (gatewayFetch) and the
+  // synthesized audio is held only in memory for the response, never persisted.
+  readonly voiceSpeechRequest?:
+    | ((request: TextToSpeechRequest) => Promise<TextToSpeechOutcome>)
     | undefined;
   // Issue #497 (Epic #491) — realtime voice proxied-SDP negotiation seam (ADR-0058 D3/D6). Lets the
   // WebSocket control plane perform the browser↔provider SDP exchange through the provider-neutral

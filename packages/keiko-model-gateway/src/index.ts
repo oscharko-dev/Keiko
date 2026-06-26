@@ -125,6 +125,16 @@ export {
 } from "./speech-to-text-adapter.js";
 
 export {
+  MAX_SPEECH_AUDIO_BYTES,
+  requestTextToSpeech,
+  type SpeechResponseFormat,
+  type TextToSpeechErrorKind,
+  type TextToSpeechOutcome,
+  type TextToSpeechRequest,
+  type TextToSpeechSuccess,
+} from "./text-to-speech-adapter.js";
+
+export {
   MAX_SDP_BYTES,
   requestRealtimeNegotiation,
   type RealtimeNegotiationErrorKind,

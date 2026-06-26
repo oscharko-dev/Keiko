@@ -56,7 +56,8 @@ import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./Voi
 import { useRealtimeVoice, type RealtimeVoiceController } from "./hooks/useRealtimeVoice";
 import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
 import { VoiceRealtimeButton, VoiceRealtimeStatusFromController } from "./VoiceRealtime";
-import { useVoicePlayback, type VoicePlaybackBinding } from "./hooks/useVoicePlayback";
+import { type VoicePlaybackBinding } from "./hooks/useVoicePlayback";
+import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton, VoicePlaybackStatusFromBinding } from "./VoicePlayback";
 import {
   useVoiceSessionRecap,
@@ -1452,6 +1453,7 @@ function ComposerCore({
     removePendingAttachment,
     budget,
     clearHistory,
+    messages,
     activeChat,
     activeProject,
     replaceChat,
@@ -1538,9 +1540,27 @@ function ComposerCore({
   );
   const dictation = useDictation({ onInsert: insertTranscript });
   const realtime = useRealtimeVoice({});
-  // Issue #501 — assistant speech-output playback binding. Driven by the resolved voice profile; a
-  // non-playback profile yields a dormant controller (AC1). Replay is policy-gated and off by default.
-  const playback = useVoicePlayback({ profile: voiceCapability?.profile ?? "none" });
+  // Issue #501 / #1558 — assistant speech-output binding with the live audio engine. The latest
+  // COMPLETE assistant message in the transcript is the only text ever synthesized, so the spoken
+  // answer cannot diverge from the visible text (AC2); a streaming or pending turn is excluded until it
+  // settles. A non-playback profile or a deployment without speech output keeps the engine inert (AC1),
+  // and a synthesis or playback failure degrades to the visible text without breaking the chat (AC4).
+  const latestVisibleMessage = useMemo(() => {
+    const visibleMessages = visibleOnly(messages);
+    return visibleMessages[visibleMessages.length - 1];
+  }, [messages]);
+  const spokenTurnSettled =
+    !sending &&
+    sendStatus !== "streaming" &&
+    latestVisibleMessage !== undefined &&
+    latestVisibleMessage.role === "assistant" &&
+    latestVisibleMessage.content.trim().length > 0;
+  const playback = useAssistantSpeech({
+    profile: voiceCapability?.profile ?? "none",
+    enabled: voiceSpeechOutputVisible,
+    text: spokenTurnSettled ? latestVisibleMessage.content : undefined,
+    messageId: spokenTurnSettled ? latestVisibleMessage.id : undefined,
+  });
   // Issue #504 — voice session recap. Derives memory candidates from the COMMITTED voice transcript via
   // the additive recap route, then lists them through the EXISTING review queue. Live committed-transcript
   // segments are not yet surfaced by the composer (the #500 voice-transcript-segments store is not consumed

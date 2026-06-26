@@ -789,6 +789,46 @@ export async function readJsonCapped(
   return JSON.parse(parts.join("")) as unknown;
 }
 
+// Reads a binary response body into a single `ArrayBuffer`-backed `Uint8Array`, capping the
+// cumulative size exactly like `readJsonCapped`. Used by the text-to-speech adapter (Issue #1558) to
+// pull synthesized audio off the provider response without buffering an unbounded payload: a provider
+// that streams more than `maxBytes` is aborted and rejected rather than exhausting memory (the same
+// bounded-egress guarantee every other gateway call inherits, ADR-0038/ADR-0058 D4). The returned
+// array is `ArrayBuffer`-backed so it is a valid `BodyInit`/`BufferSource` for downstream consumers
+// without a type assertion.
+export async function readBytesCapped(
+  response: Response,
+  maxBytes: number = MAX_RESPONSE_BYTES,
+): Promise<Uint8Array<ArrayBuffer>> {
+  if (response.body === null) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxBytes) {
+      throw new Error("response body exceeded the size limit");
+    }
+    return new Uint8Array(buffer);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("response body exceeded the size limit");
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
 // Splits an SSE buffer on newlines, keeping the trailing partial line (no newline yet)
 // for the next read. Returns the complete lines and the leftover remainder so a
 // `data: {...}` payload split across two reads is never parsed half-formed.
