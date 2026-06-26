@@ -17,6 +17,7 @@ import {
   handleEvidenceList,
   handleEvidenceDetail,
 } from "./read-handlers.js";
+import { handleGetWorkspaceState, handlePutWorkspaceState } from "./workspace-state-handlers.js";
 import { handleVoiceTranscribe } from "./voice-handlers.js";
 import { handleVoiceRecapBuild } from "./voice-recap.js";
 import {
@@ -240,6 +241,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/evidence", handler: handleEvidenceList },
   { method: "GET", pattern: "/api/evidence/:runId", handler: handleEvidenceDetail },
   { method: "GET", pattern: "/api/workspace", handler: handleWorkspace },
+  { method: "GET", pattern: "/api/workspace/state", handler: handleGetWorkspaceState },
+  { method: "PUT", pattern: "/api/workspace/state", handler: handlePutWorkspaceState },
   // ADR-0013 D7 — UI-local persistence routes (additive).
   { method: "GET", pattern: "/api/projects", handler: handleListProjects },
   { method: "POST", pattern: "/api/projects", handler: handleCreateProject },
