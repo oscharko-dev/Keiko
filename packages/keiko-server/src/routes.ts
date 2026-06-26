@@ -77,6 +77,12 @@ import {
 } from "./terminal-routes.js";
 import { handleRuntimeCapabilities } from "./runtime/capabilityRoutes.js";
 import {
+  handleCommandCatalog,
+  handleCommandEvents,
+  handleCreateCommandRun,
+  handleDeleteCommandRun,
+} from "./command-runner-routes.js";
+import {
   handleFilesContent,
   handleFilesDirectories,
   handleFilesPreview,
@@ -290,6 +296,26 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/git/diff",
     handler: (ctx, deps) => handleGitDiff(ctx, deps, deps.gitRouteOptions),
+  },
+  // Issue #1387 — controlled test/build/run command executor. Tasks are discovered from package
+  // scripts and run through the single governed spawn boundary (keiko-tools runCommand): allowlisted
+  // task ids only (never free-form argv), workspace-contained cwd, output cap, timeout, cancellation,
+  // and content-free evidence. Literal `catalog`/`events` paths register before the `:runId` route.
+  {
+    method: "GET",
+    pattern: "/api/commands/catalog",
+    handler: handleCommandCatalog,
+  },
+  {
+    method: "GET",
+    pattern: "/api/commands/events",
+    handler: handleCommandEvents,
+  },
+  { method: "POST", pattern: "/api/commands/runs", handler: handleCreateCommandRun },
+  {
+    method: "DELETE",
+    pattern: "/api/commands/runs/:runId",
+    handler: handleDeleteCommandRun,
   },
   // Desktop files — selected-root browser, preview, and editor control plane.
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },

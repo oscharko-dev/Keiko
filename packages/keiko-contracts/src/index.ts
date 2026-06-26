@@ -405,6 +405,44 @@ export {
   validateGitRepositoryDiffResponse,
 } from "./git-repository.js";
 
+// ─── Controlled command executor (Issue #1387, Epic #1491) ────────────────────────
+// Wire contract for the governed test/build/run command runner: a server-discovered catalog of
+// vetted tasks, a run request that names a catalog `taskId` (never free-form argv), the structured
+// run result (exit code, duration, truncation, failure reason), and the SSE run events. The executor
+// allowlist (`COMMAND_TASK_RULES`) is separate from the read-only command rule tables so the
+// test/build/run surface cannot widen them. Discovery + execution live in keiko-server.
+export type {
+  CommandTaskKind,
+  CommandTaskSource,
+  CommandTask,
+  CommandTaskCatalog,
+  CommandFailureReason,
+  CommandTaskRunRequest,
+  CommandTaskRunResult,
+  CommandRunnerEventKind,
+  CommandRunnerEvent,
+  CommandTaskRunRequestParseOk,
+  CommandTaskRunRequestParseFail,
+  CommandTaskRunRequestParse,
+  CommandTaskCatalogParseOk,
+  CommandTaskCatalogParseFail,
+  CommandTaskCatalogParse,
+  CommandTaskRunResultParseOk,
+  CommandTaskRunResultParseFail,
+  CommandTaskRunResultParse,
+} from "./command-runner.js";
+export {
+  COMMAND_RUNNER_SCHEMA_VERSION,
+  COMMAND_TASK_KINDS,
+  COMMAND_TASK_SOURCES,
+  COMMAND_FAILURE_REASONS,
+  COMMAND_RUNNER_EVENT_KINDS,
+  COMMAND_TASK_RULES,
+  parseCommandTaskRunRequest,
+  validateCommandTaskCatalog,
+  validateCommandTaskRunResult,
+} from "./command-runner.js";
+
 // ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
 // Wire request/response for the governed `POST /api/editor/completion` route: deterministic
 // language-service completion (#1198) merged with gated model-assisted completion (#1210) over

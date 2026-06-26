@@ -19,6 +19,7 @@ import { FilesWidget } from "./cards/FilesWidget";
 import { EditorWidget } from "./cards/EditorWidget";
 import { BrowserWidget } from "./cards/BrowserWidget";
 import { TerminalWidget } from "./cards/TerminalWidget";
+import { CommandsWidget } from "./cards/CommandsWidget";
 import { ReviewWidget } from "./cards/ReviewWidget";
 import { AgentRunWidget, type AgentRunCfg } from "./cards/AgentRunWidget";
 import { IntegrationsWidget } from "./cards/IntegrationsWidget";
@@ -391,6 +392,12 @@ registerWindowRender("terminal", (cfg) => {
   if (cwd !== undefined) props.cwd = cwd;
   if (projectPath !== undefined) props.projectPath = projectPath;
   return <TerminalWidget {...props} />;
+});
+registerWindowRender("commands", (cfg) => {
+  const projectPath = str(cfg, "projectPath");
+  const props: { projectPath?: string } = {};
+  if (projectPath !== undefined) props.projectPath = projectPath;
+  return <CommandsWidget {...props} />;
 });
 // uiux-fix F018 C110: a review window without a run ID was a dead end — the empty
 // state now offers an inline run-ID form, persisted via updateCfg like files/figma.

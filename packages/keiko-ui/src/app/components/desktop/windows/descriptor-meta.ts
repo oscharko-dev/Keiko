@@ -73,6 +73,14 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "transient",
   },
+  commands: {
+    lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
+    trustBoundary: ["ui", "fs", "tool"],
+    authority: "user-confirm",
+    // The window holds only a project-path reference (the run catalog and results are fetched live),
+    // so it is restorable like the files/editor surfaces rather than transient like the terminal.
+    persistence: "fs-reference",
+  },
   review: {
     lifecycle: ["proposed", "needs-review", "applied", "reverted", "archived"],
     trustBoundary: ["ui", "evidence"],
