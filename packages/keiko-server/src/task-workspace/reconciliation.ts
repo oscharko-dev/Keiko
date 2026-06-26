@@ -137,7 +137,7 @@ function findWorktreeEntry(
   return worktrees.find((entry) => realpathOrSelf(entry.path) === target);
 }
 
-interface FactsAndHead {
+export interface FactsAndHead {
   readonly facts: WorkspaceReconciliationFacts;
   readonly observedHead: string | undefined;
 }
@@ -297,6 +297,22 @@ function reconcileWithContext(
   });
   emitReconcileEvidence(ctx, persisted, fromState, outcome, targetState !== fromState, nowMs);
   return { instance: persisted, outcome };
+}
+
+// Gathers the content-free reconciliation facts for one instance against a PRE-FETCHED adapter +
+// worktree list, WITHOUT persisting or classifying. Exported so the #448 health service can build the
+// same WorkspaceReconciliationFacts the reconciler uses (no second containment/git engine) and then
+// layer its live dirty + ownership signals on top.
+export function gatherInstanceReconciliationFacts(
+  deps: WorkspaceReconciliationServiceDeps,
+  adapter: GitWorktreeAdapter,
+  worktrees: readonly WorktreeListEntry[],
+  instance: WorkspaceInstance,
+  nowMs: number,
+  actor?: string,
+): Promise<FactsAndHead> {
+  const ctx: ReconcileCtx = { deps, lockTtlMs: deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS };
+  return gatherFacts(ctx, adapter, worktrees, instance, nowMs, actor);
 }
 
 // Reconciles a SINGLE instance end to end (builds its own adapter + worktree list). Exported so the

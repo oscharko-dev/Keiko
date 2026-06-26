@@ -17,7 +17,7 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.10.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.11.0" as const;
 
 // Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
@@ -2348,6 +2348,15 @@ export type {
   WorkspaceActiveRestorationKind,
   WorkspaceActiveRestoration,
   WorkspaceReconciliationReport,
+  WorkspaceHealthClassification,
+  WorkspaceCleanupRefusalReason,
+  WorkspaceCleanupSafetyFacts,
+  WorkspaceCleanupDecision,
+  WorkspaceHealthSignals,
+  WorkspaceHealthEvaluation,
+  WorkspaceHealthEntryKind,
+  WorkspaceHealthEntry,
+  WorkspaceHealthReport,
 } from "./task-workspace.js";
 export {
   TASK_WORKSPACE_SCHEMA_VERSION,
@@ -2407,4 +2416,20 @@ export {
   validateWorkspaceReconciliationEntry,
   validateWorkspaceActiveRestoration,
   validateWorkspaceReconciliationReport,
+  WORKSPACE_HEALTH_CLASSIFICATIONS,
+  WORKSPACE_CLEANUP_ELIGIBLE_LIFECYCLE_STATES,
+  WORKSPACE_CLEANUP_REFUSAL_REASONS,
+  WORKSPACE_HEALTH_ENTRY_KINDS,
+  WORKSPACE_HEALTH_ENTRY_ALLOWED_KEYS,
+  WORKSPACE_HEALTH_REPORT_ALLOWED_KEYS,
+  isWorkspaceHealthClassification,
+  isCleanupEligibleLifecycleState,
+  isWorkspaceCleanupRefusalReason,
+  isWorkspaceHealthEntryKind,
+  evaluateWorkspaceCleanupSafety,
+  classifyWorkspaceHealth,
+  deriveWorkspaceHealthEntry,
+  deriveOrphanWorktreeHealthEntry,
+  validateWorkspaceHealthEntry,
+  validateWorkspaceHealthReport,
 } from "./task-workspace.js";

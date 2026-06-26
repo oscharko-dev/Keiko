@@ -40,7 +40,11 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 export const GIT_WORKTREE_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   {
     executable: "git",
-    allowedSubcommands: Object.freeze(["worktree", "rev-parse", "show-ref"]),
+    // `status` (#448) is the read-only working-tree probe for live dirty detection. Like `rev-parse`
+    // and `show-ref` it cannot mutate, so adding it keeps the structural separation from
+    // GIT_MUTATION_COMMAND_RULES (no write subcommand is reachable) while letting the cleanup gate see
+    // uncommitted/untracked work before removing a worktree.
+    allowedSubcommands: Object.freeze(["worktree", "rev-parse", "show-ref", "status"]),
     valueFlags: Object.freeze([
       "-C",
       "-c",
@@ -189,6 +193,13 @@ export function buildPruneWorktreesArgv(): readonly string[] {
   return ["worktree", "prune"];
 }
 
+// `git status --porcelain` — the read-only working-tree probe (#448). Exit 0 with any output means the
+// worktree has uncommitted OR untracked changes (the conservative signal for a deletion gate). The
+// porcelain lines themselves never leave the adapter: the caller receives only a `dirty` boolean.
+export function buildWorktreeStatusArgv(): readonly string[] {
+  return ["status", "--porcelain"];
+}
+
 export function buildShowToplevelArgv(): readonly string[] {
   return ["rev-parse", "--show-toplevel"];
 }
@@ -283,12 +294,22 @@ export interface WorktreeOperationResult {
   readonly truncated: boolean;
 }
 
+// Content-free working-tree state (#448): `ok` is false when `git status` could not run (e.g. the path
+// is not a readable worktree), in which case `dirty` is not meaningful. The adapter never surfaces the
+// porcelain lines — only whether the tree has changes.
+export interface WorktreeStatusResult {
+  readonly ok: boolean;
+  readonly dirty: boolean;
+}
+
 export interface GitWorktreeAdapter {
   // Resolves the repository top-level directory, or undefined when the root is not a git repository.
   readonly resolveRepositoryRoot: () => Promise<string | undefined>;
   readonly refResolves: (ref: string) => Promise<boolean>;
   readonly localBranchExists: (branch: string) => Promise<boolean>;
   readonly listWorktrees: () => Promise<readonly WorktreeListEntry[]>;
+  // Read-only live dirty probe (#448). Run against a worktree-bound adapter; returns only a boolean.
+  readonly worktreeStatus: () => Promise<WorktreeStatusResult>;
   readonly addWorktree: (operands: AddWorktreeOperands) => Promise<WorktreeOperationResult>;
   readonly addWorktreeForExistingBranch: (
     operands: AddExistingBranchOperands,
@@ -374,6 +395,11 @@ export function createNodeGitWorktreeAdapter(deps: NodeGitWorktreeAdapterDeps): 
       const result = await runGit(ctx, buildListWorktreesArgv());
       if (result.exitCode !== 0) return [];
       return parseWorktreeListPorcelain(result.stdout);
+    },
+    worktreeStatus: async (): Promise<WorktreeStatusResult> => {
+      const result = await runGit(ctx, buildWorktreeStatusArgv());
+      if (result.exitCode !== 0) return { ok: false, dirty: false };
+      return { ok: true, dirty: result.stdout.trim().length > 0 };
     },
     addWorktree: async (operands: AddWorktreeOperands): Promise<WorktreeOperationResult> =>
       toOperationResult(await runGit(ctx, buildAddWorktreeArgv(operands))),

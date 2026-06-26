@@ -174,8 +174,8 @@ import {
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
-  it("exposes the version constant pinned at 0.10.0", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.10.0");
+  it("exposes the version constant pinned at 0.11.0", () => {
+    expect(KEIKO_CONTRACTS_VERSION).toBe("0.11.0");
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {

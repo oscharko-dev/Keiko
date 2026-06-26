@@ -88,9 +88,12 @@ import {
 } from "./command-runner-routes.js";
 import {
   handleActivateTaskWorkspace,
+  handleCleanupOrphanTaskWorkspaces,
+  handleCleanupTaskWorkspace,
   handleClearActiveTaskWorkspace,
   handleGetActiveTaskWorkspace,
   handleGetTaskWorkspace,
+  handleGetTaskWorkspaceHealth,
   handleGetTaskWorkspaceReconciliation,
   handleHandoffTaskWorkspace,
   handleListTaskWorkspaces,
@@ -418,6 +421,20 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/task-workspaces/:workspaceId/repair",
     handler: handleRepairTaskWorkspace,
+  },
+  // Issue #448 (Epic #443, ADR-0092) — operational health/drift/orphan report (read-only) plus the
+  // governed, operator-approval-gated cleanup controls. The literal `health` and `cleanup/orphans`
+  // paths win over the `:workspaceId` routes by `matchRoute` specificity.
+  { method: "GET", pattern: "/api/task-workspaces/health", handler: handleGetTaskWorkspaceHealth },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/cleanup/orphans",
+    handler: handleCleanupOrphanTaskWorkspaces,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/cleanup",
+    handler: handleCleanupTaskWorkspace,
   },
   { method: "GET", pattern: "/api/task-workspaces/:workspaceId", handler: handleGetTaskWorkspace },
   // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. The capability

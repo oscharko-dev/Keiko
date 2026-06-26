@@ -356,6 +356,8 @@ describe("drift + partial failure leave a visible classified state (SC4)", () =>
         refResolves: (): Promise<boolean> => Promise.resolve(true),
         localBranchExists: (): Promise<boolean> => Promise.resolve(false),
         listWorktrees: (): Promise<readonly never[]> => Promise.resolve([]),
+        worktreeStatus: (): Promise<{ ok: boolean; dirty: boolean }> =>
+          Promise.resolve({ ok: true, dirty: false }),
         addWorktree: (): Promise<WorktreeOperationResult> => Promise.resolve(fail),
         addWorktreeForExistingBranch: (): Promise<WorktreeOperationResult> => Promise.resolve(fail),
         removeWorktree: (): Promise<WorktreeOperationResult> => Promise.resolve(ok),

@@ -24,6 +24,9 @@ import { FilesError, resolveRoot } from "../files.js";
 import { TaskWorkspaceError } from "./errors.js";
 import type {
   WorkspaceActivateRequest,
+  WorkspaceCleanupMode,
+  WorkspaceCleanupService,
+  WorkspaceHealthService,
   WorkspaceLifecycleActionRequest,
   WorkspaceLifecycleService,
   WorkspaceProvisioningService,
@@ -56,6 +59,8 @@ type RouteOrService = RouteResult | WorkspaceProvisioningService;
 type RouteOrLifecycle = RouteResult | WorkspaceLifecycleService;
 type RouteOrReconciliation = RouteResult | WorkspaceReconciliationService;
 type RouteOrRepair = RouteResult | WorkspaceRepairService;
+type RouteOrHealth = RouteResult | WorkspaceHealthService;
+type RouteOrCleanup = RouteResult | WorkspaceCleanupService;
 
 function requireService(deps: UiHandlerDeps): RouteOrService {
   return deps.workspaceProvisioning ?? unavailable();
@@ -73,8 +78,22 @@ function requireRepair(deps: UiHandlerDeps): RouteOrRepair {
   return deps.workspaceRepair ?? unavailable();
 }
 
+function requireHealth(deps: UiHandlerDeps): RouteOrHealth {
+  return deps.workspaceHealth ?? unavailable();
+}
+
+function requireCleanup(deps: UiHandlerDeps): RouteOrCleanup {
+  return deps.workspaceCleanup ?? unavailable();
+}
+
 function isRouteResult(
-  value: RouteOrService | RouteOrLifecycle | RouteOrReconciliation | RouteOrRepair,
+  value:
+    | RouteOrService
+    | RouteOrLifecycle
+    | RouteOrReconciliation
+    | RouteOrRepair
+    | RouteOrHealth
+    | RouteOrCleanup,
 ): value is RouteResult {
   return typeof (value as { status?: unknown }).status === "number";
 }
@@ -478,6 +497,94 @@ export async function handleRepairTaskWorkspace(
         driftMarkers: result.driftMarkers,
         operatorActionRequired: result.operatorActionRequired,
       }),
+    };
+  });
+}
+
+// ─── #448 health + governed cleanup routes ──────────────────────────────────────────────────────
+// The literal `health` and `cleanup/orphans` paths are registered BEFORE `:workspaceId` so they win by
+// literal-segment specificity. A `root` of undefined scopes health/orphan-cleanup across ALL managed
+// repositories; a provided root scopes to one (resolved + realpath'd through the same containment).
+
+// GET /api/task-workspaces/health[?root=<repoRoot>] — content-free operational health + drift + orphan
+// report (read-only; live filesystem + git probing, no persistence).
+export async function handleGetTaskWorkspaceHealth(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireHealth(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(deps, async () => {
+    const root = await resolveOptionalRoot(deps, ctx.url.searchParams.get("root"));
+    const report = await guard.report(root);
+    return { status: 200, body: redacted(deps, { report }) };
+  });
+}
+
+function parseCleanupMode(value: unknown): WorkspaceCleanupMode {
+  if (value === "request" || value === "complete") return value;
+  throw new TaskWorkspaceError(
+    "INVALID_REQUEST",
+    "missing or invalid field: mode (expected 'request' or 'complete')",
+  );
+}
+
+// POST /api/task-workspaces/:workspaceId/cleanup — request (settled → cleanup-pending) or complete
+// (governed, live-verified physical removal). Operator-approval gated; CSRF inherited.
+export async function handleCleanupTaskWorkspace(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireCleanup(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(deps, async () => {
+    const workspaceId = ctx.params.workspaceId ?? "";
+    const body = await readJsonObject(ctx.req);
+    const requestedBy = boundedString(body.requestedBy);
+    if (requestedBy === undefined) {
+      throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: requestedBy");
+    }
+    const result = await guard.cleanup({
+      workspaceId,
+      requestedBy,
+      operatorApproved: body.operatorApproved === true,
+      mode: parseCleanupMode(body.mode),
+    });
+    return {
+      status: 200,
+      body: redacted(deps, {
+        outcome: result.outcome,
+        workspaceId: result.workspaceId,
+        ...(result.instance !== undefined ? { instance: result.instance } : {}),
+        ...(result.refusalReason !== undefined ? { refusalReason: result.refusalReason } : {}),
+      }),
+    };
+  });
+}
+
+// POST /api/task-workspaces/cleanup/orphans — governed removal of orphaned managed worktrees (on-disk
+// directories with no persisted record). Operator-approval gated; CSRF inherited.
+export async function handleCleanupOrphanTaskWorkspaces(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireCleanup(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(deps, async () => {
+    const body = await readJsonObject(ctx.req);
+    const requestedBy = boundedString(body.requestedBy);
+    if (requestedBy === undefined) {
+      throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: requestedBy");
+    }
+    const root = await resolveOptionalRoot(deps, boundedString(body.root));
+    const result = await guard.cleanupOrphans({
+      ...(root !== undefined ? { repositoryRoot: root } : {}),
+      requestedBy,
+      operatorApproved: body.operatorApproved === true,
+    });
+    return {
+      status: 200,
+      body: redacted(deps, { removed: result.removed, refused: result.refused }),
     };
   });
 }
