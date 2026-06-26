@@ -41,7 +41,10 @@ import {
   DEFAULT_INLINE_COMPLETION_CONTEXT_BUDGET_BYTES,
   DEFAULT_INLINE_COMPLETION_DEBOUNCE_MS,
 } from "./inline-completion-bridge.js";
-import { DEFAULT_DIAGNOSTICS_DEBOUNCE_MS } from "./diagnostics-bridge.js";
+import {
+  DEFAULT_DIAGNOSTICS_DEBOUNCE_MS,
+  type DiagnosticOverviewMarker,
+} from "./diagnostics-bridge.js";
 import {
   createInlineCompletionTelemetry,
   type InlineCompletionTelemetry,
@@ -51,7 +54,10 @@ export interface EditorHandlers {
   readonly onChange: OnChange;
   readonly onMount: OnMount;
   readonly formatDocument: () => void;
+  readonly revealDiagnosticMarker: (marker: DiagnosticOverviewMarker) => void;
 }
+
+type OverviewMarkersHandler = (markers: readonly DiagnosticOverviewMarker[]) => void;
 
 interface EditorRefs {
   readonly editorRef: MutableRefObject<MountEditor | null>;
@@ -103,18 +109,34 @@ function applyRevealRequest(
   editor.focus();
   editor.setSelection(safeRange);
   editor.revealRangeInCenterIfOutsideViewport(safeRange);
-  refs.revealDecorationIdsRef.current = editor.deltaDecorations([], [
-    {
-      range: safeRange,
-      options: {
-        isWholeLine: true,
-        className: "keiko-editor-reference-target",
+  refs.revealDecorationIdsRef.current = editor.deltaDecorations(
+    [],
+    [
+      {
+        range: safeRange,
+        options: {
+          isWholeLine: true,
+          className: "keiko-editor-reference-target",
+        },
       },
-    },
-  ]);
+    ],
+  );
   refs.revealTimeoutRef.current = window.setTimeout(() => {
     clearRevealDecoration(refs);
   }, 2400);
+}
+
+function revealDiagnosticMarker(refs: EditorRefs, marker: DiagnosticOverviewMarker): void {
+  const editor = refs.editorRef.current;
+  if (editor === null) return;
+  const startLineNumber = Math.max(1, marker.startLineNumber);
+  const startColumn = Math.max(1, marker.startColumn);
+  const endLineNumber = Math.max(startLineNumber, marker.endLineNumber);
+  const endColumn = Math.max(startColumn + 1, marker.endColumn);
+  const range = { startLineNumber, startColumn, endLineNumber, endColumn };
+  editor.focus();
+  editor.setSelection(range);
+  editor.revealRangeInCenterIfOutsideViewport(range);
 }
 
 function useSaveEmitter(
@@ -219,6 +241,7 @@ function buildInlineCompletionWiring(
 function buildDiagnosticsWiring(
   latestProps: MutableRefObject<KeikoCodeEditorProps>,
   streamId: string,
+  onOverviewMarkers: OverviewMarkersHandler | undefined,
 ): WireEditorDiagnostics | undefined {
   if (latestProps.current.provideDiagnostics === undefined) {
     return undefined;
@@ -238,6 +261,7 @@ function buildDiagnosticsWiring(
     onSummary: (summary): void => {
       latestProps.current.onDiagnosticsSummary?.(summary);
     },
+    ...(onOverviewMarkers === undefined ? {} : { onOverviewMarkers }),
   };
 }
 
@@ -349,10 +373,61 @@ function useMountStreams(latestProps: MutableRefObject<KeikoCodeEditorProps>): {
   return { streamId, inlineStreamId, telemetry };
 }
 
+interface MountRuntimeArgs {
+  readonly editor: MountEditor;
+  readonly monaco: unknown;
+  readonly refs: EditorRefs;
+  readonly emitSave: () => void;
+  readonly latestProps: MutableRefObject<KeikoCodeEditorProps>;
+  readonly streamId: string;
+  readonly inlineStreamId: string;
+  readonly telemetry: InlineCompletionTelemetry;
+  readonly onOverviewMarkers: OverviewMarkersHandler | undefined;
+  readonly onCursorChange: KeikoCodeEditorProps["onCursorChange"];
+  readonly onSelectionChange: KeikoCodeEditorProps["onSelectionChange"];
+  readonly onRuntimeError: KeikoCodeEditorProps["onRuntimeError"];
+  readonly themeVariant: KeikoCodeEditorProps["themeVariant"];
+  readonly autoFocus: KeikoCodeEditorProps["autoFocus"];
+}
+
+function mountEditorRuntime(args: MountRuntimeArgs): void {
+  const mountMonaco = args.monaco as MountMonaco;
+  args.refs.editorRef.current = args.editor;
+  applyViewState(args.editor, args.refs.viewStateRef.current);
+  args.refs.disposeRef.current = wireEditorOnMount({
+    editor: args.editor,
+    monaco: mountMonaco,
+    container: args.editor.getContainerDomNode(),
+    themeVariant: args.themeVariant ?? "dark",
+    autoFocus: args.autoFocus ?? false,
+    onSave: args.emitSave,
+    onCursorChange: args.onCursorChange,
+    onSelectionChange: args.onSelectionChange,
+    onThemeError: args.onRuntimeError,
+    completion: buildCompletionWiring(args.latestProps, args.streamId),
+    inlineCompletion: buildInlineCompletionWiring(
+      args.latestProps,
+      args.inlineStreamId,
+      args.telemetry,
+    ),
+    diagnostics: buildDiagnosticsWiring(
+      args.latestProps,
+      `${args.streamId}:diagnostics`,
+      args.onOverviewMarkers,
+    ),
+    hover: buildHoverWiring(args.latestProps, `${args.streamId}:hover`),
+    symbols: buildSymbolsWiring(args.latestProps, `${args.streamId}:symbols`),
+    formatting: buildFormattingWiring(args.latestProps, `${args.streamId}:formatting`),
+    commands: buildCommandsWiring(args.latestProps),
+  });
+  applyRevealRequest(args.refs, args.latestProps.current.revealRequest);
+}
+
 function useMountHandler(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
   emitSave: () => void,
+  onOverviewMarkers: OverviewMarkersHandler | undefined,
 ): OnMount {
   const { onCursorChange, onSelectionChange, onRuntimeError, themeVariant, autoFocus } = props;
   // Live props for the completion resolvers (read at provider-call time, not mount time).
@@ -361,32 +436,22 @@ function useMountHandler(
   const { streamId, inlineStreamId, telemetry } = useMountStreams(latestProps);
   return useCallback<OnMount>(
     (editor, monaco): void => {
-      const mountEditor: MountEditor = editor;
-      // The live `monaco` namespace arrives typed as the editor library's `Monaco`, which the
-      // typed-lint program cannot fully resolve (it surfaces as error-typed); narrow it at this
-      // single seam to the minimal structural view the mount wiring consumes.
-      const mountMonaco = monaco as unknown as MountMonaco;
-      refs.editorRef.current = mountEditor;
-      applyViewState(editor, refs.viewStateRef.current);
-      refs.disposeRef.current = wireEditorOnMount({
-        editor: mountEditor,
-        monaco: mountMonaco,
-        container: editor.getContainerDomNode(),
-        themeVariant: themeVariant ?? "dark",
-        autoFocus: autoFocus ?? false,
-        onSave: emitSave,
+      mountEditorRuntime({
+        editor,
+        monaco,
+        refs,
+        emitSave,
+        latestProps,
+        streamId,
+        inlineStreamId,
+        telemetry,
+        onOverviewMarkers,
         onCursorChange,
         onSelectionChange,
-        onThemeError: onRuntimeError,
-        completion: buildCompletionWiring(latestProps, streamId),
-        inlineCompletion: buildInlineCompletionWiring(latestProps, inlineStreamId, telemetry),
-        diagnostics: buildDiagnosticsWiring(latestProps, `${streamId}:diagnostics`),
-        hover: buildHoverWiring(latestProps, `${streamId}:hover`),
-        symbols: buildSymbolsWiring(latestProps, `${streamId}:symbols`),
-        formatting: buildFormattingWiring(latestProps, `${streamId}:formatting`),
-        commands: buildCommandsWiring(latestProps),
+        onRuntimeError,
+        themeVariant,
+        autoFocus,
       });
-      applyRevealRequest(refs, latestProps.current.revealRequest);
     },
     [
       refs,
@@ -400,6 +465,7 @@ function useMountHandler(
       streamId,
       inlineStreamId,
       telemetry,
+      onOverviewMarkers,
     ],
   );
 }
@@ -426,17 +492,27 @@ function useRevealRequest(props: KeikoCodeEditorProps, refs: EditorRefs): void {
 }
 
 /** Wire change/mount handlers and unmount disposal; returns the handlers for `<Editor>`. */
-export function useEditorHandlers(props: KeikoCodeEditorProps, readOnly: boolean): EditorHandlers {
+export function useEditorHandlers(
+  props: KeikoCodeEditorProps,
+  readOnly: boolean,
+  onOverviewMarkers?: OverviewMarkersHandler,
+): EditorHandlers {
   const refs = useEditorRefs();
   const emitSave = useSaveEmitter(props, refs.editorRef, readOnly);
   const onChange = useChangeHandler(props.onContentChange, readOnly);
-  const onMount = useMountHandler(props, refs, emitSave);
+  const onMount = useMountHandler(props, refs, emitSave, onOverviewMarkers);
   const formatDocument = useCallback((): void => {
     const editor = refs.editorRef.current;
     if (editor === null || readOnly) return;
     void editor.getAction(MONACO_BUILTIN_ACTION_IDS.format)?.run();
   }, [readOnly, refs.editorRef]);
+  const revealDiagnostic = useCallback(
+    (marker: DiagnosticOverviewMarker): void => {
+      revealDiagnosticMarker(refs, marker);
+    },
+    [refs],
+  );
   useUnmountDisposal(refs);
   useRevealRequest(props, refs);
-  return { onChange, onMount, formatDocument };
+  return { onChange, onMount, formatDocument, revealDiagnosticMarker: revealDiagnostic };
 }

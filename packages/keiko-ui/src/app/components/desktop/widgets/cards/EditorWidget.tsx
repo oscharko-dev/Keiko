@@ -14,6 +14,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   activeEditorPane,
   createEditorDirtyCloseIntent,
@@ -25,6 +26,7 @@ import {
   serializeEditorLayoutStateV2,
   type EditorDirtyCloseIntent,
   type EditorLayoutNode,
+  type EditorLayoutPaneNode,
   type EditorLayoutSplitNode,
   type EditorLayoutStateV2,
   type EditorPaneStateV2,
@@ -33,9 +35,11 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { Icons } from "../../Icons";
+import { acquireGrabbingBodyStyle } from "../../interactionGuards";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget } from "./FilesWidget";
+import { FileIcon } from "../shared/projectTree";
 
 const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
   () => import("./EditorRuntimeWidget"),
@@ -70,11 +74,31 @@ interface DraggedTab {
   readonly file: string;
 }
 
+interface PointerTabDrag {
+  readonly paneId: string;
+  readonly file: string;
+  readonly startX: number;
+  readonly startY: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly width: number;
+  dragging: boolean;
+}
+
+interface PointerTabDragPosition {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+}
+
+const EDITOR_TAB_DRAG_MIME = "application/x-keiko-editor-tab";
+const TAB_POINTER_DRAG_THRESHOLD_PX = 6;
 const MIN_SIDEBAR_WIDTH = 180;
 const DEFAULT_SIDEBAR_WIDTH = 260;
 const MAX_SIDEBAR_WIDTH = 440;
 const MIN_SPLIT_RATIO = 15;
 const MAX_SPLIT_RATIO = 85;
+const MAX_EDITOR_PANES = 2;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -138,13 +162,31 @@ function sanitizeLayoutFiles(root: string, layout: EditorLayoutStateV2): EditorL
   return { ...layout, root, panes };
 }
 
+function layoutHasDuplicateFiles(layout: EditorLayoutStateV2): boolean {
+  const seen = new Set<string>();
+  for (const pane of editorLayoutPanes(layout)) {
+    for (const path of pane.openFiles) {
+      if (seen.has(path)) return true;
+      seen.add(path);
+    }
+  }
+  return false;
+}
+
+function layoutHasClonedPanes(layout: EditorLayoutStateV2): boolean {
+  const panes = editorLayoutPanes(layout);
+  if (panes.length < 2) return false;
+  const first = panes[0]?.openFiles ?? [];
+  return panes.every((pane) => sameStringList(pane.openFiles, first));
+}
+
 function createInitialLayout(input: {
   readonly root: string;
   readonly file: string;
   readonly openFiles: readonly string[];
   readonly layoutJson: string | undefined;
 }): EditorLayoutStateV2 {
-  return sanitizeLayoutFiles(
+  return normalizeEditorLayoutStructure(
     input.root,
     createEditorLayoutStateV2({
       root: input.root,
@@ -156,6 +198,131 @@ function createInitialLayout(input: {
       maxSidebarWidth: MAX_SIDEBAR_WIDTH,
     }),
   );
+}
+
+function createPresetPane(
+  root: string,
+  id: string,
+  activeFile: string,
+  openFiles: readonly string[],
+): EditorPaneStateV2 {
+  const normalizedOpenFiles = normalizeEditorOpenFiles(root, activeFile, openFiles);
+  const normalizedActiveFile =
+    normalizeEditorFile(root, activeFile) || normalizedOpenFiles[0] || "";
+  return {
+    id,
+    activeFile: normalizedActiveFile,
+    openFiles: normalizedOpenFiles,
+    tabOrder: normalizedOpenFiles,
+  };
+}
+
+function paneNode(paneId: string): EditorLayoutPaneNode {
+  return { type: "pane", paneId };
+}
+
+function splitNode(
+  id: string,
+  direction: EditorSplitDirection,
+  first: EditorLayoutNode,
+  second: EditorLayoutNode,
+): EditorLayoutSplitNode {
+  return { type: "split", id, direction, ratio: 50, first, second };
+}
+
+function presetTree(direction: EditorSplitDirection): EditorLayoutSplitNode {
+  return splitNode("split-1", direction, paneNode("pane-1"), paneNode("pane-2"));
+}
+
+function createDistributedPresetLayout(
+  layout: EditorLayoutStateV2,
+  root: string,
+  direction: EditorSplitDirection,
+  sourcePane: EditorPaneStateV2,
+): EditorLayoutStateV2 | null {
+  const openFiles = normalizeEditorOpenFiles(
+    root,
+    sourcePane.activeFile,
+    editorLayoutOpenFiles(layout),
+  );
+  const activeFile = normalizeEditorFile(root, sourcePane.activeFile) || openFiles[0] || "";
+  const otherFiles = openFiles.filter((path) => path !== activeFile);
+  if (activeFile.length === 0 || otherFiles.length === 0) return null;
+  return {
+    ...layout,
+    root,
+    activePaneId: "pane-1",
+    tree: presetTree(direction),
+    panes: {
+      "pane-1": createPresetPane(root, "pane-1", activeFile, [activeFile]),
+      "pane-2": createPresetPane(root, "pane-2", otherFiles[0] ?? "", otherFiles),
+    },
+  };
+}
+
+function createSinglePresetLayout(
+  layout: EditorLayoutStateV2,
+  root: string,
+  activeFile: string,
+  openFiles: readonly string[],
+): EditorLayoutStateV2 {
+  return {
+    ...layout,
+    root,
+    activePaneId: "pane-1",
+    tree: paneNode("pane-1"),
+    panes: {
+      "pane-1": createPresetPane(root, "pane-1", activeFile, openFiles),
+    },
+  };
+}
+
+function dedupeLayoutFilesByActivePane(
+  layout: EditorLayoutStateV2,
+  root: string,
+): EditorLayoutStateV2 {
+  const paneIds = editorLayoutPaneIds(layout);
+  const orderedPaneIds = [
+    layout.activePaneId,
+    ...paneIds.filter((paneId) => paneId !== layout.activePaneId),
+  ];
+  const seen = new Set<string>();
+  const panes: Record<string, EditorPaneStateV2> = { ...layout.panes };
+  for (const paneId of orderedPaneIds) {
+    const pane = layout.panes[paneId];
+    if (pane === undefined) continue;
+    const openFiles = pane.openFiles.filter((path) => {
+      if (seen.has(path)) return false;
+      seen.add(path);
+      return true;
+    });
+    const activeFile = openFiles.includes(pane.activeFile) ? pane.activeFile : (openFiles[0] ?? "");
+    panes[paneId] = createPresetPane(root, pane.id, activeFile, openFiles);
+  }
+  return { ...layout, panes };
+}
+
+function normalizeEditorLayoutStructure(
+  root: string,
+  layout: EditorLayoutStateV2,
+): EditorLayoutStateV2 {
+  const sanitized = sanitizeLayoutFiles(root, layout);
+  const paneIds = editorLayoutPaneIds(sanitized);
+  const hasDuplicateFiles = layoutHasDuplicateFiles(sanitized);
+  if (paneIds.length <= MAX_EDITOR_PANES && !hasDuplicateFiles) {
+    return sanitized;
+  }
+  if (paneIds.length <= MAX_EDITOR_PANES && hasDuplicateFiles && !layoutHasClonedPanes(sanitized)) {
+    const deduped = dedupeLayoutFilesByActivePane(sanitized, root);
+    if (editorLayoutPanes(deduped).every((pane) => pane.openFiles.length > 0)) return deduped;
+  }
+  const sourcePane = activeEditorPane(sanitized);
+  const direction = sanitized.tree.type === "split" ? sanitized.tree.direction : "row";
+  const distributed = createDistributedPresetLayout(sanitized, root, direction, sourcePane);
+  if (distributed !== null) return distributed;
+  const openFiles = editorLayoutOpenFiles(sanitized);
+  const activeFile = normalizeEditorFile(root, sourcePane.activeFile) || openFiles[0] || "";
+  return createSinglePresetLayout(sanitized, root, activeFile, openFiles);
 }
 
 function dirtyFilesForPane(
@@ -175,6 +342,51 @@ function allDirtyFiles(
     for (const path of Object.keys(paneDirty)) out.add(path);
   }
   return [...out];
+}
+
+function draggedTabFromEvent(event: DragEvent<HTMLElement>): DraggedTab | null {
+  const payload = event.dataTransfer.getData(EDITOR_TAB_DRAG_MIME);
+  if (payload.length === 0) return null;
+  try {
+    const parsed: unknown = JSON.parse(payload);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "paneId" in parsed &&
+      "file" in parsed &&
+      typeof parsed.paneId === "string" &&
+      typeof parsed.file === "string" &&
+      parsed.paneId.length > 0 &&
+      parsed.file.length > 0
+    ) {
+      return { paneId: parsed.paneId, file: parsed.file };
+    }
+  } catch {
+    // Ignore stale or foreign drag payloads.
+  }
+  return null;
+}
+
+function paneIdFromPoint(clientX: number, clientY: number): string | null {
+  const target = document.elementFromPoint(clientX, clientY);
+  const pane = target?.closest<HTMLElement>(".ed-pane");
+  return pane?.dataset.paneId ?? null;
+}
+
+function remapDirtyFilesToPresetPanes(
+  dirtyByPane: Readonly<Record<string, Readonly<Record<string, true>>>>,
+  layout: EditorLayoutStateV2,
+): Readonly<Record<string, Readonly<Record<string, true>>>> {
+  const dirtyFiles = allDirtyFiles(dirtyByPane);
+  if (dirtyFiles.length === 0) return {};
+  const panes = editorLayoutPanes(layout);
+  const fallbackPane = activeEditorPane(layout);
+  const next: Record<string, Record<string, true>> = {};
+  for (const path of dirtyFiles) {
+    const targetPane = panes.find((pane) => pane.openFiles.includes(path)) ?? fallbackPane;
+    next[targetPane.id] = { ...(next[targetPane.id] ?? {}), [path]: true };
+  }
+  return next;
 }
 
 function DirtyCloseDialog(props: {
@@ -273,12 +485,17 @@ export function EditorWidget({
     Readonly<Record<string, Readonly<Record<string, true>>>>
   >({});
   const [pendingClose, setPendingClose] = useState<PendingDirtyClose | null>(null);
+  const [heldTab, setHeldTab] = useState<DraggedTab | null>(null);
   const [draggedTab, setDraggedTab] = useState<DraggedTab | null>(null);
+  const [tabDragPosition, setTabDragPosition] = useState<PointerTabDragPosition | null>(null);
+  const [tabDropTargetPaneId, setTabDropTargetPaneId] = useState<string | null>(null);
   const [saveRequest, setSaveRequest] = useState<EditorExternalSaveRequest | null>(null);
   const saveSeqRef = useRef(0);
   const saveResolversRef = useRef(new Map<number, (ok: boolean) => void>());
   const lastPropRootRef = useRef(root?.trim() ?? "");
   const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const pointerTabDragRef = useRef<PointerTabDrag | null>(null);
+  const suppressNextTabClickRef = useRef(false);
 
   const buildPatch = useCallback(
     (nextRoot: string, nextLayout: EditorLayoutStateV2): EditorWidgetWorkspacePatch => {
@@ -295,7 +512,7 @@ export function EditorWidget({
 
   const commitLayout = useCallback(
     (nextLayout: EditorLayoutStateV2, nextRoot = workspaceRoot): void => {
-      const normalized = sanitizeLayoutFiles(nextRoot, nextLayout);
+      const normalized = normalizeEditorLayoutStructure(nextRoot, nextLayout);
       setLayout(normalized);
       if (nextRoot.length > 0) onWorkspaceChange?.(buildPatch(nextRoot, normalized));
     },
@@ -519,11 +736,19 @@ export function EditorWidget({
     [commitLayout, layout, markDirty, requestDirtyClose],
   );
 
-  const splitPane = useCallback(
+  const applyPanePreset = useCallback(
     (paneId: string, direction: EditorSplitDirection): void => {
-      commitLayout(editorLayoutReducer(layout, { type: "split-pane", paneId, direction }));
+      const pane = layout.panes[paneId];
+      if (pane === undefined || pane.activeFile.length === 0) return;
+      const nextLayout = createDistributedPresetLayout(layout, workspaceRoot, direction, pane);
+      if (nextLayout === null) return;
+      if (serializeEditorLayoutStateV2(nextLayout) === serializeEditorLayoutStateV2(layout)) {
+        return;
+      }
+      setDirtyByPane((current) => remapDirtyFilesToPresetPanes(current, nextLayout));
+      commitLayout(nextLayout);
     },
-    [commitLayout, layout],
+    [commitLayout, layout, workspaceRoot],
   );
 
   const closePane = useCallback(
@@ -571,12 +796,18 @@ export function EditorWidget({
     [commitLayout, layout],
   );
 
+  const isTabDragActive = useCallback(
+    (): boolean => pointerTabDragRef.current !== null || draggedTab !== null,
+    [draggedTab],
+  );
+
   const resizeSidebar = useCallback(
     (event: PointerEvent<HTMLButtonElement>): void => {
       if (event.buttons !== 1) return;
+      if (isTabDragActive()) return;
       resizeSidebarTo(event.clientX);
     },
-    [resizeSidebarTo],
+    [isTabDragActive, resizeSidebarTo],
   );
 
   const resizeSidebarBy = useCallback(
@@ -624,6 +855,7 @@ export function EditorWidget({
 
   const beginSidebarMouseResize = useCallback(
     (event: MouseEvent<HTMLButtonElement>): void => {
+      if (isTabDragActive()) return;
       event.preventDefault();
       const move = (moveEvent: globalThis.MouseEvent): void => resizeSidebarTo(moveEvent.clientX);
       const up = (): void => {
@@ -633,11 +865,12 @@ export function EditorWidget({
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up, { once: true });
     },
-    [resizeSidebarTo],
+    [isTabDragActive, resizeSidebarTo],
   );
 
   const beginSplitMouseResize = useCallback(
     (split: EditorLayoutSplitNode, event: MouseEvent<HTMLButtonElement>): void => {
+      if (isTabDragActive()) return;
       event.preventDefault();
       const parent = event.currentTarget.parentElement;
       if (parent === null) return;
@@ -650,7 +883,7 @@ export function EditorWidget({
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up, { once: true });
     },
-    [resizeSplitTo],
+    [isTabDragActive, resizeSplitTo],
   );
 
   const handleSidebarResizerKeyDown = useCallback(
@@ -732,18 +965,128 @@ export function EditorWidget({
     [commitLayout, layout],
   );
 
+  const beginTabPointerDrag = useCallback(
+    (
+      paneId: string,
+      path: string,
+      event: PointerEvent<HTMLButtonElement>,
+      onDragModeStart?: (() => void) | undefined,
+    ): void => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      let releaseBodyStyle: (() => void) | null = null;
+      const clearDragFeedback = (): void => {
+        releaseBodyStyle?.();
+        releaseBodyStyle = null;
+        setHeldTab(null);
+        setDraggedTab(null);
+        setTabDragPosition(null);
+        setTabDropTargetPaneId(null);
+      };
+      const tabRect = event.currentTarget.getBoundingClientRect();
+      pointerTabDragRef.current = {
+        paneId,
+        file: path,
+        startX: event.clientX,
+        startY: event.clientY,
+        offsetX: event.clientX - tabRect.left,
+        offsetY: event.clientY - tabRect.top,
+        width: tabRect.width,
+        dragging: false,
+      };
+      setHeldTab({ paneId, file: path });
+      const move = (moveEvent: globalThis.PointerEvent): void => {
+        const drag = pointerTabDragRef.current;
+        if (drag === null) return;
+        const distance = Math.hypot(
+          moveEvent.clientX - drag.startX,
+          moveEvent.clientY - drag.startY,
+        );
+        if (!drag.dragging && distance < TAB_POINTER_DRAG_THRESHOLD_PX) return;
+        if (!drag.dragging) {
+          drag.dragging = true;
+          suppressNextTabClickRef.current = true;
+          releaseBodyStyle = acquireGrabbingBodyStyle();
+          onDragModeStart?.();
+          setDraggedTab({ paneId: drag.paneId, file: drag.file });
+        }
+        const targetPaneId = paneIdFromPoint(moveEvent.clientX, moveEvent.clientY);
+        setTabDragPosition({
+          x: moveEvent.clientX - drag.offsetX,
+          y: moveEvent.clientY - drag.offsetY,
+          width: drag.width,
+        });
+        setTabDropTargetPaneId(
+          targetPaneId !== null && targetPaneId !== drag.paneId ? targetPaneId : null,
+        );
+        moveEvent.preventDefault();
+      };
+      const cleanup = (): void => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", cancel);
+      };
+      const cancel = (): void => {
+        cleanup();
+        pointerTabDragRef.current = null;
+        clearDragFeedback();
+      };
+      const up = (upEvent: globalThis.PointerEvent): void => {
+        cleanup();
+        const drag = pointerTabDragRef.current;
+        pointerTabDragRef.current = null;
+        clearDragFeedback();
+        if (drag === null || !drag.dragging) return;
+        upEvent.preventDefault();
+        const targetPaneId = paneIdFromPoint(upEvent.clientX, upEvent.clientY);
+        if (targetPaneId === null || targetPaneId === drag.paneId) return;
+        commitLayout(
+          editorLayoutReducer(layout, {
+            type: "move-tab",
+            fromPaneId: drag.paneId,
+            toPaneId: targetPaneId,
+            file: drag.file,
+          }),
+        );
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up, { once: true });
+      window.addEventListener("pointercancel", cancel, { once: true });
+    },
+    [commitLayout, layout],
+  );
+
+  const suppressTabClickAfterPointerDrag = useCallback(
+    (event: MouseEvent<HTMLButtonElement>): void => {
+      if (!suppressNextTabClickRef.current) return;
+      suppressNextTabClickRef.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [],
+  );
+
   const dropTab = useCallback(
     (paneId: string, zone: EditorSplitDropZone, event: DragEvent<HTMLElement>): void => {
       event.preventDefault();
-      if (draggedTab === null) return;
+      const dragged = draggedTab ?? draggedTabFromEvent(event);
+      if (dragged === null) return;
+      const paneCount = editorLayoutPaneIds(layout).length;
+      const effectiveZone =
+        zone !== "center" && paneCount >= MAX_EDITOR_PANES && dragged.paneId !== paneId
+          ? "center"
+          : zone;
+      if (effectiveZone !== "center" && paneCount >= MAX_EDITOR_PANES) {
+        setDraggedTab(null);
+        return;
+      }
       commitLayout(
         editorLayoutReducer(layout, {
           type: "drop-tab",
           intent: {
-            fromPaneId: draggedTab.paneId,
+            fromPaneId: dragged.paneId,
             toPaneId: paneId,
-            file: draggedTab.file,
-            zone,
+            file: dragged.file,
+            zone: effectiveZone,
           },
         }),
       );
@@ -756,39 +1099,39 @@ export function EditorWidget({
     return <EditorRuntimeWidget {...props} />;
   }
 
-  const paneActions = (pane: EditorPaneStateV2): ReactNode => (
-    <span className="ed-pane-actions" aria-label="Editor split controls">
-      <button
-        type="button"
-        className="ed-icon-action ui-tip"
-        aria-label={`Split ${pane.activeFile || "editor"} right`}
-        data-tip="Split right"
-        onClick={() => splitPane(pane.id, "row")}
-      >
-        <Icons.split size={14} />
-      </button>
-      <button
-        type="button"
-        className="ed-icon-action ui-tip"
-        aria-label={`Split ${pane.activeFile || "editor"} down`}
-        data-tip="Split down"
-        onClick={() => splitPane(pane.id, "column")}
-      >
-        <Icons.panelDown size={14} />
-      </button>
-      {editorLayoutPaneIds(layout).length > 1 ? (
+  const paneActions = (pane: EditorPaneStateV2): ReactNode => {
+    const paneCount = editorLayoutPaneIds(layout).length;
+    return (
+      <span className="ed-pane-actions" aria-label="Editor split controls">
         <button
           type="button"
-          className="ed-icon-action ui-tip"
-          aria-label={`Close split ${pane.activeFile || "editor"}`}
-          data-tip="Close split"
-          onClick={() => closePane(pane.id)}
+          className="ed-icon-action"
+          aria-label={`Split ${pane.activeFile || "editor"} right`}
+          onClick={() => applyPanePreset(pane.id, "row")}
         >
-          <Icons.close size={14} />
+          <Icons.split size={14} />
         </button>
-      ) : null}
-    </span>
-  );
+        <button
+          type="button"
+          className="ed-icon-action"
+          aria-label={`Split ${pane.activeFile || "editor"} down`}
+          onClick={() => applyPanePreset(pane.id, "column")}
+        >
+          <Icons.panelDown size={14} />
+        </button>
+        {paneCount > 1 ? (
+          <button
+            type="button"
+            className="ed-icon-action"
+            aria-label={`Close split ${pane.activeFile || "editor"}`}
+            onClick={() => closePane(pane.id)}
+          >
+            <Icons.close size={14} />
+          </button>
+        ) : null}
+      </span>
+    );
+  };
 
   const renderPane = (pane: EditorPaneStateV2): ReactNode => {
     const layoutPaneSnapshots: readonly EditorAgentPaneSnapshot[] = editorLayoutPanes(layout).map(
@@ -821,6 +1164,8 @@ export function EditorWidget({
         className="ed-pane"
         data-active={pane.id === layout.activePaneId ? "true" : "false"}
         data-dragging={draggedTab === null ? "false" : "true"}
+        data-tab-drop-target={tabDropTargetPaneId === pane.id ? "true" : "false"}
+        data-pane-id={pane.id}
         key={pane.id}
       >
         <div className="ed-pane-drop-zones" aria-hidden="true">
@@ -838,17 +1183,28 @@ export function EditorWidget({
         </div>
         <EditorRuntimeWidget
           {...runtimeProps}
-          renderTabHandle={(path, active, tabDirty) => ({
-            draggable: true,
+          renderTabHandle={(path, active, tabDirty, context) => ({
+            draggable: false,
             onDragStart: (event) => {
               event.dataTransfer.effectAllowed = "move";
               event.dataTransfer.setData("text/plain", path);
+              event.dataTransfer.setData(
+                EDITOR_TAB_DRAG_MIME,
+                JSON.stringify({ paneId: pane.id, file: path }),
+              );
+              context?.onDragModeStart?.();
               setDraggedTab({ paneId: pane.id, file: path });
             },
             onDragEnd: () => setDraggedTab(null),
+            onPointerDown: (event) =>
+              beginTabPointerDrag(pane.id, path, event, context?.onDragModeStart),
+            onClickCapture: suppressTabClickAfterPointerDrag,
             onKeyDown: (event) => handleTabKeyDown(pane.id, path, event),
             "data-active": active ? "true" : "false",
             "data-dirty": tabDirty ? "true" : "false",
+            "data-tab-draggable": "true",
+            "data-tab-held":
+              heldTab?.paneId === pane.id && heldTab.file === path ? "true" : "false",
           })}
         />
       </section>
@@ -869,12 +1225,15 @@ export function EditorWidget({
         {renderNode(node.first)}
         <button
           type="button"
-          className="ed-pane-resizer ui-tip"
+          className="ed-pane-resizer"
           aria-label="Resize editor split"
-          data-tip="Resize editor split"
-          onPointerDown={capturePointer}
+          onPointerDown={(event) => {
+            if (isTabDragActive()) return;
+            capturePointer(event);
+          }}
           onPointerMove={(event) => {
             if (event.buttons !== 1) return;
+            if (isTabDragActive()) return;
             const parent = event.currentTarget.parentElement;
             if (parent !== null) {
               resizeSplitTo(node, parent.getBoundingClientRect(), event.clientX, event.clientY);
@@ -895,6 +1254,7 @@ export function EditorWidget({
   return (
     <div
       className={`editor-workspace${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      data-tab-dragging={draggedTab === null ? "false" : "true"}
       ref={workspaceRef}
       style={{ "--ed-sidebar-width": `${String(layout.sidebarWidth)}px` } as CSSProperties}
     >
@@ -932,10 +1292,12 @@ export function EditorWidget({
           </aside>
           <button
             type="button"
-            className="ed-sidebar-resizer ui-tip"
+            className="ed-sidebar-resizer"
             aria-label="Resize project tree"
-            data-tip="Resize project tree"
-            onPointerDown={capturePointer}
+            onPointerDown={(event) => {
+              if (isTabDragActive()) return;
+              capturePointer(event);
+            }}
             onPointerMove={resizeSidebar}
             onPointerUp={releasePointer}
             onPointerCancel={releasePointer}
@@ -949,6 +1311,26 @@ export function EditorWidget({
           {renderNode(layout.tree)}
         </div>
       </div>
+      {draggedTab !== null && tabDragPosition !== null && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="ed-tab-drag-ghost mono"
+              style={
+                {
+                  "--ed-tab-drag-x": `${String(tabDragPosition.x)}px`,
+                  "--ed-tab-drag-y": `${String(tabDragPosition.y)}px`,
+                  "--ed-tab-drag-width": `${String(tabDragPosition.width)}px`,
+                } as CSSProperties
+              }
+              aria-hidden="true"
+            >
+              <FileIcon name={draggedTab.file} />
+              <span className="ed-tab-drag-ghost-label">{draggedTab.file}</span>
+              <span className="ed-tab-drag-ghost-close">×</span>
+            </div>,
+            document.body,
+          )
+        : null}
       {pendingClose !== null ? (
         <DirtyCloseDialog
           pending={pendingClose}

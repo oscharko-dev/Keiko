@@ -15,10 +15,11 @@
  * the host's job (#1196).
  */
 import { Editor } from "@monaco-editor/react";
-import { useEffect, useMemo, useRef, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from "react";
 
 import { inferMonacoLanguageId } from "../monaco/language-inference.js";
 import { buildEditorOptions } from "./editor-options.js";
+import type { DiagnosticOverviewMarker } from "./diagnostics-bridge.js";
 import { deriveLargeFileMode } from "./large-file-mode.js";
 import type { EditorStatusViewModel } from "./status-text.js";
 import type { KeikoCodeEditorProps } from "./types.js";
@@ -26,6 +27,8 @@ import { useEditorHandlers } from "./use-editor-handlers.js";
 import { computeEditorViewModel } from "./use-editor-view-model.js";
 
 const EDITOR_HEIGHT = "100%";
+const DIAGNOSTIC_OVERVIEW_WIDTH = 8;
+const DIAGNOSTIC_OVERVIEW_MARKER_HEIGHT = 4;
 
 /** A sized placeholder shown while Monaco loads — same box as the editor, so no layout shift. */
 function EditorLoadingBox(): ReactElement {
@@ -54,6 +57,128 @@ function EditorRuntimeErrorBox(props: { readonly message: string }): ReactElemen
       }}
     >
       {`Editor failed to load: ${props.message}`}
+    </div>
+  );
+}
+
+function countLines(text: string): number {
+  if (text.length === 0) return 1;
+  let lines = 1;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.charCodeAt(index) === 10) lines += 1;
+  }
+  return lines;
+}
+
+function markerTone(severity: number): string {
+  if (severity >= 8) return "var(--ed-error, var(--feedback-danger, var(--danger)))";
+  if (severity >= 4) return "var(--ed-warn, var(--warn))";
+  return "var(--ed-info, var(--info))";
+}
+
+function markerSeverityLabel(severity: number): string {
+  if (severity >= 8) return "Error";
+  if (severity >= 4) return "Warning";
+  return "Info";
+}
+
+function markerMeta(marker: DiagnosticOverviewMarker): string {
+  const location = `Line ${String(marker.startLineNumber)}`;
+  if (marker.source === undefined && marker.code === undefined) return location;
+  if (marker.source === undefined) return `${location} · ${String(marker.code)}`;
+  const codeSuffix = marker.code === undefined ? "" : `(${marker.code})`;
+  return `${location} · ${marker.source}${codeSuffix}`;
+}
+
+function markerDataSeverity(severity: number): string {
+  if (severity >= 8) return "error";
+  if (severity >= 4) return "warning";
+  return "info";
+}
+
+function markerTopPercent(marker: DiagnosticOverviewMarker, lineCount: number): number {
+  const denominator = Math.max(1, lineCount);
+  const start = Math.max(1, Math.min(marker.startLineNumber, denominator));
+  return ((start - 1) / denominator) * 100;
+}
+
+function EditorDiagnosticMarkerButton(props: {
+  readonly marker: DiagnosticOverviewMarker;
+  readonly lineCount: number;
+  readonly index: number;
+  readonly onActivate: (marker: DiagnosticOverviewMarker) => void;
+}): ReactElement {
+  const marker = props.marker;
+  const top = markerTopPercent(marker, props.lineCount);
+  const severityLabel = markerSeverityLabel(marker.severity);
+  const meta = markerMeta(marker);
+  return (
+    <button
+      type="button"
+      key={`${String(props.index)}:${String(marker.severity)}:${String(marker.startLineNumber)}:${
+        marker.message
+      }`}
+      className="keiko-editor-diagnostic-marker"
+      aria-label={`${severityLabel} diagnostic on ${meta}: ${marker.message}`}
+      data-severity={markerDataSeverity(marker.severity)}
+      onClick={() => {
+        props.onActivate(marker);
+      }}
+      style={
+        {
+          position: "absolute",
+          top: `clamp(0px, ${String(top)}%, calc(100% - ${String(
+            DIAGNOSTIC_OVERVIEW_MARKER_HEIGHT,
+          )}px))`,
+          right: 0,
+          width: "100%",
+          height: DIAGNOSTIC_OVERVIEW_MARKER_HEIGHT,
+          borderRadius: 999,
+          background: markerTone(marker.severity),
+          pointerEvents: "auto",
+        } satisfies CSSProperties
+      }
+    >
+      <span className="keiko-editor-diagnostic-tooltip" aria-hidden="true">
+        <span className="keiko-editor-diagnostic-tooltip-message">{marker.message}</span>
+        <span className="keiko-editor-diagnostic-tooltip-meta">{meta}</span>
+      </span>
+    </button>
+  );
+}
+
+function EditorDiagnosticOverview(props: {
+  readonly markers: readonly DiagnosticOverviewMarker[];
+  readonly lineCount: number;
+  readonly onActivate: (marker: DiagnosticOverviewMarker) => void;
+}): ReactElement | null {
+  if (props.markers.length === 0) return null;
+  return (
+    <div
+      data-testid="keiko-editor-diagnostic-overview"
+      className="keiko-editor-diagnostic-overview"
+      aria-label="Diagnostic overview"
+      style={{
+        position: "absolute",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: DIAGNOSTIC_OVERVIEW_WIDTH,
+        pointerEvents: "none",
+        zIndex: "var(--z-tooltip)",
+      }}
+    >
+      {props.markers.map((marker, index) => (
+        <EditorDiagnosticMarkerButton
+          key={`${String(index)}:${String(marker.severity)}:${String(marker.startLineNumber)}:${
+            marker.message
+          }`}
+          marker={marker}
+          lineCount={props.lineCount}
+          index={index}
+          onActivate={props.onActivate}
+        />
+      ))}
     </div>
   );
 }
@@ -121,11 +246,75 @@ function useEditorConstructionOptions(
   return { options, monacoLanguage };
 }
 
+type EditorHandlers = ReturnType<typeof useEditorHandlers>;
+
+function ReadyEditorSurface(props: {
+  readonly editorProps: KeikoCodeEditorProps;
+  readonly monacoLanguage: string;
+  readonly options: ReturnType<typeof buildEditorOptions>;
+  readonly handlers: EditorHandlers;
+}): ReactElement {
+  const editorProps = props.editorProps;
+  return (
+    <Editor
+      value={editorProps.buffer.content.text}
+      language={props.monacoLanguage}
+      path={editorProps.fileModel.identity.uri}
+      theme={`keiko-editor-${editorProps.themeVariant ?? "dark"}`}
+      height={EDITOR_HEIGHT}
+      loading={<EditorLoadingBox />}
+      options={props.options}
+      keepCurrentModel={false}
+      // Scroll/fold/cursor view state is restored per `path` by `@monaco-editor/react`'s default
+      // `saveViewState` mechanism as the host swaps files within a mounted editor; the package's
+      // own view-state seam (use-editor-handlers.ts) is a secondary, host-injectable hook.
+      onChange={props.handlers.onChange}
+      onMount={props.handlers.onMount}
+    />
+  );
+}
+
+function EditorBody(props: {
+  readonly editorProps: KeikoCodeEditorProps;
+  readonly monacoLanguage: string;
+  readonly options: ReturnType<typeof buildEditorOptions>;
+  readonly handlers: EditorHandlers;
+  readonly overviewMarkers: readonly DiagnosticOverviewMarker[];
+  readonly lineCount: number;
+}): ReactElement {
+  const loadState = props.editorProps.loadState;
+  return (
+    <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0 }}>
+      {loadState.status === "ready" ? (
+        <ReadyEditorSurface
+          editorProps={props.editorProps}
+          monacoLanguage={props.monacoLanguage}
+          options={props.options}
+          handlers={props.handlers}
+        />
+      ) : loadState.status === "error" ? (
+        <EditorRuntimeErrorBox message={loadState.message} />
+      ) : (
+        <EditorLoadingBox />
+      )}
+      <EditorDiagnosticOverview
+        markers={props.overviewMarkers}
+        lineCount={props.lineCount}
+        onActivate={props.handlers.revealDiagnosticMarker}
+      />
+    </div>
+  );
+}
+
 export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
   const view = computeEditorViewModel(props);
-  const handlers = useEditorHandlers(props, view.readOnly);
-  const { buffer, fileModel } = props;
+  const [overviewMarkers, setOverviewMarkers] = useState<readonly DiagnosticOverviewMarker[]>([]);
+  const handlers = useEditorHandlers(props, view.readOnly, setOverviewMarkers);
   const { options, monacoLanguage } = useEditorConstructionOptions(props, view.readOnly);
+  const lineCount = useMemo(
+    () => countLines(props.buffer.content.text),
+    [props.buffer.content.text],
+  );
   const lastFormatRequestNonce = useRef(props.formatRequestNonce ?? 0);
   useEffect(() => {
     const nonce = props.formatRequestNonce ?? 0;
@@ -139,29 +328,14 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
       data-testid="keiko-code-editor"
       style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%" }}
     >
-      <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0 }}>
-        {props.loadState.status === "ready" ? (
-          <Editor
-            value={buffer.content.text}
-            language={monacoLanguage}
-            path={fileModel.identity.uri}
-            theme={`keiko-editor-${props.themeVariant ?? "dark"}`}
-            height={EDITOR_HEIGHT}
-            loading={<EditorLoadingBox />}
-            options={options}
-            keepCurrentModel={false}
-            // Scroll/fold/cursor view state is restored per `path` by `@monaco-editor/react`'s default
-            // `saveViewState` mechanism as the host swaps files within a mounted editor; the package's
-            // own view-state seam (use-editor-handlers.ts) is a secondary, host-injectable hook.
-            onChange={handlers.onChange}
-            onMount={handlers.onMount}
-          />
-        ) : props.loadState.status === "error" ? (
-          <EditorRuntimeErrorBox message={props.loadState.message} />
-        ) : (
-          <EditorLoadingBox />
-        )}
-      </div>
+      <EditorBody
+        editorProps={props}
+        monacoLanguage={monacoLanguage}
+        options={options}
+        handlers={handlers}
+        overviewMarkers={overviewMarkers}
+        lineCount={lineCount}
+      />
       {(props.showStatusFooter ?? true) ? (
         <EditorStatusFooter
           status={view.status}

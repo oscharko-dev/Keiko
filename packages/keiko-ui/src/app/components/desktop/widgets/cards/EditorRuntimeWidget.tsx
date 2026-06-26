@@ -165,6 +165,18 @@ const BOOTSTRAP_LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   ],
 };
 
+type EditorTabHandleProps = Pick<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "draggable" | "onClickCapture" | "onDragStart" | "onDragEnd" | "onKeyDown" | "onPointerDown"
+> & {
+  readonly "data-tab-draggable"?: "true" | "false" | undefined;
+  readonly "data-tab-held"?: "true" | "false" | undefined;
+};
+
+interface EditorTabHandleContext {
+  readonly onDragModeStart?: (() => void) | undefined;
+}
+
 export interface EditorRuntimeWidgetProps {
   readonly windowId?: string | undefined;
   readonly paneId?: string | undefined;
@@ -189,10 +201,8 @@ export interface EditorRuntimeWidgetProps {
         file: string,
         active: boolean,
         dirty: boolean,
-      ) => Pick<
-        ButtonHTMLAttributes<HTMLButtonElement>,
-        "draggable" | "onDragStart" | "onDragEnd" | "onKeyDown"
-      >)
+        context?: EditorTabHandleContext,
+      ) => EditorTabHandleProps)
     | undefined;
   readonly toolbarExtras?: ReactNode | undefined;
   readonly linkedRoot?: string | null;
@@ -360,13 +370,6 @@ function providerOperationEnabled(
   );
 }
 
-function summarizePaths(paths: readonly string[]): string {
-  if (paths.length === 0) return "";
-  if (paths.length === 1) return paths[0] ?? "";
-  if (paths.length === 2) return `${paths[0] ?? ""}, ${paths[1] ?? ""}`;
-  return `${paths[0] ?? ""}, ${paths[1] ?? ""} +${String(paths.length - 2)} more`;
-}
-
 export default function EditorRuntimeWidget({
   windowId,
   paneId,
@@ -452,10 +455,24 @@ export default function EditorRuntimeWidget({
     tablistCompact && file !== undefined && file.length > 0 && documentTabs.length > 2;
   const summaryTabs = compactTabs ? documentTabs.filter((path) => path !== file) : [];
   const visibleTabs = compactTabs ? documentTabs.filter((path) => path === file) : documentTabs;
-  const summaryTip = summarizePaths(summaryTabs);
   const summaryMenuId = `${editorDomIdPrefix}-summary-menu`;
   const summaryMenuRef = useRef<HTMLDetailsElement>(null);
   const [summaryMenuOpen, setSummaryMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!summaryMenuOpen) return;
+    const closeSummaryMenuOnOutsidePointer = (event: globalThis.PointerEvent): void => {
+      const menu = summaryMenuRef.current;
+      const target = event.target;
+      if (menu === null || !(target instanceof Node) || menu.contains(target)) return;
+      setSummaryMenuOpen(false);
+      menu.removeAttribute("open");
+    };
+    document.addEventListener("pointerdown", closeSummaryMenuOnOutsidePointer, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeSummaryMenuOnOutsidePointer, true);
+    };
+  }, [summaryMenuOpen]);
 
   const [content, setContent] = useState("");
   const [fileModel, setFileModel] = useState<EditorFileModel | null>(null);
@@ -472,10 +489,7 @@ export default function EditorRuntimeWidget({
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer<
     Reducer<TestGenerationFlowState, TestGenerationFlowAction>
-  >(
-    testGenerationReducer,
-    IDLE_TEST_GENERATION_STATE,
-  );
+  >(testGenerationReducer, IDLE_TEST_GENERATION_STATE);
   const testGenSeqRef = useRef(0);
   const testGenAbortRef = useRef<AbortController | null>(null);
   const [currentSelection, setCurrentSelection] = useState<EditorRange | null>(null);
@@ -1341,6 +1355,8 @@ export default function EditorRuntimeWidget({
     () => `${safeDomIdSegment(windowId ?? generatedId)}:${rootHash(root ?? "")}`,
     [generatedId, root, windowId],
   );
+  const shouldSubscribeToAgentActions =
+    paneId === undefined || activePaneId === undefined || paneId === activePaneId;
   const agentDocumentVersion = useMemo(
     () =>
       version === null
@@ -1495,14 +1511,20 @@ export default function EditorRuntimeWidget({
     },
     [agentSessionId, formattingEnabled, onSelectOpenFile, persist, postAgentResult],
   );
+  const executeAgentActionRef = useRef(executeAgentAction);
+
+  useEffect(() => {
+    executeAgentActionRef.current = executeAgentAction;
+  }, [executeAgentAction]);
 
   useEffect(() => {
     if (typeof EventSource === "undefined") return;
+    if (!shouldSubscribeToAgentActions) return;
     const source = new EventSource("/api/editor/agent/events");
     const onAction = (event: MessageEvent<string>): void => {
       try {
         const parsed = JSON.parse(event.data) as { readonly action?: EditorAgentAction };
-        if (parsed.action !== undefined) executeAgentAction(parsed.action);
+        if (parsed.action !== undefined) executeAgentActionRef.current(parsed.action);
       } catch {
         // Ignore malformed SSE frames; the server owns validation before enqueueing.
       }
@@ -1512,7 +1534,7 @@ export default function EditorRuntimeWidget({
       source.removeEventListener("editor-agent:action", onAction);
       source.close();
     };
-  }, [executeAgentAction]);
+  }, [shouldSubscribeToAgentActions]);
 
   const recoveryDiskChanged =
     recoverySnapshot !== null &&
@@ -1625,6 +1647,8 @@ export default function EditorRuntimeWidget({
                 <span
                   className={`ed-tab${active ? " active" : ""}`}
                   data-dirty={tabDirty ? "true" : "false"}
+                  data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+                  data-tab-held={tabHandle?.["data-tab-held"]}
                   key={path}
                 >
                   <button
@@ -1637,8 +1661,12 @@ export default function EditorRuntimeWidget({
                     aria-controls={tabpanelId}
                     tabIndex={active ? 0 : -1}
                     data-tip={path}
+                    data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+                    data-tab-held={tabHandle?.["data-tab-held"]}
+                    onClickCapture={tabHandle?.onClickCapture}
                     onDragStart={tabHandle?.onDragStart}
                     onDragEnd={tabHandle?.onDragEnd}
+                    onPointerDown={tabHandle?.onPointerDown}
                     onKeyDown={tabHandle?.onKeyDown}
                     onClick={() => handleSelectTab(path)}
                   >
@@ -1688,12 +1716,11 @@ export default function EditorRuntimeWidget({
               onToggle={(event) => setSummaryMenuOpen(event.currentTarget.open)}
             >
               <summary
-                className="ed-tab-summary ui-tip"
+                className="ed-tab-summary"
                 aria-label={`${String(summaryTabs.length)} more open documents`}
                 aria-haspopup="menu"
                 aria-expanded={summaryMenuOpen ? "true" : "false"}
                 aria-controls={summaryMenuId}
-                data-tip={summaryTip}
               >
                 +{summaryTabs.length}
               </summary>
@@ -1704,15 +1731,25 @@ export default function EditorRuntimeWidget({
               >
                 {summaryTabs.map((path) => {
                   const tabDirty = effectiveDirtyFiles.has(path);
+                  const tabHandle = renderTabHandle?.(path, false, tabDirty, {
+                    onDragModeStart: () => setSummaryMenuOpen(false),
+                  });
                   return (
                     <button
                       type="button"
                       key={path}
-                      className="ed-tab-summary-item ui-tip"
-                      data-tip={path}
+                      className="ed-tab-summary-item"
+                      draggable={tabHandle?.draggable}
+                      data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+                      data-tab-held={tabHandle?.["data-tab-held"]}
+                      onClickCapture={tabHandle?.onClickCapture}
+                      onDragStart={tabHandle?.onDragStart}
+                      onDragEnd={tabHandle?.onDragEnd}
+                      onPointerDown={tabHandle?.onPointerDown}
+                      onKeyDown={tabHandle?.onKeyDown}
                       onClick={() => handleChooseSummaryTab(path)}
                     >
-                      <Icons.editor size={12} />
+                      <FileIcon name={path} />
                       <span className="ed-tab-summary-label">{path}</span>
                       {tabDirty ? (
                         <span className="ed-dirty" aria-hidden="true">
@@ -1731,58 +1768,45 @@ export default function EditorRuntimeWidget({
           {hasTarget && completionEnabled ? (
             <button
               type="button"
-              className="ed-save ui-tip"
+              className="ed-save"
               onClick={() => {
                 if (canGenerateTests) runTestGeneration();
               }}
               aria-disabled={!canGenerateTests}
-              data-tip="Generate unit tests for this file"
             >
               {testGenBusy ? "Generating…" : "Generate Tests"}
             </button>
           ) : null}
           {testGenBusy ? (
-            <button
-              type="button"
-              className="ed-reload ui-tip"
-              onClick={cancelTestGeneration}
-              data-tip="Cancel test generation"
-            >
+            <button type="button" className="ed-reload" onClick={cancelTestGeneration}>
               Cancel
             </button>
           ) : null}
           {hasTarget ? (
             <button
               type="button"
-              className="ed-save ui-tip"
+              className="ed-save"
               onClick={() => {
                 if (canFormat) setFormatRequestNonce((value) => value + 1);
               }}
               aria-disabled={canFormat ? "false" : "true"}
-              data-tip="Format document"
             >
               Format
             </button>
           ) : null}
           {hasTarget && saveStatus === "conflict" ? (
-            <button
-              type="button"
-              className="ed-reload ui-tip"
-              onClick={reload}
-              data-tip="Reload from disk"
-            >
+            <button type="button" className="ed-reload" onClick={reload}>
               Reload
             </button>
           ) : null}
           {hasTarget ? (
             <button
               type="button"
-              className="ed-save ui-tip"
+              className="ed-save"
               onClick={() => {
                 if (canSave) void persist(content);
               }}
               aria-disabled={saveUnavailable}
-              data-tip={saveStatus === "saving" ? "Saving changes" : "Save changes"}
             >
               {saveStatus === "saving" ? "Saving…" : "Save"}
             </button>

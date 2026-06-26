@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { useEffect, type ReactElement } from "react";
@@ -330,7 +330,8 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
     expect(status).not.toHaveTextContent(/disabled in this build/i);
     const button = screen.getByRole("button", { name: "Generate Tests" });
     expect(button).toBeInTheDocument();
-    expect(button).toHaveAttribute("data-tip", "Generate unit tests for this file");
+    expect(button).not.toHaveAttribute("data-tip");
+    expect(button).not.toHaveAttribute("title");
     vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce(DISABLED_RESPONSE);
 
     await userEvent.click(button);
@@ -1435,6 +1436,7 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     try {
       vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
       const onSelectOpenFile = vi.fn();
+      const draggedPaths: string[] = [];
       render(
         <EditorRuntimeWidget
           windowId="editor-tabs-compact"
@@ -1442,6 +1444,13 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
           file="src/app.ts"
           openFiles={["src/app.ts", "README.md", "src/other.ts"]}
           onSelectOpenFile={onSelectOpenFile}
+          renderTabHandle={(path, _active, _dirty, context) => ({
+            draggable: true,
+            onDragStart: () => {
+              context?.onDragModeStart?.();
+              draggedPaths.push(path);
+            },
+          })}
         />,
       );
       await screen.findByTestId("editor-surface");
@@ -1451,13 +1460,37 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
       });
       const summary = screen.getByLabelText("2 more open documents");
       expect(summary).toHaveTextContent("+2");
-      expect(summary).toHaveAttribute("data-tip", "README.md, src/other.ts");
+      expect(summary).not.toHaveClass("ui-tip");
+      expect(summary).not.toHaveAttribute("data-tip");
       expect(summary).not.toHaveAttribute("title");
 
       await userEvent.click(summary);
+      expect(summary.closest("details")).toHaveAttribute("open");
+      await userEvent.click(document.body);
+      await waitFor(() => {
+        expect(summary).toHaveAttribute("aria-expanded", "false");
+      });
+      expect(summary.closest("details")).not.toHaveAttribute("open");
+
+      await userEvent.click(summary);
       const hiddenTab = screen.getByRole("button", { name: "README.md" });
-      expect(hiddenTab).toHaveAttribute("data-tip", "README.md");
-      await userEvent.click(hiddenTab);
+      expect(hiddenTab).not.toHaveClass("ui-tip");
+      expect(hiddenTab).not.toHaveAttribute("data-tip");
+      expect(hiddenTab).not.toHaveAttribute("title");
+      expect(hiddenTab).toHaveAttribute("draggable", "true");
+      expect(hiddenTab.querySelector(".fi-img")).toHaveAttribute(
+        "src",
+        "/assets/icons/markdown.svg",
+      );
+      fireEvent.dragStart(hiddenTab, { dataTransfer: { effectAllowed: "", setData: vi.fn() } });
+      expect(draggedPaths).toContain("README.md");
+      await waitFor(() => {
+        expect(summary).toHaveAttribute("aria-expanded", "false");
+      });
+      expect(summary.closest("details")).not.toHaveAttribute("open");
+
+      await userEvent.click(summary);
+      await userEvent.click(screen.getByRole("button", { name: "README.md" }));
       expect(onSelectOpenFile).toHaveBeenCalledWith("README.md");
     } finally {
       rectSpy.mockRestore();
@@ -1747,6 +1780,78 @@ describe("EditorWidget — agent bridge", () => {
 
     await screen.findByTestId("editor-surface");
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+  });
+
+  it("keeps inactive split panes from opening duplicate agent event streams", async () => {
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+
+    render(
+      <EditorRuntimeWidget
+        windowId="agent-inactive-pane"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-2"
+        activePaneId="pane-1"
+      />,
+    );
+
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+    });
+    expect(FakeSource.instances).toHaveLength(0);
+  });
+
+  it("keeps the active pane event stream stable across handler rerenders", async () => {
+    const FakeSource = installFakeEventSource();
+    const firstSelect = vi.fn();
+    const secondSelect = vi.fn();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+
+    const view = render(
+      <EditorRuntimeWidget
+        windowId="agent-active-pane"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+        activePaneId="pane-1"
+        onSelectOpenFile={firstSelect}
+      />,
+    );
+
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+      expect(FakeSource.instances).toHaveLength(1);
+    });
+    const sessionId = String(
+      vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
+    );
+    const source = FakeSource.instances[0] as FakeEventSource;
+
+    view.rerender(
+      <EditorRuntimeWidget
+        windowId="agent-active-pane"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+        activePaneId="pane-1"
+        onSelectOpenFile={secondSelect}
+      />,
+    );
+
+    expect(FakeSource.instances).toHaveLength(1);
+    expect(source.close).not.toHaveBeenCalled();
+    act(() => {
+      source.emitAction(agentAction(sessionId, "openFile", { target: { file: "README.md" } }));
+    });
+
+    expect(firstSelect).not.toHaveBeenCalled();
+    expect(secondSelect).toHaveBeenCalledWith("README.md");
+
+    view.unmount();
+    expect(source.close).toHaveBeenCalledOnce();
   });
 
   it("rounds fractional modifiedAt values before posting agent snapshots", async () => {

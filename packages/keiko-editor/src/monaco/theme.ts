@@ -111,9 +111,9 @@ export const CHROME_TOKEN_COLOR_IDS: Readonly<Record<string, readonly string[]>>
   // mapping would be stored but never painted (a silent no-op). The diff editor (#1195) renders gutter
   // indicators with decorations driven by these tokens directly, not via the Monaco theme. The tokens
   // remain surfaced in the keiko-ui runtime (globals.css) for that consumer; see EDITOR_THEME_DEAD_COLOR_IDS.
-  "--ed-error": ["editorError.foreground"],
-  "--ed-warn": ["editorWarning.foreground"],
-  "--ed-info": ["editorInfo.foreground"],
+  "--ed-error": ["editorError.foreground", "editorOverviewRuler.errorForeground"],
+  "--ed-warn": ["editorWarning.foreground", "editorOverviewRuler.warningForeground"],
+  "--ed-info": ["editorInfo.foreground", "editorOverviewRuler.infoForeground"],
   "--ed-hint": ["editorHint.foreground"],
   "--ed-agent-ghost": ["editorGhostText.foreground"],
   "--ed-suggest-bg": ["editorSuggestWidget.background"],

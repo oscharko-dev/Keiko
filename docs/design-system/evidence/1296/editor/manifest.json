@@ -4,7 +4,7 @@
   "appPath": "packaged-cli-ui",
   "route": "/",
   "evidencePath": "docs/design-system/evidence/1296/editor",
-  "generatedAt": "2026-06-21T19:46:00.204Z",
+  "generatedAt": "2026-06-26T01:11:05.362Z",
   "designReference": "design-system/editor-agent.html",
   "productCss": "packages/keiko-ui/src/app/globals.css",
   "assertions": {

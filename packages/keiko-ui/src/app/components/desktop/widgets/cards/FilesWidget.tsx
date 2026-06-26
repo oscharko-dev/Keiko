@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import { fetchFilesTree, fetchProjects } from "../../../../../lib/api";
 import type { FilesTreeEntry } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
@@ -60,6 +65,15 @@ interface DirectoryState {
   readonly notice: "no-root" | null;
 }
 
+interface TreeTooltipState {
+  readonly text: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+const TREE_TOOLTIP_DELAY_MS = 650;
+const TREE_TOOLTIP_MAX_WIDTH = 240;
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unable to read this folder.";
 }
@@ -76,6 +90,13 @@ function cssEscape(value: string): string {
 // placeholder) align with sibling folders (audit C143/C216).
 function treeIndent(depth: number): number {
   return 8 + depth * 18;
+}
+
+function treeTooltipPosition(x: number, y: number): { x: number; y: number } {
+  return {
+    x: Math.max(12, Math.min(x + 12, window.innerWidth - TREE_TOOLTIP_MAX_WIDTH - 12)),
+    y: Math.max(12, Math.min(y + 18, window.innerHeight - 44)),
+  };
 }
 
 const TREE_NAV_KEYS = new Set(["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Home", "End"]);
@@ -146,6 +167,8 @@ export function FilesWidget({
   const [currentDirectoryPath, setCurrentDirectoryPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [treeTooltip, setTreeTooltip] = useState<TreeTooltipState | null>(null);
   const activeFileChangeRef = useRef(onActiveFileChange);
   activeFileChangeRef.current = onActiveFileChange;
   // Focus restore (WCAG 2.4.3): closing the preview re-mounts the whole tree, which would drop
@@ -153,9 +176,51 @@ export function FilesWidget({
   // tree row once the tree is rendered again (fallback: the widget container).
   const filesRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusPathRef = useRef<string | null>(null);
+  const treeTooltipTimerRef = useRef<number | null>(null);
+  const treeTooltipPointerRef = useRef({ x: 0, y: 0 });
   // Shared ARIA description for unreadable symlink rows (audit C196): the rows stay focusable
   // via aria-disabled, and this single hidden span explains WHY they cannot be opened.
   const unreadableReasonId = useId();
+
+  const clearTreeTooltipTimer = useCallback((): void => {
+    if (treeTooltipTimerRef.current === null) return;
+    window.clearTimeout(treeTooltipTimerRef.current);
+    treeTooltipTimerRef.current = null;
+  }, []);
+
+  const hideTreeTooltip = useCallback((): void => {
+    clearTreeTooltipTimer();
+    setTreeTooltip(null);
+  }, [clearTreeTooltipTimer]);
+
+  const scheduleTreeTooltip = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>, text: string): void => {
+      clearTreeTooltipTimer();
+      setTreeTooltip(null);
+      const name = event.currentTarget.querySelector<HTMLElement>(".tr-name");
+      if (name === null || name.scrollWidth <= name.clientWidth + 1) return;
+
+      treeTooltipPointerRef.current = { x: event.clientX, y: event.clientY };
+      treeTooltipTimerRef.current = window.setTimeout(() => {
+        treeTooltipTimerRef.current = null;
+        const position = treeTooltipPosition(
+          treeTooltipPointerRef.current.x,
+          treeTooltipPointerRef.current.y,
+        );
+        setTreeTooltip({ text, ...position });
+      }, TREE_TOOLTIP_DELAY_MS);
+    },
+    [clearTreeTooltipTimer],
+  );
+
+  const moveTreeTooltip = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    treeTooltipPointerRef.current = { x: event.clientX, y: event.clientY };
+    setTreeTooltip((current) => {
+      if (current === null) return current;
+      const position = treeTooltipPosition(event.clientX, event.clientY);
+      return { ...current, ...position };
+    });
+  }, []);
 
   useEffect(() => {
     if (selectedPath !== null) return;
@@ -167,6 +232,13 @@ export function FilesWidget({
     );
     (row ?? filesRef.current)?.focus({ preventScroll: true });
   }, [selectedPath]);
+
+  useEffect(
+    () => () => {
+      clearTreeTooltipTimer();
+    },
+    [clearTreeTooltipTimer],
+  );
 
   useEffect(() => {
     if (configuredRoot !== null) return;
@@ -345,6 +417,7 @@ export function FilesWidget({
     // neutral copy covers all server cases — outside root, deny-listed AND broken links
     // (audit C349). Clicks are guarded instead of blocked by the browser.
     const unreadableTitle = "This link can't be opened from this folder.";
+    const entryTip = entry.readable ? entry.path : unreadableTitle;
     if (entry.kind === "directory") {
       const state = directories[entry.path];
       return (
@@ -357,9 +430,6 @@ export function FilesWidget({
               disabled={!entry.readable}
               aria-label={`${open ? "Collapse" : "Expand"} folder: ${entry.name}`}
               onClick={() => toggleDirectory(entry)}
-              title={
-                entry.readable ? `${open ? "Collapse" : "Expand"} ${entry.path}` : unreadableTitle
-              }
             >
               <span className="tr-caret" data-open={open}>
                 <Icons.chevronR size={11} />
@@ -377,8 +447,11 @@ export function FilesWidget({
               aria-disabled={entry.readable ? undefined : true}
               aria-describedby={entry.readable ? undefined : unreadableReasonId}
               aria-expanded={open}
+              onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
+              onPointerMove={moveTreeTooltip}
+              onPointerLeave={hideTreeTooltip}
+              onBlur={hideTreeTooltip}
               onClick={() => enterDirectory(entry)}
-              title={entry.readable ? entry.path : unreadableTitle}
             >
               <span className="fi-fallback" style={{ color: "var(--accent)" }}>
                 <Icons.folder size={14} />
@@ -407,6 +480,10 @@ export function FilesWidget({
         type="button"
         aria-disabled={entry.readable ? undefined : true}
         aria-describedby={entry.readable ? undefined : unreadableReasonId}
+        onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
+        onPointerMove={moveTreeTooltip}
+        onPointerLeave={hideTreeTooltip}
+        onBlur={hideTreeTooltip}
         onClick={() => {
           if (!entry.readable) return;
           const fileRoot = resolvedRoot ?? apiRoot;
@@ -418,7 +495,6 @@ export function FilesWidget({
           setSelectedPath(entry.path);
           activeFileChangeRef.current?.(entry.path, fileRoot);
         }}
-        title={entry.readable ? entry.path : unreadableTitle}
       >
         {/* invisible caret placeholder keeps file rows aligned with sibling folders (C216) */}
         <span className="tr-caret tr-caret-ghost" aria-hidden="true">
@@ -558,6 +634,18 @@ export function FilesWidget({
       >
         {renderDirectory(currentDirectoryPath ?? "", 0)}
       </div>
+      {treeTooltip !== null && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="files-tree-tooltip mono"
+              role="tooltip"
+              style={{ left: treeTooltip.x, top: treeTooltip.y }}
+            >
+              {treeTooltip.text}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

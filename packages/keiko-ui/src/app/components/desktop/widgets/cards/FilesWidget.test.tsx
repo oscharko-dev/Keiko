@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -581,6 +581,105 @@ describe("FilesWidget", () => {
     expect(dirRow).toHaveFocus();
     await userEvent.keyboard("{End}");
     expect(fileRow).toHaveFocus();
+  });
+
+  it("removes native browser titles from project-tree rows", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "package-lock.json",
+          path: "package-lock.json",
+          kind: "file",
+          extension: "json",
+        },
+        {
+          ...treeEntryBase,
+          name: "linked-secret",
+          path: "linked-secret",
+          kind: "file",
+          symlink: true,
+          readable: false,
+        },
+      ],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    const folderRow = await screen.findByRole("treeitem", { name: /^src$/i });
+    const caret = screen.getByRole("button", { name: "Expand folder: src" });
+    const fileRow = screen.getByRole("treeitem", { name: /package-lock\.json/i });
+    const unreadableRow = screen.getByRole("treeitem", { name: /linked-secret/i });
+
+    expect(caret).not.toHaveAttribute("title");
+    expect(caret).not.toHaveAttribute("data-tip");
+    expect(folderRow).not.toHaveAttribute("title");
+    expect(folderRow).not.toHaveAttribute("data-tip");
+    expect(fileRow).not.toHaveAttribute("title");
+    expect(fileRow).not.toHaveAttribute("data-tip");
+    expect(unreadableRow).not.toHaveAttribute("title");
+    expect(unreadableRow).not.toHaveAttribute("data-tip");
+    expect(unreadableRow).toHaveAccessibleDescription("This link can't be opened from this folder.");
+  });
+
+  it("shows the Keiko tree tooltip only after delay when a filename is truncated", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "package-lock.json",
+          path: "package-lock.json",
+          kind: "file",
+          extension: "json",
+        },
+      ],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    const fileRow = await screen.findByRole("treeitem", { name: /package-lock\.json/i });
+    const name = fileRow.querySelector<HTMLElement>(".tr-name");
+    expect(name).not.toBeNull();
+    Object.defineProperty(name, "scrollWidth", { configurable: true, value: 160 });
+    Object.defineProperty(name, "clientWidth", { configurable: true, value: 80 });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerEnter(fileRow, { clientX: 100, clientY: 100 });
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(649);
+      });
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      const tooltip = screen.getByRole("tooltip");
+      expect(tooltip).toHaveTextContent("package-lock.json");
+      expect(tooltip.parentElement).toBe(document.body);
+
+      fireEvent.pointerLeave(fileRow);
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+      Object.defineProperty(name, "scrollWidth", { configurable: true, value: 80 });
+      Object.defineProperty(name, "clientWidth", { configurable: true, value: 160 });
+      fireEvent.pointerEnter(fileRow, { clientX: 100, clientY: 100 });
+      act(() => {
+        vi.advanceTimersByTime(650);
+      });
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

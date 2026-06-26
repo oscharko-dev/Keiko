@@ -148,10 +148,7 @@ export type {
 } from "./commands.js";
 
 // ─── Runtime: range mapping ──────────────────────────────────────────────────────
-export {
-  applyTextEditsToText,
-  applyTextEditsToTextWithinLimit,
-} from "./apply-text-edits.js";
+export { applyTextEditsToText, applyTextEditsToTextWithinLimit } from "./apply-text-edits.js";
 export type { BoundedTextEditResult } from "./apply-text-edits.js";
 
 // ─── Runtime: range mapping ──────────────────────────────────────────────────────
@@ -320,6 +317,7 @@ export {
   severityToMarker,
   editorDiagnosticToMarker,
   diagnosticsToMarkers,
+  markersToOverviewMarkers,
   defaultDiagnosticsScheduler,
   DIAGNOSTICS_ELIGIBLE_LANGUAGES,
   DEFAULT_DIAGNOSTICS_DEBOUNCE_MS,
@@ -331,6 +329,7 @@ export type {
   DiagnosticsTimerHandle,
   MonacoMarkerSeverities,
   MonacoMarkerData,
+  DiagnosticOverviewMarker,
   MonacoMarkerEditorNamespace,
   MonacoDiagnosticsModel,
   MonacoDiagnosticsEditor,
