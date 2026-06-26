@@ -26,8 +26,9 @@ export const WORKSPACE_LIFECYCLE_EVIDENCE_KIND = "task-workspace-lifecycle" as c
 
 // `provision`/`activate` are the #445 mutating operations; `pause`/`resume`/`handoff` are the #446
 // active-binding lifecycle actions; `reconcile`/`repair` are the #447 startup-reconciliation and
-// controlled-repair operations. The union is additive — the evidence document stays content-free
-// regardless of which operation produced it.
+// controlled-repair operations; `cleanup` is the #448 governed cleanup operation (request + complete +
+// orphan removal). The union is additive — the evidence document stays content-free regardless of which
+// operation produced it.
 export type WorkspaceLifecycleOperation =
   | "provision"
   | "activate"
@@ -35,7 +36,8 @@ export type WorkspaceLifecycleOperation =
   | "resume"
   | "handoff"
   | "reconcile"
-  | "repair";
+  | "repair"
+  | "cleanup";
 
 export type WorkspaceLifecycleOutcome =
   | "provisioned"
@@ -51,7 +53,13 @@ export type WorkspaceLifecycleOutcome =
   // an operator to act first, so no automatic mutation was attempted.
   | "reconciled"
   | "repaired"
-  | "operator-required";
+  | "operator-required"
+  // #448: `cleanup-requested` = a settled workspace was marked cleanup-pending; `cleanup-completed` =
+  // a governed physical removal succeeded; `cleanup-refused` = the live safety gate refused removal (a
+  // first-class successful safety outcome, never an error).
+  | "cleanup-requested"
+  | "cleanup-completed"
+  | "cleanup-refused";
 
 export interface WorkspaceLifecycleEvidenceRecord {
   readonly kind: typeof WORKSPACE_LIFECYCLE_EVIDENCE_KIND;

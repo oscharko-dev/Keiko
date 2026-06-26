@@ -79,7 +79,11 @@ import { createWorkspaceProvisioningService } from "./task-workspace/provisionin
 import { createWorkspaceLifecycleService } from "./task-workspace/lifecycle.js";
 import { createWorkspaceReconciliationService } from "./task-workspace/reconciliation.js";
 import { createWorkspaceRepairService } from "./task-workspace/repair.js";
+import { createWorkspaceHealthService } from "./task-workspace/health.js";
+import { createWorkspaceCleanupService } from "./task-workspace/cleanup.js";
 import type {
+  WorkspaceCleanupService,
+  WorkspaceHealthService,
   WorkspaceLifecycleService,
   WorkspaceProvisioningService,
   WorkspaceReconciliationService,
@@ -237,6 +241,12 @@ export interface UiHandlerDeps {
   // unchanged; production composes them over the same store/pointer/adapter as #445/#446.
   readonly workspaceReconciliation?: WorkspaceReconciliationService | undefined;
   readonly workspaceRepair?: WorkspaceRepairService | undefined;
+  // Issue #448 (Epic #443, ADR-0092) — read-only health/drift/orphan report service and the governed,
+  // operator-approval-gated cleanup service. Optional so legacy tests that do not exercise the
+  // health/cleanup routes keep their fixtures unchanged; production composes them over the same
+  // store/pointer/adapter/managed-root as #445–#447.
+  readonly workspaceHealth?: WorkspaceHealthService | undefined;
+  readonly workspaceCleanup?: WorkspaceCleanupService | undefined;
   // Resolved evidence directory path (same precedence as the CLI: explicit → KEIKO_EVIDENCE_DIR →
   // default). Consumed by QI read routes that pass evidenceDir to listQualityIntelligenceRuns /
   // loadQualityIntelligenceRun (which require either options.store or options.evidenceDir).
@@ -294,6 +304,10 @@ export interface BuildHandlerDepsOptions {
   // over the same store/pointer/worktree-adapter as #445/#446 (Issue #447).
   readonly workspaceReconciliation?: WorkspaceReconciliationService | undefined;
   readonly workspaceRepair?: WorkspaceRepairService | undefined;
+  // Optional injected task-workspace health/cleanup services (tests); production composes them over the
+  // same store/pointer/worktree-adapter/managed-root as #445–#447 (Issue #448).
+  readonly workspaceHealth?: WorkspaceHealthService | undefined;
+  readonly workspaceCleanup?: WorkspaceCleanupService | undefined;
   // The working directory from which `keiko ui` was launched. Production seeds it into the UI store
   // so first-run project selection is deterministic even when an older UI DB already has rows.
   readonly initialProjectPath?: string | undefined;
@@ -914,6 +928,56 @@ function buildWorkspaceRepair(
   });
 }
 
+// Issue #448 — the read-only health/drift/orphan report service and the governed cleanup service. Both
+// reuse the SAME #445 instance store, #446 active pointer, evidence store, managed root, and node
+// worktree adapter (no second engine). Return undefined whenever a composed dependency is absent so the
+// health/cleanup routes degrade to 503 exactly like the provisioning routes.
+function buildWorkspaceHealth(
+  options: BuildHandlerDepsOptions,
+  instanceStore: WorkspaceInstanceStore | undefined,
+  activePointerStore: ActiveWorkspacePointerStore | undefined,
+  resolvedUiDbPath: string,
+  evidenceStore: EvidenceStore,
+  redactString: (value: string) => string,
+): WorkspaceHealthService | undefined {
+  if (options.workspaceHealth !== undefined) return options.workspaceHealth;
+  if (instanceStore === undefined || activePointerStore === undefined) return undefined;
+  return createWorkspaceHealthService({
+    store: instanceStore,
+    activePointerStore,
+    evidenceStore,
+    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    createAdapter: (workspace) =>
+      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+    redactString,
+    now: () => Date.now(),
+    newId: randomUUID,
+  });
+}
+
+function buildWorkspaceCleanup(
+  options: BuildHandlerDepsOptions,
+  instanceStore: WorkspaceInstanceStore | undefined,
+  activePointerStore: ActiveWorkspacePointerStore | undefined,
+  resolvedUiDbPath: string,
+  evidenceStore: EvidenceStore,
+  redactString: (value: string) => string,
+): WorkspaceCleanupService | undefined {
+  if (options.workspaceCleanup !== undefined) return options.workspaceCleanup;
+  if (instanceStore === undefined || activePointerStore === undefined) return undefined;
+  return createWorkspaceCleanupService({
+    store: instanceStore,
+    activePointerStore,
+    evidenceStore,
+    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    createAdapter: (workspace) =>
+      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+    redactString,
+    now: () => Date.now(),
+    newId: randomUUID,
+  });
+}
+
 // Best-effort startup reconciliation (Issue #447): mirror the QI-retention startup pass — run once at
 // bootstrap, never throw into construction, and never block server start (the reconcile IO is detached
 // and self-contained). A failure simply leaves the persisted classification untouched until the next
@@ -1039,17 +1103,60 @@ interface PersistenceBundle {
   readonly workspaceLifecycle: WorkspaceLifecycleService | undefined;
   readonly workspaceReconciliation: WorkspaceReconciliationService | undefined;
   readonly workspaceRepair: WorkspaceRepairService | undefined;
+  readonly workspaceHealth: WorkspaceHealthService | undefined;
+  readonly workspaceCleanup: WorkspaceCleanupService | undefined;
   readonly preferredProjectPath: string | undefined;
 }
 
-function buildPersistenceBundle(
+// The #445–#448 task-workspace services, composed over the shared instance/active-pointer stores. Each
+// returns undefined when a dependency is absent (injected-store tests) so its routes degrade to 503.
+interface TaskWorkspaceServices {
+  readonly workspaceProvisioning: WorkspaceProvisioningService | undefined;
+  readonly workspaceLifecycle: WorkspaceLifecycleService | undefined;
+  readonly workspaceReconciliation: WorkspaceReconciliationService | undefined;
+  readonly workspaceRepair: WorkspaceRepairService | undefined;
+  readonly workspaceHealth: WorkspaceHealthService | undefined;
+  readonly workspaceCleanup: WorkspaceCleanupService | undefined;
+}
+
+// Issue #448 — the health + cleanup pair, split out to keep composeTaskWorkspaceServices small.
+function composeHealthAndCleanup(
   options: BuildHandlerDepsOptions,
+  workspaceInstanceStore: WorkspaceInstanceStore | undefined,
+  activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined,
   resolvedUiDbPath: string,
-  redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
-): PersistenceBundle {
-  const { store, relationship, workspaceInstanceStore, activeWorkspacePointerStore } =
-    composePersistence(options.store, resolvedUiDbPath, redactString, options.env);
+  redactString: (value: string) => string,
+): Pick<TaskWorkspaceServices, "workspaceHealth" | "workspaceCleanup"> {
+  return {
+    workspaceHealth: buildWorkspaceHealth(
+      options,
+      workspaceInstanceStore,
+      activeWorkspacePointerStore,
+      resolvedUiDbPath,
+      evidenceStore,
+      redactString,
+    ),
+    workspaceCleanup: buildWorkspaceCleanup(
+      options,
+      workspaceInstanceStore,
+      activeWorkspacePointerStore,
+      resolvedUiDbPath,
+      evidenceStore,
+      redactString,
+    ),
+  };
+}
+
+// Issue #445/#446/#447 — provisioning + active-binding lifecycle + reconciliation + repair.
+function composeCoreTaskWorkspaceServices(
+  options: BuildHandlerDepsOptions,
+  workspaceInstanceStore: WorkspaceInstanceStore | undefined,
+  activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined,
+  resolvedUiDbPath: string,
+  evidenceStore: EvidenceStore,
+  redactString: (value: string) => string,
+): Omit<TaskWorkspaceServices, "workspaceHealth" | "workspaceCleanup"> {
   const workspaceProvisioning = buildWorkspaceProvisioning(
     options,
     workspaceInstanceStore,
@@ -1058,8 +1165,6 @@ function buildPersistenceBundle(
     redactString,
   );
   return {
-    uiStore: store,
-    relationship,
     workspaceProvisioning,
     workspaceLifecycle: buildWorkspaceLifecycle(
       options,
@@ -1086,6 +1191,51 @@ function buildPersistenceBundle(
       evidenceStore,
       redactString,
     ),
+  };
+}
+
+function composeTaskWorkspaceServices(
+  options: BuildHandlerDepsOptions,
+  workspaceInstanceStore: WorkspaceInstanceStore | undefined,
+  activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined,
+  resolvedUiDbPath: string,
+  evidenceStore: EvidenceStore,
+  redactString: (value: string) => string,
+): TaskWorkspaceServices {
+  const args = [
+    options,
+    workspaceInstanceStore,
+    activeWorkspacePointerStore,
+    resolvedUiDbPath,
+    evidenceStore,
+    redactString,
+  ] as const;
+  return {
+    ...composeCoreTaskWorkspaceServices(...args),
+    ...composeHealthAndCleanup(...args),
+  };
+}
+
+function buildPersistenceBundle(
+  options: BuildHandlerDepsOptions,
+  resolvedUiDbPath: string,
+  redactString: (value: string) => string,
+  evidenceStore: EvidenceStore,
+): PersistenceBundle {
+  const { store, relationship, workspaceInstanceStore, activeWorkspacePointerStore } =
+    composePersistence(options.store, resolvedUiDbPath, redactString, options.env);
+  const services = composeTaskWorkspaceServices(
+    options,
+    workspaceInstanceStore,
+    activeWorkspacePointerStore,
+    resolvedUiDbPath,
+    evidenceStore,
+    redactString,
+  );
+  return {
+    uiStore: store,
+    relationship,
+    ...services,
     preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
   };
 }
@@ -1106,6 +1256,8 @@ function optionalPersistenceServices(bundle: PersistenceBundle): Partial<UiHandl
       ? {}
       : { workspaceReconciliation: bundle.workspaceReconciliation }),
     ...(bundle.workspaceRepair === undefined ? {} : { workspaceRepair: bundle.workspaceRepair }),
+    ...(bundle.workspaceHealth === undefined ? {} : { workspaceHealth: bundle.workspaceHealth }),
+    ...(bundle.workspaceCleanup === undefined ? {} : { workspaceCleanup: bundle.workspaceCleanup }),
   };
 }
 

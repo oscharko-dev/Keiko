@@ -9,6 +9,8 @@ import type {
   TaskWorkspaceDriftMarker,
   TaskWorkspaceLifecycleState,
   WorkspaceBinding,
+  WorkspaceCleanupRefusalReason,
+  WorkspaceHealthReport,
   WorkspaceInstance,
   WorkspaceInfo,
   WorkspaceReconciliationReport,
@@ -207,4 +209,74 @@ export interface WorkspaceRepairServiceDeps {
   readonly now: () => number;
   readonly newId: () => string;
   readonly lockTtlMs?: number | undefined;
+}
+
+// ─── #448 operational health + governed cleanup services ────────────────────────────────────────
+// The health service is read-only: it gathers the SAME #447 reconciliation facts (no second engine),
+// adds a live `git status` dirty probe + a managed-root ownership check, classifies via the pure
+// contract, detects orphaned managed worktrees by cross-referencing the managed-root directory with the
+// store, and returns a content-free WorkspaceHealthReport. It performs NO store writes and emits NO
+// evidence — health is observation. The cleanup service is the mutating counterpart: it re-verifies
+// containment + ownership + dirty + lock LIVE before any removal (never trusting the persisted path),
+// removes through the governed adapter, deletes the retired row, clears the active pointer, and audits
+// every outcome — treating a safety refusal as a first-class successful result, never an error.
+
+// The health/cleanup services need exactly the reconciliation deps bundle (store, active pointer,
+// evidence, managed root, adapter factory, redactor, clock, id). Aliased rather than re-declared so the
+// shape can never drift from the fact-gathering path they reuse.
+export type WorkspaceHealthServiceDeps = WorkspaceReconciliationServiceDeps;
+export type WorkspaceCleanupServiceDeps = WorkspaceReconciliationServiceDeps;
+
+export interface WorkspaceHealthService {
+  // Live: classify every persisted instance for a repository root (or all repositories) plus any
+  // orphaned managed worktrees, and return the content-free report. Read-only — no persistence.
+  readonly report: (repositoryRoot?: string) => Promise<WorkspaceHealthReport>;
+}
+
+export type WorkspaceCleanupMode = "request" | "complete";
+
+export interface WorkspaceCleanupRequest {
+  readonly workspaceId: string;
+  readonly requestedBy: string;
+  // The #444 request-cleanup / complete-cleanup operations both require operator approval.
+  readonly operatorApproved: boolean;
+  // `request` transitions a settled instance to cleanup-pending; `complete` performs the live-verified
+  // governed physical removal of a cleanup-pending instance.
+  readonly mode: WorkspaceCleanupMode;
+}
+
+export type WorkspaceCleanupOutcome = "requested" | "completed" | "refused";
+
+export interface WorkspaceCleanupResult {
+  readonly outcome: WorkspaceCleanupOutcome;
+  readonly workspaceId: string;
+  // present for `requested` (the freshly cleanup-pending instance).
+  readonly instance?: WorkspaceInstance;
+  // present for `refused` — the content-free reason the live safety gate declined removal (SC4).
+  readonly refusalReason?: WorkspaceCleanupRefusalReason;
+}
+
+export interface WorkspaceOrphanCleanupRequest {
+  readonly repositoryRoot?: string | undefined;
+  readonly requestedBy: string;
+  readonly operatorApproved: boolean;
+}
+
+export interface WorkspaceOrphanRefusal {
+  readonly orphanId: string;
+  readonly refusalReason: WorkspaceCleanupRefusalReason;
+}
+
+export interface WorkspaceOrphanCleanupResult {
+  readonly removed: number;
+  readonly refused: readonly WorkspaceOrphanRefusal[];
+}
+
+export interface WorkspaceCleanupService {
+  // request-cleanup (settled → cleanup-pending) or complete-cleanup (governed physical removal).
+  readonly cleanup: (request: WorkspaceCleanupRequest) => Promise<WorkspaceCleanupResult>;
+  // Governed removal of orphaned managed worktrees (on-disk directories with no persisted record).
+  readonly cleanupOrphans: (
+    request: WorkspaceOrphanCleanupRequest,
+  ) => Promise<WorkspaceOrphanCleanupResult>;
 }

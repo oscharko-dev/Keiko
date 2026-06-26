@@ -79,3 +79,29 @@ export function ensureManagedWorktreeParent(worktreePath: string): void {
 export function managedTargetExists(worktreePath: string): boolean {
   return existsSync(worktreePath);
 }
+
+// Non-throwing, read-only ownership check (#448): the managed root is a directory AND Keiko's marker
+// file is present. Unlike assertManagedRootOwned it never creates the root or the marker, so it is the
+// correct gate for read-only health evaluation and for cleanup (which must REFUSE when ownership cannot
+// be proven rather than establish it). Any IO error fails closed (not owned).
+export function isManagedRootOwned(managedRoot: string): boolean {
+  try {
+    const markerPath = join(managedRoot, MANAGED_ROOT_MARKER_FILENAME);
+    return statSync(managedRoot).isDirectory() && existsSync(markerPath);
+  } catch {
+    return false;
+  }
+}
+
+// Non-throwing containment check (#448): true iff `target` resolves inside the managed root lexically
+// AND after realpath resolution. Delegates to the same keiko-workspace engine as the throwing assert
+// (no second containment engine); any escape — parent traversal, NUL, symlinked ancestor, out-of-root
+// absolute path — or an unverifiable parent chain fails closed (not contained).
+export function isManagedTargetContained(managedRoot: string, target: string): boolean {
+  try {
+    assertManagedTargetContained(managedRoot, target);
+    return true;
+  } catch {
+    return false;
+  }
+}

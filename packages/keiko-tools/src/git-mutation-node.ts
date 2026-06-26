@@ -217,6 +217,7 @@ export {
   buildRefResolvesArgv,
   buildRemoveWorktreeArgv,
   buildShowToplevelArgv,
+  buildWorktreeStatusArgv,
   createNodeGitWorktreeAdapter,
   GIT_WORKTREE_COMMAND_RULES,
   GitWorktreeOperandError,
@@ -231,6 +232,7 @@ export {
   type RemoveWorktreeOperands,
   type WorktreeListEntry,
   type WorktreeOperationResult,
+  type WorktreeStatusResult,
 } from "./git-worktree-adapter.js";
 
 // The Node remote publish executor (Issue #476) carries the same Node spawn effect and a DEDICATED

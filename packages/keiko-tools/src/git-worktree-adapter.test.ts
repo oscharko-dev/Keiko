@@ -25,8 +25,8 @@ import {
 } from "./git-worktree-adapter.js";
 
 describe("GIT_WORKTREE_COMMAND_RULES allowlist (AC5)", () => {
-  it("permits only worktree / rev-parse / show-ref", () => {
-    for (const sub of ["worktree", "rev-parse", "show-ref"]) {
+  it("permits only the read-only worktree / rev-parse / show-ref / status verbs", () => {
+    for (const sub of ["worktree", "rev-parse", "show-ref", "status"]) {
       expect(isCommandAllowed(GIT_WORKTREE_COMMAND_RULES, "git", [sub]).allowed).toBe(true);
     }
   });
@@ -232,5 +232,40 @@ describe("real git worktree lifecycle (EV2)", () => {
     await adapter.pruneWorktrees();
     const finalList = await adapter.listWorktrees();
     expect(finalList.map((entry) => entry.path)).not.toContain(worktreeReal);
+  });
+
+  it("worktreeStatus reports a clean worktree clean and a dirtied one dirty (#448)", async () => {
+    const repoAdapter = createNodeGitWorktreeAdapter(deps());
+    const worktreePath = join(worktreeParent, "wt-status");
+    await repoAdapter.addWorktree({
+      worktreePath,
+      taskBranch: "keiko/task/status-aabbccdd",
+      baseRef: "main",
+    });
+    // A freshly created worktree is clean.
+    const worktreeAdapter = createNodeGitWorktreeAdapter({
+      workspace: workspaceInfo(worktreePath),
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+    });
+    const clean = await worktreeAdapter.worktreeStatus();
+    expect(clean).toEqual({ ok: true, dirty: false });
+
+    // An untracked file makes it dirty (the conservative deletion-gate signal).
+    writeFileSync(join(worktreePath, "scratch.txt"), "work in progress\n");
+    const dirty = await worktreeAdapter.worktreeStatus();
+    expect(dirty.ok).toBe(true);
+    expect(dirty.dirty).toBe(true);
+  });
+
+  it("worktreeStatus reports ok=false for a non-worktree path", async () => {
+    const adapter = createNodeGitWorktreeAdapter({
+      workspace: workspaceInfo(worktreeParent),
+      processEnv: { PATH: process.env.PATH ?? "" },
+      now: () => Date.now(),
+    });
+    const status = await adapter.worktreeStatus();
+    expect(status.ok).toBe(false);
+    expect(status.dirty).toBe(false);
   });
 });

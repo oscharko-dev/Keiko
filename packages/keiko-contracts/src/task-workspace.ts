@@ -1465,3 +1465,371 @@ export function validateWorkspaceReconciliationReport(input: unknown): TaskWorks
   }
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
+
+// ─── Operational health + governed cleanup (Issue #448, content-free; consumed by #449/#450) ────────
+// #447 made persisted state trustworthy after restarts. #448 turns that into the OPERATIONAL support
+// surface: a richer health classification (adds dirty / orphaned / archived / cleanup-ready on top of
+// the reconciliation status), a single pure cleanup-safety gate, and the content-free health report.
+// All decision logic is pure (no IO): the keiko-server health/cleanup services gather content-free
+// facts (live realpath containment, the `.git` pointer/HEAD/branch state, a live `git status` dirty
+// probe, lock liveness, managed-root ownership) and defer every classification + safety decision here,
+// so health and cleanup semantics stay deterministic and 100%-testable without a filesystem (AC5).
+
+// The ten Issue-mandated operational-health classifications (AC1). A SUPERSET of the reconciliation
+// vocabulary: `dirty` = a structurally healthy worktree with live uncommitted/untracked changes;
+// `orphaned` = a managed worktree directory on disk with no persisted record; `archived` = a settled
+// (archived/merged) instance retained on disk; `cleanup-ready` = an abandoned/failed/cleanup-pending
+// instance whose live cleanup-safety gate passes (safe to physically remove now).
+export type WorkspaceHealthClassification =
+  | "healthy"
+  | "dirty"
+  | "drifted"
+  | "missing"
+  | "stale-pointer"
+  | "locked"
+  | "orphaned"
+  | "archived"
+  | "cleanup-ready"
+  | "recovery-required";
+
+export const WORKSPACE_HEALTH_CLASSIFICATIONS: readonly WorkspaceHealthClassification[] = [
+  "healthy",
+  "dirty",
+  "drifted",
+  "missing",
+  "stale-pointer",
+  "locked",
+  "orphaned",
+  "archived",
+  "cleanup-ready",
+  "recovery-required",
+] as const;
+
+export function isWorkspaceHealthClassification(
+  value: unknown,
+): value is WorkspaceHealthClassification {
+  return (
+    typeof value === "string" &&
+    WORKSPACE_HEALTH_CLASSIFICATIONS.includes(value as WorkspaceHealthClassification)
+  );
+}
+
+// The lifecycle states from which a workspace may be physically cleaned up. STRICTER than the contract
+// transition table (which permits `active->cleanup-pending` with operator approval): #448 policy
+// requires a workspace be SETTLED (archived/merged/abandoned/failed) or already cleanup-pending before
+// its worktree can be removed, so an active/paused/handoff-ready/recovery-required workspace can never
+// be cleaned without first transitioning it to a settled state (defense in depth, SC4).
+export const WORKSPACE_CLEANUP_ELIGIBLE_LIFECYCLE_STATES: readonly TaskWorkspaceLifecycleState[] = [
+  "archived",
+  "merged",
+  "abandoned",
+  "failed",
+  "cleanup-pending",
+] as const;
+
+export function isCleanupEligibleLifecycleState(value: TaskWorkspaceLifecycleState): boolean {
+  return (
+    isTaskWorkspaceLifecycleState(value) &&
+    WORKSPACE_CLEANUP_ELIGIBLE_LIFECYCLE_STATES.includes(value)
+  );
+}
+
+// Why a cleanup was refused. Every reason is a content-free safety outcome, not an error: a refusal is
+// a successful first-class result the caller surfaces, never a thrown failure (SC4).
+export type WorkspaceCleanupRefusalReason =
+  | "ownership-unproven"
+  | "path-escape"
+  | "lock-live"
+  | "worktree-dirty"
+  | "not-eligible-state";
+
+export const WORKSPACE_CLEANUP_REFUSAL_REASONS: readonly WorkspaceCleanupRefusalReason[] = [
+  "ownership-unproven",
+  "path-escape",
+  "lock-live",
+  "worktree-dirty",
+  "not-eligible-state",
+] as const;
+
+export function isWorkspaceCleanupRefusalReason(
+  value: unknown,
+): value is WorkspaceCleanupRefusalReason {
+  return (
+    typeof value === "string" &&
+    WORKSPACE_CLEANUP_REFUSAL_REASONS.includes(value as WorkspaceCleanupRefusalReason)
+  );
+}
+
+// The content-free facts a cleanup-safety decision needs. `hasRecord` is false for an orphaned managed
+// worktree (a directory with no persisted instance); the other four are LIVE-gathered booleans the
+// keiko-server cleanup service re-verifies at the moment of removal — never read from the persisted
+// path (SC2). `lockLive` blocks on ANY live lock (even the actor's own), because cleanup is destructive.
+export interface WorkspaceCleanupSafetyFacts {
+  readonly lifecycleState: TaskWorkspaceLifecycleState;
+  readonly hasRecord: boolean;
+  readonly pathContained: boolean;
+  readonly ownershipProven: boolean;
+  readonly worktreeDirty: boolean;
+  readonly lockLive: boolean;
+}
+
+export interface WorkspaceCleanupDecision {
+  readonly allowed: boolean;
+  readonly refusalReason?: WorkspaceCleanupRefusalReason;
+}
+
+// Pure: the SINGLE cleanup-safety gate, shared by the health classifier (`cleanup-ready`) and the
+// keiko-server cleanup service (refusal), so they can never diverge. Refusal precedence (most
+// fundamental first): ownership must be proven (SC1), the path must be realpath-contained inside the
+// managed root (SC1/SC2), no live lock may be held (SC4), the worktree must be clean (SC4), and a
+// persisted instance must be in a cleanup-eligible lifecycle state. An orphaned worktree (no record)
+// skips the lifecycle check — once owned, contained, clean, and unlocked it is always removable.
+export function evaluateWorkspaceCleanupSafety(
+  facts: WorkspaceCleanupSafetyFacts,
+): WorkspaceCleanupDecision {
+  if (!facts.ownershipProven) return { allowed: false, refusalReason: "ownership-unproven" };
+  if (!facts.pathContained) return { allowed: false, refusalReason: "path-escape" };
+  if (facts.lockLive) return { allowed: false, refusalReason: "lock-live" };
+  if (facts.worktreeDirty) return { allowed: false, refusalReason: "worktree-dirty" };
+  if (facts.hasRecord && !isCleanupEligibleLifecycleState(facts.lifecycleState)) {
+    return { allowed: false, refusalReason: "not-eligible-state" };
+  }
+  return { allowed: true };
+}
+
+// The content-free input to the health classifier for ONE persisted instance: the #447 reconciliation
+// facts (reused, not duplicated) plus the two #448-specific live signals — `worktreeDirty` (a live
+// `git status --porcelain` probe; the #445 adapter has no status verb, so #447 could not gather it) and
+// `ownershipProven` (the managed-root ownership marker, re-verified live).
+export interface WorkspaceHealthSignals {
+  readonly reconciliation: WorkspaceReconciliationFacts;
+  readonly worktreeDirty: boolean;
+  readonly ownershipProven: boolean;
+}
+
+export interface WorkspaceHealthEvaluation {
+  readonly classification: WorkspaceHealthClassification;
+  readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
+  readonly recoveryHints: readonly WorkspaceRecoveryHint[];
+  // whether `evaluateWorkspaceCleanupSafety` would allow cleanup of this instance right now.
+  readonly cleanupEligible: boolean;
+}
+
+// Pure: maps a reconciliation status + lifecycle + live dirty/cleanup signals to the operational health
+// classification. Severe structural conditions win first (they precede any cleanup consideration); a
+// structurally healthy worktree then resolves by lifecycle — settled (archived/merged) → `archived`,
+// settled-for-disposal (abandoned/failed/cleanup-pending) + cleanup-eligible → `cleanup-ready`,
+// otherwise `dirty` when the working tree is dirty, else `healthy`.
+// eslint-disable-next-line complexity
+function healthClassificationFor(
+  status: WorkspaceReconciliationStatus,
+  lifecycleState: TaskWorkspaceLifecycleState,
+  worktreeDirty: boolean,
+  cleanupEligible: boolean,
+): WorkspaceHealthClassification {
+  if (status === "unmanaged-path") return "recovery-required";
+  if (status === "locked") return "locked";
+  if (status === "missing") return "missing";
+  if (status === "stale-pointer") return "stale-pointer";
+  if (status === "drifted") return "drifted";
+  if (status === "partially-created" || status === "recovery-required") return "recovery-required";
+  // status === "healthy": structurally sound (contained, pointer + branch + HEAD verified, no foreign
+  // lock). Resolve the operational classification by lifecycle disposition.
+  if (lifecycleState === "archived" || lifecycleState === "merged") return "archived";
+  if (
+    (lifecycleState === "abandoned" ||
+      lifecycleState === "failed" ||
+      lifecycleState === "cleanup-pending") &&
+    cleanupEligible
+  ) {
+    return "cleanup-ready";
+  }
+  return worktreeDirty ? "dirty" : "healthy";
+}
+
+// Pure: classify ONE persisted instance. Delegates the structural classification to the #447
+// reconciliation classifier (no second precedence chain) and the cleanup decision to the single safety
+// gate, then composes them into the operational health evaluation.
+export function classifyWorkspaceHealth(
+  signals: WorkspaceHealthSignals,
+): WorkspaceHealthEvaluation {
+  const facts = signals.reconciliation;
+  const recon = classifyWorkspaceReconciliation(facts);
+  const decision = evaluateWorkspaceCleanupSafety({
+    lifecycleState: facts.lifecycleState,
+    hasRecord: true,
+    pathContained: facts.pathContained,
+    ownershipProven: signals.ownershipProven,
+    worktreeDirty: signals.worktreeDirty,
+    lockLive: facts.lockLive,
+  });
+  return {
+    classification: healthClassificationFor(
+      recon.status,
+      facts.lifecycleState,
+      signals.worktreeDirty,
+      decision.allowed,
+    ),
+    driftMarkers: recon.driftMarkers,
+    recoveryHints: recon.recoveryHints,
+    cleanupEligible: decision.allowed,
+  };
+}
+
+// A health report entry is either a persisted `instance` (carries workspace/task ids, lifecycle, and
+// health) or an `orphan-worktree` (a managed directory on disk with no record — carries only a
+// content-free `orphanId` hash and always classifies `orphaned`).
+export type WorkspaceHealthEntryKind = "instance" | "orphan-worktree";
+
+export const WORKSPACE_HEALTH_ENTRY_KINDS: readonly WorkspaceHealthEntryKind[] = [
+  "instance",
+  "orphan-worktree",
+] as const;
+
+export function isWorkspaceHealthEntryKind(value: unknown): value is WorkspaceHealthEntryKind {
+  return (
+    typeof value === "string" &&
+    WORKSPACE_HEALTH_ENTRY_KINDS.includes(value as WorkspaceHealthEntryKind)
+  );
+}
+
+// The per-entry content-free health record surfaced to UI/support/verification (AC5). Content-free:
+// opaque ids, enums, the existing drift-marker / recovery-hint shapes, two booleans, and an optional
+// ISO timestamp. No path, no command output.
+export interface WorkspaceHealthEntry {
+  readonly schemaVersion: typeof TASK_WORKSPACE_SCHEMA_VERSION;
+  readonly kind: WorkspaceHealthEntryKind;
+  readonly classification: WorkspaceHealthClassification;
+  readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
+  readonly recoveryHints: readonly WorkspaceRecoveryHint[];
+  readonly cleanupEligible: boolean;
+  // present for kind `instance`:
+  readonly workspaceId?: string;
+  readonly taskId?: string;
+  readonly lifecycleState?: TaskWorkspaceLifecycleState;
+  readonly health?: TaskWorkspaceHealth;
+  readonly lastVerifiedAt?: string;
+  // present for kind `orphan-worktree`: a content-free hash identifying the orphaned managed directory.
+  readonly orphanId?: string;
+}
+
+export const WORKSPACE_HEALTH_ENTRY_ALLOWED_KEYS: readonly string[] = [
+  "schemaVersion",
+  "kind",
+  "classification",
+  "driftMarkers",
+  "recoveryHints",
+  "cleanupEligible",
+  "workspaceId",
+  "taskId",
+  "lifecycleState",
+  "health",
+  "lastVerifiedAt",
+  "orphanId",
+] as const;
+
+// Pure: build a content-free health entry for a persisted instance from its (content-free) fields plus
+// the pure evaluation. Used by the server health service so the report shape cannot diverge from the
+// classifier output.
+export function deriveWorkspaceHealthEntry(input: {
+  readonly workspaceId: string;
+  readonly taskId: string;
+  readonly lifecycleState: TaskWorkspaceLifecycleState;
+  readonly health: TaskWorkspaceHealth;
+  readonly evaluation: WorkspaceHealthEvaluation;
+  readonly lastVerifiedAt?: string;
+}): WorkspaceHealthEntry {
+  return {
+    schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
+    kind: "instance",
+    classification: input.evaluation.classification,
+    driftMarkers: input.evaluation.driftMarkers,
+    recoveryHints: input.evaluation.recoveryHints,
+    cleanupEligible: input.evaluation.cleanupEligible,
+    workspaceId: input.workspaceId,
+    taskId: input.taskId,
+    lifecycleState: input.lifecycleState,
+    health: input.health,
+    ...(input.lastVerifiedAt !== undefined ? { lastVerifiedAt: input.lastVerifiedAt } : {}),
+  };
+}
+
+// Pure: build a content-free health entry for an orphaned managed worktree (no persisted record). It
+// always classifies `orphaned`; `cleanupEligible` reflects whether the live safety gate cleared it.
+export function deriveOrphanWorktreeHealthEntry(input: {
+  readonly orphanId: string;
+  readonly cleanupEligible: boolean;
+}): WorkspaceHealthEntry {
+  return {
+    schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
+    kind: "orphan-worktree",
+    classification: "orphaned",
+    driftMarkers: [],
+    recoveryHints: [],
+    cleanupEligible: input.cleanupEligible,
+    orphanId: input.orphanId,
+  };
+}
+
+// eslint-disable-next-line complexity
+export function validateWorkspaceHealthEntry(input: unknown): TaskWorkspaceValidation {
+  if (!isRecord(input)) return { ok: false, reasons: ["entry must be an object"] };
+  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_HEALTH_ENTRY_ALLOWED_KEYS);
+  if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
+  if (!isWorkspaceHealthEntryKind(input.kind)) reasons.push("kind invalid");
+  if (!isWorkspaceHealthClassification(input.classification))
+    reasons.push("classification invalid");
+  if (!Array.isArray(input.driftMarkers) || !input.driftMarkers.every(isTaskWorkspaceDriftMarker)) {
+    reasons.push("driftMarkers must be an array of valid markers");
+  }
+  validateRecoveryHints(input.recoveryHints, reasons);
+  if (!isBoolean(input.cleanupEligible)) reasons.push("cleanupEligible must be a boolean");
+  if (input.kind === "instance") {
+    for (const key of ["workspaceId", "taskId"] as const) {
+      if (!isNonEmptyString(input[key])) reasons.push(`${key} must be a non-empty string`);
+    }
+    if (!isTaskWorkspaceLifecycleState(input.lifecycleState))
+      reasons.push("lifecycleState invalid");
+    if (!isTaskWorkspaceHealth(input.health)) reasons.push("health invalid");
+    if (input.orphanId !== undefined) reasons.push("orphanId not allowed for an instance entry");
+  } else if (input.kind === "orphan-worktree") {
+    if (!isNonEmptyString(input.orphanId)) reasons.push("orphanId must be a non-empty string");
+    if (input.classification !== "orphaned") reasons.push("orphan entry must classify as orphaned");
+    for (const key of ["workspaceId", "taskId", "lifecycleState", "health"] as const) {
+      if (input[key] !== undefined) reasons.push(`${key} not allowed for an orphan entry`);
+    }
+  }
+  if (input.lastVerifiedAt !== undefined && !isNonEmptyString(input.lastVerifiedAt)) {
+    reasons.push("lastVerifiedAt must be a non-empty string when present");
+  }
+  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}
+
+export interface WorkspaceHealthReport {
+  readonly schemaVersion: typeof TASK_WORKSPACE_SCHEMA_VERSION;
+  readonly generatedAt: string;
+  readonly entries: readonly WorkspaceHealthEntry[];
+}
+
+export const WORKSPACE_HEALTH_REPORT_ALLOWED_KEYS: readonly string[] = [
+  "schemaVersion",
+  "generatedAt",
+  "entries",
+] as const;
+
+export function validateWorkspaceHealthReport(input: unknown): TaskWorkspaceValidation {
+  if (!isRecord(input)) return { ok: false, reasons: ["report must be an object"] };
+  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_HEALTH_REPORT_ALLOWED_KEYS);
+  if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
+  if (!isNonEmptyString(input.generatedAt)) reasons.push("generatedAt must be a non-empty string");
+  if (!Array.isArray(input.entries)) reasons.push("entries must be an array");
+  else {
+    input.entries.forEach((entry, index) => {
+      const entryValidation = validateWorkspaceHealthEntry(entry);
+      if (!entryValidation.ok) {
+        reasons.push(`entries[${String(index)}]: ${entryValidation.reasons.join("; ")}`);
+      }
+    });
+  }
+  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}
