@@ -87,6 +87,11 @@ import {
   handleDeleteCommandRun,
 } from "./command-runner-routes.js";
 import {
+  handleActivateTaskWorkspace,
+  handleGetTaskWorkspace,
+  handleProvisionTaskWorkspace,
+} from "./task-workspace/routes.js";
+import {
   handleContainerCapability,
   handleContainerCatalog,
   handleContainerEvents,
@@ -347,6 +352,18 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/commands/runs/:runId",
     handler: handleDeleteCommandRun,
   },
+  // Issue #445 (Epic #443, ADR-0089) — governed managed task-workspace provisioning + activation.
+  // Provision creates a dedicated task branch + managed Git worktree from an approved base branch
+  // through the narrow worktree adapter (single governed spawn boundary; no generic git runner) and
+  // persists a WorkspaceInstance; activate yields the WorkspaceBinding surfaces bind to. CSRF is
+  // enforced by the server's state-changing gate for the POST routes.
+  { method: "POST", pattern: "/api/task-workspaces", handler: handleProvisionTaskWorkspace },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/activate",
+    handler: handleActivateTaskWorkspace,
+  },
+  { method: "GET", pattern: "/api/task-workspaces/:workspaceId", handler: handleGetTaskWorkspace },
   // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. The capability
   // route runs an opt-in ACTIVE daemon probe (distinct from the metadata-only #1385 detector); the
   // catalog/run routes degrade to 503 CONTAINER_ENGINE_UNAVAILABLE when no engine is present. A run

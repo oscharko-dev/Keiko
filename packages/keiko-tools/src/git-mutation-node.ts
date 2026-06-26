@@ -202,6 +202,37 @@ export {
   type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";
 
+// The narrow managed-worktree lifecycle adapter (Issue #445, Epic #443) carries the same Node spawn
+// effect through the same governed `runCommand` boundary with its OWN dedicated allowlist
+// (`GIT_WORKTREE_COMMAND_RULES`: worktree/rev-parse/show-ref only — structurally separate from the
+// mutation, read-inspection, publish, PR, and merge rule sets). It is exposed on the SAME
+// `./internal/git-mutation` subpath. The pure argv builders, operand validators, and porcelain parser
+// are re-exported alongside the node factory so the server can pre-validate operands without spawning.
+export {
+  buildAddExistingBranchArgv,
+  buildAddWorktreeArgv,
+  buildListWorktreesArgv,
+  buildLocalBranchExistsArgv,
+  buildPruneWorktreesArgv,
+  buildRefResolvesArgv,
+  buildRemoveWorktreeArgv,
+  buildShowToplevelArgv,
+  createNodeGitWorktreeAdapter,
+  GIT_WORKTREE_COMMAND_RULES,
+  GitWorktreeOperandError,
+  GitWorktreeSpawnError,
+  isSafeGitRefName,
+  isSafeWorktreePathOperand,
+  parseWorktreeListPorcelain,
+  type AddExistingBranchOperands,
+  type AddWorktreeOperands,
+  type GitWorktreeAdapter,
+  type NodeGitWorktreeAdapterDeps,
+  type RemoveWorktreeOperands,
+  type WorktreeListEntry,
+  type WorktreeOperationResult,
+} from "./git-worktree-adapter.js";
+
 // The Node remote publish executor (Issue #476) carries the same Node spawn effect and a DEDICATED
 // push allowlist; it is exposed on the SAME `./internal/git-mutation` subpath. Its allowlist is
 // structurally separate from both the mutation and the read-only inspection rules.
