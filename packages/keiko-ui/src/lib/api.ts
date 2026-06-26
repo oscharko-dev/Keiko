@@ -85,6 +85,7 @@ import type {
   GitDeliveryActionSheet,
   GitDeliveryActionSheetRequest,
   GitDeliveryApprovalRequirement,
+  VoicePersona,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -254,6 +255,10 @@ export interface VoiceSpeechRequest {
   // The exact assistant answer text shown in the transcript, so the spoken output cannot diverge from
   // the visible text (AC2).
   readonly text: string;
+  // Issue #1559 — the selected product voice persona ("male" | "female" | "neutral"). Content-free: the
+  // server resolves the actual voice id from this enum and the configured provider; the browser never
+  // sees or sends a voice id. Optional so existing callers keep their provider-default voice.
+  readonly persona?: VoicePersona;
 }
 
 export interface VoiceSpeechResult {
