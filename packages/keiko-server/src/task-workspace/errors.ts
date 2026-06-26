@@ -18,7 +18,13 @@ export type TaskWorkspaceErrorCode =
   | "POINTER_DRIFT"
   | "PROVISIONING_FAILED"
   | "WORKSPACE_NOT_FOUND"
-  | "ILLEGAL_TRANSITION";
+  | "ILLEGAL_TRANSITION"
+  // #447 repair gates: the requested repair needs operator approval it did not carry; the requested
+  // strategy is not applicable to the workspace's reconciled state; a controlled repair mutation
+  // errored after it was authorized.
+  | "OPERATOR_APPROVAL_REQUIRED"
+  | "REPAIR_NOT_APPLICABLE"
+  | "REPAIR_FAILED";
 
 // The content-free outcome recorded in lifecycle evidence. `blocked` = a precondition/safety/conflict
 // gate rejected the request before or instead of mutating; `failed` = a mutation was attempted and
@@ -42,6 +48,9 @@ const ERROR_SPECS: Readonly<Record<TaskWorkspaceErrorCode, TaskWorkspaceErrorSpe
   PROVISIONING_FAILED: { status: 500, outcome: "failed" },
   WORKSPACE_NOT_FOUND: { status: 404, outcome: "blocked" },
   ILLEGAL_TRANSITION: { status: 409, outcome: "blocked" },
+  OPERATOR_APPROVAL_REQUIRED: { status: 403, outcome: "blocked" },
+  REPAIR_NOT_APPLICABLE: { status: 409, outcome: "blocked" },
+  REPAIR_FAILED: { status: 500, outcome: "failed" },
 };
 
 export class TaskWorkspaceError extends Error {

@@ -25,9 +25,17 @@ import {
 export const WORKSPACE_LIFECYCLE_EVIDENCE_KIND = "task-workspace-lifecycle" as const;
 
 // `provision`/`activate` are the #445 mutating operations; `pause`/`resume`/`handoff` are the #446
-// active-binding lifecycle actions. The union is additive — the evidence document stays content-free
+// active-binding lifecycle actions; `reconcile`/`repair` are the #447 startup-reconciliation and
+// controlled-repair operations. The union is additive — the evidence document stays content-free
 // regardless of which operation produced it.
-export type WorkspaceLifecycleOperation = "provision" | "activate" | "pause" | "resume" | "handoff";
+export type WorkspaceLifecycleOperation =
+  | "provision"
+  | "activate"
+  | "pause"
+  | "resume"
+  | "handoff"
+  | "reconcile"
+  | "repair";
 
 export type WorkspaceLifecycleOutcome =
   | "provisioned"
@@ -37,7 +45,13 @@ export type WorkspaceLifecycleOutcome =
   | "handoff-prepared"
   | "blocked"
   | "failed"
-  | "retry-required";
+  | "retry-required"
+  // #447: `reconciled` = a startup/explicit reconciliation classified the workspace;
+  // `repaired` = a controlled repair completed; `operator-required` = the recommended recovery needs
+  // an operator to act first, so no automatic mutation was attempted.
+  | "reconciled"
+  | "repaired"
+  | "operator-required";
 
 export interface WorkspaceLifecycleEvidenceRecord {
   readonly kind: typeof WORKSPACE_LIFECYCLE_EVIDENCE_KIND;

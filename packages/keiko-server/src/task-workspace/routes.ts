@@ -10,8 +10,14 @@
 // TaskWorkspaceError taxonomy; the response body is redacted before it reaches the browser.
 
 import type { IncomingMessage } from "node:http";
-import { isTaskWorkspaceLifecycleState } from "@oscharko-dev/keiko-contracts";
-import type { TaskWorkspaceLifecycleState } from "@oscharko-dev/keiko-contracts";
+import {
+  isTaskWorkspaceLifecycleState,
+  isWorkspaceRecoveryStrategy,
+} from "@oscharko-dev/keiko-contracts";
+import type {
+  TaskWorkspaceLifecycleState,
+  WorkspaceRecoveryStrategy,
+} from "@oscharko-dev/keiko-contracts";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { FilesError, resolveRoot } from "../files.js";
@@ -22,6 +28,8 @@ import type {
   WorkspaceLifecycleService,
   WorkspaceProvisioningService,
   WorkspaceProvisionRequest,
+  WorkspaceReconciliationService,
+  WorkspaceRepairService,
 } from "./types.js";
 
 const MAX_BODY_BYTES = 16_000;
@@ -46,6 +54,8 @@ function unavailable(): RouteResult {
 
 type RouteOrService = RouteResult | WorkspaceProvisioningService;
 type RouteOrLifecycle = RouteResult | WorkspaceLifecycleService;
+type RouteOrReconciliation = RouteResult | WorkspaceReconciliationService;
+type RouteOrRepair = RouteResult | WorkspaceRepairService;
 
 function requireService(deps: UiHandlerDeps): RouteOrService {
   return deps.workspaceProvisioning ?? unavailable();
@@ -55,7 +65,17 @@ function requireLifecycle(deps: UiHandlerDeps): RouteOrLifecycle {
   return deps.workspaceLifecycle ?? unavailable();
 }
 
-function isRouteResult(value: RouteOrService | RouteOrLifecycle): value is RouteResult {
+function requireReconciliation(deps: UiHandlerDeps): RouteOrReconciliation {
+  return deps.workspaceReconciliation ?? unavailable();
+}
+
+function requireRepair(deps: UiHandlerDeps): RouteOrRepair {
+  return deps.workspaceRepair ?? unavailable();
+}
+
+function isRouteResult(
+  value: RouteOrService | RouteOrLifecycle | RouteOrReconciliation | RouteOrRepair,
+): value is RouteResult {
   return typeof (value as { status?: unknown }).status === "number";
 }
 
@@ -373,4 +393,91 @@ export function handleHandoffTaskWorkspace(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runLifecycleAction(ctx, deps, (lifecycle) => lifecycle.prepareHandoff);
+}
+
+// ─── #447 reconciliation + repair routes ───────────────────────────────────────────────────────
+// A `root` of undefined reconciles/reports across ALL repositories; a provided root scopes to one
+// repository (resolved + realpath'd through the same containment as the other routes).
+
+async function resolveOptionalRoot(
+  deps: UiHandlerDeps,
+  rootInput: string | null | undefined,
+): Promise<string | undefined> {
+  if (rootInput === null || rootInput === undefined || rootInput.length === 0) return undefined;
+  const resolved = await resolveRoot(deps.store, rootInput, deps.redactor);
+  return resolved.realRoot;
+}
+
+// GET /api/task-workspaces/reconciliation[?root=<repoRoot>] — read-only reconciliation report derived
+// from the persisted (content-free) instance fields, no filesystem/git IO.
+export async function handleGetTaskWorkspaceReconciliation(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireReconciliation(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(deps, async () => {
+    const root = await resolveOptionalRoot(deps, ctx.url.searchParams.get("root"));
+    const report = guard.report(root);
+    return { status: 200, body: redacted(deps, { report }) };
+  });
+}
+
+// POST /api/task-workspaces/reconciliation — run a live reconciliation pass (verifies disk + git,
+// persists the classification) and return the fresh report. CSRF is enforced for this POST.
+export async function handleReconcileTaskWorkspaces(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireReconciliation(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(deps, async () => {
+    const body = await readJsonObject(ctx.req);
+    const root = await resolveOptionalRoot(deps, boundedString(body.root));
+    const report = await guard.reconcile(root);
+    return { status: 200, body: redacted(deps, { report }) };
+  });
+}
+
+function parseRepairStrategy(value: unknown): WorkspaceRecoveryStrategy {
+  if (!isWorkspaceRecoveryStrategy(value)) {
+    throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: strategy");
+  }
+  return value;
+}
+
+// POST /api/task-workspaces/:workspaceId/repair — controlled, operator-approval-gated repair.
+export async function handleRepairTaskWorkspace(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireRepair(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(deps, async () => {
+    const workspaceId = ctx.params.workspaceId ?? "";
+    const body = await readJsonObject(ctx.req);
+    const requestedBy = boundedString(body.requestedBy);
+    if (requestedBy === undefined) {
+      throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: requestedBy");
+    }
+    const result = await guard.repair({
+      workspaceId,
+      requestedBy,
+      strategy: parseRepairStrategy(body.strategy),
+      operatorApproved: body.operatorApproved === true,
+    });
+    return {
+      status: 200,
+      body: redacted(deps, {
+        instance: result.instance,
+        binding: result.binding,
+        strategy: result.strategy,
+        applied: result.applied,
+        outcome: result.outcome,
+        status: result.status,
+        driftMarkers: result.driftMarkers,
+        operatorActionRequired: result.operatorActionRequired,
+      }),
+    };
+  });
 }

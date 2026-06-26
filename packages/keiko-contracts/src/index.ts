@@ -17,7 +17,7 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.9.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.10.0" as const;
 
 // Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
@@ -2341,6 +2341,13 @@ export type {
   WorkspaceOperation,
   TaskWorkspaceDelegatedConcern,
   TaskWorkspaceDelegatedSubsystem,
+  WorkspaceReconciliationStatus,
+  WorkspaceReconciliationFacts,
+  WorkspaceReconciliationOutcome,
+  WorkspaceReconciliationEntry,
+  WorkspaceActiveRestorationKind,
+  WorkspaceActiveRestoration,
+  WorkspaceReconciliationReport,
 } from "./task-workspace.js";
 export {
   TASK_WORKSPACE_SCHEMA_VERSION,
@@ -2380,4 +2387,24 @@ export {
   isMutatingTaskWorkspaceOperation,
   isDelegatedTaskWorkspaceConcern,
   taskWorkspaceDelegatedOwner,
+  WORKSPACE_RECONCILIATION_STATUSES,
+  WORKSPACE_RECONCILIATION_ENTRY_ALLOWED_KEYS,
+  WORKSPACE_RECONCILIATION_REPORT_ALLOWED_KEYS,
+  WORKSPACE_ACTIVE_RESTORATION_KINDS,
+  isWorkspaceReconciliationStatus,
+  isWorkspaceActiveRestorationKind,
+  classifyWorkspaceReconciliation,
+  planWorkspaceRecoveryHints,
+  reconciliationHealth,
+  reconciliationRequiresRecoveryFlag,
+  reconciliationStatusFromInstance,
+  isAutomaticWorkspaceRepairStrategy,
+  isWorkspaceRepairStrategyApplicable,
+  workspaceEntryRepairable,
+  workspaceEntryOperatorActionRequired,
+  deriveReconciliationEntry,
+  resolveActiveRestoration,
+  validateWorkspaceReconciliationEntry,
+  validateWorkspaceActiveRestoration,
+  validateWorkspaceReconciliationReport,
 } from "./task-workspace.js";
