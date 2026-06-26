@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
+import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
+import { useActiveWorkspaceState } from "./hooks/useActiveWorkspaceState";
+import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
 import { TwinProvider, useTwin } from "./context/TwinContext";
 import { WsContext, type WsContextValue } from "./context/WsContext";
 import { Footer } from "./Footer";
@@ -351,6 +354,9 @@ function AppShellInner(): ReactNode {
   const { theme, toggle: toggleTheme } = useTheme();
   const twin = useTwin();
   const session = useChatSession({ autoCreate: false });
+  // Issue #446 (ADR-0090) — the active task-workspace binding state machine. It is provided to the
+  // whole shell so the Header switcher and every window's render context read one source of truth.
+  const activeWorkspace = useActiveWorkspaceState();
   const wsRef = useRef<HTMLDivElement>(null);
   const wsWinsForBindingRef = useRef<readonly AppWindow[] | null>(null);
   // Operator-configurable grounding caps — fetched once on mount, fall back to compile-time
@@ -361,6 +367,14 @@ function AppShellInner(): ReactNode {
       .then((res) => setGroundingLimits(res.effectiveGroundingLimits))
       .catch(() => undefined);
   }, []);
+  // Issue #446 — load the task-workspace inventory + active binding for the launched project, and
+  // re-list whenever the active project changes. Best-effort: a server without the binding routes
+  // degrades to an empty inventory and an unbound state (the switcher then shows "no active workspace").
+  const refreshActiveWorkspace = activeWorkspace.refresh;
+  const activeProjectPath = session.activeProject?.path;
+  useEffect(() => {
+    void refreshActiveWorkspace(activeProjectPath);
+  }, [refreshActiveWorkspace, activeProjectPath]);
   // Release 0.2.0 — user-visible feedback when a connect gesture is rejected because the
   // per-chat source limit is reached. Cleared on the next accepted bind and auto-dismissed.
   const [sourceConnectionNotice, setSourceConnectionNotice] = useState<string | null>(null);
@@ -730,84 +744,91 @@ function AppShellInner(): ReactNode {
   ) : null;
 
   return (
-    <ChatSessionProvider value={session}>
-      <WsContext.Provider value={wsContextValue}>
-        <div className="app">
-          {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
+    <ActiveWorkspaceProvider value={activeWorkspace}>
+      <ChatSessionProvider value={session}>
+        <WsContext.Provider value={wsContextValue}>
+          <div className="app">
+            {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
               users past the header/rail straight to the workspace (design/accessibility.html §04). */}
-          <a className="skip-link" href="#main">
-            Skip to content
-          </a>
-          {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
-          <h1 className="visually-hidden">Keiko workspace</h1>
-          <Header
-            openPalette={openPalette}
-            openCommandPalette={openCmdk}
-            onTileAll={ws.api.tileAll}
-            onSplitFront={ws.api.splitFront}
-            onCascade={ws.api.cascade}
-          />
-          <div className="mid">
-            {needsGatewaySetup ? null : (
-              <LeftRail
-                openTools={openTools}
-                onTool={onTool}
-                onNewChat={onNewChat}
-                theme={theme}
-                onToggleTheme={toggleTheme}
+            <a className="skip-link" href="#main">
+              Skip to content
+            </a>
+            {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
+            <h1 className="visually-hidden">Keiko workspace</h1>
+            <Header
+              openPalette={openPalette}
+              openCommandPalette={openCmdk}
+              onTileAll={ws.api.tileAll}
+              onSplitFront={ws.api.splitFront}
+              onCascade={ws.api.cascade}
+            />
+            {/* Issue #446 — the active task-workspace context control sits in the top chrome so the
+              operator always sees which task workspace every surface is bound to. */}
+            <div className="tw-switcher-strip" style={{ padding: "0.25rem 0.6rem" }}>
+              <TaskWorkspaceSwitcher />
+            </div>
+            <div className="mid">
+              {needsGatewaySetup ? null : (
+                <LeftRail
+                  openTools={openTools}
+                  onTool={onTool}
+                  onNewChat={onNewChat}
+                  theme={theme}
+                  onToggleTheme={toggleTheme}
+                />
+              )}
+              <div className="stage" id="main" tabIndex={-1}>
+                <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
+                {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
+                  AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
+                {sourceConnectionNotice !== null && (
+                  <div className="source-limit-alert" role="alert">
+                    <span>{sourceConnectionNotice}</span>
+                    <button
+                      type="button"
+                      className="source-limit-alert-dismiss"
+                      aria-label="Dismiss source connection notice"
+                      onClick={() => setSourceConnectionNotice(null)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+              </div>
+              {needsGatewaySetup ? null : <RightRail openTools={openTools} onTool={onTool} />}
+            </div>
+            <Footer
+              winCount={winCount}
+              windows={ws.wins ?? []}
+              windowPaletteOpen={windowPaletteOpen}
+              onToggleWindowPalette={toggleWindowPalette}
+              onSelectWindow={selectFooterWindow}
+              onCloseWindowPalette={closeWindowPalette}
+              mode={twin.mode}
+              selectedModel={session.selectedModel}
+              projectName={projectName}
+              branchLabel={branchLabel}
+              shellStatusLabel={footerShellStatusLabel}
+              evidenceStatusLabel={footerEvidenceStatusLabel}
+              statusRef={setStatusRef}
+            />
+
+            {pending !== null && (
+              <NewWindowDialog
+                type={pending}
+                types={WIN_TYPES}
+                filesContext={ws.api.currentFilesContext()}
+                onConfirm={confirmNew}
+                onClose={closeDialog}
               />
             )}
-            <div className="stage" id="main" tabIndex={-1}>
-              <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
-              {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
-                  AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
-              {sourceConnectionNotice !== null && (
-                <div className="source-limit-alert" role="alert">
-                  <span>{sourceConnectionNotice}</span>
-                  <button
-                    type="button"
-                    className="source-limit-alert-dismiss"
-                    aria-label="Dismiss source connection notice"
-                    onClick={() => setSourceConnectionNotice(null)}
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
-            </div>
-            {needsGatewaySetup ? null : <RightRail openTools={openTools} onTool={onTool} />}
+            {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
+            {needsGatewaySetup ? <GatewaySetupDialog /> : null}
+            <InstallBanner />
           </div>
-          <Footer
-            winCount={winCount}
-            windows={ws.wins ?? []}
-            windowPaletteOpen={windowPaletteOpen}
-            onToggleWindowPalette={toggleWindowPalette}
-            onSelectWindow={selectFooterWindow}
-            onCloseWindowPalette={closeWindowPalette}
-            mode={twin.mode}
-            selectedModel={session.selectedModel}
-            projectName={projectName}
-            branchLabel={branchLabel}
-            shellStatusLabel={footerShellStatusLabel}
-            evidenceStatusLabel={footerEvidenceStatusLabel}
-            statusRef={setStatusRef}
-          />
-
-          {pending !== null && (
-            <NewWindowDialog
-              type={pending}
-              types={WIN_TYPES}
-              filesContext={ws.api.currentFilesContext()}
-              onConfirm={confirmNew}
-              onClose={closeDialog}
-            />
-          )}
-          {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
-          {needsGatewaySetup ? <GatewaySetupDialog /> : null}
-          <InstallBanner />
-        </div>
-      </WsContext.Provider>
-    </ChatSessionProvider>
+        </WsContext.Provider>
+      </ChatSessionProvider>
+    </ActiveWorkspaceProvider>
   );
 }
 

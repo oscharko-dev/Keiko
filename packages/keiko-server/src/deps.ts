@@ -71,8 +71,16 @@ import {
   buildWorkspaceInstanceStoreOverDatabase,
   type WorkspaceInstanceStore,
 } from "./task-workspace/store.js";
+import {
+  buildActiveWorkspacePointerStoreOverDatabase,
+  type ActiveWorkspacePointerStore,
+} from "./task-workspace/active-store.js";
 import { createWorkspaceProvisioningService } from "./task-workspace/provisioning.js";
-import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
+import { createWorkspaceLifecycleService } from "./task-workspace/lifecycle.js";
+import type {
+  WorkspaceLifecycleService,
+  WorkspaceProvisioningService,
+} from "./task-workspace/types.js";
 import { randomUUID } from "node:crypto";
 import {
   resolveGroundingLimits,
@@ -215,6 +223,11 @@ export interface UiHandlerDeps {
   // legacy tests that do not exercise /api/task-workspaces/* keep their fixtures unchanged; production
   // wiring composes a sqlite-backed WorkspaceInstanceStore + worktree adapter in buildUiHandlerDeps.
   readonly workspaceProvisioning?: WorkspaceProvisioningService | undefined;
+  // Issue #446 (Epic #443, ADR-0090) — active task-workspace binding + lifecycle service. Owns the
+  // singleton active pointer and the switch/pause/resume/handoff actions surfaces consume. Optional so
+  // legacy tests that do not exercise the active-binding routes keep their fixtures unchanged;
+  // production wiring composes it over the same DatabaseSync handle as the #445 instance store.
+  readonly workspaceLifecycle?: WorkspaceLifecycleService | undefined;
   // Resolved evidence directory path (same precedence as the CLI: explicit → KEIKO_EVIDENCE_DIR →
   // default). Consumed by QI read routes that pass evidenceDir to listQualityIntelligenceRuns /
   // loadQualityIntelligenceRun (which require either options.store or options.evidenceDir).
@@ -265,6 +278,9 @@ export interface BuildHandlerDepsOptions {
   // Optional injected task-workspace provisioning service (tests); production composes one over the
   // sqlite WorkspaceInstanceStore + node worktree adapter when a node store is built.
   readonly workspaceProvisioning?: WorkspaceProvisioningService | undefined;
+  // Optional injected task-workspace lifecycle service (tests); production composes one over the
+  // sqlite WorkspaceInstanceStore + active-pointer store + the provisioning service.
+  readonly workspaceLifecycle?: WorkspaceLifecycleService | undefined;
   // The working directory from which `keiko ui` was launched. Production seeds it into the UI store
   // so first-run project selection is deterministic even when an older UI DB already has rows.
   readonly initialProjectPath?: string | undefined;
@@ -732,6 +748,9 @@ interface ComposedPersistence {
   // (schema.ts §V7) so the V7 sibling table shares the single-writer transaction model. Undefined when
   // a UiStore is injected (tests supply their own workspace store/service).
   readonly workspaceInstanceStore: WorkspaceInstanceStore | undefined;
+  // Issue #446: the singleton active-workspace pointer store, composed over the SAME handle (schema.ts
+  // §V8). Undefined when a UiStore is injected (tests supply their own lifecycle service).
+  readonly activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined;
 }
 
 function composePersistence(
@@ -741,7 +760,12 @@ function composePersistence(
   env: EnvSource,
 ): ComposedPersistence {
   if (injected !== undefined) {
-    return { store: injected, relationship: undefined, workspaceInstanceStore: undefined };
+    return {
+      store: injected,
+      relationship: undefined,
+      workspaceInstanceStore: undefined,
+      activeWorkspacePointerStore: undefined,
+    };
   }
   const db = openNodeUiDatabase(resolvedUiDbPath);
   const store = buildUiStoreOverDatabase(db, { redactString });
@@ -755,6 +779,7 @@ function composePersistence(
     store,
     relationship,
     workspaceInstanceStore: buildWorkspaceInstanceStoreOverDatabase(db),
+    activeWorkspacePointerStore: buildActiveWorkspacePointerStoreOverDatabase(db),
   };
 }
 
@@ -779,6 +804,37 @@ function buildWorkspaceProvisioning(
     managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
     createAdapter: (workspace) =>
       createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+    redactString,
+    now: () => Date.now(),
+    newId: randomUUID,
+  });
+}
+
+// Issue #446 — the active-binding lifecycle service. It composes the SAME #445 instance store,
+// provisioning service, evidence store, and active-pointer store (no second worktree/lock/transition
+// engine). Returns undefined whenever any composed dependency is absent (injected UiStore tests), so
+// the active-binding routes degrade to 503 exactly like the provisioning routes.
+function buildWorkspaceLifecycle(
+  options: BuildHandlerDepsOptions,
+  instanceStore: WorkspaceInstanceStore | undefined,
+  activePointerStore: ActiveWorkspacePointerStore | undefined,
+  provisioning: WorkspaceProvisioningService | undefined,
+  evidenceStore: EvidenceStore,
+  redactString: (value: string) => string,
+): WorkspaceLifecycleService | undefined {
+  if (options.workspaceLifecycle !== undefined) return options.workspaceLifecycle;
+  if (
+    instanceStore === undefined ||
+    activePointerStore === undefined ||
+    provisioning === undefined
+  ) {
+    return undefined;
+  }
+  return createWorkspaceLifecycleService({
+    store: instanceStore,
+    activePointerStore,
+    provisioning,
+    evidenceStore,
     redactString,
     now: () => Date.now(),
     newId: randomUUID,
@@ -892,6 +948,7 @@ interface PersistenceBundle {
   readonly uiStore: UiStore;
   readonly relationship: RelationshipHandlerDeps | undefined;
   readonly workspaceProvisioning: WorkspaceProvisioningService | undefined;
+  readonly workspaceLifecycle: WorkspaceLifecycleService | undefined;
   readonly preferredProjectPath: string | undefined;
 }
 
@@ -901,19 +958,24 @@ function buildPersistenceBundle(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
 ): PersistenceBundle {
-  const { store, relationship, workspaceInstanceStore } = composePersistence(
-    options.store,
+  const { store, relationship, workspaceInstanceStore, activeWorkspacePointerStore } =
+    composePersistence(options.store, resolvedUiDbPath, redactString, options.env);
+  const workspaceProvisioning = buildWorkspaceProvisioning(
+    options,
+    workspaceInstanceStore,
     resolvedUiDbPath,
+    evidenceStore,
     redactString,
-    options.env,
   );
   return {
     uiStore: store,
     relationship,
-    workspaceProvisioning: buildWorkspaceProvisioning(
+    workspaceProvisioning,
+    workspaceLifecycle: buildWorkspaceLifecycle(
       options,
       workspaceInstanceStore,
-      resolvedUiDbPath,
+      activeWorkspacePointerStore,
+      workspaceProvisioning,
       evidenceStore,
       redactString,
     ),
@@ -935,7 +997,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
-  const { uiStore, relationship, workspaceProvisioning, preferredProjectPath } =
+  const { uiStore, relationship, workspaceProvisioning, workspaceLifecycle, preferredProjectPath } =
     buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
   return {
     config,
@@ -961,5 +1023,6 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     consolidationJobs: createConsolidationJobRegistry(),
     ...(relationship === undefined ? {} : { relationship }),
     ...(workspaceProvisioning === undefined ? {} : { workspaceProvisioning }),
+    ...(workspaceLifecycle === undefined ? {} : { workspaceLifecycle }),
   };
 }

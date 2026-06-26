@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 interface Migration {
   readonly version: number;
@@ -247,6 +247,24 @@ CREATE INDEX idx_task_workspace_repository
   ON task_workspace_instances(repository_id, updated_at);
 `;
 
+// V8 (issue #446, epic #443) — singleton active task-workspace pointer. Studio binds exactly ONE
+// active task workspace at a time; this table holds at most one row (id pinned to the constant
+// 'active', enforced by CHECK). The WorkspaceBinding surfaces consume is DERIVED from the referenced
+// instance (binding.ts), never stored, so the active root has no second copy to drift. Content-free:
+// an opaque workspace id + an opaque actor id + ISO timestamps only. ON DELETE CASCADE clears the
+// pointer when the referenced instance is removed (the lifecycle service also clears it defensively).
+const V8_SQL = `
+CREATE TABLE task_workspace_active_pointer (
+  id            TEXT NOT NULL PRIMARY KEY DEFAULT 'active',
+  workspace_id  TEXT NOT NULL,
+  set_by        TEXT NOT NULL,
+  set_at        TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  CHECK (id = 'active'),
+  FOREIGN KEY (workspace_id) REFERENCES task_workspace_instances(workspace_id) ON DELETE CASCADE
+) STRICT;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -255,6 +273,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 5, sql: V5_SQL },
   { version: 6, sql: V6_SQL },
   { version: 7, sql: V7_SQL },
+  { version: 8, sql: V8_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

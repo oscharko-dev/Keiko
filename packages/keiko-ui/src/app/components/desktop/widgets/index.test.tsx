@@ -430,6 +430,10 @@ function makeCtx(): WindowRenderContext & {
         screenId: "screen-1",
       },
     ],
+    // Issue #446 — unbound by default so these legacy renderer tests keep their cfg/linkedRoot
+    // behavior; the dedicated retarget tests set activeRoot to assert the override.
+    activeRoot: null,
+    activeBinding: null,
     updateCfg: vi.fn<UpdateCfg>(),
     openWindow: vi.fn(() => "win-1"),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
@@ -444,9 +448,7 @@ describe("workspace widget renderer registry", () => {
     await waitFor(() => {
       expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1" });
     });
-    expect(screen.getByTestId("chat-window")).toHaveTextContent(
-      "true:/repo:/repo|/docs:false",
-    );
+    expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo:/repo|/docs:false");
   });
 
   it("maps window cfg into widget props and follow-up workspace actions", () => {

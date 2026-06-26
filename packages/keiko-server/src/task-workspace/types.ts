@@ -11,6 +11,7 @@ import type {
   WorkspaceInstance,
   WorkspaceInfo,
 } from "@oscharko-dev/keiko-contracts";
+import type { ActiveWorkspacePointer, ActiveWorkspacePointerStore } from "./active-store.js";
 import type { WorkspaceInstanceStore } from "./store.js";
 
 export interface WorkspaceProvisionRequest {
@@ -62,5 +63,72 @@ export interface WorkspaceProvisioningServiceDeps {
   readonly now: () => number;
   readonly newId: () => string;
   // Optional: how long a provisioning/activation lock stays valid before it is treated as stale.
+  readonly lockTtlMs?: number | undefined;
+}
+
+// ─── #446 active-binding lifecycle service ──────────────────────────────────────────────────────
+// The cross-surface binding authority: it owns the singleton active pointer and the operator-driven
+// pause/resume/switch/handoff transitions. It REUSES the #445 provisioning service for the lifecycle
+// walk into `active` (setActive/resume delegate to provisioning.activate) and the same store/evidence
+// for pause/handoff — no second worktree, lock, or transition engine (SC1).
+
+// The active view returned to the BFF: the durable instance, the DERIVED binding (binding.ts), and
+// the pointer metadata (who set it / when) the switcher renders.
+export interface ActiveWorkspaceView {
+  readonly instance: WorkspaceInstance;
+  readonly binding: WorkspaceBinding;
+  readonly pointer: ActiveWorkspacePointer;
+}
+
+export interface SetActiveWorkspaceRequest {
+  readonly workspaceId: string;
+  readonly requestedBy: string;
+  // When true, the activation acquires the workspace lock for the actor (cross-actor exclusivity).
+  readonly acquireLock: boolean;
+}
+
+export interface WorkspaceLifecycleActionRequest {
+  readonly workspaceId: string;
+  readonly requestedBy: string;
+}
+
+export interface WorkspaceLifecycleActionResult {
+  readonly instance: WorkspaceInstance;
+  readonly binding: WorkspaceBinding;
+}
+
+export interface WorkspaceLifecycleService {
+  // List the persisted instances for an already-resolved repository root (switcher inventory).
+  readonly list: (repositoryRoot: string) => readonly WorkspaceInstance[];
+  // Current active instance + derived binding + pointer, or undefined in unbound mode.
+  readonly getActive: () => ActiveWorkspaceView | undefined;
+  // ATOMIC SWITCH: activate/resume the target via the #445 service, then persist it as the pointer.
+  readonly setActive: (request: SetActiveWorkspaceRequest) => Promise<ActiveWorkspaceView>;
+  // Clear the pointer → unbound mode. Does not change any instance lifecycle state. Idempotent.
+  readonly clearActive: () => void;
+  // active → paused. Clears the pointer iff the paused workspace was the active one.
+  readonly pause: (
+    request: WorkspaceLifecycleActionRequest,
+  ) => Promise<WorkspaceLifecycleActionResult>;
+  // paused → active. Sets the pointer to the resumed workspace (delegates the walk to activate).
+  readonly resume: (
+    request: WorkspaceLifecycleActionRequest,
+  ) => Promise<WorkspaceLifecycleActionResult>;
+  // active | paused → handoff-ready (requires a clean worktree). Does not change the pointer.
+  readonly prepareHandoff: (
+    request: WorkspaceLifecycleActionRequest,
+  ) => Promise<WorkspaceLifecycleActionResult>;
+}
+
+export interface WorkspaceLifecycleServiceDeps {
+  readonly store: WorkspaceInstanceStore;
+  readonly activePointerStore: ActiveWorkspacePointerStore;
+  // Reused #445 service: setActive/resume delegate the lifecycle walk into `active` to it.
+  readonly provisioning: WorkspaceProvisioningService;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (input: string) => string;
+  readonly now: () => number;
+  readonly newId: () => string;
+  // Optional: how long a mutation lock stays valid before it is treated as stale. Mirrors provisioning.
   readonly lockTtlMs?: number | undefined;
 }

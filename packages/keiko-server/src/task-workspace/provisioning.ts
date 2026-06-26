@@ -22,16 +22,15 @@ import { isSafeGitRefName } from "@oscharko-dev/keiko-tools/internal/git-mutatio
 import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
-  TASK_WORKSPACE_SURFACES,
   validateTaskWorkspaceTransition,
   type TaskWorkspaceLifecycleState,
-  type WorkspaceBinding,
   type WorkspaceEventType,
   type WorkspaceInfo,
   type WorkspaceInstance,
   type WorkspaceLock,
   type WorkspaceLockReason,
 } from "@oscharko-dev/keiko-contracts";
+import { buildBinding } from "./binding.js";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
@@ -123,18 +122,6 @@ function gitdirIdentity(worktreePath: string): string {
   }
   // Content-free, stable identity of the worktree's admin dir. The raw target stays in-process.
   return createHash("sha256").update(match[1].trim(), "utf8").digest("hex").slice(0, 32);
-}
-
-function buildBinding(instance: WorkspaceInstance): WorkspaceBinding {
-  return {
-    schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
-    workspaceId: instance.workspaceId,
-    taskId: instance.taskId,
-    activeRoot: instance.managedWorktreePath,
-    boundSurfaces: TASK_WORKSPACE_SURFACES,
-    gitDeliveryRoot: instance.managedWorktreePath,
-    editorProjectRoot: instance.managedWorktreePath,
-  };
 }
 
 // ─── lock helpers ──────────────────────────────────────────────────────────────────────────────
