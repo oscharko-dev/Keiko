@@ -16,6 +16,7 @@ export type WindowType =
   | "browser"
   | "terminal"
   | "commands"
+  | "runtime"
   // Issue #1388 (ADR-0070) — Container engine status surface. A read-mostly status card: probes the
   // host container engine on demand and, when available, exposes the server-frozen diagnostic task
   // catalog + a governed run control. With no engine it shows the structured unavailable state and
@@ -288,6 +289,21 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
       // Issue #1387 — the command runner discovers test/build/run tasks from the project's package
       // scripts. The window only needs a project path (acts as projectId); tasks are picked per run.
       { key: "projectPath", label: "Project path", type: "text", def: "" },
+    ],
+  },
+  runtime: {
+    title: "Runtime",
+    icon: "cube",
+    accent: true,
+    desc: "Runtime, Git, tasks, and audit",
+    w: 500,
+    h: 390,
+    min: { w: 320, h: 260 },
+    tiny: { w: 260, h: 200 },
+    config: [
+      // Issue #1389 — this hub only carries the active project path and opens the specialized
+      // governed surfaces. It does not execute commands or Git operations itself.
+      { key: "projectPath", label: "Project path", type: "text", def: "", optional: true },
     ],
   },
   containerStatus: {
@@ -684,6 +700,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "figmaJson",
   "files",
   "editor",
+  "runtime",
   "governedGit",
   "governedPullRequest",
   "governedMerge",

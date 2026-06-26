@@ -20,6 +20,7 @@ import { EditorWidget } from "./cards/EditorWidget";
 import { BrowserWidget } from "./cards/BrowserWidget";
 import { TerminalWidget } from "./cards/TerminalWidget";
 import { CommandsWidget } from "./cards/CommandsWidget";
+import { RuntimeHubWidget } from "./cards/RuntimeHubWidget";
 import { GovernedGitFlowCard } from "./cards/GovernedGitFlowCard";
 import { GovernedPullRequestCard } from "./cards/GovernedPullRequestCard";
 import { GovernedMergeCard } from "./cards/GovernedMergeCard";
@@ -407,6 +408,31 @@ registerWindowRender("commands", (cfg) => {
   const props: { projectPath?: string } = {};
   if (projectPath !== undefined) props.projectPath = projectPath;
   return <CommandsWidget {...props} />;
+});
+registerWindowRender("runtime", (cfg, ctx) => {
+  const projectPath = str(cfg, "projectPath") ?? ctx.linkedRoot ?? undefined;
+  const openWithProject = (
+    type: "commands" | "governedGit" | "governedPullRequest" | "governedMerge",
+    root: string,
+  ): void => {
+    ctx.openWindow(type, { projectPath: root });
+  };
+  return (
+    <RuntimeHubWidget
+      projectPath={projectPath}
+      onProjectPathChange={(nextProjectPath) => ctx.updateCfg({ projectPath: nextProjectPath })}
+      onOpenFiles={(root) => {
+        ctx.openWindow("files", root !== undefined ? { root } : undefined);
+      }}
+      onOpenCommands={(root) => openWithProject("commands", root)}
+      onOpenContainers={(root) => {
+        ctx.openWindow("containerStatus", root !== undefined ? { projectPath: root } : undefined);
+      }}
+      onOpenGovernedGit={(root) => openWithProject("governedGit", root)}
+      onOpenPullRequest={(root) => openWithProject("governedPullRequest", root)}
+      onOpenMerge={(root) => openWithProject("governedMerge", root)}
+    />
+  );
 });
 // Epic #470, Issue #475 — Governed local Git flow surface. The active project root acts as the
 // projectId. Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a

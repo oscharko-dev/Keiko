@@ -81,6 +81,14 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     // so it is restorable like the files/editor surfaces rather than transient like the terminal.
     persistence: "fs-reference",
   },
+  // Issue #1389 — composition hub for runtime, read-only Git, governed commands, and Git Delivery.
+  // It owns no execution path; all authority stays in the specialized windows it opens.
+  runtime: {
+    lifecycle: ["idle", "connected", "degraded", "running", "blocked", "error"],
+    trustBoundary: ["ui", "fs", "tool", "evidence"],
+    authority: "user-confirm",
+    persistence: "fs-reference",
+  },
   // Issue #1388 (ADR-0070) — container engine status surface. Read-mostly: probes the host engine on
   // demand and, when available, runs a server-frozen diagnostic through the keiko-tools spawn
   // boundary (user-confirm authority for that crossing). Holds no durable state of its own — the

@@ -24,6 +24,9 @@ Git affordances to the governed Git delivery surfaces or API clients:
 - Use `/api/git/status` and `/api/git/diff` for clean/dirty/conflict/read-only diff states.
 - Use the Files widget Git status strip as the editor entry point into governed delivery; it opens
   `governedGit` with the trusted `repositoryRoot` from the read-only status response.
+- Use the Runtime workspace window from Issue #1389 as the discovery hub for Files/Git diff,
+  command tasks, container diagnostics, and governed Git Delivery windows. The hub opens existing
+  windows only; it performs no Git, command, or container execution itself.
 - Use `governedGit`, `governedPullRequest`, and `governedMerge` windows for write-capable delivery
   flows.
 - Use `fetchGitDelivery*` API helpers for any mutating or previewable delivery operation.

@@ -128,6 +128,8 @@ describe("CommandsWidget", () => {
     });
     await userEvent.click(screen.getByRole("button", { name: /run task/i }));
     expect((await screen.findAllByText(/exit 0/i)).length).toBeGreaterThan(0);
+    expect(screen.getByText("run run-1")).toBeInTheDocument();
+    expect(screen.getByText("task npm-script:test")).toBeInTheDocument();
     expect(screen.getByText(/all good/)).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(/run finished: exit 0/i);
     expect(createCommandRun).toHaveBeenCalledWith({
