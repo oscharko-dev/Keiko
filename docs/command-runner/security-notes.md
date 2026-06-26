@@ -52,9 +52,11 @@ Each finished run writes a standard `EvidenceManifest` (`taskType: "command-run"
 `EvidenceStore.put` port, carrying **counts and enums only**: run id, task id, task kind, executable
 name, argument _count_ (never the argv), exit code, duration, `timedOut`, `truncated`, and
 `failureReason`. The argv values and the captured output are deliberately excluded, and `deepRedactStrings`
-is applied to every string leaf before persistence (ADR-0048 content-free invariant). Evidence writes
-are best-effort process-evidence: a write failure is swallowed so it can never corrupt a genuine run
-result.
+is applied to every string leaf before persistence (ADR-0048 content-free invariant). The manifest's
+standard `context.workspaceRoot` field retains the local project-root path (a non-secret reference, not
+reconstructive content) exactly as every other evidence manifest in the codebase does; no command argv,
+output bytes, or secret-shaped value is persisted. Evidence writes are best-effort process-evidence: a
+write failure is swallowed so it can never corrupt a genuine run result.
 
 ## Out of scope
 

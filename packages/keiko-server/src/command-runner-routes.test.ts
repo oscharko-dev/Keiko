@@ -354,4 +354,34 @@ describe("GET /api/commands/events", () => {
     expect(stream).toContain("event: command:run-completed");
     expect(stream).toContain('"runId":"run-99"');
   });
+
+  it("applies Layer-2 redaction to every SSE event frame", async () => {
+    await rebuild({
+      redactor: (value: unknown): unknown =>
+        JSON.parse(JSON.stringify(value).replace(/SECRET-VALUE/g, "[REDACTED]")) as unknown,
+    });
+    const res = await fetch(`${baseUrl()}/api/commands/events`, {
+      headers: { Accept: "text/event-stream" },
+    });
+    const reader = res.body?.getReader();
+    const chunks: string[] = [];
+    const decoder = new TextDecoder();
+    setTimeout(() => {
+      commandRunner.emitExternal({
+        kind: "run-failed",
+        runId: "run-x",
+        payload: { failureReason: "spawn-error", note: "token=SECRET-VALUE" },
+      });
+    }, 30);
+    const deadline = Date.now() + 1500;
+    while (Date.now() < deadline) {
+      const { value } = (await reader?.read()) ?? { value: undefined };
+      if (value !== undefined) chunks.push(decoder.decode(value));
+      if (chunks.join("").includes("command:run-failed")) break;
+    }
+    void reader?.cancel();
+    const stream = chunks.join("");
+    expect(stream).toContain("[REDACTED]");
+    expect(stream).not.toContain("SECRET-VALUE");
+  });
 });

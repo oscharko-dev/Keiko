@@ -50,6 +50,18 @@ async function seedCommandsWindow(page: Page, projectPath: string): Promise<void
 }
 
 async function routeCommandBff(page: Page, runs: string[]): Promise<void> {
+  // Deterministically serve the SSE channel so the EventSource connects to a controlled endpoint
+  // (instead of the live BFF) and a synthetic run-completed frame is delivered to the events log.
+  await page.route("**/api/commands/events**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream; charset=utf-8",
+      body:
+        "event: ready\ndata: {}\n\n" +
+        'id: 1\nevent: command:run-completed\ndata: {"kind":"run-completed","runId":"run-e2e-1","payload":{"failureReason":"none","durationMs":42}}\n\n',
+    });
+  });
+
   await page.route("**/api/commands/catalog**", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -112,6 +124,9 @@ test(`Tasks window discovers a task and runs it ${TAG}`, async ({ page }) => {
   await expect(tasksWindow.getByText("exit 0", { exact: true })).toBeVisible();
   await expect(tasksWindow.getByText(/Test Files {2}1 passed/u)).toBeVisible();
   await expect(tasksWindow.getByText(/run finished: exit 0/i)).toBeVisible();
+
+  // The live SSE event channel delivers run lifecycle events into the bounded events log.
+  await expect(tasksWindow.getByRole("log")).toContainText(/completed/);
 
   // The run request named the discovered task id — never free-form argv.
   await expect
