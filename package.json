@@ -54,6 +54,7 @@
     "test:e2e:editor-layout-1375": "playwright test --config playwright.issue-1375-editor-layout.config.ts --project=chromium",
     "test:e2e:editor-baseline-1377": "playwright test --config playwright.issue-1377-editor-baseline.config.ts --project=chromium",
     "test:e2e:formatting-1380": "playwright test --config=playwright.issue-1380-formatting.config.ts",
+    "test:e2e:language-intelligence-1383": "playwright test --config playwright.issue-1383-language-intelligence.config.ts --project=chromium",
     "test:release:smoke": "npm run test:e2e:smoke",
     "release:plan": "node scripts/release-publish.mjs --plan-only",
     "release:publish": "node scripts/release-publish.mjs",
