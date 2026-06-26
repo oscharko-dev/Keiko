@@ -131,6 +131,20 @@ export {
   type TerminalEvidenceEntry,
 } from "./terminal-evidence.js";
 export {
+  DEFAULT_RUNTIME_CAPABILITY_DEADLINE_MS,
+  PathHostExecutableProbe,
+  RUNTIME_HOST_EXECUTABLE_SPECS,
+  detectRuntimeCapabilities,
+  type HostExecutableProbe,
+  type HostExecutableProbeResult,
+  type HostExecutableSpec,
+  type RuntimeCapabilityDetectorOptions,
+} from "./runtime/capabilityDetector.js";
+export {
+  handleRuntimeCapabilities,
+  type RuntimeCapabilityRouteOptions,
+} from "./runtime/capabilityRoutes.js";
+export {
   handleFilesContent,
   handleFilesSearch,
   listFilesDirectories,

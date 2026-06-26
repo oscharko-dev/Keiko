@@ -75,6 +75,7 @@ import {
   handleTerminalEvents,
   handleTerminalPolicy,
 } from "./terminal-routes.js";
+import { handleRuntimeCapabilities } from "./runtime/capabilityRoutes.js";
 import {
   handleFilesContent,
   handleFilesDirectories,
@@ -268,6 +269,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: handleDeleteTerminalExecution,
   },
   { method: "GET", pattern: "/api/terminal/events", handler: handleTerminalEvents },
+  // Issue #1385 — read-only local runtime inventory. Metadata-only detection: no package manager,
+  // Git, language, or container command is executed; root-scoped command sources use contained
+  // manifest reads on a registered project.
+  {
+    method: "GET",
+    pattern: "/api/runtime/capabilities",
+    handler: (ctx, deps) =>
+      handleRuntimeCapabilities(ctx, deps, deps.runtimeCapabilityRouteOptions),
+  },
   // Desktop files — selected-root browser, preview, and editor control plane.
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },

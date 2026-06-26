@@ -355,6 +355,33 @@ export {
   parseLspFrameHeader,
 } from "./lsp-process.js";
 
+// ─── Local runtime capabilities (Issue #1385, Epic #1491) ─────────────────────────
+// Wire contract for the BFF-owned runtime inventory: Git, host Node/package managers, common
+// language toolchains, command-source metadata, and container-engine presence. The contract is
+// metadata-only and content-free; the detector implementation lives in keiko-server so the browser
+// never gains process, Git, Docker socket, or filesystem authority.
+export type {
+  RuntimeCapabilityKind,
+  RuntimeCapabilityState,
+  RuntimeCapabilityUnavailableReason,
+  RuntimeCommandKind,
+  RuntimeCommandSourceType,
+  RuntimeCommandSource,
+  RuntimeCapability,
+  RuntimeCapabilitiesResponse,
+  RuntimeCapabilitiesParseOk,
+  RuntimeCapabilitiesParseFail,
+  RuntimeCapabilitiesParse,
+} from "./runtime-capabilities.js";
+export {
+  RUNTIME_CAPABILITY_SCHEMA_VERSION,
+  RUNTIME_CAPABILITY_KINDS,
+  RUNTIME_CAPABILITY_STATES,
+  RUNTIME_CAPABILITY_UNAVAILABLE_REASONS,
+  RUNTIME_COMMAND_KINDS,
+  validateRuntimeCapabilitiesResponse,
+} from "./runtime-capabilities.js";
+
 // ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
 // Wire request/response for the governed `POST /api/editor/completion` route: deterministic
 // language-service completion (#1198) merged with gated model-assisted completion (#1210) over
