@@ -22,7 +22,6 @@ import {
   setActiveTaskWorkspace,
   type ActiveWorkspaceView,
 } from "@/lib/task-workspace-api";
-import { ApiError } from "@/lib/api";
 import type { ActiveWorkspaceApi } from "../context/ActiveWorkspaceContext";
 
 // The opaque actor identity for this single-operator Studio session. Held constant so lock ownership
@@ -78,7 +77,9 @@ function reducer(state: State, action: Action): State {
 }
 
 function messageFor(error: unknown): string {
-  if (error instanceof ApiError) return error.message;
+  // ApiError extends Error and already carries the redacted server message, so a single Error check
+  // covers it. Avoids importing ApiError here so AppShell's import graph does not require the @/lib/api
+  // `ApiError` export to exist on every test mock of that module.
   if (error instanceof Error) return error.message;
   return "Task workspace action failed.";
 }

@@ -80,11 +80,35 @@ describe("active-workspace pointer store", () => {
     expect(store.get()?.workspaceId).toBe("ws-2");
   });
 
+  it("preserves set_at when re-setting the SAME workspace, only advancing updated_at", () => {
+    store.set({ workspaceId: "ws-1", setBy: "op", atIso: "2026-06-26T00:00:00.000Z" });
+    const again = store.set({
+      workspaceId: "ws-1",
+      setBy: "op",
+      atIso: "2026-06-26T00:05:00.000Z",
+    });
+    expect(again.setAt).toBe("2026-06-26T00:00:00.000Z");
+    expect(again.updatedAt).toBe("2026-06-26T00:05:00.000Z");
+  });
+
+  it("resets set_at when switching to a DIFFERENT workspace", () => {
+    store.set({ workspaceId: "ws-1", setBy: "op", atIso: "2026-06-26T00:00:00.000Z" });
+    const switched = store.set({
+      workspaceId: "ws-2",
+      setBy: "op",
+      atIso: "2026-06-26T00:05:00.000Z",
+    });
+    expect(switched.workspaceId).toBe("ws-2");
+    expect(switched.setAt).toBe("2026-06-26T00:05:00.000Z");
+  });
+
   it("clears the pointer → unbound mode, and clear is idempotent", () => {
     store.set({ workspaceId: "ws-1", setBy: "op", atIso: "2026-06-26T00:00:00.000Z" });
     store.clear();
     expect(store.get()).toBeUndefined();
-    expect(() => store.clear()).not.toThrow();
+    expect(() => {
+      store.clear();
+    }).not.toThrow();
     expect(store.get()).toBeUndefined();
   });
 

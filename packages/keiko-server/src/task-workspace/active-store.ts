@@ -41,15 +41,20 @@ interface PointerRow {
 
 const SQL_GET = `SELECT workspace_id, set_by, set_at, updated_at FROM task_workspace_active_pointer WHERE id = 'active'`;
 const SQL_CLEAR = `DELETE FROM task_workspace_active_pointer WHERE id = 'active'`;
-// On a re-set, created_at semantics are kept by preserving set_at on conflict and only advancing
-// updated_at — the row records when the active workspace first became active and when it last changed.
+// `set_at` records when the CURRENT workspace became active, `updated_at` the last touch. On conflict
+// the CASE keeps the original `set_at` when the SAME workspace is re-set (an idempotent re-activation
+// preserves its "became active" time) and resets it when switching to a DIFFERENT workspace.
 const SQL_SET = `
 INSERT INTO task_workspace_active_pointer (id, workspace_id, set_by, set_at, updated_at)
 VALUES ('active', ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
+  set_at = CASE
+    WHEN task_workspace_active_pointer.workspace_id = excluded.workspace_id
+    THEN task_workspace_active_pointer.set_at
+    ELSE excluded.set_at
+  END,
   workspace_id = excluded.workspace_id,
   set_by = excluded.set_by,
-  set_at = excluded.set_at,
   updated_at = excluded.updated_at
 RETURNING workspace_id, set_by, set_at, updated_at
 `;

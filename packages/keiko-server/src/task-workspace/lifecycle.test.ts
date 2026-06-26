@@ -18,7 +18,11 @@ import { buildBinding } from "./binding.js";
 import { deriveRepositoryId } from "./naming.js";
 import { createWorkspaceLifecycleService } from "./lifecycle.js";
 import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
-import type { WorkspaceLifecycleService, WorkspaceProvisioningService } from "./types.js";
+import type {
+  WorkspaceActivateResult,
+  WorkspaceLifecycleService,
+  WorkspaceProvisioningService,
+} from "./types.js";
 
 const REPO_ROOT = "/repo";
 const REPO_ID = deriveRepositoryId(REPO_ROOT);
@@ -71,7 +75,7 @@ function instance(taskId: string, overrides: Partial<WorkspaceInstance> = {}): W
 function fakeProvisioning(): WorkspaceProvisioningService {
   return {
     provision: () => Promise.reject(new Error("provision not used in lifecycle tests")),
-    activate: ({ workspaceId }) => {
+    activate: ({ workspaceId }): Promise<WorkspaceActivateResult> => {
       const inst = store.getById(workspaceId);
       if (inst === undefined) {
         return Promise.reject(new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "not found"));
@@ -194,6 +198,16 @@ describe("pause", () => {
     expect(result.instance.lifecycleState).toBe("paused");
     expect(pointerStore.get()).toBeUndefined();
     expect(evidence.some((e) => e.json.includes('"paused"'))).toBe(true);
+  });
+
+  it("leaves the active pointer untouched when pausing a DIFFERENT (non-active) workspace", async () => {
+    const a = store.upsert(instance("a"));
+    const b = store.upsert(instance("b"));
+    await service.setActive({ workspaceId: a.workspaceId, requestedBy: "op", acquireLock: false });
+    const result = await service.pause({ workspaceId: b.workspaceId, requestedBy: "op" });
+    expect(result.instance.lifecycleState).toBe("paused");
+    // A stays the active workspace — pausing B must not clear A's pointer.
+    expect(pointerStore.get()?.workspaceId).toBe(a.workspaceId);
   });
 
   it("rejects an illegal transition (cannot pause an archived workspace)", async () => {

@@ -130,6 +130,18 @@ describe("TaskWorkspaceSwitcher", () => {
     expect(value.switchTo).toHaveBeenCalledWith("ws-2");
   });
 
+  it("closes the panel on Escape and restores focus to the trigger", () => {
+    renderSwitcher(api({ activeInstance: instance() }));
+    const trigger = screen.getByRole("button", { name: /task-446/i });
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(screen.getByRole("group", { name: /task workspace context/i }), {
+      key: "Escape",
+    });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+  });
+
   it("renders an error in an alert region", () => {
     renderSwitcher(api({ error: "Workspace is locked by another actor" }));
     openPanel();

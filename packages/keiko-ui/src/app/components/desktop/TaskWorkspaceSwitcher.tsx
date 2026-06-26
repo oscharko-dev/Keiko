@@ -10,7 +10,7 @@
 // busy controls use aria-disabled (focus stays put), errors use role=alert, recovery hints sit in a
 // <details> disclosure. No globals.css edits — visual tone comes from inline design tokens.
 
-import { useId, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   nextLegalTaskWorkspaceStates,
   type TaskWorkspaceHealth,
@@ -143,9 +143,10 @@ function actionButton(props: {
         borderRadius: "var(--radius-sm, 4px)",
         border: "1px solid var(--border-subtle, #ccc)",
         background: "transparent",
-        color: "var(--text-primary, inherit)",
+        // Disabled cue via a tertiary text token (keeps ≥4.5:1 contrast, WCAG 1.4.3) rather than an
+        // opacity fade, which would drop the label below the minimum contrast ratio.
+        color: disabled ? "var(--text-tertiary, #6b6b6b)" : "var(--text-primary, inherit)",
         cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1,
       }}
     >
       {props.label}
@@ -160,6 +161,23 @@ export function TaskWorkspaceSwitcher(): ReactNode {
   const [baseBranch, setBaseBranch] = useState("");
   const panelId = useId();
   const statusId = useId();
+
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // While the panel is open, Escape closes it and returns focus to the trigger (keyboard operability +
+  // focus restoration). A document listener keeps the non-interactive panel free of event handlers.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   const active = api.activeInstance;
   const legalNext = active === null ? [] : nextLegalTaskWorkspaceStates(active.lifecycleState);
@@ -176,6 +194,7 @@ export function TaskWorkspaceSwitcher(): ReactNode {
   return (
     <div className="tw-switcher" style={{ position: "relative" }}>
       <button
+        ref={triggerRef}
         type="button"
         className="tw-switcher-trigger"
         aria-expanded={open}

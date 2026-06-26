@@ -215,6 +215,8 @@ async function setActiveImpl(
   // the surfaces' view because the derived binding flips in one persisted step.
   const result = await ctx.deps.provisioning.activate({
     workspaceId: request.workspaceId,
+    // taskId "" intentionally skips activate's optional taskId cross-check — at switch time identity is
+    // the workspaceId only, and the store lookup by workspaceId is the authoritative identity gate.
     taskId: "",
     requestedBy: request.requestedBy,
     acquireLock: request.acquireLock,
