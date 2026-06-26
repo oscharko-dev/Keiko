@@ -17,7 +17,7 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.8.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.9.0" as const;
 
 // Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
@@ -2306,3 +2306,78 @@ export {
   summarizeVoiceSessionRecap,
   validateVoiceSessionRecapAuditRecord,
 } from "./voice-session-recap.js";
+
+// ─── Task-scoped workspace domain (Issue #444, Epic #443) ───
+// The authoritative contract for what a task-scoped isolated workspace IS, how a task binds to it,
+// its lifecycle state machine (legal/illegal transitions + SC4 preconditions), drift/recovery
+// semantics, the content-free audit event, the read-only vs mutating operation authority (AC3), and
+// the no-duplicate-subsystem delegation boundary (AC4). Delegates git mutation (#470), editor/runtime
+// context (#1491), terminal mutation (ADR-0018), and workspace discovery + path containment
+// (@oscharko-dev/keiko-workspace) — it never re-implements them. Follow-on slices #445–#450 consume
+// this as the single source for status/health/repair/binding/audit.
+export type {
+  TaskWorkspaceValidationOk,
+  TaskWorkspaceValidationFail,
+  TaskWorkspaceValidation,
+  TaskWorkspaceTransitionValidation,
+  TaskWorkspaceLifecycleState,
+  TaskWorkspaceTransitionPrecondition,
+  TaskWorkspaceTransitionContext,
+  TaskWorkspaceTransitionInput,
+  TaskWorkspaceHealth,
+  TaskWorkspaceDriftMarker,
+  WorkspaceLockReason,
+  WorkspaceLock,
+  WorkspaceRecoveryStrategy,
+  WorkspaceRecoveryHint,
+  WorkspaceSurface,
+  WorkspaceEventType,
+  WorkspaceEvent,
+  WorkspaceInstance,
+  WorkspaceBinding,
+  WorkspaceActivation,
+  WorkspaceOperationAuthority,
+  WorkspaceOperationName,
+  WorkspaceOperation,
+  TaskWorkspaceDelegatedConcern,
+  TaskWorkspaceDelegatedSubsystem,
+} from "./task-workspace.js";
+export {
+  TASK_WORKSPACE_SCHEMA_VERSION,
+  TASK_WORKSPACE_LIFECYCLE_STATES,
+  TASK_WORKSPACE_LEGAL_TRANSITIONS,
+  TASK_WORKSPACE_TRANSITION_PRECONDITIONS,
+  TASK_WORKSPACE_HEALTH_STATES,
+  TASK_WORKSPACE_DRIFT_MARKERS,
+  WORKSPACE_LOCK_REASONS,
+  WORKSPACE_RECOVERY_STRATEGIES,
+  TASK_WORKSPACE_SURFACES,
+  WORKSPACE_EVENT_TYPES,
+  WORKSPACE_EVENT_ALLOWED_KEYS,
+  WORKSPACE_INSTANCE_ALLOWED_KEYS,
+  WORKSPACE_BINDING_ALLOWED_KEYS,
+  WORKSPACE_ACTIVATION_ALLOWED_KEYS,
+  TASK_WORKSPACE_OPERATIONS,
+  TASK_WORKSPACE_DELEGATED_SUBSYSTEMS,
+  isTaskWorkspaceLifecycleState,
+  isLegalTaskWorkspaceTransition,
+  nextLegalTaskWorkspaceStates,
+  isTaskWorkspaceTransitionPrecondition,
+  requiredTaskWorkspaceTransitionPreconditions,
+  validateTaskWorkspaceTransition,
+  isTaskWorkspaceHealth,
+  isTaskWorkspaceDriftMarker,
+  isWorkspaceLockReason,
+  isWorkspaceRecoveryStrategy,
+  isWorkspaceSurface,
+  isWorkspaceEventType,
+  validateWorkspaceEvent,
+  validateWorkspaceInstance,
+  validateWorkspaceBinding,
+  validateWorkspaceActivation,
+  taskWorkspaceOperation,
+  isReadOnlyTaskWorkspaceOperation,
+  isMutatingTaskWorkspaceOperation,
+  isDelegatedTaskWorkspaceConcern,
+  taskWorkspaceDelegatedOwner,
+} from "./task-workspace.js";
