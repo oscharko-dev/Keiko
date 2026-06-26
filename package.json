@@ -67,6 +67,7 @@
     "check:retrieval-latency": "node scripts/check-retrieval-latency.mjs",
     "check:retrieval-quality": "node scripts/check-retrieval-quality.mjs",
     "check:context-quality": "node scripts/check-context-quality.mjs",
+    "check:git-delivery-evidence": "node scripts/check-git-delivery-evidence.mjs",
     "check:editor-doc-links": "node scripts/check-editor-doc-links.mjs",
     "check:package-graph": "node scripts/check-package-graph.mjs",
     "check:version-consistency": "node scripts/check-version-consistency.mjs",
