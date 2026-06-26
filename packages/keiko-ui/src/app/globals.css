@@ -16400,6 +16400,24 @@ select.qi-select {
   color: var(--text-secondary);
 }
 
+/* Issue #1399: click-through from a PAT/credential alert to the Figma access-token settings. */
+.figma-snapshot-error-action {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  border: 1px solid var(--button-secondary-border);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  outline-offset: 2px;
+  min-height: 24px; /* WCAG 2.5.8 */
+}
+.figma-snapshot-error-action:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+}
+
 /* ── Stored-snapshot notice ───────────────────────────────────────────────── */
 
 .figma-snapshot-stored-notice {

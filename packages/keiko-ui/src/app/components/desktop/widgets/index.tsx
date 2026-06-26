@@ -28,6 +28,7 @@ import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
 import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
 import { FigmaJsonSourceWindow } from "./figma/FigmaJsonSourceWindow";
 import { FigmaImageSourceWindow } from "./figma/FigmaImageSourceWindow";
+import { requestGatewaySetup } from "./shared/gatewaySetupBus";
 import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
 import { RelationshipsView } from "../../../relationships/RelationshipsView";
@@ -435,6 +436,11 @@ registerWindowRender("figma", (cfg, ctx) => {
           selectedScreenName: name,
         });
       }}
+      // Issue #1399: deep-link a PAT/credential error straight to the Figma access-token settings.
+      openTokenSettings={() => {
+        requestGatewaySetup();
+        ctx.openWindow("settings");
+      }}
       updateCfg={(patch) => {
         ctx.updateCfg(patch);
       }}
@@ -452,6 +458,11 @@ registerWindowRender("figmaView", (cfg, ctx) => {
       snapshotRunId={snapshotRunId}
       selectedScreenIds={selectedScreenIds}
       selectedScreenName={selectedScreenName}
+      // Issue #1399: deep-link a PAT/credential error straight to the Figma access-token settings.
+      openTokenSettings={() => {
+        requestGatewaySetup();
+        ctx.openWindow("settings");
+      }}
       updateCfg={(patch) => {
         ctx.updateCfg(patch);
       }}

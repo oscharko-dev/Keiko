@@ -14,6 +14,7 @@ import { explainConversationIneligibility, isConversationEligibleModel } from "@
 import { Icons } from "../../Icons";
 import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
 import { Toggle } from "../shared/Toggle";
+import { GATEWAY_SETUP_REQUEST_EVENT, consumePendingGatewaySetup } from "../shared/gatewaySetupBus";
 import {
   WALLPAPER_ENABLED_EVENT,
   WALLPAPER_ENABLED_KEY,
@@ -623,8 +624,42 @@ export function SettingsPanel(): ReactNode {
   const [modelError, setModelError] = useState<string | undefined>();
   const [readiness, setReadiness] = useState<Record<string, ReadinessRunState>>({});
   const [setupOpen, setSetupOpen] = useState(false);
+  // Issue #1399: a PAT error in the Figma Snapshot window can deep-link here to open the
+  // gateway-setup dialog on its Figma access-token section. The request is latched until config
+  // has loaded so preserveExisting (and thus the focused field + copy) is settled before the
+  // dialog mounts — opening it mid-load would flash first-run wording and focus the wrong input.
+  const [pendingSetupRequest, setPendingSetupRequest] = useState(false);
   // uiux-fix C287: bumping the tick re-runs the load effect (Retry button).
   const [reloadTick, setReloadTick] = useState(0);
+
+  // Issue #1399: receive gateway-setup deep-link requests. The latch covers "Settings was just
+  // opened" (read on mount), the event covers "Settings already open" (live listener). Both paths
+  // gate on consuming the latch so exactly ONE of them claims a given request (the bus invariant).
+  useEffect(() => {
+    const claim = (): void => {
+      setTab("models");
+      setPendingSetupRequest(true);
+    };
+    if (consumePendingGatewaySetup()) claim();
+    const onRequest = (): void => {
+      if (consumePendingGatewaySetup()) claim();
+    };
+    window.addEventListener(GATEWAY_SETUP_REQUEST_EVENT, onRequest);
+    return () => {
+      window.removeEventListener(GATEWAY_SETUP_REQUEST_EVENT, onRequest);
+    };
+  }, []);
+
+  // Issue #1399: open the dialog only once config has RESOLVED (loaded without error) so
+  // preserveExisting (edit-mode wording + Figma-token focus) is settled before the dialog mounts.
+  // On a load failure the request stays latched — the panel shows its own error + Retry, and a
+  // successful retry then opens the dialog correctly rather than in misleading first-run wording.
+  useEffect(() => {
+    if (pendingSetupRequest && !loadingModels && modelError === undefined) {
+      setSetupOpen(true);
+      setPendingSetupRequest(false);
+    }
+  }, [pendingSetupRequest, loadingModels, modelError]);
 
   useEffect(() => {
     let cancelled = false;
