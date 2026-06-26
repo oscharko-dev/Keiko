@@ -281,6 +281,30 @@ describe("validateTaskWorkspaceTransition", () => {
       }),
     ).toEqual({ ok: true });
   });
+
+  it("rejects a self-transition through the full validator (never a no-op)", () => {
+    // A self-transition is illegal: no state lists itself as a successor, so it falls through the
+    // single legality check even when every precondition is satisfied. This pins the validator's
+    // top-level rejection path (not just the isLegalTaskWorkspaceTransition lookup) so a mutation
+    // dropping that check cannot pass silently. Matches ADR-0088 D2.
+    for (const state of TASK_WORKSPACE_LIFECYCLE_STATES) {
+      expect(
+        validateTaskWorkspaceTransition({ from: state, to: state, context: ALL_PRECONDITIONS_MET }),
+      ).toEqual({ ok: false, reasons: [`illegal transition from ${state} to ${state}`] });
+    }
+  });
+
+  it("reports only the unmet preconditions (met ones produce no reason)", () => {
+    // Partial satisfaction: exactly one required precondition of provisioning->active is false.
+    // The result must list exactly that one reason — proving the per-precondition AND logic and
+    // that satisfied preconditions never generate false reasons (guards against an AND->OR mutation).
+    const result = validateTaskWorkspaceTransition({
+      from: "provisioning",
+      to: "active",
+      context: { ...ALL_PRECONDITIONS_MET, pathContained: false },
+    });
+    expect(result).toEqual({ ok: false, reasons: ["unmet precondition: path-contained"] });
+  });
 });
 
 describe("enum vocab + guards", () => {
@@ -706,6 +730,16 @@ describe("operation authority (AC3)", () => {
     expect(isMutatingTaskWorkspaceOperation("discover")).toBe(false);
     expect(isReadOnlyTaskWorkspaceOperation("not-an-op" as never)).toBe(false);
     expect(isMutatingTaskWorkspaceOperation("not-an-op" as never)).toBe(false);
+  });
+
+  it("lock lifecycle ops are mutating-server-actions, not read-only", () => {
+    // acquire-lock / release-lock mutate lock ownership, so they must be mutating-server-actions
+    // even though they do not themselves require a pre-held lock. Pins the classification so a
+    // mutation reclassifying them as read-only is caught.
+    for (const name of ["acquire-lock", "release-lock"] as const) {
+      expect(isMutatingTaskWorkspaceOperation(name)).toBe(true);
+      expect(isReadOnlyTaskWorkspaceOperation(name)).toBe(false);
+    }
   });
 });
 
