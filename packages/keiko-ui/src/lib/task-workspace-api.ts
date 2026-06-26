@@ -15,22 +15,14 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 // A task-workspace BFF error that also carries the caller-facing failure class (#449, ADR-0093 D3) when
-// the server surfaced one. Callers can `instanceof TaskWorkspaceApiError` and branch on `.failureClass`
-// (retryable / repairable / blocked / policy-denied / terminal) instead of matching raw codes; it is
-// `undefined` only when the error did not originate from the structured task-workspace taxonomy.
-export class TaskWorkspaceApiError extends ApiError {
-  public readonly failureClass: WorkspaceFailureClass | undefined;
-  public constructor(
-    code: string,
-    message: string,
-    status: number,
-    failureClass: WorkspaceFailureClass | undefined,
-  ) {
-    super(code, message, status);
-    this.name = "TaskWorkspaceApiError";
-    this.failureClass = failureClass;
-  }
-}
+// the server surfaced one. Modelled as a TYPE on the existing `ApiError` (not a subclass) so this module
+// has no load-time dependency on the `ApiError` binding — partial mocks of `@/lib/api` in unrelated UI
+// tests must not break at import. Callers narrow on `.failureClass` (retryable / repairable / blocked /
+// policy-denied / terminal) instead of matching raw codes; it is `undefined` when the error did not
+// originate from the structured task-workspace taxonomy.
+export type TaskWorkspaceApiError = ApiError & {
+  readonly failureClass?: WorkspaceFailureClass | undefined;
+};
 
 // The active view the BFF returns: the durable instance, the DERIVED binding, and the pointer
 // metadata (who set it / when) the switcher renders. Mirrors the server ActiveWorkspaceView shape.
@@ -85,7 +77,13 @@ async function taskWorkspaceFetch<T>(path: string, init?: RequestInit): Promise<
     } catch {
       // parse failure — keep generic, never log
     }
-    throw new TaskWorkspaceApiError(code, message, res.status, failureClass);
+    // `ApiError` is referenced only here (runtime throw path), never at module load, so a partial
+    // `@/lib/api` mock in unrelated UI tests is unaffected. The thrown value is an ApiError carrying the
+    // optional caller-facing failure class.
+    const error: TaskWorkspaceApiError = Object.assign(new ApiError(code, message, res.status), {
+      failureClass,
+    });
+    throw error;
   }
 
   if (res.status === 204) return undefined as T;
