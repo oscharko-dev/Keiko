@@ -58,7 +58,7 @@ function makeClient(overrides: Partial<GovernedMergeClient> = {}): GovernedMerge
 const PROJECT = "/home/me/repo";
 
 function fillTarget(): void {
-  fireEvent.change(screen.getByLabelText("Repository owner and name"), {
+  fireEvent.change(screen.getByLabelText("Repository (owner/repo)"), {
     target: { value: "oscharko-dev/Keiko" },
   });
   fireEvent.change(screen.getByLabelText("Pull request number"), { target: { value: "1500" } });

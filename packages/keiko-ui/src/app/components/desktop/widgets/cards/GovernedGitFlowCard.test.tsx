@@ -116,7 +116,7 @@ describe("GovernedGitFlowCard", () => {
   it("dispatches stage with parsed pathspecs and includeUntracked", async () => {
     const client = makeClient();
     render(<GovernedGitFlowCard projectId={PROJECT} client={client} />);
-    fireEvent.change(screen.getByLabelText("Pathspecs"), {
+    fireEvent.change(screen.getByLabelText("Pathspecs (one per line)"), {
       target: { value: "src/a.ts\n src/b.ts \n" },
     });
     fireEvent.click(screen.getByLabelText("Include untracked files"));
@@ -132,7 +132,7 @@ describe("GovernedGitFlowCard", () => {
   it("dispatches unstage with parsed pathspecs", async () => {
     const client = makeClient();
     render(<GovernedGitFlowCard projectId={PROJECT} client={client} />);
-    fireEvent.change(screen.getByLabelText("Pathspecs"), { target: { value: "src/a.ts" } });
+    fireEvent.change(screen.getByLabelText("Pathspecs (one per line)"), { target: { value: "src/a.ts" } });
     fireEvent.click(screen.getByRole("button", { name: "Unstage" }));
     await waitFor(() => expect(client.unstage).toHaveBeenCalled());
     expect(client.unstage).toHaveBeenCalledWith({
@@ -205,7 +205,7 @@ describe("GovernedGitFlowCard", () => {
       })),
     });
     render(<GovernedGitFlowCard projectId={PROJECT} client={client} />);
-    fireEvent.change(screen.getByLabelText("Pathspecs"), { target: { value: "src/a.ts" } });
+    fireEvent.change(screen.getByLabelText("Pathspecs (one per line)"), { target: { value: "src/a.ts" } });
     fireEvent.click(screen.getByRole("button", { name: "Stage" }));
     await waitFor(() => expect(screen.getByTestId("ggit-outcome")).toBeInTheDocument());
     expect(screen.getByTestId("ggit-outcome")).toHaveTextContent("preflight: nothing-to-stage");

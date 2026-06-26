@@ -256,7 +256,6 @@ function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
             value={form.ownerAndRepo}
             disabled={busy}
             onChange={(e) => onChange("ownerAndRepo", e.target.value)}
-            aria-label="Repository owner and name"
           />
         </label>
         <label style={{ ...LABEL_STYLE, flex: 1 }}>
