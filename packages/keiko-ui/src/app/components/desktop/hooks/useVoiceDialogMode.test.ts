@@ -53,14 +53,30 @@ const FULL_REALTIME: VoiceCapabilityResolution = {
   availableVoicePersonas: PERSONAS,
 };
 
+// Issue #1560 (ADR-0090 D3) — the STT+TTS fallback: a full-realtime deployment in a browser WITHOUT
+// WebRTC media. Dialogue must STILL be offered (it runs over the STT+TTS turn loop). This is the defect
+// the generalized availability gate fixes.
+const FULL_REALTIME_NO_WEBRTC: VoiceCapabilityResolution = {
+  ...FULL_REALTIME,
+  transport: { websocketControl: true, webrtcMedia: false },
+};
+
 const STORAGE_KEY = "keiko.voice.dialog.persona";
 
 beforeEach(() => {
   localStorage.clear();
+  // The generalized availability gate (D3) requires a capture-capable browser; jsdom lacks both, so
+  // stub them. The fallback availability is then a pure function of the resolution.
+  vi.stubGlobal("MediaRecorder", class {});
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia: vi.fn() },
+  });
 });
 
 afterEach(() => {
   localStorage.clear();
+  vi.unstubAllGlobals();
 });
 
 // ─── Availability gating ────────────────────────────────────────────────────────
@@ -82,7 +98,7 @@ describe("useVoiceDialogMode — availability gating", () => {
     expect(result.current.available).toBe(false);
   });
 
-  it("is unavailable for a 'speech-output' deployment because it lacks realtimeVoice/webrtcMedia", () => {
+  it("is unavailable for a 'speech-output' deployment (no user speech capture)", () => {
     const { result } = renderHook(() => useVoiceDialogMode({ capability: SPEECH_OUTPUT }));
     expect(result.current.available).toBe(false);
   });
@@ -95,10 +111,24 @@ describe("useVoiceDialogMode — availability gating", () => {
     expect(result.current.availablePersonas).toHaveLength(0);
   });
 
-  it("is available when full-realtime has at least one persona", () => {
+  it("is available when full-realtime has at least one persona AND browser capture (with WebRTC)", () => {
     const { result } = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
     expect(result.current.available).toBe(true);
     expect(result.current.availablePersonas).toEqual(PERSONAS);
+  });
+
+  it("is STILL available for full-realtime WITHOUT WebRTC media (the STT+TTS fallback fix, D3)", () => {
+    const { result } = renderHook(() =>
+      useVoiceDialogMode({ capability: FULL_REALTIME_NO_WEBRTC }),
+    );
+    expect(result.current.available).toBe(true);
+  });
+
+  it("is unavailable when the browser cannot capture audio, even for full-realtime", () => {
+    vi.unstubAllGlobals();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
+    const { result } = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
+    expect(result.current.available).toBe(false);
   });
 });
 

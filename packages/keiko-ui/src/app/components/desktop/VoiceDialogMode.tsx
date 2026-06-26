@@ -240,3 +240,68 @@ export function VoiceDialogControls({
     </div>
   );
 }
+
+export interface VoiceDialogTurnControlsProps {
+  // True while the dialogue mic is capturing the user's spoken turn (recording).
+  readonly listening: boolean;
+  // True while the assistant holds the floor and its answer is being spoken.
+  readonly speaking: boolean;
+  // True only when a barge-in is currently meaningful (the assistant holds the floor).
+  readonly canInterrupt: boolean;
+  // Toggle: start capturing when idle; stop-and-send (end the user turn) while listening.
+  readonly onListen: () => void;
+  // Barge-in: take the floor from the speaking assistant.
+  readonly onInterrupt: () => void;
+  readonly compact?: boolean | undefined;
+}
+
+// Issue #1560, Epic #1556 (ADR-0090) — the per-turn dialogue controls the user drives to actually
+// speak. Separate from VoiceDialogControls (whose signature #1559 tests pin) so this issue adds the
+// turn loop without disturbing the session cluster. Both buttons are plain, keyboard-operable buttons
+// with a stable accessible name (WCAG 2.2 AA, AC4); the mic exposes its on/off state via aria-pressed,
+// and the decorative glyphs are aria-hidden so the label is the accessible name.
+export function VoiceDialogTurnControls({
+  listening,
+  speaking,
+  canInterrupt,
+  onListen,
+  onInterrupt,
+  compact = false,
+}: VoiceDialogTurnControlsProps): ReactNode {
+  // The mic label changes with capture state so a screen-reader user always hears what the next press
+  // does: begin a turn, or end it and send. `speaking` is reflected in the data attribute for styling
+  // only; it never widens the accessible name.
+  const micLabel = listening ? "Stop speaking and send" : "Start speaking";
+  // Reuse the existing `.cmp-voice-actions` cluster class (globals.css is SHA-pinned, #1300 proof gate);
+  // capture / floor state rides on data-* attributes, so no new selector is introduced.
+  return (
+    <div
+      className="cmp-voice-actions"
+      data-voice-turn="true"
+      data-compact={compact ? "true" : "false"}
+    >
+      <button
+        type="button"
+        className="cmp-voice-btn"
+        aria-pressed={listening}
+        aria-label={micLabel}
+        data-tip={micLabel}
+        data-listening={listening ? "true" : "false"}
+        data-speaking={speaking ? "true" : "false"}
+        onClick={onListen}
+      >
+        <span aria-hidden="true">{listening ? "Stop" : "Speak"}</span>
+      </button>
+      <button
+        type="button"
+        className="cmp-voice-btn"
+        aria-label="Interrupt the assistant"
+        data-tip="Interrupt the assistant"
+        disabled={!canInterrupt}
+        onClick={onInterrupt}
+      >
+        <span aria-hidden="true">Interrupt</span>
+      </button>
+    </div>
+  );
+}

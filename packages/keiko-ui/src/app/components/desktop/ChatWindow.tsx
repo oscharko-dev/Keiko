@@ -60,6 +60,7 @@ import { type VoicePlaybackBinding } from "./hooks/useVoicePlayback";
 import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton, VoicePlaybackStatusFromBinding } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
+import { useVoiceDialogueSession } from "./hooks/useVoiceDialogueSession";
 import {
   deriveVoiceDialogState,
   playbackPhaseToTurnState,
@@ -69,6 +70,7 @@ import {
   VoiceDialogModeSwitch,
   VoiceDialogSessionStatus,
   VoiceDialogControls,
+  VoiceDialogTurnControls,
 } from "./VoiceDialogMode";
 import {
   useVoiceSessionRecap,
@@ -1596,24 +1598,40 @@ function ComposerCore({
     latestVisibleMessage.content.trim().length > 0;
   const playback = useAssistantSpeech({
     profile: voiceCapability?.profile ?? "none",
-    enabled: voiceSpeechOutputVisible,
+    // Issue #1560 — while spoken dialogue is active the dialogue session owns the spoken turn (it runs
+    // its own speech engine bound to the live turn manager), so the standalone composer playback engine
+    // is muted to avoid double synthesis. The mute toggle still surfaces the user's playback preference.
+    enabled: voiceSpeechOutputVisible && !voiceDialog.active,
     text: spokenTurnSettled ? latestVisibleMessage.content : undefined,
     messageId: spokenTurnSettled ? latestVisibleMessage.id : undefined,
-    // Issue #1559 — speak with the selected persona while dialogue is active; outside dialogue the
-    // provider-default voice is kept (undefined). Content-free: the server resolves the voice id.
+  });
+  // Issue #1560 (ADR-0090) — the live dialogue session controller. It drives ONE turn manager as the
+  // single conversational truth, captures via dictation, speaks the settled answer, and routes barge-in
+  // to playback + chat. Entering starts this session (NOT the realtime media plane, D7); leaving runs
+  // its master cleanup (D9). The text composer stays fully usable throughout (AC2).
+  const dialogueSession = useVoiceDialogueSession({
+    capability: voiceCapability,
+    active: voiceDialog.active,
     persona: voiceDialog.active ? voiceDialog.persona : undefined,
+    session,
+    answerText: spokenTurnSettled ? latestVisibleMessage.content : undefined,
+    answerId: spokenTurnSettled ? latestVisibleMessage.id : undefined,
+    onLeave: voiceDialog.leave,
   });
-  // Issue #1559 — the single dialog-session label, collapsed from the realtime connection phase and the
-  // assistant playback floor the chat already owns (no second turn manager is stood up). Drives the
-  // live-region status and the controls so they never contradict each other.
-  const voiceDialogState: VoiceDialogState = deriveVoiceDialogState({
-    realtimePhase: realtime.phase,
-    turnState: playbackPhaseToTurnState(playback.snapshot.phase),
-    muted: playback.snapshot.muted,
-  });
+  // Issue #1560 (ADR-0090 D4) — the dialogue surface label is derived from the LIVE turn state (the
+  // dialogue session's snapshot), replacing the #1559 playback-phase synthesis. When dialogue is
+  // inactive the standalone playback floor still feeds the label so the speech-output controls behave.
+  const voiceDialogState: VoiceDialogState = voiceDialog.active
+    ? dialogueSession.state
+    : deriveVoiceDialogState({
+        realtimePhase: realtime.phase,
+        turnState: playbackPhaseToTurnState(playback.snapshot.phase),
+        muted: playback.snapshot.muted,
+      });
   const dialogMuteButtonRef = useRef<HTMLButtonElement>(null);
-  // Entering starts the existing realtime session and records dialog intent; leaving stops it. No new
-  // orchestration: both reuse the realtime controller's start / stop.
+  // Issue #1560 (ADR-0090 D7) — entering records dialog intent and arms the dialogue session; it does
+  // NOT start the realtime media plane (which had no transcript consumer and double-captured the mic).
+  // Leaving runs the dialogue session master cleanup and clears intent.
   const enterVoiceDialog = useCallback(() => {
     // Fail-closed symmetry with voiceDialog.enter(): never open the realtime session on a deployment
     // that does not offer dialogue, even if the switch were ever rendered without its availability gate.
@@ -1621,12 +1639,10 @@ function ComposerCore({
       return;
     }
     voiceDialog.enter();
-    realtime.start();
-  }, [voiceDialog, realtime]);
+  }, [voiceDialog]);
   const leaveVoiceDialog = useCallback(() => {
-    realtime.stop();
-    voiceDialog.leave();
-  }, [voiceDialog, realtime]);
+    dialogueSession.onStop();
+  }, [dialogueSession]);
   const toggleVoiceDialog = useCallback(() => {
     if (voiceDialog.active) {
       leaveVoiceDialog();
@@ -1898,17 +1914,31 @@ function ComposerCore({
         {voiceDialog.active ? (
           <>
             <VoiceDialogSessionStatus state={voiceDialogState} />
+            {/* Issue #1560 (ADR-0090) — the active dialogue cluster is wired to the LIVE dialogue
+                session, not the standalone playback / realtime bindings (which are inert while dialogue
+                owns the spoken turn). Mute, Stop, and barge-in all route through the session controller. */}
             <VoiceDialogControls
               state={voiceDialogState}
-              muted={playback.snapshot.muted}
-              onToggleMute={playback.toggleMute}
-              onStop={realtime.stop}
+              muted={dialogueSession.muted}
+              onToggleMute={dialogueSession.toggleMute}
+              onStop={dialogueSession.onStop}
               onLeave={leaveVoiceDialog}
               personas={voiceDialog.availablePersonas}
               selectedPersona={voiceDialog.persona}
               onSelectPersona={voiceDialog.selectPersona}
               compact={controlsNarrow}
               muteButtonRef={dialogMuteButtonRef}
+            />
+            {/* Issue #1560 — the per-turn controls that let the user actually speak: a mic toggle
+                (start / stop-and-send) and a barge-in Interrupt. Without these the user has no way to
+                take the floor (AC1). */}
+            <VoiceDialogTurnControls
+              listening={dialogueSession.listening}
+              speaking={dialogueSession.speaking}
+              canInterrupt={dialogueSession.canInterrupt}
+              onListen={dialogueSession.onListen}
+              onInterrupt={dialogueSession.onInterrupt}
+              compact={controlsNarrow}
             />
           </>
         ) : null}

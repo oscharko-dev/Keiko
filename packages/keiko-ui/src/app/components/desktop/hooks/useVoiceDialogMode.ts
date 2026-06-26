@@ -13,7 +13,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { VOICE_PERSONAS, type VoicePersona } from "@oscharko-dev/keiko-contracts";
 import type { VoiceCapabilityResolution } from "@/lib/types";
-import { supportsRealtimeVoice } from "./useVoiceCapability";
+import { dictationCaptureSupported } from "./dictation-recorder";
+import { voiceDialogueModeForResolution } from "./voice-dialogue-session";
 
 const PERSONA_STORAGE_KEY = "keiko.voice.dialog.persona";
 
@@ -83,7 +84,12 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
     [personaKey],
   );
 
-  const available = supportsRealtimeVoice(capability) && availablePersonas.length > 0;
+  // Issue #1560 (ADR-0090 D3) — dialogue is offered for the STT+TTS conjunction (speech capture AND
+  // spoken answer AND a capture-capable browser AND a persona), NOT for realtime WebRTC alone. This is
+  // the production fallback fix: a full-realtime deployment in a browser without WebRTC media now
+  // correctly offers dialogue over the STT+TTS turn loop instead of being wrongly hidden. The matrix
+  // predicate (which already requires personas) is the single source of this gate.
+  const available = voiceDialogueModeForResolution(capability, dictationCaptureSupported()).offered;
 
   const [persona, setPersona] = useState<VoicePersona>(
     () => readStoredPersona(availablePersonas) ?? VOICE_PERSONAS[0]!,
