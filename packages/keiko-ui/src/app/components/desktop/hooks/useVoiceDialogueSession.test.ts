@@ -346,3 +346,40 @@ describe("useVoiceDialogueSession — master cleanup (AC3, D9)", () => {
     expect(h.recorder.cancel).toHaveBeenCalled();
   });
 });
+
+// ─── Provider-error + capture-race robustness (Scope: handle provider error without leaking) ──────
+describe("useVoiceDialogueSession — provider failure and capture race", () => {
+  it("drives the floor to recovering when dictation transcription fails (no strand in listening)", async () => {
+    const h = harness({ transcribe: vi.fn(() => Promise.reject(new Error("provider down"))) });
+    const { result } = renderHook(() => useVoiceDialogueSession(h.options));
+    await act(async () => {
+      result.current.onListen();
+      await Promise.resolve();
+    });
+    // End the turn → transcribe rejects → dictation enters `error` → provider-failure → recovering.
+    await act(async () => {
+      result.current.onListen();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(result.current.listening).toBe(false);
+    expect(result.current.turnSnapshot.state).toBe("recovering");
+    // The failure edge never sends a (non-existent) committed transcript.
+    expect(h.chat.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("ignores a re-tap while a capture start is in flight (no second getUserMedia stream)", async () => {
+    const h = harness();
+    // A start() that never resolves keeps dictation in the `requesting` permission window.
+    h.recorder.start.mockImplementation(() => new Promise<never>(() => undefined));
+    const { result } = renderHook(() => useVoiceDialogueSession(h.options));
+    await act(async () => {
+      result.current.onListen();
+      await Promise.resolve();
+    });
+    // A second activation during `requesting` must be ignored, not open a second capture stream.
+    act(() => result.current.onListen());
+    expect(h.recorder.start).toHaveBeenCalledTimes(1);
+  });
+});

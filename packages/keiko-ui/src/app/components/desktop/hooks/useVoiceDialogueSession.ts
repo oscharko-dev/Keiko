@@ -40,6 +40,7 @@ import {
   runDialogueEffects,
   shouldSpeakAnswer,
   signalForDictationPhase,
+  signalForInterrupt,
   signalForMicActivation,
   voiceDialogueModeForResolution,
   type DialogueEffectSinks,
@@ -198,9 +199,10 @@ export function useVoiceDialogueSession(
   const dictationRef = useRef(dictation);
   dictationRef.current = dictation;
 
-  // Map the dictation phase transition onto a turn signal (preview → user-end-of-turn, D4) and insert
-  // the committed transcript when the preview settles. Tracking the previous phase makes the
-  // transition edge-triggered, so a stable phase never re-fires.
+  // Map the dictation phase transition onto a turn signal (preview → user-end-of-turn, D4; error →
+  // provider-failure) and, ONLY for the committed end-of-turn, insert the transcript into chat. Tracking
+  // the previous phase makes the transition edge-triggered, so a stable phase never re-fires; the
+  // failure edge must not call insert() (there is no committed transcript to send).
   const prevPhaseRef = useRef(dictation.phase);
   useEffect(() => {
     const previous = prevPhaseRef.current;
@@ -212,7 +214,9 @@ export function useVoiceDialogueSession(
     const signal = signalForDictationPhase(previous, next);
     if (signal !== undefined) {
       applyUserSignal(signal);
-      dictationRef.current.insert();
+      if (signal.kind === "user-end-of-turn") {
+        dictationRef.current.insert();
+      }
     }
   }, [dictation.phase, active, applyUserSignal]);
 
@@ -255,17 +259,28 @@ export function useVoiceDialogueSession(
     if (!active || !dialogueAvailable) {
       return;
     }
-    if (dictationRef.current.busy) {
+    const phase = dictationRef.current.phase;
+    // A capture start or transcription is already in flight: ignore the re-tap. useDictation's
+    // single-session guard only arms AFTER start() resolves, so a second start() during the `requesting`
+    // permission window would open a second getUserMedia stream and leak the first track.
+    if (phase === "requesting" || phase === "transcribing") {
+      return;
+    }
+    // Recording: a second activation ENDS the user turn (→ transcribe → preview → user-end-of-turn → send).
+    if (phase === "recording") {
       dictationRef.current.stop();
       return;
     }
+    // idle / preview / error: begin a new listening turn. A mid-speech activation is a barge-in — the
+    // manager synthesizes interrupt + listen from `user-speech-start` (ADR-0062) and the emitted effects
+    // stop playback + cancel generation (D6).
     applyUserSignal(signalForMicActivation(), playbackRef.current.snapshot.lastInterruptAtMs);
     dictationRef.current.start();
   }, [active, dialogueAvailable, applyUserSignal]);
 
   const onInterrupt = useCallback((): void => {
     const atMs = playbackRef.current.snapshot.lastInterruptAtMs;
-    applyUserSignal({ kind: "user-interrupt", atMs }, atMs);
+    applyUserSignal(signalForInterrupt(atMs), atMs);
   }, [applyUserSignal]);
 
   const onStop = useCallback((): void => {

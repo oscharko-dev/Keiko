@@ -142,12 +142,26 @@ describe("event → VoiceTurnSignal mapping (D5, content-free D10)", () => {
     expect(signalForDictationPhase("preview", "preview")).toBeUndefined();
   });
 
+  it("dictation entering error maps to a recoverable provider-failure (Scope: handle provider error)", () => {
+    expect(signalForDictationPhase("recording", "error")).toEqual({
+      kind: "provider-failure",
+      recoverable: true,
+    });
+    expect(signalForDictationPhase("transcribing", "error")).toEqual({
+      kind: "provider-failure",
+      recoverable: true,
+    });
+  });
+
+  it("emits no signal when already in error (no re-fire on a stable phase)", () => {
+    expect(signalForDictationPhase("error", "error")).toBeUndefined();
+  });
+
   it.each<[DictationPhase, DictationPhase]>([
     ["idle", "requesting"],
     ["requesting", "recording"],
     ["recording", "transcribing"],
     ["preview", "idle"],
-    ["recording", "error"],
   ])("emits no signal for the %s → %s transition", (previous, next) => {
     expect(signalForDictationPhase(previous, next)).toBeUndefined();
   });

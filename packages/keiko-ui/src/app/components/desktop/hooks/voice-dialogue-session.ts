@@ -85,6 +85,14 @@ export function signalForDictationPhase(
   if (next === "preview" && previous !== "preview") {
     return { kind: "user-end-of-turn" };
   }
+  // A dictation provider failure (transcribe error, device loss, permission denial) drives the floor
+  // OFF `listening` so the turn does not strand. The dictation layer has already released the mic track,
+  // so this leaks nothing; it is treated as recoverable so the user can retry by speaking again (Scope:
+  // "handle provider error without leaking resources"; AC4). `signalForProviderFailure` is the owner of
+  // this mapping (D5).
+  if (next === "error" && previous !== "error") {
+    return signalForProviderFailure(true);
+  }
   return undefined;
 }
 
