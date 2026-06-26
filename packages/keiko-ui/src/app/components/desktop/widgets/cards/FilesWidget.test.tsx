@@ -217,7 +217,12 @@ describe("FilesWidget", () => {
     const onOpenFile = vi.fn();
 
     render(
-      <FilesWidget root="/repo space" openFilesDirectly activeFilePath="" onOpenFile={onOpenFile} />,
+      <FilesWidget
+        root="/repo space"
+        openFilesDirectly
+        activeFilePath=""
+        onOpenFile={onOpenFile}
+      />,
     );
 
     await userEvent.click(await screen.findByRole("treeitem", { name: /package\.json/i }));
@@ -609,6 +614,50 @@ describe("FilePreview", () => {
       await screen.findByText("No safe text or image preview is available for this file type."),
     ).toBeInTheDocument();
     expect(screen.getAllByText("archive.bin").length).toBeGreaterThan(0);
+  });
+
+  it("copies the opened file name and full path from the preview header", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "C:\\repo space",
+      path: "src/package.json",
+      name: "package.json",
+      sizeBytes: 18,
+      modifiedAt: 1,
+      extension: "json",
+      mime: "application/json",
+      symlink: false,
+      kind: "text",
+      content: '{"name":"keiko"}\n',
+      truncated: false,
+      maxBytes: 1_000_000,
+    });
+
+    render(
+      <FilePreview root={"C:\\repo space"} path="src/package.json" onClose={() => undefined} />,
+    );
+
+    await screen.findByRole("region", { name: "File preview: package.json" });
+    await userEvent.click(screen.getByRole("button", { name: "Copy file name" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("package.json"));
+    expect(screen.getByText("File name copied")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("C:\\repo space\\src\\package.json"),
+    );
+    expect(screen.getByText("File path copied")).toBeInTheDocument();
+
+    if (clipboardDescriptor === undefined) {
+      Reflect.deleteProperty(navigator, "clipboard");
+    } else {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
   });
 
   it("explains that DOCX is searchable via bounded extraction with stated limits (Issue #1285)", async () => {

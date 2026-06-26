@@ -5068,12 +5068,21 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .fpv-refresh[data-state="refreshing"] {
   color: var(--accent);
 }
+.fpv-copy {
+  width: 24px;
+  height: 24px;
+}
 .fpv-status {
   flex: none;
   font-size: 10px;
   line-height: 1;
   color: var(--text-secondary);
   white-space: nowrap;
+}
+.fpv-copy-status {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .fpv-status[data-state="refreshed"] {
   color: var(--feedback-success);
@@ -19336,6 +19345,7 @@ ul.integ {
   outline-offset: -2px;
 }
 .fpv-back:focus-visible,
+.fpv-copy:focus-visible,
 .files-root-up:focus-visible,
 .files-root-open:focus-visible,
 .files-refresh:focus-visible,
