@@ -289,6 +289,10 @@ function loadedIdentity(): EditorSurfaceProps["fileModel"]["identity"] {
   return identity;
 }
 
+function editorStatusField(id: string): Element | null {
+  return screen.getByTestId("editor-status-bar").querySelector(`[data-field="${id}"]`);
+}
+
 describe("EditorWidget — empty state", () => {
   it("renders an honest empty state and mounts no editor until a file is opened", () => {
     render(<EditorRuntimeWidget />);
@@ -1330,6 +1334,57 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
     expect(surface.props?.provideSymbols).toBeUndefined();
     expect(surface.props?.provideFormatting).toBeUndefined();
   });
+
+  it("keeps unavailable providers non-blocking and content-free in status and agent snapshots", async () => {
+    installFakeEventSource();
+    vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValueOnce({
+      schemaVersion: "1",
+      providers: [
+        {
+          id: "python-lsp",
+          languages: ["python"],
+          operations: ["diagnostics", "completion", "hover", "symbols"],
+          availability: "unavailable",
+          unavailableReason: "Required host language tool is blocked by host execution policy.",
+        },
+      ],
+    });
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        path: "src/tool.py",
+        name: "tool.py",
+        extension: "py",
+        content: "value = 1\n",
+      }),
+    );
+
+    render(<EditorRuntimeWidget windowId="provider-status" root="/repo" file="src/tool.py" />);
+    await screen.findByTestId("editor-surface");
+
+    await waitFor(() => {
+      expect(surface.props?.provideCompletions).toBeUndefined();
+      expect(surface.props?.provideDiagnostics).toBeUndefined();
+      expect(surface.props?.provideHover).toBeUndefined();
+      expect(surface.props?.provideSymbols).toBeUndefined();
+      expect(surface.props?.provideFormatting).toBeUndefined();
+      expect(editorStatusField("language-service")).toHaveTextContent("LSP unavailable");
+    });
+    expect(editorStatusField("language-service")).toHaveAttribute(
+      "aria-label",
+      "Language provider unavailable: Required host language tool is blocked by host execution policy.",
+    );
+    expect(fetchEditorLanguageCapabilities).toHaveBeenCalledWith("/repo");
+
+    await waitFor(() => {
+      const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+      expect(snapshot?.languageCapability).toEqual({
+        languageId: "python",
+        providerId: "python-lsp",
+        available: false,
+        unavailableReason: "Required host language tool is blocked by host execution policy.",
+      });
+    });
+  });
 });
 
 describe("EditorWidget — status bar and command surface (Issue #1205)", () => {
@@ -1928,6 +1983,11 @@ describe("EditorWidget — agent bridge", () => {
             end: { line: 3, character: 5 },
           },
           diagnosticsSummary: { errors: 1, warnings: 0, infos: 2 },
+          languageCapability: {
+            languageId: "typescript",
+            providerId: "typescript",
+            available: true,
+          },
           dirtyFiles: expect.arrayContaining(["README.md", "src/app.ts"]),
         }),
       );

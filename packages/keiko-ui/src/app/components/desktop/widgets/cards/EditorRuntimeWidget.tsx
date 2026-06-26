@@ -605,7 +605,7 @@ export default function EditorRuntimeWidget({
 
   useEffect(() => {
     let cancelled = false;
-    void fetchEditorLanguageCapabilities()
+    void fetchEditorLanguageCapabilities(root)
       .then((capabilities) => {
         if (!cancelled) setLanguageCapabilities(capabilities);
       })
@@ -617,7 +617,7 @@ export default function EditorRuntimeWidget({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [root]);
 
   useEffect(
     () => () => {

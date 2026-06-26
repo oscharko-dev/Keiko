@@ -68,8 +68,17 @@ export const NO_PROVIDER_UNAVAILABLE_REASON =
 // unmatched/unavailable language still yields UNSUPPORTED_LANGUAGE (AC3).
 export function describeLanguageCapabilities(
   registry: LanguageProviderRegistry = defaultRegistry,
+  descriptorOverrides: readonly LanguageProviderDescriptor[] = [],
 ): LanguageServiceCapabilities {
-  const descriptors = registry.describe();
+  const overridesById = new Map(descriptorOverrides.map((descriptor) => [descriptor.id, descriptor]));
+  const descriptors = registry
+    .describe()
+    .map((descriptor) => overridesById.get(descriptor.id) ?? descriptor);
+  for (const descriptor of descriptorOverrides) {
+    if (!descriptors.some((entry) => entry.id === descriptor.id)) {
+      descriptors.push(descriptor);
+    }
+  }
   const covered = new Set<string>();
   for (const descriptor of descriptors) {
     for (const language of descriptor.languages) {

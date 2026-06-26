@@ -53,6 +53,8 @@ export interface LspProcessManager {
     operations: readonly LanguageServiceOperation[],
   ): LspManagerLanguageProvider;
   sendRequest<T>(method: string, params: unknown, signal: AbortSignal): Promise<T>;
+  sendNotification(method: string, params: unknown): void;
+  onNotification(handler: (method: string, params: unknown) => void): void;
   dispose(): Promise<void>;
 }
 
@@ -179,6 +181,12 @@ export function createLspProcessManager(deps: LspProcessManagerDeps): LspProcess
       buildLanguageProvider(deps.config.managerId, languages, operations, () => state.status),
     sendRequest: <T>(method: string, params: unknown, signal: AbortSignal): Promise<T> =>
       sendRequest<T>(state, deps, now, method, params, signal),
+    sendNotification: (method, params): void => {
+      if (state.status === "READY") state.transport?.client.notify(method, params);
+    },
+    onNotification: (handler): void => {
+      state.transport?.client.onNotification(handler);
+    },
     dispose: (): Promise<void> => disposeManager(state, deps, now, transition),
   };
 }

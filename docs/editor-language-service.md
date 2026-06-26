@@ -74,22 +74,25 @@ so it is present in the published closure (the root uses `bundleDependencies`, w
 package's third-party dependencies — ADR-0021 D1). The compiler runs server-side only, model-free and
 offline.
 
-### Staged expansion to other languages (#1213, governed by ADR-0045)
+### Staged expansion to other languages (#1213/#1381/#1382, governed by ADR-0045 and ADR-0069)
 
-Deep deterministic intelligence for additional languages is a **staged expansion**, not part of the
-first release, tracked by [#1213](https://github.com/oscharko-dev/Keiko/issues/1213) and governed by
-[ADR-0045](adr/ADR-0045-staged-multi-language-lsp-expansion.md) with its companion
-[architecture blueprint](planning/keiko-editor-multi-language-expansion.md). Each
-language attaches as a new provider over its standard Language Server Protocol (LSP 3.17) server,
-bridged through the out-of-process LSP path the epic already flags for dependency review
-(`monaco-languageclient` or an out-of-process LSP host):
+Deep deterministic intelligence for additional languages is a **staged expansion** tracked by
+[#1213](https://github.com/oscharko-dev/Keiko/issues/1213), [#1381](https://github.com/oscharko-dev/Keiko/issues/1381),
+and [#1382](https://github.com/oscharko-dev/Keiko/issues/1382), governed by
+[ADR-0045](adr/ADR-0045-staged-multi-language-lsp-expansion.md), [ADR-0069](adr/ADR-0069-governed-lsp-process-manager.md),
+and the companion [architecture blueprint](planning/keiko-editor-multi-language-expansion.md). Each
+language attaches as a provider over its standard Language Server Protocol (LSP) server, bridged
+through the server-side governed process manager. Keiko does not install or bundle these tools; see
+the [host language provider setup guide](keiko-editor/host-language-providers.md) for operator
+prerequisites and enterprise setup.
 
-| Language | Standard LSP server      |
-| -------- | ------------------------ |
-| Java     | `jdtls` (Eclipse JDT LS) |
-| Python   | `pyright` / `pylsp`      |
-| Rust     | `rust-analyzer`          |
-| Go       | `gopls`                  |
+| Language | Standard LSP server                      |
+| -------- | ---------------------------------------- |
+| Java     | `jdtls` (Eclipse JDT LS)                 |
+| Python   | `pyright-langserver`                     |
+| Rust     | `rust-analyzer`                          |
+| Go       | `gopls`                                  |
+| Shell    | `bash-language-server` plus `shellcheck` |
 
 Because the contracts are provider-pluggable, none of these require a contract change — only a new
 provider registration. Monaco already provides multi-language syntax highlighting and editing today
@@ -149,6 +152,14 @@ are disjoint by design.
 boolean, and a short reason string only; never buffer text) — so a future agent can read the active
 file's provider availability from the snapshot without calling the capabilities route itself. The
 field is additive and the agent-snapshot schema version is unchanged.
+
+### Host provider detection (#1382)
+
+The capabilities route is workspace-aware when called with a `root` query parameter. For Java, Python,
+Go, Rust, and Shell providers, Keiko requires an explicit per-provider enable flag, detects the
+required bare executable names on `PATH`, rejects workspace-local or symlink-escaped executables, and
+reports a structured unavailable descriptor when a tool is missing, disabled, or blocked by policy.
+Core editing remains available in every unavailable state.
 
 Code-action capabilities are **not** modelled as an executable operation yet: no provider implements
 them, so adding one would be speculative surface. They are reserved for the staged-LSP work
