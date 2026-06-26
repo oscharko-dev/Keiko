@@ -7,6 +7,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { GovernedGitFlowCard, type GovernedGitFlowClient } from "./GovernedGitFlowCard";
 import type {
+  GitBranchListResponse,
   GitDeliveryCommitPreviewResponse,
   GitDeliveryMutationResponse,
   GitDeliveryPushPreviewResponse,
@@ -51,7 +52,7 @@ function makeClient(overrides: Partial<GovernedGitFlowClient> = {}): GovernedGit
         available: true,
       },
     })),
-    listBranches: vi.fn(async () => ({
+    listBranches: vi.fn(async (): Promise<GitBranchListResponse> => ({
       schemaVersion: "1",
       root: PROJECT,
       available: true,

@@ -8,6 +8,7 @@ import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { GovernedGitFlowCard, type GovernedGitFlowClient } from "./GovernedGitFlowCard";
 import type {
+  GitBranchListResponse,
   GitDeliveryCommitPreviewResponse,
   GitDeliveryMutationResponse,
   GitDeliveryPushPreviewResponse,
@@ -83,7 +84,7 @@ function makeClient(): GovernedGitFlowClient {
         available: true,
       },
     })),
-    listBranches: vi.fn(async () => ({
+    listBranches: vi.fn(async (): Promise<GitBranchListResponse> => ({
       schemaVersion: "1",
       root: PROJECT,
       available: true,
