@@ -66,6 +66,14 @@ import {
   createRelationshipStorePort,
   type RelationshipHandlerDeps,
 } from "./relationship-handlers.js";
+import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import {
+  buildWorkspaceInstanceStoreOverDatabase,
+  type WorkspaceInstanceStore,
+} from "./task-workspace/store.js";
+import { createWorkspaceProvisioningService } from "./task-workspace/provisioning.js";
+import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
+import { randomUUID } from "node:crypto";
 import {
   resolveGroundingLimits,
   type GroundingLimits,
@@ -203,6 +211,10 @@ export interface UiHandlerDeps {
   // that do not exercise /api/relationships/* keep their fixtures unchanged. Production
   // wiring composes a sqlite-backed RelationshipStore inside buildUiHandlerDeps.
   readonly relationship?: RelationshipHandlerDeps | undefined;
+  // Issue #445 (Epic #443) — managed task-workspace provisioning + activation service. Optional so
+  // legacy tests that do not exercise /api/task-workspaces/* keep their fixtures unchanged; production
+  // wiring composes a sqlite-backed WorkspaceInstanceStore + worktree adapter in buildUiHandlerDeps.
+  readonly workspaceProvisioning?: WorkspaceProvisioningService | undefined;
   // Resolved evidence directory path (same precedence as the CLI: explicit → KEIKO_EVIDENCE_DIR →
   // default). Consumed by QI read routes that pass evidenceDir to listQualityIntelligenceRuns /
   // loadQualityIntelligenceRun (which require either options.store or options.evidenceDir).
@@ -250,6 +262,9 @@ export interface BuildHandlerDepsOptions {
   readonly uiDbPath?: string | undefined;
   // Optional injected UiStore (tests); a node store opened at the resolved path is built otherwise.
   readonly store?: UiStore | undefined;
+  // Optional injected task-workspace provisioning service (tests); production composes one over the
+  // sqlite WorkspaceInstanceStore + node worktree adapter when a node store is built.
+  readonly workspaceProvisioning?: WorkspaceProvisioningService | undefined;
   // The working directory from which `keiko ui` was launched. Production seeds it into the UI store
   // so first-run project selection is deterministic even when an older UI DB already has rows.
   readonly initialProjectPath?: string | undefined;
@@ -710,13 +725,24 @@ function resolveLoopbackWorkspaceId(env: EnvSource): string {
 // with the relationship-engine store so V5 sibling tables share the UI-store transaction model
 // (issue #539, storage.md §3.1). When tests inject a UiStore we leave `relationship` undefined;
 // relationship-engine tests inject their own deps.
+interface ComposedPersistence {
+  readonly store: UiStore;
+  readonly relationship: RelationshipHandlerDeps | undefined;
+  // Issue #445: the durable task-workspace instance store, composed over the SAME DatabaseSync handle
+  // (schema.ts §V7) so the V7 sibling table shares the single-writer transaction model. Undefined when
+  // a UiStore is injected (tests supply their own workspace store/service).
+  readonly workspaceInstanceStore: WorkspaceInstanceStore | undefined;
+}
+
 function composePersistence(
   injected: UiStore | undefined,
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
   env: EnvSource,
-): { readonly store: UiStore; readonly relationship: RelationshipHandlerDeps | undefined } {
-  if (injected !== undefined) return { store: injected, relationship: undefined };
+): ComposedPersistence {
+  if (injected !== undefined) {
+    return { store: injected, relationship: undefined, workspaceInstanceStore: undefined };
+  }
   const db = openNodeUiDatabase(resolvedUiDbPath);
   const store = buildUiStoreOverDatabase(db, { redactString });
   const relationship: RelationshipHandlerDeps = {
@@ -725,7 +751,38 @@ function composePersistence(
     }),
     store: createRelationshipStorePort({ db, redactString }),
   };
-  return { store, relationship };
+  return {
+    store,
+    relationship,
+    workspaceInstanceStore: buildWorkspaceInstanceStoreOverDatabase(db),
+  };
+}
+
+// The Keiko-owned managed task-workspace root lives alongside the UI database (`<uiDbDir>/
+// task-workspaces`), so it inherits the same per-user data directory and 0o700 hardening posture.
+function resolveManagedWorktreeRoot(uiDbPath: string): string {
+  return join(dirname(uiDbPath), "task-workspaces");
+}
+
+function buildWorkspaceProvisioning(
+  options: BuildHandlerDepsOptions,
+  store: WorkspaceInstanceStore | undefined,
+  resolvedUiDbPath: string,
+  evidenceStore: EvidenceStore,
+  redactString: (value: string) => string,
+): WorkspaceProvisioningService | undefined {
+  if (options.workspaceProvisioning !== undefined) return options.workspaceProvisioning;
+  if (store === undefined) return undefined;
+  return createWorkspaceProvisioningService({
+    store,
+    evidenceStore,
+    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    createAdapter: (workspace) =>
+      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+    redactString,
+    now: () => Date.now(),
+    newId: randomUUID,
+  });
 }
 
 function seedInitialProject(
@@ -831,6 +888,39 @@ function resolveEvidenceDirAndEnforceRetention(options: BuildHandlerDepsOptions)
   return evidenceDir;
 }
 
+interface PersistenceBundle {
+  readonly uiStore: UiStore;
+  readonly relationship: RelationshipHandlerDeps | undefined;
+  readonly workspaceProvisioning: WorkspaceProvisioningService | undefined;
+  readonly preferredProjectPath: string | undefined;
+}
+
+function buildPersistenceBundle(
+  options: BuildHandlerDepsOptions,
+  resolvedUiDbPath: string,
+  redactString: (value: string) => string,
+  evidenceStore: EvidenceStore,
+): PersistenceBundle {
+  const { store, relationship, workspaceInstanceStore } = composePersistence(
+    options.store,
+    resolvedUiDbPath,
+    redactString,
+    options.env,
+  );
+  return {
+    uiStore: store,
+    relationship,
+    workspaceProvisioning: buildWorkspaceProvisioning(
+      options,
+      workspaceInstanceStore,
+      resolvedUiDbPath,
+      evidenceStore,
+      redactString,
+    ),
+    preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
+  };
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
   const runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
@@ -845,17 +935,8 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
-  const { store: uiStore, relationship } = composePersistence(
-    options.store,
-    resolvedUiDbPath,
-    redactString,
-    options.env,
-  );
-  const preferredProjectPath = seedInitialProject(
-    uiStore,
-    resolvedUiDbPath,
-    options.initialProjectPath,
-  );
+  const { uiStore, relationship, workspaceProvisioning, preferredProjectPath } =
+    buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
   return {
     config,
     configPresent,
@@ -879,5 +960,6 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     ...buildPeripherals(options, uiStore, evidenceStore, redactString, liveRedactor),
     consolidationJobs: createConsolidationJobRegistry(),
     ...(relationship === undefined ? {} : { relationship }),
+    ...(workspaceProvisioning === undefined ? {} : { workspaceProvisioning }),
   };
 }
