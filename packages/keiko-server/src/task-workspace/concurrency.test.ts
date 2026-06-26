@@ -176,6 +176,33 @@ describe("concurrent lifecycle mutations of one workspace", () => {
     const final = store.getById(workspaceId);
     expect(final).toBeDefined();
     expect(["active", "paused"]).toContain(final?.lifecycleState);
+    // The singleton active pointer must NEVER durably bind a non-active workspace: setActive re-verifies
+    // the live state under the active: key before writing the pointer, so the cross-key window between
+    // activate and the pointer flip cannot advertise a paused task as active (security MEDIUM fix).
+    const active = lifecycle.getActive();
+    if (active !== undefined) {
+      expect(active.instance.workspaceId).toBe(workspaceId);
+      expect(active.instance.lifecycleState).toBe("active");
+    }
+  });
+
+  it("never binds the active pointer to a workspace a concurrent pause moved out of active", async () => {
+    // Tighter probe of the cross-key race: many rounds of setActive racing pause on the same workspace.
+    // Every observable end state must satisfy the invariant — pointer set ⇒ workspace is active.
+    const provisioned = await provisioning.provision(provisionRequest("race"));
+    const workspaceId = provisioned.instance.workspaceId;
+    for (let round = 0; round < 8; round += 1) {
+      await Promise.allSettled([
+        lifecycle.setActive({ workspaceId, requestedBy: "actor", acquireLock: false }),
+        lifecycle.pause({ workspaceId, requestedBy: "actor" }),
+      ]);
+      const active = lifecycle.getActive();
+      if (active !== undefined) {
+        expect(active.instance.lifecycleState).toBe("active");
+      }
+      // Reset to a known active state for the next round (serialized — no concurrency here).
+      await lifecycle.setActive({ workspaceId, requestedBy: "actor", acquireLock: false });
+    }
   });
 });
 

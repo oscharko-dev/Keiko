@@ -214,15 +214,27 @@ async function setActiveImpl(
   });
   // The pointer flip is serialized per repository under the `active:` key so two concurrent switches in
   // the same repository cannot tear the singleton pointer write. Sequenced AFTER activate (whose `ws:`
-  // lock has already drained), never nested inside it.
+  // lock has already drained), never nested inside it. Because `ws:` was released between activate and
+  // here, a concurrent pause/abandon/cleanup on the same workspace may have moved it out of `active`; we
+  // RE-VERIFY the live state inside the `active:` critical section before binding the singleton pointer,
+  // so the switch can never durably advertise a paused/abandoned task as active (#449 AC1, ADR-0093 D1).
+  // getById + set are synchronous here, so no flow can interleave between the check and the write.
   const pointer = await ctx.deps.mutex.runExclusive(
     [activePointerKey(result.instance.repositoryId)],
-    () =>
-      ctx.deps.activePointerStore.set({
-        workspaceId: result.instance.workspaceId,
+    () => {
+      const current = ctx.deps.store.getById(result.instance.workspaceId);
+      if (current?.lifecycleState !== "active") {
+        throw new TaskWorkspaceError(
+          "LOCK_CONTENTION",
+          "workspace state changed during activation; retry",
+        );
+      }
+      return ctx.deps.activePointerStore.set({
+        workspaceId: current.workspaceId,
         setBy: request.requestedBy,
         atIso: isoFrom(ctx.deps.now()),
-      }),
+      });
+    },
   );
   return { instance: result.instance, binding: result.binding, pointer };
 }
