@@ -4,7 +4,7 @@
 // state (catalog tasks + run control), api errors rendered as a muted code-tagged message that never
 // leaks URLs/credentials, and an axe a11y assertion (zero serious/critical).
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -160,6 +160,20 @@ describe("ContainerStatusWidget", () => {
     expect(screen.getByRole("button", { name: /run diagnostic/i })).toBeInTheDocument();
   });
 
+  it("re-probes capability and catalog when the window project path changes", async () => {
+    vi.mocked(fetchContainerCapability).mockResolvedValue(AVAILABLE);
+    vi.mocked(fetchContainerCatalog).mockResolvedValue(CATALOG);
+    const view = render(<ContainerStatusWidget projectPath="/proj" />);
+    await screen.findByRole("button", { name: /run diagnostic/i });
+    vi.mocked(fetchContainerCapability).mockClear();
+    vi.mocked(fetchContainerCatalog).mockClear();
+
+    view.rerender(<ContainerStatusWidget projectPath="/proj-next" />);
+
+    await waitFor(() => expect(fetchContainerCapability).toHaveBeenCalledWith("/proj-next"));
+    await waitFor(() => expect(fetchContainerCatalog).toHaveBeenCalledWith("/proj-next"));
+  });
+
   it("runs the selected diagnostic and shows the structured result", async () => {
     vi.mocked(fetchContainerCapability).mockResolvedValue(AVAILABLE);
     vi.mocked(fetchContainerCatalog).mockResolvedValue(CATALOG);
@@ -179,6 +193,22 @@ describe("ContainerStatusWidget", () => {
       taskId: "diag:docker-info",
       requestId: "req-own",
     });
+  });
+
+  it("guards against duplicate diagnostic submissions before React rerenders the running state", async () => {
+    vi.mocked(fetchContainerCapability).mockResolvedValue(AVAILABLE);
+    vi.mocked(fetchContainerCatalog).mockResolvedValue(CATALOG);
+    vi.mocked(createContainerRun).mockImplementation(() => new Promise<never>(() => undefined));
+    render(<ContainerStatusWidget projectPath="/proj" />);
+
+    const runButton = await screen.findByRole("button", { name: /run diagnostic/i });
+    await waitFor(() => expect(runButton).toHaveAttribute("aria-disabled", "false"));
+
+    fireEvent.click(runButton);
+    fireEvent.click(runButton);
+
+    expect(createContainerRun).toHaveBeenCalledTimes(1);
+    expect(runButton).toBeDisabled();
   });
 
   it("renders a capability fetch error as a muted, code-tagged message that never leaks a URL", async () => {

@@ -181,7 +181,7 @@ function EngineStatusList({
 }
 
 export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactNode {
-  const [projectInput] = useState<string>(props.projectPath ?? "");
+  const projectInput = props.projectPath ?? "";
   const [capability, setCapability] = useState<ContainerCapabilityResponse | null>(null);
   const [tasks, setTasks] = useState<readonly ContainerTask[]>([]);
   const [taskId, setTaskId] = useState<string>("");
@@ -290,7 +290,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
   const onSubmit = useCallback(
     async (e: FormEvent<HTMLFormElement>): Promise<void> => {
       e.preventDefault();
-      if (running || !hasRunControl || taskId.length === 0) return;
+      if (running || runningRef.current || !hasRunControl || taskId.length === 0) return;
       setError(null);
       setResult(null);
       setInFlightRunId(null);
@@ -367,7 +367,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
               className="tm-action"
               data-primary="true"
               ref={runBtnRef}
-              disabled={tasks.length === 0}
+              disabled={running || tasks.length === 0 || taskId.length === 0}
               aria-disabled={running || tasks.length === 0 || taskId.length === 0}
             >
               {running ? "Running…" : "Run diagnostic"}
@@ -376,6 +376,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
               <button
                 type="button"
                 className="tm-action"
+                disabled={inFlightRunId === null}
                 aria-disabled={inFlightRunId === null}
                 onClick={() => void onAbort()}
               >
