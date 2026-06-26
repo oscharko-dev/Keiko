@@ -321,7 +321,7 @@ describe("GET /api/git/status", () => {
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${root}\n`))
       .mockResolvedValueOnce(fail("fatal: could not read /secret/repo/config"));
-    const redactor = buildRedactor({ secrets: ["/secret/repo/config"] });
+    const redactor = buildRedactor({ GIT_CONFIG_SECRET: "/secret/repo/config" });
 
     const result = await handleGitStatus(
       ctx(`/api/git/status?root=${encodeURIComponent(root)}`),
