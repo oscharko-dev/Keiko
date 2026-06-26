@@ -23,7 +23,6 @@ import {
 import type { GitMergeCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { isGitDeliveryTrusted } from "./capability.js";
 import { resolveProjectWorkspace } from "./execution.js";
 import {
   buildGitDeliveryMergePreview,
@@ -49,7 +48,6 @@ export type GitDeliveryMergeErrorCode =
   | "GIT_DELIVERY_MERGE_BAD_REQUEST"
   | "GIT_DELIVERY_MERGE_PAYLOAD_TOO_LARGE"
   | "GIT_DELIVERY_MERGE_FORBIDDEN_PAYLOAD"
-  | "GIT_DELIVERY_MERGE_DISABLED"
   | "GIT_DELIVERY_MERGE_UNKNOWN_PROJECT"
   | "GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE";
 
@@ -58,7 +56,6 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryMergeErrorCode, string>> = {
   GIT_DELIVERY_MERGE_PAYLOAD_TOO_LARGE: "The governed merge request exceeds the maximum size.",
   GIT_DELIVERY_MERGE_FORBIDDEN_PAYLOAD:
     "The request contained a forbidden field. Requests may not carry credentials or auth headers.",
-  GIT_DELIVERY_MERGE_DISABLED: "Governed Git delivery is not enabled for this deployment.",
   GIT_DELIVERY_MERGE_UNKNOWN_PROJECT: "The requested project is not a known workspace.",
   GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE:
     "The repository worktree could not be inspected. Confirm the project is a Git repository.",
@@ -222,7 +219,6 @@ export const createHandleMergePreview = (
   const seams = options.execution ?? {};
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
-    if (!isGitDeliveryTrusted(deps)) return errResult(404, "GIT_DELIVERY_MERGE_DISABLED");
     const read = await readParsed(ctx.req);
     if (!read.ok) return read.result;
     const validation = validate(read.value);
@@ -249,7 +245,6 @@ export const createHandleMergeExecute = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
   return async (ctx, deps): Promise<RouteResult> => {
-    if (!isGitDeliveryTrusted(deps)) return errResult(404, "GIT_DELIVERY_MERGE_DISABLED");
     const read = await readParsed(ctx.req);
     if (!read.ok) return read.result;
     const validation = validate(read.value);

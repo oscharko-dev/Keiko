@@ -1,19 +1,14 @@
 # Governed Git Delivery Operator Runbook
 
-This runbook is for maintainers and operators who enable, support, and audit governed Git delivery.
+This runbook is for maintainers and operators who support and audit governed Git delivery.
 It assumes the implementation from Epic #470 is present and verified by the
 [verification matrix](verification-matrix.md).
 
 ## Rollout prerequisites
 
-1. Confirm the deployment deliberately enables governed Git delivery:
-
-   ```text
-   KEIKO_GIT_DELIVERY_ENABLED=true
-   ```
-
-   The default is disabled. With the flag absent, governed Git BFF routes return disabled responses or
-   `404`, and UI cards must show a disabled state.
+1. Confirm each workspace that should use governed Git delivery is registered and has an available Git
+   worktree. The surface is part of the deployment; routes are not hidden behind a deployment enable
+   flag. There is no deployment enable flag.
 
 2. Confirm `gh` is installed and authenticated for PR and merge operations. Keiko does not read or store
    GitHub tokens; the `gh` process owns credential lookup through its keyring or `GH_TOKEN` /
@@ -47,17 +42,17 @@ Use [policy-pack guidance](policy-pack-guidance.md) to choose a mode:
 
 ## Troubleshooting
 
-| Symptom                                      | Likely cause                                                                                                         | Operator action                                                                                                                                                   |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Governed Git UI says delivery is disabled    | `KEIKO_GIT_DELIVERY_ENABLED` is absent or false.                                                                     | Enable the flag only after policy and evidence storage are configured.                                                                                            |
-| Commit preview blocks on message policy      | Conventional Commit or issue-link policy failed.                                                                     | Fix the message. The failed draft is not persisted in evidence.                                                                                                   |
-| Local mutation blocks before execution       | Preflight found detached HEAD, missing branch, no changes, or unsafe worktree state.                                 | Follow the typed finding and rerun preview.                                                                                                                       |
-| Publish blocks a protected/shared target     | Default publish policy allows only safe branch namespaces.                                                           | Publish to a safe namespace or author an explicit approval-gated override.                                                                                        |
-| Publish rejects after execution              | Provider rejected the push, commonly non-fast-forward, no upstream, auth, permission, or protected ref.              | Use the typed rejection reason; do not retry unchanged when disposition is user-fixable.                                                                          |
-| PR create/update blocks                      | Base branch policy or provider readiness failed.                                                                     | Select an allowed base or fix provider state.                                                                                                                     |
-| Merge button is disabled                     | Readiness gate found blocking checks, approvals, conflicts, branch protection, draft state, or merge queue position. | Resolve provider readiness first. Keiko must not attempt the merge while blockers remain.                                                                         |
-| Merge rejects after readiness passed         | Provider state changed, rate limit occurred, permission changed, or head SHA changed.                                | Re-read readiness, refresh approval if needed, and retry only when typed disposition permits.                                                                     |
-| Evidence is missing for a terminal operation | Evidence persistence failed after response or the block occurred before the kernel evidence path.                    | Inspect server evidence storage. For commit message-policy blocks, use route response and issue evidence; kernel evidence starts after message-policy acceptance. |
+| Symptom                                      | Likely cause                                                                                                                                | Operator action                                                                                                                                                   |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Governed Git route reports unavailable       | The project is unknown, the worktree cannot be read, provider tooling is missing, credentials are absent, or policy has no applicable rule. | Register the workspace, fix Git/provider prerequisites, authenticate `gh`, or configure the policy pack; do not use an enable flag.                               |
+| Commit preview blocks on message policy      | Conventional Commit or issue-link policy failed.                                                                                            | Fix the message. The failed draft is not persisted in evidence.                                                                                                   |
+| Local mutation blocks before execution       | Preflight found detached HEAD, missing branch, no changes, or unsafe worktree state.                                                        | Follow the typed finding and rerun preview.                                                                                                                       |
+| Publish blocks a protected/shared target     | Default publish policy allows only safe branch namespaces.                                                                                  | Publish to a safe namespace or author an explicit approval-gated override.                                                                                        |
+| Publish rejects after execution              | Provider rejected the push, commonly non-fast-forward, no upstream, auth, permission, or protected ref.                                     | Use the typed rejection reason; do not retry unchanged when disposition is user-fixable.                                                                          |
+| PR create/update blocks                      | Base branch policy or provider readiness failed.                                                                                            | Select an allowed base or fix provider state.                                                                                                                     |
+| Merge button is disabled                     | Readiness gate found blocking checks, approvals, conflicts, branch protection, draft state, or merge queue position.                        | Resolve provider readiness first. Keiko must not attempt the merge while blockers remain.                                                                         |
+| Merge rejects after readiness passed         | Provider state changed, rate limit occurred, permission changed, or head SHA changed.                                                       | Re-read readiness, refresh approval if needed, and retry only when typed disposition permits.                                                                     |
+| Evidence is missing for a terminal operation | Evidence persistence failed after response or the block occurred before the kernel evidence path.                                           | Inspect server evidence storage. For commit message-policy blocks, use route response and issue evidence; kernel evidence starts after message-policy acceptance. |
 
 ## Evidence interpretation
 

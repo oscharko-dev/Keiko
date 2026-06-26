@@ -35,8 +35,8 @@ import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 
 // Default trusted policy: PERMIT the lowest risk class (local-mutation = branch create/switch, stage,
 // unstage, commit) and fail-closed for everything else (publish / protected-or-merge / recovery). It
-// applies only when governed git delivery is ENABLED (capability gate) and no stricter pack is
-// configured. The decision is still EVALUATED for every action — governance is preserved.
+// applies when no stricter pack is configured. The decision is still EVALUATED for every action —
+// governance is preserved.
 export const KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK: GitDeliveryRepoPolicyPack = {
   schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   repoId: "keiko-local-default",

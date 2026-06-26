@@ -4947,6 +4947,11 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: color-mix(in oklab, var(--accent) 14%, transparent);
   border-color: color-mix(in oklab, var(--accent) 30%, transparent);
 }
+.ml-elig-voice {
+  color: var(--fg);
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 30%, transparent);
+}
 .ml-elig-no {
   color: var(--fg);
   background: color-mix(in oklab, var(--danger) 14%, transparent);

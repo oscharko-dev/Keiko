@@ -73,7 +73,7 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
     },
     {
       id: "governed-git",
-      label: "Governed Git",
+      label: "Git",
       icon: "git",
       disabled: !hasProject,
       onClick: () => props.onOpenGovernedGit(projectPath),
@@ -126,7 +126,7 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
         </div>
         {!hasProject ? (
           <p className="tm-limits" role="status">
-            Add a project path to enable task and governed Git workflows.
+            Add a project path to enable task and Git workflows.
           </p>
         ) : null}
       </form>
@@ -142,7 +142,7 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
             <span className="tm-event-detail">runId / taskId / engine / exit status</span>
           </li>
           <li className="tm-event">
-            <span className="tm-event-kind">Git Delivery</span>
+            <span className="tm-event-kind">Git</span>
             <span className="tm-event-detail">policy / approval / evidence ledger</span>
           </li>
         </ul>

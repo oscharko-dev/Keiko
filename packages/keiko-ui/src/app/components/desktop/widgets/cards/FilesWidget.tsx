@@ -753,8 +753,8 @@ export function FilesWidget({
               style={{ width: 24, height: 24, marginLeft: "auto" }}
               type="button"
               onClick={() => onOpenGitDelivery(gitDeliveryRoot)}
-              title="Open governed Git delivery"
-              aria-label="Open governed Git delivery"
+              title="Open Git"
+              aria-label="Open Git"
             >
               <Icons.branch size={13} />
             </button>

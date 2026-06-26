@@ -22,7 +22,7 @@ binary, output shape, failure taxonomy).
 | contracts    | `keiko-contracts/src/git-pull-request.ts`                                   | Provider-neutral, content-free leaf: the readiness model (`GitPullRequestReadinessSummary` with `objectExists` / `reviewReady` and severity-ranked blockers), the deterministic metadata synthesizer (`synthesizePullRequestMetadata`), the draft-vs-ready recommendation, reviewer/label/linkage suggestions, and the neutral `GitPullRequestRejectionReason` taxonomy with exhaustive disposition/error-code tables. Pure: no IO, no clock, no provider field names.                                                                                           |
 | tools        | `keiko-tools/src/git-pr-gateway.ts`                                         | The pure PR gateway: `GitPullRequestCommand` (carries the actual title/body), the narrow two-method `GitPullRequestAdapter` port, the dedicated `gh api` allowlist (`GIT_PULL_REQUEST_COMMAND_RULES`, subcommand `api` only — no merge, no delete), pure argv builders (`buildPrCreateArgv` / `buildPrUpdateArgv` / the draft-toggle GraphQL builders), `classifyGitPullRequestRejection`, `evaluateGitPullRequestEffectivePolicy`, and `runGitPullRequest` returning a kernel-shaped `GitMutationLifecycleResult` the #474 evidence builder consumes unchanged. |
 | tools (Node) | `keiko-tools/src/git-pr-node.ts` (on the `./internal/git-mutation` subpath) | `createNodeGitPullRequestAdapter`: shells `gh api` through the shared no-shell spawn boundary. `gh` reads its own token from the keyring or `GH_TOKEN` / `GITHUB_TOKEN`; Keiko never reads the token value. Output is secret-redacted before classification.                                                                                                                                                                                                                                                                                                     |
-| server       | `keiko-server/src/gitDelivery/prExecution.ts` + `prRoutes.ts`               | `POST /api/git-delivery/pr/preview` (read-only metadata + readiness + recommendation + policy) and `POST /api/git-delivery/pr/execute` (governed create/update + evidence). Reuses the policy/evidence/capability gate. Default `KEIKO_DEFAULT_PR_POLICY_PACK`.                                                                                                                                                                                                                                                                                                  |
+| server       | `keiko-server/src/gitDelivery/prExecution.ts` + `prRoutes.ts`               | `POST /api/git-delivery/pr/preview` (read-only metadata + readiness + recommendation + policy) and `POST /api/git-delivery/pr/execute` (governed create/update + evidence). Reuses the policy/evidence path. Default `KEIKO_DEFAULT_PR_POLICY_PACK`.                                                                                                                                                                                                                                                                                                             |
 | ui           | `keiko-ui/.../cards/GovernedPullRequestCard.tsx`                            | The PR command center: an editable metadata draft, the readiness panel, the recommendation, reviewer/label/linkage suggestions, and the open/update actions. Inline styles via CSS custom properties (globals.css untouched). Outcome conveyed by text + icon, never colour alone.                                                                                                                                                                                                                                                                               |
 
 ## Transport and the token boundary (ADR-0086 D2)
@@ -64,7 +64,9 @@ satisfied) belongs to the #478 merge-governance slice.
 integration target (`dev`, `main`, `release/*`, `feat/*`) within the `protected-or-merge` ceiling; a base
 outside the allow-list is blocked with `policy-pack-blocked`. Per-target approval escalation is a
 deployment override (`runGitPullRequest` fully supports the `approval-gated` → `approval-required` path).
-The whole surface is gated behind `KEIKO_GIT_DELIVERY_ENABLED` (default false).
+The PR surface is always registered. It becomes operational when the project worktree is known, `gh` can
+authenticate through its own credential sources, provider readiness is available, and policy allows or
+approval-gates the requested action.
 
 ## Tests and evidence
 
@@ -72,10 +74,10 @@ The whole surface is gated behind `KEIKO_GIT_DELIVERY_ENABLED` (default false).
   exhaustive rejection taxonomy, guards).
 - tools: `git-pr-gateway.test.ts` (argv builders, GitHub-error classifier, effective policy, lifecycle
   gates with a fake adapter).
-- server: `gitDelivery/prRoutes.test.ts` (capability gate, policy block, content-free evidence,
+- server: `gitDelivery/prRoutes.test.ts` (route guards, policy block, content-free evidence,
   normalized rejection, approval-gated hold — all with a fake adapter, no `gh`, no network).
 - ui: `GovernedPullRequestCard.test.tsx` + `.a11y.test.tsx` (metadata seeding, dispatch payloads,
-  outcome banner, disabled notice, WCAG 2.2 AA).
+  outcome banner, readable API failure alert, WCAG 2.2 AA).
 - browser evidence (non-gating, coordinator): `playwright.issue-477-pr-command-center.config.ts` +
   `tests/e2e/pr-command-center-477.spec.ts` drive the real packaged app, proving the UI PR path reaches
   the governed BFF routes and surfaces the policy block with no client-side escape. Run with

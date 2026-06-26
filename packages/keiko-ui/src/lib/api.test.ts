@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
+  cloneRepository,
   clearModelCacheForTests,
   clearProjectRequestForTests,
   deleteChat,
@@ -10,6 +11,7 @@ import {
   fetchFilesPreview,
   fetchFilesSearch,
   fetchFilesTree,
+  fetchGitBranches,
   fetchGitDiff,
   fetchGitStatus,
   fetchModels,
@@ -478,7 +480,7 @@ describe("files API helpers", () => {
     );
   });
 
-  it("encodes Git status and diff requests", async () => {
+  it("encodes Git status, branch list, and diff requests", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -505,6 +507,17 @@ describe("files API helpers", () => {
           schemaVersion: "1",
           root: "/repo space",
           repositoryRoot: "/repo space",
+          available: true,
+          state: "available",
+          branches: [{ name: "main", headRefHash: "abc123", current: true }],
+          truncated: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          repositoryRoot: "/repo space",
           state: "available",
           available: true,
           path: "src/app.ts",
@@ -517,6 +530,7 @@ describe("files API helpers", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await fetchGitStatus("/repo space");
+    await fetchGitBranches("/repo space");
     await fetchGitDiff({ root: "/repo space", path: "src/app.ts", scope: "worktree" });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -528,6 +542,13 @@ describe("files API helpers", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
+      "/api/git/branches?root=%2Frepo+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
       "/api/git/diff?root=%2Frepo+space&path=src%2Fapp.ts&scope=worktree",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
@@ -761,6 +782,51 @@ describe("fetchProjects", () => {
     await expect(fetchProjects()).resolves.toEqual({ projects: [{ path: "/repo/b" }] });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("cloneRepository", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts a repository clone request with the CSRF header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        project: {
+          path: "/repo/app",
+          name: "app",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+          available: true,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      cloneRepository({
+        repositoryUrl: "https://github.com/acme/app.git",
+        destinationPath: "/repo/app",
+      }),
+    ).resolves.toMatchObject({ project: { path: "/repo/app", name: "app" } });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/repositories/clone",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          repositoryUrl: "https://github.com/acme/app.git",
+          destinationPath: "/repo/app",
+        }),
+      }),
+    );
   });
 });
 

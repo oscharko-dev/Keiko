@@ -64,6 +64,24 @@ interface RepositoryContext {
   readonly selectedRootPrefix: string;
 }
 
+export interface GitBranchListEntry {
+  readonly name: string;
+  readonly headRefHash: string;
+  readonly current: boolean;
+}
+
+export interface GitBranchListResponse {
+  readonly schemaVersion: typeof GIT_REPOSITORY_SCHEMA_VERSION;
+  readonly root: string;
+  readonly repositoryRoot?: string | undefined;
+  readonly available: boolean;
+  readonly state: "available" | "unavailable" | "unsafe";
+  readonly reason?: GitRepositoryStatusResponse["reason"] | undefined;
+  readonly message?: string | undefined;
+  readonly branches: readonly GitBranchListEntry[];
+  readonly truncated: boolean;
+}
+
 function devNullPath(): string {
   return process.platform === "win32" ? "NUL" : "/dev/null";
 }
@@ -374,6 +392,91 @@ function parseStatus(
 
 function redacted<T>(deps: UiHandlerDeps, value: T): T {
   return deps.redactor(value) as T;
+}
+
+function unavailableBranchList(repo: GitRepositoryStatusResponse): GitBranchListResponse {
+  return {
+    schemaVersion: GIT_REPOSITORY_SCHEMA_VERSION,
+    root: repo.root,
+    available: false,
+    state: repo.state === "error" ? "unavailable" : repo.state,
+    reason: repo.reason,
+    message: repo.message,
+    branches: [],
+    truncated: false,
+  };
+}
+
+function parseBranches(stdout: string): readonly GitBranchListEntry[] {
+  const fields = stdout.split("\0");
+  const branches: GitBranchListEntry[] = [];
+  for (let index = 0; index + 2 < fields.length; index += 3) {
+    const name = fields[index]?.trim() ?? "";
+    const headRefHash = fields[index + 1]?.trim() ?? "";
+    const headMarker = fields[index + 2]?.trim() ?? "";
+    if (name.length === 0 || headRefHash.length === 0) continue;
+    branches.push({ name, headRefHash, current: headMarker === "*" });
+  }
+  return branches;
+}
+
+function branchListFailure(
+  repo: RepositoryContext,
+  result: GitProcessResult,
+): GitBranchListResponse {
+  const reason = classifyFailure(result);
+  return {
+    schemaVersion: GIT_REPOSITORY_SCHEMA_VERSION,
+    root: repo.root,
+    repositoryRoot: repo.repositoryRoot,
+    available: false,
+    state: reason === "unsafe-repository" ? "unsafe" : "unavailable",
+    reason,
+    message: "Git branches are unavailable for this folder.",
+    branches: [],
+    truncated: result.truncated,
+  };
+}
+
+export async function handleGitBranches(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  rawOptions?: GitRouteOptions,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => {
+    const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
+    const repo = await resolveRepository(ctx, deps, options);
+    if ("available" in repo) {
+      return { status: 200, body: redacted(deps, unavailableBranchList(repo)) };
+    }
+    const result = await options.runner(
+      [
+        "--no-pager",
+        "--no-optional-locks",
+        "-C",
+        repo.repositoryRoot,
+        "for-each-ref",
+        "--format=%(refname:short)%00%(objectname)%00%(HEAD)%00",
+        "refs/heads",
+      ],
+      { cwd: repo.repositoryRoot, maxBytes: options.maxStatusBytes, timeoutMs: options.timeoutMs },
+    );
+    if (result.exitCode !== 0) {
+      return { status: 200, body: redacted(deps, branchListFailure(repo, result)) };
+    }
+    return {
+      status: 200,
+      body: redacted(deps, {
+        schemaVersion: GIT_REPOSITORY_SCHEMA_VERSION,
+        root: repo.root,
+        repositoryRoot: repo.repositoryRoot,
+        available: true,
+        state: "available",
+        branches: parseBranches(result.stdout),
+        truncated: result.truncated,
+      } satisfies GitBranchListResponse),
+    };
+  });
 }
 
 function validatePath(path: string | null): string | undefined {

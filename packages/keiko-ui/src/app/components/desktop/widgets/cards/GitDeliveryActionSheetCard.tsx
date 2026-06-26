@@ -454,7 +454,7 @@ function GitDeliveryActionSheetView({
       tabIndex={-1}
     >
       <div className="arun-gate-h">
-        <Icons.git size={13} /> Governed Git delivery
+        <Icons.git size={13} /> Git delivery
       </div>
       <div className="arun-gate-t" id={titleId}>
         {actionSheet.actionKind} · {actionSheet.actionId}

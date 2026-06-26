@@ -115,11 +115,10 @@ overwritten.
 
 `GET /api/git-delivery/evidence` returns a `GitDeliveryAuditPacket`: the redacted records, per-class
 and per-disposition counts, and an honest static list of the limitations the export does not overcome.
-The route is **default-off** — gated by the same deployment-owned `KEIKO_GIT_DELIVERY_ENABLED` flag as
-the rest of the #470 surface — and returns a content-free `404` when the surface is not enabled. It
-accepts bounded `days` (1–30) and `limit` (1–500) query parameters. Being a `GET`, it is not covered
-by the central CSRF guard; access control is the deployment env flag, and a malformed or tampered
-record is dropped on read rather than served.
+The route is always registered with the governed Git delivery surface and returns only redacted,
+content-free audit data. It accepts bounded `days` (1–30) and `limit` (1–500) query parameters. Being a
+`GET`, it is not covered by the central CSRF guard; a malformed or tampered record is dropped on read
+rather than served.
 
 ## 6. What this slice does not do
 

@@ -30,7 +30,7 @@ shape, and the evidence builder — so there is no second policy system and no s
 | contracts    | `keiko-contracts/src/git-merge.ts`                                  | Provider-neutral, content-free leaf: the merge-readiness model (`GitMergeReadinessSummary` with `mergeable` and severity-ranked `blockers`), the neutral blocker taxonomy (reusing `GitDeliveryMergeBlockReason` plus lifecycle states), strategy-eligibility derivation (`deriveEligibleMergeStrategies`), the merge recommendation, and the neutral `GitMergeRejectionReason` taxonomy with exhaustive disposition/error-code tables. Pure: no IO, no clock, no provider field names.                                        |
 | tools (pure) | `keiko-tools/src/git-merge-gateway.ts`                              | The pure merge gateway: `GitMergeCommand`, the narrow two-method `GitMergeAdapter` port (`readMergeReadiness` / `mergePullRequest`), the dedicated `gh api` allowlist (`GIT_MERGE_ALLOWED_SUBCOMMANDS = ["api"]`, deny `--input` / `--paginate`), the pure argv builders (`buildMergeArgv` / `buildMergeReadinessArgv` / `buildDeleteMergedBranchArgv`), `classifyGitMergeRejection`, `evaluateGitMergeEffectivePolicy`, and `runGitMerge` returning a `GitMergeLifecycleResult` the #474 evidence builder consumes unchanged. |
 | tools (Node) | `keiko-tools/src/git-merge-node.ts` (on `./internal/git-mutation`)  | `createNodeGitMergeAdapter`: shells `gh api` through the shared no-shell spawn boundary to read readiness and execute the merge, then performs the guarded non-fatal branch deletion. Maps GitHub `mergeable_state` to the neutral readiness model. `gh` reads its own token; Keiko never reads the token value. Output is secret-redacted before classification.                                                                                                                                                              |
-| server       | `keiko-server/src/gitDelivery/mergeExecution.ts` + `mergeRoutes.ts` | `POST /api/git-delivery/merge/preview` (read-only readiness + eligible strategies + recommendation + policy) and `POST /api/git-delivery/merge/execute` (governed merge + evidence). Reuses the policy/evidence/capability gate. Default `KEIKO_DEFAULT_MERGE_POLICY_PACK`.                                                                                                                                                                                                                                                    |
+| server       | `keiko-server/src/gitDelivery/mergeExecution.ts` + `mergeRoutes.ts` | `POST /api/git-delivery/merge/preview` (read-only readiness + eligible strategies + recommendation + policy) and `POST /api/git-delivery/merge/execute` (governed merge + evidence). Reuses the policy/evidence path. Default `KEIKO_DEFAULT_MERGE_POLICY_PACK`.                                                                                                                                                                                                                                                               |
 | ui           | `keiko-ui/.../cards/GovernedMergeCard.tsx`                          | The merge command surface: the strategy selector (populated from eligible strategies, never a hard-coded default), the readiness / blocker panel, the final high-risk approval affordance, and the rejection / recovery display. Inline styles via CSS custom properties (globals.css untouched). Outcome conveyed by text + aria-live, never colour alone.                                                                                                                                                                    |
 
 ## The three gates in `runGitMerge` (AC1)
@@ -147,8 +147,9 @@ kind is fail-closed. The pack governs _authorization_ (may this action proceed, 
 approval); merge _prerequisites_ (checks, approvals, conflicts, strategy compatibility) live in the
 readiness layer, because the policy evaluator selects one decision per action kind and cannot express
 "approval-gated AND base-restricted AND strategy-restricted" in a single rule. A deployment may override
-with a stricter pack (e.g. naming specific `requiredApprovers`). The whole surface is gated behind
-`KEIKO_GIT_DELIVERY_ENABLED` (the existing `isGitDeliveryTrusted` gate; default false → 404).
+with a stricter pack (e.g. naming specific `requiredApprovers`). The merge surface is always registered.
+It becomes operational only when the project worktree, `gh` authentication, provider readiness, eligible
+strategy, policy, and required approval are all satisfied.
 
 `GovernedMergeCard.tsx` is a new sibling card under a new `"governedMerge"` window kind, launched from the
 PR card's review-ready state. It hosts the strategy selector (populated from the eligible set), the
@@ -167,13 +168,13 @@ not modified (ADR-0051 gate); all styling uses inline CSS custom properties.
   called and that the gateway calls nothing but the narrow adapter).
 - tools (Node): `git-merge-node.integration.test.ts` (scripted spawn proving `mergeable_state` mapping and
   the guarded non-fatal branch delete).
-- server: `gitDelivery/mergeRoutes.test.ts` (capability / CSRF gates, policy / approval / readiness
+- server: `gitDelivery/mergeRoutes.test.ts` (route / CSRF guards, policy / approval / readiness
   blocking, content-free evidence append, rejection → recovery projection — all with a fake adapter, no
   `gh`, no network).
 - ui: `GovernedMergeCard.test.tsx` + `.a11y.test.tsx` (eligible-strategy seeding, dispatch payloads,
-  blocker panel, outcome banner, disabled notice, WCAG 2.2 AA).
+  blocker panel, outcome banner, readable API failure alert, WCAG 2.2 AA).
 - browser evidence (non-gating, coordinator): `playwright.issue-478-merge-governance.config.ts` +
   `tests/e2e/merge-governance-478.spec.ts` drive the real packaged app for the read-only preview, the
-  blocked-merge state, and the disabled (`KEIKO_GIT_DELIVERY_ENABLED` unset → 404) state, proving the UI
-  merge path reaches the governed BFF routes with no client-side escape. Run with
-  `npm run test:e2e:merge-governance-478`. Evidence under `docs/git-delivery/evidence/478/`.
+  blocked-merge state, and governed error surfacing, proving the UI merge path reaches the governed BFF
+  routes with no client-side escape. Run with `npm run test:e2e:merge-governance-478`. Evidence under
+  `docs/git-delivery/evidence/478/`.

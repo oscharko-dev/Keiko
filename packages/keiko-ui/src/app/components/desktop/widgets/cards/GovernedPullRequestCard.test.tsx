@@ -1,7 +1,7 @@
 // Behavioural tests for the governed GitHub pull request command center (Issue #477, Epic #470).
 // Exercises the metadata editor + readiness/recommendation panel + open/update dispatch with a fully
 // mocked api client: empty state, synthesized-draft seeding, mutation payloads, the readable outcome
-// banner (created PR / blocked / normalized rejection), and the disabled-deployment notice.
+// banner (created PR / blocked / normalized rejection), and readable API errors.
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -169,9 +169,11 @@ describe("GovernedPullRequestCard", () => {
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("recover: user-fixable");
   });
 
-  it("renders the disabled notice when the deployment has governed delivery off", async () => {
+  it("renders API failures as a readable alert", async () => {
     const prExecute = vi.fn(() =>
-      Promise.reject(new ApiError("GIT_DELIVERY_PR_DISABLED", "not enabled", 404)),
+      Promise.reject(
+        new ApiError("GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE", "worktree unavailable", 409),
+      ),
     );
     render(<GovernedPullRequestCard projectId={PROJECT} client={makeClient({ prExecute })} />);
     fillForm();
@@ -179,6 +181,10 @@ describe("GovernedPullRequestCard", () => {
       target: { value: "claude/issue-477-x" },
     });
     fireEvent.click(screen.getByTestId("gpr-submit"));
-    await waitFor(() => expect(screen.getByTestId("gpr-disabled")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "worktree unavailable (GIT_DELIVERY_PR_WORKTREE_UNAVAILABLE)",
+      ),
+    );
   });
 });

@@ -24,7 +24,7 @@ describe("RuntimeHubWidget", () => {
     await userEvent.click(screen.getByRole("button", { name: "Files & Git diff" }));
     await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
     await userEvent.click(screen.getByRole("button", { name: "Containers" }));
-    await userEvent.click(screen.getByRole("button", { name: "Governed Git" }));
+    await userEvent.click(screen.getByRole("button", { name: "Git" }));
     await userEvent.click(screen.getByRole("button", { name: "Pull Request" }));
     await userEvent.click(screen.getByRole("button", { name: "Merge" }));
 
@@ -41,7 +41,7 @@ describe("RuntimeHubWidget", () => {
     render(<RuntimeHubWidget {...h} />);
 
     expect(screen.getByRole("button", { name: "Tasks" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Governed Git" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Git" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Pull Request" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Merge" })).toBeDisabled();
 

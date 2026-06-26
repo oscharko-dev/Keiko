@@ -2,8 +2,8 @@
 //
 // Two harnesses:
 //   * The real `createUiServer` dispatch — exercises the CENTRAL CSRF + 415 + body-cap enforcement,
-//     request validation, the default (no-pack → fail-closed) policy path, the provider-not-ready
-//     capability gate, and the redaction guarantee. The default route uses NO trusted packs.
+//     request validation, the default (no-pack → fail-closed) policy path, and the redaction
+//     guarantee. The default route uses NO trusted packs.
 //   * A direct handler call with an injected `policyPacks` seam — exercises the policy-dependent
 //     states (ready / waiting / blocked-policy) that need configured TRUSTED packs. Packs are a
 //     server-side seam, never a request field (AUTHORITY RULE / AC1).
@@ -33,7 +33,6 @@ import {
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const PATH = "/api/git-delivery/action-sheet";
-const ENABLED_ENV = { KEIKO_GIT_DELIVERY_ENABLED: "true" } as const;
 
 const CLEAN_SNAPSHOT: GitWorktreeSnapshot = {
   headDetached: false,
@@ -74,7 +73,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     config: undefined,
     configPresent: false,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: ENABLED_ENV,
+    env: {},
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
@@ -172,14 +171,15 @@ describe("POST /api/git-delivery/action-sheet — central enforcement + validati
     expect(sheet.policyExplanation.blockReason).toBe("no-applicable-rule");
   });
 
-  it("returns 200 blocked provider-not-ready when the capability flag is off", async () => {
+  it("does not require a deployment enable flag before policy evaluation", async () => {
     await closeServer();
     await startBound({ env: {} });
     const res = await post(validRequest());
     expect(res.status).toBe(200);
     const sheet = (await res.json()) as GitDeliveryActionSheet;
     expect(sheet.state).toBe("blocked");
-    expect(sheet.blocked?.cause).toBe("provider-not-ready");
+    expect(sheet.blocked?.cause).toBe("policy");
+    expect(sheet.policyExplanation.blockReason).toBe("no-applicable-rule");
   });
 
   it("returns 413 for an oversized body", async () => {

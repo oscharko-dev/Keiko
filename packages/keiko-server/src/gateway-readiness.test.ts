@@ -108,7 +108,7 @@ function requestBodyAt(fetchImpl: typeof fetch, index: number): Record<string, u
 function fetchForDefaultSuccess(): typeof fetch {
   return vi
     .fn()
-    .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+    .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
     .mockResolvedValueOnce(sseResponse("stream-ok"))
     .mockResolvedValueOnce(
       jsonResponse({
@@ -266,7 +266,7 @@ describe("gateway readiness route", () => {
   it("classifies streaming and JSON schema provider rejections without blocking chat", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(jsonResponse({ error: { message: "stream unsupported" } }, 501))
       .mockResolvedValueOnce(jsonResponse({ error: { message: "schema failed" } }, 500)) as typeof fetch;
     const deps = depsWith(gatewayConfig(), fetchImpl);
@@ -309,7 +309,7 @@ describe("gateway readiness route", () => {
     const config = gatewayConfig("qwen3-coder-test");
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(sseResponse("stream-ok"))
       .mockResolvedValueOnce(jsonResponse({ error: { message: "tools unavailable" } }, 400))
       .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}'))) as typeof fetch;
@@ -329,7 +329,7 @@ describe("gateway readiness route", () => {
   it("detects reasoning output without persisting raw reasoning text", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(
         jsonResponse({
           choices: [
@@ -360,7 +360,7 @@ describe("gateway readiness route", () => {
   it("marks malformed structured-output payloads as unsupported instead of failed", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("not-json"))) as typeof fetch;
     const deps = depsWith(gatewayConfig(), fetchImpl);
     const report = await runGatewayReadiness({ options: { probes: ["json_schema"] } }, deps);
@@ -379,7 +379,7 @@ describe("gateway readiness route", () => {
   it("verifies image, document, and long-context probes only from provider evidence", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("red")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("KEIKO PDF READINESS PROBE")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("KEIKO_LONG_CONTEXT_SENTINEL"))) as typeof fetch;
@@ -418,7 +418,7 @@ describe("gateway readiness route", () => {
   it("keeps deep probe failures isolated from the working chat result", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse(chatPayload("keiko-ready")))
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("blue")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("no pdf phrase")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("missing sentinel"))) as typeof fetch;

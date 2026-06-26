@@ -43,6 +43,7 @@ import {
 } from "./store-handlers.js";
 import { handleCreateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
+import { handleCloneRepository } from "./gitRepositoryRoutes.js";
 import {
   handleListMemories,
   handleMemoryReviewQueue,
@@ -100,7 +101,7 @@ import {
   handleFilesSearch,
   handleFilesTree,
 } from "./files.js";
-import { handleGitDiff, handleGitStatus } from "./gitRoutes.js";
+import { handleGitBranches, handleGitDiff, handleGitStatus } from "./gitRoutes.js";
 import {
   handleEditorLanguage,
   handleEditorLanguageCapabilitiesForRoute,
@@ -275,6 +276,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/projects", handler: handleCreateProject },
   { method: "PATCH", pattern: "/api/projects", handler: handleUpdateProject },
   { method: "DELETE", pattern: "/api/projects", handler: handleDeleteProject },
+  { method: "POST", pattern: "/api/repositories/clone", handler: handleCloneRepository },
   { method: "GET", pattern: "/api/chats", handler: handleListChats },
   { method: "POST", pattern: "/api/chats", handler: handleCreateChat },
   { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
@@ -326,6 +328,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/git/diff",
     handler: (ctx, deps) => handleGitDiff(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/branches",
+    handler: (ctx, deps) => handleGitBranches(ctx, deps, deps.gitRouteOptions),
   },
   // Issue #1387 — controlled test/build/run command executor. Tasks are discovered from package
   // scripts and run through the single governed spawn boundary (keiko-tools runCommand): allowlisted

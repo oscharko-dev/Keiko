@@ -195,6 +195,60 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("stores optional voice dictation credentials as an STT-only provider in update mode", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-voice-");
+    const evidenceDir = await tempDir("keiko-gw-ev-voice-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+
+    const initial = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(initial.status).toBe(200);
+
+    const updated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://voice-gateway.example.com/openai/v1",
+        voiceApiKey: "voice-secret-token",
+        voiceApiKeyHeaderName: "api-key",
+        voiceModelId: "keiko-stt",
+        voiceProviderLocality: "azure-foundry",
+      }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    expect(config?.providers.map((provider) => provider.modelId)).toEqual([
+      "example-chat-model",
+      "keiko-stt",
+    ]);
+    const voiceProvider = config?.providers.find((provider) => provider.modelId === "keiko-stt");
+    expect(voiceProvider?.apiKey).toBe("voice-secret-token");
+    expect(voiceProvider?.apiKeyHeaderName).toBe("api-key");
+    const voiceCapability = config?.capabilities?.find((capability) => capability.id === "keiko-stt");
+    expect(voiceCapability).toMatchObject({
+      kind: "voice",
+      supportsSpeechInput: true,
+      voiceProviderLocality: "azure-foundry",
+      workflowEligible: false,
+    });
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    expect(saved).not.toContain("voice-secret-token");
+    expect(saved).toContain("cred:keiko-stt");
+    expect(saved).toContain('"kind": "voice"');
+    deps.store.close();
+  });
+
   it("stores an optional Figma PAT submitted through browser gateway setup", async () => {
     const uiDir = await tempDir("keiko-gw-ui-figma-");
     const evidenceDir = await tempDir("keiko-gw-ev-figma-");
@@ -849,6 +903,41 @@ describe("handleGatewaySetup", () => {
       globalThis.fetch = originalFetch;
       deps.store.close();
     }
+  });
+
+  it("stores Mistral chat deployments without claiming tool-calling support by default", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-mistral-capability-");
+    const evidenceDir = await tempDir("keiko-gw-ev-mistral-capability-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://workspace.example.services.ai.azure.com/openai/v1",
+        apiKey: "example-secret-token",
+        deploymentNames: ["Mistral-Large-3"],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    const capability = config?.capabilities?.find(
+      (candidate) => candidate.id === "Mistral-Large-3",
+    );
+    expect(capability).toMatchObject({
+      id: "Mistral-Large-3",
+      kind: "chat",
+      toolCalling: false,
+      structuredOutput: true,
+      streaming: true,
+    });
+    deps.store.close();
   });
 
   it("uses LiteLLM model info to persist embeddings while smoke-testing only chat models", async () => {

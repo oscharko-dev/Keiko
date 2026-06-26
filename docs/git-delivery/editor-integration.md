@@ -39,7 +39,8 @@ Integration is valid only when these invariants are true:
 
 - Core editing works without Git, GitHub CLI, or a configured remote.
 - Read-only Git failures surface as unavailable or degraded editor state.
-- Mutating Git workflows remain disabled unless governed Git delivery is trusted for the deployment.
+- Mutating Git workflows remain inside governed Git delivery routes and proceed only when the workspace,
+  worktree/provider prerequisites, policy, approval, and evidence paths permit the requested action.
 - Every mutating Git action still passes policy, preview or preflight, approval where required, and
   content-free evidence recording.
 - No browser code receives shell authority, raw Git command construction authority, or unrestricted

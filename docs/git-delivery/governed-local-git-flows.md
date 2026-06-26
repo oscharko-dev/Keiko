@@ -49,7 +49,7 @@ both content-free, neither a Model Gateway call.
     content-free `GitCommitChangeSummary` the analyzer consumes.
   - the kernel gains a `switchBranch` adapter method (`git switch <branch>`) and a `switch-target-missing`
     preflight finding.
-- **keiko-server** (BFF, capability- and CSRF-gated, content-free, fail-closed):
+- **keiko-server** (BFF, CSRF-gated, content-free, fail-closed):
   - `POST /api/git-delivery/local-branch/create`, `/local-branch/switch`, `/staging/stage`,
     `/staging/unstage` — execute a governed local mutation.
   - `POST /api/git-delivery/commit/preview` — READ-ONLY pre-commit verification context (staged scope,
@@ -61,16 +61,17 @@ both content-free, neither a Model Gateway call.
 
 ## 3. Trust and execution model
 
-- **Capability gate.** Every route returns `404` unless `KEIKO_GIT_DELIVERY_ENABLED=true` (default
-  false). This is the single, explicit opt-in for the whole governed-git surface.
+- **Always-registered governed surface.** Governed Git routes are part of the deployment. Keiko does not
+  hide branch, staging, commit, publish, PR, merge, or evidence routes behind a deployment enable flag;
+  each operation proceeds only when its concrete technical prerequisites are present.
 - **Project authorization.** The request carries a `projectId` (the workspace root path). The server
   resolves it through the UI project store; an unregistered path is rejected. Git runs only inside a
   known project's worktree.
 - **Trusted snapshot.** The snapshot is read server-side from the live worktree, so a client cannot
   assert, for example, a staged-file count that would slip a commit past preflight.
-- **Default local policy.** When governed git delivery is enabled and no stricter pack is configured,
-  `KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK` permits the lowest risk class (`local-mutation`) and fail-closes
-  for everything else. Policy is still EVALUATED for every action; operators can supply stricter packs.
+- **Default local policy.** When no stricter pack is configured, `KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK`
+  permits the lowest risk class (`local-mutation`) and fail-closes for everything else. Policy is still
+  EVALUATED for every action; operators can supply stricter packs.
 - **Message policy gate (AC2).** A policy-violating commit message is blocked with typed violation codes
   BEFORE the kernel runs — the kernel never receives a non-compliant message.
 - **No bypass (AC5).** The only path to a commit is the execute route, which always runs the message

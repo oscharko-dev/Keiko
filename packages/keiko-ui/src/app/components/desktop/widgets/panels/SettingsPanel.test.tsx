@@ -87,6 +87,30 @@ function ocrVisionCapability(id = "test-ocr-1"): ModelCapability {
   };
 }
 
+function voiceCapability(id = "test-stt-1"): ModelCapability {
+  return {
+    id,
+    kind: "voice",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    supportsSpeechInput: true,
+    supportsSpeechOutput: false,
+    supportsRealtimeVoice: false,
+    voiceProviderLocality: "azure-foundry",
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "test fixture",
+    preferredUseCases: ["Dictation"],
+    knownLimitations: ["test fixture"],
+  };
+}
+
 function primeFetches(models: readonly ModelCapability[]): void {
   fetchConfigMock.mockResolvedValue({ config: null, configPresent: true });
   fetchModelsMock.mockResolvedValue({ models });
@@ -152,6 +176,18 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     expect(status?.className).toContain("connected");
     expect(container.textContent ?? "").toContain("0 chat");
   });
+
+  it("marks voice models as available without making them conversation-eligible", async () => {
+    primeFetches([voiceCapability("test-stt-1")]);
+    const { container } = render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-elig-ok")).toHaveTextContent(/voice-ready/i);
+    });
+    const status = container.querySelector('.ml-status[title="available for voice"]');
+    expect(status).not.toBeNull();
+    expect(status?.className).toContain("connected");
+    expect(container.textContent ?? "").toContain("0 chat");
+  });
 });
 
 describe("SettingsPanel chat-count uses the eligibility helper (Issue #144 AC #1)", () => {
@@ -161,12 +197,13 @@ describe("SettingsPanel chat-count uses the eligibility helper (Issue #144 AC #1
       chatCapability("test-chat-2"),
       embeddingCapability("test-embed-1"),
       ocrVisionCapability("test-ocr-1"),
+      voiceCapability("test-stt-1"),
     ]);
     const { container } = render(<SettingsPanel />);
     await waitFor(() => {
       expect(container.textContent ?? "").toContain("2 chat");
     });
-    expect(container.textContent ?? "").toContain("4 models");
+    expect(container.textContent ?? "").toContain("5 models");
   });
 });
 

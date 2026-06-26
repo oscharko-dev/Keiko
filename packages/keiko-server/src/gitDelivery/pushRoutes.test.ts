@@ -31,7 +31,6 @@ import type {
   GitDeliveryPublishSeams,
 } from "./pushExecution.js";
 
-const ENABLED_ENV = { KEIKO_GIT_DELIVERY_ENABLED: "true" } as const;
 const PREVIEW = "/api/git-delivery/push/preview";
 const EXECUTE = "/api/git-delivery/push/execute";
 
@@ -105,7 +104,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     config: undefined,
     configPresent: false,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: ENABLED_ENV,
+    env: {},
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
@@ -184,7 +183,7 @@ describe("push routes — central enforcement", () => {
     await closeServer();
   });
 
-  it("404s preview + execute when governed git delivery is disabled", async () => {
+  it("does not require a deployment enable flag before checking the worktree", async () => {
     await closeServer();
     await startBound({ env: {} });
     for (const path of [PREVIEW, EXECUTE]) {
@@ -193,7 +192,10 @@ describe("push routes — central enforcement", () => {
         headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
         body: JSON.stringify(pushBody()),
       });
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error: { code: "GIT_DELIVERY_PUSH_WORKTREE_UNAVAILABLE" },
+      });
     }
   });
 

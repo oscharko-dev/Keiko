@@ -7,6 +7,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { GovernedGitFlowCard, type GovernedGitFlowClient } from "./GovernedGitFlowCard";
 import type {
+  GitBranchListResponse,
   GitDeliveryCommitPreviewResponse,
   GitDeliveryMutationResponse,
   GitDeliveryPushPreviewResponse,
@@ -19,6 +20,49 @@ function makeClient(overrides: Partial<GovernedGitFlowClient> = {}): GovernedGit
     actionKind: "branch-create",
   };
   return {
+    listRepositories: vi.fn(async () => ({
+      projects: [
+        {
+          path: PROJECT,
+          name: "repo",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+          available: true,
+        },
+      ],
+    })),
+    registerRepository: vi.fn(async (input) => ({
+      project: {
+        path: input.path,
+        name: input.name ?? "repo",
+        favorite: false,
+        createdAt: 1,
+        lastOpenedAt: 1,
+        available: true,
+      },
+    })),
+    cloneRepository: vi.fn(async (input) => ({
+      project: {
+        path: input.destinationPath,
+        name: "repo",
+        favorite: false,
+        createdAt: 1,
+        lastOpenedAt: 1,
+        available: true,
+      },
+    })),
+    listBranches: vi.fn(async (): Promise<GitBranchListResponse> => ({
+      schemaVersion: "1",
+      root: PROJECT,
+      available: true,
+      state: "available",
+      branches: [
+        { name: "main", headRefHash: "main-ref", current: true },
+        { name: "release", headRefHash: "release-ref", current: false },
+      ],
+      truncated: false,
+    })),
     branchCreate: vi.fn(async () => ok),
     branchSwitch: vi.fn(async () => ({ ...ok, actionKind: "branch-switch" })),
     stage: vi.fn(async () => ({ ...ok, actionKind: "stage" })),
@@ -72,10 +116,53 @@ function makePreview(
 const PROJECT = "/home/me/repo";
 
 describe("GovernedGitFlowCard", () => {
-  it("renders an empty state when no project root is provided", () => {
+  it("renders the repository manager when no repository is selected", async () => {
     render(<GovernedGitFlowCard client={makeClient()} />);
-    expect(screen.getByTestId("ggit-empty")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Repository Manager" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Working copies")).toBeInTheDocument());
     expect(screen.queryByLabelText("Branch")).not.toBeInTheDocument();
+  });
+
+  it("registers an existing repository and offers follow-up open actions", async () => {
+    const onOpenFiles = vi.fn();
+    const onOpenEditor = vi.fn();
+    const client = makeClient();
+    render(
+      <GovernedGitFlowCard client={client} onOpenFiles={onOpenFiles} onOpenEditor={onOpenEditor} />,
+    );
+    fireEvent.change(screen.getByLabelText("Existing working copy"), {
+      target: { value: "/work/new-repo" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Register repository" }));
+    await waitFor(() =>
+      expect(client.registerRepository).toHaveBeenCalledWith({
+        path: "/work/new-repo",
+        name: "new-repo",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open in Files" }));
+    expect(onOpenFiles).toHaveBeenCalledWith("/work/new-repo");
+    fireEvent.click(screen.getByRole("button", { name: "Open in Editor" }));
+    expect(onOpenEditor).toHaveBeenCalledWith("/work/new-repo");
+  });
+
+  it("clones a repository into a chosen destination and selects it", async () => {
+    const client = makeClient();
+    render(<GovernedGitFlowCard client={client} />);
+    fireEvent.change(screen.getByLabelText("Repository URL"), {
+      target: { value: "https://github.com/acme/app.git" },
+    });
+    fireEvent.change(screen.getByLabelText("Clone to folder"), {
+      target: { value: "/work/app" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Clone repository" }));
+    await waitFor(() =>
+      expect(client.cloneRepository).toHaveBeenCalledWith({
+        repositoryUrl: "https://github.com/acme/app.git",
+        destinationPath: "/work/app",
+      }),
+    );
+    expect(await screen.findByText(/Repository ready/i)).toBeInTheDocument();
   });
 
   it("renders the three flow sections for a project", () => {
@@ -88,29 +175,29 @@ describe("GovernedGitFlowCard", () => {
   it("dispatches branch-create with the typed payload and shows the outcome", async () => {
     const client = makeClient();
     render(<GovernedGitFlowCard projectId={PROJECT} client={client} />);
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(PROJECT));
     fireEvent.change(screen.getByLabelText("New branch name"), { target: { value: "feat/x" } });
-    fireEvent.change(screen.getByLabelText("Base branch"), { target: { value: "main" } });
-    fireEvent.change(screen.getByLabelText("Start-point ref hash"), {
-      target: { value: "abc123" },
-    });
+    fireEvent.change(screen.getByLabelText("Base branch"), { target: { value: "release" } });
     fireEvent.click(screen.getByRole("button", { name: "Create branch" }));
     await waitFor(() => expect(screen.getByTestId("ggit-outcome")).toBeInTheDocument());
     expect(client.branchCreate).toHaveBeenCalledWith({
       projectId: PROJECT,
       branchName: "feat/x",
-      baseBranchName: "main",
-      startPointRefHash: "abc123",
+      baseBranchName: "release",
+      startPointRefHash: "release-ref",
     });
+    expect(screen.queryByLabelText("Start-point ref hash")).not.toBeInTheDocument();
     expect(screen.getByTestId("ggit-outcome")).toHaveTextContent("branch-create: Succeeded");
   });
 
   it("dispatches branch-switch with the typed payload", async () => {
     const client = makeClient();
     render(<GovernedGitFlowCard projectId={PROJECT} client={client} />);
-    fireEvent.change(screen.getByLabelText("Switch to branch"), { target: { value: "main" } });
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(PROJECT));
+    fireEvent.change(screen.getByLabelText("Switch to branch"), { target: { value: "release" } });
     fireEvent.click(screen.getByRole("button", { name: "Switch branch" }));
     await waitFor(() => expect(client.branchSwitch).toHaveBeenCalled());
-    expect(client.branchSwitch).toHaveBeenCalledWith({ projectId: PROJECT, branchName: "main" });
+    expect(client.branchSwitch).toHaveBeenCalledWith({ projectId: PROJECT, branchName: "release" });
   });
 
   it("dispatches stage with parsed pathspecs and includeUntracked", async () => {
@@ -132,7 +219,9 @@ describe("GovernedGitFlowCard", () => {
   it("dispatches unstage with parsed pathspecs", async () => {
     const client = makeClient();
     render(<GovernedGitFlowCard projectId={PROJECT} client={client} />);
-    fireEvent.change(screen.getByLabelText("Pathspecs (one per line)"), { target: { value: "src/a.ts" } });
+    fireEvent.change(screen.getByLabelText("Pathspecs (one per line)"), {
+      target: { value: "src/a.ts" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Unstage" }));
     await waitFor(() => expect(client.unstage).toHaveBeenCalled());
     expect(client.unstage).toHaveBeenCalledWith({
@@ -205,7 +294,9 @@ describe("GovernedGitFlowCard", () => {
       })),
     });
     render(<GovernedGitFlowCard projectId={PROJECT} client={client} />);
-    fireEvent.change(screen.getByLabelText("Pathspecs (one per line)"), { target: { value: "src/a.ts" } });
+    fireEvent.change(screen.getByLabelText("Pathspecs (one per line)"), {
+      target: { value: "src/a.ts" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Stage" }));
     await waitFor(() => expect(screen.getByTestId("ggit-outcome")).toBeInTheDocument());
     expect(screen.getByTestId("ggit-outcome")).toHaveTextContent("preflight: nothing-to-stage");
@@ -218,7 +309,8 @@ describe("GovernedGitFlowCard", () => {
       }),
     });
     render(<GovernedGitFlowCard projectId={PROJECT} client={client} />);
-    fireEvent.change(screen.getByLabelText("Switch to branch"), { target: { value: "main" } });
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(PROJECT));
+    fireEvent.change(screen.getByLabelText("Switch to branch"), { target: { value: "release" } });
     fireEvent.click(screen.getByRole("button", { name: "Switch branch" }));
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("worktree unavailable"),

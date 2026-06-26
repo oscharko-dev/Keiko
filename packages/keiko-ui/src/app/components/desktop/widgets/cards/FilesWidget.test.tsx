@@ -241,7 +241,7 @@ describe("FilesWidget", () => {
 
     expect(await screen.findByText(/Git main 1 changed file/i)).toBeInTheDocument();
     expect(screen.getByText("M")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Open governed Git delivery" }));
+    await userEvent.click(screen.getByRole("button", { name: "Open Git" }));
     expect(onOpenGitDelivery).toHaveBeenCalledWith("/repo space");
 
     await userEvent.click(screen.getByRole("button", { name: "View Git diff for package.json" }));
