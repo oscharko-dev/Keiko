@@ -9,6 +9,7 @@ on:
       - feat/prompt-enhancer-1307
       - feat/keiko-establish-governed-end-to-end-git-delivery
       - feat/keiko-voice-digital-twin
+      - feat/keiko-colleague-like-voice-dialogue-mode
       - "release/**"
   pull_request:
     branches:
@@ -18,6 +19,7 @@ on:
       - feat/prompt-enhancer-1307
       - feat/keiko-establish-governed-end-to-end-git-delivery
       - feat/keiko-voice-digital-twin
+      - feat/keiko-colleague-like-voice-dialogue-mode
       - "release/**"
   workflow_dispatch:
 
@@ -32,7 +34,7 @@ jobs:
       - name: Confirm dev branch gate
         run: |
           case "${{ github.ref }}:${{ github.base_ref }}" in
-            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:release/*)
+            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-colleague-like-voice-dialogue-mode | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;
             *)

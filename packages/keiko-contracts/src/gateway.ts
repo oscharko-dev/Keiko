@@ -65,6 +65,20 @@ export const VOICE_PROVIDER_LOCALITIES: readonly VoiceProviderLocality[] = [
   "local-only",
 ] as const;
 
+// ─── Product voice persona (Issue #1557, Epic #1556, ADR-0088 D1) ──────────────
+// A `VoicePersona` is a PRODUCT-level voice identity the operator offers to the end user — "what
+// the assistant sounds like." It is deliberately distinct from `VoiceProfile` (the capability
+// DEGRADATION ladder, "how much voice the deployment can do"): the two are orthogonal axes and must
+// never collide. Personas are OUTPUT voices, so an STT-only deployment offers none. The persona →
+// provider-voice-id MAPPING is provider-sensitive and lives on the credential tier
+// (`ModelProviderConfig.voiceProfiles` in keiko-model-gateway) — it never crosses to contracts; only
+// the content-free persona enum below does (ADR-0088 D2).
+export type VoicePersona = "male" | "female" | "neutral";
+
+// Canonical, ordered tuple of personas. Derivation of `supportedVoicePersonas` and aggregation of
+// `availableVoicePersonas` both sort against this order so the wire surface is deterministic.
+export const VOICE_PERSONAS: readonly VoicePersona[] = ["male", "female", "neutral"] as const;
+
 // ─── Capability registry entry ────────────────────────────────────────────────
 
 export interface ModelCapability {
@@ -125,6 +139,15 @@ export interface ModelCapability {
    * inferred from the endpoint URL or environment name. Required when `kind === "voice"`.
    */
   readonly voiceProviderLocality?: VoiceProviderLocality | undefined;
+  /**
+   * The product voice personas this voice provider offers as OUTPUT voices (Issue #1557, ADR-0088
+   * D2). CONTENT-FREE: persona enums only, never a provider voice id — the sensitive persona →
+   * voice-id mapping lives on the credential-tier `ModelProviderConfig.voiceProfiles`. This field is
+   * DERIVED at config parse time from that mapping (sorted canonical `VOICE_PERSONAS` order); it is
+   * never an operator input key and is never persisted. Only meaningful for a `kind: "voice"`
+   * provider that advertises speech output or realtime voice.
+   */
+  readonly supportedVoicePersonas?: readonly VoicePersona[] | undefined;
 }
 
 // ─── Completion / infilling capability helpers (Issue #1210, ADR-0042 D5) ──────
@@ -262,10 +285,73 @@ export interface VoiceCapabilityResolution {
     readonly realtimeVoice: boolean;
   };
   readonly transport: VoiceTransportPosture;
+  // Aggregate union of the product voice personas offered across reachable speech-output / realtime
+  // voice providers, sorted in canonical `VOICE_PERSONAS` order (Issue #1557, ADR-0088 D2/D7).
+  // CONTENT-FREE (persona enums only, never a voice id). REQUIRED: the empty array is the honest
+  // "no personas available" value, so an STT-only or no-voice deployment reports `[]` rather than an
+  // ambiguous absent field.
+  readonly availableVoicePersonas: readonly VoicePersona[];
   // Locality of the elected voice provider(s); present only when a single locality is in effect.
   readonly providerLocality?: VoiceProviderLocality | undefined;
   // Present when `available` is false.
   readonly reason?: VoiceUnavailableReason | undefined;
+}
+
+// ─── Kind-aware voice provider availability (Issue #1557, ADR-0088 D3) ─────────
+// Content-free descriptor that distinguishes a WORKING voice provider (advertises ≥1 usable voice
+// sub-capability) from a model that is merely non-chat. The UI branches on `isConfiguredVoiceProvider`
+// to render a positive "Voice provider" badge instead of the red chat-ineligibility warning (AC4),
+// without making voice conversation-eligible. Deterministic and probe-free (ADR-0088 D3): every field
+// is read from the already-parsed capability, never from a network call.
+
+export interface VoiceProviderAvailability {
+  // True when the capability is the voice modality AND advertises ≥1 voice sub-capability.
+  readonly available: boolean;
+  readonly speechToText: boolean;
+  readonly speechOutput: boolean;
+  readonly realtimeVoice: boolean;
+  // The product voice personas advertised (sorted canonical order). Empty for an STT-only provider.
+  readonly personas: readonly VoicePersona[];
+  // The provider locality when declared; absent otherwise.
+  readonly providerLocality?: VoiceProviderLocality | undefined;
+}
+
+// Whether the capability is a CONFIGURED, working voice provider: the voice modality advertising at
+// least one of speech input / speech output / realtime voice. Fail-closed: a non-voice kind, or a
+// voice kind with no advertised sub-capability, is false.
+export function isConfiguredVoiceProvider(capability: ModelCapability): boolean {
+  return (
+    isVoiceCapability(capability) &&
+    (modelSupportsSpeechInput(capability) ||
+      modelSupportsSpeechOutput(capability) ||
+      modelSupportsRealtimeVoice(capability))
+  );
+}
+
+// The product voice personas a single capability offers, sorted in canonical `VOICE_PERSONAS` order
+// and de-duplicated. Empty for a non-voice capability or one that advertises none.
+export function listVoicePersonas(capability: ModelCapability): readonly VoicePersona[] {
+  const declared = capability.supportedVoicePersonas;
+  if (declared === undefined || declared.length === 0) {
+    return [];
+  }
+  const present = new Set<VoicePersona>(declared);
+  return VOICE_PERSONAS.filter((persona) => present.has(persona));
+}
+
+// Content-free availability descriptor for one capability (ADR-0088 D3). Total and probe-free.
+export function describeVoiceProviderAvailability(
+  capability: ModelCapability,
+): VoiceProviderAvailability {
+  const locality = capability.voiceProviderLocality;
+  return {
+    available: isConfiguredVoiceProvider(capability),
+    speechToText: modelSupportsSpeechInput(capability),
+    speechOutput: modelSupportsSpeechOutput(capability),
+    realtimeVoice: modelSupportsRealtimeVoice(capability),
+    personas: listVoicePersonas(capability),
+    ...(locality !== undefined ? { providerLocality: locality } : {}),
+  };
 }
 
 // ─── Request / response ───────────────────────────────────────────────────────

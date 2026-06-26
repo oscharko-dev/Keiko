@@ -262,9 +262,22 @@ describe("GET /api/voice/capability", () => {
         profile: "none",
         capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
         transport: { websocketControl: false, webrtcMedia: false },
+        // Issue #1557, ADR-0088 D2: the resolution always carries availableVoicePersonas (empty when
+        // unavailable). The unavailable resolution offers no personas.
+        availableVoicePersonas: [],
         reason: "no-voice-provider",
       },
     });
+  });
+
+  it("includes availableVoicePersonas (content-free) on every resolution (Issue #1557, AC3)", () => {
+    const result = handleVoiceCapability(
+      ctx("/api/voice/capability"),
+      depsWith({ config: VOICE_STT_CONFIG, configPresent: true }),
+    );
+    const body = result.body as { voice: { availableVoicePersonas: readonly string[] } };
+    // STT-only deployment: personas are OUTPUT voices, so none are available.
+    expect(body.voice.availableVoicePersonas).toEqual([]);
   });
 
   it("reports dictation (speech-to-text) when keiko-stt is configured (AC2/AC6)", () => {

@@ -638,15 +638,18 @@ export type {
   StreamDelta,
   StreamEvent,
   VoiceProviderLocality,
+  VoicePersona,
   VoiceProfile,
   VoiceUnavailableReason,
   VoiceTransportPosture,
   VoiceCapabilityResolution,
+  VoiceProviderAvailability,
 } from "./gateway.js";
 export {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
   INFILLING_ALIGNMENTS,
   VOICE_PROVIDER_LOCALITIES,
+  VOICE_PERSONAS,
 } from "./gateway.js";
 export type { ConversationIneligibilityReason } from "./gateway.js";
 export {
@@ -659,6 +662,9 @@ export {
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
   modelSupportsRealtimeVoice,
+  isConfiguredVoiceProvider,
+  describeVoiceProviderAvailability,
+  listVoicePersonas,
 } from "./gateway.js";
 
 // ─── Voice control / media protocol (Issue #496 / Epic #491; ADR-0059) ──────────

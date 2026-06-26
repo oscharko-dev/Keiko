@@ -87,6 +87,31 @@ function ocrVisionCapability(id = "test-ocr-1"): ModelCapability {
   };
 }
 
+function voiceCapability(
+  id = "keiko-tts",
+  overrides: Partial<ModelCapability> = {},
+): ModelCapability {
+  return {
+    id,
+    kind: "voice",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    voiceProviderLocality: "azure-foundry",
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "test fixture",
+    preferredUseCases: ["Voice"],
+    knownLimitations: ["test fixture"],
+    ...overrides,
+  };
+}
+
 function primeFetches(models: readonly ModelCapability[]): void {
   fetchConfigMock.mockResolvedValue({ config: null, configPresent: true });
   fetchModelsMock.mockResolvedValue({ models });
@@ -151,6 +176,34 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     expect(status).not.toBeNull();
     expect(status?.className).toContain("connected");
     expect(container.textContent ?? "").toContain("0 chat");
+  });
+
+  it("renders a positive 'Voice provider' badge for a configured voice provider (Issue #1557 AC4)", async () => {
+    primeFetches([
+      voiceCapability("keiko-tts", {
+        supportsSpeechOutput: true,
+        supportedVoicePersonas: ["male", "female", "neutral"],
+      }),
+    ]);
+    render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-elig-ok")).toHaveTextContent(/voice provider/i);
+    });
+    // It is presented as available, NOT as the red chat-ineligibility warning.
+    expect(screen.queryByTestId("conv-elig-no")).toBeNull();
+    expect(screen.getByTestId("voice-elig-ok")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/available for speech output; voices: male, female, neutral/i),
+    );
+  });
+
+  it("describes an STT-only voice provider as available for speech-to-text (Issue #1557 AC4)", async () => {
+    primeFetches([voiceCapability("keiko-stt", { supportsSpeechInput: true })]);
+    render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-elig-ok")).toHaveTextContent(/speech-to-text/i);
+    });
+    expect(screen.queryByTestId("conv-elig-no")).toBeNull();
   });
 });
 

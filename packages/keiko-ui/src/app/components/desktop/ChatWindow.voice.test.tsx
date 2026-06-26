@@ -33,6 +33,7 @@ const STT: VoiceCapabilityResolution = {
   profile: "speech-to-text",
   capabilities: { speechToText: true, speechOutput: false, realtimeVoice: false },
   transport: { websocketControl: true, webrtcMedia: false },
+  availableVoicePersonas: [],
   providerLocality: "azure-foundry",
 };
 
@@ -41,6 +42,7 @@ const NONE: VoiceCapabilityResolution = {
   profile: "none",
   capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
   transport: { websocketControl: false, webrtcMedia: false },
+  availableVoicePersonas: [],
   reason: "no-voice-provider",
 };
 
@@ -216,6 +218,7 @@ const FULL_REALTIME: VoiceCapabilityResolution = {
   profile: "full-realtime",
   capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
   transport: { websocketControl: true, webrtcMedia: true },
+  availableVoicePersonas: [],
   providerLocality: "azure-foundry",
 };
 
@@ -289,6 +292,7 @@ const SPEECH_OUTPUT: VoiceCapabilityResolution = {
   profile: "speech-output",
   capabilities: { speechToText: false, speechOutput: true, realtimeVoice: false },
   transport: { websocketControl: true, webrtcMedia: false },
+  availableVoicePersonas: [],
   providerLocality: "azure-foundry",
 };
 

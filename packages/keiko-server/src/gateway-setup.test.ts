@@ -17,6 +17,7 @@ import type { IncomingMessage } from "node:http";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
+import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
   handleGatewaySetup,
   MAX_DISCOVERED_MODELS,
@@ -24,6 +25,7 @@ import {
   modelIdFromDiscoveryItem,
   normalizeDiscoveryPayload,
   normalizeDiscoveryPayloadForSetup,
+  rawConfigFromCurrent,
   smokeTestCandidates,
 } from "./gateway-setup.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
@@ -1431,5 +1433,55 @@ describe("smokeTestCandidates", () => {
     );
     expect(tracker.peak).toBeLessThanOrEqual(2);
     expect(tracker.peak).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// Issue #1557 (Epic #1556, ADR-0088 D2 / HAZARD-3): the preserve-existing save path round-trips a
+// parsed config back to raw via `rawConfigFromCurrent`. A configured voice provider's persona mapping
+// must survive that round-trip without tripping the strict capability parser on reload.
+describe("rawConfigFromCurrent — voice persona persistence round-trip", () => {
+  const voiceRaw = {
+    providers: [
+      {
+        modelId: "keiko-tts",
+        baseUrl: "https://voice.example/v1",
+        apiKey: "voice-key",
+        capability: {
+          kind: "voice",
+          supportsSpeechOutput: true,
+          voiceProviderLocality: "customer-hosted",
+        },
+        voiceProfiles: [
+          { persona: "male", voiceId: "voice-male-01" },
+          { persona: "neutral", voiceId: "voice-neutral-01" },
+        ],
+      },
+    ],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+  };
+
+  it("preserves voiceProfiles and re-derives supportedVoicePersonas on reload", () => {
+    const config = parseGatewayConfig(voiceRaw);
+    expect(config.capabilities?.find((c) => c.id === "keiko-tts")?.supportedVoicePersonas).toEqual([
+      "male",
+      "neutral",
+    ]);
+
+    const persisted = rawConfigFromCurrent(config, undefined);
+    const persistedJson = JSON.stringify(persisted);
+    // The derived view is NEVER persisted (the strict parser rejects it as an input key); the
+    // credential-tier mapping IS persisted so the personas survive.
+    expect(persistedJson).not.toContain("supportedVoicePersonas");
+    expect(persistedJson).toContain("voiceProfiles");
+
+    // Reload must succeed (no strict-parser rejection) and reproduce the same effective config.
+    const reloaded = parseGatewayConfig(persisted);
+    expect(reloaded.providers.find((p) => p.modelId === "keiko-tts")?.voiceProfiles).toEqual([
+      { persona: "male", voiceId: "voice-male-01" },
+      { persona: "neutral", voiceId: "voice-neutral-01" },
+    ]);
+    expect(
+      reloaded.capabilities?.find((c) => c.id === "keiko-tts")?.supportedVoicePersonas,
+    ).toEqual(["male", "neutral"]);
   });
 });
