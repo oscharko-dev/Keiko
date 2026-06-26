@@ -10,7 +10,11 @@ import { createLspFrameReader, writeLspFrame } from "../lspFrameCodec.js";
 import type { LspBytes } from "../lspFrameCodec.js";
 import type { LspSpawnHandle } from "../lspTransport.js";
 
-export type FakeLspBehavior = "normal" | "slow" | "oversized" | "crash" | "ignore-shutdown";
+// "unresponsive" answers `initialize` (so the manager reaches READY) but ignores BOTH the `shutdown`
+// request AND the `exit` notification, so it never goes down on its own — the only way to terminate it
+// is the manager's SIGKILL escalation. "ignore-shutdown" ignores only `shutdown` but still exits on
+// `exit`, modelling a well-behaved server that simply never answers the shutdown RPC.
+export type FakeLspBehavior = "normal" | "slow" | "oversized" | "ignore-shutdown" | "unresponsive";
 
 // The spawn-handle surface a manager adapter consumes: the structural stdio handle plus lifecycle
 // hooks. Mirrors the node adapter's `LspSpawnFn` return so the fake is a drop-in for the manager.
@@ -44,6 +48,10 @@ export interface FakeLspController {
   emitStderr(text: string): void;
   // Simulates a mid-session crash: emits an exit event and ends the streams.
   crash(code?: number): void;
+  // Re-invokes the exit callbacks bypassing the once-guard, modelling a LATE OS exit/error event from
+  // a child that has already been superseded by a restart (real ChildProcess can fire both `error`
+  // and `exit`). Used to prove the manager discards a stale-generation crash (FIX 4).
+  emitLateExit(code?: number): void;
   killed(): readonly NodeJS.Signals[];
   exitEmitted(): boolean;
 }
@@ -95,6 +103,9 @@ export function createFakeLspProcess(options: FakeLspOptions = {}): FakeLspContr
     crash: (code = 1): void => {
       emitExit(code, null);
     },
+    emitLateExit: (code = 1): void => {
+      for (const callback of exitCallbacks) callback(code, null);
+    },
     killed: (): readonly NodeJS.Signals[] => killedSignals,
     exitEmitted: (): boolean => exitEmitted,
   };
@@ -130,7 +141,8 @@ function handleRequest(
 ): void {
   if (message?.method === undefined) return;
   if (message.method === "exit") {
-    emitExit(0, null);
+    // "unresponsive" never goes down on its own — it ignores `exit`, so only SIGKILL terminates it.
+    if (behavior !== "unresponsive") emitExit(0, null);
     return;
   }
   if (message.id === undefined) return;
@@ -145,7 +157,9 @@ function respond(
   options: FakeLspOptions,
 ): void {
   if (behavior === "slow") return;
-  if (method === "shutdown" && behavior === "ignore-shutdown") return;
+  if (method === "shutdown" && (behavior === "ignore-shutdown" || behavior === "unresponsive")) {
+    return;
+  }
   if (behavior === "oversized") {
     writeOversizedFrame(stdout, options.oversizedContentLength ?? 64 * 1024 * 1024);
     return;

@@ -203,6 +203,33 @@ describe("escalateKill", () => {
       escalateKill(throwing, 5_000, () => true, immediateScheduler),
     ).resolves.toBeUndefined();
   });
+
+  it("resolves early via whenExited without firing the grace timer or SIGKILL (FIX 2)", async () => {
+    const tracker = makeKillTracker(1234);
+    let timerFired = false;
+    // A scheduler whose timer never fires within the test — only the whenExited registration can
+    // resolve escalateKill. Proves the prompt-exit short-circuit, not the grace fallback.
+    const neverScheduler: KillScheduler = {
+      setTimer: (): unknown => {
+        timerFired = true;
+        return 0;
+      },
+    };
+    let exited = false;
+    let registered: (() => void) | undefined;
+    const whenExited = (onExit: () => void): void => {
+      registered = onExit;
+    };
+
+    const settled = escalateKill(tracker, 5_000, () => exited, neverScheduler, whenExited);
+    // Fire the child's exit asynchronously, after escalateKill has wired its registration.
+    exited = true;
+    registered?.();
+
+    await expect(settled).resolves.toBeUndefined();
+    expect(tracker.signals).toEqual(["SIGTERM"]);
+    expect(timerFired).toBe(true); // the timer was scheduled, but the exit resolved first
+  });
 });
 
 describe("preflightSpawnEnv", () => {

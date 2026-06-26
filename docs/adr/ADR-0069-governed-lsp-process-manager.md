@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted (2026-06-26). Pending human review. Authored for Issue [#1381](https://github.com/oscharko-dev/Keiko/issues/1381) (Parent Epic [#1491](https://github.com/oscharko-dev/Keiko/issues/1491)).
 
 ## Date
 

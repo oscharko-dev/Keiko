@@ -6,13 +6,23 @@
 //
 // ADR-0069 I3 (stream boundaries never buffer an oversized body): when the declared Content-Length
 // exceeds `maxFrameBytes` the reader rejects the frame BEFORE reading the body and never accumulates
-// the oversized payload. A missing or garbled header is rejected as MALFORMED_HEADER.
+// the oversized payload. A missing or garbled header is rejected as MALFORMED_HEADER. The pre-header
+// region is itself capped at `MAX_HEADER_BYTES` so a server that floods bytes WITHOUT ever sending a
+// `\r\n\r\n` terminator cannot grow the accumulation buffer unbounded (OOM); such a stream is rejected
+// as MALFORMED_HEADER. Incoming chunks accumulate in a list and are concatenated at most once per
+// yielded frame, so a large body arriving in many small chunks costs O(n) total copy, not O(n^2).
 
 import { parseLspFrameHeader } from "@oscharko-dev/keiko-contracts";
 import type { LspFrameRejectReason } from "@oscharko-dev/keiko-contracts";
 
 const HEADER_DELIMITER = Buffer.from("\r\n\r\n", "ascii");
 const HEADER_LINE_DELIMITER = "\r\n";
+
+// Per LSP-norm header bound: a well-formed `Content-Length` (+ optional `Content-Type`) header block
+// is far under 8 KiB. Capping the pre-terminator region at this constant (independent of the body cap
+// `maxFrameBytes`, which governs the declared body) means a delimiter-less flood is rejected promptly
+// instead of accumulating without limit. 8192 is the conventional LSP base-protocol header ceiling.
+const MAX_HEADER_BYTES = 8192;
 
 // The byte type carried through the codec. Aliased so the source/sink/reader speak one name; it
 // resolves to the Node `Buffer` whose backing-buffer generic accommodates `subarray`/`concat` results
@@ -72,19 +82,88 @@ function readContentLength(headerBlock: string): number | null {
 // Reads framed bodies from a byte source, yielding one Buffer per frame. Async-generator semantics
 // give natural backpressure: a frame is yielded only once its full body is buffered, and the next
 // source pull happens when the consumer requests the next frame.
+//
+// Accumulation is a list of chunks plus a running byte total; the list is concatenated into a single
+// contiguous buffer only when a header terminator is present (so a complete header+body frame can be
+// sliced). A large body delivered in many small chunks therefore incurs one O(n) concat at yield time
+// rather than an O(n^2) concat-on-every-chunk. Before any terminator arrives, the accumulated size is
+// bounded by `MAX_HEADER_BYTES`; exceeding it without a terminator is a MALFORMED_HEADER reject.
 export async function* createLspFrameReader(
   source: LspByteSource,
   maxFrameBytes: number,
 ): AsyncGenerator<LspBytes, void, void> {
-  let buffer: LspBytes = Buffer.alloc(0);
+  const pending = createPendingBuffer();
   for await (const chunk of source) {
-    buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
-    let frame = takeFrame(buffer, maxFrameBytes);
-    while (frame !== null) {
-      yield frame.body;
-      buffer = frame.rest;
-      frame = takeFrame(buffer, maxFrameBytes);
+    pending.push(chunk);
+    yield* drainFrames(pending, maxFrameBytes);
+  }
+}
+
+const EMPTY = Buffer.alloc(0);
+
+// Accumulates incoming chunks without a full concat per chunk. It tracks the running byte total and an
+// incremental scan offset for the `\r\n\r\n` terminator: each push scans only the freshly-arrived
+// region (plus a 3-byte overlap so a terminator straddling two chunks is still found), never rescanning
+// settled bytes. The contiguous buffer is materialized lazily via `coalesce()` only when a terminator
+// is known to be present, so the single concat cost is O(total) once per frame, not O(n^2).
+interface PendingBuffer {
+  push(chunk: LspBytes): void;
+  // The total accumulated, not-yet-yielded byte count across all buffered chunks.
+  byteLength(): number;
+  // True once a `\r\n\r\n` terminator is present anywhere in the accumulated bytes.
+  hasHeaderDelimiter(): boolean;
+  // Concatenates the buffered chunks into one contiguous buffer and returns it. O(total bytes);
+  // called at most once per frame slice, only after `hasHeaderDelimiter()` is true.
+  coalesce(): LspBytes;
+  // Replaces the buffered chunks with a single trailing remainder (the bytes after a sliced frame).
+  reset(rest: LspBytes): void;
+}
+
+const DELIMITER_OVERLAP = HEADER_DELIMITER.length - 1;
+
+function createPendingBuffer(): PendingBuffer {
+  let chunks: LspBytes[] = [];
+  let totalBytes = 0;
+  let delimiterFound = false;
+  // The last `DELIMITER_OVERLAP` bytes of already-scanned data, retained so a terminator straddling a
+  // chunk boundary is detected by scanning only `tail + newChunk` — never a full re-concat (O(n)).
+  let tail: LspBytes = EMPTY;
+
+  const scanIncoming = (chunk: LspBytes): void => {
+    const window = tail.length === 0 ? chunk : Buffer.concat([tail, chunk]);
+    if (window.indexOf(HEADER_DELIMITER) !== -1) {
+      delimiterFound = true;
+      return;
     }
+    tail = window.subarray(Math.max(0, window.length - DELIMITER_OVERLAP));
+  };
+
+  return {
+    push: (chunk): void => {
+      if (chunk.length === 0) return;
+      chunks.push(chunk);
+      totalBytes += chunk.length;
+      if (!delimiterFound) {
+        scanIncoming(chunk);
+      }
+    },
+    byteLength: (): number => totalBytes,
+    hasHeaderDelimiter: (): boolean => delimiterFound,
+    coalesce: (): LspBytes => (chunks.length === 1 ? (chunks[0] ?? EMPTY) : Buffer.concat(chunks)),
+    reset: (rest): void => {
+      chunks = rest.length === 0 ? [] : [rest];
+      totalBytes = rest.length;
+      tail = EMPTY;
+      delimiterFound = rest.indexOf(HEADER_DELIMITER) !== -1;
+    },
+  };
+}
+
+// Rejects a delimiter-less accumulation that has grown past the header cap (ADR-0069 I3): a server
+// that floods bytes without ever sending `\r\n\r\n` would otherwise grow the buffer unbounded.
+function guardHeaderBound(pending: PendingBuffer): void {
+  if (!pending.hasHeaderDelimiter() && pending.byteLength() > MAX_HEADER_BYTES) {
+    throw new LspFrameRejectError("MALFORMED_HEADER");
   }
 }
 
@@ -93,9 +172,10 @@ interface TakenFrame {
   readonly rest: LspBytes;
 }
 
-// Attempts to slice one complete frame from the head of the buffer. Returns null when either the
-// header terminator or the full declared body is not yet present. Enforces the oversized cap at the
-// header boundary, before any body byte is required (ADR-0069 I3).
+// Attempts to slice one complete frame from the head of the buffer. Returns null when the full
+// declared body is not yet present. Enforces the oversized cap at the header boundary, before any
+// body byte is required (ADR-0069 I3). The caller only invokes this once a terminator is present, so
+// `parseHeader` never returns null here.
 function takeFrame(buffer: LspBytes, maxFrameBytes: number): TakenFrame | null {
   const header = parseHeader(buffer);
   if (header === null) {
@@ -112,6 +192,27 @@ function takeFrame(buffer: LspBytes, maxFrameBytes: number): TakenFrame | null {
     body: buffer.subarray(header.headerEndIndex, bodyEnd),
     rest: buffer.subarray(bodyEnd),
   };
+}
+
+// Slices every complete frame currently buffered, yielding each body. Enforces the header cap on the
+// no-terminator path before coalescing, so a delimiter-less flood is rejected without an unbounded
+// concat. Stops when neither a full header nor a full body is yet available (awaiting more chunks).
+function* drainFrames(
+  pending: PendingBuffer,
+  maxFrameBytes: number,
+): Generator<LspBytes, void, void> {
+  for (;;) {
+    if (!pending.hasHeaderDelimiter()) {
+      guardHeaderBound(pending);
+      return;
+    }
+    const frame = takeFrame(pending.coalesce(), maxFrameBytes);
+    if (frame === null) {
+      return;
+    }
+    pending.reset(frame.rest);
+    yield frame.body;
+  }
 }
 
 // Minimal writable sink: the codec only needs to push a fully-assembled frame buffer. Kept structural

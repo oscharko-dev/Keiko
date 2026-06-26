@@ -18,6 +18,7 @@ import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { createLspTransport } from "./lspTransport.js";
 import type { LspTransport } from "./lspTransport.js";
+import { LspFrameRejectError } from "./lspFrameCodec.js";
 import {
   LspProcessError,
   defaultLspSpawnFn,
@@ -65,6 +66,11 @@ interface RuntimeState {
   exited: boolean;
   restartCount: number;
   disposed: boolean;
+  // Monotonic counter incremented per spawned child. Each crash callback captures the generation it
+  // was registered for; a callback whose captured generation no longer matches belongs to a superseded
+  // child (a late `exit`/`error` arriving after a restart) and is discarded (ADR-0069 D4 — no spurious
+  // CRASHED transition or throttle debit on a stale child event).
+  childGeneration: number;
 }
 
 interface ManagerRuntime {
@@ -82,11 +88,21 @@ interface SupervisorContext {
   readonly transition: Transition;
 }
 
-function supervisorOnCrash(ctx: SupervisorContext): void {
-  if (ctx.state.disposed || ctx.state.exited) {
+function supervisorOnCrash(ctx: SupervisorContext, crashGeneration: number): void {
+  // A late `exit`/`error` from a child already superseded by a restart carries a stale generation;
+  // discard it so it cannot debit the throttle or re-enter CRASHED (FIX 4). The same-generation
+  // error+exit pair coalesces because the first call advances `exited`/`childGeneration` so the second
+  // is caught here (stale generation after a restart) or by the `exited` guard below (no restart).
+  if (crashGeneration !== ctx.state.childGeneration || ctx.state.exited) {
     return;
   }
+  // Marking the child exited BEFORE the disposed early-return lets `escalateKill`'s stop-predicate
+  // (`() => state.exited`) observe a prompt exit during dispose and resolve without waiting the full
+  // grace window (FIX 2).
   ctx.state.exited = true;
+  if (ctx.state.disposed) {
+    return;
+  }
   ctx.transition("CRASHED", "CRASHED");
   if (ctx.throttle.recordCrashAndMayRestart(ctx.now())) {
     ctx.state.restartCount = ctx.throttle.restartCount();
@@ -116,8 +132,8 @@ function supervisorStart(ctx: SupervisorContext): void {
     ctx.transition,
     executable,
     env,
-    () => {
-      supervisorOnCrash(ctx);
+    (generation) => {
+      supervisorOnCrash(ctx, generation);
     },
   );
 }
@@ -131,6 +147,7 @@ function createManagerRuntime(deps: LspProcessManagerDeps): ManagerRuntime {
     exited: false,
     restartCount: 0,
     disposed: false,
+    childGeneration: 0,
   };
   const transition: Transition = (status, code) => {
     state.status = status;
@@ -192,8 +209,14 @@ function spawnAndInitialize(
   transition: Transition,
   executable: string,
   env: Record<string, string>,
-  onCrash: () => void,
+  onCrash: (generation: number) => void,
 ): void {
+  // On a restart, reject any request still pending against the dead transport IMMEDIATELY instead of
+  // letting it linger until requestTimeoutMs: dispose rejects pending with LspRpcDisposedError, which
+  // maps to DISPOSED (FIX 3). The new generation guards stale callbacks from the superseded child.
+  state.transport?.dispose();
+  state.childGeneration += 1;
+  const generation = state.childGeneration;
   state.exited = false;
   const child = trySpawn(spawn, executable, env, deps, transition);
   if (child === undefined) {
@@ -201,10 +224,16 @@ function spawnAndInitialize(
   }
   state.child = child;
   state.transport = createLspTransport(child, deps.config.maxFrameBytes, {
-    onReaderError: onCrash,
+    onReaderError: () => {
+      onCrash(generation);
+    },
   });
-  child.onExit(onCrash);
-  child.onError(onCrash);
+  child.onExit(() => {
+    onCrash(generation);
+  });
+  child.onError(() => {
+    onCrash(generation);
+  });
   transition("INITIALIZING");
   void runInitialize(state, deps, now, transition);
 }
@@ -325,7 +354,17 @@ function mapRequestError(error: unknown): LspProcessError {
   if (error instanceof LspRpcDisposedError) {
     return new LspProcessError("DISPOSED");
   }
-  return new LspProcessError("RESPONSE_TOO_LARGE");
+  // RESPONSE_TOO_LARGE is reserved for an ACTUAL frame-size rejection, never a generic RPC failure
+  // (FIX 9). A frame reject for an oversized body keeps that code; any other frame reject (malformed
+  // header) poisons the channel and surfaces as CRASHED. A plain server-side RPC error (the
+  // `new Error("LSP error")` raised in `settleResponse`) is a transport/protocol fault for that
+  // request, mapped to CRASHED — honest and content-free, never echoing the server's message text.
+  if (error instanceof LspFrameRejectError) {
+    return new LspProcessError(
+      error.reason === "RESPONSE_TOO_LARGE" ? "RESPONSE_TOO_LARGE" : "CRASHED",
+    );
+  }
+  return new LspProcessError("CRASHED");
 }
 
 async function disposeManager(
@@ -344,7 +383,15 @@ async function disposeManager(
   await requestGracefulShutdown(transport, deps, now);
   transport?.dispose();
   if (child !== undefined) {
-    await escalateKill(child, deps.config.shutdownTimeoutMs, () => state.exited);
+    await escalateKill(
+      child,
+      deps.config.shutdownTimeoutMs,
+      () => state.exited,
+      undefined,
+      (onExit) => {
+        child.onExit(onExit);
+      },
+    );
   }
   transition("DISPOSED", "DISPOSED");
 }

@@ -149,6 +149,59 @@ function silentAfterInitSpawn(): SilentHandle {
   return { spawn, controller: { exitEmitted: (): boolean => exited } };
 }
 
+interface CrashableSpawn {
+  spawn: LspSpawnFn;
+  // Fires the exit callback of the most-recently-spawned child, simulating a crash before it answers
+  // an in-flight (non-initialize) request.
+  crashLatest(): void;
+}
+
+// Like `silentAfterInitSpawn` but every spawned child exposes its exit callback so a test can crash
+// the live child on demand. Answers `initialize` (reaching READY) and ignores all later requests, so
+// a sent request stays pending until the crash forces a transport dispose (FIX 3).
+function crashableSilentSpawn(): CrashableSpawn {
+  let latestExit: ((code: number | null) => void) | undefined;
+  const spawn: LspSpawnFn = () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    void (async (): Promise<void> => {
+      const reader = createLspFrameReader(stdin, 1_048_576);
+      try {
+        for await (const body of reader) {
+          const message = JSON.parse(body.toString("utf8")) as { id?: number; method?: string };
+          if (message.method === "initialize" && message.id !== undefined) {
+            writeLspFrame(stdout, JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
+          }
+        }
+      } catch {
+        // Stream closed on dispose/crash.
+      }
+    })();
+    return {
+      stdin: {
+        write: (chunk: Buffer): void => {
+          stdin.write(chunk);
+        },
+      },
+      stdout,
+      stderr,
+      pid: 5555,
+      kill: (): void => {
+        stdout.end();
+      },
+      onExit: (callback): void => {
+        latestExit = callback;
+      },
+      onError: (): void => undefined,
+    };
+  };
+  return {
+    spawn,
+    crashLatest: (): void => latestExit?.(1),
+  };
+}
+
 function makeDeps(
   spawn: LspSpawnFn,
   config: LspProcessConfig,
@@ -258,6 +311,62 @@ describe("createLspProcessManager", () => {
     await manager.dispose();
   });
 
+  it("rejects an in-flight request PROMPTLY when the child crashes before responding (FIX 3)", async () => {
+    // A request is in flight when the server crashes. On restart, spawnAndInitialize disposes the OLD
+    // transport, whose client.dispose() rejects every pending request with LspRpcDisposedError →
+    // DISPOSED. Without that, the request would linger until requestTimeoutMs. A long requestTimeoutMs
+    // makes the assertion meaningful: the rejection must arrive far sooner than the deadline.
+    const crashable = crashableSilentSpawn();
+    const config = makeConfig({ requestTimeoutMs: 30_000 });
+    const manager = createLspProcessManager(makeDeps(crashable.spawn, config));
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+
+    const start = Date.now();
+    const pending = manager.sendRequest<unknown>(
+      "textDocument/hover",
+      {},
+      new AbortController().signal,
+    );
+    const assertion = expect(pending).rejects.toMatchObject({ code: "DISPOSED" });
+    // Crash the FIRST child: its exit callback drives supervisorOnCrash → restart →
+    // old transport.dispose() → the pending request is rejected immediately, not after the deadline.
+    crashable.crashLatest();
+    await settle();
+    await assertion;
+    expect(Date.now() - start).toBeLessThan(5_000);
+    await manager.dispose();
+  });
+
+  it("discards a stale exit from a superseded child without a second CRASHED or throttle debit (FIX 4)", async () => {
+    // After a crash + restart, a LATE exit event from the OLD (superseded) child must be ignored:
+    // its captured generation no longer matches state.childGeneration. Otherwise it would emit a
+    // spurious CRASHED and debit the restart throttle, halving the budget on real servers.
+    const { spawn, controllers } = fakeSpawnHarness(["normal", "normal", "normal"]);
+    const events: LspLifecycleEvent[] = [];
+    const config = makeConfig({ maxRestartsInWindow: 2, restartWindowMs: 60_000 });
+    const manager = createLspProcessManager(makeDeps(spawn, config, (event) => events.push(event)));
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+
+    controllers[0]?.crash(1);
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    const crashedAfterRestart = events.filter((e) => e.status === "CRASHED").length;
+
+    // A late, stale exit from the already-superseded first child — must be a no-op.
+    controllers[0]?.emitLateExit(1);
+    await settle();
+
+    expect(events.filter((e) => e.status === "CRASHED").length).toBe(crashedAfterRestart);
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    // The throttle budget is intact: a second genuine crash still restarts (not throttled).
+    controllers[controllers.length - 1]?.crash(1);
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+    await manager.dispose();
+  });
+
   it("stops at RESTART_THROTTLED once the crash window is exhausted", async () => {
     const { spawn, controllers } = fakeSpawnHarness(["normal"]);
     const config = makeConfig({ maxRestartsInWindow: 1, restartWindowMs: 60_000 });
@@ -279,23 +388,49 @@ describe("createLspProcessManager", () => {
     await settle();
 
     // The oversized frame is rejected at the reader; the manager surfaces it as a reader error
-    // (CRASHED transition) rather than buffering the body or throwing out of band.
-    expect(["CRASHED", "READY", "RESTART_THROTTLED"]).toContain(manager.getLspProcessStatus());
+    // (CRASHED transition) rather than buffering the body or throwing out of band. READY is impossible
+    // here: the oversized fake never returns a valid initialize response, so the manager can only land
+    // in CRASHED or (after the restart budget is spent) RESTART_THROTTLED (FIX 5).
+    expect(["CRASHED", "RESTART_THROTTLED"]).toContain(manager.getLspProcessStatus());
     await manager.dispose();
   });
 
-  it("kills the process and surfaces DISPOSED when the server ignores shutdown", async () => {
-    const { spawn, controllers } = fakeSpawnHarness(["ignore-shutdown"]);
-    const config = makeConfig({ initializeTimeoutMs: 200 });
+  it("escalates to SIGKILL and surfaces DISPOSED when the server never exits", async () => {
+    // "unresponsive" ignores both shutdown and exit, so the grace window must elapse and SIGKILL fire.
+    const { spawn, controllers } = fakeSpawnHarness(["unresponsive"]);
+    const config = makeConfig({ initializeTimeoutMs: 200, shutdownTimeoutMs: 20 });
     const manager = createLspProcessManager(makeDeps(spawn, config));
     await settle();
 
     const disposePromise = manager.dispose();
-    await settleMs(50);
+    await settleMs(60);
     await disposePromise;
 
     expect(manager.getLspProcessStatus()).toBe("DISPOSED");
     expect(controllers[0]?.killed()).toContain("SIGKILL");
+  });
+
+  it("does not wait the full grace window when the child exits promptly during dispose", async () => {
+    // FIX 2: a well-behaved server answers `shutdown` (so requestGracefulShutdown returns fast) and
+    // exits on `exit`. escalateKill's stop-predicate (`() => state.exited`) must observe the exit set
+    // BEFORE the disposed early-return in supervisorOnCrash and resolve WITHOUT the SIGKILL fallback,
+    // even though shutdownTimeoutMs (the grace window) is large. Before FIX 2 `state.exited` stayed
+    // false during dispose, so escalateKill waited the full window and then sent SIGKILL.
+    const { spawn, controllers } = fakeSpawnHarness(["normal"]);
+    const config = makeConfig({ initializeTimeoutMs: 200, shutdownTimeoutMs: 5_000 });
+    const manager = createLspProcessManager(makeDeps(spawn, config));
+    await settle();
+
+    const start = Date.now();
+    const disposePromise = manager.dispose();
+    await settleMs(20);
+    await disposePromise;
+    const elapsedMs = Date.now() - start;
+
+    expect(manager.getLspProcessStatus()).toBe("DISPOSED");
+    // Resolved well before the 5 s grace window — proves escalateKill saw the prompt exit (FIX 2).
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(controllers[0]?.killed()).not.toContain("SIGKILL");
   });
 
   it("throws DISPOSED for calls made after dispose", async () => {
@@ -385,11 +520,12 @@ describe("createLspProcessManager", () => {
     await assertion;
   });
 
-  it("maps an unknown error to RESPONSE_TOO_LARGE (mapRequestError catch-all)", async () => {
+  it("maps a generic server RPC error to CRASHED (mapRequestError catch-all, not RESPONSE_TOO_LARGE)", async () => {
     // Build a spawn handle that answers initialize (reaching READY), then replies to subsequent
     // requests with a JSON-RPC error whose `message` field is a non-string object. The JSON-RPC
     // client rejects with a plain `new Error("LSP error")` in that case — none of the typed RPC
-    // error subclasses — so mapRequestError's catch-all returns RESPONSE_TOO_LARGE.
+    // error subclasses — so mapRequestError's catch-all returns CRASHED. RESPONSE_TOO_LARGE is
+    // reserved for an actual frame-size rejection and must NOT mislabel a generic RPC error (FIX 9).
     const config = makeConfig();
     const stdin = new PassThrough();
     const stdout = new PassThrough();
@@ -441,10 +577,11 @@ describe("createLspProcessManager", () => {
     await settle();
     expect(manager.getLspProcessStatus()).toBe("READY");
     // The request gets an RPC error with a non-string message — client rejects with a plain Error.
-    // mapRequestError's catch-all returns RESPONSE_TOO_LARGE.
+    // mapRequestError's catch-all returns CRASHED (a generic request/protocol fault), never the
+    // frame-size-only RESPONSE_TOO_LARGE.
     await expect(
       manager.sendRequest("textDocument/hover", {}, new AbortController().signal),
-    ).rejects.toMatchObject({ code: "RESPONSE_TOO_LARGE" });
+    ).rejects.toMatchObject({ code: "CRASHED" });
     await manager.dispose();
   });
 
