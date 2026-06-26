@@ -1243,6 +1243,11 @@ export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
       retryBaseDelayMs: provider.retryBaseDelayMs,
     })),
     circuitBreaker: config.circuitBreaker,
+    // INVARIANT (ADR-0019 / ADR-0088 D2): `ModelCapability` is the wire-tier, browser-serialisable
+    // shape and MUST NEVER carry a secret — all credential-/provider-sensitive data (apiKey, baseUrl,
+    // voiceProfiles voice ids) lives on `ModelProviderConfig`, which the allowlisted provider
+    // projection above drops. Capabilities are therefore passed through un-projected. Any future
+    // sensitive field must go on `ModelProviderConfig`, never here, or this projection must change.
     ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
     ...(config.grounding !== undefined ? { grounding: config.grounding } : {}),
   };

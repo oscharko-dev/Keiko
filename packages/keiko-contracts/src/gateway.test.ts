@@ -247,10 +247,8 @@ describe("listVoicePersonas", () => {
     expect(listVoicePersonas(voiceCap({ supportedVoicePersonas: [] }))).toEqual([]);
   });
 
-  it("returns [] for a non-voice capability even if the field leaks in", () => {
-    expect(listVoicePersonas(cap({ kind: "chat", supportedVoicePersonas: ["male"] }))).toEqual([
-      "male",
-    ]);
+  it("returns [] for a non-voice capability even if the field leaks in (fail-closed)", () => {
+    expect(listVoicePersonas(cap({ kind: "chat", supportedVoicePersonas: ["male"] }))).toEqual([]);
   });
 });
 

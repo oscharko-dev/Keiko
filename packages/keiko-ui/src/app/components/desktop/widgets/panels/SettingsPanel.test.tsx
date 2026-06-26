@@ -205,6 +205,17 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     });
     expect(screen.queryByTestId("conv-elig-no")).toBeNull();
   });
+
+  it("does NOT show the voice-available badge for a voice kind with no advertised sub-capability (fail-closed)", async () => {
+    // The config parser rejects this combination; the UI defends in depth — a degenerate voice
+    // capability falls through to the not-selectable badge rather than claiming availability.
+    primeFetches([voiceCapability("degenerate-voice", {})]);
+    render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId("conv-elig-no")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("voice-elig-ok")).toBeNull();
+  });
 });
 
 describe("SettingsPanel chat-count uses the eligibility helper (Issue #144 AC #1)", () => {

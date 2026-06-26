@@ -1547,6 +1547,8 @@ describe("parseGatewayConfig — voiceProfiles parsing (Issue #1557)", () => {
       circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
     };
     const config = parseGatewayConfig(raw);
+    const personasOf = (id: string): readonly string[] | undefined =>
+      config.capabilities?.find((c) => c.id === id)?.supportedVoicePersonas;
     expect(config.providers.map((p) => p.modelId)).toEqual([
       "keiko-stt",
       "keiko-tts",
@@ -1555,15 +1557,11 @@ describe("parseGatewayConfig — voiceProfiles parsing (Issue #1557)", () => {
       "keiko-realtime-stt",
     ]);
     // STT-only carries no personas; the four output-capable ones do.
-    expect(
-      config.capabilities?.find((c) => c.id === "keiko-stt")?.supportedVoicePersonas,
-    ).toBeUndefined();
-    expect(config.capabilities?.find((c) => c.id === "keiko-tts")?.supportedVoicePersonas).toEqual([
-      "neutral",
-    ]);
-    expect(
-      config.capabilities?.find((c) => c.id === "keiko-realtime")?.supportedVoicePersonas,
-    ).toEqual(["male"]);
+    expect(personasOf("keiko-stt")).toBeUndefined();
+    expect(personasOf("keiko-tts")).toEqual(["neutral"]);
+    expect(personasOf("keiko-audio-output")).toEqual(["female"]);
+    expect(personasOf("keiko-realtime")).toEqual(["male"]);
+    expect(personasOf("keiko-realtime-stt")).toEqual(["neutral"]);
   });
 
   it("rejects supportedVoicePersonas as a raw INPUT key on the strict capability parser", () => {

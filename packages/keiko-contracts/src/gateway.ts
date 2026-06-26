@@ -329,8 +329,13 @@ export function isConfiguredVoiceProvider(capability: ModelCapability): boolean 
 }
 
 // The product voice personas a single capability offers, sorted in canonical `VOICE_PERSONAS` order
-// and de-duplicated. Empty for a non-voice capability or one that advertises none.
+// and de-duplicated. Fail-closed: empty for a non-voice capability (even if a persona field is
+// present — defence in depth alongside the config parser, which prevents that at parse time) or one
+// that advertises none.
 export function listVoicePersonas(capability: ModelCapability): readonly VoicePersona[] {
+  if (!isVoiceCapability(capability)) {
+    return [];
+  }
   const declared = capability.supportedVoicePersonas;
   if (declared === undefined || declared.length === 0) {
     return [];
