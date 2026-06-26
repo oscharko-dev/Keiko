@@ -8,7 +8,7 @@ It assumes the implementation from Epic #470 is present and verified by the
 
 1. Confirm each workspace that should use governed Git delivery is registered and has an available Git
    worktree. The surface is part of the deployment; routes are not hidden behind a deployment enable
-   flag.
+   flag. There is no deployment enable flag.
 
 2. Confirm `gh` is installed and authenticated for PR and merge operations. Keiko does not read or store
    GitHub tokens; the `gh` process owns credential lookup through its keyring or `GH_TOKEN` /

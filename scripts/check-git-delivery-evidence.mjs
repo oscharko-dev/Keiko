@@ -104,10 +104,10 @@ const REQUIRED_TEXT = {
     "merge",
     "approval-required",
     "recovery-required",
-    "provider-not-ready",
+    "provider readiness",
   ],
   "docs/git-delivery/operator-runbook.md": [
-    "KEIKO_GIT_DELIVERY_ENABLED=true",
+    "no deployment enable flag",
     "Troubleshooting",
     "Evidence interpretation",
     "Residual limits",
