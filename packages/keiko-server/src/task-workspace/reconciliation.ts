@@ -48,6 +48,7 @@ import {
   type WorkspaceReconciliationReport,
 } from "@oscharko-dev/keiko-contracts";
 import { deriveRepositoryId } from "./naming.js";
+import { lockIsLive, resolveLockTtl } from "./locks.js";
 import {
   appendWorkspaceLifecycleEvidence,
   buildWorkspaceEvent,
@@ -57,8 +58,6 @@ import type {
   WorkspaceReconciliationService,
   WorkspaceReconciliationServiceDeps,
 } from "./types.js";
-
-const DEFAULT_LOCK_TTL_MS = 5 * 60_000;
 
 interface ReconcileCtx {
   readonly deps: WorkspaceReconciliationServiceDeps;
@@ -73,18 +72,6 @@ export interface ReconcileInstanceResult {
 
 function isoFrom(nowMs: number): string {
   return new Date(nowMs).toISOString();
-}
-
-// Same lock-liveness rule as the provisioning + lifecycle services: an explicit expiry wins, otherwise
-// the TTL since acquisition; a non-finite timestamp fails closed (treated as not live).
-function lockIsLive(lock: WorkspaceInstance["lock"], nowMs: number, ttlMs: number): boolean {
-  if (lock === null) return false;
-  if (lock.expiresAt !== undefined) {
-    const expiry = Date.parse(lock.expiresAt);
-    return Number.isFinite(expiry) ? nowMs < expiry : false;
-  }
-  const acquired = Date.parse(lock.acquiredAt);
-  return Number.isFinite(acquired) ? nowMs - acquired < ttlMs : false;
 }
 
 // Non-throwing content-free identity of a worktree's git admin dir, or undefined when the `.git`
@@ -311,7 +298,7 @@ export function gatherInstanceReconciliationFacts(
   nowMs: number,
   actor?: string,
 ): Promise<FactsAndHead> {
-  const ctx: ReconcileCtx = { deps, lockTtlMs: deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS };
+  const ctx: ReconcileCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return gatherFacts(ctx, adapter, worktrees, instance, nowMs, actor);
 }
 
@@ -323,7 +310,7 @@ export async function reconcileSingleInstance(
   nowMs: number,
   actor?: string,
 ): Promise<ReconcileInstanceResult> {
-  const ctx: ReconcileCtx = { deps, lockTtlMs: deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS };
+  const ctx: ReconcileCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   const adapter = deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot));
   const worktrees = await adapter.listWorktrees();
   const { facts, observedHead } = await gatherFacts(
@@ -416,7 +403,7 @@ async function reconcileImpl(
 export function createWorkspaceReconciliationService(
   deps: WorkspaceReconciliationServiceDeps,
 ): WorkspaceReconciliationService {
-  const ctx: ReconcileCtx = { deps, lockTtlMs: deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS };
+  const ctx: ReconcileCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return {
     report: (repositoryRoot?: string): WorkspaceReconciliationReport =>
       buildReport(ctx, instancesFor(deps, repositoryRoot), deps.now(), false),

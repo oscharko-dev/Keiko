@@ -33,6 +33,8 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { buildBinding } from "./binding.js";
 import { TaskWorkspaceError } from "./errors.js";
+import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
+import { workspaceKey } from "./mutex.js";
 import { reconcileSingleInstance } from "./reconciliation.js";
 import {
   appendWorkspaceLifecycleEvidence,
@@ -48,7 +50,6 @@ import type {
   WorkspaceRepairServiceDeps,
 } from "./types.js";
 
-const DEFAULT_LOCK_TTL_MS = 5 * 60_000;
 const MAX_FIELD_LENGTH = 512;
 
 interface RepairCtx {
@@ -64,27 +65,19 @@ function isoFrom(nowMs: number): string {
   return new Date(nowMs).toISOString();
 }
 
-function lockIsLive(lock: WorkspaceInstance["lock"], nowMs: number, ttlMs: number): boolean {
-  if (lock === null) return false;
-  if (lock.expiresAt !== undefined) {
-    const expiry = Date.parse(lock.expiresAt);
-    return Number.isFinite(expiry) ? nowMs < expiry : false;
-  }
-  const acquired = Date.parse(lock.acquiredAt);
-  return Number.isFinite(acquired) ? nowMs - acquired < ttlMs : false;
-}
-
 // The #444 `repair` operation declares requiresLock:true. The service reserves the workspace lock for
-// the requesting actor before any mutation (closing the check→mutate TOCTOU window) and releases it
-// afterwards, mirroring the #445 provisioning lock lifecycle.
+// the requesting actor before any mutation and releases it afterwards, mirroring the #445 provisioning
+// lock lifecycle. The whole repair runs under the `ws:` in-process mutex (#449, ADR-0093 D1) so the
+// advisory check → reconcile → acquire → mutate sequence is atomic against same-process callers; the
+// advisory lock builder is the consolidated locks.ts helper.
 function makeRepairLock(ctx: RepairCtx, owner: string, nowMs: number): WorkspaceLock {
-  return {
-    lockId: ctx.deps.newId(),
+  return makeWorkspaceLock({
+    newId: ctx.deps.newId,
     owner,
     reason: "repair",
-    acquiredAt: isoFrom(nowMs),
-    expiresAt: isoFrom(nowMs + ctx.lockTtlMs),
-  };
+    nowMs,
+    ttlMs: ctx.lockTtlMs,
+  });
 }
 
 // Releases a still-held repair lock owned by this actor. The provision/release/abandon paths already
@@ -362,7 +355,7 @@ function assertRepairAuthorized(
   }
 }
 
-async function repairImpl(
+async function repairLocked(
   ctx: RepairCtx,
   request: WorkspaceRepairRequest,
 ): Promise<WorkspaceRepairResult> {
@@ -415,10 +408,22 @@ async function repairImpl(
   }
 }
 
+// Serializes the whole repair (advisory check → live reconcile → lock acquire → strategy mutation) under
+// the workspace's `ws:` key (#449, ADR-0093 D1). The nested provisioning re-materialization runs under
+// the distinct `prov:` key, so there is no self-deadlock against this `ws:` hold.
+function repairImpl(
+  ctx: RepairCtx,
+  request: WorkspaceRepairRequest,
+): Promise<WorkspaceRepairResult> {
+  return ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
+    repairLocked(ctx, request),
+  );
+}
+
 export function createWorkspaceRepairService(
   deps: WorkspaceRepairServiceDeps,
 ): WorkspaceRepairService {
-  const ctx: RepairCtx = { deps, lockTtlMs: deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS };
+  const ctx: RepairCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return {
     repair: (request: WorkspaceRepairRequest): Promise<WorkspaceRepairResult> =>
       repairImpl(ctx, request),

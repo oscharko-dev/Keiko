@@ -28,9 +28,10 @@ import {
   type WorkspaceInfo,
   type WorkspaceInstance,
   type WorkspaceLock,
-  type WorkspaceLockReason,
 } from "@oscharko-dev/keiko-contracts";
 import { buildBinding } from "./binding.js";
+import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
+import { provisionKey, workspaceKey } from "./mutex.js";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
@@ -60,7 +61,6 @@ import type {
   WorkspaceProvisionResult,
 } from "./types.js";
 
-const DEFAULT_LOCK_TTL_MS = 5 * 60_000;
 const MAX_FIELD_LENGTH = 512;
 const RESUMABLE_STATES: readonly TaskWorkspaceLifecycleState[] = ["active", "paused"];
 const COMPLETABLE_STATES: readonly TaskWorkspaceLifecycleState[] = [
@@ -125,30 +125,24 @@ function gitdirIdentity(worktreePath: string): string {
 }
 
 // ─── lock helpers ──────────────────────────────────────────────────────────────────────────────
+// Lock liveness + the advisory-lock builder are the consolidated #449 helpers (locks.ts); this thin
+// wrapper binds the provisioning ctx's TTL so the call sites stay terse.
 
-function lockIsLive(ctx: ProvisioningCtx, lock: WorkspaceLock | null, nowMs: number): boolean {
-  if (lock === null) return false;
-  if (lock.expiresAt !== undefined) {
-    const expiry = Date.parse(lock.expiresAt);
-    return Number.isFinite(expiry) ? nowMs < expiry : false;
-  }
-  const acquired = Date.parse(lock.acquiredAt);
-  return Number.isFinite(acquired) ? nowMs - acquired < ctx.lockTtlMs : false;
+function provisioningLockLive(
+  ctx: ProvisioningCtx,
+  lock: WorkspaceLock | null,
+  nowMs: number,
+): boolean {
+  return lockIsLive(lock, nowMs, ctx.lockTtlMs);
 }
 
 function makeLock(
   ctx: ProvisioningCtx,
   owner: string,
-  reason: WorkspaceLockReason,
+  reason: WorkspaceLock["reason"],
   nowMs: number,
 ): WorkspaceLock {
-  return {
-    lockId: ctx.deps.newId(),
-    owner,
-    reason,
-    acquiredAt: isoFrom(nowMs),
-    expiresAt: isoFrom(nowMs + ctx.lockTtlMs),
-  };
+  return makeWorkspaceLock({ newId: ctx.deps.newId, owner, reason, nowMs, ttlMs: ctx.lockTtlMs });
 }
 
 // ─── evidence ───────────────────────────────────────────────────────────────────────────────────
@@ -315,7 +309,7 @@ function assertNotLocked(
 ): void {
   if (
     existing !== undefined &&
-    lockIsLive(ctx, existing.lock, nowMs) &&
+    provisioningLockLive(ctx, existing.lock, nowMs) &&
     existing.lock?.owner !== request.requestedBy
   ) {
     throw new TaskWorkspaceError("LOCK_CONTENTION", "workspace is locked by another actor");
@@ -533,12 +527,16 @@ async function runWorktreeMutation(
   return { instance: active, binding: buildBinding(active), created };
 }
 
-async function provisionImpl(
+// The gated provisioning critical section. Runs under the `prov:<repositoryId>:<taskId>` mutex key
+// (#449, ADR-0093 D1) so two concurrent provisions of the SAME (repo, task) serialize instead of both
+// passing the check-then-write gates and racing `git worktree add`. The advisory cross-actor
+// LOCK_CONTENTION check (assertProvisionable → assertNotLocked) stays INSIDE this section, preserving the
+// across-actor rejection while the mutex only serializes same-process callers.
+async function provisionLocked(
   ctx: ProvisioningCtx,
   request: WorkspaceProvisionRequest,
+  repo: RepositoryContext,
 ): Promise<WorkspaceProvisionResult> {
-  validateProvisionRequest(request);
-  const repo = await resolveRepositoryContext(ctx, request);
   assertManagedRootOwned(ctx.deps.managedRoot);
   assertManagedTargetContained(ctx.deps.managedRoot, repo.worktreePath);
 
@@ -559,6 +557,19 @@ async function provisionImpl(
   const lock = makeLock(ctx, request.requestedBy, "provisioning", nowMs);
   const provisioning = ctx.deps.store.upsert(freshInstance(repo, request, existing, lock, nowMs));
   return runWorktreeMutation(ctx, repo, request, provisioning);
+}
+
+async function provisionImpl(
+  ctx: ProvisioningCtx,
+  request: WorkspaceProvisionRequest,
+): Promise<WorkspaceProvisionResult> {
+  validateProvisionRequest(request);
+  // Resolve the repository identity (read-only git-root resolution) BEFORE acquiring the key — the key
+  // is derived from (repositoryId, taskId) and serialization must cover only the mutating gated section.
+  const repo = await resolveRepositoryContext(ctx, request);
+  return ctx.deps.mutex.runExclusive([provisionKey(repo.repositoryId, request.taskId)], () =>
+    provisionLocked(ctx, request, repo),
+  );
 }
 
 // ─── activate orchestration ──────────────────────────────────────────────────────────────────────
@@ -607,7 +618,10 @@ function assertActivatable(
   ) {
     throw new TaskWorkspaceError("LOCK_CONTENTION", "workspace state changed; retry");
   }
-  if (lockIsLive(ctx, instance.lock, nowMs) && instance.lock?.owner !== request.requestedBy) {
+  if (
+    provisioningLockLive(ctx, instance.lock, nowMs) &&
+    instance.lock?.owner !== request.requestedBy
+  ) {
     throw new TaskWorkspaceError("LOCK_CONTENTION", "workspace is locked by another actor");
   }
   if (!RESUMABLE_STATES.includes(instance.lifecycleState)) {
@@ -644,13 +658,13 @@ function flagActivateDrift(
   throw new TaskWorkspaceError("POINTER_DRIFT", "managed worktree is missing");
 }
 
-function activateImpl(
+// The gated activation critical section, run under the `ws:<workspaceId>` mutex key (#449, ADR-0093 D1)
+// so a concurrent activate/pause/repair/cleanup of the same workspace serializes. The advisory
+// cross-actor LOCK_CONTENTION check (assertActivatable) stays INSIDE.
+function activateLocked(
   ctx: ProvisioningCtx,
   request: WorkspaceActivateRequest,
-): Promise<WorkspaceActivateResult> {
-  if (!isBoundedNonEmpty(request.workspaceId) || !isBoundedNonEmpty(request.requestedBy)) {
-    throw new TaskWorkspaceError("INVALID_REQUEST", "invalid activation request");
-  }
+): WorkspaceActivateResult {
   const instance = ctx.deps.store.getById(request.workspaceId);
   if (instance === undefined) {
     throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
@@ -680,7 +694,19 @@ function activateImpl(
     toState: "active",
     ...(lock !== null ? { lockId: lock.lockId } : {}),
   });
-  return Promise.resolve({ instance: persisted, binding: buildBinding(persisted) });
+  return { instance: persisted, binding: buildBinding(persisted) };
+}
+
+function activateImpl(
+  ctx: ProvisioningCtx,
+  request: WorkspaceActivateRequest,
+): Promise<WorkspaceActivateResult> {
+  if (!isBoundedNonEmpty(request.workspaceId) || !isBoundedNonEmpty(request.requestedBy)) {
+    throw new TaskWorkspaceError("INVALID_REQUEST", "invalid activation request");
+  }
+  return ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
+    activateLocked(ctx, request),
+  );
 }
 
 // ─── factory ─────────────────────────────────────────────────────────────────────────────────────
@@ -688,7 +714,7 @@ function activateImpl(
 export function createWorkspaceProvisioningService(
   deps: WorkspaceProvisioningServiceDeps,
 ): WorkspaceProvisioningService {
-  const ctx: ProvisioningCtx = { deps, lockTtlMs: deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS };
+  const ctx: ProvisioningCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return {
     provision: (request: WorkspaceProvisionRequest): Promise<WorkspaceProvisionResult> =>
       provisionImpl(ctx, request),

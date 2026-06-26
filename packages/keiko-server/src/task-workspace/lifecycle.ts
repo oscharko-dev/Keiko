@@ -29,6 +29,8 @@ import {
 import { buildBinding } from "./binding.js";
 import { deriveRepositoryId } from "./naming.js";
 import { managedTargetExists } from "./managed-root.js";
+import { lockIsLive, resolveLockTtl } from "./locks.js";
+import { activePointerKey, workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
 import {
   appendWorkspaceLifecycleEvidence,
@@ -46,7 +48,6 @@ import type {
   WorkspaceLifecycleServiceDeps,
 } from "./types.js";
 
-const DEFAULT_LOCK_TTL_MS = 5 * 60_000;
 const MAX_FIELD_LENGTH = 512;
 
 interface LifecycleCtx {
@@ -70,18 +71,6 @@ function isBoundedNonEmpty(value: unknown): value is string {
 
 function isoFrom(nowMs: number): string {
   return new Date(nowMs).toISOString();
-}
-
-// Lock liveness mirrors the provisioning service: an expiry wins if present, otherwise the TTL since
-// acquisition. A non-finite timestamp fails closed (treated as not live).
-function lockIsLive(lock: WorkspaceInstance["lock"], nowMs: number, ttlMs: number): boolean {
-  if (lock === null) return false;
-  if (lock.expiresAt !== undefined) {
-    const expiry = Date.parse(lock.expiresAt);
-    return Number.isFinite(expiry) ? nowMs < expiry : false;
-  }
-  const acquired = Date.parse(lock.acquiredAt);
-  return Number.isFinite(acquired) ? nowMs - acquired < ttlMs : false;
 }
 
 function emit(
@@ -211,8 +200,10 @@ async function setActiveImpl(
     throw new TaskWorkspaceError("INVALID_REQUEST", "requestedBy is required");
   }
   // Delegate the lifecycle walk (paused/active → active, drift + lock checks, persistence, evidence)
-  // to the #445 service. Only on success do we record the active pointer — the switch is atomic from
-  // the surfaces' view because the derived binding flips in one persisted step.
+  // to the #445 service. That call already serializes on the target's `ws:` key (#449, ADR-0093 D1), so
+  // we must NOT re-acquire `ws:` here — the in-process mutex is not reentrant. Only on success do we
+  // record the active pointer — the switch is atomic from the surfaces' view because the derived binding
+  // flips in one persisted step.
   const result = await ctx.deps.provisioning.activate({
     workspaceId: request.workspaceId,
     // taskId "" intentionally skips activate's optional taskId cross-check — at switch time identity is
@@ -221,11 +212,18 @@ async function setActiveImpl(
     requestedBy: request.requestedBy,
     acquireLock: request.acquireLock,
   });
-  const pointer = ctx.deps.activePointerStore.set({
-    workspaceId: result.instance.workspaceId,
-    setBy: request.requestedBy,
-    atIso: isoFrom(ctx.deps.now()),
-  });
+  // The pointer flip is serialized per repository under the `active:` key so two concurrent switches in
+  // the same repository cannot tear the singleton pointer write. Sequenced AFTER activate (whose `ws:`
+  // lock has already drained), never nested inside it.
+  const pointer = await ctx.deps.mutex.runExclusive(
+    [activePointerKey(result.instance.repositoryId)],
+    () =>
+      ctx.deps.activePointerStore.set({
+        workspaceId: result.instance.workspaceId,
+        setBy: request.requestedBy,
+        atIso: isoFrom(ctx.deps.now()),
+      }),
+  );
   return { instance: result.instance, binding: result.binding, pointer };
 }
 
@@ -280,7 +278,7 @@ const HANDOFF_SPEC: DirectTransitionSpec = {
 export function createWorkspaceLifecycleService(
   deps: WorkspaceLifecycleServiceDeps,
 ): WorkspaceLifecycleService {
-  const ctx: LifecycleCtx = { deps, lockTtlMs: deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS };
+  const ctx: LifecycleCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
   return {
     list: (repositoryRoot: string): readonly WorkspaceInstance[] => listImpl(ctx, repositoryRoot),
     getActive: (): ActiveWorkspaceView | undefined => getActiveImpl(ctx),
@@ -289,13 +287,19 @@ export function createWorkspaceLifecycleService(
     clearActive: (): void => {
       deps.activePointerStore.clear();
     },
+    // pause / handoff are direct transitions on one instance — serialized under its `ws:` key (#449,
+    // ADR-0093 D1) so they cannot race a concurrent activate/repair/cleanup of the same workspace.
     pause: (request: WorkspaceLifecycleActionRequest): Promise<WorkspaceLifecycleActionResult> =>
-      Promise.resolve(runDirectTransition(ctx, request, PAUSE_SPEC)),
+      ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
+        runDirectTransition(ctx, request, PAUSE_SPEC),
+      ),
     resume: (request: WorkspaceLifecycleActionRequest): Promise<WorkspaceLifecycleActionResult> =>
       resumeImpl(ctx, request),
     prepareHandoff: (
       request: WorkspaceLifecycleActionRequest,
     ): Promise<WorkspaceLifecycleActionResult> =>
-      Promise.resolve(runDirectTransition(ctx, request, HANDOFF_SPEC)),
+      ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
+        runDirectTransition(ctx, request, HANDOFF_SPEC),
+      ),
   };
 }

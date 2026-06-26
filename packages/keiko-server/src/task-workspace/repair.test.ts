@@ -29,6 +29,9 @@ import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceRepairService } from "./repair.js";
 import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
 import type { WorkspaceProvisioningService, WorkspaceRepairService } from "./types.js";
+import { createWorkspaceMutexRegistry } from "./mutex.js";
+
+const __twMutex = createWorkspaceMutexRegistry();
 
 let repoRoot: string;
 let managedRoot: string;
@@ -71,6 +74,7 @@ function repairService(): WorkspaceRepairService {
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
   });
 }
 
@@ -135,6 +139,7 @@ beforeEach(() => {
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
   });
 });
 

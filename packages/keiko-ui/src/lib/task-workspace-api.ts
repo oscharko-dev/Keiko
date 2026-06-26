@@ -7,7 +7,30 @@
  */
 
 import { ApiError } from "./api";
-import type { WorkspaceBinding, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import {
+  isWorkspaceFailureClass,
+  type WorkspaceBinding,
+  type WorkspaceFailureClass,
+  type WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
+
+// A task-workspace BFF error that also carries the caller-facing failure class (#449, ADR-0093 D3) when
+// the server surfaced one. Callers can `instanceof TaskWorkspaceApiError` and branch on `.failureClass`
+// (retryable / repairable / blocked / policy-denied / terminal) instead of matching raw codes; it is
+// `undefined` only when the error did not originate from the structured task-workspace taxonomy.
+export class TaskWorkspaceApiError extends ApiError {
+  public readonly failureClass: WorkspaceFailureClass | undefined;
+  public constructor(
+    code: string,
+    message: string,
+    status: number,
+    failureClass: WorkspaceFailureClass | undefined,
+  ) {
+    super(code, message, status);
+    this.name = "TaskWorkspaceApiError";
+    this.failureClass = failureClass;
+  }
+}
 
 // The active view the BFF returns: the durable instance, the DERIVED binding, and the pointer
 // metadata (who set it / when) the switcher renders. Mirrors the server ActiveWorkspaceView shape.
@@ -28,7 +51,11 @@ export interface WorkspaceMutationResult {
 }
 
 interface BffError {
-  readonly error: { readonly code: string; readonly message: string };
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    readonly failureClass?: string;
+  };
 }
 
 async function taskWorkspaceFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -47,14 +74,18 @@ async function taskWorkspaceFetch<T>(path: string, init?: RequestInit): Promise<
   if (!res.ok) {
     let code = "INTERNAL";
     let message = `HTTP ${res.status.toString()}`;
+    let failureClass: WorkspaceFailureClass | undefined;
     try {
       const envelope = (await res.json()) as BffError;
       code = envelope.error.code;
       message = envelope.error.message;
+      failureClass = isWorkspaceFailureClass(envelope.error.failureClass)
+        ? envelope.error.failureClass
+        : undefined;
     } catch {
       // parse failure — keep generic, never log
     }
-    throw new ApiError(code, message, res.status);
+    throw new TaskWorkspaceApiError(code, message, res.status, failureClass);
   }
 
   if (res.status === 204) return undefined as T;

@@ -363,6 +363,41 @@ export interface WorkspaceLock {
   readonly expiresAt?: string;
 }
 
+// ─── Failure classification ───────────────────────────────────────────────────────
+// The caller-facing failure vocabulary (Issue #449, ADR-0093). It is a DISTINCT axis from the
+// evidence-recording outcome (`blocked`/`failed`/`retry-required`): the outcome describes what the
+// ledger saw, this class describes what the CALLER should do next. The keiko-server error taxonomy maps
+// every `TaskWorkspaceErrorCode` onto exactly one of these classes (`classifyTaskWorkspaceError`), so a
+// BFF/UI caller can branch on a stable, content-free signal instead of a raw code list.
+//
+//   retryable     — transient/contended; the SAME request may succeed if retried as-is (e.g. a live
+//                   advisory lock held by another actor that will expire).
+//   repairable    — a drift/partial state that #447 reconciliation + repair resolves; a bare retry would
+//                   re-hit the same stale condition, so the caller routes to repair.
+//   blocked       — a precondition/validation/conflict gate; the caller must change inputs or environment.
+//   policy-denied — an authority/approval gate (operator approval, eligibility); needs governance, not retry.
+//   terminal      — a non-recoverable server fault; do not retry without out-of-band intervention.
+export type WorkspaceFailureClass =
+  | "retryable"
+  | "repairable"
+  | "blocked"
+  | "policy-denied"
+  | "terminal";
+
+export const WORKSPACE_FAILURE_CLASSES: readonly WorkspaceFailureClass[] = [
+  "retryable",
+  "repairable",
+  "blocked",
+  "policy-denied",
+  "terminal",
+] as const;
+
+export function isWorkspaceFailureClass(value: unknown): value is WorkspaceFailureClass {
+  return (
+    typeof value === "string" && WORKSPACE_FAILURE_CLASSES.includes(value as WorkspaceFailureClass)
+  );
+}
+
 // ─── Recovery hint ────────────────────────────────────────────────────────────────
 // WORKSPACE recovery only. GIT-MUTATION recovery stays owned by #470 (git-delivery recovery hints).
 

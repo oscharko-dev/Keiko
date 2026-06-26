@@ -26,6 +26,9 @@ import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "./store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
 import type { WorkspaceProvisioningService } from "./types.js";
+import { createWorkspaceMutexRegistry } from "./mutex.js";
+
+const __twMutex = createWorkspaceMutexRegistry();
 
 let server: Server;
 let staticRoot: string;
@@ -52,7 +55,9 @@ async function listen(srv: Server): Promise<number> {
 
 async function closeServer(srv: Server = server): Promise<void> {
   await new Promise<void>((resolve) => {
-    srv.close(() => { resolve(); });
+    srv.close(() => {
+      resolve();
+    });
   });
 }
 
@@ -91,6 +96,7 @@ function buildService(): WorkspaceProvisioningService {
       let n = 0;
       return (): string => `id-${String(n++)}`;
     })(),
+    mutex: __twMutex,
   });
 }
 

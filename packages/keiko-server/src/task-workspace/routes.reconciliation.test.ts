@@ -34,6 +34,9 @@ import type {
   WorkspaceReconciliationService,
   WorkspaceRepairService,
 } from "./types.js";
+import { createWorkspaceMutexRegistry } from "./mutex.js";
+
+const __twMutex = createWorkspaceMutexRegistry();
 
 let server: Server;
 let staticRoot: string;
@@ -109,6 +112,7 @@ function buildServices(): void {
     redactString: (s: string): string => s,
     now: (): number => Date.now(),
     newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
   };
   provisioning = createWorkspaceProvisioningService(common);
   reconciliation = createWorkspaceReconciliationService(common);

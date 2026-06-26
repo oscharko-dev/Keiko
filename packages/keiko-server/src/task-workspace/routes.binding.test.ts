@@ -29,6 +29,9 @@ import { buildActiveWorkspacePointerStoreOverDatabase } from "./active-store.js"
 import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceLifecycleService } from "./lifecycle.js";
 import type { WorkspaceLifecycleService, WorkspaceProvisioningService } from "./types.js";
+import { createWorkspaceMutexRegistry } from "./mutex.js";
+
+const __twMutex = createWorkspaceMutexRegistry();
 
 let server: Server;
 let staticRoot: string;
@@ -98,6 +101,7 @@ function buildServices(): void {
     redactString: (s: string): string => s,
     now: (): number => Date.now(),
     newId,
+    mutex: __twMutex,
   });
   lifecycle = createWorkspaceLifecycleService({
     store,
@@ -107,6 +111,7 @@ function buildServices(): void {
     redactString: (s: string): string => s,
     now: (): number => Date.now(),
     newId,
+    mutex: __twMutex,
   });
 }
 
