@@ -44,7 +44,10 @@ const SCALE = 200;
 const RECONCILE_BUDGET_MS = 2000;
 const HEALTH_BUDGET_MS = 2000;
 const LIST_ALL_BUDGET_MS = 50;
-const SWITCH_BUDGET_MS = 2000;
+// ADR-0093 D4 rapid switching is O(1) per switch (design target ≤25 ms p95). The p95 assertion keeps CI
+// headroom while staying tight enough to catch a 3× latency creep; the total bounds a gross regression.
+const SWITCH_P95_BUDGET_MS = 50;
+const SWITCH_TOTAL_BUDGET_MS = 1500;
 
 let repoRoot: string;
 let managedRoot: string;
@@ -217,17 +220,26 @@ describe(`task-workspace performance bounds at N=${String(SCALE)} (ADR-0093 D4)`
     const ids = [a.instance.workspaceId, b.instance.workspaceId];
     const switches = 30;
     let lastId = "";
-    const ms = await elapsed(async () => {
+    const perSwitchMs: number[] = [];
+    const total = await elapsed(async () => {
       for (let i = 0; i < switches; i += 1) {
         lastId = ids[i % 2] ?? "";
+        const start = performance.now();
         await lifecycle.setActive({
           workspaceId: lastId,
           requestedBy: "actor",
           acquireLock: false,
         });
+        perSwitchMs.push(performance.now() - start);
       }
     });
     expect(lifecycle.getActive()?.instance.workspaceId).toBe(lastId);
-    expect(ms).toBeLessThan(SWITCH_BUDGET_MS);
+    // Per-switch p95 guards the ADR-0093 D4 O(1) bound (design target 25 ms; the assertion keeps CI
+    // headroom but stays tight enough to catch a 3× latency creep — e.g. a stray listAll/`git status`
+    // slipped into setActive would push each switch past 50 ms and fail here).
+    const sorted = [...perSwitchMs].sort((x, y) => x - y);
+    const p95 = sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)] ?? 0;
+    expect(p95).toBeLessThan(SWITCH_P95_BUDGET_MS);
+    expect(total).toBeLessThan(SWITCH_TOTAL_BUDGET_MS);
   });
 });
