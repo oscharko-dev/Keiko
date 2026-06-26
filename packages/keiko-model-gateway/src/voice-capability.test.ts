@@ -13,9 +13,11 @@ import {
 import {
   resolveVoiceCapability,
   selectRealtimeVoiceModel,
+  selectSpeechOutputModel,
   selectSpeechToTextModel,
+  selectVoicePersonaVoice,
 } from "./model-selection.js";
-import type { GatewayConfig } from "./types.js";
+import type { GatewayConfig, VoicePersonaVoice } from "./types.js";
 
 // A voice capability with the named sub-capabilities. Defaults to a development Azure Foundry STT
 // deployment shaped like the existing `keiko-stt` (AC6).
@@ -369,5 +371,209 @@ describe("selectRealtimeVoiceModel (Issue #497)", () => {
       capabilities: [voiceCap({ supportsRealtimeVoice: true })],
     };
     expect(selectRealtimeVoiceModel(config)).toBeUndefined();
+  });
+});
+
+// ─── Issue #1557 (Epic #1556, ADR-0088) ────────────────────────────────────────
+
+function configFor(capabilities: readonly ModelCapability[]): GatewayConfig {
+  return {
+    providers: capabilities.map((capability) => ({
+      modelId: capability.id,
+      baseUrl: "https://example.test",
+      apiKey: "test-key",
+      timeoutMs: 30_000,
+      maxRetries: 3,
+      retryBaseDelayMs: 500,
+    })),
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    capabilities,
+  };
+}
+
+interface VoiceProviderEntry {
+  readonly capability: ModelCapability;
+  readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+}
+
+// A GatewayConfig whose providers carry the credential-tier persona → voice-id mapping (ADR-0088 D2).
+function configWithVoiceProfiles(entries: readonly VoiceProviderEntry[]): GatewayConfig {
+  return {
+    providers: entries.map((entry) => ({
+      modelId: entry.capability.id,
+      baseUrl: "https://example.test",
+      apiKey: "test-key",
+      timeoutMs: 30_000,
+      maxRetries: 3,
+      retryBaseDelayMs: 500,
+      ...(entry.voiceProfiles === undefined ? {} : { voiceProfiles: entry.voiceProfiles }),
+    })),
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    capabilities: entries.map((entry) => entry.capability),
+  };
+}
+
+describe("resolveVoiceCapabilityFromCapabilities — available voice personas (Issue #1557, AC3)", () => {
+  it("reports no personas for a no-voice deployment", () => {
+    expect(resolve([]).availableVoicePersonas).toEqual([]);
+  });
+
+  it("reports no personas for an STT-only deployment (personas are output voices)", () => {
+    expect(resolve([voiceCap({ supportsSpeechInput: true })]).availableVoicePersonas).toEqual([]);
+  });
+
+  it("reports a speech-output provider's personas, sorted in canonical order", () => {
+    const result = resolve([
+      voiceCap({
+        id: "keiko-tts",
+        supportsSpeechOutput: true,
+        supportedVoicePersonas: ["neutral", "male"],
+      }),
+    ]);
+    expect(result.availableVoicePersonas).toEqual(["male", "neutral"]);
+  });
+
+  it("unions personas across reachable speech-output and realtime providers, deduped + sorted", () => {
+    const result = resolve([
+      voiceCap({ id: "keiko-tts", supportsSpeechOutput: true, supportedVoicePersonas: ["female"] }),
+      voiceCap({
+        id: "keiko-realtime",
+        supportsRealtimeVoice: true,
+        supportedVoicePersonas: ["male", "female"],
+      }),
+    ]);
+    expect(result.availableVoicePersonas).toEqual(["male", "female"]);
+  });
+
+  it("excludes personas advertised only by an unreachable provider", () => {
+    const result = resolve(
+      [voiceCap({ id: "keiko-tts", supportsSpeechOutput: true, supportedVoicePersonas: ["male"] })],
+      { unreachableProviderIds: new Set(["keiko-tts"]) },
+    );
+    expect(result.available).toBe(false);
+    expect(result.availableVoicePersonas).toEqual([]);
+  });
+
+  it("ignores personas mistakenly attached to an STT-only provider (output-voice invariant)", () => {
+    const result = resolve([
+      voiceCap({ supportsSpeechInput: true, supportedVoicePersonas: ["male", "female"] }),
+    ]);
+    expect(result.availableVoicePersonas).toEqual([]);
+  });
+});
+
+describe("selectSpeechOutputModel (Issue #1557, ADR-0088 D6)", () => {
+  it("returns undefined for a no-voice (chat-only) deployment", () => {
+    expect(selectSpeechOutputModel(configFor([chatCap()]))).toBeUndefined();
+  });
+
+  it("returns undefined when no provider is configured", () => {
+    expect(selectSpeechOutputModel(configFor([]))).toBeUndefined();
+  });
+
+  it("returns undefined for an STT-only deployment (no speech output advertised)", () => {
+    expect(
+      selectSpeechOutputModel(configFor([voiceCap({ supportsSpeechInput: true })])),
+    ).toBeUndefined();
+  });
+
+  it("selects the configured speech-output provider", () => {
+    expect(
+      selectSpeechOutputModel(
+        configFor([voiceCap({ id: "keiko-tts", supportsSpeechOutput: true })]),
+      ),
+    ).toBe("keiko-tts");
+  });
+
+  it("prefers the cheapest configured speech-output provider", () => {
+    const config = configFor([
+      voiceCap({ id: "tts-high", supportsSpeechOutput: true, costClass: "high" }),
+      voiceCap({ id: "tts-low", supportsSpeechOutput: true, costClass: "low" }),
+    ]);
+    expect(selectSpeechOutputModel(config)).toBe("tts-low");
+  });
+
+  it("never elects a speech-output capability that names no configured provider (fail-closed)", () => {
+    const config: GatewayConfig = {
+      ...configFor([]),
+      capabilities: [voiceCap({ id: "keiko-tts", supportsSpeechOutput: true })],
+    };
+    expect(selectSpeechOutputModel(config)).toBeUndefined();
+  });
+});
+
+describe("selectVoicePersonaVoice (Issue #1557, ADR-0088 D2/D6)", () => {
+  it("returns undefined for a no-voice deployment", () => {
+    expect(selectVoicePersonaVoice(configWithVoiceProfiles([]), "male")).toBeUndefined();
+  });
+
+  it("maps a persona to the provider voice id on a speech-output provider", () => {
+    const config = configWithVoiceProfiles([
+      {
+        capability: voiceCap({ id: "keiko-tts", supportsSpeechOutput: true }),
+        voiceProfiles: [
+          { persona: "male", voiceId: "azure-male-1" },
+          { persona: "female", voiceId: "azure-female-1" },
+        ],
+      },
+    ]);
+    expect(selectVoicePersonaVoice(config, "male")).toEqual({
+      modelId: "keiko-tts",
+      voiceId: "azure-male-1",
+    });
+    expect(selectVoicePersonaVoice(config, "female")).toEqual({
+      modelId: "keiko-tts",
+      voiceId: "azure-female-1",
+    });
+  });
+
+  it("maps a persona on a realtime provider", () => {
+    const config = configWithVoiceProfiles([
+      {
+        capability: voiceCap({ id: "keiko-realtime", supportsRealtimeVoice: true }),
+        voiceProfiles: [{ persona: "neutral", voiceId: "rt-neutral" }],
+      },
+    ]);
+    expect(selectVoicePersonaVoice(config, "neutral")).toEqual({
+      modelId: "keiko-realtime",
+      voiceId: "rt-neutral",
+    });
+  });
+
+  it("returns undefined when the persona is not mapped by any provider", () => {
+    const config = configWithVoiceProfiles([
+      {
+        capability: voiceCap({ id: "keiko-tts", supportsSpeechOutput: true }),
+        voiceProfiles: [{ persona: "male", voiceId: "azure-male-1" }],
+      },
+    ]);
+    expect(selectVoicePersonaVoice(config, "neutral")).toBeUndefined();
+  });
+
+  it("ignores a mapping on a provider that cannot render output personas (STT-only) — fail-closed", () => {
+    const config = configWithVoiceProfiles([
+      {
+        capability: voiceCap({ id: "keiko-stt", supportsSpeechInput: true }),
+        voiceProfiles: [{ persona: "male", voiceId: "x" }],
+      },
+    ]);
+    expect(selectVoicePersonaVoice(config, "male")).toBeUndefined();
+  });
+
+  it("prefers the cheapest provider when several map the persona", () => {
+    const config = configWithVoiceProfiles([
+      {
+        capability: voiceCap({ id: "tts-high", supportsSpeechOutput: true, costClass: "high" }),
+        voiceProfiles: [{ persona: "male", voiceId: "high-male" }],
+      },
+      {
+        capability: voiceCap({ id: "tts-low", supportsSpeechOutput: true, costClass: "low" }),
+        voiceProfiles: [{ persona: "male", voiceId: "low-male" }],
+      },
+    ]);
+    expect(selectVoicePersonaVoice(config, "male")).toEqual({
+      modelId: "tts-low",
+      voiceId: "low-male",
+    });
   });
 });

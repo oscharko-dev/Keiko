@@ -554,6 +554,7 @@ describe("voice-timebase — resolutionToVoiceProfile (AC1)", () => {
       profile: "full-realtime",
       capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
       transport: { websocketControl: false, webrtcMedia: false },
+      availableVoicePersonas: [],
     };
     expect(resolutionToVoiceProfile(unavailable)).toBe("none");
 

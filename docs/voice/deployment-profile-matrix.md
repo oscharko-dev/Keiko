@@ -68,3 +68,24 @@ and only to configured endpoints / relays.
 In every environment the long-lived provider key stays on the Keiko host as sealed vault material
 (`apiKeySecretRef`, [ADR-0046](../adr/ADR-0046-local-credential-vault.md)); see
 [privacy-contract.md](privacy-contract.md) §2.
+
+## 6. Product voice personas (Issue #1557)
+
+Product voice personas (`male` / `female` / `neutral`) are an axis **orthogonal** to the capability and
+environment profiles above ([ADR-0088](../adr/ADR-0088-voice-provider-capability-registry-extension.md)). They
+apply only to the **output-capable** profiles (`speech output only` and `full realtime voice`); a
+`speech-to-text only` deployment offers no personas because personas are output voices.
+
+| Environment                | Persona → voice-id mapping (`voiceProfiles`) | Browser sees                                     |
+| -------------------------- | -------------------------------------------- | ------------------------------------------------ |
+| Azure Foundry dev/academic | Sealed on the Keiko host (credential tier)   | Only the available persona enums (no voice ids). |
+| Customer-hosted controlled | Sealed on the Keiko host (credential tier)   | Only the available persona enums (no voice ids). |
+| No-voice                   | n/a                                          | n/a (`availableVoicePersonas: []`).              |
+
+The persona → provider voice-id mapping lives on the credential-tier provider record
+(`ModelProviderConfig.voiceProfiles`) and never reaches the browser; the content-free
+`availableVoicePersonas` (and the derived `supportedVoicePersonas` on the model list) carry only the persona
+literals, so the operator picks personas per deployment without exposing provider voice identifiers. The five
+existing Azure Foundry deployment classes (`keiko-stt`, `keiko-tts`, `keiko-audio-output`, `keiko-realtime`,
+`keiko-realtime-stt`) are represented purely by `modelId` + capability flags + `voiceProfiles` — no deployment
+name is hard-coded into product behavior.

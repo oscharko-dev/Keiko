@@ -11,6 +11,7 @@ import {
   modelSupportsRealtimeVoice,
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
+  VOICE_PERSONAS,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CompletionDegradeReason,
@@ -19,6 +20,7 @@ import type {
   ModelCapability,
   ModelKind,
   VoiceCapabilityResolution,
+  VoicePersona,
   VoiceProfile,
   VoiceProviderLocality,
   VoiceUnavailableReason,
@@ -62,14 +64,20 @@ export {
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
   modelSupportsRealtimeVoice,
+  isConfiguredVoiceProvider,
+  describeVoiceProviderAvailability,
+  listVoicePersonas,
   VOICE_PROVIDER_LOCALITIES,
+  VOICE_PERSONAS,
 } from "@oscharko-dev/keiko-contracts";
 export type {
   VoiceProviderLocality,
+  VoicePersona,
   VoiceProfile,
   VoiceUnavailableReason,
   VoiceTransportPosture,
   VoiceCapabilityResolution,
+  VoiceProviderAvailability,
 } from "@oscharko-dev/keiko-contracts";
 
 export const CAPABILITY_REGISTRY: readonly ModelCapability[] = CAPABILITY_DATA;
@@ -299,8 +307,27 @@ function unavailableVoice(reason: VoiceUnavailableReason): VoiceCapabilityResolu
     profile: "none",
     capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
     transport: { websocketControl: false, webrtcMedia: false },
+    // HAZARD-2: an unavailable resolution offers no personas. Empty is the honest value (the field
+    // is required on VoiceCapabilityResolution).
+    availableVoicePersonas: [],
     reason,
   };
+}
+
+// Aggregate union of the product voice personas across the reachable providers that advertise
+// speech output or realtime voice (Issue #1557, ADR-0088 D2 / HAZARD-2). Personas are OUTPUT voices,
+// so an STT-only provider contributes none. Sorted canonical (VOICE_PERSONAS) order, content-free.
+function availablePersonasFor(capabilities: readonly ModelCapability[]): readonly VoicePersona[] {
+  const present = new Set<VoicePersona>();
+  for (const capability of capabilities) {
+    if (!modelSupportsSpeechOutput(capability) && !modelSupportsRealtimeVoice(capability)) {
+      continue;
+    }
+    for (const persona of capability.supportedVoicePersonas ?? []) {
+      present.add(persona);
+    }
+  }
+  return VOICE_PERSONAS.filter((persona) => present.has(persona));
 }
 
 // The single effective locality when every elected voice provider agrees; undefined when none
@@ -371,6 +398,7 @@ export function resolveVoiceCapabilityFromCapabilities(
     profile,
     capabilities: { speechToText, speechOutput, realtimeVoice },
     transport: { websocketControl: true, webrtcMedia: profile === "full-realtime" },
+    availableVoicePersonas: availablePersonasFor(reachable),
     ...(locality !== undefined ? { providerLocality: locality } : {}),
   };
 }
