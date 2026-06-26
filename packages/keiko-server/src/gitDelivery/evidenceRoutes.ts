@@ -8,11 +8,9 @@
 // workflows inspect without replaying raw logs or shell transcripts. It mutates nothing and reads
 // only the bounded, date-bucketed evidence ledger written by mutationEvidenceLedger.ts.
 //
-// ACCESS (AC: the authority is the deployment's): the surface is gated by the SAME default-false
-// deployment env flag as the rest of the #470 surface (isGitDeliveryTrusted). A GET is not
-// state-changing, so the central CSRF guard does not cover it — gating is the env flag, and an
-// untrusted deployment gets a content-free 404 (the audit surface is simply absent), never an empty
-// payload that would imply the surface exists.
+// ACCESS: the route is read-only and returns only the bounded, redacted evidence packet. A GET is not
+// state-changing, so the central CSRF guard does not cover it; the records themselves remain
+// content-free and are revalidated before export.
 //
 // DEFENCE IN DEPTH: every record is re-validated through the contract guard and the whole packet is
 // re-run through deps.redactor before it leaves the server, so a record that somehow escaped
@@ -27,21 +25,7 @@ import {
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { isGitDeliveryTrusted } from "./capability.js";
 import { GIT_DELIVERY_EVIDENCE_RUNID_PREFIX } from "./mutationEvidenceLedger.js";
-
-// ─── Error envelope (typed, content-free) ────────────────────────────────────────────────
-
-export type GitDeliveryEvidenceErrorCode = "GIT_DELIVERY_EVIDENCE_NOT_ENABLED";
-
-const SAFE_MESSAGES: Readonly<Record<GitDeliveryEvidenceErrorCode, string>> = {
-  GIT_DELIVERY_EVIDENCE_NOT_ENABLED: "The governed Git delivery evidence surface is not enabled.",
-};
-
-const errResult = (status: number, code: GitDeliveryEvidenceErrorCode): RouteResult => ({
-  status,
-  body: { error: { code, message: SAFE_MESSAGES[code] } },
-});
 
 // ─── Read-window bounds ──────────────────────────────────────────────────────────────────
 
@@ -119,9 +103,6 @@ export const createHandleGitDeliveryEvidenceExport = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => RouteResult) => {
   const now = options.now ?? ((): number => Date.now());
   return (ctx, deps): RouteResult => {
-    if (!isGitDeliveryTrusted(deps)) {
-      return errResult(404, "GIT_DELIVERY_EVIDENCE_NOT_ENABLED");
-    }
     const days = clampInt(
       ctx.url.searchParams.get("days"),
       DEFAULT_BUCKET_DAYS,

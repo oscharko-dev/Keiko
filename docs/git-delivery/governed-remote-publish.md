@@ -40,8 +40,9 @@ content-free evidence record is appended for **every** terminal outcome (allowed
 A rejected push returns the typed `publishRejectionReason` plus a reused recovery disposition and action
 hint so the user can recover without guessing.
 
-Both routes are gated by the `KEIKO_GIT_DELIVERY_ENABLED` capability flag (404 when disabled), bounded
-and credential-shape-scanned at the boundary, and CSRF-protected by the central server gate.
+Both routes are always registered with the governed Git delivery surface. They are bounded and
+credential-shape-scanned at the boundary, CSRF-protected by the central server gate, and execute only
+when the project worktree, remote, credentials, preflight, and policy prerequisites are satisfied.
 
 ## Policy: protected and shared targets are stricter (AC2)
 
@@ -109,7 +110,7 @@ evidence capture.
   at execution time; a force push is blocked and the remote is untouched; evidence is recorded for
   allowed and blocked attempts; push stays out of the local mutation allowlist.
 - `packages/keiko-tools/src/git-mutation-preflight.test.ts` — the `non-fast-forward` preflight finding.
-- `packages/keiko-server/src/gitDelivery/pushRoutes.test.ts` — the BFF seam: capability/CSRF gates,
+- `packages/keiko-server/src/gitDelivery/pushRoutes.test.ts` — the BFF seam: CSRF and request guards,
   preview risk context, the default pack's protected-target block, force block, non-fast-forward
   preflight block, rejection surfacing, and evidence recording.
 - `packages/keiko-ui/.../GovernedGitFlowCard.test.tsx` / `.a11y.test.tsx` — the Publish section.

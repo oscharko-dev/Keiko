@@ -441,7 +441,13 @@ registerWindowRender("runtime", (cfg, ctx) => {
 registerWindowRender("governedGit", (cfg, ctx) => {
   const projectId =
     str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
-  return <GovernedGitFlowCard projectId={projectId} />;
+  return (
+    <GovernedGitFlowCard
+      projectId={projectId}
+      onOpenFiles={(root) => ctx.openWindow("files", { root })}
+      onOpenEditor={(root) => ctx.openWindow("editor", { root })}
+    />
+  );
 });
 // Epic #470, Issue #477 — Governed GitHub pull request command center. The active project root acts as
 // the projectId; the published head branch is carried in cfg from the Publish section.

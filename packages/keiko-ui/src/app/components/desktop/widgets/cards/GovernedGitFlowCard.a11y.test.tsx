@@ -51,6 +51,49 @@ const OK: GitDeliveryMutationResponse = {
 
 function makeClient(): GovernedGitFlowClient {
   return {
+    listRepositories: vi.fn(async () => ({
+      projects: [
+        {
+          path: PROJECT,
+          name: "repo",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+          available: true,
+        },
+      ],
+    })),
+    registerRepository: vi.fn(async (input) => ({
+      project: {
+        path: input.path,
+        name: input.name ?? "repo",
+        favorite: false,
+        createdAt: 1,
+        lastOpenedAt: 1,
+        available: true,
+      },
+    })),
+    cloneRepository: vi.fn(async (input) => ({
+      project: {
+        path: input.destinationPath,
+        name: "repo",
+        favorite: false,
+        createdAt: 1,
+        lastOpenedAt: 1,
+        available: true,
+      },
+    })),
+    listBranches: vi.fn(async () => ({
+      schemaVersion: "1",
+      root: PROJECT,
+      available: true,
+      state: "available",
+      branches: [
+        { name: "main", headRefHash: "main-ref", current: true },
+        { name: "release", headRefHash: "release-ref", current: false },
+      ],
+      truncated: false,
+    })),
     branchCreate: vi.fn(async () => OK),
     branchSwitch: vi.fn(async () => OK),
     stage: vi.fn(async () => OK),

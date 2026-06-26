@@ -1,8 +1,7 @@
 // Unit tests for GET /api/git-delivery/evidence (Issue #474, Epic #470).
-// Proves: the audit-export surface is default-off (404) unless the deployment enables it; when
-// enabled it returns a structured GitDeliveryAuditPacket aggregating the ledger (AC1/AC4); the
-// response is re-redacted on read so a record that escaped persist-time redaction is still scrubbed
-// (AC5 defence-in-depth); and a malformed/tampered record is dropped rather than served.
+// Proves: the audit-export surface returns a structured GitDeliveryAuditPacket aggregating the ledger
+// (AC1/AC4); the response is re-redacted on read so a record that escaped persist-time redaction is
+// still scrubbed (AC5 defence-in-depth); and a malformed/tampered record is dropped rather than served.
 
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -76,17 +75,10 @@ function ctx(query = "days=7&limit=200"): RouteContext {
 }
 
 const handler = createHandleGitDeliveryEvidenceExport({ now: () => NOW });
-const ENABLED = { KEIKO_GIT_DELIVERY_ENABLED: "true" } as const;
 
-describe("GET /api/git-delivery/evidence — capability gate", () => {
-  it("returns 404 when the deployment has not enabled the surface", () => {
+describe("GET /api/git-delivery/evidence — empty export", () => {
+  it("returns an empty but well-formed packet without a deployment enable flag", () => {
     const result = handler(ctx(), deps({}, createInMemoryEvidenceStore()));
-    expect(result.status).toBe(404);
-    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_EVIDENCE_NOT_ENABLED" } });
-  });
-
-  it("returns an empty but well-formed packet when enabled with no records", () => {
-    const result = handler(ctx(), deps(ENABLED, createInMemoryEvidenceStore()));
     expect(result.status).toBe(200);
     const packet = result.body as GitDeliveryAuditPacket;
     expect(packet.recordCount).toBe(0);
@@ -109,7 +101,7 @@ describe("GET /api/git-delivery/evidence — aggregation (AC1/AC4)", () => {
         recovery: { disposition: "policy-forbidden", actionHint: "adjust-policy-target" },
       }),
     );
-    const result = handler(ctx(), deps(ENABLED, store));
+    const result = handler(ctx(), deps({}, store));
     const packet = result.body as GitDeliveryAuditPacket;
     expect(packet.recordCount).toBe(2);
     expect(packet.outcomeClassCounts.succeeded).toBe(1);
@@ -129,7 +121,7 @@ describe("GET /api/git-delivery/evidence — aggregation (AC1/AC4)", () => {
       { evidenceStore: store, redactString },
       record({ evidenceId: "gde-newer", recordedAtMs: NOW }),
     );
-    const result = handler(ctx("days=7&limit=200"), deps(ENABLED, store));
+    const result = handler(ctx("days=7&limit=200"), deps({}, store));
     const packet = result.body as GitDeliveryAuditPacket;
     expect(packet.recordCount).toBe(2);
     expect(packet.records.map((r) => r.evidenceId)).toStrictEqual(["gde-older", "gde-newer"]);
@@ -144,7 +136,7 @@ describe("GET /api/git-delivery/evidence — aggregation (AC1/AC4)", () => {
       record({ evidenceId: "gde-ancient", recordedAtMs: longAgo }),
     );
     recordGitDeliveryMutationEvidence({ evidenceStore: store, redactString }, record());
-    const result = handler(ctx("days=7&limit=200"), deps(ENABLED, store));
+    const result = handler(ctx("days=7&limit=200"), deps({}, store));
     const packet = result.body as GitDeliveryAuditPacket;
     expect(packet.recordCount).toBe(1);
     expect(packet.records[0]?.evidenceId).toBe("gde-route-00000000000000000000000000000000");
@@ -159,7 +151,7 @@ describe("GET /api/git-delivery/evidence — aggregation (AC1/AC4)", () => {
         record({ evidenceId: `gde-${String(i)}` }),
       );
     }
-    const result = handler(ctx("days=7&limit=2"), deps(ENABLED, store));
+    const result = handler(ctx("days=7&limit=2"), deps({}, store));
     const packet = result.body as GitDeliveryAuditPacket;
     expect(packet.recordCount).toBe(2);
     expect(packet.records.map((r) => r.evidenceId)).toStrictEqual(["gde-3", "gde-4"]);
@@ -183,7 +175,7 @@ describe("GET /api/git-delivery/evidence — defence in depth (AC5)", () => {
       gitDeliveryEvidenceRunIdFor(NOW),
       JSON.stringify({ schemaVersion: "1", records: [raw] }),
     );
-    const result = handler(ctx(), deps(ENABLED, store));
+    const result = handler(ctx(), deps({}, store));
     const json = JSON.stringify(result.body);
     expect(json).not.toContain(SK_FAKE);
     expect(json).toContain("[REDACTED]");
@@ -195,7 +187,7 @@ describe("GET /api/git-delivery/evidence — defence in depth (AC5)", () => {
       gitDeliveryEvidenceRunIdFor(NOW),
       JSON.stringify({ schemaVersion: "1", records: [record(), { not: "a record" }] }),
     );
-    const result = handler(ctx(), deps(ENABLED, store));
+    const result = handler(ctx(), deps({}, store));
     const packet = result.body as GitDeliveryAuditPacket;
     expect(packet.recordCount).toBe(1);
     expect(packet.records[0]?.evidenceId).toBe("gde-route-00000000000000000000000000000000");
@@ -204,7 +196,7 @@ describe("GET /api/git-delivery/evidence — defence in depth (AC5)", () => {
   it("ignores a corrupt bucket document rather than failing the export", () => {
     const store = createInMemoryEvidenceStore();
     store.put(gitDeliveryEvidenceRunIdFor(NOW), "{ not valid json");
-    const result = handler(ctx(), deps(ENABLED, store));
+    const result = handler(ctx(), deps({}, store));
     expect(result.status).toBe(200);
     expect((result.body as GitDeliveryAuditPacket).recordCount).toBe(0);
   });

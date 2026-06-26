@@ -274,7 +274,14 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
         if (existing !== undefined) {
           createdId = existing.id;
           return list.map((w) =>
-            w.id === existing.id ? { ...w, minimized: false, z: ++zc.current } : w,
+            w.id === existing.id
+              ? {
+                  ...w,
+                  cfg: cfg === undefined ? w.cfg : { ...w.cfg, ...cfg },
+                  minimized: false,
+                  z: ++zc.current,
+                }
+              : w,
           );
         }
       }

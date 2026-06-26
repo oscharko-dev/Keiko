@@ -12,7 +12,12 @@ import {
 } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { UiStore } from "./store/index.js";
-import { handleGitDiff, handleGitStatus, type GitProcessRunner } from "./gitRoutes.js";
+import {
+  handleGitBranches,
+  handleGitDiff,
+  handleGitStatus,
+  type GitProcessRunner,
+} from "./gitRoutes.js";
 
 let root: string;
 let store: UiStore;
@@ -351,6 +356,36 @@ describe("GET /api/git/status", () => {
       reason: "git-missing",
       available: false,
     });
+  });
+});
+
+describe("GET /api/git/branches", () => {
+  it("returns local branches with current marker and head refs", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok("main\0aaa111\0*\0release\0bbb222\0\0"));
+
+    const result = await handleGitBranches(
+      ctx(`/api/git/branches?root=${encodeURIComponent(root)}`),
+      deps(runner),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      schemaVersion: "1",
+      root,
+      available: true,
+      state: "available",
+      branches: [
+        { name: "main", headRefHash: "aaa111", current: true },
+        { name: "release", headRefHash: "bbb222", current: false },
+      ],
+      truncated: false,
+    });
+    expect(runner.mock.calls[1]?.[0]).toEqual(
+      expect.arrayContaining(["for-each-ref", "refs/heads"]),
+    );
   });
 });
 

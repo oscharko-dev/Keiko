@@ -2,8 +2,8 @@
 //
 // Two harnesses:
 //   * Real `createUiServer` dispatch — central CSRF / 415 / body-cap, envelope validation, the
-//     capability gate (404 when disabled), and unknown-project authorization. The default route uses
-//     the real git adapter, so real-dispatch tests stop at the gates BEFORE execution.
+//     unknown-project authorization, and real worktree preconditions. The default route uses the real
+//     git adapter, so real-dispatch tests stop at validation/worktree checks BEFORE execution.
 //   * Direct handler calls with injected execution SEAMS (fake adapter / snapshot / clock / packs) —
 //     exercise the governed outcomes (success, preflight-block, policy-block, approval-required) and
 //     prove evidence is recorded and the mutation never bypasses the kernel.
@@ -36,7 +36,6 @@ import {
 import type { GitDeliveryExecutionSeams } from "./execution.js";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
-const ENABLED_ENV = { KEIKO_GIT_DELIVERY_ENABLED: "true" } as const;
 
 const SNAPSHOT: GitWorktreeSnapshot = {
   headDetached: false,
@@ -146,7 +145,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     config: undefined,
     configPresent: false,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: ENABLED_ENV,
+    env: {},
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
@@ -235,13 +234,13 @@ describe("local mutation routes — central enforcement + validation (real dispa
     await closeServer();
   });
 
-  it("404s every execution route when governed git delivery is disabled", async () => {
+  it("does not require a deployment enable flag before checking the worktree", async () => {
     await closeServer();
     await startBound({ env: {} });
     const res = await post(SWITCH, { schemaVersion: "1", projectId, branchName: "feature/x" });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(409);
     const body = (await res.json()) as GitDeliveryLocalErrorBody;
-    expect(body.error.code).toBe("GIT_DELIVERY_LOCAL_DISABLED");
+    expect(body.error.code).toBe("GIT_DELIVERY_LOCAL_WORKTREE_UNAVAILABLE");
   });
 
   it("403s when the central CSRF header is missing", async () => {
@@ -442,7 +441,12 @@ describe("local mutation routes — real specs through the route group (direct h
   it("stages and unstages via the real staging specs", async () => {
     const a1 = recordingAdapter();
     const staged = await handlerFor(STAGE, seams({ adapterFactory: () => a1.adapter }))(
-      ctxFor(STAGE, { schemaVersion: "1", projectId, pathspecs: ["src/a.ts"], includeUntracked: false }),
+      ctxFor(STAGE, {
+        schemaVersion: "1",
+        projectId,
+        pathspecs: ["src/a.ts"],
+        includeUntracked: false,
+      }),
       deps(),
     );
     expect((staged.body as { status: string }).status).toBe("succeeded");
@@ -464,7 +468,12 @@ describe("local mutation routes — real specs through the route group (direct h
     );
     expect(missing.status).toBe(400);
     const badApproval = await handlerFor(SWITCH, seams())(
-      ctxFor(SWITCH, { schemaVersion: "1", projectId, branchName: "feature/x", approval: { required: "no" } }),
+      ctxFor(SWITCH, {
+        schemaVersion: "1",
+        projectId,
+        branchName: "feature/x",
+        approval: { required: "no" },
+      }),
       deps(),
     );
     expect(badApproval.status).toBe(400);

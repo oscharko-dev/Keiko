@@ -2,7 +2,7 @@
 // target editor + eligible-strategy selector + readiness/recommendation panel + governed merge dispatch
 // with a fully mocked api client: empty state, strategy-selector population from the preview (AC2),
 // execute gated on mergeable + high-risk confirmation, the readable outcome banner (merged / blocked /
-// normalized provider rejection), and the disabled-deployment notice.
+// normalized provider rejection), and readable API errors.
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -225,13 +225,19 @@ describe("GovernedMergeCard", () => {
     expect(screen.getByTestId("gm-outcome")).toHaveTextContent("hint: resolve-conflicts");
   });
 
-  it("renders the disabled notice when the deployment has governed delivery off", async () => {
+  it("renders API failures as a readable alert", async () => {
     const mergePreview = vi.fn(() =>
-      Promise.reject(new ApiError("GIT_DELIVERY_MERGE_DISABLED", "not enabled", 404)),
+      Promise.reject(
+        new ApiError("GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE", "worktree unavailable", 409),
+      ),
     );
     render(<GovernedMergeCard projectId={PROJECT} client={makeClient({ mergePreview })} />);
     fillTarget();
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
-    await waitFor(() => expect(screen.getByTestId("gm-disabled")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "worktree unavailable (GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE)",
+      ),
+    );
   });
 });

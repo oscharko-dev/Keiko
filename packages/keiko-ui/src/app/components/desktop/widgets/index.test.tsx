@@ -130,7 +130,7 @@ vi.mock("./cards/FilesWidget", () => ({
         Open file
       </button>
       <button type="button" onClick={() => onOpenGitDelivery("/repo")}>
-        Open governed Git delivery
+        Open Git
       </button>
     </div>
   ),
@@ -444,9 +444,7 @@ describe("workspace widget renderer registry", () => {
     await waitFor(() => {
       expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1" });
     });
-    expect(screen.getByTestId("chat-window")).toHaveTextContent(
-      "true:/repo:/repo|/docs:false",
-    );
+    expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo:/repo|/docs:false");
   });
 
   it("maps window cfg into widget props and follow-up workspace actions", () => {
@@ -473,7 +471,7 @@ describe("workspace widget renderer registry", () => {
       file: "src/app.ts",
       openFiles: ["src/app.ts"],
     });
-    fireEvent.click(screen.getByRole("button", { name: "Open governed Git delivery" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Git" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", { projectPath: "/repo" });
 
     view.rerender(<>{WIN_TYPES.review.render({}, ctx)}</>);

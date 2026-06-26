@@ -279,9 +279,9 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
 test("governed Git action-sheet endpoint is wired, CSRF-protected, and returns the contract shape @smoke", async ({
   request,
 }) => {
-  // Issue #473: the action-sheet BFF is read-only/computational. Against the packaged app (governed
-  // Git delivery not enabled in this deployment) it must return a well-formed, content-free
-  // GitDeliveryActionSheet that is fail-closed to blocked/provider-not-ready — never a 500 or raw output.
+  // Issue #473: the action-sheet BFF is read-only/computational. Against the packaged app it must
+  // return a well-formed, content-free GitDeliveryActionSheet that reaches policy evaluation and
+  // fail-closes when no trusted policy pack applies — never a 500 or raw output.
   const body = {
     schemaVersion: "1",
     resolvedInputs: {
@@ -324,9 +324,9 @@ test("governed Git action-sheet endpoint is wired, CSRF-protected, and returns t
   expect(typeof sheet.approval.necessity).toBe("string");
   expect(typeof sheet.policyExplanation.decision).toBe("string");
   expect(Array.isArray(sheet.recovery)).toBe(true);
-  // Governed Git delivery is disabled in the packaged deployment -> fail-closed to a hard block.
+  // No trusted policy pack is configured in the packaged deployment -> fail-closed to a hard block.
   expect(sheet.state).toBe("blocked");
-  expect(sheet.blocked?.cause).toBe("provider-not-ready");
+  expect(sheet.blocked?.cause).toBe("policy");
   // Content-free guarantee: no raw repo paths or command output leaked into the response.
   expect(JSON.stringify(sheet)).not.toContain("/Users/");
 

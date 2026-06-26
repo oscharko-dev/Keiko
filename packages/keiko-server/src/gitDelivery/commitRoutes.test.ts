@@ -33,7 +33,6 @@ import {
 } from "./commitRoutes.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
 
-const ENABLED_ENV = { KEIKO_GIT_DELIVERY_ENABLED: "true" } as const;
 const PREVIEW = "/api/git-delivery/commit/preview";
 const EXECUTE = "/api/git-delivery/commit/execute";
 
@@ -131,7 +130,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     config: undefined,
     configPresent: false,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: ENABLED_ENV,
+    env: {},
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
@@ -200,16 +199,23 @@ describe("commit routes — central enforcement (real dispatch)", () => {
     await closeServer();
   });
 
-  it("404s preview + execute when governed git delivery is disabled", async () => {
+  it("does not require a deployment enable flag before checking the worktree", async () => {
     await closeServer();
     await startBound({ env: {} });
-    for (const path of [PREVIEW, EXECUTE]) {
-      const res = await fetch(`http://${UI_HOST}:${String(port)}${path}`, {
+    const cases = [
+      { path: PREVIEW, body: { schemaVersion: "1", projectId, messageDraft: "feat: x" } },
+      { path: EXECUTE, body: { schemaVersion: "1", projectId, message: "feat: x" } },
+    ] as const;
+    for (const item of cases) {
+      const res = await fetch(`http://${UI_HOST}:${String(port)}${item.path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
-        body: JSON.stringify({ schemaVersion: "1", projectId, message: "feat: x" }),
+        body: JSON.stringify(item.body),
       });
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error: { code: "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE" },
+      });
     }
   });
 

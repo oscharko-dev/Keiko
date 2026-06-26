@@ -457,6 +457,16 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectR
   return fetchJson("/api/projects", { method: "POST", body: JSON.stringify(input) });
 }
 
+export interface CloneRepositoryInput {
+  repositoryUrl: string;
+  destinationPath: string;
+  name?: string;
+}
+
+export async function cloneRepository(input: CloneRepositoryInput): Promise<ProjectResponse> {
+  return fetchJson("/api/repositories/clone", { method: "POST", body: JSON.stringify(input) });
+}
+
 export interface UpdateProjectInput {
   name?: string;
   favorite?: boolean;
@@ -960,6 +970,30 @@ export async function fetchGitStatus(root: string): Promise<GitRepositoryStatusR
   const params = new URLSearchParams();
   params.set("root", root);
   return fetchJson(`/api/git/status?${params.toString()}`);
+}
+
+export interface GitBranchListEntry {
+  readonly name: string;
+  readonly headRefHash: string;
+  readonly current: boolean;
+}
+
+export interface GitBranchListResponse {
+  readonly schemaVersion: "1";
+  readonly root: string;
+  readonly repositoryRoot?: string | undefined;
+  readonly available: boolean;
+  readonly state: "available" | "unavailable" | "unsafe";
+  readonly reason?: string | undefined;
+  readonly message?: string | undefined;
+  readonly branches: readonly GitBranchListEntry[];
+  readonly truncated: boolean;
+}
+
+export async function fetchGitBranches(root: string): Promise<GitBranchListResponse> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  return fetchJson(`/api/git/branches?${params.toString()}`);
 }
 
 export async function fetchGitDiff(input: {

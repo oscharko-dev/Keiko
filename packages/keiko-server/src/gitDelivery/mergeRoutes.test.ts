@@ -42,7 +42,6 @@ import type {
   GitDeliveryMergeSeams,
 } from "./mergeExecution.js";
 
-const ENABLED_ENV = { KEIKO_GIT_DELIVERY_ENABLED: "true" } as const;
 const PREVIEW = "/api/git-delivery/merge/preview";
 const EXECUTE = "/api/git-delivery/merge/execute";
 
@@ -152,7 +151,7 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     config: undefined,
     configPresent: false,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: ENABLED_ENV,
+    env: {},
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
@@ -234,16 +233,19 @@ describe("merge routes — central enforcement", () => {
     await closeServer();
   });
 
-  it("404s preview + execute when governed git delivery is disabled", async () => {
+  it("does not require a deployment enable flag before project validation", async () => {
     await closeServer();
     await startBound({ env: {} });
     for (const path of [PREVIEW, EXECUTE]) {
       const res = await fetch(`http://${UI_HOST}:${String(port)}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
-        body: JSON.stringify(mergeBody()),
+        body: JSON.stringify(mergeBody({ projectId: "/no/such/project" })),
       });
       expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({
+        error: { code: "GIT_DELIVERY_MERGE_UNKNOWN_PROJECT" },
+      });
     }
   });
 

@@ -128,6 +128,27 @@ describe("LeftRail — workspace tool buttons", () => {
     );
   });
 
+  it("opens the Git window via onTool('governedGit') when clicked", async () => {
+    const onTool = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={onTool}
+        onNewChat={vi.fn()}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Git" }));
+    expect(onTool).toHaveBeenCalledWith("governedGit");
+  });
+
+  it("marks the Git button pressed when its window is open", () => {
+    renderRail(new Set(["governedGit"]));
+    expect(screen.getByRole("button", { name: "Git" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("renders Local Knowledge as a tool button (not a page-route link)", () => {
     renderRail();
     expect(screen.getByRole("button", { name: "Local Knowledge" })).toBeInTheDocument();

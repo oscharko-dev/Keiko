@@ -126,6 +126,18 @@ export function LeftRail({
           type="button"
           className="rail-btn"
           data-side="left"
+          data-active={openTools.has("governedGit") ? "true" : "false"}
+          aria-label="Git"
+          aria-pressed={openTools.has("governedGit")}
+          data-tip="Git"
+          onClick={() => onTool("governedGit")}
+        >
+          <Icons.git size={19} />
+        </button>
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
           data-active={openTools.has("localKnowledge") ? "true" : "false"}
           aria-label="Local Knowledge"
           aria-pressed={openTools.has("localKnowledge")}

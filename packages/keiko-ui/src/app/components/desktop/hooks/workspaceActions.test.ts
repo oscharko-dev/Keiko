@@ -1648,6 +1648,28 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
     toggleTool("localKnowledge");
     expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(0);
   });
+
+  it("merges cfg into an existing singleton when add focuses it", () => {
+    let wins: AppWindow[] | null = [win("governedGit", {}, "governedGit")];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 4 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    const id = add("governedGit", { projectPath: "/repo" });
+
+    expect(id).toBe("governedGit");
+    expect(wins).toHaveLength(1);
+    expect(wins?.[0]).toMatchObject({
+      type: "governedGit",
+      cfg: { projectPath: "/repo" },
+      z: 5,
+    });
+  });
 });
 
 // ─── Epic #729 #731 — linkedAllFilesRoots (N+1 multiple folders reader) ──────────

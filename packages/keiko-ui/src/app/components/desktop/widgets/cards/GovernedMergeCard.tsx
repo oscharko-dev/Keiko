@@ -36,12 +36,6 @@ const DEFAULT_CLIENT: GovernedMergeClient = {
   mergeExecute: fetchGitDeliveryMergeExecute,
 };
 
-const DISABLED_CODE = "GIT_DELIVERY_MERGE_DISABLED";
-
-function isDisabledError(err: unknown): boolean {
-  return err instanceof ApiError && err.code === DISABLED_CODE;
-}
-
 function formatError(err: unknown): string {
   if (err instanceof ApiError) return `${err.message} (${err.code})`;
   if (err instanceof Error) return err.message;
@@ -160,14 +154,13 @@ function formToInput(form: MergeForm, projectId: string): GitDeliveryMergeInput 
   };
 }
 
-// ─── Async actions hook (seq-guarded; surfaces preview / outcome / error / disabled) ────────────────
+// ─── Async actions hook (seq-guarded; surfaces preview / outcome / error) ───────────────────────────
 
 interface MergeAsyncState {
   readonly preview: GitDeliveryMergePreviewResponse | null;
   readonly outcome: GitDeliveryMergeExecuteResponse | null;
   readonly error: string | null;
   readonly busy: boolean;
-  readonly disabled: boolean;
 }
 
 interface MergeAsync extends MergeAsyncState {
@@ -183,7 +176,6 @@ function useGovernedMergeActions(client: GovernedMergeClient): MergeAsync {
     outcome: null,
     error: null,
     busy: false,
-    disabled: false,
   });
   const seq = useRef(0);
 
@@ -192,7 +184,6 @@ function useGovernedMergeActions(client: GovernedMergeClient): MergeAsync {
     setState((s) => ({
       ...s,
       busy: false,
-      disabled: isDisabledError(err),
       error: formatError(err),
     }));
   }, []);
@@ -204,7 +195,7 @@ function useGovernedMergeActions(client: GovernedMergeClient): MergeAsync {
       try {
         const preview = await client.mergePreview(input);
         if (token !== seq.current) return null;
-        setState((s) => ({ ...s, busy: false, preview, disabled: false }));
+        setState((s) => ({ ...s, busy: false, preview }));
         return preview;
       } catch (err) {
         handleError(err, token);
@@ -222,7 +213,7 @@ function useGovernedMergeActions(client: GovernedMergeClient): MergeAsync {
         .mergeExecute(input)
         .then((outcome) => {
           if (token !== seq.current) return;
-          setState((s) => ({ ...s, busy: false, outcome, disabled: false }));
+          setState((s) => ({ ...s, busy: false, outcome }));
         })
         .catch((err: unknown) => {
           handleError(err, token);
@@ -557,19 +548,6 @@ function GovernedMergeBody({
   const onExecute = useCallback((): void => {
     async.runExecute(formToInput(form, projectId));
   }, [async, form, projectId]);
-
-  if (async.disabled) {
-    return (
-      <div
-        data-testid="gm-disabled"
-        style={{ padding: "var(--space-4)", color: "var(--fg-muted)", font: "var(--text-body-sm)" }}
-      >
-        <p>
-          <Icons.info size={13} /> Governed merge delivery is not enabled for this deployment.
-        </p>
-      </div>
-    );
-  }
 
   // Preview needs the full target; execute additionally requires a loaded preview, a chosen strategy, a
   // mergeable PR, and — when the policy gates approval — the explicit high-risk confirmation.

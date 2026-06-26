@@ -37,12 +37,6 @@ const DEFAULT_CLIENT: GovernedPullRequestClient = {
   prExecute: fetchGitDeliveryPrExecute,
 };
 
-const DISABLED_CODE = "GIT_DELIVERY_PR_DISABLED";
-
-function isDisabledError(err: unknown): boolean {
-  return err instanceof ApiError && err.code === DISABLED_CODE;
-}
-
 function formatError(err: unknown): string {
   if (err instanceof ApiError) return `${err.message} (${err.code})`;
   if (err instanceof Error) return err.message;
@@ -153,14 +147,13 @@ function formToInput(form: PrForm, projectId: string): GitDeliveryPrInput {
   };
 }
 
-// ─── Async actions hook (seq-guarded; surfaces preview / outcome / error / disabled) ────────────────
+// ─── Async actions hook (seq-guarded; surfaces preview / outcome / error) ───────────────────────────
 
 interface PrAsyncState {
   readonly preview: GitDeliveryPrPreviewResponse | null;
   readonly outcome: GitDeliveryPrExecuteResponse | null;
   readonly error: string | null;
   readonly busy: boolean;
-  readonly disabled: boolean;
 }
 
 interface PrAsync extends PrAsyncState {
@@ -174,7 +167,6 @@ function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
     outcome: null,
     error: null,
     busy: false,
-    disabled: false,
   });
   const seq = useRef(0);
 
@@ -183,7 +175,6 @@ function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
     setState((s) => ({
       ...s,
       busy: false,
-      disabled: isDisabledError(err),
       error: formatError(err),
     }));
   }, []);
@@ -195,7 +186,7 @@ function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
       try {
         const preview = await client.prPreview(input);
         if (token !== seq.current) return null;
-        setState((s) => ({ ...s, busy: false, preview, disabled: false }));
+        setState((s) => ({ ...s, busy: false, preview }));
         return preview;
       } catch (err) {
         handleError(err, token);
@@ -213,7 +204,7 @@ function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
         .prExecute(input)
         .then((outcome) => {
           if (token !== seq.current) return;
-          setState((s) => ({ ...s, busy: false, outcome, disabled: false }));
+          setState((s) => ({ ...s, busy: false, outcome }));
         })
         .catch((err: unknown) => {
           handleError(err, token);
@@ -459,20 +450,6 @@ function GovernedPullRequestBody({
   const onExecute = useCallback((): void => {
     async.runExecute(formToInput(form, projectId));
   }, [async, form, projectId]);
-
-  if (async.disabled) {
-    return (
-      <div
-        data-testid="gpr-disabled"
-        style={{ padding: "var(--space-4)", color: "var(--fg-muted)", font: "var(--text-body-sm)" }}
-      >
-        <p>
-          <Icons.info size={13} /> Governed pull request delivery is not enabled for this
-          deployment.
-        </p>
-      </div>
-    );
-  }
 
   // Preview only needs the targets (it SYNTHESIZES a title/body suggestion); execute also needs a title.
   const canPreview =

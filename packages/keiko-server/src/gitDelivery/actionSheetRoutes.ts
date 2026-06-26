@@ -41,7 +41,6 @@ import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { containsForbiddenSecretShape } from "../qualityIntelligence/connectorErrors.js";
-import { isGitDeliveryTrusted } from "./capability.js";
 import {
   buildActionSheetFromFacts,
   type GitDeliveryProviderStateFacts,
@@ -394,7 +393,7 @@ export const createHandleGitDeliveryActionSheet = (
       policyPacks: resolvePolicyPacks(deps),
       activeProviderCapabilities: request.activeProviderCapabilities,
       providerState: request.providerState,
-      providerReady: isGitDeliveryTrusted(deps),
+      providerReady: true,
       nowMs: now(),
     });
     return { status: 200, body: deps.redactor(sheet) };

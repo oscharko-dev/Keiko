@@ -6,8 +6,8 @@
 //   * POST /api/git-delivery/staging/stage
 //   * POST /api/git-delivery/staging/unstage
 //
-// Every handler runs the SAME chain: capability gate (404 when governed git delivery is disabled) →
-// bounded body + envelope hardening (allowed keys, credential-shape + unsafe-format-char scans) →
+// Every handler runs the SAME chain: bounded body + envelope hardening (allowed keys,
+// credential-shape + unsafe-format-char scans) →
 // typed field validation → project authorization → executeGovernedMutation (live snapshot → kernel
 // preflight/policy/approval/execute → evidence) → redacted content-free response. CSRF + JSON content
 // type are enforced centrally by server.ts.
@@ -20,7 +20,6 @@ import {
 import type { GitMutationCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { isGitDeliveryTrusted } from "./capability.js";
 import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
@@ -44,7 +43,6 @@ export type GitDeliveryLocalErrorCode =
   | "GIT_DELIVERY_LOCAL_BAD_REQUEST"
   | "GIT_DELIVERY_LOCAL_PAYLOAD_TOO_LARGE"
   | "GIT_DELIVERY_LOCAL_FORBIDDEN_PAYLOAD"
-  | "GIT_DELIVERY_LOCAL_DISABLED"
   | "GIT_DELIVERY_LOCAL_UNKNOWN_PROJECT"
   | "GIT_DELIVERY_LOCAL_WORKTREE_UNAVAILABLE";
 
@@ -58,7 +56,6 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryLocalErrorCode, string>> = {
     "The governed local Git request exceeds the maximum permitted size.",
   GIT_DELIVERY_LOCAL_FORBIDDEN_PAYLOAD:
     "The request contained a forbidden field. Requests may not carry credentials, headers, or URLs.",
-  GIT_DELIVERY_LOCAL_DISABLED: "Governed Git delivery is not enabled for this deployment.",
   GIT_DELIVERY_LOCAL_UNKNOWN_PROJECT: "The requested project is not a known workspace.",
   GIT_DELIVERY_LOCAL_WORKTREE_UNAVAILABLE:
     "The repository worktree could not be inspected. Confirm the project is a Git repository.",
@@ -217,7 +214,6 @@ export const createHandleLocalMutation = (
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
   const seams = options.execution ?? {};
   return async (ctx, deps): Promise<RouteResult> => {
-    if (!isGitDeliveryTrusted(deps)) return errResult(404, "GIT_DELIVERY_LOCAL_DISABLED");
     const read = await readParsed(ctx.req);
     if (!read.ok) return read.result;
     const validation = validate(spec, read.value);
