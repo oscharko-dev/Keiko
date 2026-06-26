@@ -58,7 +58,11 @@ export type WindowType =
   // Epic #470, Issue #475 — Governed local Git flow surface. A per-project card walking
   // branch → staging → commit (live preview + message-policy + policy decision) entirely through the
   // governed mutation kernel. Gated server-side by KEIKO_GIT_DELIVERY_ENABLED.
-  | "governedGit";
+  | "governedGit"
+  // Epic #470, Issue #477 — Governed GitHub pull request command center. Turns a published branch into
+  // a review-ready PR (synthesized editable metadata + readiness + recommendation) through the governed
+  // PR gateway. Gated server-side by KEIKO_GIT_DELIVERY_ENABLED.
+  | "governedPullRequest";
 
 export interface WindowSize {
   readonly w: number;
@@ -544,6 +548,22 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tiny: { w: 300, h: 240 },
     config: [{ key: "projectPath", label: "Project path", type: "text", def: "" }],
   },
+  // Epic #470, Issue #477 — Governed GitHub pull request command center. Reads the active project root
+  // from cfg (like governedGit) and the published head branch carried from the Publish section.
+  governedPullRequest: {
+    title: "Pull Request",
+    icon: "git",
+    accent: true,
+    desc: "Open a review-ready PR under policy",
+    w: 540,
+    h: 680,
+    min: { w: 380, h: 440 },
+    tiny: { w: 320, h: 260 },
+    config: [
+      { key: "projectPath", label: "Project path", type: "text", def: "" },
+      { key: "headBranchName", label: "Head branch", type: "text", def: "" },
+    ],
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -611,6 +631,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "files",
   "editor",
   "governedGit",
+  "governedPullRequest",
   "quality",
   "promptEnhancer",
   "relationships",

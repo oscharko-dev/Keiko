@@ -1508,3 +1508,98 @@ export async function fetchGitDeliveryPushExecute(
     ...(signal === undefined ? {} : { signal }),
   });
 }
+
+// ─── Governed GitHub pull request command center (#477, ADR-0064) ────────────────────────────────────
+
+export type GitDeliveryPrKind = "pr-create" | "pr-update";
+
+// The PR command-center input. Title/body are user content flowing to the provider; only their byte
+// lengths reach the evidence ledger server-side.
+export interface GitDeliveryPrInput {
+  readonly projectId: string;
+  readonly kind: GitDeliveryPrKind;
+  readonly ownerAndRepo: string;
+  readonly headBranchName: string;
+  readonly baseBranchName: string;
+  readonly title: string;
+  readonly body: string;
+  readonly isDraft?: boolean | undefined;
+  readonly prExternalId?: string | undefined;
+  readonly convertToDraft?: boolean | undefined;
+  readonly convertFromDraft?: boolean | undefined;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export interface GitDeliveryPrReadiness {
+  readonly objectExists: boolean;
+  readonly reviewReady: boolean;
+  readonly blockerCodes: readonly string[];
+}
+
+export interface GitDeliveryPrPreviewResponse {
+  readonly schemaVersion: "1";
+  readonly actionKind: GitDeliveryPrKind;
+  readonly headBranchName: string;
+  readonly baseBranchName: string;
+  readonly riskClass: string;
+  readonly riskSeverity: number;
+  readonly isDraft: boolean;
+  readonly policyOutcome: string;
+  readonly policyBlockReason?: string;
+  readonly composedTitle: string;
+  readonly composedBody: string;
+  readonly riskNarrative: string;
+  readonly recommendation: string;
+  readonly readiness: GitDeliveryPrReadiness;
+  readonly suggestedLabels: readonly string[];
+  readonly suggestedIssueRefs: readonly string[];
+  readonly titleByteLength: number;
+  readonly bodyByteLength: number;
+}
+
+export interface GitDeliveryPrExecuteResponse extends GitDeliveryMutationResponse {
+  readonly prRejectionReason?: string;
+  readonly recoveryDisposition?: string;
+  readonly recoveryActionHint?: string;
+  readonly createdPrExternalId?: string;
+}
+
+function gitDeliveryPrBody(input: GitDeliveryPrInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    kind: input.kind,
+    ownerAndRepo: input.ownerAndRepo,
+    headBranchName: input.headBranchName,
+    baseBranchName: input.baseBranchName,
+    title: input.title,
+    body: input.body,
+    ...(input.isDraft === undefined ? {} : { isDraft: input.isDraft }),
+    ...(input.prExternalId === undefined ? {} : { prExternalId: input.prExternalId }),
+    ...(input.convertToDraft === undefined ? {} : { convertToDraft: input.convertToDraft }),
+    ...(input.convertFromDraft === undefined ? {} : { convertFromDraft: input.convertFromDraft }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+export async function fetchGitDeliveryPrPreview(
+  input: GitDeliveryPrInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrPreviewResponse> {
+  return fetchJson("/api/git-delivery/pr/preview", {
+    method: "POST",
+    body: gitDeliveryPrBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrExecute(
+  input: GitDeliveryPrInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrExecuteResponse> {
+  return fetchJson("/api/git-delivery/pr/execute", {
+    method: "POST",
+    body: gitDeliveryPrBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}

@@ -228,6 +228,18 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "fs-reference",
   },
+  // Epic #470, Issue #477 — governed GitHub pull request command center. Drives the governed PR gateway
+  // (policy + approval + `gh api` execute) over a project's published branch and records evidence; every
+  // open/update is a user-confirmed action. Trust spans the git/provider tool boundary and the ledger.
+  governedPullRequest: {
+    lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
+    // Reads the project's git worktree and reaches the GitHub provider via the governed `gh api` adapter,
+    // producing audit evidence. fs-reference persistence keeps the slash-bearing project path across
+    // reloads (evidence-reference would strip it, leaving a broken empty window on restore).
+    trustBoundary: ["ui", "fs", "tool", "evidence"],
+    authority: "user-confirm",
+    persistence: "fs-reference",
+  },
 };
 
 // ─── Module-evaluation validation ─────────────────────────────────────────

@@ -20,6 +20,7 @@ import { EditorWidget } from "./cards/EditorWidget";
 import { BrowserWidget } from "./cards/BrowserWidget";
 import { TerminalWidget } from "./cards/TerminalWidget";
 import { GovernedGitFlowCard } from "./cards/GovernedGitFlowCard";
+import { GovernedPullRequestCard } from "./cards/GovernedPullRequestCard";
 import { ReviewWidget } from "./cards/ReviewWidget";
 import { AgentRunWidget, type AgentRunCfg } from "./cards/AgentRunWidget";
 import { IntegrationsWidget } from "./cards/IntegrationsWidget";
@@ -400,6 +401,14 @@ registerWindowRender("governedGit", (cfg, ctx) => {
   const projectId =
     str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
   return <GovernedGitFlowCard projectId={projectId} />;
+});
+// Epic #470, Issue #477 — Governed GitHub pull request command center. The active project root acts as
+// the projectId; the published head branch is carried in cfg from the Publish section.
+registerWindowRender("governedPullRequest", (cfg, ctx) => {
+  const projectId =
+    str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
+  const headBranchName = str(cfg, "headBranchName") ?? undefined;
+  return <GovernedPullRequestCard projectId={projectId} headBranchName={headBranchName} />;
 });
 // uiux-fix F018 C110: a review window without a run ID was a dead end — the empty
 // state now offers an inline run-ID form, persisted via updateCfg like files/figma.
