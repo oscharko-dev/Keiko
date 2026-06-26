@@ -29,6 +29,10 @@ export interface WorkspaceInstanceStore {
     taskId: string,
   ) => WorkspaceInstance | undefined;
   readonly listByRepository: (repositoryId: string) => readonly WorkspaceInstance[];
+  // Every persisted instance across all repositories — the enumeration startup reconciliation walks
+  // (#447). Ordered deterministically (most recently updated first, then by id) so reconciliation and
+  // its evidence are reproducible across restarts.
+  readonly listAll: () => readonly WorkspaceInstance[];
   readonly upsert: (instance: WorkspaceInstance) => WorkspaceInstance;
   readonly delete: (workspaceId: string) => void;
 }
@@ -64,6 +68,7 @@ const COLUMNS = `
 const SQL_GET_BY_ID = `SELECT ${COLUMNS} FROM task_workspace_instances WHERE workspace_id = ?`;
 const SQL_FIND_BY_REPO_TASK = `SELECT ${COLUMNS} FROM task_workspace_instances WHERE repository_id = ? AND task_id = ?`;
 const SQL_LIST_BY_REPO = `SELECT ${COLUMNS} FROM task_workspace_instances WHERE repository_id = ? ORDER BY updated_at DESC, workspace_id`;
+const SQL_LIST_ALL = `SELECT ${COLUMNS} FROM task_workspace_instances ORDER BY updated_at DESC, workspace_id`;
 const SQL_DELETE = "DELETE FROM task_workspace_instances WHERE workspace_id = ?";
 const SQL_UPSERT = `
 INSERT INTO task_workspace_instances (${COLUMNS})
@@ -170,6 +175,8 @@ export function buildWorkspaceInstanceStoreOverDatabase(db: DatabaseSync): Works
       (db.prepare(SQL_LIST_BY_REPO).all(repositoryId) as unknown as InstanceRow[]).map(
         rowToInstance,
       ),
+    listAll: (): readonly WorkspaceInstance[] =>
+      (db.prepare(SQL_LIST_ALL).all() as unknown as InstanceRow[]).map(rowToInstance),
     upsert: (instance: WorkspaceInstance): WorkspaceInstance => {
       const validation = validateWorkspaceInstance(instance);
       if (!validation.ok) {

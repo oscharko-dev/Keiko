@@ -77,9 +77,13 @@ import {
 } from "./task-workspace/active-store.js";
 import { createWorkspaceProvisioningService } from "./task-workspace/provisioning.js";
 import { createWorkspaceLifecycleService } from "./task-workspace/lifecycle.js";
+import { createWorkspaceReconciliationService } from "./task-workspace/reconciliation.js";
+import { createWorkspaceRepairService } from "./task-workspace/repair.js";
 import type {
   WorkspaceLifecycleService,
   WorkspaceProvisioningService,
+  WorkspaceReconciliationService,
+  WorkspaceRepairService,
 } from "./task-workspace/types.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -228,6 +232,11 @@ export interface UiHandlerDeps {
   // legacy tests that do not exercise the active-binding routes keep their fixtures unchanged;
   // production wiring composes it over the same DatabaseSync handle as the #445 instance store.
   readonly workspaceLifecycle?: WorkspaceLifecycleService | undefined;
+  // Issue #447 (Epic #443, ADR-0091) — startup reconciliation + controlled repair services. Optional
+  // so legacy tests that do not exercise the reconciliation/repair routes keep their fixtures
+  // unchanged; production composes them over the same store/pointer/adapter as #445/#446.
+  readonly workspaceReconciliation?: WorkspaceReconciliationService | undefined;
+  readonly workspaceRepair?: WorkspaceRepairService | undefined;
   // Resolved evidence directory path (same precedence as the CLI: explicit → KEIKO_EVIDENCE_DIR →
   // default). Consumed by QI read routes that pass evidenceDir to listQualityIntelligenceRuns /
   // loadQualityIntelligenceRun (which require either options.store or options.evidenceDir).
@@ -281,6 +290,10 @@ export interface BuildHandlerDepsOptions {
   // Optional injected task-workspace lifecycle service (tests); production composes one over the
   // sqlite WorkspaceInstanceStore + active-pointer store + the provisioning service.
   readonly workspaceLifecycle?: WorkspaceLifecycleService | undefined;
+  // Optional injected task-workspace reconciliation/repair services (tests); production composes them
+  // over the same store/pointer/worktree-adapter as #445/#446 (Issue #447).
+  readonly workspaceReconciliation?: WorkspaceReconciliationService | undefined;
+  readonly workspaceRepair?: WorkspaceRepairService | undefined;
   // The working directory from which `keiko ui` was launched. Production seeds it into the UI store
   // so first-run project selection is deterministic even when an older UI DB already has rows.
   readonly initialProjectPath?: string | undefined;
@@ -841,6 +854,81 @@ function buildWorkspaceLifecycle(
   });
 }
 
+// Issue #447 — the startup reconciliation service. It composes the SAME #445 instance store, #446
+// active pointer, evidence store, managed root, and node worktree adapter (no second engine). Returns
+// undefined whenever a composed dependency is absent (injected UiStore tests) so the reconciliation
+// routes degrade to 503 exactly like the provisioning routes.
+function buildWorkspaceReconciliation(
+  options: BuildHandlerDepsOptions,
+  instanceStore: WorkspaceInstanceStore | undefined,
+  activePointerStore: ActiveWorkspacePointerStore | undefined,
+  resolvedUiDbPath: string,
+  evidenceStore: EvidenceStore,
+  redactString: (value: string) => string,
+): WorkspaceReconciliationService | undefined {
+  if (options.workspaceReconciliation !== undefined) return options.workspaceReconciliation;
+  if (instanceStore === undefined || activePointerStore === undefined) return undefined;
+  return createWorkspaceReconciliationService({
+    store: instanceStore,
+    activePointerStore,
+    evidenceStore,
+    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    createAdapter: (workspace) =>
+      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+    redactString,
+    now: () => Date.now(),
+    newId: randomUUID,
+  });
+}
+
+// Issue #447 — the controlled repair service. It reuses the #445 provisioning service for the
+// worktree-recreating strategies and the same store/pointer/adapter for the rest (no second engine).
+function buildWorkspaceRepair(
+  options: BuildHandlerDepsOptions,
+  instanceStore: WorkspaceInstanceStore | undefined,
+  activePointerStore: ActiveWorkspacePointerStore | undefined,
+  provisioning: WorkspaceProvisioningService | undefined,
+  resolvedUiDbPath: string,
+  evidenceStore: EvidenceStore,
+  redactString: (value: string) => string,
+): WorkspaceRepairService | undefined {
+  if (options.workspaceRepair !== undefined) return options.workspaceRepair;
+  if (
+    instanceStore === undefined ||
+    activePointerStore === undefined ||
+    provisioning === undefined
+  ) {
+    return undefined;
+  }
+  return createWorkspaceRepairService({
+    store: instanceStore,
+    activePointerStore,
+    evidenceStore,
+    provisioning,
+    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    createAdapter: (workspace) =>
+      createNodeGitWorktreeAdapter({ workspace, processEnv: options.env }),
+    redactString,
+    now: () => Date.now(),
+    newId: randomUUID,
+  });
+}
+
+// Best-effort startup reconciliation (Issue #447): mirror the QI-retention startup pass — run once at
+// bootstrap, never throw into construction, and never block server start (the reconcile IO is detached
+// and self-contained). A failure simply leaves the persisted classification untouched until the next
+// pass or an explicit refresh.
+function reconcileTaskWorkspacesAtStartup(
+  service: WorkspaceReconciliationService | undefined,
+): void {
+  if (service === undefined) return;
+  try {
+    void service.reconcile().catch(() => undefined);
+  } catch {
+    // construction must never fail because of reconciliation.
+  }
+}
+
 function seedInitialProject(
   store: UiStore,
   uiDbPath: string,
@@ -949,6 +1037,8 @@ interface PersistenceBundle {
   readonly relationship: RelationshipHandlerDeps | undefined;
   readonly workspaceProvisioning: WorkspaceProvisioningService | undefined;
   readonly workspaceLifecycle: WorkspaceLifecycleService | undefined;
+  readonly workspaceReconciliation: WorkspaceReconciliationService | undefined;
+  readonly workspaceRepair: WorkspaceRepairService | undefined;
   readonly preferredProjectPath: string | undefined;
 }
 
@@ -979,7 +1069,43 @@ function buildPersistenceBundle(
       evidenceStore,
       redactString,
     ),
+    workspaceReconciliation: buildWorkspaceReconciliation(
+      options,
+      workspaceInstanceStore,
+      activeWorkspacePointerStore,
+      resolvedUiDbPath,
+      evidenceStore,
+      redactString,
+    ),
+    workspaceRepair: buildWorkspaceRepair(
+      options,
+      workspaceInstanceStore,
+      activeWorkspacePointerStore,
+      workspaceProvisioning,
+      resolvedUiDbPath,
+      evidenceStore,
+      redactString,
+    ),
     preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
+  };
+}
+
+// The optional persistence services (relationship engine + the #445/#446/#447 task-workspace
+// services) spread onto the handler deps only when they were composed (production) — absent ones leave
+// the corresponding routes to degrade to 503, exactly as before.
+function optionalPersistenceServices(bundle: PersistenceBundle): Partial<UiHandlerDeps> {
+  return {
+    ...(bundle.relationship === undefined ? {} : { relationship: bundle.relationship }),
+    ...(bundle.workspaceProvisioning === undefined
+      ? {}
+      : { workspaceProvisioning: bundle.workspaceProvisioning }),
+    ...(bundle.workspaceLifecycle === undefined
+      ? {}
+      : { workspaceLifecycle: bundle.workspaceLifecycle }),
+    ...(bundle.workspaceReconciliation === undefined
+      ? {}
+      : { workspaceReconciliation: bundle.workspaceReconciliation }),
+    ...(bundle.workspaceRepair === undefined ? {} : { workspaceRepair: bundle.workspaceRepair }),
   };
 }
 
@@ -997,8 +1123,10 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
-  const { uiStore, relationship, workspaceProvisioning, workspaceLifecycle, preferredProjectPath } =
-    buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
+  const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
+  // Issue #447: run a best-effort startup reconciliation only on the real bootstrap path (no injected
+  // store), so test fixtures stay deterministic and trigger reconcile() explicitly when they need it.
+  if (options.store === undefined) reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation);
   return {
     config,
     configPresent,
@@ -1010,19 +1138,17 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     registry: options.registry ?? createRunRegistry(),
     modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(runtimeConfig),
     redactionSecrets: runtimeRedactionSecrets(options.env, runtimeConfig, egress),
-    store: uiStore,
+    store: bundle.uiStore,
     uiDbPath: resolvedUiDbPath,
-    preferredProjectPath,
+    preferredProjectPath: bundle.preferredProjectPath,
     gatewayConfig: runtimeConfig,
     gatewaySetupTester: options.gatewaySetupTester,
     gatewayModelDiscovery: options.gatewayModelDiscovery,
     figmaCredentialTester: options.figmaCredentialTester,
     localKnowledgeKeyProvider: createLocalKnowledgeKeyProvider({ env: options.env }),
     contextProfile: DEFAULT_CONTEXT_PROFILE,
-    ...buildPeripherals(options, uiStore, evidenceStore, redactString, liveRedactor),
+    ...buildPeripherals(options, bundle.uiStore, evidenceStore, redactString, liveRedactor),
     consolidationJobs: createConsolidationJobRegistry(),
-    ...(relationship === undefined ? {} : { relationship }),
-    ...(workspaceProvisioning === undefined ? {} : { workspaceProvisioning }),
-    ...(workspaceLifecycle === undefined ? {} : { workspaceLifecycle }),
+    ...optionalPersistenceServices(bundle),
   };
 }

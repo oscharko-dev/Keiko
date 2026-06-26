@@ -953,3 +953,515 @@ export function taskWorkspaceDelegatedOwner(
 ): string | undefined {
   return TASK_WORKSPACE_DELEGATED_SUBSYSTEMS.find((entry) => entry.concern === concern)?.owner;
 }
+
+// ─── Startup reconciliation + repair (Issue #447) ───────────────────────────────────
+// #445 made a workspace's durable record; #446 made the active binding. #447 turns those into
+// trustworthy OPERATIONAL state across restarts/partial failures/external filesystem changes/git
+// worktree drift. ALL reconciliation decision logic lives here as pure functions over content-free
+// FACTS the server gathers by IO (path existence, realpath containment, git pointer/HEAD/branch
+// identity, lock liveness) — the keiko-server service is a thin IO+persistence+evidence shell. This
+// keeps classification deterministic and 100%-testable, and (AC5) lets #446 UI and #448 health/audit/
+// cleanup/verification consume the SAME semantics without inventing their own.
+
+// The eight Issue-mandated reconciliation classifications. `partially-created` = a workspace that never
+// completed initial provisioning (lifecycle still provisioning/failed). `stale-pointer` = the worktree
+// directory exists but its `.git` linked-worktree pointer is missing/malformed or points elsewhere.
+// `unmanaged-path` = the persisted managed-worktree path no longer realpath-resolves inside the
+// Keiko-owned managed root (a containment escape — never auto-repairable). `locked` = a live lock held
+// by another actor, so reconciliation defers rather than racing it.
+export type WorkspaceReconciliationStatus =
+  | "healthy"
+  | "missing"
+  | "drifted"
+  | "locked"
+  | "partially-created"
+  | "stale-pointer"
+  | "unmanaged-path"
+  | "recovery-required";
+
+export const WORKSPACE_RECONCILIATION_STATUSES: readonly WorkspaceReconciliationStatus[] = [
+  "healthy",
+  "missing",
+  "drifted",
+  "locked",
+  "partially-created",
+  "stale-pointer",
+  "unmanaged-path",
+  "recovery-required",
+] as const;
+
+export function isWorkspaceReconciliationStatus(
+  value: unknown,
+): value is WorkspaceReconciliationStatus {
+  return (
+    typeof value === "string" &&
+    WORKSPACE_RECONCILIATION_STATUSES.includes(value as WorkspaceReconciliationStatus)
+  );
+}
+
+// The content-free facts the server resolves by IO for one persisted instance, fed to the pure
+// classifier. Every field is a boolean or the persisted lifecycle enum — no path, no command output.
+export interface WorkspaceReconciliationFacts {
+  readonly lifecycleState: TaskWorkspaceLifecycleState;
+  // realpath containment of the persisted managed-worktree path inside the managed root (SC: a
+  // persisted path is NEVER trusted without realpath verification).
+  readonly pathContained: boolean;
+  readonly worktreeDirExists: boolean;
+  // the worktree's `.git` linked-worktree pointer file is present and well-formed.
+  readonly gitPointerPresent: boolean;
+  // the pointer's content-free gitdir identity equals the persisted `gitdirIdentity`.
+  readonly gitdirIdentityMatches: boolean;
+  // the dedicated task branch still exists / the worktree is still bound to it.
+  readonly taskBranchPresent: boolean;
+  // the worktree HEAD equals the persisted `lastVerifiedHead` (true when no baseline was recorded).
+  readonly headMatches: boolean;
+  readonly uncommittedChanges: boolean;
+  readonly lockPresent: boolean;
+  readonly lockLive: boolean;
+  readonly lockedByOtherActor: boolean;
+}
+
+export interface WorkspaceReconciliationOutcome {
+  readonly status: WorkspaceReconciliationStatus;
+  readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
+  readonly recoveryHints: readonly WorkspaceRecoveryHint[];
+}
+
+// Lifecycle states past the operational window: a missing worktree for one of these is EXPECTED
+// (cleanup), so reconciliation treats them as settled rather than drifted.
+const TERMINAL_LIFECYCLE_STATES: readonly TaskWorkspaceLifecycleState[] = [
+  "merged",
+  "archived",
+  "abandoned",
+  "cleanup-pending",
+] as const;
+
+const PARTIAL_LIFECYCLE_STATES: readonly TaskWorkspaceLifecycleState[] = [
+  "provisioning",
+  "failed",
+] as const;
+
+// The single authoritative map from a drift marker to its recovery strategy + whether an operator
+// must act (e.g. a moved HEAD or uncommitted work may carry intentional changes, and a containment
+// escape is never auto-repaired). Consumed by both reconciliation and the repair service (AC5).
+const DRIFT_MARKER_RECOVERY: Readonly<
+  Record<
+    TaskWorkspaceDriftMarker,
+    { readonly strategy: WorkspaceRecoveryStrategy; readonly operatorActionRequired: boolean }
+  >
+> = {
+  "worktree-missing": { strategy: "recreate-worktree", operatorActionRequired: false },
+  // A moved-but-readable gitdir can be re-linked automatically (the pointer identity is re-derived);
+  // a missing/corrupt `.git` pointer cannot be repaired by the narrow worktree adapter without risking
+  // loss of the worktree's uncommitted work, so it is operator-guided.
+  "gitdir-mismatch": { strategy: "reconcile-pointer", operatorActionRequired: false },
+  "pointer-stale": { strategy: "operator-repair", operatorActionRequired: true },
+  "head-moved": { strategy: "operator-repair", operatorActionRequired: true },
+  // A deleted local branch cannot be safely re-created by the narrow worktree adapter without risking
+  // loss of the worktree's commits, so reattachment is operator-guided, never automatic.
+  "branch-deleted": { strategy: "reattach-branch", operatorActionRequired: true },
+  "uncommitted-changes": { strategy: "commit-or-stash-required", operatorActionRequired: true },
+  "lock-stale": { strategy: "release-stale-lock", operatorActionRequired: false },
+  "path-escape": { strategy: "operator-repair", operatorActionRequired: true },
+} as const;
+
+// Pure: map a set of drift markers to ordered, de-duplicated recovery hints. The order follows the
+// input marker order so the most salient drift drives the first suggested repair.
+export function planWorkspaceRecoveryHints(
+  driftMarkers: readonly TaskWorkspaceDriftMarker[],
+): readonly WorkspaceRecoveryHint[] {
+  const hints: WorkspaceRecoveryHint[] = [];
+  const seen = new Set<TaskWorkspaceDriftMarker>();
+  for (const marker of driftMarkers) {
+    if (!isTaskWorkspaceDriftMarker(marker) || seen.has(marker)) continue;
+    seen.add(marker);
+    const mapping = DRIFT_MARKER_RECOVERY[marker];
+    hints.push({
+      marker,
+      strategy: mapping.strategy,
+      operatorActionRequired: mapping.operatorActionRequired,
+    });
+  }
+  return hints;
+}
+
+function withStaleLock(
+  markers: readonly TaskWorkspaceDriftMarker[],
+  facts: WorkspaceReconciliationFacts,
+): readonly TaskWorkspaceDriftMarker[] {
+  return facts.lockPresent && !facts.lockLive ? [...markers, "lock-stale"] : markers;
+}
+
+function outcome(
+  status: WorkspaceReconciliationStatus,
+  markers: readonly TaskWorkspaceDriftMarker[],
+): WorkspaceReconciliationOutcome {
+  return { status, driftMarkers: markers, recoveryHints: planWorkspaceRecoveryHints(markers) };
+}
+
+// Pure deterministic classifier with a fixed precedence (most severe first): a containment escape and
+// a live foreign lock short-circuit before any disk classification; terminal lifecycles are settled;
+// then partial-creation, then on-disk drift (missing → stale pointer → branch/HEAD/dirty), then a
+// lingering recovery-required flag, then a stale lock on an otherwise-healthy workspace.
+// eslint-disable-next-line complexity
+export function classifyWorkspaceReconciliation(
+  facts: WorkspaceReconciliationFacts,
+): WorkspaceReconciliationOutcome {
+  if (!facts.pathContained) return outcome("unmanaged-path", ["path-escape"]);
+  if (facts.lockedByOtherActor) return outcome("locked", []);
+  if (TERMINAL_LIFECYCLE_STATES.includes(facts.lifecycleState)) return outcome("healthy", []);
+  if (PARTIAL_LIFECYCLE_STATES.includes(facts.lifecycleState)) {
+    const base: readonly TaskWorkspaceDriftMarker[] = !facts.worktreeDirExists
+      ? ["worktree-missing"]
+      : !facts.gitPointerPresent
+        ? ["pointer-stale"]
+        : [];
+    return outcome("partially-created", withStaleLock(base, facts));
+  }
+  if (!facts.worktreeDirExists)
+    return outcome("missing", withStaleLock(["worktree-missing"], facts));
+  if (!facts.gitPointerPresent)
+    return outcome("stale-pointer", withStaleLock(["pointer-stale"], facts));
+  if (!facts.gitdirIdentityMatches) {
+    return outcome("stale-pointer", withStaleLock(["gitdir-mismatch"], facts));
+  }
+  if (!facts.taskBranchPresent) return outcome("drifted", withStaleLock(["branch-deleted"], facts));
+  if (!facts.headMatches) return outcome("drifted", withStaleLock(["head-moved"], facts));
+  if (facts.uncommittedChanges) {
+    return outcome("drifted", withStaleLock(["uncommitted-changes"], facts));
+  }
+  if (facts.lifecycleState === "recovery-required") {
+    return outcome("recovery-required", withStaleLock([], facts));
+  }
+  if (facts.lockPresent && !facts.lockLive) return outcome("drifted", ["lock-stale"]);
+  return outcome("healthy", []);
+}
+
+// Pure: the health enum value reconciliation persists for a given status, so the stored health stays
+// consistent with the classification (and #448 can read either).
+export function reconciliationHealth(status: WorkspaceReconciliationStatus): TaskWorkspaceHealth {
+  switch (status) {
+    case "healthy":
+      return "healthy";
+    case "missing":
+      return "missing";
+    case "drifted":
+    case "stale-pointer":
+      return "drifted";
+    case "locked":
+      return "locked-out";
+    case "partially-created":
+    case "unmanaged-path":
+    case "recovery-required":
+      return "degraded";
+    default:
+      return "unknown";
+  }
+}
+
+// Pure: whether reconciliation should flag a once-operational workspace (active/paused/handoff-ready)
+// as recovery-required because its worktree is GONE or structurally unusable (missing, a broken/moved
+// git pointer, or an escaped path). A merely `drifted` workspace (moved HEAD, uncommitted work, branch
+// mismatch, stale lock) keeps a usable worktree, so it is surfaced via health + drift markers + hints
+// WITHOUT being forced out of its lifecycle — crisp classification over aggressive auto-healing. A
+// partially-created (provisioning/failed) workspace is left to the provisioning retry path, and a live
+// foreign lock is deferred, never flagged.
+export function reconciliationRequiresRecoveryFlag(
+  status: WorkspaceReconciliationStatus,
+  lifecycleState: TaskWorkspaceLifecycleState,
+): boolean {
+  if (
+    lifecycleState !== "active" &&
+    lifecycleState !== "paused" &&
+    lifecycleState !== "handoff-ready"
+  ) {
+    return false;
+  }
+  return status === "missing" || status === "stale-pointer" || status === "unmanaged-path";
+}
+
+// Pure: reconstruct the reconciliation status from the CONTENT-FREE persisted instance fields, so a
+// read-only report can be derived without re-running IO (the GET surface) and matches what a live
+// reconcile last persisted. Mirrors the precedence of classifyWorkspaceReconciliation.
+// eslint-disable-next-line complexity
+export function reconciliationStatusFromInstance(input: {
+  readonly lifecycleState: TaskWorkspaceLifecycleState;
+  readonly health: TaskWorkspaceHealth;
+  readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
+}): WorkspaceReconciliationStatus {
+  const markers = input.driftMarkers;
+  if (markers.includes("path-escape")) return "unmanaged-path";
+  if (input.health === "locked-out") return "locked";
+  if (TERMINAL_LIFECYCLE_STATES.includes(input.lifecycleState)) return "healthy";
+  if (PARTIAL_LIFECYCLE_STATES.includes(input.lifecycleState)) return "partially-created";
+  if (markers.includes("worktree-missing")) return "missing";
+  if (markers.includes("pointer-stale") || markers.includes("gitdir-mismatch")) {
+    return "stale-pointer";
+  }
+  if (
+    markers.includes("branch-deleted") ||
+    markers.includes("head-moved") ||
+    markers.includes("uncommitted-changes") ||
+    markers.includes("lock-stale")
+  ) {
+    return "drifted";
+  }
+  if (input.lifecycleState === "recovery-required") return "recovery-required";
+  return "healthy";
+}
+
+// ─── Repair applicability (Issue #447) ──────────────────────────────────────────────
+// A repair may only apply a strategy the reconciliation actually recommended for the workspace, so a
+// caller cannot drive an arbitrary git mutation: the repair service validates the requested strategy
+// against the instance's current recovery hints. `abandon-and-cleanup` is the one universal escape
+// (always available for a non-healthy workspace) and `operator-repair`/`commit-or-stash-required`
+// signal that no automatic mutation is safe — the operator must act first.
+
+// The strategies the repair service can apply WITHOUT operator action, because each is reversible /
+// non-destructive: recreate a missing worktree from the still-present branch, refresh a stale/moved
+// worktree pointer, or release an expired lock. `reattach-branch`, `operator-repair`, and
+// `commit-or-stash-required` are deliberately excluded — they require a human decision.
+export function isAutomaticWorkspaceRepairStrategy(strategy: WorkspaceRecoveryStrategy): boolean {
+  return (
+    strategy === "reconcile-pointer" ||
+    strategy === "recreate-worktree" ||
+    strategy === "release-stale-lock"
+  );
+}
+
+// Pure: whether `strategy` is applicable given the recovery hints reconciliation produced. An
+// automatic strategy is applicable iff a hint recommends it; `abandon-and-cleanup` is applicable for
+// any non-healthy status; operator strategies are never "applicable" as an automatic repair.
+export function isWorkspaceRepairStrategyApplicable(input: {
+  readonly status: WorkspaceReconciliationStatus;
+  readonly recoveryHints: readonly WorkspaceRecoveryHint[];
+  readonly strategy: WorkspaceRecoveryStrategy;
+}): boolean {
+  if (input.strategy === "abandon-and-cleanup") return input.status !== "healthy";
+  if (!isAutomaticWorkspaceRepairStrategy(input.strategy)) return false;
+  return input.recoveryHints.some(
+    (hint) => hint.strategy === input.strategy && !hint.operatorActionRequired,
+  );
+}
+
+// ─── Reconciliation report (Issue #447, content-free; consumed by #446 UI + #448) ────
+
+// The per-workspace reconciliation record. Content-free: ids, enums, the existing drift-marker /
+// recovery-hint shapes, two derived booleans, and an optional ISO timestamp.
+export interface WorkspaceReconciliationEntry {
+  readonly schemaVersion: typeof TASK_WORKSPACE_SCHEMA_VERSION;
+  readonly workspaceId: string;
+  readonly taskId: string;
+  readonly status: WorkspaceReconciliationStatus;
+  readonly lifecycleState: TaskWorkspaceLifecycleState;
+  readonly health: TaskWorkspaceHealth;
+  readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
+  readonly recoveryHints: readonly WorkspaceRecoveryHint[];
+  // an automatic (non-operator) repair is available.
+  readonly repairable: boolean;
+  // at least one recommended recovery needs an operator to act first.
+  readonly operatorActionRequired: boolean;
+  readonly lastVerifiedAt?: string;
+}
+
+export const WORKSPACE_RECONCILIATION_ENTRY_ALLOWED_KEYS: readonly string[] = [
+  "schemaVersion",
+  "workspaceId",
+  "taskId",
+  "status",
+  "lifecycleState",
+  "health",
+  "driftMarkers",
+  "recoveryHints",
+  "repairable",
+  "operatorActionRequired",
+  "lastVerifiedAt",
+] as const;
+
+// Pure: the two derived booleans on a reconciliation entry. `repairable` is true when an automatic
+// strategy is available OR the workspace is partially-created (the canonical retry case, AC3).
+export function workspaceEntryRepairable(input: {
+  readonly status: WorkspaceReconciliationStatus;
+  readonly recoveryHints: readonly WorkspaceRecoveryHint[];
+}): boolean {
+  if (input.status === "partially-created") return true;
+  return input.recoveryHints.some((hint) => !hint.operatorActionRequired);
+}
+
+export function workspaceEntryOperatorActionRequired(
+  recoveryHints: readonly WorkspaceRecoveryHint[],
+): boolean {
+  return recoveryHints.some((hint) => hint.operatorActionRequired);
+}
+
+// Pure: build a content-free reconciliation entry from the persisted (content-free) instance fields.
+// The status is reconstructed from those fields so a read-only report matches what a live reconcile
+// last persisted, and the two derived booleans come from the recovery hints. Used by both the live and
+// stored-derived report paths so they cannot diverge (AC5).
+export function deriveReconciliationEntry(input: {
+  readonly workspaceId: string;
+  readonly taskId: string;
+  readonly lifecycleState: TaskWorkspaceLifecycleState;
+  readonly health: TaskWorkspaceHealth;
+  readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
+  readonly recoveryHints: readonly WorkspaceRecoveryHint[];
+  readonly lastVerifiedAt?: string;
+}): WorkspaceReconciliationEntry {
+  const status = reconciliationStatusFromInstance({
+    lifecycleState: input.lifecycleState,
+    health: input.health,
+    driftMarkers: input.driftMarkers,
+  });
+  return {
+    schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
+    workspaceId: input.workspaceId,
+    taskId: input.taskId,
+    status,
+    lifecycleState: input.lifecycleState,
+    health: input.health,
+    driftMarkers: input.driftMarkers,
+    recoveryHints: input.recoveryHints,
+    repairable: workspaceEntryRepairable({ status, recoveryHints: input.recoveryHints }),
+    operatorActionRequired: workspaceEntryOperatorActionRequired(input.recoveryHints),
+    ...(input.lastVerifiedAt !== undefined ? { lastVerifiedAt: input.lastVerifiedAt } : {}),
+  };
+}
+
+// eslint-disable-next-line complexity
+export function validateWorkspaceReconciliationEntry(input: unknown): TaskWorkspaceValidation {
+  if (!isRecord(input)) return { ok: false, reasons: ["entry must be an object"] };
+  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_RECONCILIATION_ENTRY_ALLOWED_KEYS);
+  if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
+  for (const key of ["workspaceId", "taskId"] as const) {
+    if (!isNonEmptyString(input[key])) reasons.push(`${key} must be a non-empty string`);
+  }
+  if (!isWorkspaceReconciliationStatus(input.status)) reasons.push("status invalid");
+  if (!isTaskWorkspaceLifecycleState(input.lifecycleState)) reasons.push("lifecycleState invalid");
+  if (!isTaskWorkspaceHealth(input.health)) reasons.push("health invalid");
+  if (!Array.isArray(input.driftMarkers) || !input.driftMarkers.every(isTaskWorkspaceDriftMarker)) {
+    reasons.push("driftMarkers must be an array of valid markers");
+  }
+  validateRecoveryHints(input.recoveryHints, reasons);
+  if (!isBoolean(input.repairable)) reasons.push("repairable must be a boolean");
+  if (!isBoolean(input.operatorActionRequired)) {
+    reasons.push("operatorActionRequired must be a boolean");
+  }
+  if (input.lastVerifiedAt !== undefined && !isNonEmptyString(input.lastVerifiedAt)) {
+    reasons.push("lastVerifiedAt must be a non-empty string when present");
+  }
+  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}
+
+// The active-workspace restoration decision after a startup reconciliation. `none` = nothing to
+// restore (no pointer; safe unbound mode). `restored` = the pointer target is healthy and stays
+// active. `recovery-required` = the pointer target drifted/missing and is kept visible but flagged
+// (never silently disappears, AC2). `cleared-dangling` = the pointer referenced a deleted instance
+// and was cleared. `ambiguous` = no pointer but ≥2 instances claim `active` lifecycle, so restoration
+// refuses to choose (SC: restart recovery never silently picks among ambiguous active workspaces).
+export type WorkspaceActiveRestorationKind =
+  | "none"
+  | "restored"
+  | "recovery-required"
+  | "cleared-dangling"
+  | "ambiguous";
+
+export const WORKSPACE_ACTIVE_RESTORATION_KINDS: readonly WorkspaceActiveRestorationKind[] = [
+  "none",
+  "restored",
+  "recovery-required",
+  "cleared-dangling",
+  "ambiguous",
+] as const;
+
+export function isWorkspaceActiveRestorationKind(
+  value: unknown,
+): value is WorkspaceActiveRestorationKind {
+  return (
+    typeof value === "string" &&
+    WORKSPACE_ACTIVE_RESTORATION_KINDS.includes(value as WorkspaceActiveRestorationKind)
+  );
+}
+
+export interface WorkspaceActiveRestoration {
+  readonly kind: WorkspaceActiveRestorationKind;
+  readonly workspaceId?: string;
+  readonly ambiguousWorkspaceIds?: readonly string[];
+}
+
+// Pure: decide how (and whether) to restore the active workspace after restart, given the persisted
+// pointer target (or undefined for unbound mode) and the reconciliation entries. Deterministic and
+// conservative — it never auto-selects among ambiguous active workspaces.
+export function resolveActiveRestoration(
+  pointerWorkspaceId: string | undefined,
+  entries: readonly WorkspaceReconciliationEntry[],
+): WorkspaceActiveRestoration {
+  if (pointerWorkspaceId === undefined || pointerWorkspaceId.length === 0) {
+    const activeIds = entries
+      .filter((entry) => entry.lifecycleState === "active")
+      .map((entry) => entry.workspaceId)
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    if (activeIds.length >= 2) return { kind: "ambiguous", ambiguousWorkspaceIds: activeIds };
+    return { kind: "none" };
+  }
+  const target = entries.find((entry) => entry.workspaceId === pointerWorkspaceId);
+  if (target === undefined) return { kind: "cleared-dangling", workspaceId: pointerWorkspaceId };
+  if (target.status === "healthy") return { kind: "restored", workspaceId: pointerWorkspaceId };
+  return { kind: "recovery-required", workspaceId: pointerWorkspaceId };
+}
+
+export function validateWorkspaceActiveRestoration(input: unknown): TaskWorkspaceValidation {
+  if (!isRecord(input)) return { ok: false, reasons: ["restoration must be an object"] };
+  const reasons: string[] = unknownKeyReasons(input, [
+    "kind",
+    "workspaceId",
+    "ambiguousWorkspaceIds",
+  ]);
+  if (!isWorkspaceActiveRestorationKind(input.kind)) reasons.push("kind invalid");
+  if (input.workspaceId !== undefined && !isNonEmptyString(input.workspaceId)) {
+    reasons.push("workspaceId must be a non-empty string when present");
+  }
+  if (input.ambiguousWorkspaceIds !== undefined) {
+    if (
+      !Array.isArray(input.ambiguousWorkspaceIds) ||
+      !input.ambiguousWorkspaceIds.every(isNonEmptyString)
+    ) {
+      reasons.push("ambiguousWorkspaceIds must be an array of non-empty strings when present");
+    }
+  }
+  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}
+
+export interface WorkspaceReconciliationReport {
+  readonly schemaVersion: typeof TASK_WORKSPACE_SCHEMA_VERSION;
+  readonly generatedAt: string;
+  readonly entries: readonly WorkspaceReconciliationEntry[];
+  readonly activeRestoration: WorkspaceActiveRestoration;
+}
+
+export const WORKSPACE_RECONCILIATION_REPORT_ALLOWED_KEYS: readonly string[] = [
+  "schemaVersion",
+  "generatedAt",
+  "entries",
+  "activeRestoration",
+] as const;
+
+export function validateWorkspaceReconciliationReport(input: unknown): TaskWorkspaceValidation {
+  if (!isRecord(input)) return { ok: false, reasons: ["report must be an object"] };
+  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_RECONCILIATION_REPORT_ALLOWED_KEYS);
+  if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
+  if (!isNonEmptyString(input.generatedAt)) reasons.push("generatedAt must be a non-empty string");
+  if (!Array.isArray(input.entries)) reasons.push("entries must be an array");
+  else {
+    input.entries.forEach((entry, index) => {
+      const entryValidation = validateWorkspaceReconciliationEntry(entry);
+      if (!entryValidation.ok) {
+        reasons.push(`entries[${String(index)}]: ${entryValidation.reasons.join("; ")}`);
+      }
+    });
+  }
+  const restorationValidation = validateWorkspaceActiveRestoration(input.activeRestoration);
+  if (!restorationValidation.ok) {
+    reasons.push(`activeRestoration: ${restorationValidation.reasons.join("; ")}`);
+  }
+  return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+}

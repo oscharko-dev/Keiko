@@ -86,6 +86,28 @@ describe("round-trip", () => {
     store.delete("ws_aaaaaaaaaaaaaaaaaaaaaaaa");
     expect(store.getById("ws_aaaaaaaaaaaaaaaaaaaaaaaa")).toBeUndefined();
   });
+
+  it("lists every instance across repositories for startup reconciliation (#447)", () => {
+    store.upsert(instance());
+    store.upsert(
+      instance({
+        workspaceId: "ws_bbbbbbbbbbbbbbbbbbbbbbbb",
+        taskId: "task-2",
+        repositoryId: "repo_bbbbbbbbbbbbbbbb",
+        managedWorktreePath: "/m/repo_bbbbbbbbbbbbbbbb/ws_bbbbbbbbbbbbbbbbbbbbbbbb",
+      }),
+    );
+    const all = store.listAll();
+    expect(all).toHaveLength(2);
+    expect(all.map((row) => row.workspaceId).sort()).toEqual([
+      "ws_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "ws_bbbbbbbbbbbbbbbbbbbbbbbb",
+    ]);
+  });
+
+  it("returns an empty list when there are no instances", () => {
+    expect(store.listAll()).toEqual([]);
+  });
 });
 
 describe("invariants", () => {

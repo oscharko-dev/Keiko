@@ -91,10 +91,13 @@ import {
   handleClearActiveTaskWorkspace,
   handleGetActiveTaskWorkspace,
   handleGetTaskWorkspace,
+  handleGetTaskWorkspaceReconciliation,
   handleHandoffTaskWorkspace,
   handleListTaskWorkspaces,
   handlePauseTaskWorkspace,
   handleProvisionTaskWorkspace,
+  handleReconcileTaskWorkspaces,
+  handleRepairTaskWorkspace,
   handleResumeTaskWorkspace,
   handleSetActiveTaskWorkspace,
 } from "./task-workspace/routes.js";
@@ -396,6 +399,25 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/task-workspaces/:workspaceId/activate",
     handler: handleActivateTaskWorkspace,
+  },
+  // Issue #447 (Epic #443, ADR-0091) — startup reconciliation report (read-only, derived from the
+  // persisted content-free fields), an explicit live reconcile pass (CSRF-gated POST), and the
+  // controlled, operator-approval-gated repair. The literal `reconciliation` path wins over the
+  // `:workspaceId` GET by `matchRoute` specificity.
+  {
+    method: "GET",
+    pattern: "/api/task-workspaces/reconciliation",
+    handler: handleGetTaskWorkspaceReconciliation,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/reconciliation",
+    handler: handleReconcileTaskWorkspaces,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/repair",
+    handler: handleRepairTaskWorkspace,
   },
   { method: "GET", pattern: "/api/task-workspaces/:workspaceId", handler: handleGetTaskWorkspace },
   // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. The capability
