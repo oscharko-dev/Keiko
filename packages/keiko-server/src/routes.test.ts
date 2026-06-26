@@ -252,6 +252,15 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the metadata-only runtime capability route (#1385)", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/runtime/capabilities"),
+    ).toBeDefined();
+    expect(matchRoute("GET", "/api/runtime/capabilities")).toMatchObject({
+      definition: { pattern: "/api/runtime/capabilities" },
+    });
+  });
+
   it("includes the run-summary message routes (#66)", () => {
     const patchRoute = API_ROUTES.find(
       (r) => r.method === "PATCH" && r.pattern === "/api/chats/messages",
