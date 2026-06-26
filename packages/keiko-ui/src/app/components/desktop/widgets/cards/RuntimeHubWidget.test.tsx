@@ -66,4 +66,15 @@ describe("RuntimeHubWidget", () => {
     );
     expect(await axe(container)).toHaveNoViolations();
   });
+
+  it("syncs the editable project path when the window configuration changes", () => {
+    const h = handlers();
+    const view = render(<RuntimeHubWidget projectPath="/repo" {...h} />);
+
+    expect(screen.getByLabelText("Project path")).toHaveValue("/repo");
+
+    view.rerender(<RuntimeHubWidget projectPath="/repo-next" {...h} />);
+
+    expect(screen.getByLabelText("Project path")).toHaveValue("/repo-next");
+  });
 });

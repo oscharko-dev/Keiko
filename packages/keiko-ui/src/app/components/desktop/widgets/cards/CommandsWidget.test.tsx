@@ -2,7 +2,7 @@
 // the UI through the same paths a real BFF would. Covers: catalog fetch, run-button POST, failure
 // surface, cancel via SSE-captured runId, SSE event display, and an axe a11y smoke.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -107,6 +107,17 @@ describe("CommandsWidget", () => {
     expect(screen.getByRole("button", { name: /run task/i })).toBeInTheDocument();
   });
 
+  it("reloads the discovered task catalog when the window project path changes", async () => {
+    const view = render(<CommandsWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /task/i });
+    vi.mocked(fetchCommandCatalog).mockClear();
+
+    view.rerender(<CommandsWidget projectPath="/proj-next" />);
+
+    await waitFor(() => expect(fetchCommandCatalog).toHaveBeenCalledWith("/proj-next"));
+    expect(screen.getByLabelText(/project path/i)).toHaveValue("/proj-next");
+  });
+
   it("populates the task dropdown from the discovered catalog", async () => {
     const user = userEvent.setup();
     render(<CommandsWidget projectPath="/proj" />);
@@ -137,6 +148,20 @@ describe("CommandsWidget", () => {
       taskId: "npm-script:test",
       requestId: "req-own",
     });
+  });
+
+  it("guards against duplicate submissions before React rerenders the running state", async () => {
+    vi.mocked(createCommandRun).mockImplementation(() => new Promise<never>(() => undefined));
+    render(<CommandsWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /task/i });
+    const runButton = screen.getByRole("button", { name: /run task/i });
+    await waitFor(() => expect(runButton).toHaveAttribute("aria-disabled", "false"));
+
+    fireEvent.click(runButton);
+    fireEvent.click(runButton);
+
+    expect(createCommandRun).toHaveBeenCalledTimes(1);
+    expect(runButton).toBeDisabled();
   });
 
   it("surfaces a failure reason badge for a non-zero exit", async () => {

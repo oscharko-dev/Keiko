@@ -4,7 +4,7 @@
 // without adding execution authority: read-only Git lives in Files, command/container runs keep their
 // server-frozen catalogs, and all Git mutations stay in Epic #470 Git Delivery windows.
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../Icons";
 
 interface RuntimeHubWidgetProps {
@@ -44,6 +44,10 @@ function RuntimeActionButton({ action }: { readonly action: RuntimeAction }): Re
 
 export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
   const [projectInput, setProjectInput] = useState<string>(props.projectPath ?? "");
+  useEffect(() => {
+    setProjectInput(props.projectPath ?? "");
+  }, [props.projectPath]);
+
   const projectPath = projectInput.trim();
   const hasProject = projectPath.length > 0;
 

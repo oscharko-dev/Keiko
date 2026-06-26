@@ -90,6 +90,10 @@ function resultSummary(result: CommandTaskRunResult): string {
 
 export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   const [projectInput, setProjectInput] = useState<string>(props.projectPath ?? "");
+  useEffect(() => {
+    setProjectInput(props.projectPath ?? "");
+  }, [props.projectPath]);
+
   const [tasks, setTasks] = useState<readonly CommandTask[]>([]);
   const [taskId, setTaskId] = useState<string>("");
   const [running, setRunning] = useState(false);
@@ -169,7 +173,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   const onSubmit = useCallback(
     async (e: FormEvent<HTMLFormElement>): Promise<void> => {
       e.preventDefault();
-      if (running || taskId.length === 0) return;
+      if (running || runningRef.current || taskId.length === 0) return;
       setError(null);
       setResult(null);
       setInFlightRunId(null);
@@ -236,7 +240,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
             className="tm-action"
             data-primary="true"
             ref={runBtnRef}
-            disabled={tasks.length === 0}
+            disabled={running || tasks.length === 0 || taskId.length === 0}
             aria-disabled={running || tasks.length === 0 || taskId.length === 0}
           >
             {running ? "Running…" : "Run task"}
@@ -245,6 +249,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
             <button
               type="button"
               className="tm-action"
+              disabled={inFlightRunId === null}
               aria-disabled={inFlightRunId === null}
               onClick={() => void onAbort()}
             >
