@@ -414,6 +414,7 @@ function GitDeliveryActionSheetView({
 }: GitDeliveryActionSheetViewProps): ReactNode {
   const titleId = useId();
   const stateId = useId();
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   const waiting = actionSheet.state === "waiting-for-approval";
   const blocked = actionSheet.state === "blocked";
@@ -426,10 +427,12 @@ function GitDeliveryActionSheetView({
   useEffect(() => {
     if (waiting) {
       approveRef.current?.focus();
+    } else if (blocked) {
+      dialogRef.current?.focus();
     } else {
       confirmRef.current?.focus();
     }
-  }, [waiting]);
+  }, [blocked, waiting]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key === "Escape" && onReject !== undefined) {
@@ -447,6 +450,8 @@ function GitDeliveryActionSheetView({
       aria-labelledby={titleId}
       aria-describedby={stateId}
       onKeyDown={handleKeyDown}
+      ref={dialogRef}
+      tabIndex={-1}
     >
       <div className="arun-gate-h">
         <Icons.git size={13} /> Governed Git delivery

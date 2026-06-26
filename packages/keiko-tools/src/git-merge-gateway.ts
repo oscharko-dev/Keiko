@@ -701,6 +701,28 @@ async function runMergeAdapter(
   }
 }
 
+function providerPullRequestMatchesCommand(
+  command: GitMergeCommand,
+  pullRequest: GitDeliveryPullRequestState | undefined,
+): boolean {
+  return (
+    pullRequest?.externalId === command.prExternalId &&
+    pullRequest.baseBranchName === command.baseBranchName &&
+    pullRequest.headBranchName === command.headBranchName
+  );
+}
+
+function providerMismatchReadiness(summary: GitMergeReadinessSummary): GitMergeReadinessSummary {
+  return {
+    ...summary,
+    mergeable: false,
+    blockers: [
+      { code: "provider-error", severity: "blocking", remediation: "internal" },
+      ...summary.blockers,
+    ],
+  };
+}
+
 // The readiness gate result: proceed to execute, or block (with the lifecycle to return).
 function readinessBlockLifecycle(
   prep: MergePrep,
@@ -761,6 +783,13 @@ async function runReadinessAndMerge(
         provider.providerError === true,
       ),
       readiness: summary,
+    };
+  }
+  if (!providerPullRequestMatchesCommand(request.command, provider.pullRequest)) {
+    const mismatchReadiness = providerMismatchReadiness(summary);
+    return {
+      lifecycle: readinessBlockLifecycle(prep, request.approval, mismatchReadiness, true),
+      readiness: mismatchReadiness,
     };
   }
 

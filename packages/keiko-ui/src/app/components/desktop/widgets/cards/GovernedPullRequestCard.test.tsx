@@ -59,7 +59,7 @@ function makeClient(overrides: Partial<GovernedPullRequestClient> = {}): Governe
 const PROJECT = "/home/me/repo";
 
 function fillForm(): void {
-  fireEvent.change(screen.getByLabelText("Repository owner and name"), {
+  fireEvent.change(screen.getByLabelText("Repository (owner/repo)"), {
     target: { value: "oscharko-dev/Keiko" },
   });
   fireEvent.change(screen.getByLabelText("Base branch"), { target: { value: "dev" } });
@@ -97,7 +97,7 @@ describe("GovernedPullRequestCard", () => {
     fillForm();
     // Clear the title so the draft seeds it.
     fireEvent.change(screen.getByLabelText("Pull request title"), { target: { value: "" } });
-    fireEvent.change(screen.getByLabelText("Repository owner and name"), {
+    fireEvent.change(screen.getByLabelText("Repository (owner/repo)"), {
       target: { value: "oscharko-dev/Keiko" },
     });
     fireEvent.change(screen.getByLabelText("Head branch"), {

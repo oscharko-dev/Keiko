@@ -381,6 +381,8 @@ describe("runGitMerge gates (AC1/AC4/AC5)", () => {
       deps(adapter, ALLOW_PACK),
     );
     expect(result.lifecycle.outcome.status).toBe("failed");
+    expect(result.readiness?.mergeable).toBe(false);
+    expect(result.readiness?.blockers.some((b) => b.code === "provider-error")).toBe(true);
     expect(adapter.mergeCalls()).toHaveLength(0);
   });
 
@@ -394,6 +396,58 @@ describe("runGitMerge gates (AC1/AC4/AC5)", () => {
     expect(result.merged).toBe(true);
     expect(adapter.mergeCalls()).toHaveLength(1);
     expect(adapter.mergeCalls()[0]?.mergeStrategy).toBe("squash");
+  });
+
+  it("fails closed when provider PR base differs from the policy-evaluated command base", async () => {
+    const adapter = fakeAdapter(
+      readyProvider({
+        pullRequest: {
+          schemaVersion: "1",
+          externalId: "42",
+          status: "open",
+          isDraft: false,
+          headBranchName: "feat/x",
+          baseBranchName: "release/protected",
+          mergeReadiness: { ready: true, requiredApprovalCount: 0, receivedApprovalCount: 0 },
+        },
+      }),
+      SUCCEEDED,
+    );
+    const result = await runGitMerge(
+      { command: COMMAND, approval: NO_APPROVAL },
+      deps(adapter, ALLOW_PACK),
+    );
+    expect(result.lifecycle.outcome.status).toBe("failed");
+    expect(adapter.mergeCalls()).toHaveLength(0);
+  });
+
+  it("fails closed when provider PR head differs from the branch deletion command head", async () => {
+    const adapter = fakeAdapter(
+      readyProvider({
+        pullRequest: {
+          schemaVersion: "1",
+          externalId: "42",
+          status: "open",
+          isDraft: false,
+          headBranchName: "feat/actual",
+          baseBranchName: "main",
+          mergeReadiness: { ready: true, requiredApprovalCount: 0, receivedApprovalCount: 0 },
+        },
+      }),
+      { ...SUCCEEDED, branchDeleted: true },
+    );
+    const result = await runGitMerge(
+      {
+        command: { ...COMMAND, headBranchName: "feat/forged-delete", deleteBranchAfterMerge: true },
+        approval: NO_APPROVAL,
+      },
+      deps(adapter, ALLOW_PACK),
+    );
+    expect(result.lifecycle.outcome.status).toBe("failed");
+    expect(result.readiness?.mergeable).toBe(false);
+    expect(result.readiness?.blockers.some((b) => b.code === "provider-error")).toBe(true);
+    expect(result.branchDeleted).toBeUndefined();
+    expect(adapter.mergeCalls()).toHaveLength(0);
   });
 
   it("surfaces the provider rejection descriptor on a rejected merge", async () => {

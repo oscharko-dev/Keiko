@@ -46,7 +46,7 @@ function makeClient(): GovernedPullRequestClient {
 const PROJECT = "/home/me/repo";
 
 function fillForm(): void {
-  fireEvent.change(screen.getByLabelText("Repository owner and name"), {
+  fireEvent.change(screen.getByLabelText("Repository (owner/repo)"), {
     target: { value: "oscharko-dev/Keiko" },
   });
   fireEvent.change(screen.getByLabelText("Base branch"), { target: { value: "dev" } });

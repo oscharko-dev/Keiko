@@ -321,7 +321,6 @@ function StagingSection({ busy, onStage, onUnstage }: StagingSectionProps): Reac
           style={{ ...FIELD_STYLE, minHeight: 60, resize: "vertical" }}
           value={pathspecs}
           onChange={(e) => setPathspecs(e.target.value)}
-          aria-label="Pathspecs"
         />
       </label>
       <p style={{ font: "var(--text-caption)", color: "var(--fg-muted)", margin: 0 }}>{hint}</p>

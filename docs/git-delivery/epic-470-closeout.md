@@ -20,6 +20,8 @@ The implementation landed through these merged pull requests targeting
 | #1527 | Governed remote publish for #476.                                                   |
 | #1531 | Governed GitHub pull request command center for #477.                               |
 | #1534 | Governed merge gateway, protected-branch enforcement, and guided recovery for #478. |
+| #1536 | Verification matrix, operator runbooks, policy guidance, and closure evidence.      |
+| #1538 | Final Epic #470 closeout reconciliation after child-issue board/checkbox audit.     |
 
 ## Terminal restrictions
 
@@ -83,6 +85,12 @@ reconciled. That governance gap is now closed:
 All nine child issues (#471-#479) are now closed with `status: done`, and every Epic #470
 Definition-of-Done and Expected-Verification item is satisfied by the evidence cited above and in the
 verification matrix.
+
+The #475 implementation was completed across PR #1523 and its follow-up PR #1525. PR #1523 was merged
+before its `ci` coverage branch gate was green; PR #1525 repaired that coverage gate and restored the
+final #475 implementation state to a green `ci` result before the epic branch closeout. The final
+closeout PR #1538 also passed `ci` before Epic #470 was closed. Closure evidence must cite this sequence
+explicitly instead of claiming that every historical #475 PR head was green.
 
 ## Closure decision
 
