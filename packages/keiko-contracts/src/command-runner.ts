@@ -182,20 +182,40 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
+// Bound the identifier fields at the parse boundary so an oversized or non-token value cannot reach
+// the manager, the audit ledger, or the SSE fan-out. The 16 KB body cap is the outer backstop; these
+// are the precise per-field limits.
+export const MAX_TASK_ID_LENGTH = 256;
+export const MAX_REQUEST_ID_LENGTH = 128;
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function isBoundedNonEmptyString(value: unknown, maxLength: number): value is string {
+  return isNonEmptyString(value) && value.length <= maxLength;
 }
 
 function isPositiveFinite(value: unknown): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+function isValidRequestId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_REQUEST_ID_LENGTH &&
+    REQUEST_ID_PATTERN.test(value)
+  );
+}
+
 function collectOptionalRequestErrors(input: Record<string, unknown>, errors: string[]): void {
   if (input.timeoutMs !== undefined && !isPositiveFinite(input.timeoutMs)) {
     errors.push("timeoutMs must be a positive finite number");
   }
-  if (input.requestId !== undefined && typeof input.requestId !== "string") {
-    errors.push("requestId must be a string");
+  if (input.requestId !== undefined && !isValidRequestId(input.requestId)) {
+    errors.push(`requestId must be a token of 1-${String(MAX_REQUEST_ID_LENGTH)} characters`);
   }
 }
 
@@ -209,8 +229,10 @@ export function parseCommandTaskRunRequest(input: unknown): CommandTaskRunReques
   if (!isNonEmptyString(input.projectId)) {
     errors.push("projectId must be a non-empty string");
   }
-  if (!isNonEmptyString(input.taskId)) {
-    errors.push("taskId must be a non-empty string");
+  if (!isBoundedNonEmptyString(input.taskId, MAX_TASK_ID_LENGTH)) {
+    errors.push(
+      `taskId must be a non-empty string of up to ${String(MAX_TASK_ID_LENGTH)} characters`,
+    );
   }
   collectOptionalRequestErrors(input, errors);
   if (errors.length > 0) {

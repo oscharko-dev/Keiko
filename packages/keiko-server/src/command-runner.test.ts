@@ -273,6 +273,17 @@ describe("CommandRunnerManager — execution", () => {
     ).rejects.toMatchObject({ code: "PROJECT_NOT_FOUND" });
   });
 
+  it("keeps fanning out events when one subscriber throws", async () => {
+    const manager = makeManager(makeSpawn({ stdout: "ok", exitCode: 0 }));
+    manager.subscribe(() => {
+      throw new Error("subscriber boom");
+    });
+    const received: string[] = [];
+    manager.subscribe((event) => received.push(event.kind));
+    await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
+    expect(received).toEqual(["run-started", "run-completed"]);
+  });
+
   it("enforces the concurrent-run limit", async () => {
     const manager = makeManager(makeSpawn({ hangs: true }));
     const pending: Promise<unknown>[] = [];

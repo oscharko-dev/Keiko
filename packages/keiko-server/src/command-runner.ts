@@ -300,6 +300,10 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
 
   public readonly execute = async (input: CommandRunInput): Promise<CommandTaskRunResult> => {
     const workspace = this.resolveWorkspace(input.projectId);
+    // Re-discover the catalog at execute time on purpose: the requested taskId is untrusted, so the
+    // server re-derives the vetted task from the CURRENT package.json rather than trusting a catalog
+    // the client fetched earlier (which may be stale or forged). The extra manifest read is a
+    // deliberate security re-validation on a low-frequency, user-triggered path, not a hot loop.
     const task = discoverTasks(workspace, this.fs()).find((entry) => entry.id === input.taskId);
     if (task === undefined) {
       throw new CommandRunnerError("TASK_NOT_FOUND", "Task is not in the discovered catalog.");

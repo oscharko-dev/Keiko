@@ -125,9 +125,9 @@ describe("parseCommandTaskRunRequest rejections", () => {
       expect(parsed.errors).toEqual(
         expect.arrayContaining([
           "projectId must be a non-empty string",
-          "taskId must be a non-empty string",
+          "taskId must be a non-empty string of up to 256 characters",
           "timeoutMs must be a positive finite number",
-          "requestId must be a string",
+          "requestId must be a token of 1-128 characters",
         ]),
       );
     }
@@ -138,6 +138,24 @@ describe("parseCommandTaskRunRequest rejections", () => {
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) {
       expect(parsed.errors).toEqual(["timeoutMs must be a positive finite number"]);
+    }
+  });
+
+  it("rejects an oversized taskId", () => {
+    const parsed = parseCommandTaskRunRequest({ ...baseRequest(), taskId: "x".repeat(257) });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toEqual(["taskId must be a non-empty string of up to 256 characters"]);
+    }
+  });
+
+  it("rejects a requestId with illegal characters or excessive length", () => {
+    for (const bad of ["has space", "semi;colon", "x".repeat(129)]) {
+      const parsed = parseCommandTaskRunRequest({ ...baseRequest(), requestId: bad });
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) {
+        expect(parsed.errors).toEqual(["requestId must be a token of 1-128 characters"]);
+      }
     }
   });
 });
