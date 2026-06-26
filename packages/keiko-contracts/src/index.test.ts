@@ -652,4 +652,29 @@ describe("keiko-contracts package surface", () => {
     pin<GitDeliveryActionSheetRequest>();
     pin<GitDeliveryWorktreeSnapshot>();
   });
+
+  it("governed GitHub pull request contracts are reachable through the barrel (#477)", async () => {
+    const m = await import("./index.js");
+    expect(m.GIT_PULL_REQUEST_SCHEMA_VERSION).toBe("1");
+    // Count assertions are intentional surface pins; bump deliberately when the surface changes.
+    expect(m.GIT_PR_CHANGE_TYPES.length).toBe(7);
+    expect(m.GIT_PR_READINESS_BLOCKER_CODES.length).toBe(9);
+    expect(m.GIT_PR_RECOMMENDATIONS.length).toBe(5);
+    expect(m.GIT_PR_REJECTION_REASONS.length).toBe(9);
+
+    expect(typeof m.synthesizePullRequestMetadata).toBe("function");
+    expect(typeof m.gitPullRequestReadinessFor).toBe("function");
+    expect(typeof m.gitPullRequestRecommendationFor).toBe("function");
+    expect(m.gitPrRejectionToErrorCode("rate-limited")).toBe("network-failure");
+    expect(m.gitPrRejectionToDisposition("validation-error")).toBe("user-fixable");
+
+    const readiness = m.gitPullRequestReadinessFor({
+      headBranchName: "claude/issue-477-x",
+      baseBranchName: "dev",
+      headPublished: true,
+      baseExists: true,
+    });
+    expect(m.isGitPullRequestReadinessSummary(readiness)).toBe(true);
+    expect(readiness.objectExists).toBe(false);
+  });
 });

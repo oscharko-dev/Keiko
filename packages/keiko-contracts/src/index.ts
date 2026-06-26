@@ -1658,3 +1658,61 @@ export {
   isGitCommitChangeSummary,
   isGitCommitIntentAnalysis,
 } from "./git-commit-intent.js";
+
+// git-pull-request.ts (Issue #477, Epic #470; ADR-0064)
+// The provider-neutral, content-free PR-orchestration leaf: the readiness model (objectExists vs
+// reviewReady with severity-ranked blockers), the deterministic metadata-synthesis heuristics, the
+// reviewer/label/linkage suggestion shapes, and the provider-failure rejection taxonomy. The actual PR
+// title/body strings and the GitHub-specific raw-error classifier are keiko-tools concerns.
+export type {
+  GitPrChangeType,
+  GitPrPolicyOutcome,
+  GitPullRequestChangeNarrative,
+  GitPullRequestRiskDigest,
+  GitPrSummarySection,
+  GitPrRiskSection,
+  GitPrChangeNarrativeSection,
+  GitPullRequestMetadataDraft,
+  GitPullRequestReadinessBlockerCode,
+  GitPrBlockerSeverity,
+  GitPrRemediationClass,
+  GitPullRequestReadinessBlocker,
+  GitPullRequestReadinessSummary,
+  GitPullRequestReadinessInput,
+  GitPullRequestRecommendation,
+  GitPrReviewerSuggestionBasis,
+  GitPrLabelSuggestionBasis,
+  GitPrLinkageSuggestionBasis,
+  GitPullRequestReviewerSuggestion,
+  GitPullRequestLabelSuggestion,
+  GitPullRequestLinkageSuggestion,
+  GitPullRequestRejectionReason,
+} from "./git-pull-request.js";
+export {
+  GIT_PULL_REQUEST_SCHEMA_VERSION,
+  GIT_PR_CHANGE_TYPES,
+  GIT_PR_POLICY_OUTCOMES,
+  GIT_PR_READINESS_BLOCKER_CODES,
+  GIT_PR_RECOMMENDATIONS,
+  GIT_PR_REJECTION_REASONS,
+  GIT_PR_REJECTION_ERROR_CODE,
+  GIT_PR_REJECTION_DISPOSITION,
+  gitPrRejectionToErrorCode,
+  gitPrRejectionToDisposition,
+  synthesizePullRequestMetadata,
+  gitPullRequestReadinessFor,
+  gitPullRequestRecommendationFor,
+  gitPullRequestReviewerSuggestionsFor,
+  gitPullRequestLabelSuggestionsFor,
+  gitPullRequestLinkageSuggestionsFor,
+  isGitPrChangeType,
+  isGitPrPolicyOutcome,
+  isGitPullRequestReadinessBlockerCode,
+  isGitPullRequestRecommendation,
+  isGitPullRequestRejectionReason,
+  isGitPullRequestReadinessBlocker,
+  isGitPullRequestReadinessSummary,
+  isGitPullRequestChangeNarrative,
+  isGitPullRequestMetadataDraft,
+  parseGitPullRequestReadinessSummary,
+} from "./git-pull-request.js";

@@ -206,3 +206,12 @@ export {
 // push allowlist; it is exposed on the SAME `./internal/git-mutation` subpath. Its allowlist is
 // structurally separate from both the mutation and the read-only inspection rules.
 export { createNodeGitPublishAdapter, type NodeGitPublishAdapterDeps } from "./git-publish-node.js";
+
+// The Node GitHub pull request executor (Issue #477) shells `gh api` through the same spawn boundary
+// with its OWN dedicated PR allowlist (create / update / draft-toggle GraphQL — no merge, no delete);
+// it is exposed on the SAME `./internal/git-mutation` subpath. The GitHub token is read by gh itself,
+// never by Keiko.
+export {
+  createNodeGitPullRequestAdapter,
+  type NodeGitPullRequestAdapterDeps,
+} from "./git-pr-node.js";

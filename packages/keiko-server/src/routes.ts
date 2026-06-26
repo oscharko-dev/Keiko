@@ -174,6 +174,7 @@ import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.
 import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
 import { GIT_DELIVERY_COMMIT_ROUTE_GROUP } from "./gitDelivery/commitRoutes.js";
 import { GIT_DELIVERY_PUSH_ROUTE_GROUP } from "./gitDelivery/pushRoutes.js";
+import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -620,6 +621,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #476 governed remote publish: push preview (read-only) + execute through the SEPARATE publish
   // gateway (dedicated push-only allowlist) + #474 evidence ledger; same capability flag and CSRF.
   ...GIT_DELIVERY_PUSH_ROUTE_GROUP,
+  // #477 governed GitHub pull request command center: PR preview (read-only metadata/readiness/
+  // recommendation) + execute through the SEPARATE PR gateway (dedicated `gh api` allowlist) + #474
+  // evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_PR_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

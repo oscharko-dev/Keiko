@@ -208,6 +208,40 @@ export {
   type GitRemotePublishAdapter,
 } from "./git-publish-gateway.js";
 
+// The SEPARATE GitHub pull request authority (Issue #477, ADR-0064). A PARALLEL gateway to the publish
+// gateway — never an extension of it. The pure surface — PR command union, narrow two-method adapter
+// port, dedicated `gh api` allowlist, argv builders, GitHub-error classifier, effective-policy
+// evaluator, and the runGitPullRequest orchestrator — is re-exported here. The Node `gh api` executor
+// (createNodeGitPullRequestAdapter) carries the spawn effect and is reachable on the
+// `./internal/git-mutation` subpath, never the package barrel.
+export {
+  buildPrConvertDraftGraphqlArgv,
+  buildPrCreateArgv,
+  buildPrMarkReadyGraphqlArgv,
+  buildPrUpdateArgv,
+  classifyGitPullRequestRejection,
+  evaluateGitPullRequestEffectivePolicy,
+  GIT_PULL_REQUEST_ALLOWED_SUBCOMMANDS,
+  GIT_PULL_REQUEST_COMMAND_RULES,
+  gitPrArgvIsGoverned,
+  gitPrRejectionToErrorCode,
+  gitPullRequestRejectionFor,
+  GitPrArgvError,
+  runGitPullRequest,
+  type GitPrCreateCommand,
+  type GitPrCreateExecRequest,
+  type GitPrExecResult,
+  type GitPrUpdateCommand,
+  type GitPrUpdateExecRequest,
+  type GitPullRequestAdapter,
+  type GitPullRequestCommand,
+  type GitPullRequestEffectivePolicy,
+  type GitPullRequestLifecycleResult,
+  type GitPullRequestOrchestratorDeps,
+  type GitPullRequestRejection,
+  type GitPullRequestRequest,
+} from "./git-pr-gateway.js";
+
 // ─── Governed local Git flows: commit-intent summary (Issue #475) ──────────────────────────────
 // The PURE commit-intent summarizer reduces staged paths into the content-free GitCommitChangeSummary.
 // The live worktree READER carries the Node spawn effect and is therefore NOT re-exported here; it is
