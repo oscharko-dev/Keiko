@@ -323,18 +323,23 @@ registerWindowRender("files", (cfg, ctx) => {
   const onOpenFile = (fileRoot: string, path: string): void => {
     ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] });
   };
+  const onOpenGitDelivery = (projectRoot: string): void => {
+    ctx.openWindow("governedGit", { projectPath: projectRoot });
+  };
   return root !== undefined ? (
     <FilesWidget
       root={root}
       onActiveFileChange={onActiveFileChange}
       onRootChange={onRootChange}
       onOpenFile={onOpenFile}
+      onOpenGitDelivery={onOpenGitDelivery}
     />
   ) : (
     <FilesWidget
       onActiveFileChange={onActiveFileChange}
       onRootChange={onRootChange}
       onOpenFile={onOpenFile}
+      onOpenGitDelivery={onOpenGitDelivery}
     />
   );
 });

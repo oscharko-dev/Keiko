@@ -106,6 +106,7 @@ vi.mock("./cards/FilesWidget", () => ({
     onActiveFileChange,
     onRootChange,
     onOpenFile,
+    onOpenGitDelivery,
   }: {
     readonly root?: string;
     readonly onActiveFileChange: (
@@ -115,6 +116,7 @@ vi.mock("./cards/FilesWidget", () => ({
     ) => void;
     readonly onRootChange: (root: string) => void;
     readonly onOpenFile: (root: string, path: string) => void;
+    readonly onOpenGitDelivery: (root: string) => void;
   }) => (
     <div>
       <span data-testid="files-root">{root ?? "none"}</span>
@@ -126,6 +128,9 @@ vi.mock("./cards/FilesWidget", () => ({
       </button>
       <button type="button" onClick={() => onOpenFile("/repo", "src/app.ts")}>
         Open file
+      </button>
+      <button type="button" onClick={() => onOpenGitDelivery("/repo")}>
+        Open governed Git delivery
       </button>
     </div>
   ),
@@ -422,6 +427,8 @@ describe("workspace widget renderer registry", () => {
       file: "src/app.ts",
       openFiles: ["src/app.ts"],
     });
+    fireEvent.click(screen.getByRole("button", { name: "Open governed Git delivery" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", { projectPath: "/repo" });
 
     view.rerender(<>{WIN_TYPES.review.render({}, ctx)}</>);
     fireEvent.click(screen.getByTestId("review-widget"));

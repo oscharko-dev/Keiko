@@ -22,6 +22,8 @@ Issue #1389 should use the editor Git status and diff API for passive context, t
 Git affordances to the governed Git delivery surfaces or API clients:
 
 - Use `/api/git/status` and `/api/git/diff` for clean/dirty/conflict/read-only diff states.
+- Use the Files widget Git status strip as the editor entry point into governed delivery; it opens
+  `governedGit` with the trusted `repositoryRoot` from the read-only status response.
 - Use `governedGit`, `governedPullRequest`, and `governedMerge` windows for write-capable delivery
   flows.
 - Use `fetchGitDelivery*` API helpers for any mutating or previewable delivery operation.

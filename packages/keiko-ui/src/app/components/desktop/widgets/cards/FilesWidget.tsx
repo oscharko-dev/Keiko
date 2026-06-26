@@ -32,6 +32,7 @@ interface FilesWidgetProps {
   // the root bar is hidden (the widget is then locked to its configured/fallback root).
   onRootChange?: (root: string) => void;
   onOpenFile?: ((root: string, path: string) => void) | undefined;
+  onOpenGitDelivery?: ((root: string) => void) | undefined;
 }
 
 // Parent directory of an absolute POSIX/Windows path, or null at the filesystem root. Pure string
@@ -175,6 +176,7 @@ export function FilesWidget({
   onActiveFileChange,
   onRootChange,
   onOpenFile,
+  onOpenGitDelivery,
 }: FilesWidgetProps): ReactNode {
   const trimmedRoot = root?.trim();
   const configuredRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : null;
@@ -431,6 +433,14 @@ export function FilesWidget({
     gitChanges.map((change): [string, GitChangedFile] => [change.path, change]),
   );
   const gitSummary = gitStatusSummary(gitStatusState);
+  const gitDeliveryRoot =
+    gitStatusState.status?.available === true
+      ? (gitStatusState.status.repositoryRoot ?? gitStatusState.status.root)
+      : "";
+  const canOpenGitDelivery =
+    onOpenGitDelivery !== undefined &&
+    gitStatusState.status?.available === true &&
+    gitDeliveryRoot.length > 0;
 
   const renderEntry = (entry: FilesTreeEntry, depth: number): ReactNode => {
     const pad = treeIndent(depth);
@@ -733,6 +743,18 @@ export function FilesWidget({
         >
           <Icons.git size={13} />
           <span>{gitSummary}</span>
+          {canOpenGitDelivery ? (
+            <button
+              className="files-root-up"
+              style={{ width: 24, height: 24, marginLeft: "auto" }}
+              type="button"
+              onClick={() => onOpenGitDelivery(gitDeliveryRoot)}
+              title="Open governed Git delivery"
+              aria-label="Open governed Git delivery"
+            >
+              <Icons.branch size={13} />
+            </button>
+          ) : null}
         </div>
       ) : null}
       <button
