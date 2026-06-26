@@ -171,6 +171,8 @@ describe("ContainerStatusWidget", () => {
     await userEvent.click(runButton);
 
     expect((await screen.findAllByText(/exit 0/i)).length).toBeGreaterThan(0);
+    expect(screen.getByText("run run-1")).toBeInTheDocument();
+    expect(screen.getByText("task diag:docker-info")).toBeInTheDocument();
     expect(screen.getByText(/diagnostic ok/)).toBeInTheDocument();
     expect(createContainerRun).toHaveBeenCalledWith({
       projectId: "/proj",

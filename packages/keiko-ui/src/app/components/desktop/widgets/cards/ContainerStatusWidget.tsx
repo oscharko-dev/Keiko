@@ -128,6 +128,7 @@ function resultSummary(result: ContainerRunResult): string {
   if (result.truncated) parts.push("output truncated");
   if (result.timedOut) parts.push("timed out");
   parts.push(result.failureReason);
+  parts.push(`run ${result.runId}`, `task ${result.taskId}`);
   return `Run finished: ${parts.join(", ")}`;
 }
 
@@ -416,6 +417,8 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
             </span>
             <span className="tm-badge">{result.durationMs} ms</span>
             <span className="tm-badge">{result.failureReason}</span>
+            <span className="tm-badge">run {result.runId}</span>
+            <span className="tm-badge">task {result.taskId}</span>
             {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
             {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
           </div>

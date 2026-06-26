@@ -189,6 +189,13 @@ import {
   handlePromptEnhancement,
   handlePromptEnhancementEvidence,
 } from "./promptEnhancer/index.js";
+import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
+import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
+import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
+import { GIT_DELIVERY_COMMIT_ROUTE_GROUP } from "./gitDelivery/commitRoutes.js";
+import { GIT_DELIVERY_PUSH_ROUTE_GROUP } from "./gitDelivery/pushRoutes.js";
+import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
+import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -705,6 +712,26 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // envelope (refs only, no chat content). Registered as a sibling group so concurrent
   // QI epic merges (e.g. #280) stay mechanically merge-safe.
   ...QI_HANDOFF_ROUTE_GROUP,
+  // Issue #473 (Epic #470) — governed Git delivery action-sheet route group. Single READ-ONLY
+  // POST seam returning a UI-safe GitDeliveryActionSheet projection; never mutates the repo.
+  // Registered as a sibling group so concurrent #470 epic merges stay mechanically merge-safe.
+  ...GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP,
+  ...GIT_DELIVERY_EVIDENCE_ROUTE_GROUP,
+  // #475 governed local write flows: branch create/switch, staging, and commit preview/execute. These
+  // EXECUTE through the #472 kernel + #474 evidence ledger; gated by the same capability flag and CSRF.
+  ...GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP,
+  ...GIT_DELIVERY_COMMIT_ROUTE_GROUP,
+  // #476 governed remote publish: push preview (read-only) + execute through the SEPARATE publish
+  // gateway (dedicated push-only allowlist) + #474 evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_PUSH_ROUTE_GROUP,
+  // #477 governed GitHub pull request command center: PR preview (read-only metadata/readiness/
+  // recommendation) + execute through the SEPARATE PR gateway (dedicated `gh api` allowlist) + #474
+  // evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_PR_ROUTE_GROUP,
+  // #478 governed merge: merge preview (read-only readiness/eligible-strategies/recommendation) +
+  // execute through the SEPARATE merge gateway (dedicated `gh api` merge allowlist, readiness gate, final
+  // approval) + #474 evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_MERGE_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

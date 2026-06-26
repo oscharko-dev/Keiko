@@ -20,6 +20,10 @@ import { EditorWidget } from "./cards/EditorWidget";
 import { BrowserWidget } from "./cards/BrowserWidget";
 import { TerminalWidget } from "./cards/TerminalWidget";
 import { CommandsWidget } from "./cards/CommandsWidget";
+import { RuntimeHubWidget } from "./cards/RuntimeHubWidget";
+import { GovernedGitFlowCard } from "./cards/GovernedGitFlowCard";
+import { GovernedPullRequestCard } from "./cards/GovernedPullRequestCard";
+import { GovernedMergeCard } from "./cards/GovernedMergeCard";
 import { ContainerStatusWidget } from "./cards/ContainerStatusWidget";
 import { ReviewWidget } from "./cards/ReviewWidget";
 import { AgentRunWidget, type AgentRunCfg } from "./cards/AgentRunWidget";
@@ -320,18 +324,23 @@ registerWindowRender("files", (cfg, ctx) => {
   const onOpenFile = (fileRoot: string, path: string): void => {
     ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] });
   };
+  const onOpenGitDelivery = (projectRoot: string): void => {
+    ctx.openWindow("governedGit", { projectPath: projectRoot });
+  };
   return root !== undefined ? (
     <FilesWidget
       root={root}
       onActiveFileChange={onActiveFileChange}
       onRootChange={onRootChange}
       onOpenFile={onOpenFile}
+      onOpenGitDelivery={onOpenGitDelivery}
     />
   ) : (
     <FilesWidget
       onActiveFileChange={onActiveFileChange}
       onRootChange={onRootChange}
       onOpenFile={onOpenFile}
+      onOpenGitDelivery={onOpenGitDelivery}
     />
   );
 });
@@ -399,6 +408,55 @@ registerWindowRender("commands", (cfg) => {
   const props: { projectPath?: string } = {};
   if (projectPath !== undefined) props.projectPath = projectPath;
   return <CommandsWidget {...props} />;
+});
+registerWindowRender("runtime", (cfg, ctx) => {
+  const projectPath = str(cfg, "projectPath") ?? ctx.linkedRoot ?? undefined;
+  const openWithProject = (
+    type: "commands" | "governedGit" | "governedPullRequest" | "governedMerge",
+    root: string,
+  ): void => {
+    ctx.openWindow(type, { projectPath: root });
+  };
+  return (
+    <RuntimeHubWidget
+      projectPath={projectPath}
+      onProjectPathChange={(nextProjectPath) => ctx.updateCfg({ projectPath: nextProjectPath })}
+      onOpenFiles={(root) => {
+        ctx.openWindow("files", root !== undefined ? { root } : undefined);
+      }}
+      onOpenCommands={(root) => openWithProject("commands", root)}
+      onOpenContainers={(root) => {
+        ctx.openWindow("containerStatus", root !== undefined ? { projectPath: root } : undefined);
+      }}
+      onOpenGovernedGit={(root) => openWithProject("governedGit", root)}
+      onOpenPullRequest={(root) => openWithProject("governedPullRequest", root)}
+      onOpenMerge={(root) => openWithProject("governedMerge", root)}
+    />
+  );
+});
+// Epic #470, Issue #475 — Governed local Git flow surface. The active project root acts as the
+// projectId. Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a
+// linked Files/Editor window root; an empty state renders when none is available.
+registerWindowRender("governedGit", (cfg, ctx) => {
+  const projectId =
+    str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
+  return <GovernedGitFlowCard projectId={projectId} />;
+});
+// Epic #470, Issue #477 — Governed GitHub pull request command center. The active project root acts as
+// the projectId; the published head branch is carried in cfg from the Publish section.
+registerWindowRender("governedPullRequest", (cfg, ctx) => {
+  const projectId =
+    str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
+  const headBranchName = str(cfg, "headBranchName") ?? undefined;
+  return <GovernedPullRequestCard projectId={projectId} headBranchName={headBranchName} />;
+});
+// Epic #470, Issue #478 — Governed merge command center. The active project root acts as the projectId;
+// the head branch under review is carried in cfg from the Pull Request section.
+registerWindowRender("governedMerge", (cfg, ctx) => {
+  const projectId =
+    str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
+  const headBranchName = str(cfg, "headBranchName") ?? undefined;
+  return <GovernedMergeCard projectId={projectId} headBranchName={headBranchName} />;
 });
 // Issue #1388 (ADR-0070) — container engine status surface. Always renders: the unavailable state
 // degrades gracefully and never blocks. An optional project path scopes the allowlisted catalog.

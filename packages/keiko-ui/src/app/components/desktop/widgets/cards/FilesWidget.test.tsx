@@ -236,10 +236,14 @@ describe("FilesWidget", () => {
       maxBytes: 131072,
     });
 
-    render(<FilesWidget root="/repo space" />);
+    const onOpenGitDelivery = vi.fn();
+    render(<FilesWidget root="/repo space" onOpenGitDelivery={onOpenGitDelivery} />);
 
     expect(await screen.findByText(/Git main 1 changed file/i)).toBeInTheDocument();
     expect(screen.getByText("M")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open governed Git delivery" }));
+    expect(onOpenGitDelivery).toHaveBeenCalledWith("/repo space");
+
     await userEvent.click(screen.getByRole("button", { name: "View Git diff for package.json" }));
 
     expect(fetchGitDiff).toHaveBeenCalledWith({ root: "/repo space", path: "package.json" });

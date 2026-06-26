@@ -106,6 +106,7 @@ vi.mock("./cards/FilesWidget", () => ({
     onActiveFileChange,
     onRootChange,
     onOpenFile,
+    onOpenGitDelivery,
   }: {
     readonly root?: string;
     readonly onActiveFileChange: (
@@ -115,6 +116,7 @@ vi.mock("./cards/FilesWidget", () => ({
     ) => void;
     readonly onRootChange: (root: string) => void;
     readonly onOpenFile: (root: string, path: string) => void;
+    readonly onOpenGitDelivery: (root: string) => void;
   }) => (
     <div>
       <span data-testid="files-root">{root ?? "none"}</span>
@@ -126,6 +128,9 @@ vi.mock("./cards/FilesWidget", () => ({
       </button>
       <button type="button" onClick={() => onOpenFile("/repo", "src/app.ts")}>
         Open file
+      </button>
+      <button type="button" onClick={() => onOpenGitDelivery("/repo")}>
+        Open governed Git delivery
       </button>
     </div>
   ),
@@ -194,6 +199,52 @@ vi.mock("./cards/TerminalWidget", () => ({
     readonly cwd?: string;
     readonly projectPath?: string;
   }) => <div data-testid="terminal-widget">{`${cwd ?? ""}:${projectPath ?? ""}`}</div>,
+}));
+vi.mock("./cards/RuntimeHubWidget", () => ({
+  RuntimeHubWidget: ({
+    projectPath,
+    onProjectPathChange,
+    onOpenFiles,
+    onOpenCommands,
+    onOpenContainers,
+    onOpenGovernedGit,
+    onOpenPullRequest,
+    onOpenMerge,
+  }: {
+    readonly projectPath?: string;
+    readonly onProjectPathChange: (projectPath: string) => void;
+    readonly onOpenFiles: (projectPath?: string) => void;
+    readonly onOpenCommands: (projectPath: string) => void;
+    readonly onOpenContainers: (projectPath?: string) => void;
+    readonly onOpenGovernedGit: (projectPath: string) => void;
+    readonly onOpenPullRequest: (projectPath: string) => void;
+    readonly onOpenMerge: (projectPath: string) => void;
+  }) => (
+    <div data-testid="runtime-hub-widget">
+      <span>{projectPath ?? ""}</span>
+      <button type="button" onClick={() => onProjectPathChange("/next-runtime")}>
+        Change runtime project
+      </button>
+      <button type="button" onClick={() => onOpenFiles("/repo")}>
+        Runtime files
+      </button>
+      <button type="button" onClick={() => onOpenCommands("/repo")}>
+        Runtime tasks
+      </button>
+      <button type="button" onClick={() => onOpenContainers("/repo")}>
+        Runtime containers
+      </button>
+      <button type="button" onClick={() => onOpenGovernedGit("/repo")}>
+        Runtime git
+      </button>
+      <button type="button" onClick={() => onOpenPullRequest("/repo")}>
+        Runtime pr
+      </button>
+      <button type="button" onClick={() => onOpenMerge("/repo")}>
+        Runtime merge
+      </button>
+    </div>
+  ),
 }));
 vi.mock("./cards/ReviewWidget", () => ({
   ReviewWidget: ({
@@ -422,6 +473,8 @@ describe("workspace widget renderer registry", () => {
       file: "src/app.ts",
       openFiles: ["src/app.ts"],
     });
+    fireEvent.click(screen.getByRole("button", { name: "Open governed Git delivery" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", { projectPath: "/repo" });
 
     view.rerender(<>{WIN_TYPES.review.render({}, ctx)}</>);
     fireEvent.click(screen.getByTestId("review-widget"));
@@ -463,6 +516,27 @@ describe("workspace widget renderer registry", () => {
     expect(screen.getByTestId("prompt-enhancer-panel")).toHaveTextContent(
       "/repo:src/app.ts:/repo|/docs",
     );
+  });
+
+  it("maps the runtime hub into existing runtime and governed delivery windows", () => {
+    const ctx = makeCtx();
+    render(<>{WIN_TYPES.runtime.render({ projectPath: "/repo" }, ctx)}</>);
+
+    expect(screen.getByTestId("runtime-hub-widget")).toHaveTextContent("/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Change runtime project" }));
+    expect(ctx.updateCfg).toHaveBeenCalledWith({ projectPath: "/next-runtime" });
+    fireEvent.click(screen.getByRole("button", { name: "Runtime files" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("files", { root: "/repo" });
+    fireEvent.click(screen.getByRole("button", { name: "Runtime tasks" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("commands", { projectPath: "/repo" });
+    fireEvent.click(screen.getByRole("button", { name: "Runtime containers" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("containerStatus", { projectPath: "/repo" });
+    fireEvent.click(screen.getByRole("button", { name: "Runtime git" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", { projectPath: "/repo" });
+    fireEvent.click(screen.getByRole("button", { name: "Runtime pr" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedPullRequest", { projectPath: "/repo" });
+    fireEvent.click(screen.getByRole("button", { name: "Runtime merge" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedMerge", { projectPath: "/repo" });
   });
 
   it("wires hub callbacks for quality, regenerated runs, connector management, figma, and chat history", () => {

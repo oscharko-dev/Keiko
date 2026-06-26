@@ -275,6 +275,7 @@ export function subText(type: WindowType, cfg: Record<string, unknown> | undefin
     case "terminal":
       return cfgString("cwd");
     case "commands":
+    case "runtime":
       return cfgString("projectPath");
     case "review": {
       const base = cfgString("base");
