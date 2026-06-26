@@ -18,6 +18,7 @@
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
+  isLegalTaskWorkspaceTransition,
   isWorkspaceRecoveryStrategy,
   isWorkspaceRepairStrategyApplicable,
   reconciliationStatusFromInstance,
@@ -26,6 +27,7 @@ import {
   type TaskWorkspaceLifecycleState,
   type WorkspaceEventType,
   type WorkspaceInstance,
+  type WorkspaceLock,
   type WorkspaceReconciliationOutcome,
   type WorkspaceRecoveryStrategy,
 } from "@oscharko-dev/keiko-contracts";
@@ -70,6 +72,28 @@ function lockIsLive(lock: WorkspaceInstance["lock"], nowMs: number, ttlMs: numbe
   }
   const acquired = Date.parse(lock.acquiredAt);
   return Number.isFinite(acquired) ? nowMs - acquired < ttlMs : false;
+}
+
+// The #444 `repair` operation declares requiresLock:true. The service reserves the workspace lock for
+// the requesting actor before any mutation (closing the check→mutate TOCTOU window) and releases it
+// afterwards, mirroring the #445 provisioning lock lifecycle.
+function makeRepairLock(ctx: RepairCtx, owner: string, nowMs: number): WorkspaceLock {
+  return {
+    lockId: ctx.deps.newId(),
+    owner,
+    reason: "repair",
+    acquiredAt: isoFrom(nowMs),
+    expiresAt: isoFrom(nowMs + ctx.lockTtlMs),
+  };
+}
+
+// Releases a still-held repair lock owned by this actor. The provision/release/abandon paths already
+// persist their own terminal lock state, so this only fires when a repair errored before clearing it.
+function releaseRepairLock(ctx: RepairCtx, workspaceId: string, owner: string): void {
+  const current = ctx.deps.store.getById(workspaceId);
+  if (current?.lock?.owner === owner && current.lock.reason === "repair") {
+    ctx.deps.store.upsert({ ...current, lock: null, updatedAt: isoFrom(ctx.deps.now()) });
+  }
 }
 
 // The reconciliation deps are a subset of the repair deps, so the repair service re-classifies a single
@@ -302,10 +326,13 @@ function reportOperatorRequired(
   return resultFor(reconciled, strategy, false);
 }
 
-// The two authorization gates before any mutation: operator approval (the #444 `repair` operation
-// requires it) and applicability of the requested strategy to the reconciled state.
+// The authorization gates before any mutation: operator approval (the #444 `repair` operation requires
+// it), applicability of the requested strategy to the reconciled state, and — for abandon — that the
+// current lifecycle can LEGALLY reach `abandoned` (an active/provisioning workspace must be paused or
+// fail/recover first), refused cleanly as not-applicable rather than as a downstream illegal transition.
 function assertRepairAuthorized(
   request: WorkspaceRepairRequest,
+  reconciled: WorkspaceInstance,
   outcome: WorkspaceReconciliationOutcome,
   strategy: WorkspaceRecoveryStrategy,
 ): void {
@@ -322,6 +349,15 @@ function assertRepairAuthorized(
     throw new TaskWorkspaceError(
       "REPAIR_NOT_APPLICABLE",
       `strategy ${strategy} is not applicable to a ${outcome.status} workspace`,
+    );
+  }
+  if (
+    strategy === "abandon-and-cleanup" &&
+    !isLegalTaskWorkspaceTransition(reconciled.lifecycleState, "abandoned")
+  ) {
+    throw new TaskWorkspaceError(
+      "REPAIR_NOT_APPLICABLE",
+      `a ${reconciled.lifecycleState} workspace must be paused or flagged for recovery before it can be abandoned`,
     );
   }
 }
@@ -356,14 +392,27 @@ async function repairImpl(
   if (needsOperator(outcome, strategy)) {
     return reportOperatorRequired(ctx, reconciled, strategy);
   }
-  assertRepairAuthorized(request, outcome, strategy);
+  assertRepairAuthorized(request, reconciled, outcome, strategy);
 
+  // Acquire the workspace lock for the requesting actor before mutating (the #444 `repair` operation is
+  // requiresLock:true). executeStrategy persists its own terminal lock state (provision clears it,
+  // release-stale-lock/abandon set it null); the finally releases the repair lock only if it is still
+  // ours — so an error mid-repair never leaves the workspace locked.
   const fromState = reconciled.lifecycleState;
-  const repaired = await executeStrategy(ctx, reconciled, strategy, request.requestedBy, nowMs);
-  // Read back the authoritative post-repair instance (the provisioning path persists its own state).
-  const finalInstance = ctx.deps.store.getById(repaired.workspaceId) ?? repaired;
-  emitRepair(ctx, finalInstance, fromState, "repaired", "repaired", ctx.deps.now());
-  return resultFor(finalInstance, strategy, true);
+  const locked = ctx.deps.store.upsert({
+    ...reconciled,
+    lock: makeRepairLock(ctx, request.requestedBy, nowMs),
+    updatedAt: isoFrom(nowMs),
+  });
+  try {
+    const repaired = await executeStrategy(ctx, locked, strategy, request.requestedBy, nowMs);
+    // Read back the authoritative post-repair instance (the provisioning path persists its own state).
+    const finalInstance = ctx.deps.store.getById(repaired.workspaceId) ?? repaired;
+    emitRepair(ctx, finalInstance, fromState, "repaired", "repaired", ctx.deps.now());
+    return resultFor(finalInstance, strategy, true);
+  } finally {
+    releaseRepairLock(ctx, request.workspaceId, request.requestedBy);
+  }
 }
 
 export function createWorkspaceRepairService(
