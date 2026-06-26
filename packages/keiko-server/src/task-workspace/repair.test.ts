@@ -208,6 +208,29 @@ describe("abandon-and-cleanup (mark abandoned)", () => {
   });
 });
 
+describe("abandon-and-cleanup legality", () => {
+  it("refuses abandon from an active workspace with a clean REPAIR_NOT_APPLICABLE (not ILLEGAL_TRANSITION)", async () => {
+    const instance = await provisionTask("t1");
+    // a stale lock makes the workspace drifted but it stays `active` (a usable worktree) — active
+    // cannot legally transition straight to abandoned.
+    store.upsert({
+      ...instance,
+      lock: {
+        lockId: "stale",
+        owner: "u",
+        reason: "mutation",
+        acquiredAt: new Date(nowMs - 3_600_000).toISOString(),
+        expiresAt: new Date(nowMs - 1_800_000).toISOString(),
+      },
+    });
+    await rejectsWithCode(
+      () => repair(instance.workspaceId, "abandon-and-cleanup", true),
+      "REPAIR_NOT_APPLICABLE",
+    );
+    expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("active");
+  });
+});
+
 describe("operator-approval gate (#444 repair operation)", () => {
   it("refuses an automatic repair without operator approval", async () => {
     const instance = await provisionTask("t1");

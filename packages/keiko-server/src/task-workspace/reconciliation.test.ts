@@ -21,6 +21,7 @@ import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import {
   buildActiveWorkspacePointerStoreOverDatabase,
+  type ActiveWorkspacePointer,
   type ActiveWorkspacePointerStore,
 } from "./active-store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
@@ -321,5 +322,40 @@ describe("dangling active pointer", () => {
     const report = await reconciliation().reconcile();
     expect(["cleared-dangling", "none"]).toContain(report.activeRestoration.kind);
     expect(pointerStore.get()).toBeUndefined();
+  });
+
+  it("report() is read-only: it reports a dangling pointer but never calls clear(); reconcile() does", async () => {
+    await provisionTask("t1");
+    // a pointer that references a workspace id absent from the store (a dangling pointer the FK
+    // cascade would normally prevent) lets us prove the read vs. write behavior directly.
+    let clearCount = 0;
+    const dangling: ActiveWorkspacePointer = {
+      workspaceId: "ws_ghost",
+      setBy: "u",
+      setAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+    const stubPointer: ActiveWorkspacePointerStore = {
+      get: () => dangling,
+      set: () => dangling,
+      clear: () => {
+        clearCount += 1;
+      },
+    };
+    const svc = createWorkspaceReconciliationService({
+      store,
+      activePointerStore: stubPointer,
+      evidenceStore: capturingEvidence(),
+      managedRoot,
+      createAdapter: realAdapter,
+      redactString: (s: string): string => s,
+      now: (): number => nowMs,
+      newId: (): string => `id-${String(idCounter++)}`,
+    });
+    const read = svc.report();
+    expect(read.activeRestoration.kind).toBe("cleared-dangling");
+    expect(clearCount).toBe(0); // read-only GET path never mutates the pointer store
+    await svc.reconcile();
+    expect(clearCount).toBe(1); // the live reconcile self-heals the dangling pointer
   });
 });
