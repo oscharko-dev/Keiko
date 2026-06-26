@@ -18,6 +18,10 @@
     "./internal/writer": {
       "types": "./dist/writer.d.ts",
       "import": "./dist/writer.js"
+    },
+    "./internal/git-mutation": {
+      "types": "./dist/git-mutation-node.d.ts",
+      "import": "./dist/git-mutation-node.js"
     }
   },
   "scripts": {

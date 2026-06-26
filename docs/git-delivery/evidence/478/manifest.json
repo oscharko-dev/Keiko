@@ -1,0 +1,42 @@
+{
+  "issue": "#478",
+  "epic": "#470",
+  "harness": "playwright.issue-478-merge-governance.config.ts",
+  "appPath": "packaged-cli-ui",
+  "route": "/",
+  "evidencePath": "docs/git-delivery/evidence/478",
+  "generatedAt": "2026-06-26T05:15:08.349Z",
+  "governedRoutes": [
+    "/api/git-delivery/merge/preview",
+    "/api/git-delivery/merge/execute"
+  ],
+  "windowRegistration": {
+    "kind": "governedMerge",
+    "seededVia": "keiko.workspace.v4",
+    "renderedBy": "GovernedMergeCard"
+  },
+  "assertions": {
+    "packagedUiLoaded": true,
+    "governedWindowMountedFromRegistry": true,
+    "notMergeablePrSurfacesReadinessBlock": true,
+    "mergeButtonDisabledWhenNotMergeable": true,
+    "noExecuteRequestReachableWhenBlocked": true,
+    "eligibleStrategiesPopulatedFromPreview": true,
+    "highRiskConfirmationGatesExecute": true,
+    "browserReachedGovernedMergeExecuteRoute": true,
+    "mergeableReachesSucceeded": true
+  },
+  "requestLedger": {
+    "previewRequests": 2,
+    "executeRequests": 1
+  },
+  "notes": [
+    "Real packaged CLI UI; governedMerge window rendered through the real WindowsRegistry.",
+    "Merge routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/route/contract suites.",
+    "The UI exposes no merge-anyway escape: the Merge button is disabled when not mergeable, and gated behind the eligible-strategy + high-risk confirmation otherwise; it always routes through /merge/execute and renders its governed response verbatim."
+  ],
+  "artifacts": [
+    "manifest.json",
+    "governed-merge-block.png"
+  ]
+}

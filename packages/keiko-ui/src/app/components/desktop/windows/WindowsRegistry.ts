@@ -55,7 +55,19 @@ export type WindowType =
   // A scoped, JSON-only Figma Screen-IR source window derived from a Figma Snapshot view.
   | "figmaJson"
   // A scoped, image-only Figma screen-render source window derived from a Figma Snapshot view.
-  | "figmaImage";
+  | "figmaImage"
+  // Epic #470, Issue #475 — Governed local Git flow surface. A per-project card walking
+  // branch → staging → commit (live preview + message-policy + policy decision) entirely through the
+  // governed mutation kernel. Gated server-side by KEIKO_GIT_DELIVERY_ENABLED.
+  | "governedGit"
+  // Epic #470, Issue #477 — Governed GitHub pull request command center. Turns a published branch into
+  // a review-ready PR (synthesized editable metadata + readiness + recommendation) through the governed
+  // PR gateway. Gated server-side by KEIKO_GIT_DELIVERY_ENABLED.
+  | "governedPullRequest"
+  // Epic #470, Issue #478 — Governed merge command center. Turns a review-ready PR into a merged base
+  // branch (eligible-strategy selector + readiness + final high-risk approval) through the governed merge
+  // gateway. Gated server-side by KEIKO_GIT_DELIVERY_ENABLED.
+  | "governedMerge";
 
 export interface WindowSize {
   readonly w: number;
@@ -542,6 +554,51 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     min: { w: 300, h: 240 },
     tiny: { w: 240, h: 180 },
   },
+  // Epic #470, Issue #475 — Governed local Git flow. Branch → staging → commit, walked entirely
+  // through the governed mutation kernel. Reads the active project root from cfg (like terminal).
+  governedGit: {
+    title: "Governed Git",
+    icon: "git",
+    accent: true,
+    desc: "Branch, stage, and commit under policy",
+    w: 520,
+    h: 640,
+    min: { w: 360, h: 420 },
+    tiny: { w: 300, h: 240 },
+    config: [{ key: "projectPath", label: "Project path", type: "text", def: "" }],
+  },
+  // Epic #470, Issue #477 — Governed GitHub pull request command center. Reads the active project root
+  // from cfg (like governedGit) and the published head branch carried from the Publish section.
+  governedPullRequest: {
+    title: "Pull Request",
+    icon: "git",
+    accent: true,
+    desc: "Open a review-ready PR under policy",
+    w: 540,
+    h: 680,
+    min: { w: 380, h: 440 },
+    tiny: { w: 320, h: 260 },
+    config: [
+      { key: "projectPath", label: "Project path", type: "text", def: "" },
+      { key: "headBranchName", label: "Head branch", type: "text", def: "" },
+    ],
+  },
+  // Epic #470, Issue #478 — Governed merge command center. Reads the active project root from cfg (like
+  // governedPullRequest) and the head branch under review carried from the Pull Request section.
+  governedMerge: {
+    title: "Merge",
+    icon: "git",
+    accent: true,
+    desc: "Merge a review-ready PR under policy",
+    w: 540,
+    h: 680,
+    min: { w: 380, h: 440 },
+    tiny: { w: 320, h: 260 },
+    config: [
+      { key: "projectPath", label: "Project path", type: "text", def: "" },
+      { key: "headBranchName", label: "Head branch", type: "text", def: "" },
+    ],
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -608,6 +665,9 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "figmaJson",
   "files",
   "editor",
+  "governedGit",
+  "governedPullRequest",
+  "governedMerge",
   "quality",
   "promptEnhancer",
   "relationships",

@@ -76,6 +76,15 @@ import type {
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
+import type {
+  GitCommitChangeSummary,
+  GitCommitIntentAnalysis,
+  GitCommitMessageValidation,
+  GitCommitMessageViolationCode,
+  GitDeliveryActionSheet,
+  GitDeliveryActionSheetRequest,
+  GitDeliveryApprovalRequirement,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_GROUNDING_LIMITS,
   EDITOR_COMPLETION_SCHEMA_VERSION,
@@ -1261,5 +1270,471 @@ export async function askGrounded(
     method: "POST",
     body: JSON.stringify(req),
     signal: signal ?? null,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Issue #473 (Epic #470) — governed Git delivery action sheet
+// ---------------------------------------------------------------------------
+// POSTs the content-free repository facts a caller legitimately holds — the proposed resolved action,
+// the worktree snapshot, an optional granted approval, optional provider PR/merge/branch-protection/
+// checks state, and the active provider capabilities — to the BFF, which establishes policy/approval
+// AUTHORITY server-side and assembles the UI-safe GitDeliveryActionSheet projection. The request
+// carries NO authority fields (policy decision, providerReady, expected blockers); the server rejects
+// any such key. The response carries counts/flags/names/typed codes only — never diff content, file
+// paths, secrets, or command strings. The CSRF header is added by `fetchJson` for the POST.
+
+export async function fetchGitDeliveryActionSheet(
+  request: GitDeliveryActionSheetRequest,
+  signal?: AbortSignal,
+): Promise<GitDeliveryActionSheet> {
+  return fetchJson("/api/git-delivery/action-sheet", {
+    method: "POST",
+    body: JSON.stringify(request),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Issue #475 (Epic #470) — governed local Git flows (branch / staging / commit)
+// ---------------------------------------------------------------------------
+// Six POST routes that drive the governed local-mutation kernel server-side. Each request body carries
+// `{ schemaVersion: "1", projectId, ... }` where `projectId` is the workspace root path. The CSRF header
+// is added by `fetchJson` for the POST. Requests and responses are content-free: counts, structural area
+// tokens, branch names, and typed warning / violation / finding codes only — never diff content, raw
+// paths, secrets, or the commit-message body. Mutation responses report a `status`; a message-policy
+// block returns `{ status: "blocked", blockReason: "message-policy", messageViolations }`.
+
+export type GitDeliveryMutationStatus =
+  | "succeeded"
+  | "blocked"
+  | "approval-required"
+  | "failed"
+  | "recovery-required";
+
+// Shared mutation response shape for branch + staging + commit execution. Optional fields appear only
+// for the matching outcome (block reason, preflight codes, required approvers, execution error code).
+export interface GitDeliveryMutationResponse {
+  readonly schemaVersion: "1";
+  readonly status: GitDeliveryMutationStatus;
+  readonly actionKind: string;
+  readonly phaseReached?: string;
+  readonly policyOutcome?: string;
+  readonly blockReason?: string;
+  readonly preflightFindingCodes?: readonly string[];
+  readonly requiredApprovers?: readonly string[];
+  readonly executionErrorCode?: string;
+  readonly messageViolations?: readonly GitCommitMessageViolationCode[];
+}
+
+export interface GitDeliveryLocalBranchCreateInput {
+  readonly projectId: string;
+  readonly branchName: string;
+  readonly baseBranchName: string;
+  readonly startPointRefHash: string;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export async function fetchGitDeliveryLocalBranchCreate(
+  input: GitDeliveryLocalBranchCreateInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/local-branch/create", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      branchName: input.branchName,
+      baseBranchName: input.baseBranchName,
+      startPointRefHash: input.startPointRefHash,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryLocalBranchSwitchInput {
+  readonly projectId: string;
+  readonly branchName: string;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export async function fetchGitDeliveryLocalBranchSwitch(
+  input: GitDeliveryLocalBranchSwitchInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/local-branch/switch", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      branchName: input.branchName,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryStageInput {
+  readonly projectId: string;
+  readonly pathspecs: readonly string[];
+  readonly includeUntracked: boolean;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export async function fetchGitDeliveryStage(
+  input: GitDeliveryStageInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/staging/stage", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      pathspecs: input.pathspecs,
+      includeUntracked: input.includeUntracked,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryUnstageInput {
+  readonly projectId: string;
+  readonly pathspecs: readonly string[];
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export async function fetchGitDeliveryUnstage(
+  input: GitDeliveryUnstageInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/staging/unstage", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      pathspecs: input.pathspecs,
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryCommitPreviewResponse {
+  readonly schemaVersion: "1";
+  readonly summary: GitCommitChangeSummary;
+  readonly intent: GitCommitIntentAnalysis;
+  readonly messageValidation: GitCommitMessageValidation;
+  readonly preflightFindingCodes: readonly string[];
+  readonly policyOutcome: string;
+  readonly policyBlockReason?: string;
+}
+
+export async function fetchGitDeliveryCommitPreview(
+  input: { readonly projectId: string; readonly messageDraft?: string | undefined },
+  signal?: AbortSignal,
+): Promise<GitDeliveryCommitPreviewResponse> {
+  return fetchJson("/api/git-delivery/commit/preview", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      ...(input.messageDraft === undefined ? {} : { messageDraft: input.messageDraft }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitDeliveryCommitExecuteInput {
+  readonly projectId: string;
+  readonly message: string;
+  readonly allowEmpty?: boolean | undefined;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export async function fetchGitDeliveryCommitExecute(
+  input: GitDeliveryCommitExecuteInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMutationResponse> {
+  return fetchJson("/api/git-delivery/commit/execute", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      message: input.message,
+      ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+      ...(input.approval === undefined ? {} : { approval: input.approval }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// ─── Governed remote publish (Issue #476, Epic #470) ────────────────────────────────────────────
+
+export interface GitDeliveryPushInput {
+  readonly projectId: string;
+  readonly remoteAlias: string;
+  readonly remoteBranchName: string;
+  readonly sourceBranchName: string;
+  readonly forcePush?: boolean | undefined;
+  readonly setUpstreamTracking?: boolean | undefined;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export interface GitDeliveryPushPreviewResponse {
+  readonly schemaVersion: "1";
+  readonly remoteAlias: string;
+  readonly remoteBranchName: string;
+  readonly sourceBranchName: string;
+  readonly riskClass: string;
+  readonly wouldCreateRemoteBranch: boolean;
+  readonly wouldTriggerChecks: boolean;
+  readonly forceBlocked: boolean;
+  readonly preflightBlockingCodes: readonly string[];
+  readonly preflightAdvisoryCodes: readonly string[];
+  readonly policyOutcome: string;
+  readonly policyBlockReason?: string;
+}
+
+export interface GitDeliveryPushExecuteResponse extends GitDeliveryMutationResponse {
+  readonly publishRejectionReason?: string;
+  readonly recoveryDisposition?: string;
+  readonly recoveryActionHint?: string;
+}
+
+function gitDeliveryPushBody(input: GitDeliveryPushInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    remoteAlias: input.remoteAlias,
+    remoteBranchName: input.remoteBranchName,
+    sourceBranchName: input.sourceBranchName,
+    ...(input.forcePush === undefined ? {} : { forcePush: input.forcePush }),
+    ...(input.setUpstreamTracking === undefined
+      ? {}
+      : { setUpstreamTracking: input.setUpstreamTracking }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+export async function fetchGitDeliveryPushPreview(
+  input: GitDeliveryPushInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushPreviewResponse> {
+  return fetchJson("/api/git-delivery/push/preview", {
+    method: "POST",
+    body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPushExecute(
+  input: GitDeliveryPushInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPushExecuteResponse> {
+  return fetchJson("/api/git-delivery/push/execute", {
+    method: "POST",
+    body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// ─── Governed GitHub pull request command center (#477, ADR-0064) ────────────────────────────────────
+
+export type GitDeliveryPrKind = "pr-create" | "pr-update";
+
+// The PR command-center input. Title/body are user content flowing to the provider; only their byte
+// lengths reach the evidence ledger server-side.
+export interface GitDeliveryPrInput {
+  readonly projectId: string;
+  readonly kind: GitDeliveryPrKind;
+  readonly ownerAndRepo: string;
+  readonly headBranchName: string;
+  readonly baseBranchName: string;
+  readonly title: string;
+  readonly body: string;
+  readonly isDraft?: boolean | undefined;
+  readonly prExternalId?: string | undefined;
+  readonly convertToDraft?: boolean | undefined;
+  readonly convertFromDraft?: boolean | undefined;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+export interface GitDeliveryPrReadiness {
+  readonly objectExists: boolean;
+  readonly reviewReady: boolean;
+  readonly blockerCodes: readonly string[];
+}
+
+export interface GitDeliveryPrPreviewResponse {
+  readonly schemaVersion: "1";
+  readonly actionKind: GitDeliveryPrKind;
+  readonly headBranchName: string;
+  readonly baseBranchName: string;
+  readonly riskClass: string;
+  readonly riskSeverity: number;
+  readonly isDraft: boolean;
+  readonly policyOutcome: string;
+  readonly policyBlockReason?: string;
+  readonly composedTitle: string;
+  readonly composedBody: string;
+  readonly riskNarrative: string;
+  readonly recommendation: string;
+  readonly readiness: GitDeliveryPrReadiness;
+  readonly suggestedLabels: readonly string[];
+  readonly suggestedIssueRefs: readonly string[];
+  readonly titleByteLength: number;
+  readonly bodyByteLength: number;
+}
+
+export interface GitDeliveryPrExecuteResponse extends GitDeliveryMutationResponse {
+  readonly prRejectionReason?: string;
+  readonly recoveryDisposition?: string;
+  readonly recoveryActionHint?: string;
+  readonly createdPrExternalId?: string;
+}
+
+function gitDeliveryPrBody(input: GitDeliveryPrInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    kind: input.kind,
+    ownerAndRepo: input.ownerAndRepo,
+    headBranchName: input.headBranchName,
+    baseBranchName: input.baseBranchName,
+    title: input.title,
+    body: input.body,
+    ...(input.isDraft === undefined ? {} : { isDraft: input.isDraft }),
+    ...(input.prExternalId === undefined ? {} : { prExternalId: input.prExternalId }),
+    ...(input.convertToDraft === undefined ? {} : { convertToDraft: input.convertToDraft }),
+    ...(input.convertFromDraft === undefined ? {} : { convertFromDraft: input.convertFromDraft }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+export async function fetchGitDeliveryPrPreview(
+  input: GitDeliveryPrInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrPreviewResponse> {
+  return fetchJson("/api/git-delivery/pr/preview", {
+    method: "POST",
+    body: gitDeliveryPrBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryPrExecute(
+  input: GitDeliveryPrInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryPrExecuteResponse> {
+  return fetchJson("/api/git-delivery/pr/execute", {
+    method: "POST",
+    body: gitDeliveryPrBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// ─── Governed merge command center (#478, ADR-0065) ──────────────────────────────────────────────────
+
+export type GitDeliveryMergeStrategy = "squash" | "rebase" | "merge-commit" | "provider-default";
+
+// The governed merge input. Only the content-free merge facts (PR number, strategy, delete flag) reach
+// the evidence ledger server-side; no diff content ever leaves the provider boundary.
+export interface GitDeliveryMergeInput {
+  readonly projectId: string;
+  readonly ownerAndRepo: string;
+  readonly prExternalId: string;
+  readonly baseBranchName: string;
+  readonly headBranchName: string;
+  readonly mergeStrategy: GitDeliveryMergeStrategy;
+  readonly deleteBranchAfterMerge: boolean;
+  readonly expectedHeadRefHash?: string | undefined;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+// A per-blocker readiness view carrying the precise code AND its recovery information (remediation class
+// and a recovery action hint where one applies), so the UI can render recovery guidance for pre-merge
+// readiness blocks — not only for provider-time rejections (AC3).
+export interface GitDeliveryMergeBlocker {
+  readonly code: string;
+  readonly severity: string;
+  readonly remediation: string;
+  readonly actionHint?: string;
+}
+
+export interface GitDeliveryMergeReadiness {
+  readonly mergeable: boolean;
+  readonly blockers: readonly GitDeliveryMergeBlocker[];
+}
+
+export interface GitDeliveryMergePreviewResponse {
+  readonly schemaVersion: "1";
+  readonly actionKind: "merge";
+  readonly baseBranchName: string;
+  readonly headBranchName: string;
+  readonly prExternalId: string;
+  readonly riskClass: string;
+  readonly riskSeverity: number;
+  readonly requestedStrategy: GitDeliveryMergeStrategy;
+  // The strategies the user may choose from (policy ∩ provider capability) — the UI must NOT hard-code a
+  // default; it defaults the selection to selectedDefaultStrategy (AC2).
+  readonly eligibleStrategies: readonly GitDeliveryMergeStrategy[];
+  readonly selectedDefaultStrategy?: GitDeliveryMergeStrategy;
+  readonly requestedStrategyEligible: boolean;
+  readonly policyOutcome: string;
+  readonly policyBlockReason?: string;
+  readonly requiresApproval: boolean;
+  readonly readiness: GitDeliveryMergeReadiness;
+  readonly recommendation: string;
+}
+
+export interface GitDeliveryMergeExecuteResponse extends GitDeliveryMutationResponse {
+  readonly mergeRejectionReason?: string;
+  readonly recoveryDisposition?: string;
+  readonly recoveryActionHint?: string;
+  readonly mergeable?: boolean;
+  readonly readinessBlockers?: readonly GitDeliveryMergeBlocker[];
+  readonly merged?: boolean;
+  readonly branchDeleted?: boolean;
+}
+
+function gitDeliveryMergeBody(input: GitDeliveryMergeInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    kind: "merge",
+    ownerAndRepo: input.ownerAndRepo,
+    prExternalId: input.prExternalId,
+    baseBranchName: input.baseBranchName,
+    headBranchName: input.headBranchName,
+    mergeStrategy: input.mergeStrategy,
+    deleteBranchAfterMerge: input.deleteBranchAfterMerge,
+    ...(input.expectedHeadRefHash === undefined
+      ? {}
+      : { expectedHeadRefHash: input.expectedHeadRefHash }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+export async function fetchGitDeliveryMergePreview(
+  input: GitDeliveryMergeInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMergePreviewResponse> {
+  return fetchJson("/api/git-delivery/merge/preview", {
+    method: "POST",
+    body: gitDeliveryMergeBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryMergeExecute(
+  input: GitDeliveryMergeInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMergeExecuteResponse> {
+  return fetchJson("/api/git-delivery/merge/execute", {
+    method: "POST",
+    body: gitDeliveryMergeBody(input),
+    ...(signal === undefined ? {} : { signal }),
   });
 }
