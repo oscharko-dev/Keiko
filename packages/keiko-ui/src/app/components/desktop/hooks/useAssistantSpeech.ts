@@ -15,6 +15,7 @@
 // synthesized audio: the object URL lives only for the duration of one spoken turn.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import type { VoiceProfile } from "@/lib/types";
 import { ApiError, synthesizeAssistantSpeech, type VoiceSpeechResult } from "@/lib/api";
 import type { VoiceTurnManagerEngine } from "./voice-turn-manager";
@@ -48,6 +49,10 @@ export interface UseAssistantSpeechOptions {
   readonly messageId: string | undefined;
   // "replay if permitted": whether deployment policy allows replaying a settled spoken response.
   readonly replayAllowed?: boolean | undefined;
+  // Issue #1559 — the selected product voice persona to speak with, when the deployment offers a choice.
+  // Content-free: it is forwarded to the BFF synthesis route, which resolves the voice id; the browser
+  // never sees a voice id. Undefined keeps the provider-default voice (existing callers unchanged).
+  readonly persona?: VoicePersona | undefined;
   // Optional #499 turn manager to receive assistant-speech and interruption signals (AC2).
   readonly turnManager?: VoiceTurnManagerEngine | undefined;
   // Test seams. Production uses the BFF synthesis client, `new Audio()`, and the URL object-store.
@@ -59,8 +64,14 @@ export interface UseAssistantSpeechOptions {
   readonly revokeObjectUrl?: ((url: string) => void) | undefined;
 }
 
-function defaultSynthesize(text: string, signal: AbortSignal): Promise<VoiceSpeechResult> {
-  return synthesizeAssistantSpeech({ text }, signal);
+// Builds the default BFF synthesis seam bound to the current persona. A persona is included in the
+// request only when one is selected (Issue #1559); omitting it preserves the provider-default voice for
+// callers that do not offer a persona choice.
+function makeDefaultSynthesize(
+  persona: VoicePersona | undefined,
+): (text: string, signal: AbortSignal) => Promise<VoiceSpeechResult> {
+  return (text, signal) =>
+    synthesizeAssistantSpeech(persona === undefined ? { text } : { text, persona }, signal);
 }
 
 function defaultCreateAudio(): AssistantSpeechAudioElement {
@@ -113,7 +124,7 @@ interface HandledTurn {
 }
 
 export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePlaybackBinding {
-  const { profile, enabled, text, messageId, replayAllowed, turnManager } = options;
+  const { profile, enabled, text, messageId, replayAllowed, turnManager, persona } = options;
 
   const playback = useVoicePlayback({ profile, replayAllowed, turnManager });
 
@@ -121,8 +132,10 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
   // read current values without listing them as dependencies (which would churn the effect).
   const playbackRef = useRef<VoicePlaybackBinding>(playback);
   playbackRef.current = playback;
-  const synthesizeRef = useRef(options.synthesize ?? defaultSynthesize);
-  synthesizeRef.current = options.synthesize ?? defaultSynthesize;
+  // The default seam is rebuilt when the persona changes so the next synthesized turn speaks with the
+  // newly selected voice; an explicit test seam (options.synthesize) always wins.
+  const synthesizeRef = useRef(options.synthesize ?? makeDefaultSynthesize(persona));
+  synthesizeRef.current = options.synthesize ?? makeDefaultSynthesize(persona);
   const createAudioRef = useRef(options.createAudio ?? defaultCreateAudio);
   createAudioRef.current = options.createAudio ?? defaultCreateAudio;
   const createUrlRef = useRef(options.createObjectUrl ?? defaultCreateObjectUrl);
