@@ -63,6 +63,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { EditorLanguageRouteOptions } from "./editor/languageRoutes.js";
 import type { RuntimeCapabilityRouteOptions } from "./runtime/capabilityRoutes.js";
+import type { GitRouteOptions } from "./gitRoutes.js";
 import { createProviderSecretResolver, type ProviderSecretResolver } from "./credentialVault.js";
 import { createLocalKnowledgeKeyProvider } from "./localKnowledgeKeyProvider.js";
 import type { KnowledgeStoreKeyProvider } from "@oscharko-dev/keiko-local-knowledge";
@@ -167,6 +168,9 @@ export interface UiHandlerDeps {
   // Test-only runtime detector seams. Production leaves this undefined so detection uses
   // metadata-only PATH scanning plus contained manifest reads.
   readonly runtimeCapabilityRouteOptions?: RuntimeCapabilityRouteOptions | undefined;
+  // Test-only Git BFF seams. Production leaves this undefined so repository status/diff use the
+  // fixed native Git runner and conservative caps.
+  readonly gitRouteOptions?: GitRouteOptions | undefined;
   // Issue #198 audit seam: lets local-knowledge route tests stub embedding requests without
   // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
   readonly localKnowledgeEmbeddingRequest?:

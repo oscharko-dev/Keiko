@@ -19354,6 +19354,20 @@ ul.integ {
 .files-retry:hover {
   background: var(--card-2);
 }
+.files-git-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.files-git-status[data-state="unsafe"],
+.files-git-status[data-state="error"] {
+  color: var(--feedback-warning);
+}
 /* C130 — symlink badge + size column: chip pattern analog .file-mut/.fpv-lang so the
    badge reads as a status, and the size column recedes behind the file name. */
 .tr-badge {
@@ -19376,6 +19390,37 @@ ul.integ {
   color: var(--fg-muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+.tr-file-wrap {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+.tr-file-wrap > .tr-file {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tr-git {
+  color: var(--accent-text);
+  border-color: color-mix(in oklch, var(--accent) 42%, var(--border-subtle));
+  background: color-mix(in oklch, var(--accent) 12%, var(--surface-inset));
+}
+.tr-git-diff {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  margin: 2px 4px 2px 0;
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+.tr-git-diff:hover {
+  color: var(--text-primary);
+  background: var(--button-ghost-surface-hover);
+}
+.tr-git-diff:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
 }
 /* C216 — file rows render an invisible caret placeholder instead of a hardcoded
    +14px pad, so they stay aligned with sibling folders even if the gap changes. */

@@ -382,6 +382,29 @@ export {
   validateRuntimeCapabilitiesResponse,
 } from "./runtime-capabilities.js";
 
+// ─── Git repository status/diff BFF (Issue #1386, Epic #1491) ─────────────────────
+// Read-only status/diff contract for the local BFF. The browser receives bounded, redacted
+// repository metadata and unified diff text; all Git process execution stays server-side.
+export type {
+  GitRepositoryState,
+  GitUnavailableReason,
+  GitStatusCode,
+  GitChangedFile,
+  GitRepositoryStatusResponse,
+  GitDiffScope,
+  GitRepositoryDiffResponse,
+  GitRepositoryValidationOk,
+  GitRepositoryValidationFail,
+  GitRepositoryValidation,
+} from "./git-repository.js";
+export {
+  GIT_REPOSITORY_SCHEMA_VERSION,
+  GIT_REPOSITORY_STATES,
+  GIT_UNAVAILABLE_REASONS,
+  validateGitRepositoryStatusResponse,
+  validateGitRepositoryDiffResponse,
+} from "./git-repository.js";
+
 // ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
 // Wire request/response for the governed `POST /api/editor/completion` route: deterministic
 // language-service completion (#1198) merged with gated model-assisted completion (#1210) over
