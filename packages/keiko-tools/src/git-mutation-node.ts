@@ -215,3 +215,9 @@ export {
   createNodeGitPullRequestAdapter,
   type NodeGitPullRequestAdapterDeps,
 } from "./git-pr-node.js";
+
+// The Node governed merge executor (Issue #478) shells `gh api` through the same spawn boundary with its
+// OWN dedicated merge allowlist (the merge PUT, the readiness GETs, and the guarded branch DELETE — no
+// generic exec); it is exposed on the SAME `./internal/git-mutation` subpath. The GitHub token is read by
+// gh itself, never by Keiko.
+export { createNodeGitMergeAdapter, type NodeGitMergeAdapterDeps } from "./git-merge-node.js";

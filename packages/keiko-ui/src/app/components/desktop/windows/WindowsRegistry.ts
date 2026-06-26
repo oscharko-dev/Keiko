@@ -62,7 +62,11 @@ export type WindowType =
   // Epic #470, Issue #477 — Governed GitHub pull request command center. Turns a published branch into
   // a review-ready PR (synthesized editable metadata + readiness + recommendation) through the governed
   // PR gateway. Gated server-side by KEIKO_GIT_DELIVERY_ENABLED.
-  | "governedPullRequest";
+  | "governedPullRequest"
+  // Epic #470, Issue #478 — Governed merge command center. Turns a review-ready PR into a merged base
+  // branch (eligible-strategy selector + readiness + final high-risk approval) through the governed merge
+  // gateway. Gated server-side by KEIKO_GIT_DELIVERY_ENABLED.
+  | "governedMerge";
 
 export interface WindowSize {
   readonly w: number;
@@ -564,6 +568,22 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
       { key: "headBranchName", label: "Head branch", type: "text", def: "" },
     ],
   },
+  // Epic #470, Issue #478 — Governed merge command center. Reads the active project root from cfg (like
+  // governedPullRequest) and the head branch under review carried from the Pull Request section.
+  governedMerge: {
+    title: "Merge",
+    icon: "git",
+    accent: true,
+    desc: "Merge a review-ready PR under policy",
+    w: 540,
+    h: 680,
+    min: { w: 380, h: 440 },
+    tiny: { w: 320, h: 260 },
+    config: [
+      { key: "projectPath", label: "Project path", type: "text", def: "" },
+      { key: "headBranchName", label: "Head branch", type: "text", def: "" },
+    ],
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -632,6 +652,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "editor",
   "governedGit",
   "governedPullRequest",
+  "governedMerge",
   "quality",
   "promptEnhancer",
   "relationships",

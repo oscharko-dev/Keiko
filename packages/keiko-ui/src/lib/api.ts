@@ -1603,3 +1603,107 @@ export async function fetchGitDeliveryPrExecute(
     ...(signal === undefined ? {} : { signal }),
   });
 }
+
+// ─── Governed merge command center (#478, ADR-0065) ──────────────────────────────────────────────────
+
+export type GitDeliveryMergeStrategy = "squash" | "rebase" | "merge-commit" | "provider-default";
+
+// The governed merge input. Only the content-free merge facts (PR number, strategy, delete flag) reach
+// the evidence ledger server-side; no diff content ever leaves the provider boundary.
+export interface GitDeliveryMergeInput {
+  readonly projectId: string;
+  readonly ownerAndRepo: string;
+  readonly prExternalId: string;
+  readonly baseBranchName: string;
+  readonly headBranchName: string;
+  readonly mergeStrategy: GitDeliveryMergeStrategy;
+  readonly deleteBranchAfterMerge: boolean;
+  readonly expectedHeadRefHash?: string | undefined;
+  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+}
+
+// A per-blocker readiness view carrying the precise code AND its recovery information (remediation class
+// and a recovery action hint where one applies), so the UI can render recovery guidance for pre-merge
+// readiness blocks — not only for provider-time rejections (AC3).
+export interface GitDeliveryMergeBlocker {
+  readonly code: string;
+  readonly severity: string;
+  readonly remediation: string;
+  readonly actionHint?: string;
+}
+
+export interface GitDeliveryMergeReadiness {
+  readonly mergeable: boolean;
+  readonly blockers: readonly GitDeliveryMergeBlocker[];
+}
+
+export interface GitDeliveryMergePreviewResponse {
+  readonly schemaVersion: "1";
+  readonly actionKind: "merge";
+  readonly baseBranchName: string;
+  readonly headBranchName: string;
+  readonly prExternalId: string;
+  readonly riskClass: string;
+  readonly riskSeverity: number;
+  readonly requestedStrategy: GitDeliveryMergeStrategy;
+  // The strategies the user may choose from (policy ∩ provider capability) — the UI must NOT hard-code a
+  // default; it defaults the selection to selectedDefaultStrategy (AC2).
+  readonly eligibleStrategies: readonly GitDeliveryMergeStrategy[];
+  readonly selectedDefaultStrategy?: GitDeliveryMergeStrategy;
+  readonly requestedStrategyEligible: boolean;
+  readonly policyOutcome: string;
+  readonly policyBlockReason?: string;
+  readonly requiresApproval: boolean;
+  readonly readiness: GitDeliveryMergeReadiness;
+  readonly recommendation: string;
+}
+
+export interface GitDeliveryMergeExecuteResponse extends GitDeliveryMutationResponse {
+  readonly mergeRejectionReason?: string;
+  readonly recoveryDisposition?: string;
+  readonly recoveryActionHint?: string;
+  readonly mergeable?: boolean;
+  readonly readinessBlockers?: readonly GitDeliveryMergeBlocker[];
+  readonly merged?: boolean;
+  readonly branchDeleted?: boolean;
+}
+
+function gitDeliveryMergeBody(input: GitDeliveryMergeInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    kind: "merge",
+    ownerAndRepo: input.ownerAndRepo,
+    prExternalId: input.prExternalId,
+    baseBranchName: input.baseBranchName,
+    headBranchName: input.headBranchName,
+    mergeStrategy: input.mergeStrategy,
+    deleteBranchAfterMerge: input.deleteBranchAfterMerge,
+    ...(input.expectedHeadRefHash === undefined
+      ? {}
+      : { expectedHeadRefHash: input.expectedHeadRefHash }),
+    ...(input.approval === undefined ? {} : { approval: input.approval }),
+  });
+}
+
+export async function fetchGitDeliveryMergePreview(
+  input: GitDeliveryMergeInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMergePreviewResponse> {
+  return fetchJson("/api/git-delivery/merge/preview", {
+    method: "POST",
+    body: gitDeliveryMergeBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryMergeExecute(
+  input: GitDeliveryMergeInput,
+  signal?: AbortSignal,
+): Promise<GitDeliveryMergeExecuteResponse> {
+  return fetchJson("/api/git-delivery/merge/execute", {
+    method: "POST",
+    body: gitDeliveryMergeBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
