@@ -333,15 +333,21 @@ function entryFromInstance(instance: WorkspaceInstance): WorkspaceReconciliation
   });
 }
 
+// Builds the report from a set of instances. `clearDangling` is true ONLY on the live reconcile path:
+// clearing a dangling pointer is a state mutation, so the read-only report() must never perform it (it
+// still REPORTS the `cleared-dangling` kind; the next live reconcile or getActive() self-heals it).
 function buildReport(
   ctx: ReconcileCtx,
   instances: readonly WorkspaceInstance[],
   nowMs: number,
+  clearDangling: boolean,
 ): WorkspaceReconciliationReport {
   const entries = instances.map(entryFromInstance);
   const pointer = ctx.deps.activePointerStore.get();
   const restoration = resolveActiveRestoration(pointer?.workspaceId, entries);
-  if (restoration.kind === "cleared-dangling") ctx.deps.activePointerStore.clear();
+  if (clearDangling && restoration.kind === "cleared-dangling") {
+    ctx.deps.activePointerStore.clear();
+  }
   return {
     schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
     generatedAt: isoFrom(nowMs),
@@ -388,7 +394,7 @@ async function reconcileImpl(
       reconciled.push(reconcileWithContext(ctx, facts, observedHead, instance, nowMs).instance);
     }
   }
-  return buildReport(ctx, reconciled, ctx.deps.now());
+  return buildReport(ctx, reconciled, ctx.deps.now(), true);
 }
 
 export function createWorkspaceReconciliationService(
@@ -397,7 +403,7 @@ export function createWorkspaceReconciliationService(
   const ctx: ReconcileCtx = { deps, lockTtlMs: deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS };
   return {
     report: (repositoryRoot?: string): WorkspaceReconciliationReport =>
-      buildReport(ctx, instancesFor(deps, repositoryRoot), deps.now()),
+      buildReport(ctx, instancesFor(deps, repositoryRoot), deps.now(), false),
     reconcile: (repositoryRoot?: string): Promise<WorkspaceReconciliationReport> =>
       reconcileImpl(ctx, repositoryRoot),
   };

@@ -138,14 +138,14 @@ Each maps to an unambiguous action:
 
 | Status | Meaning | Immediate action |
 |---|---|---|
-| `healthy` | Worktree present, contained, gitdir matches, HEAD matches stored `lastVerifiedHead`, branch exists, no stale lock | Restore if pointer target |
-| `missing` | Worktree path does not exist (external deletion or never completed) | Mark `recovery-required`, flag `worktree-missing` |
-| `drifted` | Worktree present but gitdir identity or HEAD commit differs from stored `lastVerifiedHead` | Mark `recovery-required`, flag `gitdir-mismatch` and/or `head-moved` |
-| `locked` | A lock is held and its `expiresAt` is in the past (stale lock) | Mark `recovery-required`, flag `lock-stale` |
-| `partially-created` | Instance row is in `provisioning` lifecycle state — provisioning never completed | Mark `recovery-required` |
-| `stale-pointer` | Active pointer references this instance but `managedWorktreePath` no longer matches realpath | Mark `recovery-required`, flag `pointer-stale` |
+| `healthy` | Worktree present, contained, gitdir matches, HEAD matches stored `lastVerifiedHead`, branch exists, no stale lock | Restore if pointer target; record `lastVerifiedHead` |
+| `missing` | Worktree path does not exist (external deletion) on an operational instance | Mark `recovery-required`, flag `worktree-missing` |
+| `drifted` | Worktree present **and usable** but HEAD moved, branch deleted, uncommitted work, or a stale lock | Keep lifecycle, set health `drifted`, flag the marker + recovery hint (surface, do not force recovery) |
+| `locked` | A live lock is held by another actor | Defer — leave the instance unchanged (no flag) |
+| `partially-created` | Instance row is in `provisioning`/`failed` lifecycle — provisioning never completed | Leave for the provisioning retry path; flag `worktree-missing`/`pointer-stale` if the partial worktree is gone |
+| `stale-pointer` | Worktree present but its `.git` pointer is missing/corrupt or its gitdir identity moved | Mark `recovery-required`, flag `pointer-stale`/`gitdir-mismatch` |
 | `unmanaged-path` | Stored `managedWorktreePath` resolves outside the Keiko-owned managed root (path-escape condition) | Mark `recovery-required`, flag `path-escape` |
-| `recovery-required` | Instance is already in `recovery-required` lifecycle state — no new drift; carry-forward | Keep `recovery-required`, retain prior drift markers |
+| `recovery-required` | Instance is already in `recovery-required` lifecycle state — no fresh disk drift; carry-forward | Keep `recovery-required` |
 
 **`WorkspaceReconciliationFacts` — the IO-gathered input to the pure classifier.**
 
@@ -212,11 +212,14 @@ the reasoning auditable:
 5. **`stale-pointer`**: `facts.isActivePointerTarget && !facts.gitdirMatches` →
    status `stale-pointer`, marker `pointer-stale`, hint `reconcile-pointer`
    (`operatorActionRequired: false`).
-6. **`drifted`**: `!facts.gitdirMatches || facts.currentHead !== facts.lastVerifiedHead`
-   → status `drifted`. Marker `gitdir-mismatch` if gitdir mismatch; marker
-   `head-moved` if HEAD moved. Hint `reconcile-pointer`
-   (`operatorActionRequired: false`). If additionally `!facts.branchExists`,
-   append `branch-deleted` + `reattach-branch` (`operatorActionRequired: true`).
+6. **`drifted`**: the worktree is present and usable but has diverged — a deleted
+   task branch (`branch-deleted` → `reattach-branch`, operator-required), a moved
+   HEAD (`head-moved` → `operator-repair`, operator-required), uncommitted work
+   (`uncommitted-changes` → `commit-or-stash-required`, operator-required), or a
+   stale lock (`lock-stale` → `release-stale-lock`, automatic). A `drifted`
+   workspace keeps its lifecycle (it is not forced to `recovery-required`); only a
+   gone/structurally-unusable worktree (`missing`/`stale-pointer`/`unmanaged-path`)
+   is flagged.
 7. **`recovery-required`** (carry-forward): `facts.lifecycleState === "recovery-required"`
    and none of the above triggered → status `recovery-required`, preserve the
    stored `driftMarkers` and `recoveryHints` from the persisted instance (caller
@@ -248,12 +251,18 @@ The mapping (closed, derived from the ADR-0088 Entity 5 recovery strategy union)
 |---|---|---|
 | `worktree-missing` | `recreate-worktree` | `false` |
 | `gitdir-mismatch` | `reconcile-pointer` | `false` |
-| `head-moved` | `reconcile-pointer` | `false` |
+| `head-moved` | `operator-repair` | `true` |
 | `branch-deleted` | `reattach-branch` | `true` |
 | `uncommitted-changes` | `commit-or-stash-required` | `true` |
 | `lock-stale` | `release-stale-lock` | `false` |
 | `path-escape` | `operator-repair` | `true` |
-| `pointer-stale` | `reconcile-pointer` | `false` |
+| `pointer-stale` | `operator-repair` | `true` |
+
+Only `recreate-worktree`, `reconcile-pointer` (a moved-but-readable gitdir), and
+`release-stale-lock` are applied automatically; a missing/corrupt `.git` pointer
+(`pointer-stale`), a moved HEAD, a deleted branch, and uncommitted work require an
+operator, because the narrow worktree adapter cannot repair them without risking
+loss of the worktree's work.
 
 **`WorkspaceReconciliationEntry` and `WorkspaceReconciliationReport` — content-free result types.**
 
@@ -435,13 +444,13 @@ Each strategy maps to exactly one action, using only existing subsystems:
 
 | Strategy | Action | Reuse |
 |---|---|---|
-| `recreate-worktree` | Call `WorkspaceProvisioningService.provision()` re-materialization path (ADR-0089 D7: handles `provisioning`/`failed`/`recovery-required`, rebuilds the missing worktree via the adapter, rolls back partial state, emits evidence) | #445 provisioning |
-| `reconcile-pointer` | Call `ActiveWorkspacePointerStore.set(workspaceId)` + update `lastVerifiedAt`/`lastVerifiedHead` on the instance row | #445 store + #446 pointer store |
-| `reattach-branch` | Return `outcome: "operator-action-required"` with no mutation (branch recreation is a Git delivery operation — ADR-0080; the operator must act via the #470 surface, not via a workspace repair route) | None (no mutation) |
-| `release-stale-lock` | `WorkspaceInstanceStore.upsert` clearing `lock: null` on the instance row | #445 store |
-| `commit-or-stash-required` | Return `outcome: "operator-action-required"` with no mutation (uncommitted-changes disposition is a Git delivery decision — ADR-0084; the operator must act via the #470 surface) | None (no mutation) |
-| `operator-repair` | Return `outcome: "operator-action-required"` with no mutation | None (no mutation) |
-| `abandon-and-cleanup` | Transition instance to `recovery-required → abandoned` (legal, requires `operator-approval`); actual worktree cleanup deferred to #448 (governed cleanup controls) | #445 store transition |
+| `recreate-worktree` | Call `WorkspaceProvisioningService.provision()` re-materialization path (ADR-0089 D7: handles `provisioning`/`failed`/`recovery-required`, prunes the stale worktree admin entry, rebuilds the missing worktree via the adapter, rolls back partial state, emits evidence) | #445 provisioning |
+| `reconcile-pointer` | Re-run the `WorkspaceProvisioningService.provision()` resume path: it resume-completes the still-present worktree and recomputes the content-free `gitdirIdentity` from the live `.git` pointer, refreshing a moved-but-readable gitdir. Applies to `gitdir-mismatch` only (a missing/corrupt pointer is `operator-repair`). | #445 provisioning |
+| `reattach-branch` | Return `outcome: "operator-required"` with no mutation (recreating a deleted branch is a Git delivery operation — ADR-0080; the operator must act via the #470 surface, not via a workspace repair route) | None (no mutation) |
+| `release-stale-lock` | `WorkspaceInstanceStore.upsert` clearing `lock: null`, then re-reconcile so the classification drops the `lock-stale` marker | #445 store |
+| `commit-or-stash-required` | Return `outcome: "operator-required"` with no mutation (uncommitted-changes disposition is a Git delivery decision — ADR-0084; the operator must act via the #470 surface) | None (no mutation) |
+| `operator-repair` | Return `outcome: "operator-required"` with no mutation | None (no mutation) |
+| `abandon-and-cleanup` | Transition instance to `abandoned` (legal only from `paused`/`handoff-ready`/`recovery-required`/`failed`/`cleanup-pending`, requires `operator-approval`; an `active`/`provisioning` source is refused as `REPAIR_NOT_APPLICABLE`); actual worktree cleanup deferred to #448 (governed cleanup controls) | #445 store transition |
 
 `repair` is classified `mutating-server-action` with `requiresLock: true` and
 `requiresOperatorApproval: true` in the ADR-0088 D4 operation authority table.
