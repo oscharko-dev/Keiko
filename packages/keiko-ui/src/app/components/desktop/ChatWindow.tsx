@@ -1615,6 +1615,11 @@ function ComposerCore({
   // Entering starts the existing realtime session and records dialog intent; leaving stops it. No new
   // orchestration: both reuse the realtime controller's start / stop.
   const enterVoiceDialog = useCallback(() => {
+    // Fail-closed symmetry with voiceDialog.enter(): never open the realtime session on a deployment
+    // that does not offer dialogue, even if the switch were ever rendered without its availability gate.
+    if (!voiceDialog.available) {
+      return;
+    }
     voiceDialog.enter();
     realtime.start();
   }, [voiceDialog, realtime]);

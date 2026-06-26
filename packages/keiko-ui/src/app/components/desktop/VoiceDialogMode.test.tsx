@@ -261,7 +261,7 @@ describe("VoiceDialogControls", () => {
 
   it("renders the Stop and Leave buttons and the mute control", () => {
     renderControls();
-    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop voice dialogue" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Leave voice dialogue" })).toBeInTheDocument();
     // Mute button comes from VoicePlaybackMuteButton — accessible name starts with Mute/Unmute.
     expect(screen.getByRole("button", { name: /mute/iu })).toBeInTheDocument();
@@ -271,7 +271,7 @@ describe("VoiceDialogControls", () => {
     const user = userEvent.setup();
     const onStop = vi.fn();
     renderControls({ onStop });
-    const stopBtn = screen.getByRole("button", { name: "Stop" });
+    const stopBtn = screen.getByRole("button", { name: "Stop voice dialogue" });
     stopBtn.focus();
     await user.keyboard("{Enter}");
     expect(onStop).toHaveBeenCalledOnce();

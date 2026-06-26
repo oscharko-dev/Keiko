@@ -127,7 +127,6 @@ export function VoiceProfileSelect({
       </span>
       <KeikoSelect
         value={selected}
-        ariaLabel="Voice profile"
         ariaLabelledBy={VOICE_PROFILE_LABEL_ID}
         disabled={disabled}
         menuTitle="Voice profile"
@@ -227,7 +226,12 @@ export function VoiceDialogControls({
         buttonRef={muteButtonRef}
         compact={compact}
       />
-      <button type="button" className="cmp-voice-btn" onClick={onStop}>
+      <button
+        type="button"
+        className="cmp-voice-btn"
+        aria-label="Stop voice dialogue"
+        onClick={onStop}
+      >
         Stop
       </button>
       <button type="button" ref={leaveRef} className="cmp-voice-btn" onClick={onLeave}>
