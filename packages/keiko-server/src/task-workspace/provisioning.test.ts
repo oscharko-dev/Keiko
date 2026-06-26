@@ -255,6 +255,34 @@ describe("pre-write rejections (AC2)", () => {
     );
   });
 
+  it("rejects an unsafe base branch name before touching git (INVALID_REQUEST)", async () => {
+    const service = makeService();
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t1",
+          baseBranch: "-evil-branch",
+          requestedBy: "u",
+        }),
+      "INVALID_REQUEST",
+    );
+  });
+
+  it("returns the terminal-state instance idempotently without re-provisioning", async () => {
+    store.upsert(validInstance("archived", { lifecycleState: "archived", health: "healthy" }));
+    const service = makeService();
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "archived",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    expect(result.created).toBe(false);
+    expect(result.instance.lifecycleState).toBe("archived");
+    expect(store.listByRepository(deriveRepositoryId(repoRoot))).toHaveLength(1);
+  });
+
   it("rejects when another actor holds a live provisioning lock", async () => {
     store.upsert(
       validInstance("locked", {
@@ -369,6 +397,53 @@ describe("activate", () => {
     });
     expect(activated.instance.lifecycleState).toBe("active");
     expect(activated.binding.activeRoot).toBe(provisioned.instance.managedWorktreePath);
+  });
+
+  it("resumes a paused workspace (paused -> active) and emits a resumed event", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-resume",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...provisioned.instance, lifecycleState: "paused", lock: null });
+    const activated = await service.activate({
+      workspaceId: provisioned.instance.workspaceId,
+      taskId: "act-resume",
+      requestedBy: "u",
+      acquireLock: false,
+    });
+    expect(activated.instance.lifecycleState).toBe("active");
+    expect(
+      evidence.some(
+        (e) => e.json.includes('"type": "resumed"') || e.json.includes('"type":"resumed"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("flags drift (recovery-required) when activating a workspace whose worktree vanished", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-drift",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    rmSync(provisioned.instance.managedWorktreePath, { recursive: true, force: true });
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId: provisioned.instance.workspaceId,
+          taskId: "act-drift",
+          requestedBy: "u",
+          acquireLock: false,
+        }),
+      "POINTER_DRIFT",
+    );
+    const after = store.getById(provisioned.instance.workspaceId);
+    expect(after?.lifecycleState).toBe("recovery-required");
+    expect(after?.driftMarkers).toContain("worktree-missing");
   });
 
   it("rejects activation of an unknown workspace", async () => {

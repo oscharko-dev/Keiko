@@ -18,6 +18,7 @@
 // `listWorktrees` parses `--porcelain` output into structured entries whose paths stay in-process for
 // idempotency and drift inference and are never persisted into evidence (mirrors `readStagedPaths`).
 
+import { isAbsolute } from "node:path";
 import type { CommandResult, CommandRule, SandboxPolicy } from "./types.js";
 import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import {
@@ -112,12 +113,13 @@ export function isSafeGitRefName(value: string): boolean {
 
 // A worktree path operand must be an absolute path with no control bytes and must not begin with a
 // dash (so it cannot be parsed as an option). Containment inside the managed root is enforced by the
-// server BEFORE this adapter is called; this is the last-line argv guard.
+// server BEFORE this adapter is called; this is the last-line argv guard, and it self-documents the
+// absolute-path invariant rather than relying on every caller to supply one.
 export function isSafeWorktreePathOperand(value: string): boolean {
   if (value.length === 0 || value.length > 4096) return false;
   if (hasControlOrNul(value)) return false;
   if (value.startsWith("-")) return false;
-  return true;
+  return isAbsolute(value);
 }
 
 function requireSafeRef(value: string, label: string): string {

@@ -98,26 +98,36 @@ function boundedString(value: unknown): string | undefined {
     : undefined;
 }
 
-function toRouteResult(error: TaskWorkspaceError): RouteResult {
-  const detail =
-    error.reasons.length > 0 ? `${error.message}: ${error.reasons.join("; ")}` : error.message;
-  return { status: error.status, body: errorBody(error.code, detail) };
+function mapError(error: unknown): RouteResult | undefined {
+  if (error instanceof WorkspaceBodyTooLargeError) {
+    return {
+      status: 413,
+      body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+    };
+  }
+  if (error instanceof TaskWorkspaceError) {
+    const detail =
+      error.reasons.length > 0 ? `${error.message}: ${error.reasons.join("; ")}` : error.message;
+    return { status: error.status, body: errorBody(error.code, detail) };
+  }
+  if (error instanceof FilesError) {
+    return { status: error.status, body: errorBody(error.code, error.message) };
+  }
+  return undefined;
 }
 
-async function runHandler(work: () => Promise<RouteResult>): Promise<RouteResult> {
+// Error responses are redacted with the SAME defense-in-depth scrubbing as success bodies, so a
+// future failure detail that ever carries a path/secret-shaped value cannot leak to the browser.
+async function runHandler(
+  deps: UiHandlerDeps,
+  work: () => Promise<RouteResult>,
+): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
-    if (error instanceof WorkspaceBodyTooLargeError) {
-      return {
-        status: 413,
-        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
-      };
-    }
-    if (error instanceof TaskWorkspaceError) return toRouteResult(error);
-    if (error instanceof FilesError)
-      return { status: error.status, body: errorBody(error.code, error.message) };
-    throw error;
+    const mapped = mapError(error);
+    if (mapped === undefined) throw error;
+    return { status: mapped.status, body: redacted(deps, mapped.body) };
   }
 }
 
@@ -169,7 +179,7 @@ export async function handleProvisionTaskWorkspace(
 ): Promise<RouteResult> {
   const guard = requireService(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(async () => {
+  return runHandler(deps, async () => {
     const body = await readJsonObject(ctx.req);
     const parsed = parseProvisionBody(body);
     const resolvedRoot = await resolveRoot(deps.store, parsed.root, deps.redactor);
@@ -210,21 +220,20 @@ export async function handleActivateTaskWorkspace(
 ): Promise<RouteResult> {
   const guard = requireService(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(async () => {
+  return runHandler(deps, async () => {
     const workspaceId = ctx.params.workspaceId ?? "";
     const body = await readJsonObject(ctx.req);
     const requestedBy = boundedString(body.requestedBy);
     if (requestedBy === undefined) {
       throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: requestedBy");
     }
+    const expectedLifecycleState = parseExpectedState(body.expectedLifecycleState);
     const request: WorkspaceActivateRequest = {
       workspaceId,
       taskId: boundedString(body.taskId) ?? "",
       requestedBy,
       acquireLock: body.acquireLock === true,
-      ...(parseExpectedState(body.expectedLifecycleState) !== undefined
-        ? { expectedLifecycleState: parseExpectedState(body.expectedLifecycleState) }
-        : {}),
+      ...(expectedLifecycleState !== undefined ? { expectedLifecycleState } : {}),
     };
     const result = await guard.activate(request);
     return {
