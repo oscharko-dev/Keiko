@@ -5,14 +5,17 @@
 
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import {
   VOICE_PROFILE_LABEL_ID,
   VoiceDialogControls,
   VoiceDialogModeSwitch,
   VoiceDialogSessionStatus,
+  VoiceDialogTurnControls,
   VoiceProfileSelect,
   personaLabel,
+  type VoiceDialogTurnControlsProps,
 } from "./VoiceDialogMode";
 import type { VoiceDialogState } from "./hooks/voice-dialog-state";
 
@@ -360,5 +363,93 @@ describe("VoiceDialogControls", () => {
     // We cannot test KeikoSelect internals deeply, but we can assert the outer wrapper class appears.
     const wrapper = document.querySelector(".cmp-model-compact");
     expect(wrapper).not.toBeNull();
+  });
+});
+
+// ─── VoiceDialogTurnControls (Issue #1560) ──────────────────────────────────────────
+
+describe("VoiceDialogTurnControls (#1560)", () => {
+  function renderTurnControls(overrides: Partial<VoiceDialogTurnControlsProps> = {}) {
+    const props: VoiceDialogTurnControlsProps = {
+      listening: false,
+      speaking: false,
+      canInterrupt: false,
+      onListen: vi.fn(),
+      onInterrupt: vi.fn(),
+      ...overrides,
+    };
+    const result = render(<VoiceDialogTurnControls {...props} />);
+    return { ...result, props };
+  }
+
+  it("mic exposes aria-pressed reflecting the listening state (AC4 / WCAG 4.1.2)", () => {
+    const { rerender } = renderTurnControls({ listening: false });
+    expect(screen.getByRole("button", { name: "Start speaking" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    rerender(
+      <VoiceDialogTurnControls
+        listening
+        speaking={false}
+        canInterrupt={false}
+        onListen={vi.fn()}
+        onInterrupt={vi.fn()}
+      />,
+    );
+    // While recording the accessible name changes so the next action is clear to a screen reader.
+    expect(screen.getByRole("button", { name: "Stop speaking and send" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("clicking the mic calls onListen", async () => {
+    const user = userEvent.setup();
+    const onListen = vi.fn();
+    renderTurnControls({ onListen });
+    await user.click(screen.getByRole("button", { name: "Start speaking" }));
+    expect(onListen).toHaveBeenCalledTimes(1);
+  });
+
+  it("Interrupt is disabled unless a barge-in is meaningful (canInterrupt)", () => {
+    const { rerender } = renderTurnControls({ canInterrupt: false });
+    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
+    rerender(
+      <VoiceDialogTurnControls
+        listening={false}
+        speaking
+        canInterrupt
+        onListen={vi.fn()}
+        onInterrupt={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeEnabled();
+  });
+
+  it("clicking Interrupt calls onInterrupt when enabled", async () => {
+    const user = userEvent.setup();
+    const onInterrupt = vi.fn();
+    renderTurnControls({ canInterrupt: true, speaking: true, onInterrupt });
+    await user.click(screen.getByRole("button", { name: "Interrupt the assistant" }));
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onInterrupt while disabled", async () => {
+    const user = userEvent.setup();
+    const onInterrupt = vi.fn();
+    renderTurnControls({ canInterrupt: false, onInterrupt });
+    await user.click(screen.getByRole("button", { name: "Interrupt the assistant" }));
+    expect(onInterrupt).not.toHaveBeenCalled();
+  });
+
+  it("jest-axe: the turn controls have no accessibility violations", async () => {
+    const { container } = renderTurnControls({
+      listening: true,
+      speaking: false,
+      canInterrupt: true,
+    });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });
