@@ -240,6 +240,19 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "fs-reference",
   },
+  // Epic #470, Issue #478 — governed merge command center. Drives the governed merge gateway (policy +
+  // final approval + readiness gate + `gh api` merge execute) over a project's review-ready PR and records
+  // evidence; every merge is a user-confirmed action. Trust spans the git/provider tool boundary and the
+  // ledger.
+  governedMerge: {
+    lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
+    // Reads the project's git worktree and reaches the GitHub provider via the governed `gh api` adapter,
+    // producing audit evidence. fs-reference persistence keeps the slash-bearing project path across
+    // reloads (evidence-reference would strip it, leaving a broken empty window on restore).
+    trustBoundary: ["ui", "fs", "tool", "evidence"],
+    authority: "user-confirm",
+    persistence: "fs-reference",
+  },
 };
 
 // ─── Module-evaluation validation ─────────────────────────────────────────

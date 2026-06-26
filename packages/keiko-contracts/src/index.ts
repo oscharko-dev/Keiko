@@ -1716,3 +1716,49 @@ export {
   isGitPullRequestMetadataDraft,
   parseGitPullRequestReadinessSummary,
 } from "./git-pull-request.js";
+
+// git-merge.ts (Issue #478, Epic #470; ADR-0065)
+// The provider-neutral, content-free merge-governance leaf: the merge-readiness model (the severity-
+// ranked blocker taxonomy reusing GitDeliveryMergeBlockReason plus the lifecycle/preview states), the
+// strategy-eligibility derivation (policy ∩ provider capability, never a UI default), the merge
+// recommendation, and the provider-failure rejection taxonomy. The GitHub-specific mergeable-state
+// mapper and raw-error classifier are keiko-tools concerns.
+export type {
+  GitMergeLifecycleBlockerCode,
+  GitMergeReadinessBlockerCode,
+  GitMergeBlockerSeverity,
+  GitMergeRemediationClass,
+  GitMergeReadinessBlocker,
+  GitMergeReadinessSummary,
+  GitMergeStrategyPolicy,
+  GitMergeStrategyEligibility,
+  GitMergeRecommendation,
+  GitMergeApprovalContext,
+  GitMergeRejectionReason,
+  GitMergeRejection,
+  GitMergeReadinessInput,
+} from "./git-merge.js";
+export {
+  GIT_MERGE_SCHEMA_VERSION,
+  GIT_MERGE_LIFECYCLE_BLOCKER_CODES,
+  GIT_MERGE_READINESS_BLOCKER_CODES,
+  GIT_MERGE_RECOMMENDATIONS,
+  GIT_MERGE_REJECTION_REASONS,
+  GIT_MERGE_REJECTION_ERROR_CODE,
+  GIT_MERGE_REJECTION_DISPOSITION,
+  gitMergeBlockerRemediationFor,
+  gitMergeBlockerActionHintFor,
+  deriveEligibleMergeStrategies,
+  gitMergeRecommendationFor,
+  gitMergeRejectionToErrorCode,
+  gitMergeRejectionToDisposition,
+  gitMergeRejectionFor,
+  gitMergeReadinessFor,
+  gitMergeReadinessBlockerIsPrerequisite,
+  isGitMergeReadinessBlockerCode,
+  isGitMergeRecommendation,
+  isGitMergeRejectionReason,
+  isGitMergeReadinessBlocker,
+  isGitMergeReadinessSummary,
+  parseGitMergeReadinessSummary,
+} from "./git-merge.js";

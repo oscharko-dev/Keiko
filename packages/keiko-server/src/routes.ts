@@ -175,6 +175,7 @@ import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMuta
 import { GIT_DELIVERY_COMMIT_ROUTE_GROUP } from "./gitDelivery/commitRoutes.js";
 import { GIT_DELIVERY_PUSH_ROUTE_GROUP } from "./gitDelivery/pushRoutes.js";
 import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
+import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -625,6 +626,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // recommendation) + execute through the SEPARATE PR gateway (dedicated `gh api` allowlist) + #474
   // evidence ledger; same capability flag and CSRF.
   ...GIT_DELIVERY_PR_ROUTE_GROUP,
+  // #478 governed merge: merge preview (read-only readiness/eligible-strategies/recommendation) +
+  // execute through the SEPARATE merge gateway (dedicated `gh api` merge allowlist, readiness gate, final
+  // approval) + #474 evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_MERGE_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

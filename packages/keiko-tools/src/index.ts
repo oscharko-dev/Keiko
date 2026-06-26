@@ -242,6 +242,41 @@ export {
   type GitPullRequestRequest,
 } from "./git-pr-gateway.js";
 
+// The SEPARATE governed merge authority (Issue #478, ADR-0065). A THIRD parallel gateway to the publish
+// and PR gateways — never an extension of either. The pure surface — merge command, narrow two-method
+// adapter port (readiness read + merge execute), dedicated `gh api` allowlist, argv builders, GitHub
+// merge-error classifier, mergeable-state mapper, effective-policy evaluator, and the runGitMerge
+// orchestrator (preflight + policy + final-approval + the readiness gate) — is re-exported here. The Node
+// `gh api` executor (createNodeGitMergeAdapter) carries the spawn effect and is reachable on the
+// `./internal/git-mutation` subpath, never the package barrel.
+export {
+  buildDeleteMergedBranchArgv,
+  buildHeadStatusArgv,
+  buildMergeArgv,
+  buildMergeReadinessArgv,
+  buildRepoMergeConfigArgv,
+  classifyGitMergeRejection,
+  evaluateGitMergeEffectivePolicy,
+  GIT_MERGE_ALLOWED_SUBCOMMANDS,
+  GIT_MERGE_COMMAND_RULES,
+  gitMergeArgvIsGoverned,
+  gitMergeRejectionToErrorCode,
+  GitMergeArgvError,
+  mapRawMergeReadiness,
+  runGitMerge,
+  type GitMergeAdapter,
+  type GitMergeCommand,
+  type GitMergeEffectivePolicy,
+  type GitMergeExecRequest,
+  type GitMergeExecResult,
+  type GitMergeLifecycleResult,
+  type GitMergeOrchestratorDeps,
+  type GitMergeProviderReadiness,
+  type GitMergeReadinessRequest,
+  type GitMergeRequest,
+  type RawMergeReadiness,
+} from "./git-merge-gateway.js";
+
 // ─── Governed local Git flows: commit-intent summary (Issue #475) ──────────────────────────────
 // The PURE commit-intent summarizer reduces staged paths into the content-free GitCommitChangeSummary.
 // The live worktree READER carries the Node spawn effect and is therefore NOT re-exported here; it is
