@@ -59,6 +59,19 @@ function embeddingAvailabilityLabel(): string {
   return "Available for embeddings; not shown in the chat model picker";
 }
 
+function voiceAvailabilityLabel(): string {
+  return "Available for voice; not shown in the chat model picker";
+}
+
+function isVoiceReady(model: ModelCapability): boolean {
+  return (
+    model.kind === "voice" &&
+    (model.supportsSpeechInput === true ||
+      model.supportsSpeechOutput === true ||
+      model.supportsRealtimeVoice === true)
+  );
+}
+
 // uiux-fix C359/C057: short visible badge copy — the long form stays in
 // aria-label/title so the model list does not read like a transport warning.
 function conversationIneligibilityShortLabel(reason: ConversationIneligibilityReason): string {
@@ -90,6 +103,19 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
         title={embeddingAvailabilityLabel()}
       >
         Embedding-ready
+      </span>
+    );
+  }
+  if (isVoiceReady(model)) {
+    return (
+      <span
+        className="ml-elig ml-elig-voice"
+        data-testid="voice-elig-ok"
+        role="status"
+        aria-label={"Model eligibility: " + voiceAvailabilityLabel()}
+        title={voiceAvailabilityLabel()}
+      >
+        Voice-ready
       </span>
     );
   }
@@ -309,16 +335,20 @@ function ModelCapabilityRow({
 }): ReactNode {
   const conversationEligible = isConversationEligibleModel(model);
   const embeddingReady = model.kind === "embedding";
-  const statusClass = conversationEligible || embeddingReady ? "connected" : "ineligible";
+  const voiceReady = isVoiceReady(model);
+  const statusClass = conversationEligible || embeddingReady || voiceReady ? "connected" : "ineligible";
   const statusTitle = conversationEligible
     ? "conversation-eligible"
     : embeddingReady
       ? "available for embeddings"
-      : "not selectable for conversation";
+      : voiceReady
+        ? "available for voice"
+        : "not selectable for conversation";
+  const RowIcon = model.kind === "voice" ? Icons.mic : Icons.cube;
   return (
     <div className="ml-row">
       <span className="ml-ico">
-        <Icons.cube size={16} />
+        <RowIcon size={16} />
       </span>
       <div className="ml-info">
         <div className="ml-top">

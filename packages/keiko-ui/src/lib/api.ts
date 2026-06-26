@@ -251,6 +251,12 @@ export interface GatewaySetupInput {
   readonly timeoutMs?: number | undefined;
   readonly deploymentNames?: readonly string[] | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
+  readonly voiceBaseUrl?: string | undefined;
+  readonly voiceApiKey?: string | undefined;
+  readonly voiceApiKeyHeaderName?: string | undefined;
+  readonly voiceModelId?: string | undefined;
+  readonly voiceProviderLocality?: string | undefined;
+  readonly voiceTimeoutMs?: number | undefined;
   readonly figmaAccessToken?: string | undefined;
   readonly preserveExisting?: boolean | undefined;
 }
