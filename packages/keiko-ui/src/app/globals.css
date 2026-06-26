@@ -3591,6 +3591,43 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   color: var(--text-secondary); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
 }
 
+.chat-memory-budget-label {
+  position: relative;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.chat-memory-budget-label[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 5px 9px;
+  border: 1px solid var(--popover-border);
+  border-radius: 7px;
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  box-shadow: var(--popover-shadow);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+  text-wrap: pretty;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: var(--z-tooltip);
+}
+
+.chat-memory-budget-label[data-tip]:hover::after,
+.chat-memory-budget-label[data-tip]:focus-within::after {
+  opacity: 1;
+}
+
 .chat-memory-budget .number-control-pill {
   --number-stepper-size: 18px;
   --number-stepper-right: 8px;

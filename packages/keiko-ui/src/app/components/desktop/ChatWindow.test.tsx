@@ -1453,13 +1453,24 @@ describe("ChatWindow memory controls", () => {
     fireEvent.click(toggle);
     expect(setMemoryEnabled).toHaveBeenCalledWith(false);
 
-    fireEvent.change(screen.getByLabelText("Budget (tokens)"), { target: { value: "800" } });
+    expect(screen.getByText("MemoriaViva budget")).toBeInTheDocument();
+    const memoryBudgetHelp = screen.getByLabelText(
+      /Limits only the MemoriaViva memory context/i,
+    );
+    expect(memoryBudgetHelp.closest(".chat-memory-budget-label")).toHaveAttribute(
+      "data-tip",
+      expect.stringContaining("not the model context window"),
+    );
+
+    fireEvent.change(screen.getByLabelText("MemoriaViva budget"), {
+      target: { value: "800" },
+    });
     expect(setMemoryBudgetTokens).toHaveBeenCalledWith(800);
 
-    fireEvent.click(screen.getByRole("button", { name: "Increase memory budget" }));
+    fireEvent.click(screen.getByRole("button", { name: "Increase MemoriaViva budget" }));
     expect(setMemoryBudgetTokens).toHaveBeenCalledWith(1300);
 
-    fireEvent.click(screen.getByRole("button", { name: "Decrease memory budget" }));
+    fireEvent.click(screen.getByRole("button", { name: "Decrease MemoriaViva budget" }));
     expect(setMemoryBudgetTokens).toHaveBeenCalledWith(1100);
   });
 

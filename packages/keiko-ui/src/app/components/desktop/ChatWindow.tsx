@@ -2545,6 +2545,9 @@ function formatMemoryCapturedAt(capturedAt: number): string {
   return new Date(capturedAt).toISOString().slice(0, 10);
 }
 
+const MEMORY_BUDGET_HELP =
+  "Limits only the MemoriaViva memory context added to the next model request. It is not the model context window, response limit, or cost budget.";
+
 function MemoryPanel({
   memoryEnabled,
   setMemoryEnabled,
@@ -2570,6 +2573,8 @@ function MemoryPanel({
   const [actionStatus, setActionStatus] = useState("");
   const generatedId = useId();
   const disclosureId = `${generatedId}-chat-memory-disclosure`;
+  const budgetInputId = `${generatedId}-chat-memory-budget`;
+  const budgetHelpId = `${generatedId}-chat-memory-budget-help`;
   const disclosureButtonRef = useRef<HTMLButtonElement>(null);
   const handleActionSettled = useCallback((message: string): void => {
     setActionStatus(message);
@@ -2588,25 +2593,42 @@ function MemoryPanel({
     stepMemoryBudget(direction * 100);
   };
   const budgetControl = (
-    <label className="chat-memory-budget">
-      <span>Budget (tokens)</span>
+    <div className="chat-memory-budget">
+      <span className="chat-memory-budget-label" data-tip={MEMORY_BUDGET_HELP}>
+        <label htmlFor={budgetInputId}>MemoriaViva budget</label>
+        {/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- matches the existing BudgetIndicator info affordance: keyboard-focusable data-tip tooltip. */}
+        <span
+          className="cmp-budget-info chat-memory-budget-info"
+          role="img"
+          tabIndex={0}
+          aria-label={MEMORY_BUDGET_HELP}
+        >
+          i
+        </span>
+        {/* eslint-enable jsx-a11y/no-noninteractive-tabindex */}
+      </span>
       <span className="number-control number-control-pill">
         <input
+          id={budgetInputId}
           type="number"
           className="number-control-input"
           min={0}
           step={100}
           value={memoryBudgetTokens}
+          aria-describedby={budgetHelpId}
           onChange={(event) => setMemoryBudgetTokens(Math.max(0, Number(event.target.value) || 0))}
           onWheel={handleBudgetWheel}
         />
         <NumberControlStepper
-          label="memory budget"
+          label="MemoriaViva budget"
           onStepUp={() => stepMemoryBudget(100)}
           onStepDown={() => stepMemoryBudget(-100)}
         />
       </span>
-    </label>
+      <span id={budgetHelpId} className="sr-only">
+        {MEMORY_BUDGET_HELP}
+      </span>
+    </div>
   );
 
   return (
