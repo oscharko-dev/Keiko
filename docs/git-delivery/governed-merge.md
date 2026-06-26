@@ -1,6 +1,6 @@
 # Governed Merge (Issue #478)
 
-Epic #470 · ADR-0077 · builds on the #477 governed pull request gateway.
+Epic #470 · ADR-0087 · builds on the #477 governed pull request gateway.
 
 ## Purpose
 
@@ -52,7 +52,7 @@ Only when all three gates pass does the gateway call the merge PUT. The provider
 enforcement (required checks, approvals, branch protection) remains the ultimate authority; the readiness
 gate makes that enforcement visible _before_ execution rather than discovering it from a failed attempt.
 
-## Transport and the token boundary (ADR-0077 D2)
+## Transport and the token boundary (ADR-0087 D2)
 
 The Node adapter shells `gh api` (no `@octokit` npm dependency). The dedicated endpoint allowlist permits
 only:

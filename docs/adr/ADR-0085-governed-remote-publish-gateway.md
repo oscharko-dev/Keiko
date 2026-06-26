@@ -1,4 +1,4 @@
-# ADR-0075: Governed Remote Publish Gateway for Push and Upstream Orchestration
+# ADR-0085: Governed Remote Publish Gateway for Push and Upstream Orchestration
 
 ## Status
 
@@ -8,11 +8,11 @@ Accepted
 
 Epic #470 has built the governed Git delivery stack through five prior slices:
 
-- ADR-0070 (#471): typed contract surface — action kinds, risk taxonomy, lifecycle envelope, policy evaluator.
-- ADR-0071 (#472): mutation kernel — single execution authority (`runGitMutation`), preflight evaluators, narrow **local** adapter port, no-shell spawn boundary.
-- ADR-0072 (#473): approval and preview presentation layer — content-free action sheet, BFF projection route.
-- ADR-0073 (#474): evidence ledger — bounded append-only record for every terminal outcome, audit-export route.
-- ADR-0074 (#475): first end-user-visible local flows — branch / staging / commit with interactive preview, commit-intent composition.
+- ADR-0080 (#471): typed contract surface — action kinds, risk taxonomy, lifecycle envelope, policy evaluator.
+- ADR-0081 (#472): mutation kernel — single execution authority (`runGitMutation`), preflight evaluators, narrow **local** adapter port, no-shell spawn boundary.
+- ADR-0082 (#473): approval and preview presentation layer — content-free action sheet, BFF projection route.
+- ADR-0083 (#474): evidence ledger — bounded append-only record for every terminal outcome, audit-export route.
+- ADR-0084 (#475): first end-user-visible local flows — branch / staging / commit with interactive preview, commit-intent composition.
 
 Issue #476 adds the **governed publish layer**: it turns local commit completion into safe remote delivery. `git push` must stop being a raw transport call and become a controlled publish workflow with explicit preview, policy enforcement, and recovery semantics. This is the point where local quality meets shared-team risk, so the controls become stricter, not looser.
 
@@ -20,7 +20,7 @@ The #472 kernel deliberately deferred this slice. Its command union comment stat
 
 Six forces constrain the design:
 
-**Force 1 — Separate remote authority, never the local adapter.** The narrow `GitLocalMutationAdapter` (ADR-0071) is the local write authority and must stay network-free. A push subcommand must never become reachable through it. Remote execution belongs to a dedicated gateway with its own dedicated allowlist.
+**Force 1 — Separate remote authority, never the local adapter.** The narrow `GitLocalMutationAdapter` (ADR-0081) is the local write authority and must stay network-free. A push subcommand must never become reachable through it. Remote execution belongs to a dedicated gateway with its own dedicated allowlist.
 
 **Force 2 — Reuse the kernel's pure machinery.** Preflight (`evaluateGitPreflight`, push case already present since #472), policy (`evaluateGitPolicy`), the lifecycle-result shape (`GitMutationLifecycleResult`), and the evidence builder (`buildGitDeliveryEvidenceRecord`, push case already present since #474) are reused unchanged. No second policy system, no second evidence schema.
 
@@ -77,14 +77,14 @@ Raw stderr never leaves the executor. Only the typed reason, the error code, and
 
 ### D5 — The publish lifecycle reuses the ledger and the response projection
 
-`executeGovernedPublish` (server) mirrors `executeGovernedMutation`: resolve and authorise the project workspace, read a trustworthy snapshot, run `runGitPublish`, and append a content-free evidence record via the existing `recordGitDeliveryMutationEvidence` and `buildGitDeliveryEvidenceRecord` (which already projects push `remoteRefHash`). Evidence is recorded for the permitted-and-executed path and for every blocked/held path before the route responds. The push preview route is read-only — snapshot, preflight, policy projection, no execution, no evidence — exactly the action-sheet/commit-preview pattern (ADR-0072 D2 / ADR-0074 D2).
+`executeGovernedPublish` (server) mirrors `executeGovernedMutation`: resolve and authorise the project workspace, read a trustworthy snapshot, run `runGitPublish`, and append a content-free evidence record via the existing `recordGitDeliveryMutationEvidence` and `buildGitDeliveryEvidenceRecord` (which already projects push `remoteRefHash`). Evidence is recorded for the permitted-and-executed path and for every blocked/held path before the route responds. The push preview route is read-only — snapshot, preflight, policy projection, no execution, no evidence — exactly the action-sheet/commit-preview pattern (ADR-0082 D2 / ADR-0084 D2).
 
 ## Consequences
 
 ### Positive
 
 - Remote publish becomes governed end-to-end with no parallel orchestrator, no new evidence schema, no new approval model, and zero contract change — the kernel's pure machinery is reused.
-- The local mutation authority stays network-free: push is reachable only through the dedicated gateway and its single-subcommand allowlist, preserving the ADR-0071 invariant.
+- The local mutation authority stays network-free: push is reachable only through the dedicated gateway and its single-subcommand allowlist, preserving the ADR-0081 invariant.
 - Force-push is blocked by two independent mechanisms (policy ceiling + argv-builder refusal); neither can be bypassed from the request body.
 - Protected/shared-target strictness is authored as policy data, so a team can tighten or relax it (block vs approval-gate) without code changes.
 - Non-fast-forward, missing-upstream, and auth/permission failures each map to a distinct typed recovery hint, so users recover without guessing while evidence stays content-free.
@@ -106,7 +106,7 @@ Raw stderr never leaves the executor. Only the typed reason, the error code, and
 ### Alternative 1: Extend the local adapter / `runGitMutation` union with a push kind
 
 - **Pros**: One execution authority; reuses the existing dispatch and envelope assembly directly.
-- **Cons**: Adds a network verb to the kernel that the local adapter would have to dispatch, eroding the ADR-0071 invariant that local writes can never reach a network subcommand. The local adapter's allowlist exclusion of `push` and its structural "no network verb" tests would have to be relaxed or specially-cased. The push execution also needs richer rejection data than the local adapter's `GitDeliveryExecutionResult`-only return allows.
+- **Cons**: Adds a network verb to the kernel that the local adapter would have to dispatch, eroding the ADR-0081 invariant that local writes can never reach a network subcommand. The local adapter's allowlist exclusion of `push` and its structural "no network verb" tests would have to be relaxed or specially-cased. The push execution also needs richer rejection data than the local adapter's `GitDeliveryExecutionResult`-only return allows.
 - **Why rejected**: Force 1. The #472 comment explicitly places remote execution "behind a separate gateway, never this local adapter". A parallel gateway keeps the local authority network-free and lets the remote path return its richer typed rejection.
 
 ### Alternative 2: Surface raw `git push` stderr to the user for recovery guidance
@@ -129,11 +129,11 @@ Raw stderr never leaves the executor. Only the typed reason, the error code, and
 
 ## Related
 
-- ADR-0070: Governed Git delivery contracts (push input shape, execution error codes, recovery vocabulary reused unchanged)
-- ADR-0071: Governed Git mutation execution kernel (local adapter network-free invariant preserved; preflight push case reused)
-- ADR-0072: Governed Git approval and preview surface (read-only BFF preview pattern; `isGitDeliveryTrusted` gate reused)
-- ADR-0073: Governed Git mutation evidence ledger (`recordGitDeliveryMutationEvidence` / `buildGitDeliveryEvidenceRecord` push projection reused)
-- ADR-0074: Governed local Git flows (governed flow card extended with a publish section; execution wiring pattern mirrored)
+- ADR-0080: Governed Git delivery contracts (push input shape, execution error codes, recovery vocabulary reused unchanged)
+- ADR-0081: Governed Git mutation execution kernel (local adapter network-free invariant preserved; preflight push case reused)
+- ADR-0082: Governed Git approval and preview surface (read-only BFF preview pattern; `isGitDeliveryTrusted` gate reused)
+- ADR-0083: Governed Git mutation evidence ledger (`recordGitDeliveryMutationEvidence` / `buildGitDeliveryEvidenceRecord` push projection reused)
+- ADR-0084: Governed local Git flows (governed flow card extended with a publish section; execution wiring pattern mirrored)
 - ADR-0019: Modular Package Architecture (leaf-package rule; dependency direction; `arch:check`)
 - ADR-0018: Terminal allowlist (read-only baseline preserved; push NOT added to it)
 - ADR-0043: Sandbox network enforcement (push uses `inherit`; `none` honoured elsewhere)

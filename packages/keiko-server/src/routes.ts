@@ -83,6 +83,13 @@ import {
   handleDeleteCommandRun,
 } from "./command-runner-routes.js";
 import {
+  handleContainerCapability,
+  handleContainerCatalog,
+  handleContainerEvents,
+  handleCreateContainerRun,
+  handleDeleteContainerRun,
+} from "./runtime/containerRoutes.js";
+import {
   handleFilesContent,
   handleFilesDirectories,
   handleFilesPreview,
@@ -323,6 +330,33 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "DELETE",
     pattern: "/api/commands/runs/:runId",
     handler: handleDeleteCommandRun,
+  },
+  // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. The capability
+  // route runs an opt-in ACTIVE daemon probe (distinct from the metadata-only #1385 detector); the
+  // catalog/run routes degrade to 503 CONTAINER_ENGINE_UNAVAILABLE when no engine is present. A run
+  // names a closed-catalog task id only (never a free-form image/argv/flag), executes a server-frozen
+  // hardened `docker run` argv through the single runCommand boundary, and writes content-free
+  // evidence. Literal `capability`/`catalog`/`events` paths register before the `:runId` route.
+  {
+    method: "GET",
+    pattern: "/api/containers/capability",
+    handler: handleContainerCapability,
+  },
+  {
+    method: "GET",
+    pattern: "/api/containers/catalog",
+    handler: handleContainerCatalog,
+  },
+  {
+    method: "GET",
+    pattern: "/api/containers/events",
+    handler: handleContainerEvents,
+  },
+  { method: "POST", pattern: "/api/containers/runs", handler: handleCreateContainerRun },
+  {
+    method: "DELETE",
+    pattern: "/api/containers/runs/:runId",
+    handler: handleDeleteContainerRun,
   },
   // Desktop files — selected-root browser, preview, and editor control plane.
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },

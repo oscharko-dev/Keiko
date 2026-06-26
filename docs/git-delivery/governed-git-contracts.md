@@ -1,7 +1,7 @@
 # Governed Git Delivery Contracts
 
 This document describes the governed Git delivery contract surface introduced in Issue #471
-(Epic #470) and defined by [ADR-0070](../adr/ADR-0070-governed-git-delivery-contracts.md). It is
+(Epic #470) and defined by [ADR-0080](../adr/ADR-0080-governed-git-delivery-contracts.md). It is
 written for operators who author policy packs and for engineers who build the later delivery slices
 (#472 and beyond) on top of these contracts.
 
@@ -157,7 +157,7 @@ orthogonal `isDraft` boolean separate from the `open | closed | merged` status),
 **The rule:** no field name, value, or type from a specific provider's API may appear in these
 interfaces. Provider adapters live in keiko-workflows or keiko-server — not in keiko-contracts, which
 as a leaf package cannot import a provider SDK. The GitHub adapter is the reference implementation;
-ADR-0070 §D6 carries the GitHub-to-neutral mapping table. Adding a second provider (GitLab, Gitea)
+ADR-0080 §D6 carries the GitHub-to-neutral mapping table. Adding a second provider (GitLab, Gitea)
 means writing another adapter that maps to the same neutral interfaces — no core contract changes.
 
 ## 6. Terminal boundary guarantee
@@ -168,7 +168,7 @@ read-only `git` inspection (`status`, `diff`, `log`, `show`, `rev-parse`, `ls-fi
 subcommand. Governed write authority is reachable only through the typed contracts above, never by
 widening that allowlist.
 
-This is machine-checked. The `AC5 — governed Git delivery boundary (ADR-0070)` block in
+This is machine-checked. The `AC5 — governed Git delivery boundary (ADR-0080)` block in
 `packages/keiko-tools/src/terminal-policy.test.ts` asserts that the real mutating and network
 commands each governed action maps to — `commit`, `push`, `push --force`, `merge`, `merge --abort`,
 `branch <name>`, `add .` / `add -A`, `restore --staged` / `reset HEAD`, `reset --hard` / `restore`,

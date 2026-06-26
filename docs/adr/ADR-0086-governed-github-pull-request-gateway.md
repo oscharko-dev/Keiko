@@ -1,4 +1,4 @@
-# ADR-0076: Governed GitHub Pull Request Gateway and Metadata Orchestration
+# ADR-0086: Governed GitHub Pull Request Gateway and Metadata Orchestration
 
 ## Status
 
@@ -8,22 +8,22 @@ Accepted
 
 Epic #470 has built the governed Git delivery stack through six prior slices:
 
-- ADR-0070 (#471): typed contract surface — action kinds, risk taxonomy, lifecycle envelope, policy evaluator.
-- ADR-0071 (#472): mutation kernel — single local execution authority, preflight evaluators, narrow local adapter port.
-- ADR-0072 (#473): approval and preview presentation layer — content-free action sheet, BFF projection route.
-- ADR-0073 (#474): evidence ledger — bounded append-only record for every terminal outcome, audit-export route.
-- ADR-0074 (#475): first end-user-visible local flows — branch / staging / commit with interactive preview and commit-intent composition.
-- ADR-0075 (#476): governed publish gateway — dedicated remote push authority with its own allowlist, rejection taxonomy, and policy pack.
+- ADR-0080 (#471): typed contract surface — action kinds, risk taxonomy, lifecycle envelope, policy evaluator.
+- ADR-0081 (#472): mutation kernel — single local execution authority, preflight evaluators, narrow local adapter port.
+- ADR-0082 (#473): approval and preview presentation layer — content-free action sheet, BFF projection route.
+- ADR-0083 (#474): evidence ledger — bounded append-only record for every terminal outcome, audit-export route.
+- ADR-0084 (#475): first end-user-visible local flows — branch / staging / commit with interactive preview and commit-intent composition.
+- ADR-0085 (#476): governed publish gateway — dedicated remote push authority with its own allowlist, rejection taxonomy, and policy pack.
 
 Issue #477 adds the **governed pull request layer**: it turns a published branch into a GitHub pull request (create or update) through an explicit, governed workflow with metadata composition, readiness assessment, policy enforcement, and content-free evidence. This is the first slice that interacts directly with a provider API (GitHub) rather than with the local git binary, so the transport model, auth boundary, and failure-classification strategy each require an explicit decision.
 
 Seven forces constrain the design:
 
-**Force 1 — Separate PR orchestration authority, not push-gateway extension.** The ADR-0075 publish gateway is responsible for `git push` operations only; its narrow `GitRemotePublishAdapter` port has a single `publish(req)` method and its allowlist admits only the `push` subcommand. A pull request operation shells `gh api` REST calls (POST/PATCH/GET), not `git push`. Merging PR execution into the push gateway would create false coupling between two structurally independent operations (a git transport and a provider REST call) and would require expanding the push allowlist in ways that violate its one-subcommand invariant.
+**Force 1 — Separate PR orchestration authority, not push-gateway extension.** The ADR-0085 publish gateway is responsible for `git push` operations only; its narrow `GitRemotePublishAdapter` port has a single `publish(req)` method and its allowlist admits only the `push` subcommand. A pull request operation shells `gh api` REST calls (POST/PATCH/GET), not `git push`. Merging PR execution into the push gateway would create false coupling between two structurally independent operations (a git transport and a provider REST call) and would require expanding the push allowlist in ways that violate its one-subcommand invariant.
 
-**Force 2 — Provider neutrality preserved at the contract layer.** GitHub is the first and currently only provider. However, the ADR-0070 rule — no provider field names or values in keiko-contracts — must continue to hold. The neutral rejection-reason taxonomy and readiness model in the contracts leaf must not reference GitHub REST envelope fields (`message`, `errors[].code`, `mergeable_state`, etc.). The GitHub-specific error classifier belongs in keiko-tools.
+**Force 2 — Provider neutrality preserved at the contract layer.** GitHub is the first and currently only provider. However, the ADR-0080 rule — no provider field names or values in keiko-contracts — must continue to hold. The neutral rejection-reason taxonomy and readiness model in the contracts leaf must not reference GitHub REST envelope fields (`message`, `errors[].code`, `mergeable_state`, etc.). The GitHub-specific error classifier belongs in keiko-tools.
 
-**Force 3 — Content-free invariant.** PR title and body strings are legitimate user-authored content that must flow from the user through the gateway to GitHub. They must never enter the evidence record. The ADR-0070 contracts already accommodate this: `GitDeliveryPrCreateInputs` and `GitDeliveryPrUpdateInputs` carry `titleByteLength` and `bodyByteLength` (not the strings). Evidence stores only those byte lengths. A metadata synthesizer may produce a deterministic title/body draft from content-free structured facts (commit counts, file counts, coarse area tokens, change-type and risk enums, branch names), but the draft is user-editable before dispatch and is not persisted to evidence.
+**Force 3 — Content-free invariant.** PR title and body strings are legitimate user-authored content that must flow from the user through the gateway to GitHub. They must never enter the evidence record. The ADR-0080 contracts already accommodate this: `GitDeliveryPrCreateInputs` and `GitDeliveryPrUpdateInputs` carry `titleByteLength` and `bodyByteLength` (not the strings). Evidence stores only those byte lengths. A metadata synthesizer may produce a deterministic title/body draft from content-free structured facts (commit counts, file counts, coarse area tokens, change-type and risk enums, branch names), but the draft is user-editable before dispatch and is not persisted to evidence.
 
 **Force 4 — No new npm dependency.** `gh` (the GitHub CLI) is installed and authenticated in the deployment environment. Its keyring or environment-variable auth (GH_TOKEN / GITHUB_TOKEN) is used by gh itself; Keiko never reads or handles the token value. An additional npm package (`@octokit/rest`, `octokit`) would add a supply-chain surface, require token management within Keiko's own process, and duplicate capability the authenticated gh binary already provides. The transport boundary must shell `gh api` with a closed REST-endpoint allowlist, exactly as the publish gateway shells `git push` with its closed subcommand allowlist.
 
@@ -52,7 +52,7 @@ We will introduce a new contracts leaf in keiko-contracts, a dedicated PR gatewa
 `packages/keiko-tools/src/git-pr-gateway.ts` (pure) defines:
 
 - `GitPullRequestCommand` — a discriminated union of `GitPrCreateCommand` and `GitPrUpdateCommand`. Each carries the actual title/body strings (the content the `git-delivery.ts` inputs deliberately omit), plus all structured operands (`headBranchName`, `baseBranchName`, `isDraft`, `prExternalId`, etc.). The title and body flow command → adapter → GitHub and command → UI (for the editable metadata draft); they never enter evidence.
-- `GitPullRequestAdapter` — the narrow provider port with two typed methods (`createPullRequest(req)` and `updatePullRequest(req)`). No generic `run(args)` escape hatch; the port accepts only the typed request shapes, mirroring the ADR-0071 and ADR-0075 narrow-port discipline.
+- `GitPullRequestAdapter` — the narrow provider port with two typed methods (`createPullRequest(req)` and `updatePullRequest(req)`). No generic `run(args)` escape hatch; the port accepts only the typed request shapes, mirroring the ADR-0081 and ADR-0085 narrow-port discipline.
 - `GIT_PULL_REQUEST_ALLOWED_SUBCOMMANDS` — a closed string array of the `gh api` REST path patterns permitted for PR operations (`/repos/{owner}/{repo}/pulls` POST, `/repos/{owner}/{repo}/pulls/{number}` PATCH, `/repos/{owner}/{repo}/pulls/{number}` GET). Structurally separate from both `GIT_MUTATION_ALLOWED_SUBCOMMANDS` and `GIT_PUBLISH_ALLOWED_SUBCOMMANDS`; adding to one never touches the others.
 - `buildPrApiArgv(req)` — pure argv builders for `gh api` invocations. Validates owner/repo operands (no NUL, no whitespace, no leading `-`, no flag injection), and emits deterministic `gh api --method POST/PATCH ... --field title=... --field body=...` argument arrays. The builder never constructs a URL from unvalidated user input; the endpoint pattern is assembled from validated, typed fields only.
 - `evaluateGitPullRequestEffectivePolicy(decision, context, inputs)` — the effective policy outcome for a specific PR target, resolving a `constrained` decision's constraints against the target branch (mirrors `evaluateGitPublishEffectivePolicy`).
@@ -117,7 +117,7 @@ The policy evaluator (`evaluateGitPolicy`) selects a rule by `actionKind`, then 
 
 The default pack is fail-closed: all action kinds not explicitly covered by a rule fall through to the `defaultRule: { decision: "blocked" }`. Governed PR delivery is only ever evaluated when `KEIKO_GIT_DELIVERY_ENABLED` is set to a truthy value in the server environment (reusing the existing `isGitDeliveryTrusted` capability gate from capability.ts); the default is false.
 
-Force-push for a PR update (e.g. force-updating the head branch after a rebase) is out of scope for this slice. The PR gateway has no force operand; any head-branch force push must use the ADR-0075 publish gateway with a future explicit policy path.
+Force-push for a PR update (e.g. force-updating the head branch after a rebase) is out of scope for this slice. The PR gateway has no force operand; any head-branch force push must use the ADR-0085 publish gateway with a future explicit policy path.
 
 ### D7 — A new sibling card GovernedPullRequestCard.tsx, not an extension of GovernedGitFlowCard
 
@@ -157,7 +157,7 @@ These tests run in the `ci` job (the required gating check) and require no live 
 
 ### Negative
 
-- Shelling `gh api` adds a new subprocess dependency. Unlike `git`, `gh` must be separately installed and authenticated. If `gh` is absent or unauthenticated, the PR gateway will produce an `internal-error` or `permission-denied` at execution time; there is no pre-flight check for `gh` availability (reachability is classified at execution time, consistent with ADR-0075's treatment of remote availability).
+- Shelling `gh api` adds a new subprocess dependency. Unlike `git`, `gh` must be separately installed and authenticated. If `gh` is absent or unauthenticated, the PR gateway will produce an `internal-error` or `permission-denied` at execution time; there is no pre-flight check for `gh` availability (reachability is classified at execution time, consistent with ADR-0085's treatment of remote availability).
 - A new `"governedPullRequest"` window kind in `WindowsRegistry` adds two new registration entries (descriptor meta + window renderer), maintaining the same registration overhead as the existing governed-git window.
 - Metadata synthesis (`synthesizePullRequestMetadata`) produces deterministic drafts from a small vocabulary. Teams with non-conventional branch-name patterns or uncommon area-token sets will get less useful title suggestions. The draft is always user-editable; the synthesis is advisory.
 
@@ -195,19 +195,19 @@ These tests run in the `ci` job (the required gating check) and require no live 
 
 ## Related
 
-- ADR-0070: Governed Git delivery contracts (PR input shapes, execution error codes, recovery vocabulary reused unchanged; provider-neutral PR state interfaces reused)
-- ADR-0071: Governed Git mutation execution kernel (preflight pr-create/pr-update → `preflightNoLocalPrecondition` unchanged; lifecycle result shape reused)
-- ADR-0072: Governed Git approval and preview surface (read-only BFF preview pattern; `isGitDeliveryTrusted` gate reused; action-sheet recovery vocabulary reused)
-- ADR-0073: Governed Git mutation evidence ledger (`recordGitDeliveryMutationEvidence` / `buildGitDeliveryEvidenceRecord` pr-create/pr-update projection reused)
-- ADR-0074: Governed local Git flows (GovernedGitFlowCard extended with "PR" launch button in Publish section)
-- ADR-0075: Governed remote publish gateway (parallel gateway pattern mirrored; publish gateway unchanged)
+- ADR-0080: Governed Git delivery contracts (PR input shapes, execution error codes, recovery vocabulary reused unchanged; provider-neutral PR state interfaces reused)
+- ADR-0081: Governed Git mutation execution kernel (preflight pr-create/pr-update → `preflightNoLocalPrecondition` unchanged; lifecycle result shape reused)
+- ADR-0082: Governed Git approval and preview surface (read-only BFF preview pattern; `isGitDeliveryTrusted` gate reused; action-sheet recovery vocabulary reused)
+- ADR-0083: Governed Git mutation evidence ledger (`recordGitDeliveryMutationEvidence` / `buildGitDeliveryEvidenceRecord` pr-create/pr-update projection reused)
+- ADR-0084: Governed local Git flows (GovernedGitFlowCard extended with "PR" launch button in Publish section)
+- ADR-0085: Governed remote publish gateway (parallel gateway pattern mirrored; publish gateway unchanged)
 - ADR-0019: Modular Package Architecture (leaf-package rule; dependency direction; `arch:check`; god-module threshold)
 - ADR-0051: Design System visual-regression and acceptance gate (globals.css untouched; inline CSS vars only)
 - ADR-0043: Enforced Execution Isolation (sandbox network policy; `gh api` uses `inherit` network, same as push)
 - Issue #477: GitHub-first pull request command center and metadata orchestration (this ADR)
 - Issue #478: Merge governance (next child; extends provider execution; NOT in this slice)
 - Issue #470: Epic — governed end-to-end Git delivery
-- ADR-0077: Governed merge gateway (downstream merge authority and protected-branch enforcement)
+- ADR-0087: Governed merge gateway (downstream merge authority and protected-branch enforcement)
 
 ## Date
 

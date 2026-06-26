@@ -34,6 +34,20 @@ export type {
   CommandTaskRunResult,
   CommandRunnerEventKind,
   CommandRunnerEvent,
+  // Issue #1388 (ADR-0070) — container engine detection + governed execution wire types.
+  ContainerEngineId,
+  ContainerEngineState,
+  ContainerEngineUnavailableReason,
+  ContainerEngineStatus,
+  ContainerCapabilityResponse,
+  ContainerTaskKind,
+  ContainerTask,
+  ContainerTaskCatalog,
+  ContainerRunRequest,
+  ContainerFailureReason,
+  ContainerRunResult,
+  ContainerRunnerEventKind,
+  ContainerRunnerEvent,
 } from "@oscharko-dev/keiko-contracts";
 
 export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";

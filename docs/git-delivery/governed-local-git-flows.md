@@ -2,13 +2,13 @@
 
 This document describes the first end-user-visible governed **local** Git write flows introduced in
 Issue #475 (Epic #470) and defined by
-[ADR-0074](../adr/ADR-0074-governed-local-git-flows-and-commit-intent.md). It is written for engineers
+[ADR-0084](../adr/ADR-0084-governed-local-git-flows-and-commit-intent.md). It is written for engineers
 extending the delivery surface and for reviewers verifying that local branch and commit creation
 stay governed, content-free, and impossible to perform outside the kernel.
 
 It builds on the contract surface from Issue #471
-([ADR-0070](../adr/ADR-0070-governed-git-delivery-contracts.md)), the execution and preflight kernel
-from Issue #472 ([ADR-0071](../adr/ADR-0071-governed-git-mutation-execution-kernel.md), see
+([ADR-0080](../adr/ADR-0080-governed-git-delivery-contracts.md)), the execution and preflight kernel
+from Issue #472 ([ADR-0081](../adr/ADR-0081-governed-git-mutation-execution-kernel.md), see
 [governed-git-execution-kernel.md](governed-git-execution-kernel.md)), the approval and preview
 surface from Issue #473 ([governed-git-approval-surface.md](governed-git-approval-surface.md)), and the
 evidence ledger from Issue #474 ([governed-git-evidence-ledger.md](governed-git-evidence-ledger.md)).

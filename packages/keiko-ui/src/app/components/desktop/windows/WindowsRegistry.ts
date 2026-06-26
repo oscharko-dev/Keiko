@@ -16,6 +16,11 @@ export type WindowType =
   | "browser"
   | "terminal"
   | "commands"
+  // Issue #1388 (ADR-0070) — Container engine status surface. A read-mostly status card: probes the
+  // host container engine on demand and, when available, exposes the server-frozen diagnostic task
+  // catalog + a governed run control. With no engine it shows the structured unavailable state and
+  // never blocks the rest of Keiko. No durable state of its own (capability is re-probed per mount).
+  | "containerStatus"
   | "review"
   | "agents"
   | "integ"
@@ -283,6 +288,20 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
       // Issue #1387 — the command runner discovers test/build/run tasks from the project's package
       // scripts. The window only needs a project path (acts as projectId); tasks are picked per run.
       { key: "projectPath", label: "Project path", type: "text", def: "" },
+    ],
+  },
+  containerStatus: {
+    title: "Containers",
+    icon: "cube",
+    desc: "Container engine status & diagnostics",
+    w: 460,
+    h: 320,
+    min: { w: 300, h: 220 },
+    tiny: { w: 250, h: 160 },
+    config: [
+      // Issue #1388 — the status surface probes the host container engine on demand. An optional
+      // project path scopes the allowlisted diagnostic catalog; with no engine it degrades gracefully.
+      { key: "projectPath", label: "Project path", type: "text", def: "", optional: true },
     ],
   },
   review: {

@@ -2,16 +2,16 @@
 
 This document describes the governed Git mutation evidence ledger, audit export, and recovery
 metadata introduced in Issue #474 (Epic #470) and defined by
-[ADR-0073](../adr/ADR-0073-governed-git-mutation-evidence-ledger.md). It is written for engineers
+[ADR-0083](../adr/ADR-0083-governed-git-mutation-evidence-ledger.md). It is written for engineers
 wiring the execution slices (#476–#478) into the ledger, for operators consuming the audit export,
 and for reviewers verifying that Git write authority in Keiko is never a black box and never leaks a
 secret.
 
 ## 1. Overview
 
-Issue #471 (ADR-0070) defined the typed contract surface, Issue #472 (ADR-0071) built the execution
+Issue #471 (ADR-0080) defined the typed contract surface, Issue #472 (ADR-0081) built the execution
 kernel that drives every mutation through one repeatable lifecycle and returns a structured
-`GitMutationLifecycleResult`, and Issue #473 (ADR-0072) built the approval and preview presentation
+`GitMutationLifecycleResult`, and Issue #473 (ADR-0082) built the approval and preview presentation
 layer. Those layers produce everything a governed delivery needs but persist nothing.
 
 This slice is the **durable record**. For every terminal outcome of a governed Git mutation —

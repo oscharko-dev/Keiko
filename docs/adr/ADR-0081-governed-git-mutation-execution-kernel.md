@@ -1,4 +1,4 @@
-# ADR-0071: Governed Git Mutation Execution Kernel
+# ADR-0081: Governed Git Mutation Execution Kernel
 
 ## Status
 
@@ -7,7 +7,7 @@ Proposed
 ## Context
 
 Epic #470 turns Keiko's read-only relationship to Git into a governed, end-to-end delivery platform.
-Issue #471 (ADR-0070) delivered the typed contract surface: action kinds, a risk taxonomy, the
+Issue #471 (ADR-0080) delivered the typed contract surface: action kinds, a risk taxonomy, the
 lifecycle envelope, policy packs with a deterministic `evaluateGitPolicy`, and provider-neutral
 interfaces. Those are pure data and validators in the `keiko-contracts` leaf — they describe _what a
 governed action is_, not _how it executes_.
@@ -209,7 +209,7 @@ the orchestrator command union as local-only keeps #472 focused while leaving a 
 
 ## Related
 
-- ADR-0070: Governed Git delivery contracts (the contract surface this kernel consumes)
+- ADR-0080: Governed Git delivery contracts (the contract surface this kernel consumes)
 - ADR-0019: Modular Package Architecture (keiko-tools as the single spawn boundary; leaf rules)
 - ADR-0018: Terminal allowlist (read-only Git baseline being preserved)
 - ADR-0043: Enforced Execution Isolation (the spawn-boundary enforcement model reused here)

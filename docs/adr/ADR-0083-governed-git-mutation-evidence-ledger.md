@@ -1,4 +1,4 @@
-# ADR-0073: Governed Git Mutation Evidence Ledger
+# ADR-0083: Governed Git Mutation Evidence Ledger
 
 ## Status
 
@@ -7,9 +7,9 @@ Accepted
 ## Context
 
 Epic #470 turns Keiko's read-only relationship to Git into a governed, end-to-end delivery
-platform. Issue #471 (ADR-0070) delivered the typed contract surface. Issue #472 (ADR-0071) built
+platform. Issue #471 (ADR-0080) delivered the typed contract surface. Issue #472 (ADR-0081) built
 the execution kernel that drives every mutation through one repeatable lifecycle and returns a
-structured `GitMutationLifecycleResult`. Issue #473 (ADR-0072) built the approval and preview
+structured `GitMutationLifecycleResult`. Issue #473 (ADR-0082) built the approval and preview
 presentation layer.
 
 Those three layers produce everything needed for a governed delivery, but they do not persist it.
@@ -20,7 +20,7 @@ packet.**
 
 Six forces shape the design:
 
-**Force 1 — Completeness over success-only.** The existing `GitMutationJournal` (ADR-0071, D5)
+**Force 1 — Completeness over success-only.** The existing `GitMutationJournal` (ADR-0081, D5)
 records only succeeded outcomes for idempotency. Audit coverage requires the opposite semantics:
 every terminal outcome — especially failures and blocks — must be recorded, because a block or
 policy denial is as auditable an event as a success. The two concerns are disjoint and must remain
@@ -291,7 +291,7 @@ worth more than the discipline cost, and six is a fixed, small set for a mature 
   breaks the content-free guarantee that the contract envelope, the kernel snapshot, and the
   action-sheet projection all hold. It would widen the confidentiality boundary at the persistence
   layer — precisely where it should be narrowest. The existing contracts deliberately do not parse
-  stderr for this reason (ADR-0071, D4 / Alternative 3).
+  stderr for this reason (ADR-0081, D4 / Alternative 3).
 - **Why rejected**: The content-free constraint is a hard invariant of the governed delivery epic.
   Richer diagnostics can be derived from typed failure category and disposition without raw text;
   any further detail is an operator concern, not a ledger concern.
@@ -321,11 +321,11 @@ worth more than the discipline cost, and six is a fixed, small set for a mature 
 
 ## Related
 
-- ADR-0070: Governed Git delivery contracts (action kinds, risk taxonomy, lifecycle envelope,
+- ADR-0080: Governed Git delivery contracts (action kinds, risk taxonomy, lifecycle envelope,
   `GitDeliveryEvidenceRef`, `GitDeliveryRecoveryStrategyHint`)
-- ADR-0071: Governed Git mutation execution kernel (`GitMutationLifecycleResult`,
+- ADR-0081: Governed Git mutation execution kernel (`GitMutationLifecycleResult`,
   `GitMutationJournal`, `GitMutationOutcome`, failure taxonomy — the projection source)
-- ADR-0072: Governed Git approval and preview surface (`GitDeliveryRecoveryActionHint`,
+- ADR-0082: Governed Git approval and preview surface (`GitDeliveryRecoveryActionHint`,
   `GitDeliveryRemediationClass`, `GitDeliveryRecoveryHint` — reused vocabulary)
 - ADR-0019: Modular Package Architecture (leaf-package rules; dependency direction contracts ←
   tools ← server; `keiko-contracts` must not import `keiko-tools`)

@@ -5,7 +5,7 @@ longer a raw transport call: it is a controlled publish workflow with explicit p
 enforcement, and recovery semantics. This is the point where local quality meets shared-team risk, so
 the controls become stricter, not looser.
 
-See ADR-0075 for the design rationale and the boundary decisions.
+See ADR-0085 for the design rationale and the boundary decisions.
 
 ## Architecture
 

@@ -1,6 +1,6 @@
 # Governed GitHub Pull Request Command Center (Issue #477)
 
-Epic #470 · ADR-0076 · builds on the #476 governed remote publish gateway.
+Epic #470 · ADR-0086 · builds on the #476 governed remote publish gateway.
 
 ## Purpose
 
@@ -25,7 +25,7 @@ binary, output shape, failure taxonomy).
 | server       | `keiko-server/src/gitDelivery/prExecution.ts` + `prRoutes.ts`               | `POST /api/git-delivery/pr/preview` (read-only metadata + readiness + recommendation + policy) and `POST /api/git-delivery/pr/execute` (governed create/update + evidence). Reuses the policy/evidence/capability gate. Default `KEIKO_DEFAULT_PR_POLICY_PACK`.                                                                                                                                                                                                                                                                                                  |
 | ui           | `keiko-ui/.../cards/GovernedPullRequestCard.tsx`                            | The PR command center: an editable metadata draft, the readiness panel, the recommendation, reviewer/label/linkage suggestions, and the open/update actions. Inline styles via CSS custom properties (globals.css untouched). Outcome conveyed by text + icon, never colour alone.                                                                                                                                                                                                                                                                               |
 
-## Transport and the token boundary (ADR-0076 D2)
+## Transport and the token boundary (ADR-0086 D2)
 
 The Node adapter shells `gh api` (no `@octokit` npm dependency). The endpoint allowlist permits only:
 
@@ -37,7 +37,7 @@ The Node adapter shells `gh api` (no `@octokit` npm dependency). The endpoint al
 There is **no** merge, delete, or project-board endpoint in the allowlist (merge is the separate #478).
 `gh` authenticates itself; the Keiko process never reads or stores the GitHub token.
 
-## Content-free guarantee (ADR-0076 D3)
+## Content-free guarantee (ADR-0086 D3)
 
 PR title and body strings flow command → adapter → GitHub and command → UI (for the editable draft). They
 **never** enter the evidence record: the ledger stores only `titleByteLength` / `bodyByteLength` (already
@@ -45,7 +45,7 @@ defined on `GitDeliveryPrCreateInputs` / `GitDeliveryPrUpdateInputs`). `synthesi
 accepts no file paths, no diff content, and no commit message bodies — only counts, coarse area tokens,
 typed enums, and branch names — so the user-editable draft it produces is a derivation, not raw content.
 
-## Readiness ≠ merge-readiness (ADR-0076 D4)
+## Readiness ≠ merge-readiness (ADR-0086 D4)
 
 The readiness model answers two distinct questions the existing preflight and provider types do not
 express together:
@@ -58,7 +58,7 @@ Readiness is a **pure derivation** in the contracts leaf, fed by the provider-st
 in the snapshot preflight (which has no network access). Merge-readiness (checks passing, approvals
 satisfied) belongs to the #478 merge-governance slice.
 
-## Policy (ADR-0076 D6)
+## Policy (ADR-0086 D6)
 
 `KEIKO_DEFAULT_PR_POLICY_PACK` permits `pr-create` / `pr-update` whose **base** branch is a legitimate
 integration target (`dev`, `main`, `release/*`, `feat/*`) within the `protected-or-merge` ceiling; a base

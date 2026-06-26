@@ -40,6 +40,10 @@ import {
 } from "./store/index.js";
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
+import {
+  createContainerRunnerManager,
+  type ContainerRunnerManager,
+} from "./runtime/containerRunner.js";
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { createBffMemoryVault } from "./memory-handlers.js";
@@ -136,6 +140,10 @@ export interface UiHandlerDeps {
   // exercise /api/commands/* keep their fixtures unchanged; production wiring creates one per BFF and
   // injects the UI store for the projectId → workspaceRoot lookup plus package-script discovery.
   readonly commandRunner?: CommandRunnerManager | undefined;
+  // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. Optional so
+  // existing tests that do not exercise /api/containers/* keep their fixtures unchanged; production
+  // wiring creates one per BFF and injects the UI store for the projectId → workspaceRoot lookup.
+  readonly containerRunner?: ContainerRunnerManager | undefined;
   // ADR-0017 — browser tool session manager (BYO Chrome over CDP). Optional so existing tests
   // that do not exercise /api/browser/* keep their fixtures unchanged.
   readonly browser?: BrowserSessionManager | undefined;
@@ -611,6 +619,26 @@ function buildCommandRunner(options: {
   });
 }
 
+// Issue #1388 — the container runner reuses the same store + evidence + live-redactor wiring as the
+// command runner so its content-free run audit inherits the identical secret-shape scrubbing. The
+// active engine probe and the frozen-argv container run both compose the single runCommand boundary.
+function buildContainerRunner(options: {
+  readonly store: UiStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly env: EnvSource;
+  readonly liveRedactor: Redactor;
+}): ContainerRunnerManager {
+  return createContainerRunnerManager({
+    store: options.store,
+    evidenceStore: options.evidenceStore,
+    processEnv: options.env,
+    redactor: (value: string): string => {
+      const redacted = options.liveRedactor(value);
+      return typeof redacted === "string" ? redacted : value;
+    },
+  });
+}
+
 // ADR-0019 direction rule 3c: the tools package cannot import src/audit. The BFF injects the
 // cost-class resolver and a side-file writer that closes over the resolved evidenceDir + the
 // nodeWorkspaceFs realpath-containment port, so the browser session manager stays self-contained
@@ -696,6 +724,7 @@ function seedInitialProject(
 interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly commandRunner: CommandRunnerManager;
+  readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
 }
@@ -715,6 +744,12 @@ function buildPeripherals(
       liveRedactor,
     }),
     commandRunner: buildCommandRunner({
+      store: uiStore,
+      evidenceStore,
+      env: options.env,
+      liveRedactor,
+    }),
+    containerRunner: buildContainerRunner({
       store: uiStore,
       evidenceStore,
       env: options.env,

@@ -2,14 +2,14 @@
 
 This document describes the governed Git mutation execution kernel introduced in Issue #472
 (Epic #470) and defined by
-[ADR-0071](../adr/ADR-0071-governed-git-mutation-execution-kernel.md). It is written for engineers
+[ADR-0081](../adr/ADR-0081-governed-git-mutation-execution-kernel.md). It is written for engineers
 building the later delivery slices (#473 and beyond) on top of the kernel, and for reviewers
 verifying that local Git write authority stays narrow and governed.
 
 ## 1. Overview
 
 The kernel is the single execution authority for governed **local** Git writes. It consumes the
-typed contracts from Issue #471 (ADR-0070) and drives every supported mutation through one repeatable
+typed contracts from Issue #471 (ADR-0080) and drives every supported mutation through one repeatable
 lifecycle:
 
 ```

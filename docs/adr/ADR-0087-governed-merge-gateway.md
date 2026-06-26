@@ -1,4 +1,4 @@
-# ADR-0077: Governed Merge Gateway, Protected-Branch Enforcement, and Guided Recovery
+# ADR-0087: Governed Merge Gateway, Protected-Branch Enforcement, and Guided Recovery
 
 ## Status
 
@@ -8,29 +8,29 @@ Accepted
 
 Epic #470 has built the governed Git delivery stack through seven prior slices:
 
-- ADR-0070 (#471): typed contract surface — action kinds, risk taxonomy, lifecycle envelope, policy evaluator. The `merge` action kind, `GitDeliveryMergeInputs`, `GitDeliveryMergeStrategyHint`, and the `GitDeliveryMergeBlockReason` taxonomy were defined here but never wired into an execution authority.
-- ADR-0071 (#472): mutation kernel — single local execution authority, preflight evaluators (`merge` already maps to `preflightNoLocalPrecondition`), narrow local adapter port.
-- ADR-0072 (#473): approval and preview presentation layer — content-free action sheet, BFF projection route.
-- ADR-0073 (#474): evidence ledger — bounded append-only record for every terminal outcome, audit-export route. Its `buildGitDeliveryEvidenceRecord` is generic over the action kind (the `merge` envelope flows through unchanged).
-- ADR-0074 (#475): first end-user-visible local flows — branch / staging / commit with interactive preview and commit-intent composition.
-- ADR-0075 (#476): governed publish gateway — dedicated remote push authority with its own allowlist, rejection taxonomy, and policy pack.
-- ADR-0076 (#477): governed pull request gateway — dedicated `gh api` PR-orchestration authority (create / update / draft-toggle), readiness model, rejection taxonomy. Explicitly deferred merge execution to this slice.
+- ADR-0080 (#471): typed contract surface — action kinds, risk taxonomy, lifecycle envelope, policy evaluator. The `merge` action kind, `GitDeliveryMergeInputs`, `GitDeliveryMergeStrategyHint`, and the `GitDeliveryMergeBlockReason` taxonomy were defined here but never wired into an execution authority.
+- ADR-0081 (#472): mutation kernel — single local execution authority, preflight evaluators (`merge` already maps to `preflightNoLocalPrecondition`), narrow local adapter port.
+- ADR-0082 (#473): approval and preview presentation layer — content-free action sheet, BFF projection route.
+- ADR-0083 (#474): evidence ledger — bounded append-only record for every terminal outcome, audit-export route. Its `buildGitDeliveryEvidenceRecord` is generic over the action kind (the `merge` envelope flows through unchanged).
+- ADR-0084 (#475): first end-user-visible local flows — branch / staging / commit with interactive preview and commit-intent composition.
+- ADR-0085 (#476): governed publish gateway — dedicated remote push authority with its own allowlist, rejection taxonomy, and policy pack.
+- ADR-0086 (#477): governed pull request gateway — dedicated `gh api` PR-orchestration authority (create / update / draft-toggle), readiness model, rejection taxonomy. Explicitly deferred merge execution to this slice.
 
 Issue #478 adds the **governed merge layer**: the highest-risk delivery action. It turns a review-ready pull request into a merged change through an explicit, governed workflow that reasons about merge readiness (required checks, approvals, branch protection, conflicts, merge-queue position), enforces policy and final approval *before* the merge call, supports only repo-and-provider-compatible merge strategies, surfaces precise structured blockers and recovery advice for blocked or failed merges, and records content-free evidence for every terminal outcome. Merge is treated as a governed release decision, never a convenience click.
 
 Seven forces constrain the design:
 
-**Force 1 — Separate merge authority, not a PR-gateway or publish-gateway extension.** The ADR-0076 PR gateway shells `gh api` against the PR create / update / draft-toggle endpoints; its allowlist explicitly excludes merge and delete. The ADR-0075 publish gateway shells `git push`. A merge operation shells a different `gh api` REST call (`PUT /repos/{owner}/{repo}/pulls/{number}/merge`) with a different failure taxonomy (405 not-mergeable, 409 head-modified, 422 required-status-checks). Merging this into either gateway would erode their narrow-port and one-purpose-allowlist invariants. The merge gateway is a third parallel execution authority with its own narrow port, its own dedicated allowlist, and its own GitHub-error classifier.
+**Force 1 — Separate merge authority, not a PR-gateway or publish-gateway extension.** The ADR-0086 PR gateway shells `gh api` against the PR create / update / draft-toggle endpoints; its allowlist explicitly excludes merge and delete. The ADR-0085 publish gateway shells `git push`. A merge operation shells a different `gh api` REST call (`PUT /repos/{owner}/{repo}/pulls/{number}/merge`) with a different failure taxonomy (405 not-mergeable, 409 head-modified, 422 required-status-checks). Merging this into either gateway would erode their narrow-port and one-purpose-allowlist invariants. The merge gateway is a third parallel execution authority with its own narrow port, its own dedicated allowlist, and its own GitHub-error classifier.
 
 **Force 2 — Readiness must be evaluated and visible before execution, not discovered by attempting the merge.** AC1 requires that merge cannot execute until required policy, approval, and readiness conditions are satisfied *and visible to the user*. The authoritative source of readiness (which checks are required, which are passing, how many approvals are present, whether the base advanced, whether a merge queue is active) is the provider, not the local worktree. The gateway therefore reads a content-free merge-readiness snapshot from the provider *before* the merge call, derives a structured blocker list the user can see, and refuses to call the merge endpoint when a blocking blocker is present — in addition to the provider's own server-side enforcement, which remains the ultimate authority.
 
 **Force 3 — Allowed merge strategy is data, not a UI default.** AC2 requires the permitted merge strategy to be derived from repo policy and provider capability, never an implicit UI default. The contract layer derives the eligible strategy set as the intersection of the strategies the deployment policy permits and the strategies the provider repository allows, and a requested strategy outside that set is a structured block (`strategy-unavailable`), never a silent substitution.
 
-**Force 4 — Provider neutrality at the contract layer.** The ADR-0070 rule — no provider field names or values in keiko-contracts — must hold. GitHub's `mergeable_state` enumeration (`clean`, `blocked`, `dirty`, `behind`, `unstable`, `draft`, `unknown`), its `merge_method` values, and its HTTP error envelope must not appear in the contracts leaf. The neutral merge-readiness model and rejection taxonomy live in contracts; the GitHub-specific `mergeable_state` mapper and error classifier live in keiko-tools.
+**Force 4 — Provider neutrality at the contract layer.** The ADR-0080 rule — no provider field names or values in keiko-contracts — must hold. GitHub's `mergeable_state` enumeration (`clean`, `blocked`, `dirty`, `behind`, `unstable`, `draft`, `unknown`), its `merge_method` values, and its HTTP error envelope must not appear in the contracts leaf. The neutral merge-readiness model and rejection taxonomy live in contracts; the GitHub-specific `mergeable_state` mapper and error classifier live in keiko-tools.
 
-**Force 5 — Content-free invariant and evidence reuse.** A merge carries no user-authored free content (no title/body): its content-free inputs are the opaque PR external id, the typed strategy enum, and the delete-branch flag (`GitDeliveryMergeInputs`, already defined in ADR-0070). The gateway produces a kernel-shaped `GitMutationLifecycleResult` so the #474 evidence builder records the merge with no schema change. No new evidence field is required.
+**Force 5 — Content-free invariant and evidence reuse.** A merge carries no user-authored free content (no title/body): its content-free inputs are the opaque PR external id, the typed strategy enum, and the delete-branch flag (`GitDeliveryMergeInputs`, already defined in ADR-0080). The gateway produces a kernel-shaped `GitMutationLifecycleResult` so the #474 evidence builder records the merge with no schema change. No new evidence field is required.
 
-**Force 6 — Final approval semantics belong to merge.** ADR-0076 deliberately kept the default PR policy pack `constrained` (not `approval-gated`), noting that the approval gate for *merging* is this slice. The default merge policy pack therefore makes `merge` `approval-gated`: a merge cannot proceed without a satisfied, unexpired approval token. This is the explicit high-risk confirmation AC1 requires; the gateway fully supports the `approval-gated` → `approval-required` path the kernel already implements.
+**Force 6 — Final approval semantics belong to merge.** ADR-0086 deliberately kept the default PR policy pack `constrained` (not `approval-gated`), noting that the approval gate for *merging* is this slice. The default merge policy pack therefore makes `merge` `approval-gated`: a merge cannot proceed without a satisfied, unexpired approval token. This is the explicit high-risk confirmation AC1 requires; the gateway fully supports the `approval-gated` → `approval-required` path the kernel already implements.
 
 **Force 7 — Guided recovery for blocked and failed merges.** AC3 requires precise blocker and recovery information. Every neutral blocker code and every neutral rejection reason maps (via exhaustive tables reusing the #473/#474 recovery vocabulary) to a recovery disposition (`retryable` / `user-fixable` / `policy-forbidden` / `none`) and, where one fits cleanly, a recovery action hint. Branch deletion after a successful merge is honoured as a guarded, non-fatal best-effort follow-up: a failed deletion never fails the merge, and a protected head branch is never deleted absent the `protected-branch-delete` provider capability.
 
@@ -84,7 +84,7 @@ The local kernel, the local adapter, the publish gateway, and the PR gateway are
 
 ### D7 — A new sibling card GovernedMergeCard.tsx, not an extension of GovernedGitFlowCard or GovernedPullRequestCard
 
-`GovernedMergeCard.tsx` is a new sibling card under a new `"governedMerge"` window kind. Rationale mirrors ADR-0076 D7: card scope/size (the merge surface — strategy selector, readiness/blocker panel, final high-risk approval affordance, rejection/recovery display — is independent of the PR metadata editor), lifecycle independence (merge is downstream of review-ready), and test separability. It is launched from the PR card's review-ready state. `globals.css` is **not** modified (ADR-0051 gate); all styling uses inline CSS custom properties.
+`GovernedMergeCard.tsx` is a new sibling card under a new `"governedMerge"` window kind. Rationale mirrors ADR-0086 D7: card scope/size (the merge surface — strategy selector, readiness/blocker panel, final high-risk approval affordance, rejection/recovery display — is independent of the PR metadata editor), lifecycle independence (merge is downstream of review-ready), and test separability. It is launched from the PR card's review-ready state. `globals.css` is **not** modified (ADR-0051 gate); all styling uses inline CSS custom properties.
 
 ### D8 — AC5 test strategy: fake-adapter unit/integration tests gate CI; Playwright e2e covers preview/blocked/disabled
 
@@ -101,7 +101,7 @@ Contract tests prove the pure readiness/strategy/rejection derivations. keiko-to
 
 ### Negative
 
-- A third `gh api`-shelling executor adds subprocess surface. `gh` must be installed and authenticated; absence is classified at execution time (no pre-flight `gh` probe), consistent with ADR-0075/0076.
+- A third `gh api`-shelling executor adds subprocess surface. `gh` must be installed and authenticated; absence is classified at execution time (no pre-flight `gh` probe), consistent with ADR-0085/0086.
 - Reading readiness before merge adds one (occasionally two) extra `gh api` reads per merge attempt. This is the cost of making readiness visible and gating on it (AC1) rather than discovering it from a failed merge.
 - A new `"governedMerge"` window kind adds two registry entries (descriptor meta + renderer), the same overhead as the PR window.
 
@@ -122,7 +122,7 @@ Contract tests prove the pure readiness/strategy/rejection derivations. keiko-to
 ### Alternative 2: Extend the PR gateway (git-pr-gateway.ts) to add a merge method
 
 - **Pros**: One gateway; reuses the PR `gh api` adapter infrastructure.
-- **Cons**: The PR allowlist explicitly excludes merge/delete (ADR-0076 D1); the PR port has create/update methods only; the merge failure taxonomy (405/409/422-required-checks) is distinct. Adding merge would erode the PR gateway's no-merge invariant and widen its allowlist.
+- **Cons**: The PR allowlist explicitly excludes merge/delete (ADR-0086 D1); the PR port has create/update methods only; the merge failure taxonomy (405/409/422-required-checks) is distinct. Adding merge would erode the PR gateway's no-merge invariant and widen its allowlist.
 - **Why rejected**: Force 1. Merge is a structurally independent operation with its own endpoint, allowlist, and taxonomy.
 
 ### Alternative 3: Encode base-branch and strategy constraints in the merge policy pack instead of the readiness layer
@@ -135,16 +135,16 @@ Contract tests prove the pure readiness/strategy/rejection derivations. keiko-to
 
 - **Pros**: Type-safe; no subprocess.
 - **Cons**: Adds supply-chain surface and makes Keiko the token custodian, breaking the token-isolation invariant.
-- **Why rejected**: Force 4 / ADR-0076 Alternative 2. The `gh api` subprocess preserves token isolation at the process boundary.
+- **Why rejected**: Force 4 / ADR-0086 Alternative 2. The `gh api` subprocess preserves token isolation at the process boundary.
 
 ## Related
 
-- ADR-0070: Governed Git delivery contracts (`merge` action kind, `GitDeliveryMergeInputs`, `GitDeliveryMergeStrategyHint`, `GitDeliveryMergeBlockReason`, provider-state interfaces reused unchanged)
-- ADR-0071: Governed Git mutation execution kernel (`merge` → `preflightNoLocalPrecondition` unchanged; lifecycle result shape reused)
-- ADR-0072: Governed Git approval and preview surface (read-only BFF preview pattern; `isGitDeliveryTrusted` gate reused)
-- ADR-0073: Governed Git mutation evidence ledger (`buildGitDeliveryEvidenceRecord` records the merge envelope unchanged)
-- ADR-0075: Governed remote publish gateway (parallel gateway pattern mirrored; publish gateway unchanged)
-- ADR-0076: Governed pull request gateway (parallel gateway pattern mirrored; PR gateway unchanged; merge was deferred to this slice)
+- ADR-0080: Governed Git delivery contracts (`merge` action kind, `GitDeliveryMergeInputs`, `GitDeliveryMergeStrategyHint`, `GitDeliveryMergeBlockReason`, provider-state interfaces reused unchanged)
+- ADR-0081: Governed Git mutation execution kernel (`merge` → `preflightNoLocalPrecondition` unchanged; lifecycle result shape reused)
+- ADR-0082: Governed Git approval and preview surface (read-only BFF preview pattern; `isGitDeliveryTrusted` gate reused)
+- ADR-0083: Governed Git mutation evidence ledger (`buildGitDeliveryEvidenceRecord` records the merge envelope unchanged)
+- ADR-0085: Governed remote publish gateway (parallel gateway pattern mirrored; publish gateway unchanged)
+- ADR-0086: Governed pull request gateway (parallel gateway pattern mirrored; PR gateway unchanged; merge was deferred to this slice)
 - ADR-0019: Modular Package Architecture (leaf-package rule; dependency direction; `arch:check`; god-module threshold)
 - ADR-0051: Design System visual-regression and acceptance gate (globals.css untouched; inline CSS vars only)
 - ADR-0043: Enforced Execution Isolation (sandbox network policy; `gh api` uses `inherit` network, same as push/PR)

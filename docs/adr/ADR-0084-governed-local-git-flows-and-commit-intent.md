@@ -1,4 +1,4 @@
-# ADR-0074: Governed Local Git Flows and Commit-Intent Composition
+# ADR-0084: Governed Local Git Flows and Commit-Intent Composition
 
 ## Status
 
@@ -8,10 +8,10 @@ Accepted
 
 Epic #470 has established the governed Git delivery foundation in three prior slices:
 
-- ADR-0070 (#471): typed contract surface — action kinds, risk taxonomy, lifecycle envelope, policy evaluator.
-- ADR-0071 (#472): mutation kernel — single execution authority (`runGitMutation`), preflight evaluators, narrow adapter port, no-shell spawn boundary.
-- ADR-0072 (#473): approval and preview presentation layer — content-free action sheet, BFF projection route.
-- ADR-0073 (#474): evidence ledger — bounded append-only record for every terminal outcome, audit-export route.
+- ADR-0080 (#471): typed contract surface — action kinds, risk taxonomy, lifecycle envelope, policy evaluator.
+- ADR-0081 (#472): mutation kernel — single execution authority (`runGitMutation`), preflight evaluators, narrow adapter port, no-shell spawn boundary.
+- ADR-0082 (#473): approval and preview presentation layer — content-free action sheet, BFF projection route.
+- ADR-0083 (#474): evidence ledger — bounded append-only record for every terminal outcome, audit-export route.
 
 Issue #475 assembles these layers into the first end-user-visible governed local write flows: branch creation and switching, staging and unstaging, and commit with interactive preview. It also introduces commit-intent composition — typed quality warnings and a deterministic suggested prefix derived from the staged changeset — without touching the Model Gateway.
 
@@ -78,11 +78,11 @@ This placement ensures the kernel remains a narrow execution primitive that know
 
 ### D4 — Content-free invariant is maintained by construction
 
-`GitCommitMessageValidation` returns only `GitCommitMessageViolationCode[]`, never a substring of the message. `GitCommitIntentAnalysis` returns typed codes, flags, and a scaffold string assembled from derived structural tokens — never the raw staged paths or diff content. `GitCommitChangeSummary` carries `areas` (top-level path segments, bounded, low-sensitivity structural tokens) and counts; no full file paths, no diff hunks, no commit message body. Evidence records for this flow carry the same content-free fields as the ledger already defines (ADR-0073 D3).
+`GitCommitMessageValidation` returns only `GitCommitMessageViolationCode[]`, never a substring of the message. `GitCommitIntentAnalysis` returns typed codes, flags, and a scaffold string assembled from derived structural tokens — never the raw staged paths or diff content. `GitCommitChangeSummary` carries `areas` (top-level path segments, bounded, low-sensitivity structural tokens) and counts; no full file paths, no diff hunks, no commit message body. Evidence records for this flow carry the same content-free fields as the ledger already defines (ADR-0083 D3).
 
 ### D5 — `branch-switch` is a governed kind, not a generic checkout
 
-`git switch` modifies HEAD, can trigger repository hooks, and is a mutation. Routing it through the governed surface means it is subject to the same preflight evaluation (D1), policy evaluation, evidence recording, and approval model as every other local mutation kind. The alternative — routing branch switching through the read-only terminal policy or through an ungoverned shell call — would create a mutation path outside the kernel's authority, which ADR-0071 D1 prohibits.
+`git switch` modifies HEAD, can trigger repository hooks, and is a mutation. Routing it through the governed surface means it is subject to the same preflight evaluation (D1), policy evaluation, evidence recording, and approval model as every other local mutation kind. The alternative — routing branch switching through the read-only terminal policy or through an ungoverned shell call — would create a mutation path outside the kernel's authority, which ADR-0081 D1 prohibits.
 
 ## Consequences
 
@@ -124,7 +124,7 @@ This placement ensures the kernel remains a narrow execution primitive that know
 ### Alternative 3: Route `branch-switch` through the read-only terminal policy
 
 - **Pros**: No contract change; no kernel extension; reuses the existing `isTerminalCommandAllowed` gate.
-- **Cons**: `git switch` is a mutation. Routing it through the read-only terminal allowlist would either require widening that allowlist (explicitly prohibited by ADR-0070 D7 and Force 6) or introduce an ungoverned execution path outside the kernel's authority (prohibited by ADR-0071 D1). Either path breaks a hard invariant of the governed delivery architecture.
+- **Cons**: `git switch` is a mutation. Routing it through the read-only terminal allowlist would either require widening that allowlist (explicitly prohibited by ADR-0080 D7 and Force 6) or introduce an ungoverned execution path outside the kernel's authority (prohibited by ADR-0081 D1). Either path breaks a hard invariant of the governed delivery architecture.
 - **Why rejected**: Both options violate documented hard invariants. Branch switching must be a governed kind, evidenced and policy-checked like every other local mutation.
 
 ### Alternative 4: Infer commit-message policy from the repository's `.commitlintrc`
@@ -137,14 +137,14 @@ This placement ensures the kernel remains a narrow execution primitive that know
 
 - **Pros**: Simpler server surface; one route per lifecycle phase instead of two.
 - **Cons**: Without a preview route, the UI cannot surface intent warnings, message-policy violations, or preflight findings before the user commits. The user discovers a policy block only after submitting — a poor experience for a governed surface. The preview route also keeps `validateGitCommitMessage` out of the kernel (where it does not belong, per D2).
-- **Why rejected**: The preview route is the architectural device that keeps policy validation outside the kernel while delivering feedback before execution. It is the same pattern as `POST /api/git-delivery/action-sheet` (ADR-0072 D2): read-only, projection only, no side effects.
+- **Why rejected**: The preview route is the architectural device that keeps policy validation outside the kernel while delivering feedback before execution. It is the same pattern as `POST /api/git-delivery/action-sheet` (ADR-0082 D2): read-only, projection only, no side effects.
 
 ## Related
 
-- ADR-0070: Governed Git delivery contracts (action kinds, risk taxonomy, lifecycle envelope — extended by one kind here)
-- ADR-0071: Governed Git mutation execution kernel (`runGitMutation`, preflight dispatch, adapter port — extended by one kind here)
-- ADR-0072: Governed Git approval and preview surface (action-sheet BFF pattern reused for preview route; `isGitDeliveryTrusted` gate reused)
-- ADR-0073: Governed Git mutation evidence ledger (`recordGitDeliveryMutationEvidence` reused for all five new routes)
+- ADR-0080: Governed Git delivery contracts (action kinds, risk taxonomy, lifecycle envelope — extended by one kind here)
+- ADR-0081: Governed Git mutation execution kernel (`runGitMutation`, preflight dispatch, adapter port — extended by one kind here)
+- ADR-0082: Governed Git approval and preview surface (action-sheet BFF pattern reused for preview route; `isGitDeliveryTrusted` gate reused)
+- ADR-0083: Governed Git mutation evidence ledger (`recordGitDeliveryMutationEvidence` reused for all five new routes)
 - ADR-0019: Modular Package Architecture (leaf-package rule; dependency direction contracts ← tools ← server; `arch:check` enforcement)
 - ADR-0018: Terminal allowlist (read-only git baseline preserved; `git switch` explicitly NOT added)
 - Issue #475: Governed local branch / staging / commit flows + commit-intent composition (this ADR)

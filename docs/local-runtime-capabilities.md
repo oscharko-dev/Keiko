@@ -44,6 +44,11 @@ remediation hints, but no listed tool is mandatory for the editor itself.
 - Container-backed workflows need Docker or Podman available on `PATH`; the capability detector
   does not contact the daemon or start containers.
 
+Container engines are additionally probed on demand via `GET /api/containers/capability` (an opt-in
+ACTIVE daemon probe, distinct from the metadata-only `container-engine` entries here); see
+[ADR-0070](adr/ADR-0070-container-execution-governance.md) and
+[`docs/container-runtime/security-notes.md`](container-runtime/security-notes.md).
+
 ## Safety Model
 
 Runtime detection is metadata-only:

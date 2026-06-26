@@ -1,4 +1,4 @@
-# ADR-0070: Governed Git Delivery Contracts
+# ADR-0080: Governed Git Delivery Contracts
 
 ## Status
 
@@ -289,7 +289,7 @@ Two enforcement mechanisms:
 **Mechanism 1 — Terminal policy immutability.** The terminal allowlist for `git` in
 `terminal-policy.ts` must not grow to include any mutating subcommand. The test file
 `terminal-policy.test.ts` gains a new `describe` block (`"AC5 — governed Git delivery boundary
-(ADR-0070)"`) that asserts `isTerminalCommandAllowed("git", [...])` returns `allowed: false` for the
+(ADR-0080)"`) that asserts `isTerminalCommandAllowed("git", [...])` returns `allowed: false` for the
 REAL underlying mutating/network commands each governed action kind maps to — not a vacuous
 kind-name loop. The covered invocations include:
 

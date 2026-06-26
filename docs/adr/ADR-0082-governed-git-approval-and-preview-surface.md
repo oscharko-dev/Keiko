@@ -1,4 +1,4 @@
-# ADR-0072: Governed Git Approval and Preview Surface
+# ADR-0082: Governed Git Approval and Preview Surface
 
 ## Status
 
@@ -7,9 +7,9 @@ Proposed
 ## Context
 
 Epic #470 turns Keiko's read-only relationship to Git into a governed, end-to-end delivery platform.
-Issue #471 (ADR-0070) delivered the typed contract surface: action kinds, a risk taxonomy, the
+Issue #471 (ADR-0080) delivered the typed contract surface: action kinds, a risk taxonomy, the
 lifecycle envelope, policy packs with a deterministic `evaluateGitPolicy`, and provider-neutral
-interfaces. Issue #472 (ADR-0071) built the execution and preflight kernel that consumes those
+interfaces. Issue #472 (ADR-0081) built the execution and preflight kernel that consumes those
 contracts and drives governed local Git writes through one repeatable lifecycle. Both layers are
 content-free and deterministic, but neither presents anything to an operator.
 
@@ -235,8 +235,8 @@ not the approval surface's (Force 2).
 
 ## Related
 
-- ADR-0070: Governed Git delivery contracts (the contract surface this projection consumes)
-- ADR-0071: Governed Git mutation execution kernel (the preflight and lifecycle facts this surface projects)
+- ADR-0080: Governed Git delivery contracts (the contract surface this projection consumes)
+- ADR-0081: Governed Git mutation execution kernel (the preflight and lifecycle facts this surface projects)
 - ADR-0019: Modular Package Architecture (leaf-package rules; the action-sheet module is a strict contract leaf)
 - Issue #473: Governed Git approval and preview surface (this ADR)
 - Issue #470: Epic — governed end-to-end Git delivery

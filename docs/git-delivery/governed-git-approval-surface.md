@@ -2,14 +2,14 @@
 
 This document describes the governed Git approval and preview surface introduced in Issue #473
 (Epic #470) and defined by
-[ADR-0072](../adr/ADR-0072-governed-git-approval-and-preview-surface.md). It is written for engineers
+[ADR-0082](../adr/ADR-0082-governed-git-approval-and-preview-surface.md). It is written for engineers
 building the later delivery slices on top of the surface, and for reviewers verifying that the surface
 stays a pure projection of trusted backend facts — never a second policy system, and never an
 execution path.
 
 It builds directly on the contract surface from Issue #471
-([ADR-0070](../adr/ADR-0070-governed-git-delivery-contracts.md)) and the execution and preflight
-kernel from Issue #472 ([ADR-0071](../adr/ADR-0071-governed-git-mutation-execution-kernel.md), see
+([ADR-0080](../adr/ADR-0080-governed-git-delivery-contracts.md)) and the execution and preflight
+kernel from Issue #472 ([ADR-0081](../adr/ADR-0081-governed-git-mutation-execution-kernel.md), see
 [governed-git-execution-kernel.md](governed-git-execution-kernel.md)).
 
 ## 1. Overview

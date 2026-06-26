@@ -23,6 +23,7 @@ import { CommandsWidget } from "./cards/CommandsWidget";
 import { GovernedGitFlowCard } from "./cards/GovernedGitFlowCard";
 import { GovernedPullRequestCard } from "./cards/GovernedPullRequestCard";
 import { GovernedMergeCard } from "./cards/GovernedMergeCard";
+import { ContainerStatusWidget } from "./cards/ContainerStatusWidget";
 import { ReviewWidget } from "./cards/ReviewWidget";
 import { AgentRunWidget, type AgentRunCfg } from "./cards/AgentRunWidget";
 import { IntegrationsWidget } from "./cards/IntegrationsWidget";
@@ -425,6 +426,14 @@ registerWindowRender("governedMerge", (cfg, ctx) => {
     str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
   const headBranchName = str(cfg, "headBranchName") ?? undefined;
   return <GovernedMergeCard projectId={projectId} headBranchName={headBranchName} />;
+});
+// Issue #1388 (ADR-0070) — container engine status surface. Always renders: the unavailable state
+// degrades gracefully and never blocks. An optional project path scopes the allowlisted catalog.
+registerWindowRender("containerStatus", (cfg) => {
+  const projectPath = str(cfg, "projectPath");
+  const props: { projectPath?: string } = {};
+  if (projectPath !== undefined) props.projectPath = projectPath;
+  return <ContainerStatusWidget {...props} />;
 });
 // uiux-fix F018 C110: a review window without a run ID was a dead end — the empty
 // state now offers an inline run-ID form, persisted via updateCfg like files/figma.
