@@ -41,6 +41,8 @@ export type { UseWorkspaceResult, ViewportWorld, WorkspaceApi };
 const WS_LS = "keiko.workspace.v4";
 const CONN_LS = "keiko.conns.v1";
 const VIEW_LS = "keiko.view";
+const WORKSPACE_STATE_API = "/api/workspace/state";
+const WORKSPACE_STATE_POLL_MS = 1_500;
 // Exported so the zoom controls in Workspace.tsx can disable themselves at the
 // clamp limits instead of swallowing clicks silently (audit C132/C361).
 export const MIN_ZOOM = 0.3;
@@ -363,28 +365,233 @@ interface UseHydrateArgs {
   readonly zc: MutableRefObject<number>;
 }
 
+interface WorkspaceSnapshot {
+  readonly wins: AppWindow[];
+  readonly conns: Connection[];
+}
+
+interface ServerWorkspaceSnapshot {
+  readonly revision: number;
+  readonly windows: readonly unknown[];
+  readonly connections: readonly unknown[];
+}
+
+function snapshotFromRaw(
+  windows: readonly unknown[],
+  connections: readonly unknown[],
+): WorkspaceSnapshot {
+  const wins = sanitizePersistedWindows(windows as readonly AppWindow[]);
+  return {
+    wins,
+    conns: sanitizePersistedConnections(connections as readonly Connection[], wins),
+  };
+}
+
+function readPersistedWorkspaceSnapshot(): {
+  readonly wins: AppWindow[];
+  readonly conns: Connection[];
+} {
+  let wins: AppWindow[] | null = null;
+  try {
+    wins = parsePersistedWindows(window.localStorage.getItem(WS_LS));
+  } catch {
+    wins = null;
+  }
+  const resolvedWins = wins ?? [];
+  try {
+    return {
+      wins: resolvedWins,
+      conns: parsePersistedConnections(window.localStorage.getItem(CONN_LS), resolvedWins),
+    };
+  } catch {
+    return { wins: resolvedWins, conns: [] };
+  }
+}
+
+async function fetchServerWorkspaceSnapshot(): Promise<ServerWorkspaceSnapshot | null> {
+  if (typeof fetch !== "function") return null;
+  try {
+    const response = await fetch(WORKSPACE_STATE_API, { headers: { Accept: "application/json" } });
+    if (!response.ok) return null;
+    const body: unknown = await response.json();
+    if (typeof body !== "object" || body === null || !("workspace" in body)) return null;
+    const workspace = (body as { readonly workspace?: unknown }).workspace;
+    if (typeof workspace !== "object" || workspace === null) return null;
+    const record = workspace as Record<string, unknown>;
+    if (
+      typeof record["revision"] !== "number" ||
+      !Array.isArray(record["windows"]) ||
+      !Array.isArray(record["connections"])
+    ) {
+      return null;
+    }
+    return {
+      revision: record["revision"],
+      windows: record["windows"],
+      connections: record["connections"],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function putServerWorkspaceSnapshot(
+  wins: readonly AppWindow[],
+  conns: readonly Connection[],
+): Promise<number | null> {
+  if (typeof fetch !== "function") return null;
+  try {
+    const response = await fetch(WORKSPACE_STATE_API, {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+      },
+      body: JSON.stringify({ windows: wins, connections: conns }),
+    });
+    if (!response.ok) return null;
+    const body: unknown = await response.json();
+    const workspace =
+      typeof body === "object" && body !== null && "workspace" in body
+        ? (body as { readonly workspace?: unknown }).workspace
+        : undefined;
+    if (typeof workspace !== "object" || workspace === null) return null;
+    const revision = (workspace as Record<string, unknown>)["revision"];
+    return typeof revision === "number" ? revision : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyPersistedWorkspaceSnapshot(
+  snapshot: { readonly wins: AppWindow[]; readonly conns: Connection[] },
+  setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  setConns: Dispatch<SetStateAction<Connection[]>>,
+  zc: MutableRefObject<number>,
+): void {
+  zc.current = snapshot.wins.length === 0 ? 1 : Math.max(1, ...snapshot.wins.map((w) => w.z));
+  setWins(snapshot.wins);
+  setConns(snapshot.conns);
+}
+
 function useHydrate({ wsRef, setWins, setConns, zc }: UseHydrateArgs): void {
   useLayoutEffect(() => {
     const el = wsRef.current;
     if (el === null) return;
-    const r = el.getBoundingClientRect();
-    let init: AppWindow[] | null = null;
-    try {
-      init = parsePersistedWindows(window.localStorage.getItem(WS_LS));
-    } catch {
-      init = null;
-    }
     // M1 (#532) — no seeded windows on first launch; the empty-state "New window" button
     // in Workspace.tsx and the FAB (+) are always reachable even when `wins` is [].
-    if (init === null) init = [];
-    zc.current = init.length === 0 ? 1 : Math.max(1, ...init.map((w) => w.z));
-    setWins(init);
-    try {
-      setConns(parsePersistedConnections(window.localStorage.getItem(CONN_LS), init));
-    } catch {
-      /* ignore */
-    }
+    applyPersistedWorkspaceSnapshot(readPersistedWorkspaceSnapshot(), setWins, setConns, zc);
   }, [wsRef, setWins, setConns, zc]);
+}
+
+interface UseStorageSyncArgs {
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+  readonly setConns: Dispatch<SetStateAction<Connection[]>>;
+  readonly zc: MutableRefObject<number>;
+  readonly beforeApplyRemote: () => void;
+}
+
+function useWorkspaceStorageSync({
+  setWins,
+  setConns,
+  zc,
+  beforeApplyRemote,
+}: UseStorageSyncArgs): void {
+  useEffect(() => {
+    const onStorage = (event: StorageEvent): void => {
+      if (event.storageArea !== null && event.storageArea !== window.localStorage) return;
+      if (event.key !== WS_LS && event.key !== CONN_LS) return;
+      beforeApplyRemote();
+      applyPersistedWorkspaceSnapshot(readPersistedWorkspaceSnapshot(), setWins, setConns, zc);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [setWins, setConns, zc, beforeApplyRemote]);
+}
+
+interface UseServerSyncArgs {
+  readonly wins: AppWindow[] | null;
+  readonly conns: readonly Connection[];
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+  readonly setConns: Dispatch<SetStateAction<Connection[]>>;
+  readonly zc: MutableRefObject<number>;
+  readonly suppressNextPersistRef: MutableRefObject<boolean>;
+}
+
+function useWorkspaceServerSync({
+  wins,
+  conns,
+  setWins,
+  setConns,
+  zc,
+  suppressNextPersistRef,
+}: UseServerSyncArgs): void {
+  const revisionRef = useRef(0);
+  const winsRef = useRef<AppWindow[] | null>(wins);
+  winsRef.current = wins;
+
+  const serverSyncEnabled = typeof navigator === "undefined" || navigator.webdriver !== true;
+
+  const applyServerSnapshot = useCallback(
+    (serverSnapshot: ServerWorkspaceSnapshot): void => {
+      const snapshot = snapshotFromRaw(serverSnapshot.windows, serverSnapshot.connections);
+      if (serverSnapshot.revision > revisionRef.current) {
+        revisionRef.current = serverSnapshot.revision;
+      }
+      suppressNextPersistRef.current = true;
+      applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc);
+    },
+    [setWins, setConns, zc, suppressNextPersistRef],
+  );
+
+  useEffect(() => {
+    if (!serverSyncEnabled) return;
+    let stopped = false;
+    const pull = async (): Promise<void> => {
+      const serverSnapshot = await fetchServerWorkspaceSnapshot();
+      if (stopped || serverSnapshot === null) return;
+      if (serverSnapshot.revision <= revisionRef.current) return;
+      if (
+        revisionRef.current === 0 &&
+        serverSnapshot.windows.length === 0 &&
+        (winsRef.current?.length ?? 0) > 0
+      ) {
+        return;
+      }
+      applyServerSnapshot(serverSnapshot);
+    };
+    void pull();
+    const interval = window.setInterval(() => {
+      void pull();
+    }, WORKSPACE_STATE_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [applyServerSnapshot, serverSyncEnabled]);
+
+  useEffect(() => {
+    if (!serverSyncEnabled) return;
+    if (wins === null) return;
+    if (suppressNextPersistRef.current) {
+      suppressNextPersistRef.current = false;
+      return;
+    }
+    let cancelled = false;
+    const persistedWins = sanitizePersistedWindows(wins);
+    const persistedConns = sanitizePersistedConnections(conns, persistedWins);
+    void putServerWorkspaceSnapshot(persistedWins, persistedConns).then((revision) => {
+      if (!cancelled && revision !== null && revision > revisionRef.current) {
+        revisionRef.current = revision;
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [wins, conns, suppressNextPersistRef, serverSyncEnabled]);
 }
 
 interface UseKeyboardArgs {
@@ -567,6 +774,10 @@ export function useWorkspace(
   const [view, setView] = useState<View>(readView);
   const zc = useRef<number>(3);
   const snapZone = useRef<SnapZone | null>(null);
+  const suppressNextServerPersistRef = useRef(false);
+  const beforeApplyRemote = useCallback((): void => {
+    suppressNextServerPersistRef.current = true;
+  }, []);
 
   const winsRef = useRef<AppWindow[]>([]);
   winsRef.current = wins ?? [];
@@ -590,6 +801,15 @@ export function useWorkspace(
   });
 
   useHydrate({ wsRef, setWins, setConns, zc });
+  useWorkspaceStorageSync({ setWins, setConns, zc, beforeApplyRemote });
+  useWorkspaceServerSync({
+    wins,
+    conns,
+    setWins,
+    setConns,
+    zc,
+    suppressNextPersistRef: suppressNextServerPersistRef,
+  });
 
   useEffect(() => {
     if (wins === null) return;
