@@ -468,6 +468,58 @@ export {
   parseEditorCompletionRequest,
 } from "./editor-completion.js";
 
+// ─── Container engine detection + governed execution (Issue #1388, ADR-0070) ──────
+// Wire vocabulary for the container runtime pilot: the active-probe capability response (engine
+// state aliased from the #1385 runtime-capability vocabulary), the closed execution policy
+// (read-only `/workspace` mount, `--network none`, frozen resource limits, `--pull never`), the
+// server-frozen task catalog + run request/result/events, and the deny-by-default
+// `CONTAINER_TASK_RULES` defense-in-depth allowlist. Detection + execution live in keiko-server.
+export type {
+  ContainerEngineId,
+  ContainerEngineState,
+  ContainerEngineUnavailableReason,
+  ContainerEngineStatus,
+  ContainerCapabilityResponse,
+  ContainerMountMode,
+  ContainerNetworkMode,
+  ContainerResourceLimits,
+  ContainerExecutionPolicy,
+  ContainerTaskKind,
+  ContainerTask,
+  ContainerTaskCatalog,
+  ContainerRunRequest,
+  ContainerFailureReason,
+  ContainerRunResult,
+  ContainerRunnerEventKind,
+  ContainerRunnerEvent,
+  ContainerRunRequestParseOk,
+  ContainerRunRequestParseFail,
+  ContainerRunRequestParse,
+  ContainerCapabilityResponseParseOk,
+  ContainerCapabilityResponseParseFail,
+  ContainerCapabilityResponseParse,
+  ContainerTaskCatalogParseOk,
+  ContainerTaskCatalogParseFail,
+  ContainerTaskCatalogParse,
+  ContainerRunResultParseOk,
+  ContainerRunResultParseFail,
+  ContainerRunResultParse,
+} from "./container-runtime.js";
+export {
+  CONTAINER_RUNTIME_SCHEMA_VERSION,
+  CONTAINER_ENGINE_IDS,
+  CONTAINER_MOUNT_MODES,
+  CONTAINER_NETWORK_MODES,
+  CONTAINER_TASK_KINDS,
+  CONTAINER_FAILURE_REASONS,
+  CONTAINER_RUNNER_EVENT_KINDS,
+  CONTAINER_TASK_RULES,
+  parseContainerRunRequest,
+  validateContainerCapabilityResponse,
+  validateContainerTaskCatalog,
+  validateContainerRunResult,
+} from "./container-runtime.js";
+
 // ─── Editor inline completion (ghost text) (Issue #1200) ───────────────────────────
 // Wire request/response for the governed `POST /api/editor/inline-completion` route (model-only,
 // suffix-aware FIM via #1210 over coding context #1211) plus the content-free acceptance/rejection
