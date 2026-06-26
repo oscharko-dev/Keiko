@@ -167,7 +167,6 @@ export function FilesWidget({
   const [currentDirectoryPath, setCurrentDirectoryPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
-  const [refreshKey, setRefreshKey] = useState(0);
   const [treeTooltip, setTreeTooltip] = useState<TreeTooltipState | null>(null);
   const activeFileChangeRef = useRef(onActiveFileChange);
   activeFileChangeRef.current = onActiveFileChange;
