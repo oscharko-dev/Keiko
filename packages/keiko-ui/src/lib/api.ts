@@ -244,6 +244,36 @@ export async function transcribeDictation(
   });
 }
 
+// Issue #1558, Epic #1556 — assistant speech output. Posts the visible assistant answer text to the
+// local BFF synthesis route (Issue #1558) and returns the synthesized audio as base64 inside the
+// standard JSON + CSRF envelope `fetchJson` already applies. The browser never reaches a provider
+// directly and never sees a provider base URL, credential, or voice id (content-free on the BFF
+// side). The request is abortable so a stop / mute / session switch cancels pending provider work
+// (AC3); on abort `fetch` throws and the caller treats it as a silent cancel rather than a failure.
+export interface VoiceSpeechRequest {
+  // The exact assistant answer text shown in the transcript, so the spoken output cannot diverge from
+  // the visible text (AC2).
+  readonly text: string;
+}
+
+export interface VoiceSpeechResult {
+  // Base64-encoded synthesized audio bytes (no `data:` URI prefix).
+  readonly audio: string;
+  // The audio container MIME type to label the decoded blob with (e.g. "audio/mpeg").
+  readonly mimeType: string;
+}
+
+export async function synthesizeAssistantSpeech(
+  input: VoiceSpeechRequest,
+  signal?: AbortSignal,
+): Promise<VoiceSpeechResult> {
+  return fetchJson<VoiceSpeechResult>("/api/voice/speak", {
+    method: "POST",
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
 export interface GatewaySetupInput {
   readonly baseUrl?: string | undefined;
   readonly apiKey?: string | undefined;
