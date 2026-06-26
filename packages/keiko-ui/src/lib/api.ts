@@ -1085,8 +1085,11 @@ function languageDocument(input: EditorLanguageRequestInput): {
   return { path: input.path, languageId: input.languageId, text: input.text };
 }
 
-export async function fetchEditorLanguageCapabilities(): Promise<LanguageServiceCapabilities> {
-  return fetchJson("/api/editor/language/capabilities");
+export async function fetchEditorLanguageCapabilities(
+  root?: string | undefined,
+): Promise<LanguageServiceCapabilities> {
+  const query = root === undefined || root.length === 0 ? "" : `?root=${encodeURIComponent(root)}`;
+  return fetchJson(`/api/editor/language/capabilities${query}`);
 }
 
 export async function requestEditorDiagnostics(

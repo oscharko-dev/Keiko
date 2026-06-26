@@ -82,7 +82,10 @@ import {
   handleFilesSearch,
   handleFilesTree,
 } from "./files.js";
-import { handleEditorLanguage, handleEditorLanguageCapabilities } from "./editor/languageRoutes.js";
+import {
+  handleEditorLanguage,
+  handleEditorLanguageCapabilitiesForRoute,
+} from "./editor/languageRoutes.js";
 import { handleEditorLspStatus } from "./editor/lsp/lspStatusRoute.js";
 import {
   handleEditorContext,
@@ -277,7 +280,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   {
     method: "GET",
     pattern: "/api/editor/language/capabilities",
-    handler: handleEditorLanguageCapabilities,
+    handler: (ctx, deps) =>
+      handleEditorLanguageCapabilitiesForRoute(ctx, deps, deps.editorLanguageRouteOptions),
   },
   {
     method: "POST",
