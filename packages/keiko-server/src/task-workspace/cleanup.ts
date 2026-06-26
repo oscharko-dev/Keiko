@@ -223,6 +223,22 @@ function requestCleanupImpl(
 // Re-gathers the LIVE facts for one instance (never trusting the persisted row) and runs the pure
 // safety gate. Builds its own repo-root adapter for structural facts and a worktree-bound adapter for
 // the dirty probe.
+// Live dirty probe for the DESTRUCTIVE path. Unlike the read-only health probe (health.ts, which treats
+// an inconclusive probe as not-dirty because it never deletes), this fails CLOSED: an existing,
+// contained worktree whose `git status` is inconclusive (`ok:false` — a corrupt/missing `.git` pointer
+// leaves the directory and its uncommitted/untracked files on disk while git refuses to read it) is
+// treated as DIRTY. A structurally-broken tree that may still hold real work is therefore refused
+// rather than force-removed (SC4). A missing worktree (nothing to lose) probes not-dirty.
+async function probeCleanupDirty(
+  ctx: CleanupCtx,
+  worktreePath: string,
+  probeable: boolean,
+): Promise<boolean> {
+  if (!probeable) return false;
+  const status = await ctx.deps.createAdapter(detectWorkspaceAt(worktreePath)).worktreeStatus();
+  return !status.ok || status.dirty;
+}
+
 async function evaluateLiveCleanupSafety(
   ctx: CleanupCtx,
   instance: WorkspaceInstance,
@@ -236,14 +252,11 @@ async function evaluateLiveCleanupSafety(
     instance,
     ctx.deps.now(),
   );
-  const worktreeDirty =
-    facts.worktreeDirExists && facts.pathContained
-      ? (
-          await ctx.deps
-            .createAdapter(detectWorkspaceAt(instance.managedWorktreePath))
-            .worktreeStatus()
-        ).dirty
-      : false;
+  const worktreeDirty = await probeCleanupDirty(
+    ctx,
+    instance.managedWorktreePath,
+    facts.worktreeDirExists && facts.pathContained,
+  );
   return evaluateWorkspaceCleanupSafety({
     lifecycleState: instance.lifecycleState,
     hasRecord: true,
@@ -394,9 +407,9 @@ async function cleanupOneOrphan(
   const orphanId = deriveOrphanId(repositoryId, leaf);
   const candidate = join(ctx.deps.managedRoot, repositoryId, leaf);
   const pathContained = isManagedTargetContained(ctx.deps.managedRoot, candidate);
-  const worktreeDirty = pathContained
-    ? (await ctx.deps.createAdapter(detectWorkspaceAt(candidate)).worktreeStatus()).dirty
-    : false;
+  // Fail closed: an orphan whose `git status` is inconclusive (broken pointer) is treated as dirty and
+  // refused, never force-removed (SC4) — it may still hold uncommitted work.
+  const worktreeDirty = await probeCleanupDirty(ctx, candidate, pathContained);
   const decision = evaluateWorkspaceCleanupSafety({
     lifecycleState: "abandoned",
     hasRecord: false,

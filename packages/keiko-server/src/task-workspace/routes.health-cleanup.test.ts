@@ -252,6 +252,16 @@ describe("POST /api/task-workspaces/:workspaceId/cleanup", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("returns 503 when cleanup is not configured", async () => {
+    await rebuild({ workspaceCleanup: undefined });
+    const res = await fetch(`${baseUrl()}/api/task-workspaces/ws_x/cleanup`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ requestedBy: "u", operatorApproved: true, mode: "request" }),
+    });
+    expect(res.status).toBe(503);
+  });
 });
 
 describe("POST /api/task-workspaces/cleanup/orphans", () => {

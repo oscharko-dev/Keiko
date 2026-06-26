@@ -1634,14 +1634,10 @@ function healthClassificationFor(
   if (status === "drifted") return "drifted";
   if (status === "partially-created" || status === "recovery-required") return "recovery-required";
   // status === "healthy": structurally sound (contained, pointer + branch + HEAD verified, no foreign
-  // lock). Resolve the operational classification by lifecycle disposition.
+  // lock). A `failed`/`provisioning` lifecycle is a partial-creation reconciliation state, so it never
+  // reaches here (it returns "partially-created" above). Resolve the remaining lifecycles by disposition.
   if (lifecycleState === "archived" || lifecycleState === "merged") return "archived";
-  if (
-    (lifecycleState === "abandoned" ||
-      lifecycleState === "failed" ||
-      lifecycleState === "cleanup-pending") &&
-    cleanupEligible
-  ) {
+  if ((lifecycleState === "abandoned" || lifecycleState === "cleanup-pending") && cleanupEligible) {
     return "cleanup-ready";
   }
   return worktreeDirty ? "dirty" : "healthy";

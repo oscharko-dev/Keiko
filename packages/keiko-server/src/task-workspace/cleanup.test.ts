@@ -220,7 +220,53 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
     expect(result.refusalReason).toBe("worktree-dirty");
     expect(existsSync(instance.managedWorktreePath)).toBe(true);
     expect(store.getById(instance.workspaceId)).toBeDefined();
-    expect(evidence.some((e) => parseEvent(e.json).outcome === "cleanup-refused")).toBe(true);
+    const refusals = evidence.filter((e) => parseEvent(e.json).outcome === "cleanup-refused");
+    expect(refusals.length).toBeGreaterThan(0);
+    // The refusal audit event is content-free too (SC3).
+    for (const e of refusals) {
+      expect(e.json).not.toContain(managedRoot);
+      expect(e.json).not.toContain(repoRoot);
+    }
+  });
+
+  it("fails closed: a corrupt .git pointer over uncommitted work is treated as dirty, not force-deleted", async () => {
+    const instance = await provisionTask("t-corrupt");
+    writeFileSync(join(instance.managedWorktreePath, "wip.txt"), "uncommitted work\n");
+    // Corrupt the worktree's `.git` pointer so `git status` exits non-zero (inconclusive probe). The
+    // directory + the WIP file remain on disk; the destructive path must NOT treat this as clean.
+    writeFileSync(join(instance.managedWorktreePath, ".git"), "not a valid gitdir pointer\n");
+    setState(instance, "cleanup-pending");
+    const result = await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("worktree-dirty");
+    expect(existsSync(join(instance.managedWorktreePath, "wip.txt"))).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
+  });
+
+  it("proceeds when only a STALE (expired) lock is present (stale lock does not block cleanup)", async () => {
+    const instance = await provisionTask("t-stale-lock");
+    const expiredLock: WorkspaceLock = {
+      lockId: "L0",
+      owner: "u",
+      reason: "mutation",
+      acquiredAt: new Date(nowMs - 600_000).toISOString(),
+      expiresAt: new Date(nowMs - 60_000).toISOString(),
+    };
+    setState(instance, "cleanup-pending", { lock: expiredLock });
+    const result = await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+    expect(result.outcome).toBe("completed");
+    expect(existsSync(instance.managedWorktreePath)).toBe(false);
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
   });
 
   it("refuses when a live lock is held (even by the requesting actor)", async () => {
@@ -362,6 +408,13 @@ describe("orphan cleanup", () => {
     expect(result.removed).toBe(1);
     expect(result.refused).toEqual([]);
     expect(existsSync(orphanPath)).toBe(false);
+    // Orphan cleanup events are content-free too (SC3): a hash orphan id, no path / repo root.
+    const orphanEvents = evidence.filter((e) => parseEvent(e.json).outcome === "cleanup-completed");
+    expect(orphanEvents.length).toBeGreaterThan(0);
+    for (const e of orphanEvents) {
+      expect(e.json).not.toContain(managedRoot);
+      expect(e.json).not.toContain(orphanPath);
+    }
   });
 
   it("refuses a dirty orphan and leaves it on disk", async () => {
