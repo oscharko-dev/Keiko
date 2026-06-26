@@ -2,8 +2,18 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import { fetchFilesTree, fetchProjects } from "../../../../../lib/api";
-import type { FilesTreeEntry } from "../../../../../lib/types";
+import {
+  fetchFilesTree,
+  fetchGitDiff,
+  fetchGitStatus,
+  fetchProjects,
+} from "../../../../../lib/api";
+import type {
+  FilesTreeEntry,
+  GitChangedFile,
+  GitRepositoryDiffResponse,
+  GitRepositoryStatusResponse,
+} from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
@@ -22,6 +32,7 @@ interface FilesWidgetProps {
   // the root bar is hidden (the widget is then locked to its configured/fallback root).
   onRootChange?: (root: string) => void;
   onOpenFile?: ((root: string, path: string) => void) | undefined;
+  onOpenGitDelivery?: ((root: string) => void) | undefined;
 }
 
 // Parent directory of an absolute POSIX/Windows path, or null at the filesystem root. Pure string
@@ -58,6 +69,19 @@ interface DirectoryState {
   // Non-error empty state ("no folder is open"): rendered as a plain note WITHOUT the Retry
   // button — retrying cannot change anything when no root is configured (audit C021).
   readonly notice: "no-root" | null;
+}
+
+interface GitStatusState {
+  readonly loading: boolean;
+  readonly status: GitRepositoryStatusResponse | null;
+  readonly error: string | null;
+}
+
+interface GitDiffState {
+  readonly path: string;
+  readonly loading: boolean;
+  readonly response: GitRepositoryDiffResponse | null;
+  readonly error: string | null;
 }
 
 function errorMessage(error: unknown): string {
@@ -126,6 +150,25 @@ function formatBytes(bytes: number): string {
   return `${value} ${units[idx]}`;
 }
 
+function gitStatusSummary(state: GitStatusState): string | null {
+  if (state.loading && state.status === null) return "Git status loading";
+  if (state.error !== null) return "Git status unavailable";
+  const status = state.status;
+  if (status === null) return null;
+  if (!status.available) return status.state === "unsafe" ? "Git unsafe" : "Git unavailable";
+  const branch = status.detached ? "detached HEAD" : (status.branch ?? "unknown branch");
+  if (status.clean) return `Git ${branch} clean`;
+  const count = status.changes.length;
+  return `Git ${branch} ${String(count)} changed ${count === 1 ? "file" : "files"}`;
+}
+
+function gitChangeLabel(change: GitChangedFile): string {
+  if (change.conflicted) return "U";
+  if (change.untracked) return "?";
+  if (change.indexStatus !== " ") return change.indexStatus;
+  return change.worktreeStatus;
+}
+
 export function FilesWidget({
   root,
   activeFilePath,
@@ -133,6 +176,7 @@ export function FilesWidget({
   onActiveFileChange,
   onRootChange,
   onOpenFile,
+  onOpenGitDelivery,
 }: FilesWidgetProps): ReactNode {
   const trimmedRoot = root?.trim();
   const configuredRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : null;
@@ -156,9 +200,15 @@ export function FilesWidget({
   // Shared ARIA description for unreadable symlink rows (audit C196): the rows stay focusable
   // via aria-disabled, and this single hidden span explains WHY they cannot be opened.
   const unreadableReasonId = useId();
+  const [gitStatusState, setGitStatusState] = useState<GitStatusState>({
+    loading: false,
+    status: null,
+    error: null,
+  });
+  const [gitDiffState, setGitDiffState] = useState<GitDiffState | null>(null);
 
   useEffect(() => {
-    if (selectedPath !== null) return;
+    if (selectedPath !== null || gitDiffState !== null) return;
     const path = restoreFocusPathRef.current;
     if (path === null) return;
     restoreFocusPathRef.current = null;
@@ -166,7 +216,7 @@ export function FilesWidget({
       `.tr-file[data-path="${cssEscape(path)}"]`,
     );
     (row ?? filesRef.current)?.focus({ preventScroll: true });
-  }, [selectedPath]);
+  }, [gitDiffState, selectedPath]);
 
   useEffect(() => {
     if (configuredRoot !== null) return;
@@ -245,6 +295,7 @@ export function FilesWidget({
 
   useEffect(() => {
     setSelectedPath(null);
+    setGitDiffState(null);
     setCurrentDirectoryPath(null);
     activeFileChangeRef.current?.(null, null, null);
     setResolvedRoot(null);
@@ -252,6 +303,32 @@ export function FilesWidget({
     setDirectories({});
     void loadDirectory("");
   }, [apiRoot, loadDirectory]);
+
+  useEffect(() => {
+    const targetRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : null);
+    if (targetRoot === null) {
+      setGitStatusState({ loading: false, status: null, error: null });
+      return;
+    }
+    let cancelled = false;
+    setGitStatusState((current) => ({ ...current, loading: true, error: null }));
+    void fetchGitStatus(targetRoot)
+      .then((status) => {
+        if (!cancelled) setGitStatusState({ loading: false, status, error: null });
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setGitStatusState({
+            loading: false,
+            status: null,
+            error: errorMessage(error),
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiRoot, resolvedRoot]);
 
   const visibleRootPath = displayPath(
     resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : ""),
@@ -320,6 +397,23 @@ export function FilesWidget({
     void loadDirectory(path);
   };
 
+  const openDiff = useCallback(
+    (path: string): void => {
+      const targetRoot = resolvedRoot ?? apiRoot;
+      if (targetRoot.length === 0) return;
+      setSelectedPath(null);
+      setGitDiffState({ path, loading: true, response: null, error: null });
+      void fetchGitDiff({ root: targetRoot, path })
+        .then((response) => {
+          setGitDiffState({ path, loading: false, response, error: null });
+        })
+        .catch((error: unknown) => {
+          setGitDiffState({ path, loading: false, response: null, error: errorMessage(error) });
+        });
+    },
+    [apiRoot, resolvedRoot],
+  );
+
   // Arrow-key navigation across the currently visible rows (audit C215). Scope-connect pills
   // are intentionally NOT part of the arrow order — only `.tr-row` buttons are traversed.
   const onTreeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
@@ -336,6 +430,21 @@ export function FilesWidget({
     event.preventDefault();
     handleTreeNavKey(rows, index, event.key);
   };
+
+  const gitChanges: readonly GitChangedFile[] =
+    gitStatusState.status?.available === true ? gitStatusState.status.changes : [];
+  const gitChangeByPath = new Map<string, GitChangedFile>(
+    gitChanges.map((change): [string, GitChangedFile] => [change.path, change]),
+  );
+  const gitSummary = gitStatusSummary(gitStatusState);
+  const gitDeliveryRoot =
+    gitStatusState.status?.available === true
+      ? (gitStatusState.status.repositoryRoot ?? gitStatusState.status.root)
+      : "";
+  const canOpenGitDelivery =
+    onOpenGitDelivery !== undefined &&
+    gitStatusState.status?.available === true &&
+    gitDeliveryRoot.length > 0;
 
   const renderEntry = (entry: FilesTreeEntry, depth: number): ReactNode => {
     const pad = treeIndent(depth);
@@ -393,42 +502,58 @@ export function FilesWidget({
     }
 
     const activePath = selectedPath ?? activeFilePath ?? null;
+    const change = gitChangeByPath.get(entry.path);
     return (
-      <button
-        className="tr-row tr-file"
-        role="treeitem"
-        aria-level={depth + 1}
-        aria-selected={activePath === entry.path}
-        data-active={activePath === entry.path}
-        data-readable={entry.readable}
-        data-path={entry.path}
-        key={entry.path}
-        style={{ paddingLeft: pad }}
-        type="button"
-        aria-disabled={entry.readable ? undefined : true}
-        aria-describedby={entry.readable ? undefined : unreadableReasonId}
-        onClick={() => {
-          if (!entry.readable) return;
-          const fileRoot = resolvedRoot ?? apiRoot;
-          if (openFilesDirectly && onOpenFile !== undefined) {
+      <div className="tr-row-wrap tr-file-wrap" key={entry.path}>
+        <button
+          className="tr-row tr-file"
+          role="treeitem"
+          aria-level={depth + 1}
+          aria-selected={activePath === entry.path}
+          data-active={activePath === entry.path}
+          data-readable={entry.readable}
+          data-path={entry.path}
+          style={{ paddingLeft: pad }}
+          type="button"
+          aria-disabled={entry.readable ? undefined : true}
+          aria-describedby={entry.readable ? undefined : unreadableReasonId}
+          onClick={() => {
+            if (!entry.readable) return;
+            const fileRoot = resolvedRoot ?? apiRoot;
+            if (openFilesDirectly && onOpenFile !== undefined) {
+              activeFileChangeRef.current?.(entry.path, fileRoot);
+              onOpenFile(fileRoot, entry.path);
+              return;
+            }
+            setSelectedPath(entry.path);
             activeFileChangeRef.current?.(entry.path, fileRoot);
-            onOpenFile(fileRoot, entry.path);
-            return;
-          }
-          setSelectedPath(entry.path);
-          activeFileChangeRef.current?.(entry.path, fileRoot);
-        }}
-        title={entry.readable ? entry.path : unreadableTitle}
-      >
-        {/* invisible caret placeholder keeps file rows aligned with sibling folders (C216) */}
-        <span className="tr-caret tr-caret-ghost" aria-hidden="true">
-          <Icons.chevronR size={11} />
-        </span>
-        <FileIcon name={entry.name} />
-        <span className="tr-name">{entry.name}</span>
-        {entry.symlink ? <span className="tr-badge">link</span> : null}
-        <span className="tr-meta mono">{formatBytes(entry.sizeBytes)}</span>
-      </button>
+          }}
+          title={entry.readable ? entry.path : unreadableTitle}
+        >
+          {/* invisible caret placeholder keeps file rows aligned with sibling folders (C216) */}
+          <span className="tr-caret tr-caret-ghost" aria-hidden="true">
+            <Icons.chevronR size={11} />
+          </span>
+          <FileIcon name={entry.name} />
+          <span className="tr-name">{entry.name}</span>
+          {entry.symlink ? <span className="tr-badge">link</span> : null}
+          {change !== undefined ? (
+            <span className="tr-badge tr-git">{gitChangeLabel(change)}</span>
+          ) : null}
+          <span className="tr-meta mono">{formatBytes(entry.sizeBytes)}</span>
+        </button>
+        {change !== undefined && entry.readable ? (
+          <button
+            className="tr-git-diff"
+            type="button"
+            onClick={() => openDiff(entry.path)}
+            title={`View Git diff for ${entry.path}`}
+            aria-label={`View Git diff for ${entry.path}`}
+          >
+            <Icons.diff size={13} />
+          </button>
+        ) : null}
+      </div>
     );
   };
 
@@ -482,6 +607,83 @@ export function FilesWidget({
     </div>
   );
 
+  if (gitDiffState !== null) {
+    const diff = gitDiffState.response?.diff ?? "";
+    return (
+      <div className="fpv" ref={filesRef} tabIndex={-1}>
+        <div className="fpv-bar">
+          <button
+            className="fpv-back"
+            type="button"
+            onClick={() => {
+              restoreFocusPathRef.current = gitDiffState.path;
+              setGitDiffState(null);
+            }}
+            title="Back to files"
+            aria-label="Back to files"
+          >
+            <Icons.back size={15} />
+          </button>
+          <Icons.diff size={15} />
+          <span className="fpv-name" title={gitDiffState.path}>
+            {gitDiffState.path}
+          </span>
+          <span className="fpv-lang mono">git diff</span>
+          <span className="spacer" />
+          <button
+            className="fpv-back"
+            type="button"
+            onClick={() => {
+              restoreFocusPathRef.current = gitDiffState.path;
+              setGitDiffState(null);
+            }}
+            title="Close diff"
+            aria-label="Close diff"
+          >
+            <Icons.close size={15} />
+          </button>
+        </div>
+        {gitDiffState.loading ? (
+          <div className="fpv-state" role="status">
+            Loading diff…
+          </div>
+        ) : null}
+        {gitDiffState.error !== null ? (
+          <div className="fpv-state fpv-error" role="alert">
+            <span>{gitDiffState.error}</span>
+          </div>
+        ) : null}
+        {gitDiffState.response?.truncated === true ? (
+          <div className="fpv-banner">
+            Diff truncated at {formatBytes(gitDiffState.response.maxBytes)}.
+          </div>
+        ) : null}
+        {gitDiffState.response !== null ? (
+          <div
+            className="fpv-code mono"
+            // Scrollable diff pane: tabIndex makes the overflow region keyboard-scrollable.
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+            tabIndex={0}
+            role="region"
+            aria-label={`Git diff: ${gitDiffState.path}`}
+          >
+            {diff.length > 0 ? (
+              diff.split("\n").map((line: string, index: number) => (
+                <div className="fpv-line" key={index}>
+                  <span className="fpv-src">{line.length > 0 ? line : " "}</span>
+                </div>
+              ))
+            ) : (
+              <div className="fpv-line">
+                <span className="fpv-src">No diff available.</span>
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   if (selectedPath !== null) {
     return (
       <FilePreview
@@ -534,6 +736,30 @@ export function FilesWidget({
             Open
           </button>
         </form>
+      ) : null}
+      {gitSummary !== null ? (
+        <div
+          className="files-git-status"
+          role="status"
+          data-state={
+            gitStatusState.status?.state ?? (gitStatusState.error !== null ? "error" : "loading")
+          }
+        >
+          <Icons.git size={13} />
+          <span>{gitSummary}</span>
+          {canOpenGitDelivery ? (
+            <button
+              className="files-root-up"
+              style={{ width: 24, height: 24, marginLeft: "auto" }}
+              type="button"
+              onClick={() => onOpenGitDelivery(gitDeliveryRoot)}
+              title="Open governed Git delivery"
+              aria-label="Open governed Git delivery"
+            >
+              <Icons.branch size={13} />
+            </button>
+          ) : null}
+        </div>
       ) : null}
       <button
         className="files-refresh"

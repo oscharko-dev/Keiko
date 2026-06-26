@@ -1,3 +1,33 @@
+/**
+ * Editor layout state and reducer for multi-tab, split-pane workspaces (Issue #1375, ADR-0064).
+ *
+ * The reducer is the single authority for layout structure: drag/keyboard intents in the UI are
+ * translated into EditorLayoutActions and applied here, never by mutating pane state directly.
+ * editorLayoutReducer is pure and total — it returns a structurally valid EditorLayoutStateV2 for
+ * every action and returns the input state unchanged for actions that target a missing pane, split,
+ * or file.
+ *
+ * Invariants maintained by every operation:
+ *
+ * 1. Tab order is stable and lossless. Within a pane openFiles and tabOrder are the same
+ *    de-duplicated, non-empty list; reorder/move only permute it. The order survives a
+ *    serialize -> parse round trip, so tabs never shuffle on reload (AC1).
+ * 2. Layout operations never read or write file content or dirty state. Files are identified by
+ *    path only, so reordering or moving a tab cannot alter a buffer or its dirty marker (AC2/AC3);
+ *    the dirty index is re-homed onto the layout by the UI layer.
+ * 3. Empty panes collapse predictably. Closing or moving the last tab out of a pane removes that
+ *    pane (when others remain) and promotes the sibling of its enclosing split, so the tree never
+ *    retains an empty pane alongside populated ones (AC4). The final remaining pane is kept even
+ *    when it holds no file.
+ * 4. Splits always have exactly two children and resize never restructures. resize-split only
+ *    clamps an existing split's ratio into [MIN_SPLIT_RATIO, MAX_SPLIT_RATIO]; it adds or removes
+ *    no pane, so nested splits resize without orphan panes or layout jumps (AC5).
+ * 5. Identifiers are unique. Pane ids (pane-N) and split ids (split-N) are allocated to avoid
+ *    collisions with existing nodes, and every tree pane node resolves to an entry in panes.
+ * 6. Persisted values are clamped on read and write. Split ratios and the sidebar width are
+ *    clamped, and unknown or malformed persisted state falls back to a fresh single-pane layout
+ *    rather than blocking the editor.
+ */
 export const EDITOR_LAYOUT_SCHEMA_VERSION = 2 as const;
 
 export type EditorSplitDirection = "row" | "column";

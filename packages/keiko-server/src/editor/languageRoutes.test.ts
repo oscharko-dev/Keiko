@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -10,6 +10,7 @@ import type { UiStore } from "../store/index.js";
 import {
   handleEditorLanguage,
   handleEditorLanguageCapabilities,
+  handleEditorLanguageCapabilitiesForRoute,
   type EditorLanguageRouteOptions,
 } from "./languageRoutes.js";
 
@@ -20,7 +21,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasProvider(body: unknown, id: string, availability: string): boolean {
   if (!isRecord(body) || !Array.isArray(body.providers)) return false;
   return body.providers.some(
-    (provider) => isRecord(provider) && provider.id === id && provider.availability === availability,
+    (provider) =>
+      isRecord(provider) && provider.id === id && provider.availability === availability,
   );
 }
 
@@ -43,6 +45,15 @@ function postContext(body: unknown): RouteContext {
   return rawPostContext(JSON.stringify(body));
 }
 
+function getContext(path: string): RouteContext {
+  return {
+    req: Readable.from([]) as unknown as IncomingMessage,
+    res: {} as unknown as ServerResponse,
+    params: {},
+    url: new URL(`http://localhost${path}`),
+  };
+}
+
 function postContextWithResponseClose(body: unknown, writableEnded: boolean): RouteContext {
   const ctx = postContext(body);
   const res = {
@@ -60,8 +71,11 @@ function postContextWithResponseClose(body: unknown, writableEnded: boolean): Ro
 let root: string;
 let store: UiStore;
 
-function deps(redactor: UiHandlerDeps["redactor"] = buildRedactor({})): UiHandlerDeps {
-  return { store, redactor } as unknown as UiHandlerDeps;
+function deps(
+  redactor: UiHandlerDeps["redactor"] = buildRedactor({}),
+  env: UiHandlerDeps["env"] = {},
+): UiHandlerDeps {
+  return { store, redactor, env } as unknown as UiHandlerDeps;
 }
 
 function redactEveryString(value: unknown): unknown {
@@ -103,6 +117,43 @@ describe("GET /api/editor/language/capabilities", () => {
     expect(schemaVersion(result.body)).toBe("1");
     expect(hasProvider(result.body, "typescript", "available")).toBe(true);
     expect(hasProvider(result.body, "python-lsp", "unavailable")).toBe(true);
+  });
+
+  it("overrides host provider descriptors from workspace-aware executable detection", async () => {
+    const bin = await mkdtemp(join(tmpdir(), "keiko-route-lsp-bin-"));
+    try {
+      const pyright = join(bin, "pyright-langserver");
+      await writeFile(pyright, "#!/bin/sh\n", "utf8");
+      await chmod(pyright, 0o755);
+
+      const result = await handleEditorLanguageCapabilitiesForRoute(
+        getContext(`/api/editor/language/capabilities?root=${encodeURIComponent(root)}`),
+        deps(buildRedactor({}), { PATH: bin, KEIKO_EDITOR_LSP_PYTHON: "1" }),
+        { hostLanguageCommandRules: [{ executable: "pyright-langserver" }] },
+      );
+
+      expect(result.status).toBe(200);
+      expect(hasProvider(result.body, "python-lsp", "available")).toBe(true);
+      expect(hasProvider(result.body, "go-lsp", "unavailable")).toBe(true);
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+    }
+  });
+
+  it("reports policy-blocked host providers with a content-free unavailable reason", async () => {
+    const result = await handleEditorLanguageCapabilitiesForRoute(
+      getContext(`/api/editor/language/capabilities?root=${encodeURIComponent(root)}`),
+      deps(buildRedactor({}), { KEIKO_EDITOR_LSP_PYTHON: "1" }),
+      { hostLanguageCommandRules: [] },
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { providers: { id: string; unavailableReason?: string }[] };
+    const python = body.providers.find((provider) => provider.id === "python-lsp");
+    expect(python?.unavailableReason).toBe(
+      "Required host language tool is blocked by host execution policy.",
+    );
+    expect(JSON.stringify(result.body)).not.toContain(root);
   });
 });
 

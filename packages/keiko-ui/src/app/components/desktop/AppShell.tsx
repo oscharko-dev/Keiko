@@ -44,6 +44,7 @@ import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
+import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
 import { applyShellUndoAction, SHELL_SHORTCUT_BINDINGS } from "./shell-undo-bindings";
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
@@ -164,38 +165,27 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-function normalizeComparablePath(path: string): string {
-  return path.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
-}
-
-function editorRelativePath(root: string, file: string): string | null {
-  const normalizedRoot = normalizeComparablePath(root);
-  const normalizedFile = normalizeComparablePath(file);
-  if (normalizedFile.length === 0) return "";
-  if (normalizedRoot.length === 0) {
-    return /^\/+$/u.test(root.trim().replace(/\\/gu, "/"))
-      ? normalizedFile.replace(/^\/+/u, "")
-      : "";
+// Root-relative file-identifier contract (Issue #1374). The editor-window cfg-persistence layer is
+// single-sourced through @oscharko-dev/keiko-contracts, exactly like the editor open flow
+// (EditorWidget / workspaceActions). A persisted cfg file id is resolved to a root-relative
+// identifier under the window's `root`; an absolute-inside-root path is stripped, the root itself or
+// an empty file maps to "" (no active file), and a path that cannot be relativized under the root
+// (absolute-outside or a traversal escape) returns null and is DROPPED — never persisted. This
+// closes the divergence where an absolute path could be written into the editor window cfg, which is
+// the failure #1374 set out to prevent. Cfg persistence intentionally keeps the window's root rather
+// than re-anchoring it, so `resolveWorkspaceFileIdentifier` is used here, not `selectWorkspaceFileTarget`.
+function editorCfgRelativePath(root: string, file: string): string | null {
+  // Filesystem-root ("/") workspace edge: every absolute path is "under" it, so strip the leading
+  // slash. The contract folds a "/" root to empty/outside-root, so this one intentional, tested case
+  // (a whole-disk editor root) is handled locally. `^\/+$` is anchored at both ends — linear.
+  if (/^\/+$/u.test(root.trim().replace(/\\/gu, "/"))) {
+    const comparableFile = file.trim().replace(/\\/gu, "/");
+    return comparableFile.length === 0 ? "" : comparableFile.replace(/^\/+/u, "");
   }
-  const rootCmp = normalizedRoot.toLowerCase();
-  const fileCmp = normalizedFile.toLowerCase();
-  if (fileCmp === rootCmp) return "";
-  if (fileCmp.startsWith(`${rootCmp}/`)) {
-    return normalizedFile.slice(normalizedRoot.length + 1).replace(/^\/+/u, "");
-  }
+  const resolution = resolveWorkspaceFileIdentifier(root, file);
+  if (resolution.kind === "relative") return resolution.path;
+  if (resolution.kind === "root" || resolution.kind === "empty") return "";
   return null;
-}
-
-function isAbsoluteEditorPath(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/u.test(path);
-}
-
-function normalizeEditorCfgPath(root: string, path: string): string | null {
-  const raw = path.trim();
-  if (raw.length === 0) return "";
-  const relative = editorRelativePath(root, raw);
-  if (relative !== null) return relative;
-  return isAbsoluteEditorPath(raw) ? null : raw.replace(/\\/gu, "/").replace(/^\/+/u, "");
 }
 
 function normalizeEditorOpenFiles(
@@ -205,7 +195,7 @@ function normalizeEditorOpenFiles(
 ): readonly string[] {
   const out: string[] = [];
   const add = (path: string): void => {
-    const relative = normalizeEditorCfgPath(root, path);
+    const relative = editorCfgRelativePath(root, path);
     if (relative === null || relative.length === 0 || out.includes(relative)) return;
     out.push(relative);
   };
@@ -222,23 +212,11 @@ export function normalizeEditorWindowCfg(cfg: Cfg): Cfg {
   const root = typeof cfg.root === "string" ? cfg.root.trim() : "";
   const file = typeof cfg.file === "string" ? cfg.file.trim() : "";
   if (root.length === 0) return cfg;
-  const relativeFile = editorRelativePath(root, file);
+  const relativeFile = editorCfgRelativePath(root, file);
   const next: Cfg = { ...cfg, root };
-  const normalizedOpenFiles = normalizeEditorOpenFiles(
-    root,
-    cfg.openFiles,
-    relativeFile !== null ? relativeFile : file,
-  );
-  if (relativeFile === null) {
-    if (file.length > 0) next.file = file;
-    if (normalizedOpenFiles.length > 0) {
-      next.openFiles = normalizedOpenFiles;
-    } else {
-      delete next.openFiles;
-    }
-    return next;
-  }
-  if (relativeFile.length > 0) {
+  const normalizedOpenFiles = normalizeEditorOpenFiles(root, cfg.openFiles, relativeFile ?? "");
+  // A non-relativizable file id (absolute-outside or escaping) is dropped, never persisted (#1374).
+  if (relativeFile !== null && relativeFile.length > 0) {
     next.file = relativeFile;
   } else {
     delete next.file;

@@ -20,7 +20,7 @@ The module exposes one BFF route family:
 | Method + path                           | Purpose                                                                                     |
 | --------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `POST /api/editor/language`             | Run one operation (`diagnostics`, `completion`, `hover`, `symbols`) over an editor overlay. |
-| `GET /api/editor/language/capabilities` | Advertise the registered providers and the operations each serves.                          |
+| `GET /api/editor/language/capabilities` | Advertise a structured provider state for every known language (exhaustive — see below).    |
 
 The wire contracts live in `@oscharko-dev/keiko-contracts` (`language-service.ts`) and are imported
 type-only by the browser tier. They are kept disjoint from the editor-session namespace
@@ -74,22 +74,25 @@ so it is present in the published closure (the root uses `bundleDependencies`, w
 package's third-party dependencies — ADR-0021 D1). The compiler runs server-side only, model-free and
 offline.
 
-### Staged expansion to other languages (#1213, governed by ADR-0045)
+### Staged expansion to other languages (#1213/#1381/#1382, governed by ADR-0045 and ADR-0069)
 
-Deep deterministic intelligence for additional languages is a **staged expansion**, not part of the
-first release, tracked by [#1213](https://github.com/oscharko-dev/Keiko/issues/1213) and governed by
-[ADR-0045](adr/ADR-0045-staged-multi-language-lsp-expansion.md) with its companion
-[architecture blueprint](planning/keiko-editor-multi-language-expansion.md). Each
-language attaches as a new provider over its standard Language Server Protocol (LSP 3.17) server,
-bridged through the out-of-process LSP path the epic already flags for dependency review
-(`monaco-languageclient` or an out-of-process LSP host):
+Deep deterministic intelligence for additional languages is a **staged expansion** tracked by
+[#1213](https://github.com/oscharko-dev/Keiko/issues/1213), [#1381](https://github.com/oscharko-dev/Keiko/issues/1381),
+and [#1382](https://github.com/oscharko-dev/Keiko/issues/1382), governed by
+[ADR-0045](adr/ADR-0045-staged-multi-language-lsp-expansion.md), [ADR-0069](adr/ADR-0069-governed-lsp-process-manager.md),
+and the companion [architecture blueprint](planning/keiko-editor-multi-language-expansion.md). Each
+language attaches as a provider over its standard Language Server Protocol (LSP) server, bridged
+through the server-side governed process manager. Keiko does not install or bundle these tools; see
+the [host language provider setup guide](keiko-editor/host-language-providers.md) for operator
+prerequisites and enterprise setup.
 
-| Language | Standard LSP server      |
-| -------- | ------------------------ |
-| Java     | `jdtls` (Eclipse JDT LS) |
-| Python   | `pyright` / `pylsp`      |
-| Rust     | `rust-analyzer`          |
-| Go       | `gopls`                  |
+| Language | Standard LSP server                      |
+| -------- | ---------------------------------------- |
+| Java     | `jdtls` (Eclipse JDT LS)                 |
+| Python   | `pyright-langserver`                     |
+| Rust     | `rust-analyzer`                          |
+| Go       | `gopls`                                  |
+| Shell    | `bash-language-server` plus `shellcheck` |
 
 Because the contracts are provider-pluggable, none of these require a contract change — only a new
 provider registration. Monaco already provides multi-language syntax highlighting and editing today
@@ -100,3 +103,65 @@ The LSP bridge architecture (server-side, not browser-side), the provider-regist
 per-language security model, and the dependency-decision record are detailed in
 [ADR-0045](adr/ADR-0045-staged-multi-language-lsp-expansion.md) and the companion
 [architecture blueprint](planning/keiko-editor-multi-language-expansion.md).
+
+## Capability registry and editor mode map (#1379)
+
+Issue [#1379](https://github.com/oscharko-dev/Keiko/issues/1379) · Parent epic
+[#1491](https://github.com/oscharko-dev/Keiko/issues/1491) · Decision record
+[ADR-0067](adr/ADR-0067-language-capability-registry-and-editor-mode-map.md).
+
+So that the UI and future agents stay provider-agnostic, the capability registry is the **single
+authoritative source** for what each language supports — modelled at the contract boundary the way
+LSP and VS Code model language features as capabilities.
+
+### Canonical editor language mode map
+
+The known **source-language** universe is a single frozen const table in `@oscharko-dev/keiko-contracts`
+(`editor-language-mode-map.ts`, `EDITOR_LANGUAGE_MODE_MAP`). Each entry carries the canonical
+`languageId`, its `fileExtensions` (the authoritative file-extension matching), and a
+`syntaxHighlighting` flag (syntax support). It is a strict leaf — pure const tables and pure functions,
+no other `keiko-*` imports. The browser editor's Monaco language inference
+(`keiko-editor/src/monaco/language-inference.ts`) **derives** its extension map and id set from this
+table (plus the editor-only `plaintext` render fallback), so the browser and the server agree on the
+known-language universe by construction rather than through two divergent maps.
+
+### Exhaustive capabilities — every known language returns a structured provider state
+
+`GET /api/editor/language/capabilities` is **exhaustive** over the mode map. The server registry first
+contributes the real providers (TypeScript/JavaScript, JSON, builtin-text) and the unavailable external
+LSP descriptors (Python/Java/Go/Rust/shell/SQL); then, for every known mode-map language that no
+descriptor already covers, `describeLanguageCapabilities()` synthesises a structured
+`{ id: "none", operations: [], availability: "unavailable", unavailableReason }` descriptor. As a
+result a consumer resolving a known `languageId` always receives a structured provider state, never a
+missing entry. The UI gates each language action (completion, diagnostics, hover, symbols, formatting)
+on the resolved descriptor's `availability` and advertised `operations` — never on a hard-coded
+TypeScript/JavaScript check.
+
+### Unsupported languages degrade safely
+
+`plaintext` and any unknown extension are deliberately **not** registry languages: they are the
+editor's plain-text render fallback. Monaco still tokenises/colours the buffer locally, every governed
+operation is disabled (no provider resolves), and `runLanguageOperation()` returns
+`UNSUPPORTED_LANGUAGE` without throwing. "Known" (a mode-map id) and "unsupported" (everything else)
+are disjoint by design.
+
+### Provider availability in agent snapshots
+
+`EditorAgentSessionSnapshot` (`editor-agent.ts`) carries an additive, optional, **content-free**
+`languageCapability` field — `{ languageId, providerId, available, unavailableReason? }` (ids, a
+boolean, and a short reason string only; never buffer text) — so a future agent can read the active
+file's provider availability from the snapshot without calling the capabilities route itself. The
+field is additive and the agent-snapshot schema version is unchanged.
+
+### Host provider detection (#1382)
+
+The capabilities route is workspace-aware when called with a `root` query parameter. For Java, Python,
+Go, Rust, and Shell providers, Keiko requires an explicit per-provider enable flag, detects the
+required bare executable names on `PATH`, rejects workspace-local or symlink-escaped executables, and
+reports a structured unavailable descriptor when a tool is missing, disabled, or blocked by policy.
+Core editing remains available in every unavailable state.
+
+Code-action capabilities are **not** modelled as an executable operation yet: no provider implements
+them, so adding one would be speculative surface. They are reserved for the staged-LSP work
+([ADR-0045](adr/ADR-0045-staged-multi-language-lsp-expansion.md)), to be added additively alongside a
+real implementor.

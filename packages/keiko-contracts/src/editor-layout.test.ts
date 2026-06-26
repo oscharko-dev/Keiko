@@ -271,4 +271,40 @@ describe("EditorLayoutStateV2 contracts", () => {
       }),
     );
   });
+
+  it("preserves tab order, structure, and active state across a serialize-reload round trip", () => {
+    const reordered = editorLayoutReducer(layout({ openFiles: ["src/a.ts", "src/b.ts", "src/c.ts"] }), {
+      type: "reorder-tab",
+      paneId: "pane-1",
+      file: "src/a.ts",
+      targetIndex: 2,
+    });
+    const split = editorLayoutReducer(reordered, {
+      type: "split-pane",
+      paneId: "pane-1",
+      direction: "row",
+      file: "src/c.ts",
+    });
+    const moved = editorLayoutReducer(split, {
+      type: "move-tab",
+      fromPaneId: "pane-1",
+      toPaneId: "pane-2",
+      file: "src/b.ts",
+      targetIndex: 0,
+    });
+    const session = editorLayoutReducer(moved, { type: "resize-split", splitId: "split-1", ratio: 65 });
+
+    const json = serializeEditorLayoutStateV2(session);
+    const reloaded = createEditorLayoutStateV2({ ...DEFAULT_INPUT, layoutJson: json });
+
+    for (const paneId of editorLayoutPaneIds(session)) {
+      expect(reloaded.panes[paneId]?.tabOrder).toEqual(session.panes[paneId]?.tabOrder);
+      expect(reloaded.panes[paneId]?.openFiles).toEqual(session.panes[paneId]?.openFiles);
+      expect(reloaded.panes[paneId]?.activeFile).toBe(session.panes[paneId]?.activeFile);
+    }
+    expect(reloaded.tree).toEqual(session.tree);
+    expect(reloaded.activePaneId).toBe(session.activePaneId);
+    // The reload is a fixed point: re-serializing yields the same persisted state.
+    expect(JSON.parse(serializeEditorLayoutStateV2(reloaded))).toEqual(JSON.parse(json));
+  });
 });

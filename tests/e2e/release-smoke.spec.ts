@@ -276,6 +276,65 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
   assertNoPageErrors();
 });
 
+test("governed Git action-sheet endpoint is wired, CSRF-protected, and returns the contract shape @smoke", async ({
+  request,
+}) => {
+  // Issue #473: the action-sheet BFF is read-only/computational. Against the packaged app (governed
+  // Git delivery not enabled in this deployment) it must return a well-formed, content-free
+  // GitDeliveryActionSheet that is fail-closed to blocked/provider-not-ready — never a 500 or raw output.
+  const body = {
+    schemaVersion: "1",
+    resolvedInputs: {
+      kind: "commit",
+      messageByteLength: 24,
+      stagedPathCount: 2,
+      allowEmptyCommit: false,
+    },
+    worktreeSnapshot: {
+      headDetached: false,
+      currentBranchName: "feature/x",
+      stagedFileCount: 2,
+      unstagedFileCount: 0,
+      untrackedFileCount: 0,
+      hasUpstream: true,
+      aheadCount: 0,
+      behindCount: 0,
+      existingLocalBranchNames: ["feature/x", "main"],
+      remoteAliases: ["origin"],
+    },
+  };
+
+  const ok = await request.post("/api/git-delivery/action-sheet", {
+    headers: MUTATION_HEADERS,
+    data: body,
+  });
+  expect(ok.status()).toBe(200);
+  const sheet = (await ok.json()) as {
+    schemaVersion: string;
+    state: string;
+    preview: { actionKind: string };
+    approval: { necessity: string };
+    policyExplanation: { decision: string };
+    recovery: unknown[];
+    blocked?: { cause: string };
+  };
+  expect(sheet.schemaVersion).toBe("1");
+  expect(["ready-to-execute", "waiting-for-approval", "blocked"]).toContain(sheet.state);
+  expect(sheet.preview.actionKind).toBe("commit");
+  expect(typeof sheet.approval.necessity).toBe("string");
+  expect(typeof sheet.policyExplanation.decision).toBe("string");
+  expect(Array.isArray(sheet.recovery)).toBe(true);
+  // Governed Git delivery is disabled in the packaged deployment -> fail-closed to a hard block.
+  expect(sheet.state).toBe("blocked");
+  expect(sheet.blocked?.cause).toBe("provider-not-ready");
+  // Content-free guarantee: no raw repo paths or command output leaked into the response.
+  expect(JSON.stringify(sheet)).not.toContain("/Users/");
+
+  // CSRF is enforced centrally for the mutating verb: the same POST without the header is rejected.
+  const noCsrf = await request.post("/api/git-delivery/action-sheet", { data: body });
+  expect(noCsrf.status()).toBe(403);
+});
+
 test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", async ({
   page,
 }) => {
@@ -283,31 +342,10 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   const relativePath = "packages/keiko-cli/src/run.ts";
   const absolutePath = join(projectPath, relativePath);
   writeFileSync(absolutePath, "", "utf8");
-  await seedFilesWindow(page, projectPath);
   const assertNoPageErrors = collectPageErrors(page);
+  const editorWindow = await openSmokeEditor(page, projectPath, relativePath);
 
-  await page.goto("/");
-  const filesWindow = page.getByRole("region", { name: /^Files/u });
-  await expect(filesWindow).toBeVisible();
-
-  await openTreePath(filesWindow, "packages");
-  await openTreePath(filesWindow, "packages/keiko-cli");
-  await openTreePath(filesWindow, "packages/keiko-cli/src");
-  await openTreePath(filesWindow, relativePath);
-  await expect(filesWindow.getByRole("region", { name: "File preview: run.ts" })).toBeVisible();
-  await filesWindow.getByRole("button", { name: "Open in editor" }).click();
-
-  const editorWindow = page.getByRole("region", {
-    name: /Editor.*packages\/keiko-cli\/src\/run\.ts/u,
-  });
-  await expect(editorWindow).toBeVisible();
-  await filesWindow.getByRole("button", { name: "Close Files window" }).click();
-  await expect(filesWindow).toBeHidden();
-  await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
-
-  // Issue #1205: dirty/saved/conflict state is communicated by the unified status bar (the editor's
-  // own footer is suppressed in the card). The save field is the visible indicator; a conflict also
-  // fires the status bar's assertive alert region.
+  // Issue #1205: dirty/saved/conflict state is communicated by the unified status bar's save field.
   const saveField = editorWindow.locator('[data-field="save"]');
   const savedText = "export const e2eFixture = 'saved in browser smoke';\n";
   await replaceMonacoText(page, editorWindow, savedText);
@@ -325,12 +363,84 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   await expect(editorWindow.getByRole("alert")).toContainText("Save conflict");
   await expect(saveField).toHaveText("Conflict");
 
+  // Issue #1376 (D1/AC1): reloading from disk over the dirty conflict buffer routes through an
+  // explicit discard confirmation before the disk content replaces the unsaved edits.
   await editorWindow.getByRole("button", { name: "Reload" }).click();
+  await editorWindow.getByRole("button", { name: "Discard and reload" }).click();
   await expect(saveField).toHaveText("Saved");
   await expect(editorWindow.getByText("external edit")).toBeVisible();
 
+  // Issue #1376 (AC1/D4): a dirty tab close is gated by the in-app dialog (no native confirm), and
+  // Cancel preserves the buffer.
+  await replaceMonacoText(page, editorWindow, "export const e2eFixture = 'dirty again';\n");
+  await editorWindow.getByRole("button", { name: `Close ${relativePath}` }).click();
+  const dirtyDialog = editorWindow.getByRole("dialog", { name: "Unsaved editor changes" });
+  await expect(dirtyDialog).toBeVisible();
+  await dirtyDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dirtyDialog).toBeHidden();
+  await expect(saveField).toHaveText("Unsaved");
+
   await editorWindow.getByRole("button", { name: "Close Editor window" }).click();
   await expect(editorWindow).toBeHidden();
+  assertNoPageErrors();
+});
+
+test("arbitrary folder opening keeps root-relative ids with clear error and empty states @smoke", async ({
+  page,
+}) => {
+  // Issue #1374: opening an arbitrary developer workspace must keep every file identifier
+  // ROOT-RELATIVE (never an absolute path that the BFF rejects with 400 BAD_PATH), support parent
+  // navigation, and render clear non-blocking states for unavailable and empty roots without
+  // breaking the app. The temp fixture stands in for a project root (the local worktree path itself
+  // contains a deny-listed `.claude` segment, so it cannot be opened as a root).
+  const projectPath = createProjectFixture();
+  mkdirSync(join(projectPath, "empty-folder"), { recursive: true });
+  await seedFilesWindow(page, projectPath);
+  const assertNoPageErrors = collectPageErrors(page);
+
+  await page.goto("/");
+  const filesWindow = page.getByRole("region", { name: /^Files/u });
+  await expect(filesWindow).toBeVisible();
+
+  // Opening the project root works and a nested package folder navigates without failure (AC1/AC2).
+  await openTreePath(filesWindow, "packages");
+  await openTreePath(filesWindow, "packages/keiko-cli");
+  await expect(
+    filesWindow.locator('button.tr-row[data-path="packages/keiko-cli/src"]'),
+  ).toBeVisible();
+
+  // AC2: every visible tree identifier is root-relative — none is an absolute machine path.
+  const identifiers = await filesWindow
+    .locator("button.tr-row")
+    .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-path") ?? ""));
+  expect(identifiers.length).toBeGreaterThan(0);
+  expect(
+    identifiers.every(
+      (id) =>
+        id.length > 0 && !id.startsWith("/") && !/^[A-Za-z]:/u.test(id) && !id.includes(":\\"),
+    ),
+  ).toBe(true);
+
+  // Parent navigation: stepping up from a nested folder lists the folder we came from.
+  await filesWindow.getByRole("button", { name: "Open parent folder" }).click();
+  await expect(filesWindow.locator('button.tr-row[data-path="packages/keiko-cli"]')).toBeVisible();
+
+  // D3/AC4: an unavailable root renders a clear, non-blocking error and the app stays alive.
+  const rootInput = filesWindow.getByRole("textbox", { name: /Folder path/u });
+  await rootInput.fill(`${projectPath}/does-not-exist-1374`);
+  await rootInput.press("Enter");
+  await expect(filesWindow.getByRole("alert")).toBeVisible();
+
+  // D3: a permission-denied root (a deny-listed path segment) renders the same clear error state.
+  await rootInput.fill(join(projectPath, ".git"));
+  await rootInput.press("Enter");
+  await expect(filesWindow.getByRole("alert")).toBeVisible();
+
+  // Recovery to an empty folder shows the clear empty state (no editor failure).
+  await rootInput.fill(join(projectPath, "empty-folder"));
+  await rootInput.press("Enter");
+  await expect(filesWindow.getByText("Empty folder.")).toBeVisible();
+
   assertNoPageErrors();
 });
 

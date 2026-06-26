@@ -17,6 +17,37 @@ export type {
   WorkflowDescriptor,
   WorkflowInputSpec,
   GroundingLimits,
+  GitRepositoryState,
+  GitUnavailableReason,
+  GitStatusCode,
+  GitChangedFile,
+  GitRepositoryStatusResponse,
+  GitDiffScope,
+  GitRepositoryDiffResponse,
+  // Issue #1387 — controlled test/build/run command executor wire types.
+  CommandTaskKind,
+  CommandTaskSource,
+  CommandTask,
+  CommandTaskCatalog,
+  CommandFailureReason,
+  CommandTaskRunRequest,
+  CommandTaskRunResult,
+  CommandRunnerEventKind,
+  CommandRunnerEvent,
+  // Issue #1388 (ADR-0070) — container engine detection + governed execution wire types.
+  ContainerEngineId,
+  ContainerEngineState,
+  ContainerEngineUnavailableReason,
+  ContainerEngineStatus,
+  ContainerCapabilityResponse,
+  ContainerTaskKind,
+  ContainerTask,
+  ContainerTaskCatalog,
+  ContainerRunRequest,
+  ContainerFailureReason,
+  ContainerRunResult,
+  ContainerRunnerEventKind,
+  ContainerRunnerEvent,
   VoiceProfile,
   VoiceProviderLocality,
   VoiceUnavailableReason,
@@ -108,6 +139,7 @@ export type {
   EditorAgentActionQueuedResponse,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
+  EditorAgentConflictCode,
   EditorAgentEvent,
   EditorAgentPaneSnapshot,
   EditorAgentSessionSnapshot,
@@ -116,7 +148,20 @@ export type {
   EditorAgentSnapshotResponse,
   EditorAgentSnapshotTextMode,
 } from "@oscharko-dev/keiko-contracts";
-export { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+export {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  isContainedAgentPath,
+  isEditorAgentEvent,
+} from "@oscharko-dev/keiko-contracts";
+
+// ─── Editor agent governance, policy, and audit (Issue #1395, ADR-0062) ─────────
+export type {
+  EditorAgentActionAuditRecord,
+  EditorAgentActionDisposition,
+  EditorAgentActionEffectClass,
+  EditorAgentAuditResponse,
+} from "@oscharko-dev/keiko-contracts";
+export { isEditorAgentActionAuditRecord } from "@oscharko-dev/keiko-contracts";
 
 // ─── Deterministic context-engineering layer (ADR-0052 / ADR-0057) ──────────────────
 // The context-status panel (ContextStatusPanel.tsx) needs the lane-id literal union and the

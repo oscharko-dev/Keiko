@@ -5,6 +5,7 @@
 // least one assertion in this file.
 
 import { describe, expect, it } from "vitest";
+import { GIT_DELIVERY_ACTION_KINDS } from "@oscharko-dev/keiko-contracts";
 import { TERMINAL_COMMAND_RULES, isTerminalCommandAllowed } from "./terminal-policy.js";
 
 describe("TERMINAL_COMMAND_RULES", () => {
@@ -421,5 +422,65 @@ describe("isTerminalCommandAllowed — bare-executable safety", () => {
 
   it("denies an executable containing a backslash", () => {
     expect(isTerminalCommandAllowed("ls\\foo", []).allowed).toBe(false);
+  });
+});
+
+describe("AC5 — governed Git delivery boundary (ADR-0058)", () => {
+  // The REAL underlying mutating git commands each governed action kind maps to must stay denied by
+  // isTerminalCommandAllowed. Governed write authority lives only behind the typed contracts; the
+  // human-facing terminal allowlist must never grow to reach any of these.
+  const DENIED_GIT_INVOCATIONS: readonly (readonly string[])[] = [
+    // commit
+    ["commit", "-m", "x"],
+    // push (incl. force)
+    ["push", "origin", "main"],
+    ["push", "--force", "origin", "main"],
+    // merge + abort
+    ["merge", "feat"],
+    ["merge", "--abort"],
+    // branch-create
+    ["branch", "feat/x"],
+    // stage (the REAL stage command)
+    ["add", "."],
+    ["add", "-A"],
+    // unstage (the REAL unstage commands)
+    ["restore", "--staged", "."],
+    ["reset", "HEAD", "file"],
+    // recovery
+    ["reset", "--hard", "HEAD~1"],
+    ["restore", "."],
+    // rewrite-adjacent operations
+    ["rebase", "main"],
+    ["cherry-pick", "abc"],
+    ["revert", "abc"],
+    ["stash"],
+    ["clean", "-fd"],
+    ["tag", "v1"],
+    ["switch", "-c", "x"],
+    ["checkout", "-b", "x"],
+    ["fetch"],
+    ["pull"],
+  ] as const;
+
+  it.each(DENIED_GIT_INVOCATIONS)("denies git %j as a mutating/network command", (...args) => {
+    expect(isTerminalCommandAllowed("git", args).allowed).toBe(false);
+  });
+
+  it("keeps read-only inspection commands allowed (selective, not deny-everything)", () => {
+    expect(isTerminalCommandAllowed("git", ["status"]).allowed).toBe(true);
+    expect(isTerminalCommandAllowed("git", ["log"]).allowed).toBe(true);
+  });
+
+  it("GIT_DELIVERY_ACTION_KINDS shares no member with any terminal allowedSubcommands", () => {
+    const allowedSubcommands = new Set<string>();
+    for (const rule of TERMINAL_COMMAND_RULES) {
+      for (const sub of rule.allowedSubcommands ?? []) {
+        allowedSubcommands.add(sub);
+      }
+    }
+    expect(allowedSubcommands.size).toBeGreaterThan(0);
+    for (const kind of GIT_DELIVERY_ACTION_KINDS) {
+      expect(allowedSubcommands.has(kind)).toBe(false);
+    }
   });
 });

@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  EDITOR_LANGUAGE_MODE_IDS,
   type LanguageServiceLimits,
   type LanguageServiceRequest,
 } from "@oscharko-dev/keiko-contracts";
 import {
   describeLanguageCapabilities,
+  NO_PROVIDER_UNAVAILABLE_REASON,
   runLanguageOperation,
   type RunLanguageOperationOptions,
 } from "./languageService.js";
@@ -620,5 +622,108 @@ describe("provider pluggability (AC7)", () => {
       options("src/x.fic", { registry }),
     );
     expect(outcome).toMatchObject({ kind: "error", code: "UNSUPPORTED_OPERATION" });
+  });
+});
+// Issue #1379 AC2 (ADR-0067 D3) — describeLanguageCapabilities is exhaustive over the canonical
+// mode map: every known language id resolves to a descriptor, never null.
+describe("describeLanguageCapabilities exhaustiveness (Issue #1379 AC2)", () => {
+  it("returns at least one descriptor whose languages include every known mode-map id", () => {
+    const capabilities = describeLanguageCapabilities();
+    for (const languageId of EDITOR_LANGUAGE_MODE_IDS) {
+      const descriptor = capabilities.providers.find((entry) =>
+        entry.languages.includes(languageId),
+      );
+      expect(descriptor, `no descriptor covers ${languageId}`).toBeDefined();
+    }
+  });
+
+  it("preserves the real available + unavailable-LSP descriptors unchanged (default registry)", () => {
+    const capabilities = describeLanguageCapabilities();
+    // The TypeScript/JS provider stays available with its full operation set.
+    const ts = capabilities.providers.find((entry) => entry.id === "typescript");
+    expect(ts?.availability).toBe("available");
+    expect(ts?.operations).toEqual(["diagnostics", "completion", "hover", "symbols", "formatting"]);
+    // JSON + builtin-text remain available; the external LSPs remain unavailable.
+    expect(capabilities.providers.find((entry) => entry.id === "json")?.availability).toBe(
+      "available",
+    );
+    expect(capabilities.providers.find((entry) => entry.id === "python-lsp")?.availability).toBe(
+      "unavailable",
+    );
+    // With the default registry every mode-map id is already covered by a real or LSP descriptor,
+    // so no synthetic "none" descriptor is appended.
+    expect(capabilities.providers.some((entry) => entry.id === "none")).toBe(false);
+  });
+
+  it("synthesizes an unavailable descriptor for a known language no provider covers", () => {
+    // A sparse registry that serves ONLY a fictional language, so every canonical mode-map id is
+    // uncovered and must be synthesized as unavailable.
+    const stub: LanguageProvider = {
+      descriptor: {
+        id: "stub",
+        languages: ["fictional"],
+        operations: ["diagnostics"],
+        availability: "available",
+      },
+      supports: (languageId: string): boolean => languageId === "fictional",
+      getDiagnostics: () => ({ diagnostics: [], truncated: false }),
+      getCompletions: () => ({ items: [], isIncomplete: false, truncated: false }),
+      getHover: () => ({ contents: null }),
+      getSymbols: () => ({ symbols: [], truncated: false }),
+      getFormatting: () => ({ edits: [], truncated: false }),
+    };
+    const registry = createLanguageProviderRegistry([stub]);
+    const capabilities = describeLanguageCapabilities(registry);
+
+    for (const languageId of EDITOR_LANGUAGE_MODE_IDS) {
+      const descriptor = capabilities.providers.find((entry) =>
+        entry.languages.includes(languageId),
+      );
+      expect(descriptor, `no descriptor covers ${languageId}`).toBeDefined();
+      expect(descriptor?.id).toBe("none");
+      expect(descriptor?.availability).toBe("unavailable");
+      expect(descriptor?.operations).toEqual([]);
+      expect(descriptor?.unavailableReason).toBe(NO_PROVIDER_UNAVAILABLE_REASON);
+      expect(descriptor?.languages).toEqual([languageId]);
+    }
+    // The real stub descriptor is still present and untouched.
+    expect(capabilities.providers.find((entry) => entry.id === "stub")?.availability).toBe(
+      "available",
+    );
+  });
+});
+
+// Issue #1379 AC3 (ADR-0067 D5) — an unsupported language degrades safely: UNSUPPORTED_LANGUAGE,
+// never an exception.
+describe("unsupported language degrades without throwing (Issue #1379 AC3)", () => {
+  it("returns UNSUPPORTED_LANGUAGE for an unknown languageId", () => {
+    let outcome: ReturnType<typeof runLanguageOperation> | undefined;
+    expect(() => {
+      outcome = runLanguageOperation(
+        {
+          operation: "diagnostics",
+          root,
+          document: { path: "notes.txt", languageId: "totally-unknown", text: "hello" },
+        },
+        options("notes.txt"),
+      );
+    }).not.toThrow();
+    expect(outcome).toMatchObject({ kind: "error", code: "UNSUPPORTED_LANGUAGE" });
+  });
+
+  it("returns UNSUPPORTED_LANGUAGE for the plaintext fallback (not a registry language)", () => {
+    let outcome: ReturnType<typeof runLanguageOperation> | undefined;
+    expect(() => {
+      outcome = runLanguageOperation(
+        {
+          operation: "completion",
+          root,
+          document: { path: "notes.txt", languageId: "plaintext", text: "hello" },
+          position: { line: 0, character: 0 },
+        },
+        options("notes.txt"),
+      );
+    }).not.toThrow();
+    expect(outcome).toMatchObject({ kind: "error", code: "UNSUPPORTED_LANGUAGE" });
   });
 });

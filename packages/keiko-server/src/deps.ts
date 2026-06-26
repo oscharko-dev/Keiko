@@ -39,6 +39,11 @@ import {
   type UiStore,
 } from "./store/index.js";
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
+import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
+import {
+  createContainerRunnerManager,
+  type ContainerRunnerManager,
+} from "./runtime/containerRunner.js";
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { createBffMemoryVault } from "./memory-handlers.js";
@@ -66,6 +71,8 @@ import {
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { EditorLanguageRouteOptions } from "./editor/languageRoutes.js";
+import type { RuntimeCapabilityRouteOptions } from "./runtime/capabilityRoutes.js";
+import type { GitRouteOptions } from "./gitRoutes.js";
 import { createProviderSecretResolver, type ProviderSecretResolver } from "./credentialVault.js";
 import { createLocalKnowledgeKeyProvider } from "./localKnowledgeKeyProvider.js";
 import type { KnowledgeStoreKeyProvider } from "@oscharko-dev/keiko-local-knowledge";
@@ -133,6 +140,14 @@ export interface UiHandlerDeps {
   // ADR-0018 — bounded permitted-command execution manager. Optional for legacy tests; production
   // wiring creates one per BFF and injects the UI store for the projectId → workspaceRoot lookup.
   readonly terminal?: TerminalExecutionManager | undefined;
+  // Issue #1387 — controlled test/build/run command executor. Optional so existing tests that do not
+  // exercise /api/commands/* keep their fixtures unchanged; production wiring creates one per BFF and
+  // injects the UI store for the projectId → workspaceRoot lookup plus package-script discovery.
+  readonly commandRunner?: CommandRunnerManager | undefined;
+  // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. Optional so
+  // existing tests that do not exercise /api/containers/* keep their fixtures unchanged; production
+  // wiring creates one per BFF and injects the UI store for the projectId → workspaceRoot lookup.
+  readonly containerRunner?: ContainerRunnerManager | undefined;
   // ADR-0017 — browser tool session manager (BYO Chrome over CDP). Optional so existing tests
   // that do not exercise /api/browser/* keep their fixtures unchanged.
   readonly browser?: BrowserSessionManager | undefined;
@@ -167,6 +182,12 @@ export interface UiHandlerDeps {
   // Test-only deterministic editor language route options. Production leaves this undefined so the
   // language service keeps the default deadline and real clock.
   readonly editorLanguageRouteOptions?: EditorLanguageRouteOptions | undefined;
+  // Test-only runtime detector seams. Production leaves this undefined so detection uses
+  // metadata-only PATH scanning plus contained manifest reads.
+  readonly runtimeCapabilityRouteOptions?: RuntimeCapabilityRouteOptions | undefined;
+  // Test-only Git BFF seams. Production leaves this undefined so repository status/diff use the
+  // fixed native Git runner and conservative caps.
+  readonly gitRouteOptions?: GitRouteOptions | undefined;
   // Issue #198 audit seam: lets local-knowledge route tests stub embedding requests without
   // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
   readonly localKnowledgeEmbeddingRequest?:
@@ -598,6 +619,46 @@ function buildTerminalManager(options: {
   });
 }
 
+// Issue #1387 — the command runner reuses the same store + evidence + live-redactor wiring as the
+// terminal manager so discovered test/build/run tasks inherit the identical workspace containment,
+// secret-shape scrubbing, and content-free audit trail.
+function buildCommandRunner(options: {
+  readonly store: UiStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly env: EnvSource;
+  readonly liveRedactor: Redactor;
+}): CommandRunnerManager {
+  return createCommandRunnerManager({
+    store: options.store,
+    evidenceStore: options.evidenceStore,
+    processEnv: options.env,
+    redactor: (value: string): string => {
+      const redacted = options.liveRedactor(value);
+      return typeof redacted === "string" ? redacted : value;
+    },
+  });
+}
+
+// Issue #1388 — the container runner reuses the same store + evidence + live-redactor wiring as the
+// command runner so its content-free run audit inherits the identical secret-shape scrubbing. The
+// active engine probe and the frozen-argv container run both compose the single runCommand boundary.
+function buildContainerRunner(options: {
+  readonly store: UiStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly env: EnvSource;
+  readonly liveRedactor: Redactor;
+}): ContainerRunnerManager {
+  return createContainerRunnerManager({
+    store: options.store,
+    evidenceStore: options.evidenceStore,
+    processEnv: options.env,
+    redactor: (value: string): string => {
+      const redacted = options.liveRedactor(value);
+      return typeof redacted === "string" ? redacted : value;
+    },
+  });
+}
+
 // ADR-0019 direction rule 3c: the tools package cannot import src/audit. The BFF injects the
 // cost-class resolver and a side-file writer that closes over the resolved evidenceDir + the
 // nodeWorkspaceFs realpath-containment port, so the browser session manager stays self-contained
@@ -682,6 +743,8 @@ function seedInitialProject(
 
 interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
+  readonly commandRunner: CommandRunnerManager;
+  readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
 }
@@ -695,6 +758,18 @@ function buildPeripherals(
 ): PeripheralManagers {
   return {
     terminal: buildTerminalManager({
+      store: uiStore,
+      evidenceStore,
+      env: options.env,
+      liveRedactor,
+    }),
+    commandRunner: buildCommandRunner({
+      store: uiStore,
+      evidenceStore,
+      env: options.env,
+      liveRedactor,
+    }),
+    containerRunner: buildContainerRunner({
       store: uiStore,
       evidenceStore,
       env: options.env,

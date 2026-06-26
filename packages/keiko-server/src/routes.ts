@@ -79,6 +79,20 @@ import {
   handleTerminalEvents,
   handleTerminalPolicy,
 } from "./terminal-routes.js";
+import { handleRuntimeCapabilities } from "./runtime/capabilityRoutes.js";
+import {
+  handleCommandCatalog,
+  handleCommandEvents,
+  handleCreateCommandRun,
+  handleDeleteCommandRun,
+} from "./command-runner-routes.js";
+import {
+  handleContainerCapability,
+  handleContainerCatalog,
+  handleContainerEvents,
+  handleCreateContainerRun,
+  handleDeleteContainerRun,
+} from "./runtime/containerRoutes.js";
 import {
   handleFilesContent,
   handleFilesDirectories,
@@ -86,7 +100,12 @@ import {
   handleFilesSearch,
   handleFilesTree,
 } from "./files.js";
-import { handleEditorLanguage, handleEditorLanguageCapabilities } from "./editor/languageRoutes.js";
+import { handleGitDiff, handleGitStatus } from "./gitRoutes.js";
+import {
+  handleEditorLanguage,
+  handleEditorLanguageCapabilitiesForRoute,
+} from "./editor/languageRoutes.js";
+import { handleEditorLspStatus } from "./editor/lsp/lspStatusRoute.js";
 import {
   handleEditorContext,
   handleEditorLocalKnowledgeRetrieve,
@@ -101,6 +120,7 @@ import { handleEditorTestGeneration } from "./editor/testGenerationRoutes.js";
 import { handleEditorPatchApply } from "./editor/patchApplyRoutes.js";
 import {
   handleEditorAgentActions,
+  handleEditorAgentAudit,
   handleEditorAgentEvents,
   handleEditorAgentSessions,
   handleEditorAgentSnapshot,
@@ -173,6 +193,13 @@ import {
   handlePromptEnhancement,
   handlePromptEnhancementEvidence,
 } from "./promptEnhancer/index.js";
+import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
+import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
+import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
+import { GIT_DELIVERY_COMMIT_ROUTE_GROUP } from "./gitDelivery/commitRoutes.js";
+import { GIT_DELIVERY_PUSH_ROUTE_GROUP } from "./gitDelivery/pushRoutes.js";
+import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
+import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -279,6 +306,74 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: handleDeleteTerminalExecution,
   },
   { method: "GET", pattern: "/api/terminal/events", handler: handleTerminalEvents },
+  // Issue #1385 — read-only local runtime inventory. Metadata-only detection: no package manager,
+  // Git, language, or container command is executed; root-scoped command sources use contained
+  // manifest reads on a registered project.
+  {
+    method: "GET",
+    pattern: "/api/runtime/capabilities",
+    handler: (ctx, deps) =>
+      handleRuntimeCapabilities(ctx, deps, deps.runtimeCapabilityRouteOptions),
+  },
+  // Issue #1386 — read-only Git repository status/diff BFF. Git execution stays server-side with
+  // fixed args/env, selected-root containment, unsafe-owner surfacing, and bounded diff output.
+  {
+    method: "GET",
+    pattern: "/api/git/status",
+    handler: (ctx, deps) => handleGitStatus(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/diff",
+    handler: (ctx, deps) => handleGitDiff(ctx, deps, deps.gitRouteOptions),
+  },
+  // Issue #1387 — controlled test/build/run command executor. Tasks are discovered from package
+  // scripts and run through the single governed spawn boundary (keiko-tools runCommand): allowlisted
+  // task ids only (never free-form argv), workspace-contained cwd, output cap, timeout, cancellation,
+  // and content-free evidence. Literal `catalog`/`events` paths register before the `:runId` route.
+  {
+    method: "GET",
+    pattern: "/api/commands/catalog",
+    handler: handleCommandCatalog,
+  },
+  {
+    method: "GET",
+    pattern: "/api/commands/events",
+    handler: handleCommandEvents,
+  },
+  { method: "POST", pattern: "/api/commands/runs", handler: handleCreateCommandRun },
+  {
+    method: "DELETE",
+    pattern: "/api/commands/runs/:runId",
+    handler: handleDeleteCommandRun,
+  },
+  // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. The capability
+  // route runs an opt-in ACTIVE daemon probe (distinct from the metadata-only #1385 detector); the
+  // catalog/run routes degrade to 503 CONTAINER_ENGINE_UNAVAILABLE when no engine is present. A run
+  // names a closed-catalog task id only (never a free-form image/argv/flag), executes a server-frozen
+  // hardened `docker run` argv through the single runCommand boundary, and writes content-free
+  // evidence. Literal `capability`/`catalog`/`events` paths register before the `:runId` route.
+  {
+    method: "GET",
+    pattern: "/api/containers/capability",
+    handler: handleContainerCapability,
+  },
+  {
+    method: "GET",
+    pattern: "/api/containers/catalog",
+    handler: handleContainerCatalog,
+  },
+  {
+    method: "GET",
+    pattern: "/api/containers/events",
+    handler: handleContainerEvents,
+  },
+  { method: "POST", pattern: "/api/containers/runs", handler: handleCreateContainerRun },
+  {
+    method: "DELETE",
+    pattern: "/api/containers/runs/:runId",
+    handler: handleDeleteContainerRun,
+  },
   // Desktop files — selected-root browser, preview, and editor control plane.
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
@@ -291,7 +386,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   {
     method: "GET",
     pattern: "/api/editor/language/capabilities",
-    handler: handleEditorLanguageCapabilities,
+    handler: (ctx, deps) =>
+      handleEditorLanguageCapabilitiesForRoute(ctx, deps, deps.editorLanguageRouteOptions),
   },
   {
     method: "POST",
@@ -362,6 +458,19 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/editor/agent/events",
     handler: handleEditorAgentEvents,
+  },
+  // Issue #1395 (ADR-0062) — read-only bounded audit feed of recent agent editor actions.
+  {
+    method: "GET",
+    pattern: "/api/editor/agent/audit",
+    handler: handleEditorAgentAudit,
+  },
+  // Issue #1381 (ADR-0069) — read-only, content-free LSP process lifecycle status feed. Env-gated
+  // default-OFF via KEIKO_EDITOR_LSP_STATUS (404 until an operator opts in). No CSP change needed.
+  {
+    method: "GET",
+    pattern: "/api/editor/lsp/status",
+    handler: (ctx, deps) => handleEditorLspStatus(ctx, { env: deps.env }),
   },
   {
     method: "POST",
@@ -619,6 +728,26 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // envelope (refs only, no chat content). Registered as a sibling group so concurrent
   // QI epic merges (e.g. #280) stay mechanically merge-safe.
   ...QI_HANDOFF_ROUTE_GROUP,
+  // Issue #473 (Epic #470) — governed Git delivery action-sheet route group. Single READ-ONLY
+  // POST seam returning a UI-safe GitDeliveryActionSheet projection; never mutates the repo.
+  // Registered as a sibling group so concurrent #470 epic merges stay mechanically merge-safe.
+  ...GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP,
+  ...GIT_DELIVERY_EVIDENCE_ROUTE_GROUP,
+  // #475 governed local write flows: branch create/switch, staging, and commit preview/execute. These
+  // EXECUTE through the #472 kernel + #474 evidence ledger; gated by the same capability flag and CSRF.
+  ...GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP,
+  ...GIT_DELIVERY_COMMIT_ROUTE_GROUP,
+  // #476 governed remote publish: push preview (read-only) + execute through the SEPARATE publish
+  // gateway (dedicated push-only allowlist) + #474 evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_PUSH_ROUTE_GROUP,
+  // #477 governed GitHub pull request command center: PR preview (read-only metadata/readiness/
+  // recommendation) + execute through the SEPARATE PR gateway (dedicated `gh api` allowlist) + #474
+  // evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_PR_ROUTE_GROUP,
+  // #478 governed merge: merge preview (read-only readiness/eligible-strategies/recommendation) +
+  // execute through the SEPARATE merge gateway (dedicated `gh api` merge allowlist, readiness gate, final
+  // approval) + #474 evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_MERGE_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

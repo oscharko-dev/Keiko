@@ -5799,6 +5799,179 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .arun-gate[data-esc="true"] .arun-gate-h {
   color: var(--info);
 }
+
+/* ── Governed Git delivery action sheet (Issue #473) ──────────────────────────────────
+   Layout-only primitives that extend the .arun-gate family. Every rule references the
+   existing mode-aware aliases (--text-*, --border-subtle, --feedback-*, --surface-*),
+   so it is correct across dark · light · high-contrast · forced-colors without per-theme
+   duplication. The state/severity tints below are ALWAYS paired with a text label in the
+   markup — colour is never the sole signal (AC5). */
+.gdas-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gdas-card[data-state="blocked"] {
+  border-color: var(--feedback-danger);
+  background: color-mix(in oklch, var(--feedback-danger) 10%, var(--surface-primary));
+}
+.gdas-card[data-state="blocked"] .arun-gate-h {
+  color: var(--feedback-danger);
+}
+.gdas-card[data-state="ready-to-execute"] {
+  border-color: var(--feedback-success);
+  background: color-mix(in oklch, var(--feedback-success) 10%, var(--surface-primary));
+}
+.gdas-card[data-state="ready-to-execute"] .arun-gate-h {
+  color: var(--feedback-success);
+}
+.gdas-state {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+.gdas-section {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+.gdas-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin: 0 0 6px;
+}
+.gdas-section-subtitle {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 6px 0 3px;
+}
+.gdas-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+.gdas-kv {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+}
+.gdas-kv dt {
+  flex: none;
+  min-width: 110px;
+  color: var(--text-secondary);
+}
+.gdas-kv dd {
+  margin: 0;
+  color: var(--text-primary);
+}
+.gdas-mono {
+  font-family: var(--font-mono);
+}
+.gdas-preview-line {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 4px 0 0;
+}
+.gdas-approver-list,
+.gdas-constraint-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.gdas-blocker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gdas-blocker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-primary);
+}
+.gdas-blocker[data-severity="blocking"] {
+  border-color: color-mix(in oklch, var(--feedback-danger) 48%, var(--border-subtle));
+}
+.gdas-blocker[data-severity="advisory"] {
+  border-color: color-mix(in oklch, var(--feedback-warning) 48%, var(--border-subtle));
+}
+.gdas-blocker-badges {
+  display: inline-flex;
+  gap: 4px;
+}
+.gdas-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+.gdas-badge[data-severity="blocking"] {
+  color: var(--feedback-danger);
+  border-color: color-mix(in oklch, var(--feedback-danger) 55%, transparent);
+}
+.gdas-badge[data-severity="advisory"] {
+  color: var(--feedback-warning);
+  border-color: color-mix(in oklch, var(--feedback-warning) 55%, transparent);
+}
+.gdas-blocker-code {
+  font-size: 11.5px;
+  color: var(--text-primary);
+}
+.gdas-blocker-remediation {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.gdas-blocked-cause {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--feedback-danger);
+  margin: 0 0 6px;
+}
+.gdas-recovery-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.gdas-recovery-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+}
+.gdas-recovery-action {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.gdas-recovery-remediation,
+.gdas-recovery-strategy {
+  color: var(--text-secondary);
+}
+.gdas-empty,
+.gdas-loading {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  padding: 11px;
+}
 .win-btn:hover {
   background: var(--surface-secondary);
   color: var(--text-primary);
@@ -19439,6 +19612,20 @@ ul.integ {
 .files-retry:hover {
   background: var(--card-2);
 }
+.files-git-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.files-git-status[data-state="unsafe"],
+.files-git-status[data-state="error"] {
+  color: var(--feedback-warning);
+}
 /* C130 — symlink badge + size column: chip pattern analog .file-mut/.fpv-lang so the
    badge reads as a status, and the size column recedes behind the file name. */
 .tr-badge {
@@ -19461,6 +19648,37 @@ ul.integ {
   color: var(--fg-muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+.tr-file-wrap {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+.tr-file-wrap > .tr-file {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tr-git {
+  color: var(--accent-text);
+  border-color: color-mix(in oklch, var(--accent) 42%, var(--border-subtle));
+  background: color-mix(in oklch, var(--accent) 12%, var(--surface-inset));
+}
+.tr-git-diff {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  margin: 2px 4px 2px 0;
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+.tr-git-diff:hover {
+  color: var(--text-primary);
+  background: var(--button-ghost-surface-hover);
+}
+.tr-git-diff:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
 }
 /* C216 — file rows render an invisible caret placeholder instead of a hardcoded
    +14px pad, so they stay aligned with sibling folders even if the gap changes. */

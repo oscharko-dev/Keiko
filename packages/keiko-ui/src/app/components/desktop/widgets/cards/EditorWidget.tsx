@@ -22,6 +22,8 @@ import {
   editorLayoutPaneIds,
   editorLayoutPanes,
   editorLayoutReducer,
+  resolveWorkspaceFileIdentifier,
+  selectWorkspaceFileTarget,
   serializeEditorLayoutStateV2,
   type EditorDirtyCloseIntent,
   type EditorLayoutNode,
@@ -33,6 +35,8 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { Icons } from "../../Icons";
+import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirtyState";
+import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget } from "./FilesWidget";
@@ -80,22 +84,17 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function normalizeComparablePath(path: string): string {
-  return path.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
-}
-
+// Root-relative file-identifier contract (Issue #1374): turn a configured/persisted file (which
+// may be absolute, e.g. from an older session or a symlink-aliased root) into the root-relative
+// identifier the BFF requires. An absolute path that does not live under `root` resolves to "" so
+// the editor renders its non-blocking empty state instead of sending an absolute path that the BFF
+// would reject with 400 BAD_PATH. This and the chat repository-reference open path
+// (workspaceActions) share the contract in @oscharko-dev/keiko-contracts; the editor window's
+// cfg-persistence normalizer (AppShell.normalizeEditorWindowCfg) is a separate layer that likewise
+// never persists an absolute file id.
 function normalizeEditorFile(root: string, file: string | undefined): string {
-  const rawFile = file?.trim() ?? "";
-  if (root.trim().length === 0 || rawFile.length === 0) return rawFile;
-  const normalizedRoot = normalizeComparablePath(root);
-  const normalizedFile = normalizeComparablePath(rawFile);
-  const rootCmp = normalizedRoot.toLowerCase();
-  const fileCmp = normalizedFile.toLowerCase();
-  if (fileCmp === rootCmp) return "";
-  if (fileCmp.startsWith(`${rootCmp}/`)) {
-    return normalizedFile.slice(normalizedRoot.length + 1).replace(/^\/+/u, "");
-  }
-  return rawFile;
+  const resolution = resolveWorkspaceFileIdentifier(root, file);
+  return resolution.kind === "relative" ? resolution.path : "";
 }
 
 function normalizeEditorOpenFiles(
@@ -269,9 +268,7 @@ export function EditorWidget({
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
   const [layout, setLayout] = useState<EditorLayoutStateV2>(initialLayout);
-  const [dirtyByPane, setDirtyByPane] = useState<
-    Readonly<Record<string, Readonly<Record<string, true>>>>
-  >({});
+  const [dirtyByPane, setDirtyByPane] = useState<EditorDirtyByPane>({});
   const [pendingClose, setPendingClose] = useState<PendingDirtyClose | null>(null);
   const [draggedTab, setDraggedTab] = useState<DraggedTab | null>(null);
   const [saveRequest, setSaveRequest] = useState<EditorExternalSaveRequest | null>(null);
@@ -297,6 +294,10 @@ export function EditorWidget({
     (nextLayout: EditorLayoutStateV2, nextRoot = workspaceRoot): void => {
       const normalized = sanitizeLayoutFiles(nextRoot, nextLayout);
       setLayout(normalized);
+      // Re-home the per-pane dirty index onto the committed layout so a dirty tab
+      // keeps its marker and unsaved-changes prompt as it moves between panes and
+      // no orphaned flag survives on a collapsed pane (Issue #1375 AC3).
+      setDirtyByPane((current) => reconcileEditorDirtyByPane(current, normalized));
       if (nextRoot.length > 0) onWorkspaceChange?.(buildPatch(nextRoot, normalized));
     },
     [buildPatch, onWorkspaceChange, workspaceRoot],
@@ -445,10 +446,16 @@ export function EditorWidget({
       for (const [paneId, files] of Object.entries(dirtyByPane)) {
         if (files[path] === true) markDirty(paneId, path, false);
       }
+      // AC5: an explicit Discard must delete the hot-exit snapshot for the file, otherwise the
+      // discarded edits resurface as a recovery offer the next time the file is opened. The runtime
+      // widget's own clean-delete effect cannot be relied on here: applying the close unmounts that
+      // widget in the same React commit as the dirty flag is cleared, so the effect never runs.
+      // Deletion is scoped to the still-current workspace root (apply() may switch roots afterward).
+      void deleteEditorHotExitSnapshot(workspaceRoot, path);
     }
     pendingClose.apply();
     setPendingClose(null);
-  }, [dirtyByPane, markDirty, pendingClose]);
+  }, [dirtyByPane, markDirty, pendingClose, workspaceRoot]);
 
   const cancelPendingClose = useCallback((): void => {
     if (pendingClose?.saving === true) return;
@@ -482,17 +489,19 @@ export function EditorWidget({
 
   const openFile = useCallback(
     (nextRoot: string, nextFile: string): void => {
-      const normalizedRoot = nextRoot.trim();
-      const normalizedFile = normalizeEditorFile(normalizedRoot, nextFile);
-      if (normalizedRoot.length === 0 || normalizedFile.length === 0) return;
+      // Resolve to a {root, file} pair: a root-relative or absolute-inside-root candidate keeps
+      // `nextRoot`; a single absolute file outside it selects its containing directory as the root
+      // (AC3). An unresolvable candidate is dropped so the editor stays on its current usable state.
+      const target = selectWorkspaceFileTarget(nextRoot, nextFile);
+      if (target === null || target.file.length === 0) return;
       const paneId = currentPane.id;
       const nextLayout = editorLayoutReducer(layout, {
         type: "open-file",
         paneId,
-        file: normalizedFile,
+        file: target.file,
       });
-      setWorkspaceRoot(normalizedRoot);
-      commitLayout(nextLayout, normalizedRoot);
+      setWorkspaceRoot(target.root);
+      commitLayout(nextLayout, target.root);
     },
     [commitLayout, currentPane.id, layout],
   );
@@ -809,6 +818,9 @@ export function EditorWidget({
       layoutPanes: layoutPaneSnapshots,
       activePaneId: layout.activePaneId,
       onSelectOpenFile: (nextFile) => selectOpenFile(pane.id, nextFile),
+      onSplitPane: (targetPaneId, direction) => splitPane(targetPaneId, direction),
+      onMoveTab: (fromPaneId, file, toPaneId) =>
+        commitLayout(editorLayoutReducer(layout, { type: "move-tab", fromPaneId, toPaneId, file })),
       onCloseOpenFile: (path) => closeOpenFile(pane.id, path),
       onDirtyChange: (path, dirty) => markDirty(pane.id, path, dirty),
       toolbarExtras: paneActions(pane),
@@ -870,7 +882,15 @@ export function EditorWidget({
         <button
           type="button"
           className="ed-pane-resizer ui-tip"
+          // WAI-ARIA window-splitter pattern: a focusable separator is an interactive widget;
+          // role="separator" with aria-valuenow and Arrow-key handling is its canonical markup.
+          // eslint-disable-next-line jsx-a11y/no-interactive-element-to-noninteractive-role
+          role="separator"
           aria-label="Resize editor split"
+          aria-orientation={node.direction === "row" ? "vertical" : "horizontal"}
+          aria-valuemin={MIN_SPLIT_RATIO}
+          aria-valuemax={MAX_SPLIT_RATIO}
+          aria-valuenow={Math.round(node.ratio)}
           data-tip="Resize editor split"
           onPointerDown={capturePointer}
           onPointerMove={(event) => {

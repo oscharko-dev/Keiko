@@ -1,11 +1,13 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   fetchFilesPreview,
   fetchFilesTree,
+  fetchGitDiff,
+  fetchGitStatus,
   fetchProjects,
   updateChatConnectedScopes,
 } from "../../../../../lib/api";
@@ -23,6 +25,8 @@ vi.mock("../../../../../lib/api", async () => {
     fetchFilesPreview: vi.fn(),
     fetchProjects: vi.fn(),
     fetchFilesTree: vi.fn(),
+    fetchGitStatus: vi.fn(),
+    fetchGitDiff: vi.fn(),
     updateChatConnectedScopes: vi.fn(),
   };
 });
@@ -104,6 +108,25 @@ function renderWithSession(ui: ReactElement, session = makeSession()): ChatSessi
 }
 
 describe("FilesWidget", () => {
+  beforeEach(() => {
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo",
+      state: "unavailable",
+      available: false,
+      reason: "not-a-repository",
+      detached: false,
+      clean: true,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [],
+      truncated: false,
+      maxChanges: 500,
+    });
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -155,6 +178,78 @@ describe("FilesWidget", () => {
     );
     expect(onActiveFileChange).toHaveBeenCalledWith("package.json", "/repo space");
     expect(await screen.findByText('"keiko"')).toBeInTheDocument();
+  });
+
+  it("shows Git status badges and opens a bounded diff view", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo space",
+      repositoryRoot: "/repo space",
+      state: "available",
+      available: true,
+      branch: "main",
+      detached: false,
+      clean: false,
+      stagedCount: 0,
+      unstagedCount: 1,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [
+        {
+          path: "package.json",
+          indexStatus: " ",
+          worktreeStatus: "M",
+          staged: false,
+          unstaged: true,
+          untracked: false,
+          conflicted: false,
+        },
+      ],
+      truncated: false,
+      maxChanges: 500,
+    });
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo space",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "package.json",
+          path: "package.json",
+          kind: "file",
+          sizeBytes: 18,
+          extension: "json",
+        },
+      ],
+    });
+    vi.mocked(fetchGitDiff).mockResolvedValueOnce({
+      schemaVersion: "1",
+      root: "/repo space",
+      repositoryRoot: "/repo space",
+      state: "available",
+      available: true,
+      path: "package.json",
+      scope: "all",
+      diff: "diff --git a/package.json b/package.json\n-old\n+new\n",
+      truncated: false,
+      maxBytes: 131072,
+    });
+
+    const onOpenGitDelivery = vi.fn();
+    render(<FilesWidget root="/repo space" onOpenGitDelivery={onOpenGitDelivery} />);
+
+    expect(await screen.findByText(/Git main 1 changed file/i)).toBeInTheDocument();
+    expect(screen.getByText("M")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open governed Git delivery" }));
+    expect(onOpenGitDelivery).toHaveBeenCalledWith("/repo space");
+
+    await userEvent.click(screen.getByRole("button", { name: "View Git diff for package.json" }));
+
+    expect(fetchGitDiff).toHaveBeenCalledWith({ root: "/repo space", path: "package.json" });
+    expect(await screen.findByRole("region", { name: "Git diff: package.json" })).toHaveTextContent(
+      "+new",
+    );
   });
 
   it("opens the previewed file in the editor on demand", async () => {

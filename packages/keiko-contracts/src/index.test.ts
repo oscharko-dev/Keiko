@@ -124,6 +124,53 @@ import type {
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
+  GitDeliveryActionEnvelope,
+  GitDeliveryResolvedInputs,
+  GitDeliveryConstraint,
+  GitDeliveryPolicyDecision,
+  GitDeliveryBranchProtection,
+  GitDeliveryMergeReadiness,
+  GitDeliveryPullRequestState,
+  GitDeliveryActionSheet,
+  GitDeliveryPreviewManifest,
+  GitDeliveryApprovalSummary,
+  GitDeliveryRecoveryHint,
+  GitDeliveryExpectedBlocker,
+  GitDeliveryActionSheetRequest,
+  GitDeliveryWorktreeSnapshot,
+} from "./index.js";
+import {
+  GIT_DELIVERY_SCHEMA_VERSION,
+  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  GIT_DELIVERY_PROVIDER_SCHEMA_VERSION,
+  GIT_DELIVERY_ACTION_KINDS,
+  GIT_DELIVERY_RISK_CLASSES,
+  GIT_DELIVERY_RISK_CLASS_SEVERITY,
+  GIT_DELIVERY_ACTION_RISK_DEFAULTS,
+  GIT_DELIVERY_BLOCK_REASONS,
+  GIT_DELIVERY_PROVIDER_CAPABILITIES,
+  GIT_DELIVERY_RULE_DECISIONS,
+  GIT_DELIVERY_CHECKS_OVERALL_STATUSES,
+  GIT_DELIVERY_PULL_REQUEST_STATUSES,
+  GIT_DELIVERY_BRANCH_MATCH_KINDS,
+  GIT_DELIVERY_EXECUTION_ERROR_CODES,
+  GIT_DELIVERY_EXECUTION_OUTCOMES,
+  GIT_DELIVERY_MERGE_BLOCK_REASONS,
+  isGitDeliveryActionKind,
+  isGitDeliveryRemoteTargetPolicy,
+  gitDeliveryDefaultRiskClass,
+  evaluateGitPolicy,
+  parseGitDeliveryActionEnvelope,
+  GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION,
+  GIT_DELIVERY_ACTION_SHEET_STATES,
+  GIT_DELIVERY_APPROVAL_NECESSITIES,
+  GIT_DELIVERY_BLOCKED_CAUSES,
+  GIT_DELIVERY_RECOVERY_ACTION_HINTS,
+  isGitDeliveryActionSheet,
+  buildGitDeliveryActionSheet,
+  gitDeliverySuggestedRecoveryStrategy,
+  GIT_DELIVERY_POLICY_DECISION_OUTCOMES,
+  isGitDeliveryPolicyDecisionOutcome,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
@@ -515,5 +562,163 @@ describe("keiko-contracts package surface", () => {
     expect(validateSelectedScope(scope)).toEqual({ ok: true });
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<ConnectedContextPack>();
+  });
+
+  it("editor-agent contract value re-exports are reachable through the barrel (#1391)", async () => {
+    const mod = await import("./index.js");
+    // Compatibility pin for the schema version constant: the public agent-editor contract is v1.
+    expect(mod.EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
+    // AC1: the content-free default snapshot text mode is exported and is `none`.
+    expect(mod.DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE).toBe("none");
+    // AC3: the structured conflict-code taxonomy is exported in full, including PRECONDITION_REQUIRED
+    // and the Issue #1392 NO_ACTIVE_BRIDGE liveness code.
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("PRECONDITION_REQUIRED");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(8);
+    // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
+    expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual(["QUEUE_FULL", "TIMED_OUT"]);
+    // AC2: the write-action classification is exported as a single source of truth.
+    expect([...mod.EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
+      ["applyPatch", "applyTextEdits", "format", "save"].sort(),
+    );
+    expect(typeof mod.isEditorAgentEvent).toBe("function");
+    expect(typeof mod.isEditorAgentWriteActionType).toBe("function");
+    expect(typeof mod.editorAgentWritePreconditionError).toBe("function");
+    expect(typeof mod.editorAgentActionHasWritePrecondition).toBe("function");
+    expect(typeof mod.isEditorAgentConflictCode).toBe("function");
+    expect(typeof mod.isEditorAgentFailureCode).toBe("function");
+  });
+
+  it("editor-agent contract type re-exports are reachable through the barrel (#1391)", () => {
+    // Phantom generics pin the public contract types onto the barrel surface; a future refactor that
+    // drops one of these names stops this test compiling (same guard pattern as #186/#205 above).
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    type _Code = import("./index.js").EditorAgentConflictCode;
+    type _Action = import("./index.js").EditorAgentAction;
+    type _Result = import("./index.js").EditorAgentActionResult;
+    type _Event = import("./index.js").EditorAgentEvent;
+    type _Snapshot = import("./index.js").EditorAgentSessionSnapshot;
+    type _Request = import("./index.js").EditorAgentSnapshotRequest;
+    pin<_Code>();
+    pin<_Action>();
+    pin<_Result>();
+    pin<_Event>();
+    pin<_Snapshot>();
+    pin<_Request>();
+    expect(true).toBe(true);
+  });
+
+  it("governed Git delivery contracts are reachable through the barrel (#471)", () => {
+    // Schema versions.
+    expect(GIT_DELIVERY_SCHEMA_VERSION).toBe("1");
+    expect(GIT_DELIVERY_POLICY_SCHEMA_VERSION).toBe("1");
+    expect(GIT_DELIVERY_PROVIDER_SCHEMA_VERSION).toBe("1");
+
+    // Count assertions are intentional surface pins; bump deliberately when #472+ extends the surface.
+    expect(GIT_DELIVERY_ACTION_KINDS.length).toBe(11);
+    expect(GIT_DELIVERY_RISK_CLASSES.length).toBe(4);
+    expect(GIT_DELIVERY_BLOCK_REASONS.length).toBe(6);
+    expect(GIT_DELIVERY_PROVIDER_CAPABILITIES.length).toBe(5);
+    expect(GIT_DELIVERY_RULE_DECISIONS.length).toBe(4);
+    expect(GIT_DELIVERY_CHECKS_OVERALL_STATUSES.length).toBe(4);
+    expect(GIT_DELIVERY_PULL_REQUEST_STATUSES.length).toBe(3);
+    expect(GIT_DELIVERY_BRANCH_MATCH_KINDS.length).toBe(2);
+    expect(GIT_DELIVERY_EXECUTION_ERROR_CODES.length).toBe(6);
+    expect(GIT_DELIVERY_EXECUTION_OUTCOMES.length).toBe(4);
+    expect(GIT_DELIVERY_MERGE_BLOCK_REASONS.length).toBe(6);
+
+    // Risk severity and per-kind defaults cover every kind.
+    expect(GIT_DELIVERY_RISK_CLASS_SEVERITY["local-mutation"]).toBe(1);
+    expect(GIT_DELIVERY_RISK_CLASS_SEVERITY["recovery-or-rewrite"]).toBe(4);
+    for (const kind of GIT_DELIVERY_ACTION_KINDS) {
+      expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS[kind]).toBeDefined();
+    }
+
+    // Value-level functions are reachable.
+    expect(typeof isGitDeliveryActionKind).toBe("function");
+    expect(typeof isGitDeliveryRemoteTargetPolicy).toBe("function");
+    expect(typeof gitDeliveryDefaultRiskClass).toBe("function");
+    expect(typeof evaluateGitPolicy).toBe("function");
+    expect(typeof parseGitDeliveryActionEnvelope).toBe("function");
+    expect(gitDeliveryDefaultRiskClass("unknown-future-kind")).toBe("recovery-or-rewrite");
+    expect(isGitDeliveryActionKind("commit")).toBe(true);
+
+    // Type pins (compile-time reachability).
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<GitDeliveryActionEnvelope>();
+    pin<GitDeliveryResolvedInputs>();
+    pin<GitDeliveryConstraint>();
+    pin<GitDeliveryPolicyDecision>();
+    pin<GitDeliveryBranchProtection>();
+    pin<GitDeliveryMergeReadiness>();
+    pin<GitDeliveryPullRequestState>();
+  });
+
+  it("governed Git action-sheet contracts are reachable through the barrel (#473)", () => {
+    expect(GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION).toBe("1");
+    // Count assertions are intentional surface pins; bump deliberately when the surface changes.
+    expect(GIT_DELIVERY_ACTION_SHEET_STATES.length).toBe(3);
+    expect(GIT_DELIVERY_APPROVAL_NECESSITIES.length).toBe(3);
+    expect(GIT_DELIVERY_BLOCKED_CAUSES.length).toBe(3);
+    expect(GIT_DELIVERY_RECOVERY_ACTION_HINTS.length).toBe(9);
+
+    expect(typeof isGitDeliveryActionSheet).toBe("function");
+    expect(typeof buildGitDeliveryActionSheet).toBe("function");
+    expect(gitDeliverySuggestedRecoveryStrategy("commit", false)).toBe("soft-reset");
+    expect(GIT_DELIVERY_POLICY_DECISION_OUTCOMES.length).toBe(4);
+    expect(isGitDeliveryPolicyDecisionOutcome("approval-gated")).toBe(true);
+    expect(isGitDeliveryPolicyDecisionOutcome("nonsense")).toBe(false);
+
+    const sheet = buildGitDeliveryActionSheet({
+      actionId: "act-1",
+      resolvedInputs: {
+        kind: "commit",
+        messageByteLength: 8,
+        stagedPathCount: 1,
+        allowEmptyCommit: false,
+      },
+      policyDecision: { outcome: "allowed" },
+      approvalRequirement: { required: false },
+      providerReady: true,
+      expectedBlockers: [],
+      recovery: [],
+    });
+    expect(isGitDeliveryActionSheet(sheet)).toBe(true);
+    expect(sheet.state).toBe("ready-to-execute");
+
+    // Type pins (compile-time reachability).
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<GitDeliveryActionSheet>();
+    pin<GitDeliveryPreviewManifest>();
+    pin<GitDeliveryApprovalSummary>();
+    pin<GitDeliveryRecoveryHint>();
+    pin<GitDeliveryExpectedBlocker>();
+    pin<GitDeliveryActionSheetRequest>();
+    pin<GitDeliveryWorktreeSnapshot>();
+  });
+
+  it("governed GitHub pull request contracts are reachable through the barrel (#477)", async () => {
+    const m = await import("./index.js");
+    expect(m.GIT_PULL_REQUEST_SCHEMA_VERSION).toBe("1");
+    // Count assertions are intentional surface pins; bump deliberately when the surface changes.
+    expect(m.GIT_PR_CHANGE_TYPES.length).toBe(7);
+    expect(m.GIT_PR_READINESS_BLOCKER_CODES.length).toBe(9);
+    expect(m.GIT_PR_RECOMMENDATIONS.length).toBe(5);
+    expect(m.GIT_PR_REJECTION_REASONS.length).toBe(9);
+
+    expect(typeof m.synthesizePullRequestMetadata).toBe("function");
+    expect(typeof m.gitPullRequestReadinessFor).toBe("function");
+    expect(typeof m.gitPullRequestRecommendationFor).toBe("function");
+    expect(m.gitPrRejectionToErrorCode("rate-limited")).toBe("network-failure");
+    expect(m.gitPrRejectionToDisposition("validation-error")).toBe("user-fixable");
+
+    const readiness = m.gitPullRequestReadinessFor({
+      headBranchName: "claude/issue-477-x",
+      baseBranchName: "dev",
+      headPublished: true,
+      baseExists: true,
+    });
+    expect(m.isGitPullRequestReadinessSummary(readiness)).toBe(true);
+    expect(readiness.objectExists).toBe(false);
   });
 });

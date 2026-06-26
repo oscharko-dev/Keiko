@@ -1331,7 +1331,10 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
 });
 
 describe("makeMutations.openEditorFile", () => {
-  function harness(initial: readonly AppWindow[] = [], vp: typeof layoutViewport | null = layoutViewport): {
+  function harness(
+    initial: readonly AppWindow[] = [],
+    vp: typeof layoutViewport | null = layoutViewport,
+  ): {
     readonly openEditorFile: ReturnType<typeof makeMutations>["openEditorFile"];
     readonly wins: () => readonly AppWindow[];
   } {
@@ -1422,7 +1425,8 @@ describe("makeMutations.openEditorFile", () => {
       root: "/repo",
       file: String(editor.cfg["file"] ?? ""),
       openFiles: Array.isArray(openFiles) ? openFiles : [],
-      layoutJson: typeof editor.cfg["layoutJson"] === "string" ? editor.cfg["layoutJson"] : undefined,
+      layoutJson:
+        typeof editor.cfg["layoutJson"] === "string" ? editor.cfg["layoutJson"] : undefined,
       defaultSidebarWidth: 260,
       minSidebarWidth: 180,
       maxSidebarWidth: 440,
@@ -1451,6 +1455,33 @@ describe("makeMutations.openEditorFile", () => {
         revealLineEnd: 8,
       },
     });
+  });
+
+  it("strips a re-included root prefix so an absolute reference stays root-relative (#1374)", () => {
+    // Issue #1374: a reference that re-includes the selected root (e.g. "/repo/src/a.ts") must be
+    // reduced to the bare root-relative identifier the BFF expects, not persisted as a malformed
+    // "repo/src/a.ts" that would resolve outside the root.
+    const h = harness([
+      win("editor", { root: "/repo", file: "src/old.ts", openFiles: ["src/old.ts"] }, "editor-1"),
+    ]);
+
+    const result = h.openEditorFile({ root: "/repo", path: "/repo/src/a.ts" });
+
+    expect(result).toEqual({ ok: true, windowId: "editor-1" });
+    const editor = h.wins().find((w) => w.type === "editor");
+    expect(editor?.cfg).toMatchObject({ root: "/repo", file: "src/a.ts" });
+  });
+
+  it("rejects a traversal-escaping repository reference (#1374)", () => {
+    const h = harness();
+
+    const result = h.openEditorFile({ root: "/repo", path: "../../etc/passwd" });
+
+    expect(result).toEqual({
+      ok: false,
+      message: "This repository reference is not a valid file path.",
+    });
+    expect(h.wins().filter((w) => w.type === "editor")).toHaveLength(0);
   });
 
   it("returns a user-facing error when viewport geometry is unavailable", () => {
