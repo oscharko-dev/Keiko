@@ -24,12 +24,17 @@ import {
 
 export const WORKSPACE_LIFECYCLE_EVIDENCE_KIND = "task-workspace-lifecycle" as const;
 
-export type WorkspaceLifecycleOperation = "provision" | "activate";
+// `provision`/`activate` are the #445 mutating operations; `pause`/`resume`/`handoff` are the #446
+// active-binding lifecycle actions. The union is additive — the evidence document stays content-free
+// regardless of which operation produced it.
+export type WorkspaceLifecycleOperation = "provision" | "activate" | "pause" | "resume" | "handoff";
 
 export type WorkspaceLifecycleOutcome =
   | "provisioned"
   | "activated"
   | "resumed"
+  | "paused"
+  | "handoff-prepared"
   | "blocked"
   | "failed"
   | "retry-required";

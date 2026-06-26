@@ -18,6 +18,8 @@ import { FilesError, resolveRoot } from "../files.js";
 import { TaskWorkspaceError } from "./errors.js";
 import type {
   WorkspaceActivateRequest,
+  WorkspaceLifecycleActionRequest,
+  WorkspaceLifecycleService,
   WorkspaceProvisioningService,
   WorkspaceProvisionRequest,
 } from "./types.js";
@@ -43,12 +45,17 @@ function unavailable(): RouteResult {
 }
 
 type RouteOrService = RouteResult | WorkspaceProvisioningService;
+type RouteOrLifecycle = RouteResult | WorkspaceLifecycleService;
 
 function requireService(deps: UiHandlerDeps): RouteOrService {
   return deps.workspaceProvisioning ?? unavailable();
 }
 
-function isRouteResult(value: RouteOrService): value is RouteResult {
+function requireLifecycle(deps: UiHandlerDeps): RouteOrLifecycle {
+  return deps.workspaceLifecycle ?? unavailable();
+}
+
+function isRouteResult(value: RouteOrService | RouteOrLifecycle): value is RouteResult {
   return typeof (value as { status?: unknown }).status === "number";
 }
 
@@ -241,4 +248,129 @@ export async function handleActivateTaskWorkspace(
       body: redacted(deps, { instance: result.instance, binding: result.binding }),
     };
   });
+}
+
+// ─── #446 active-binding + lifecycle routes ──────────────────────────────────────────────────────
+// The shared active-workspace binding the Studio/editor/runtime/Git-Delivery surfaces consume. These
+// are registered BEFORE `GET /api/task-workspaces/:workspaceId` so the literal `active` and the
+// collection (`?root`) paths win over the `:workspaceId` param route.
+
+function parseLifecycleActionBody(
+  workspaceId: string,
+  body: Record<string, unknown>,
+): WorkspaceLifecycleActionRequest {
+  const requestedBy = boundedString(body.requestedBy);
+  if (requestedBy === undefined) {
+    throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: requestedBy");
+  }
+  return { workspaceId, requestedBy };
+}
+
+// GET /api/task-workspaces?root=<repoRoot> — list the persisted instances for a repository root.
+export async function handleListTaskWorkspaces(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireLifecycle(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(deps, async () => {
+    const rootInput = ctx.url.searchParams.get("root");
+    const resolvedRoot = await resolveRoot(deps.store, rootInput, deps.redactor);
+    const instances = guard.list(resolvedRoot.realRoot);
+    return { status: 200, body: redacted(deps, { instances }) };
+  });
+}
+
+// GET /api/task-workspaces/active — the current active binding, or null in unbound mode.
+export function handleGetActiveTaskWorkspace(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const guard = requireLifecycle(deps);
+  if (isRouteResult(guard)) return guard;
+  return { status: 200, body: redacted(deps, { active: guard.getActive() ?? null }) };
+}
+
+// POST /api/task-workspaces/active — atomic switch: activate/resume the target and set it active.
+export async function handleSetActiveTaskWorkspace(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const guard = requireLifecycle(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(deps, async () => {
+    const body = await readJsonObject(ctx.req);
+    const workspaceId = boundedString(body.workspaceId);
+    const requestedBy = boundedString(body.requestedBy);
+    if (workspaceId === undefined || requestedBy === undefined) {
+      throw new TaskWorkspaceError(
+        "INVALID_REQUEST",
+        "missing or invalid fields: workspaceId, requestedBy",
+      );
+    }
+    const result = await guard.setActive({
+      workspaceId,
+      requestedBy,
+      acquireLock: body.acquireLock === true,
+    });
+    return {
+      status: 200,
+      body: redacted(deps, { instance: result.instance, binding: result.binding }),
+    };
+  });
+}
+
+// DELETE /api/task-workspaces/active — clear the active pointer → unbound mode.
+export function handleClearActiveTaskWorkspace(
+  _ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  const guard = requireLifecycle(deps);
+  if (isRouteResult(guard)) return guard;
+  guard.clearActive();
+  return { status: 200, body: redacted(deps, { active: null }) };
+}
+
+type LifecycleAction = (
+  request: WorkspaceLifecycleActionRequest,
+) => Promise<{ readonly instance: unknown; readonly binding: unknown }>;
+
+async function runLifecycleAction(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  pick: (lifecycle: WorkspaceLifecycleService) => LifecycleAction,
+): Promise<RouteResult> {
+  const guard = requireLifecycle(deps);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(deps, async () => {
+    const workspaceId = ctx.params.workspaceId ?? "";
+    const body = await readJsonObject(ctx.req);
+    const request = parseLifecycleActionBody(workspaceId, body);
+    const result = await pick(guard)(request);
+    return {
+      status: 200,
+      body: redacted(deps, { instance: result.instance, binding: result.binding }),
+    };
+  });
+}
+
+// POST /api/task-workspaces/:workspaceId/pause — active → paused (clears the pointer if it was active).
+export function handlePauseTaskWorkspace(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runLifecycleAction(ctx, deps, (lifecycle) => lifecycle.pause);
+}
+
+// POST /api/task-workspaces/:workspaceId/resume — paused → active (sets the pointer).
+export function handleResumeTaskWorkspace(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runLifecycleAction(ctx, deps, (lifecycle) => lifecycle.resume);
+}
+
+// POST /api/task-workspaces/:workspaceId/handoff — active|paused → handoff-ready (requires clean worktree).
+export function handleHandoffTaskWorkspace(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runLifecycleAction(ctx, deps, (lifecycle) => lifecycle.prepareHandoff);
 }

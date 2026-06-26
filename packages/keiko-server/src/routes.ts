@@ -88,8 +88,15 @@ import {
 } from "./command-runner-routes.js";
 import {
   handleActivateTaskWorkspace,
+  handleClearActiveTaskWorkspace,
+  handleGetActiveTaskWorkspace,
   handleGetTaskWorkspace,
+  handleHandoffTaskWorkspace,
+  handleListTaskWorkspaces,
+  handlePauseTaskWorkspace,
   handleProvisionTaskWorkspace,
+  handleResumeTaskWorkspace,
+  handleSetActiveTaskWorkspace,
 } from "./task-workspace/routes.js";
 import {
   handleContainerCapability,
@@ -358,6 +365,33 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // persists a WorkspaceInstance; activate yields the WorkspaceBinding surfaces bind to. CSRF is
   // enforced by the server's state-changing gate for the POST routes.
   { method: "POST", pattern: "/api/task-workspaces", handler: handleProvisionTaskWorkspace },
+  // Issue #446 (Epic #443, ADR-0090) — the shared ACTIVE task-workspace binding the Studio/editor/
+  // runtime/Git-Delivery surfaces consume. `matchRoute` resolves by literal specificity, so the
+  // literal `active` and the `?root` collection paths win over the `:workspaceId` param route
+  // regardless of registration order. CSRF is enforced by the state-changing gate for POST/DELETE.
+  { method: "GET", pattern: "/api/task-workspaces", handler: handleListTaskWorkspaces },
+  { method: "GET", pattern: "/api/task-workspaces/active", handler: handleGetActiveTaskWorkspace },
+  { method: "POST", pattern: "/api/task-workspaces/active", handler: handleSetActiveTaskWorkspace },
+  {
+    method: "DELETE",
+    pattern: "/api/task-workspaces/active",
+    handler: handleClearActiveTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/pause",
+    handler: handlePauseTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/resume",
+    handler: handleResumeTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/handoff",
+    handler: handleHandoffTaskWorkspace,
+  },
   {
     method: "POST",
     pattern: "/api/task-workspaces/:workspaceId/activate",

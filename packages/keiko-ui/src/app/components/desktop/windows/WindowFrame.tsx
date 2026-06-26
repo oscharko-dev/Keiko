@@ -15,8 +15,10 @@ import {
 import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
+  WorkspaceBinding,
 } from "@oscharko-dev/keiko-contracts";
 import { Icons, type IconName } from "../Icons";
+import { useOptionalActiveWorkspace } from "../context/ActiveWorkspaceContext";
 import {
   acquireGrabbingBodyStyle,
   isInteractiveControlTarget,
@@ -119,6 +121,8 @@ function selectBody(
   linkedFigmaSnapshotRunIds: readonly string[],
   linkedFigmaSnapshotSources: readonly QualityIntelligenceFigmaSnapshotSource[] | undefined,
   linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined,
+  activeRoot: string | null,
+  activeBinding: WorkspaceBinding | null,
   updateCfg: (patch: AppWindow["cfg"]) => void,
   openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null,
   openEditorFile: WorkspaceApi["openEditorFile"],
@@ -150,6 +154,8 @@ function selectBody(
         linkedFigmaSnapshotRunIds,
         linkedFigmaSnapshotSources,
         linkedImageSources,
+        activeRoot,
+        activeBinding,
         updateCfg,
         openWindow,
         openEditorFile,
@@ -171,6 +177,8 @@ function selectBody(
       linkedFigmaSnapshotRunIds,
       linkedFigmaSnapshotSources,
       linkedImageSources,
+      activeRoot,
+      activeBinding,
       updateCfg,
       openWindow,
       openEditorFile,
@@ -344,6 +352,11 @@ export function WindowFrame({
   const def = WIN_TYPES[win.type];
   const canStartConnection = hasConnectablePeer(win.type);
   const Icon = Icons[def.icon];
+  // Issue #446 — the active task-workspace binding (null when no provider is mounted or unbound). It
+  // is the single retarget choke point threaded into every window's render context below.
+  const activeWorkspace = useOptionalActiveWorkspace();
+  const activeRoot = activeWorkspace?.activeRoot ?? null;
+  const activeBinding = activeWorkspace?.activeBinding ?? null;
   const [draggingWindow, setDraggingWindow] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
@@ -411,6 +424,8 @@ export function WindowFrame({
     linkedFigmaSnapshotRunIds,
     linkedFigmaSnapshotSources,
     linkedImageSources,
+    activeRoot,
+    activeBinding,
     updateCfg,
     openWindow,
     openEditorFile,
