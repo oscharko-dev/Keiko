@@ -15,6 +15,7 @@ export type WindowType =
   | "editor"
   | "browser"
   | "terminal"
+  | "commands"
   | "review"
   | "agents"
   | "integ"
@@ -256,6 +257,20 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
       // window only needs a project path (acts as projectId) and an optional starting cwd.
       { key: "projectPath", label: "Project path", type: "text", def: "" },
       { key: "cwd", label: "Working directory", type: "directory", def: "" },
+    ],
+  },
+  commands: {
+    title: "Tasks",
+    icon: "terminal",
+    accent: true,
+    desc: "Run test/build/run tasks",
+    w: 460,
+    h: 280,
+    tiny: { w: 250, h: 140 },
+    config: [
+      // Issue #1387 — the command runner discovers test/build/run tasks from the project's package
+      // scripts. The window only needs a project path (acts as projectId); tasks are picked per run.
+      { key: "projectPath", label: "Project path", type: "text", def: "" },
     ],
   },
   review: {

@@ -24,6 +24,16 @@ export type {
   GitRepositoryStatusResponse,
   GitDiffScope,
   GitRepositoryDiffResponse,
+  // Issue #1387 — controlled test/build/run command executor wire types.
+  CommandTaskKind,
+  CommandTaskSource,
+  CommandTask,
+  CommandTaskCatalog,
+  CommandFailureReason,
+  CommandTaskRunRequest,
+  CommandTaskRunResult,
+  CommandRunnerEventKind,
+  CommandRunnerEvent,
 } from "@oscharko-dev/keiko-contracts";
 
 export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";

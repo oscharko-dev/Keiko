@@ -132,6 +132,7 @@ export type EvidenceTaskType =
   | TaskType
   | "browser-capture"
   | "terminal-execution"
+  | "command-run"
   | "connected-context";
 
 export interface EvidenceBrowserViewportPx {
