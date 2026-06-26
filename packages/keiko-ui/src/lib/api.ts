@@ -26,6 +26,9 @@ import type {
   FilesPreviewResponse,
   FilesSearchResponse,
   FilesTreeResponse,
+  GitDiffScope,
+  GitRepositoryDiffResponse,
+  GitRepositoryStatusResponse,
   GatewayReadinessOptions,
   GatewayReadinessReport,
   EditorDocumentVersion,
@@ -883,6 +886,24 @@ export async function saveFilesContent(input: {
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
+
+export async function fetchGitStatus(root: string): Promise<GitRepositoryStatusResponse> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  return fetchJson(`/api/git/status?${params.toString()}`);
+}
+
+export async function fetchGitDiff(input: {
+  readonly root: string;
+  readonly path?: string | undefined;
+  readonly scope?: GitDiffScope | undefined;
+}): Promise<GitRepositoryDiffResponse> {
+  const params = new URLSearchParams();
+  params.set("root", input.root);
+  if (input.path !== undefined && input.path.length > 0) params.set("path", input.path);
+  if (input.scope !== undefined) params.set("scope", input.scope);
+  return fetchJson(`/api/git/diff?${params.toString()}`);
 }
 
 // Issue #1199 — governed editor completion gateway. Posts the overlay buffer + cursor to the BFF,

@@ -83,6 +83,7 @@ import {
   handleFilesSearch,
   handleFilesTree,
 } from "./files.js";
+import { handleGitDiff, handleGitStatus } from "./gitRoutes.js";
 import {
   handleEditorLanguage,
   handleEditorLanguageCapabilitiesForRoute,
@@ -277,6 +278,18 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/runtime/capabilities",
     handler: (ctx, deps) =>
       handleRuntimeCapabilities(ctx, deps, deps.runtimeCapabilityRouteOptions),
+  },
+  // Issue #1386 — read-only Git repository status/diff BFF. Git execution stays server-side with
+  // fixed args/env, selected-root containment, unsafe-owner surfacing, and bounded diff output.
+  {
+    method: "GET",
+    pattern: "/api/git/status",
+    handler: (ctx, deps) => handleGitStatus(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/diff",
+    handler: (ctx, deps) => handleGitDiff(ctx, deps, deps.gitRouteOptions),
   },
   // Desktop files — selected-root browser, preview, and editor control plane.
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },

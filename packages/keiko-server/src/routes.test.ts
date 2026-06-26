@@ -261,6 +261,21 @@ describe("API route contract", () => {
     });
   });
 
+  it("includes the read-only Git repository routes (#1386)", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/status"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/diff"),
+    ).toBeDefined();
+    expect(matchRoute("GET", "/api/git/status")).toMatchObject({
+      definition: { pattern: "/api/git/status" },
+    });
+    expect(matchRoute("GET", "/api/git/diff")).toMatchObject({
+      definition: { pattern: "/api/git/diff" },
+    });
+  });
+
   it("includes the run-summary message routes (#66)", () => {
     const patchRoute = API_ROUTES.find(
       (r) => r.method === "PATCH" && r.pattern === "/api/chats/messages",

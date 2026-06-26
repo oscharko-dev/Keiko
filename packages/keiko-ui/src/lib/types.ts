@@ -17,6 +17,13 @@ export type {
   WorkflowDescriptor,
   WorkflowInputSpec,
   GroundingLimits,
+  GitRepositoryState,
+  GitUnavailableReason,
+  GitStatusCode,
+  GitChangedFile,
+  GitRepositoryStatusResponse,
+  GitDiffScope,
+  GitRepositoryDiffResponse,
 } from "@oscharko-dev/keiko-contracts";
 
 export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";

@@ -10,6 +10,8 @@ import {
   fetchFilesPreview,
   fetchFilesSearch,
   fetchFilesTree,
+  fetchGitDiff,
+  fetchGitStatus,
   fetchModels,
   fetchProjects,
   runGatewayReadiness,
@@ -469,6 +471,63 @@ describe("files API helpers", () => {
           content: "const x = 3;\n",
           baseVersion,
         }),
+      }),
+    );
+  });
+
+  it("encodes Git status and diff requests", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          repositoryRoot: "/repo space",
+          state: "available",
+          available: true,
+          branch: "main",
+          detached: false,
+          clean: false,
+          stagedCount: 0,
+          unstagedCount: 1,
+          untrackedCount: 0,
+          conflictedCount: 0,
+          changes: [],
+          truncated: false,
+          maxChanges: 500,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          repositoryRoot: "/repo space",
+          state: "available",
+          available: true,
+          path: "src/app.ts",
+          scope: "worktree",
+          diff: "diff --git a/src/app.ts b/src/app.ts\n",
+          truncated: false,
+          maxBytes: 131072,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitStatus("/repo space");
+    await fetchGitDiff({ root: "/repo space", path: "src/app.ts", scope: "worktree" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git/status?root=%2Frepo+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git/diff?root=%2Frepo+space&path=src%2Fapp.ts&scope=worktree",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
   });
