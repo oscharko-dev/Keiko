@@ -57,6 +57,7 @@
     "test:e2e:language-intelligence-1383": "playwright test --config playwright.issue-1383-language-intelligence.config.ts --project=chromium",
     "test:e2e:task-binding-446": "playwright test --config playwright.issue-446-task-workspace-binding.config.ts --project=chromium",
     "test:e2e:git-delivery-475": "playwright test --config playwright.issue-475-git-delivery.config.ts --project=chromium",
+    "test:e2e:git-changes-1575": "playwright test --config playwright.issue-1575-git-changes.config.ts --project=chromium",
     "test:e2e:git-publish-476": "playwright test --config playwright.issue-476-git-publish.config.ts --project=chromium",
     "test:e2e:pr-command-center-477": "playwright test --config playwright.issue-477-pr-command-center.config.ts --project=chromium",
     "test:e2e:merge-governance-478": "playwright test --config playwright.issue-478-merge-governance.config.ts --project=chromium",

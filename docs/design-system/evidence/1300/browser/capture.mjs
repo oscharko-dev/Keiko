@@ -269,6 +269,9 @@ const SCENARIOS = [
       '[data-window-id="issue-1574-git-desktop"] [role="combobox"][aria-label="Branch"]',
       '[data-window-id="issue-1574-git-desktop"] [role="tablist"][aria-label="Changes and history"]',
       '[data-window-id="issue-1574-git-desktop"] nav.rv-filelist[aria-label="Changed files"]',
+      // Issue #1575 — per-file staging checkboxes and the pinned commit composer.
+      '[data-window-id="issue-1574-git-desktop"] nav.rv-filelist[aria-label="Changed files"] input[type="checkbox"]',
+      '[data-window-id="issue-1574-git-desktop"] section[aria-label="Commit"]',
     ],
   },
   // Issue #1574 (EV3) — the same shell at a constrained window size. The IA must stay coherent when the
@@ -285,6 +288,9 @@ const SCENARIOS = [
       '[data-window-id="issue-1574-git-constrained"] [role="combobox"][aria-label="Branch"]',
       '[data-window-id="issue-1574-git-constrained"] [role="tablist"][aria-label="Changes and history"]',
       '[data-window-id="issue-1574-git-constrained"] nav.rv-filelist[aria-label="Changed files"]',
+      // Issue #1575 — staging checkboxes and the pinned commit composer must survive the reflow.
+      '[data-window-id="issue-1574-git-constrained"] nav.rv-filelist[aria-label="Changed files"] input[type="checkbox"]',
+      '[data-window-id="issue-1574-git-constrained"] section[aria-label="Commit"]',
     ],
   },
 ];
@@ -490,6 +496,18 @@ function apiBody(url) {
       diff: "",
       truncated: false,
       maxBytes: 262144,
+    };
+  }
+  // Issue #1575 — the commit composer auto-previews policy for the staged set, so the live shell
+  // posts here on mount. Return a content-free, passing preview so the policy preview renders.
+  if (pathname === "/api/git-delivery/commit/preview") {
+    return {
+      schemaVersion: "1",
+      summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+      intent: { warnings: [], mixedScope: false, isWip: false },
+      messageValidation: { ok: true },
+      preflightFindingCodes: [],
+      policyOutcome: "allowed",
     };
   }
   if (pathname === "/api/quality-intelligence/runs") {

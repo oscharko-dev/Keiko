@@ -61,7 +61,9 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ]
     },
     {
@@ -73,7 +75,9 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ]
     }
   ],
@@ -165,12 +169,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -187,12 +193,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -283,12 +291,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -305,12 +315,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -401,12 +413,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -423,12 +437,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -519,12 +535,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -541,12 +559,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -637,12 +657,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -659,12 +681,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -755,12 +779,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -777,12 +803,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 433,
+      "textLen": 588,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -873,12 +901,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -895,12 +925,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -991,12 +1023,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1013,12 +1047,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1109,12 +1145,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1131,12 +1169,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1227,12 +1267,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1249,12 +1291,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1345,12 +1389,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1367,12 +1413,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1463,12 +1511,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1485,12 +1535,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1581,12 +1633,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1603,12 +1657,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1699,12 +1755,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1721,12 +1779,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1817,12 +1877,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1839,12 +1901,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1935,12 +1999,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1957,12 +2023,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "light",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -2053,12 +2121,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -2075,12 +2145,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -2171,12 +2243,14 @@
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -2193,12 +2267,14 @@
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
         "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
-        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"] input[type=\"checkbox\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] section[aria-label=\"Commit\"]"
       ],
       "theme": "dark",
       "hasShell": true,
       "windowCount": 1,
-      "textLen": 427,
+      "textLen": 582,
       "missingRequiredSelectors": [],
       "pageErrors": []
     }
