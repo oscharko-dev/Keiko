@@ -33,15 +33,21 @@ describe("argv builders — fixed, governed argument vectors", () => {
     expect(() => buildBranchSwitchArgv({ branchName: "" })).toThrow(GitMutationArgvError);
   });
 
-  it("stage places pathspecs after the `--` sentinel", () => {
+  it("stage literalizes pathspecs after the `--` sentinel", () => {
     expect(buildStageArgv({ pathspecs: ["src/a.ts", "src/b.ts"] })).toEqual([
-      ["add", "--", "src/a.ts", "src/b.ts"],
+      ["add", "--", ":(literal)src/a.ts", ":(literal)src/b.ts"],
     ]);
   });
 
-  it("unstage uses restore --staged after `--`", () => {
+  it("unstage uses literal pathspecs with restore --staged after `--`", () => {
     expect(buildUnstageArgv({ pathspecs: ["src/a.ts"] })).toEqual([
-      ["restore", "--staged", "--", "src/a.ts"],
+      ["restore", "--staged", "--", ":(literal)src/a.ts"],
+    ]);
+  });
+
+  it("literalizes Git pathspec-magic filenames", () => {
+    expect(buildStageArgv({ pathspecs: [":(top)*", ":(glob)**"] })).toEqual([
+      ["add", "--", ":(literal):(top)*", ":(literal):(glob)**"],
     ]);
   });
 
@@ -101,7 +107,7 @@ describe("argv builders — fixed, governed argument vectors", () => {
         targetRefHash: "abc",
         pathspecs: ["a.ts"],
       }),
-    ).toEqual([["restore", "--source", "abc", "--staged", "--", "a.ts"]]);
+    ).toEqual([["restore", "--source", "abc", "--staged", "--", ":(literal)a.ts"]]);
   });
 });
 

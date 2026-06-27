@@ -133,6 +133,7 @@ export function useGitActions(
 ): {
   readonly flow: GitActionFlowState;
   readonly preview: GitDeliveryCommitPreviewResponse | null;
+  readonly previewDraft: string | null;
   readonly previewError: string | null;
   readonly runMutation: (op: () => Promise<GitMutationOutcome>) => void;
   readonly runPreview: (messageDraft: string) => void;
@@ -144,8 +145,10 @@ export function useGitActions(
     error: null,
   });
   const [preview, setPreview] = useState<GitDeliveryCommitPreviewResponse | null>(null);
+  const [previewDraft, setPreviewDraft] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const seqRef = useRef(0);
+  const previewSeqRef = useRef(0);
 
   const runMutation = useCallback((op: () => Promise<GitMutationOutcome>): void => {
     const seq = seqRef.current + 1;
@@ -164,11 +167,21 @@ export function useGitActions(
 
   const runPreview = useCallback(
     (messageDraft: string): void => {
+      const seq = previewSeqRef.current + 1;
+      previewSeqRef.current = seq;
+      setPreview(null);
+      setPreviewDraft(null);
       setPreviewError(null);
       void client.commitPreview({ projectId, messageDraft }).then(
-        (res) => setPreview(res),
+        (res) => {
+          if (previewSeqRef.current !== seq) return;
+          setPreview(res);
+          setPreviewDraft(messageDraft);
+        },
         (err: unknown) => {
+          if (previewSeqRef.current !== seq) return;
           setPreview(null);
+          setPreviewDraft(null);
           setPreviewError(formatGitError(err));
         },
       );
@@ -181,10 +194,12 @@ export function useGitActions(
   // one repository surfacing under another.
   const reset = useCallback((): void => {
     seqRef.current += 1;
+    previewSeqRef.current += 1;
     setFlow({ busy: false, outcome: null, error: null });
     setPreview(null);
+    setPreviewDraft(null);
     setPreviewError(null);
   }, []);
 
-  return { flow, preview, previewError, runMutation, runPreview, reset };
+  return { flow, preview, previewDraft, previewError, runMutation, runPreview, reset };
 }

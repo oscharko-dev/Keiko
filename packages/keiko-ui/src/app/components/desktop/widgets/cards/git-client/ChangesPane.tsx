@@ -264,8 +264,9 @@ function ChangesList({
   }
 
   const hasChanges = !status.clean && status.changes.length > 0;
-  const hasStaged = status.stagedCount > 0;
-  const hasUnstaged = status.unstagedCount > 0 || status.untrackedCount > 0;
+  const bulkActionsBlocked = stagingBusy || status.truncated;
+  const hasStaged = status.stagedCount > 0 && !status.truncated;
+  const hasUnstaged = (status.unstagedCount > 0 || status.untrackedCount > 0) && !status.truncated;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
@@ -276,16 +277,16 @@ function ChangesList({
           </span>
           <button
             type="button"
-            style={{ ...COMPACT_BTN, ...disabledStyle(stagingBusy || !hasUnstaged) }}
-            disabled={stagingBusy || !hasUnstaged}
+            style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasUnstaged) }}
+            disabled={bulkActionsBlocked || !hasUnstaged}
             onClick={onStageAll}
           >
             <Icons.check size={11} /> Stage all
           </button>
           <button
             type="button"
-            style={{ ...COMPACT_BTN, ...disabledStyle(stagingBusy || !hasStaged) }}
-            disabled={stagingBusy || !hasStaged}
+            style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasStaged) }}
+            disabled={bulkActionsBlocked || !hasStaged}
             onClick={onUnstageAll}
           >
             <Icons.reset size={11} /> Unstage all

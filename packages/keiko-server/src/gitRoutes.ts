@@ -530,6 +530,10 @@ function gitPath(prefix: string, path: string | undefined): string | undefined {
   return normalizedPrefix.length > 0 ? `${normalizedPrefix}/${path}` : path;
 }
 
+function literalGitPathspec(path: string): string {
+  return `:(literal)${path}`;
+}
+
 function parseScope(input: string | null): GitDiffScope {
   if (input === null || input.length === 0) return "all";
   if (input === "all" || input === "worktree" || input === "staged") return input;
@@ -554,7 +558,7 @@ async function runDiff(
   ];
   if (staged) args.push("--cached");
   const relativePath = gitPath(repo.selectedRootPrefix, path);
-  if (relativePath !== undefined) args.push("--", relativePath);
+  if (relativePath !== undefined) args.push("--", literalGitPathspec(relativePath));
   return options.runner(args, {
     cwd: repo.repositoryRoot,
     maxBytes: options.maxDiffBytes,
@@ -588,7 +592,7 @@ export async function handleGitStatus(
         "--untracked-files=all",
         "--",
         ...(repo.selectedRootPrefix.length > 0 && repo.selectedRootPrefix !== "."
-          ? [repo.selectedRootPrefix]
+          ? [literalGitPathspec(repo.selectedRootPrefix)]
           : []),
       ],
       { cwd: repo.repositoryRoot, maxBytes: options.maxStatusBytes, timeoutMs: options.timeoutMs },

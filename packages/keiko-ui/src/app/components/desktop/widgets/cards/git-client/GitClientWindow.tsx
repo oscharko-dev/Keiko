@@ -44,6 +44,20 @@ export interface GitClientWindowProps {
   readonly client?: GitClientSeam;
 }
 
+function preferredDiffScopeForChange(change: GitChangedFile): GitDiffScope {
+  return change.staged && !change.unstaged && !change.untracked ? "staged" : "worktree";
+}
+
+function normalizeDiffScopeForChange(current: GitDiffScope, change: GitChangedFile): GitDiffScope {
+  if (change.staged && !change.unstaged && !change.untracked && current === "worktree") {
+    return "staged";
+  }
+  if (!change.staged && (change.unstaged || change.untracked || change.conflicted) && current === "staged") {
+    return "worktree";
+  }
+  return current;
+}
+
 export function GitClientWindow({
   projectId,
   onOpenFiles,
@@ -61,6 +75,7 @@ export function GitClientWindow({
   const [branches, setBranches] = useState<readonly GitBranchListEntry[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [status, setStatus] = useState<GitRepositoryStatusResponse | null>(null);
+  const [statusProjectKey, setStatusProjectKey] = useState<string | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [statusRevision, setStatusRevision] = useState(0);
@@ -138,6 +153,7 @@ export function GitClientWindow({
   useEffect(() => {
     if (selectedPath === null) {
       setStatus(null);
+      setStatusProjectKey(null);
       setStatusError(null);
       return;
     }
@@ -148,14 +164,20 @@ export function GitClientWindow({
       (res) => {
         if (cancelled) return;
         setStatus(res);
+        setStatusProjectKey(selectedPath);
         setStatusLoading(false);
-        setSelectedChangePath((prev) =>
-          prev !== null && res.changes.some((c) => c.path === prev) ? prev : null,
-        );
+        setSelectedChangePath((prev) => {
+          if (prev === null) return null;
+          const selectedChange = res.changes.find((c) => c.path === prev);
+          if (selectedChange === undefined) return null;
+          setDiffScope((current) => normalizeDiffScopeForChange(current, selectedChange));
+          return prev;
+        });
       },
       (err: unknown) => {
         if (cancelled) return;
         setStatus(null);
+        setStatusProjectKey(null);
         setStatusLoading(false);
         setStatusError(formatGitError(err));
       },
@@ -196,14 +218,15 @@ export function GitClientWindow({
     [loadRepositories, selectRepository],
   );
 
+  const activeStatus = selectedPath !== null && statusProjectKey === selectedPath ? status : null;
+
   const selectChange = useCallback(
     (path: string): void => {
       setSelectedChangePath(path);
-      const change = status?.changes.find((c) => c.path === path);
-      if (change !== undefined)
-        setDiffScope(change.staged && !change.unstaged ? "staged" : "worktree");
+      const change = activeStatus?.changes.find((c) => c.path === path);
+      if (change !== undefined) setDiffScope(preferredDiffScopeForChange(change));
     },
-    [status],
+    [activeStatus],
   );
 
   const stageFile = useCallback(
@@ -231,21 +254,21 @@ export function GitClientWindow({
   );
 
   const stageAll = useCallback((): void => {
-    if (selectedPath === null || status === null) return;
-    const pathspecs = status.changes.filter((c) => c.unstaged || c.untracked).map((c) => c.path);
+    if (selectedPath === null || activeStatus === null || activeStatus.truncated) return;
+    const pathspecs = activeStatus.changes.filter((c) => c.unstaged || c.untracked).map((c) => c.path);
     if (pathspecs.length === 0) return;
-    const includeUntracked = status.changes.some((c) => c.untracked);
+    const includeUntracked = activeStatus.changes.some((c) => c.untracked);
     staging.runMutation(() =>
       client.stage({ projectId: selectedPath, pathspecs, includeUntracked }),
     );
-  }, [client, selectedPath, staging, status]);
+  }, [activeStatus, client, selectedPath, staging]);
 
   const unstageAll = useCallback((): void => {
-    if (selectedPath === null || status === null) return;
-    const pathspecs = status.changes.filter((c) => c.staged).map((c) => c.path);
+    if (selectedPath === null || activeStatus === null || activeStatus.truncated) return;
+    const pathspecs = activeStatus.changes.filter((c) => c.staged).map((c) => c.path);
     if (pathspecs.length === 0) return;
     staging.runMutation(() => client.unstage({ projectId: selectedPath, pathspecs }));
-  }, [client, selectedPath, staging, status]);
+  }, [activeStatus, client, selectedPath, staging]);
 
   const commitChanges = useCallback(
     (message: string): void => {
@@ -260,12 +283,7 @@ export function GitClientWindow({
     openWindow?.(key, { projectPath: selectedPath });
   };
 
-  // Surface only actionable (non-success) staging outcomes near the list; a successful stage is
-  // self-evident from the refreshed file list.
-  const visibleStagingOutcome =
-    staging.flow.outcome !== null && staging.flow.outcome.status !== "succeeded"
-      ? staging.flow.outcome
-      : null;
+  const visibleStagingOutcome = staging.flow.outcome;
 
   return (
     <div style={WORKSPACE_STYLE} aria-label="Git">
@@ -274,7 +292,7 @@ export function GitClientWindow({
         selectedPath={selectedPath}
         branches={branches}
         branchesLoading={branchesLoading}
-        status={status}
+        status={activeStatus}
         statusLoading={statusLoading}
         onSelectRepository={selectRepository}
         onOpenEditor={onOpenEditor}
@@ -293,7 +311,7 @@ export function GitClientWindow({
           <ChangesPane
             tab={tab}
             onTabChange={setTab}
-            status={status}
+            status={activeStatus}
             statusLoading={statusLoading}
             statusError={statusError}
             selectedChangePath={selectedChangePath}
@@ -309,11 +327,12 @@ export function GitClientWindow({
               <CommitComposer
                 key={`${selectedPath ?? "none"}:${commitNonce.toString()}`}
                 projectId={selectedPath}
-                stagedFileCount={status?.stagedCount ?? 0}
+                stagedFileCount={activeStatus?.stagedCount ?? 0}
                 busy={commit.flow.busy}
                 outcome={commit.flow.outcome}
                 error={commit.flow.error}
                 preview={commit.preview}
+                previewDraft={commit.previewDraft}
                 previewError={commit.previewError}
                 onPreview={commit.runPreview}
                 onCommit={commitChanges}
