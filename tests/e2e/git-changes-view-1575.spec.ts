@@ -83,6 +83,9 @@ function buildGitFixture(): string {
 
   git(["add", "."], root);
   git(["commit", "-m", "chore: initial commit"], root);
+  // Capture the default branch name now (git init may name it main or master). The reflog-relative
+  // HEAD@{-1} form is unreliable in a freshly scripted repo, so resolve the name explicitly.
+  const baseBranch = git(["rev-parse", "--abbrev-ref", "HEAD"], root).trim();
 
   // ── MODIFIED: edit app.ts in the worktree without staging ──
   writeFileSync(join(root, "src", "app.ts"), "export const version = 2;\n", "utf8");
@@ -110,7 +113,6 @@ function buildGitFixture(): string {
   writeFileSync(join(root, "src", "shared.ts"), "export const value = 1;\n", "utf8");
   git(["commit", "-am", "feat: set value to 1"], root);
   // Back on the default branch, modify shared.ts to value = 2.
-  const baseBranch = git(["rev-parse", "--abbrev-ref", "HEAD@{-1}"], root).trim();
   git(["checkout", baseBranch], root);
   writeFileSync(join(root, "src", "shared.ts"), "export const value = 2;\n", "utf8");
   git(["commit", "-am", "fix: set value to 2"], root);
