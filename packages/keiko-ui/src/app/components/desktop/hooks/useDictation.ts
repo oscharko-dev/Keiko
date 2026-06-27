@@ -167,6 +167,16 @@ export function useDictation(options: UseDictationOptions): DictationController 
   // while permission is pending or a transcription is in flight) never dispatches onto an unmounted
   // component, never leaks the auto-stop timer, and never leaves the microphone open.
   const mountedRef = useRef(true);
+  // True while a `start()` is awaiting its `getUserMedia` grant (the permission window) but before a
+  // session exists. `sessionRef` only becomes set once the grant resolves, so this in-flight flag is
+  // the synchronous guard that stops a second `start()` from opening a second microphone stream and
+  // leaking the first track (AC2/AC3 — "no second getUserMedia open before the first is released").
+  const startingRef = useRef(false);
+  // Set when a `cancel()` (leave / stop dialog mode, retry) happens while a `start()` is still in the
+  // permission window. A microphone grant that resolves after a cancel is then released instead of
+  // establishing a session, so leaving voice mode mid-permission still releases the mic deterministically
+  // (AC3 — "stopping or leaving dialog mode releases microphone resources deterministically").
+  const cancelledRef = useRef(false);
 
   const clearAutoStop = useCallback((): void => {
     if (autoStopRef.current !== undefined) {
@@ -198,16 +208,23 @@ export function useDictation(options: UseDictationOptions): DictationController 
   }, [clearAutoStop, language, transcribe]);
 
   const start = useCallback((): void => {
-    if (sessionRef.current !== undefined) {
+    // Never open a second microphone stream: bail if a session is already live OR a start() is still
+    // in flight. Because `sessionRef` is only set after getUserMedia resolves, the in-flight guard is
+    // what closes the same-tick double-start race (a second start() during the permission window).
+    if (sessionRef.current !== undefined || startingRef.current) {
       return;
     }
+    startingRef.current = true;
+    cancelledRef.current = false;
     dispatch({ type: "requesting" });
     const recorder = (recorderRef.current ??= recorderFactory());
     void recorder.start().then(
       (session) => {
-        // If the composer unmounted while permission was pending, release the microphone immediately
-        // and touch no state — the cleanup has already run.
-        if (!mountedRef.current) {
+        startingRef.current = false;
+        // If the composer unmounted OR the flow was cancelled (left/stopped dialog mode) while
+        // permission was pending, release the just-granted microphone immediately and touch no state —
+        // leaving voice mode mid-permission must still release the mic deterministically (AC3).
+        if (!mountedRef.current || cancelledRef.current) {
           session.cancel();
           return;
         }
@@ -216,6 +233,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
         autoStopRef.current = setTimeout(() => stop(), MAX_DICTATION_MS);
       },
       (error: unknown) => {
+        startingRef.current = false;
         if (!mountedRef.current) return;
         const { reason, message } = classifyError(error);
         dispatch({ type: "error", reason, message });
@@ -224,6 +242,10 @@ export function useDictation(options: UseDictationOptions): DictationController 
   }, [recorderFactory, stop]);
 
   const cancel = useCallback((): void => {
+    // Mark any in-flight start() as cancelled so a microphone grant that resolves after this call is
+    // released by its own resolve branch instead of establishing a session (AC3 — deterministic release
+    // even when the user leaves dialog mode mid-permission).
+    cancelledRef.current = true;
     clearAutoStop();
     sessionRef.current?.cancel();
     sessionRef.current = undefined;
