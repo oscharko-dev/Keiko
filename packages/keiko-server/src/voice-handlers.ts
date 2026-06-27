@@ -16,13 +16,21 @@
 import type { IncomingMessage } from "node:http";
 import {
   requestSpeechToText,
+  requestTextToSpeech,
   resolveVoiceCapability,
+  selectSpeechOutputModel,
   selectSpeechToTextModel,
+  selectVoicePersonaVoice,
+  VOICE_PERSONAS,
   type GatewayConfig,
   type ModelProviderConfig,
   type SpeechToTextErrorKind,
   type SpeechToTextRequest,
   type SpeechToTextSuccess,
+  type TextToSpeechErrorKind,
+  type TextToSpeechRequest,
+  type TextToSpeechSuccess,
+  type VoicePersona,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -380,4 +388,235 @@ export async function handleVoiceTranscribe(
   return outcome.ok
     ? transcriptResult(deps, outcome.value)
     : providerErrorResult(deps, outcome.kind);
+}
+
+// ---------------------------------------------------------------------------
+// BFF assistant speech-output (synthesis) route (Issue #1558, Epic #1556, ADR-0095).
+// `POST /api/voice/speak` synthesizes the visible assistant answer text into audible output through
+// the Model Gateway text-to-speech adapter and returns the audio as base64 inside the standard JSON
+// envelope. It is capability-gated: it synthesizes only when the resolved voice capability advertises
+// speech output (AC1), and otherwise answers a deterministic, secret-free `VOICE_UNAVAILABLE` so the
+// conversation degrades to text without breaking (AC4). The answer text rides inside the existing
+// JSON + CSRF request envelope, so the server's state-changing-request invariant is preserved
+// unchanged. The synthesized audio is held only in memory for the duration of the request and is
+// never written to the evidence store, a side file, a log, or any on-disk location ("no raw generated
+// audio persistence"). Provider base URLs, credentials, and the credential-tier persona → voice-id
+// mapping never appear in any response (the voice id stays server-side), and every failure is a
+// static, redacted envelope carrying no provider body, URL, path, or network detail.
+// ---------------------------------------------------------------------------
+
+// The upper bound on the answer text submitted for synthesis. It matches the OpenAI-compatible
+// `/audio/speech` input ceiling: rather than truncate a longer answer (which would make the spoken
+// output diverge from the visible text, breaking AC2), an over-long answer is rejected and the spoken
+// layer degrades to text (AC4). The visible assistant text is always present in the transcript.
+const MAX_SPEECH_INPUT_CHARS = 4096;
+
+// Server-side allowlist of audio container MIME types the synthesis route will label a response with.
+// The adapter resolves the type from the provider response, but the value handed to the browser is
+// canonicalized against this closed set so no provider-controlled string crosses the BFF boundary; an
+// unrecognized type falls back to the broadest-playback default.
+const ALLOWED_SPEECH_MIME: ReadonlySet<string> = new Set([
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/aac",
+  "audio/flac",
+  "audio/wav",
+  "audio/pcm",
+]);
+const DEFAULT_SPEECH_MIME = "audio/mpeg";
+
+// Deterministic, secret-free disabled response for the synthesis route (AC1/AC4). Returned both when
+// no speech-output capability is configured/enabled and when a configured provider cannot be resolved.
+function speechUnavailable(deps: UiHandlerDeps): RouteResult {
+  return {
+    status: 503,
+    body: deps.redactor(
+      errorBody("VOICE_UNAVAILABLE", "Assistant speech output is not available."),
+    ),
+  };
+}
+
+// Static, secret-free mapping from a coded synthesis failure to an HTTP response. No provider body,
+// URL, path, IP, or credential is ever interpolated — only fixed operator-safe text (AC4).
+function speechProviderErrorResult(deps: UiHandlerDeps, kind: TextToSpeechErrorKind): RouteResult {
+  if (kind === "rate-limited") {
+    return {
+      status: 429,
+      body: deps.redactor(
+        errorBody(
+          "VOICE_RATE_LIMITED",
+          "The speech-output provider is rate-limited. Retry shortly.",
+        ),
+      ),
+    };
+  }
+  if (kind === "timeout") {
+    return {
+      status: 504,
+      body: deps.redactor(errorBody("VOICE_TIMEOUT", "The speech-output request timed out.")),
+    };
+  }
+  if (kind === "payload-too-large") {
+    return {
+      status: 413,
+      body: deps.redactor(
+        errorBody("PAYLOAD_TOO_LARGE", "The assistant response is too long for speech synthesis."),
+      ),
+    };
+  }
+  if (kind === "unsupported-model") {
+    // The configured model is not available at the provider — effectively unavailable for synthesis.
+    return speechUnavailable(deps);
+  }
+  return {
+    status: 502,
+    body: deps.redactor(
+      errorBody(
+        "VOICE_PROVIDER_ERROR",
+        "The speech-output provider could not synthesize the audio.",
+      ),
+    ),
+  };
+}
+
+// Capability gate (AC1): confirms speech output is configured, enabled, and reachable before any text
+// is read, so a disabled deployment does zero synthesis work. Returns the active gateway config or a
+// clean VOICE_UNAVAILABLE RouteResult.
+function gateSpeechOutput(deps: UiHandlerDeps): GatewayConfig | RouteResult {
+  const config = currentGatewayConfig(deps);
+  const policyDisabled = isVoiceDisabledByPolicy(deps.env);
+  const voice = resolveVoiceCapability(config ?? { providers: [] }, { policyDisabled });
+  if (config === undefined || !voice.available || !voice.capabilities.speechOutput) {
+    return speechUnavailable(deps);
+  }
+  return config;
+}
+
+interface ValidatedSpeech {
+  readonly text: string;
+  readonly persona?: VoicePersona;
+}
+
+function isVoicePersona(value: unknown): value is VoicePersona {
+  return typeof value === "string" && (VOICE_PERSONAS as readonly string[]).includes(value);
+}
+
+// Validates the synthesis request: a non-empty bounded answer text and an optional persona drawn from
+// the closed VOICE_PERSONAS set. Order: text presence → text length → persona.
+function validateSpeakRequest(
+  body: Record<string, unknown>,
+  deps: UiHandlerDeps,
+): ValidatedSpeech | RouteResult {
+  const text = body.text;
+  if (typeof text !== "string" || text.trim().length === 0) {
+    return badRequest(deps, "INVALID_TEXT", "The text field must be a non-empty string.");
+  }
+  if (text.length > MAX_SPEECH_INPUT_CHARS) {
+    return {
+      status: 413,
+      body: deps.redactor(
+        errorBody("PAYLOAD_TOO_LARGE", "The assistant response is too long for speech synthesis."),
+      ),
+    };
+  }
+  if (body.persona !== undefined && !isVoicePersona(body.persona)) {
+    return badRequest(deps, "INVALID_PERSONA", "The persona is not a supported voice persona.");
+  }
+  return {
+    text,
+    ...(isVoicePersona(body.persona) ? { persona: body.persona } : {}),
+  };
+}
+
+interface SpeechTarget {
+  readonly modelId: string;
+  readonly voiceId?: string;
+}
+
+// Resolves the model + provider voice id to synthesize with (Issue #1557 seam, ADR-0094 D6). A
+// requested persona is honored when mapped; otherwise the first persona-mapped provider in canonical
+// order is used; otherwise the cheapest speech-output model with the adapter's default voice. The
+// resolved voice id stays server-side and never reaches a response.
+function resolveSpeechTarget(
+  config: GatewayConfig,
+  persona: VoicePersona | undefined,
+): SpeechTarget | undefined {
+  if (persona !== undefined) {
+    const mapped = selectVoicePersonaVoice(config, persona);
+    if (mapped !== undefined) {
+      return mapped;
+    }
+  }
+  for (const candidate of VOICE_PERSONAS) {
+    const mapped = selectVoicePersonaVoice(config, candidate);
+    if (mapped !== undefined) {
+      return mapped;
+    }
+  }
+  const modelId = selectSpeechOutputModel(config);
+  return modelId === undefined ? undefined : { modelId };
+}
+
+function buildTtsRequest(
+  provider: ModelProviderConfig,
+  target: SpeechTarget,
+  validated: ValidatedSpeech,
+  deps: UiHandlerDeps,
+): TextToSpeechRequest {
+  const egress = provider.egress ?? currentGatewayEgressConfig(deps);
+  return {
+    endpoint: provider.baseUrl,
+    apiKey: provider.apiKey,
+    ...(provider.apiKeyHeaderName !== undefined
+      ? { apiKeyHeaderName: provider.apiKeyHeaderName }
+      : {}),
+    modelId: provider.modelId,
+    input: validated.text,
+    ...(target.voiceId !== undefined ? { voice: target.voiceId } : {}),
+    ...(egress !== undefined ? { egress } : {}),
+    timeoutMs: provider.timeoutMs,
+  };
+}
+
+// Success body: the synthesized audio as base64 plus a canonicalized audio MIME type. The audio is
+// content-free synthesized speech of the already-visible assistant text and carries no credential or
+// URL, so it is NOT passed through the secret redactor — redacting a multi-megabyte base64 blob would
+// risk corrupting the audio with no security benefit. The MIME type is canonicalized against a closed
+// server allowlist so no provider-controlled string crosses the boundary. The audio buffer goes out
+// of scope after this response and is never persisted ("no raw generated audio persistence").
+function speechResult(value: TextToSpeechSuccess): RouteResult {
+  const mimeType = ALLOWED_SPEECH_MIME.has(value.mimeType) ? value.mimeType : DEFAULT_SPEECH_MIME;
+  return {
+    status: 200,
+    body: { audio: Buffer.from(value.audio).toString("base64"), mimeType },
+  };
+}
+
+export async function handleVoiceSpeak(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const gated = gateSpeechOutput(deps);
+  if (isRouteResult(gated)) {
+    return gated;
+  }
+  const parsed = await readJsonObject(ctx.req);
+  if (isRouteResult(parsed)) {
+    return parsed;
+  }
+  const validated = validateSpeakRequest(parsed, deps);
+  if (isRouteResult(validated)) {
+    return validated;
+  }
+  const target = resolveSpeechTarget(gated, validated.persona);
+  if (target === undefined) {
+    return speechUnavailable(deps);
+  }
+  const provider = gated.providers.find((candidate) => candidate.modelId === target.modelId);
+  if (provider === undefined) {
+    return speechUnavailable(deps);
+  }
+  const synthesize = deps.voiceSpeechRequest ?? requestTextToSpeech;
+  const outcome = await synthesize(buildTtsRequest(provider, target, validated, deps));
+  return outcome.ok ? speechResult(outcome.value) : speechProviderErrorResult(deps, outcome.kind);
 }

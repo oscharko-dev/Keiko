@@ -430,6 +430,10 @@ function makeCtx(): WindowRenderContext & {
         screenId: "screen-1",
       },
     ],
+    // Issue #446 — unbound by default so these legacy renderer tests keep their cfg/linkedRoot
+    // behavior; the dedicated retarget tests set activeRoot to assert the override.
+    activeRoot: null,
+    activeBinding: null,
     updateCfg: vi.fn<UpdateCfg>(),
     openWindow: vi.fn(() => "win-1"),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
@@ -651,5 +655,56 @@ describe("workspace widget renderer registry", () => {
     });
     expect(screen.getByTestId("connector-graph")).toHaveTextContent("false");
     expect(screen.getByText("RelationshipsView")).toBeInTheDocument();
+  });
+});
+
+// Issue #446 (ADR-0090) — prove the active-workspace root is actually WIRED into each bound-surface
+// renderer (not just the resolveBoundRoot helper): a mutation removing the override from a renderer
+// must fail here. Covers AC1/AC2 + the SC "no surface remains pointed at the previous workspace".
+describe("active workspace binding override (Issue #446)", () => {
+  function boundCtx(activeRoot: string | null): WindowRenderContext {
+    return { ...makeCtx(), activeRoot, linkedRoot: null };
+  }
+
+  it("files renderer uses the active root, overriding the per-window cfg root", () => {
+    render(<>{WIN_TYPES.files.render({ root: "/cfg/old" }, boundCtx("/wt/active"))}</>);
+    expect(screen.getByTestId("files-root")).toHaveTextContent("/wt/active");
+  });
+
+  it("files renderer falls back to the cfg root in unbound mode", () => {
+    render(<>{WIN_TYPES.files.render({ root: "/cfg/old" }, boundCtx(null))}</>);
+    expect(screen.getByTestId("files-root")).toHaveTextContent("/cfg/old");
+  });
+
+  it("terminal renderer scopes projectPath + cwd to the active root", () => {
+    render(
+      <>
+        {WIN_TYPES.terminal.render(
+          { projectPath: "/cfg/old", cwd: "/cfg/old" },
+          boundCtx("/wt/active"),
+        )}
+      </>,
+    );
+    expect(screen.getByTestId("terminal-widget")).toHaveTextContent("/wt/active:/wt/active");
+  });
+
+  it("editor renderer targets the active root and remounts (key changes) on a switch", () => {
+    render(<>{WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/active"))}</>);
+    expect(screen.getByTestId("editor-widget")).toHaveTextContent("/wt/active:");
+    // The remount key is the activeRoot — a switch to a different workspace changes it (drops the
+    // stale Monaco model), and unbound mode collapses to a stable "unbound" key.
+    const a = WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/a")) as {
+      key: string | null;
+    };
+    const b = WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/b")) as {
+      key: string | null;
+    };
+    const unbound = WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx(null)) as {
+      key: string | null;
+    };
+    expect(a.key).toBe("/wt/a");
+    expect(b.key).toBe("/wt/b");
+    expect(a.key).not.toBe(b.key);
+    expect(unbound.key).toBe("unbound");
   });
 });

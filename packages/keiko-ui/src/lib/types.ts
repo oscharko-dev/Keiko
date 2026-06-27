@@ -179,6 +179,16 @@ export {
   explainConversationIneligibility,
 } from "@oscharko-dev/keiko-contracts";
 
+// Issue #1557 / Epic #1556 (ADR-0094 D3/D5): pure, content-free voice-provider availability helpers
+// re-exported from keiko-contracts so the model list can present a correctly configured voice
+// provider as available (not as a chat-ineligibility warning) without importing keiko-model-gateway
+// (ADR-0019 trust-3).
+export {
+  isConfiguredVoiceProvider,
+  describeVoiceProviderAvailability,
+} from "@oscharko-dev/keiko-contracts";
+export type { VoiceProviderAvailability, VoicePersona } from "@oscharko-dev/keiko-contracts";
+
 // Issue #151 / Epic #142: pure conversation-budget estimator. The Conversation
 // Center context-pressure indicator and "clear history" affordance derive from
 // this on every render. Token counts are APPROXIMATE (bytes/4) by construction

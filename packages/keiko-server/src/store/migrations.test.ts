@@ -260,6 +260,40 @@ describe("runMigrations", () => {
     expect(userVersion(db)).toBe(before);
   });
 
+  it("v7 creates the task_workspace_instances table (issue #445)", () => {
+    const db = openMem();
+    runMigrations(db);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(7);
+    expect(tableNames(db)).toContain("task_workspace_instances");
+  });
+
+  it("v8 creates the singleton active-pointer table with the documented columns (issue #446)", () => {
+    const db = openMem();
+    runMigrations(db);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(8);
+    expect(tableNames(db)).toContain("task_workspace_active_pointer");
+    const cols = (
+      db.prepare("PRAGMA table_info(task_workspace_active_pointer)").all() as { name: string }[]
+    ).map((c) => c.name);
+    for (const expected of ["id", "workspace_id", "set_by", "set_at", "updated_at"]) {
+      expect(cols).toContain(expected);
+    }
+  });
+
+  it("v8 enforces the foreign key from the pointer to an instance (issue #446)", () => {
+    const db = openMem();
+    runMigrations(db);
+    // No instance with id 'ghost' exists, so the FK rejects the pointer insert.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO task_workspace_active_pointer (id, workspace_id, set_by, set_at, updated_at)" +
+            " VALUES ('active', 'ghost', 'op', 'x', 'x')",
+        )
+        .run(),
+    ).toThrow();
+  });
+
   it("v2 migration is forward-compatible from v1 state", () => {
     // Build a DB that explicitly sits at user_version = 1 with the v1 chat_messages shape (no
     // task_type column). Run migrations; v2 ALTER must add task_type without dropping existing

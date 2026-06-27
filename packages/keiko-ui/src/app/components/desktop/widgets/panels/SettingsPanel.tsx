@@ -10,7 +10,12 @@ import type {
   ModelCapability,
   SafeGatewayConfig,
 } from "@/lib/types";
-import { explainConversationIneligibility, isConversationEligibleModel } from "@/lib/types";
+import {
+  describeVoiceProviderAvailability,
+  explainConversationIneligibility,
+  isConfiguredVoiceProvider,
+  isConversationEligibleModel,
+} from "@/lib/types";
 import { Icons } from "../../Icons";
 import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
 import { Toggle } from "../shared/Toggle";
@@ -59,17 +64,29 @@ function embeddingAvailabilityLabel(): string {
   return "Available for embeddings; not shown in the chat model picker";
 }
 
-function voiceAvailabilityLabel(): string {
-  return "Available for voice; not shown in the chat model picker";
+// Issue #1557 (AC4, ADR-0094 D5): a content-free, human-readable description of a configured voice
+// provider's availability, so the model list presents it as available (with its voice capabilities
+// and the personas it offers) rather than a chat-ineligibility warning. Reads only enum/boolean
+// fields — never a base URL, credential, or provider voice id.
+function voiceProviderAvailabilityLabel(model: ModelCapability): string {
+  const availability = describeVoiceProviderAvailability(model);
+  const capabilities: string[] = [];
+  if (availability.speechToText) capabilities.push("speech-to-text");
+  if (availability.speechOutput) capabilities.push("speech output");
+  if (availability.realtimeVoice) capabilities.push("realtime dialogue");
+  const capabilityText = capabilities.length > 0 ? capabilities.join(", ") : "voice";
+  const personaText =
+    availability.personas.length > 0 ? `; voices: ${availability.personas.join(", ")}` : "";
+  return `Voice provider — available for ${capabilityText}${personaText}`;
 }
 
-function isVoiceReady(model: ModelCapability): boolean {
-  return (
-    model.kind === "voice" &&
-    (model.supportsSpeechInput === true ||
-      model.supportsSpeechOutput === true ||
-      model.supportsRealtimeVoice === true)
-  );
+// Short visible badge copy for a configured voice provider (the long form stays in aria-label/title).
+function voiceProviderShortLabel(model: ModelCapability): string {
+  const availability = describeVoiceProviderAvailability(model);
+  if (availability.realtimeVoice) return "realtime dialogue";
+  if (availability.speechOutput) return "speech output";
+  if (availability.speechToText) return "speech-to-text";
+  return "voice";
 }
 
 // uiux-fix C359/C057: short visible badge copy — the long form stays in
@@ -106,16 +123,19 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
       </span>
     );
   }
-  if (isVoiceReady(model)) {
+  // Issue #1557 (AC4): a correctly configured voice provider is available for its voice purpose, not a
+  // chat-ineligibility warning. `isConversationEligibleModel` stays unchanged (voice is genuinely not
+  // a chat model) — only the presentation differs.
+  if (isConfiguredVoiceProvider(model)) {
     return (
       <span
         className="ml-elig ml-elig-voice"
         data-testid="voice-elig-ok"
         role="status"
-        aria-label={"Model eligibility: " + voiceAvailabilityLabel()}
-        title={voiceAvailabilityLabel()}
+        aria-label={"Model eligibility: " + voiceProviderAvailabilityLabel(model)}
+        title={voiceProviderAvailabilityLabel(model)}
       >
-        Voice-ready
+        Voice provider — {voiceProviderShortLabel(model)}
       </span>
     );
   }
@@ -335,14 +355,14 @@ function ModelCapabilityRow({
 }): ReactNode {
   const conversationEligible = isConversationEligibleModel(model);
   const embeddingReady = model.kind === "embedding";
-  const voiceReady = isVoiceReady(model);
+  const voiceReady = isConfiguredVoiceProvider(model);
   const statusClass = conversationEligible || embeddingReady || voiceReady ? "connected" : "ineligible";
   const statusTitle = conversationEligible
     ? "conversation-eligible"
     : embeddingReady
       ? "available for embeddings"
       : voiceReady
-        ? "available for voice"
+        ? voiceProviderAvailabilityLabel(model)
         : "not selectable for conversation";
   const RowIcon = model.kind === "voice" ? Icons.mic : Icons.cube;
   return (

@@ -18,7 +18,7 @@ import {
   handleEvidenceDetail,
 } from "./read-handlers.js";
 import { handleGetWorkspaceState, handlePutWorkspaceState } from "./workspace-state-handlers.js";
-import { handleVoiceTranscribe } from "./voice-handlers.js";
+import { handleVoiceSpeak, handleVoiceTranscribe } from "./voice-handlers.js";
 import { handleVoiceRecapBuild } from "./voice-recap.js";
 import {
   handleCreateRun,
@@ -87,6 +87,24 @@ import {
   handleCreateCommandRun,
   handleDeleteCommandRun,
 } from "./command-runner-routes.js";
+import {
+  handleActivateTaskWorkspace,
+  handleCleanupOrphanTaskWorkspaces,
+  handleCleanupTaskWorkspace,
+  handleClearActiveTaskWorkspace,
+  handleGetActiveTaskWorkspace,
+  handleGetTaskWorkspace,
+  handleGetTaskWorkspaceHealth,
+  handleGetTaskWorkspaceReconciliation,
+  handleHandoffTaskWorkspace,
+  handleListTaskWorkspaces,
+  handlePauseTaskWorkspace,
+  handleProvisionTaskWorkspace,
+  handleReconcileTaskWorkspaces,
+  handleRepairTaskWorkspace,
+  handleResumeTaskWorkspace,
+  handleSetActiveTaskWorkspace,
+} from "./task-workspace/routes.js";
 import {
   handleContainerCapability,
   handleContainerCatalog,
@@ -253,6 +271,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // POST a short audio clip (base64 inside the JSON + CSRF envelope) and receive its transcript;
   // answers VOICE_UNAVAILABLE when no speech-to-text capability is configured/enabled.
   { method: "POST", pattern: "/api/voice/transcribe", handler: handleVoiceTranscribe },
+  // Issue #1558 (Epic #1556) — optional, capability-gated assistant speech output (ADR-0095). POST
+  // the visible assistant answer text (inside the JSON + CSRF envelope) and receive synthesized audio
+  // as base64; answers VOICE_UNAVAILABLE when no speech-output capability is configured/enabled.
+  { method: "POST", pattern: "/api/voice/speak", handler: handleVoiceSpeak },
   // Issue #504 (Epic #491, ADR-0067) — optional, capability-gated, user-triggered voice session recap.
   // POST the committed transcript text (content-free counts alongside) and derive memory candidates via
   // the EXISTING governed capture path; candidates surface in the existing review queue as "proposed".
@@ -354,6 +376,78 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/commands/runs/:runId",
     handler: handleDeleteCommandRun,
   },
+  // Issue #445 (Epic #443, ADR-0089) — governed managed task-workspace provisioning + activation.
+  // Provision creates a dedicated task branch + managed Git worktree from an approved base branch
+  // through the narrow worktree adapter (single governed spawn boundary; no generic git runner) and
+  // persists a WorkspaceInstance; activate yields the WorkspaceBinding surfaces bind to. CSRF is
+  // enforced by the server's state-changing gate for the POST routes.
+  { method: "POST", pattern: "/api/task-workspaces", handler: handleProvisionTaskWorkspace },
+  // Issue #446 (Epic #443, ADR-0090) — the shared ACTIVE task-workspace binding the Studio/editor/
+  // runtime/Git-Delivery surfaces consume. `matchRoute` resolves by literal specificity, so the
+  // literal `active` and the `?root` collection paths win over the `:workspaceId` param route
+  // regardless of registration order. CSRF is enforced by the state-changing gate for POST/DELETE.
+  { method: "GET", pattern: "/api/task-workspaces", handler: handleListTaskWorkspaces },
+  { method: "GET", pattern: "/api/task-workspaces/active", handler: handleGetActiveTaskWorkspace },
+  { method: "POST", pattern: "/api/task-workspaces/active", handler: handleSetActiveTaskWorkspace },
+  {
+    method: "DELETE",
+    pattern: "/api/task-workspaces/active",
+    handler: handleClearActiveTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/pause",
+    handler: handlePauseTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/resume",
+    handler: handleResumeTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/handoff",
+    handler: handleHandoffTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/activate",
+    handler: handleActivateTaskWorkspace,
+  },
+  // Issue #447 (Epic #443, ADR-0091) — startup reconciliation report (read-only, derived from the
+  // persisted content-free fields), an explicit live reconcile pass (CSRF-gated POST), and the
+  // controlled, operator-approval-gated repair. The literal `reconciliation` path wins over the
+  // `:workspaceId` GET by `matchRoute` specificity.
+  {
+    method: "GET",
+    pattern: "/api/task-workspaces/reconciliation",
+    handler: handleGetTaskWorkspaceReconciliation,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/reconciliation",
+    handler: handleReconcileTaskWorkspaces,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/repair",
+    handler: handleRepairTaskWorkspace,
+  },
+  // Issue #448 (Epic #443, ADR-0092) — operational health/drift/orphan report (read-only) plus the
+  // governed, operator-approval-gated cleanup controls. The literal `health` and `cleanup/orphans`
+  // paths win over the `:workspaceId` routes by `matchRoute` specificity.
+  { method: "GET", pattern: "/api/task-workspaces/health", handler: handleGetTaskWorkspaceHealth },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/cleanup/orphans",
+    handler: handleCleanupOrphanTaskWorkspaces,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/cleanup",
+    handler: handleCleanupTaskWorkspace,
+  },
+  { method: "GET", pattern: "/api/task-workspaces/:workspaceId", handler: handleGetTaskWorkspace },
   // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. The capability
   // route runs an opt-in ACTIVE daemon probe (distinct from the metadata-only #1385 detector); the
   // catalog/run routes degrade to 503 CONTAINER_ENGINE_UNAVAILABLE when no engine is present. A run

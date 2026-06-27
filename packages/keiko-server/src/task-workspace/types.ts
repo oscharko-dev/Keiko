@@ -1,0 +1,303 @@
+// Service-layer contracts for managed task-workspace provisioning + activation (Issue #445).
+// The wire entities (WorkspaceInstance / WorkspaceBinding / WorkspaceActivation) stay owned by the
+// #444 contract in @oscharko-dev/keiko-contracts; these are the request/result envelopes and the
+// injectable dependency bundle the server-side service and BFF routes share.
+
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  TaskWorkspaceDriftMarker,
+  TaskWorkspaceLifecycleState,
+  WorkspaceBinding,
+  WorkspaceCleanupRefusalReason,
+  WorkspaceHealthReport,
+  WorkspaceInstance,
+  WorkspaceInfo,
+  WorkspaceReconciliationReport,
+  WorkspaceReconciliationStatus,
+  WorkspaceRecoveryStrategy,
+} from "@oscharko-dev/keiko-contracts";
+import type { ActiveWorkspacePointer, ActiveWorkspacePointerStore } from "./active-store.js";
+import type { WorkspaceInstanceStore } from "./store.js";
+import type { WorkspaceMutexRegistry } from "./mutex.js";
+
+export interface WorkspaceProvisionRequest {
+  // The repository request path the route already resolved (realpath'd project/arbitrary root). The
+  // service resolves the git top-level from here before deriving identities.
+  readonly repositoryRequestPath: string;
+  readonly taskId: string;
+  readonly baseBranch: string;
+  readonly requestedBy: string;
+}
+
+export interface WorkspaceProvisionResult {
+  readonly instance: WorkspaceInstance;
+  readonly binding: WorkspaceBinding;
+  // True when this call created (or completed) the worktree; false when an already-active workspace
+  // was resumed idempotently.
+  readonly created: boolean;
+}
+
+export interface WorkspaceActivateRequest {
+  readonly workspaceId: string;
+  readonly taskId: string;
+  readonly requestedBy: string;
+  readonly acquireLock: boolean;
+  readonly expectedLifecycleState?: TaskWorkspaceLifecycleState | undefined;
+}
+
+export interface WorkspaceActivateResult {
+  readonly instance: WorkspaceInstance;
+  readonly binding: WorkspaceBinding;
+}
+
+export interface WorkspaceProvisioningService {
+  readonly provision: (request: WorkspaceProvisionRequest) => Promise<WorkspaceProvisionResult>;
+  readonly activate: (request: WorkspaceActivateRequest) => Promise<WorkspaceActivateResult>;
+  readonly getInstance: (workspaceId: string) => WorkspaceInstance | undefined;
+}
+
+export interface WorkspaceProvisioningServiceDeps {
+  readonly store: WorkspaceInstanceStore;
+  readonly evidenceStore: EvidenceStore;
+  // The Keiko-owned managed worktree root (absolute). Provisioning proves ownership of this before
+  // writing any worktree under it.
+  readonly managedRoot: string;
+  // Builds a narrow worktree adapter bound to a repository root. Injected so tests can supply a fake.
+  readonly createAdapter: (workspace: WorkspaceInfo) => GitWorktreeAdapter;
+  readonly redactString: (input: string) => string;
+  // Clock + id generator, injected for deterministic tests. `now` is epoch ms.
+  readonly now: () => number;
+  readonly newId: () => string;
+  // Optional: how long a provisioning/activation lock stays valid before it is treated as stale.
+  readonly lockTtlMs?: number | undefined;
+  // In-process serializer shared across all mutating workspace services (#449, ADR-0093 D1): provision
+  // takes the `prov:<repo>:<task>` key, activate the `ws:<workspaceId>` key, so concurrent same-resource
+  // mutations queue instead of racing. Must be the SAME instance the lifecycle/repair/cleanup services
+  // hold so they serialize against each other on the shared `ws:` keyspace.
+  readonly mutex: WorkspaceMutexRegistry;
+}
+
+// ─── #446 active-binding lifecycle service ──────────────────────────────────────────────────────
+// The cross-surface binding authority: it owns the singleton active pointer and the operator-driven
+// pause/resume/switch/handoff transitions. It REUSES the #445 provisioning service for the lifecycle
+// walk into `active` (setActive/resume delegate to provisioning.activate) and the same store/evidence
+// for pause/handoff — no second worktree, lock, or transition engine (SC1).
+
+// The active view returned to the BFF: the durable instance, the DERIVED binding (binding.ts), and
+// the pointer metadata (who set it / when) the switcher renders.
+export interface ActiveWorkspaceView {
+  readonly instance: WorkspaceInstance;
+  readonly binding: WorkspaceBinding;
+  readonly pointer: ActiveWorkspacePointer;
+}
+
+export interface SetActiveWorkspaceRequest {
+  readonly workspaceId: string;
+  readonly requestedBy: string;
+  // When true, the activation acquires the workspace lock for the actor (cross-actor exclusivity).
+  readonly acquireLock: boolean;
+}
+
+export interface WorkspaceLifecycleActionRequest {
+  readonly workspaceId: string;
+  readonly requestedBy: string;
+}
+
+export interface WorkspaceLifecycleActionResult {
+  readonly instance: WorkspaceInstance;
+  readonly binding: WorkspaceBinding;
+}
+
+export interface WorkspaceLifecycleService {
+  // List the persisted instances for an already-resolved repository root (switcher inventory).
+  readonly list: (repositoryRoot: string) => readonly WorkspaceInstance[];
+  // Current active instance + derived binding + pointer, or undefined in unbound mode.
+  readonly getActive: () => ActiveWorkspaceView | undefined;
+  // ATOMIC SWITCH: activate/resume the target via the #445 service, then persist it as the pointer.
+  readonly setActive: (request: SetActiveWorkspaceRequest) => Promise<ActiveWorkspaceView>;
+  // Clear the pointer → unbound mode. Does not change any instance lifecycle state. Idempotent.
+  readonly clearActive: () => void;
+  // active → paused. Clears the pointer iff the paused workspace was the active one.
+  readonly pause: (
+    request: WorkspaceLifecycleActionRequest,
+  ) => Promise<WorkspaceLifecycleActionResult>;
+  // paused → active. Sets the pointer to the resumed workspace (delegates the walk to activate).
+  readonly resume: (
+    request: WorkspaceLifecycleActionRequest,
+  ) => Promise<WorkspaceLifecycleActionResult>;
+  // active | paused → handoff-ready (requires a clean worktree). Does not change the pointer.
+  readonly prepareHandoff: (
+    request: WorkspaceLifecycleActionRequest,
+  ) => Promise<WorkspaceLifecycleActionResult>;
+}
+
+export interface WorkspaceLifecycleServiceDeps {
+  readonly store: WorkspaceInstanceStore;
+  readonly activePointerStore: ActiveWorkspacePointerStore;
+  // The Keiko-owned managed worktree root. Active binding re-proves persisted paths are still
+  // contained before exposing them to task-bound surfaces.
+  readonly managedRoot: string;
+  // Reused #445 service: setActive/resume delegate the lifecycle walk into `active` to it.
+  readonly provisioning: WorkspaceProvisioningService;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (input: string) => string;
+  readonly now: () => number;
+  readonly newId: () => string;
+  // Optional: how long a mutation lock stays valid before it is treated as stale. Mirrors provisioning.
+  readonly lockTtlMs?: number | undefined;
+  // The SAME shared in-process serializer the provisioning service holds (#449, ADR-0093 D1): pause /
+  // handoff take the `ws:<workspaceId>` key; the setActive pointer write takes the `active:<repo>` key.
+  readonly mutex: WorkspaceMutexRegistry;
+}
+
+// ─── #447 startup reconciliation + repair services ──────────────────────────────────────────────
+// reconcile() walks the durable instances, verifies each against the real filesystem + git worktree
+// state (containment, pointer, branch/HEAD, lock liveness), classifies it via the pure #444/#447
+// contract, persists the classification within legal lifecycle transitions, and decides whether the
+// last active workspace can be safely restored. report() derives the same report from the persisted
+// content-free fields without re-running IO (the read-only GET surface). The repair service applies a
+// controlled, operator-approval-gated recovery — reusing the #445 provisioning re-materialization path
+// for worktree repairs, never a second git engine (SC1).
+
+export interface WorkspaceReconciliationService {
+  // Read-only: derive the report from the currently persisted instances (no filesystem/git IO).
+  readonly report: (repositoryRoot?: string) => WorkspaceReconciliationReport;
+  // Live: verify every (or one repository's) instance against disk + git, persist the classification,
+  // and return the fresh report. Used at startup and by the explicit refresh route.
+  readonly reconcile: (repositoryRoot?: string) => Promise<WorkspaceReconciliationReport>;
+}
+
+export interface WorkspaceReconciliationServiceDeps {
+  readonly store: WorkspaceInstanceStore;
+  readonly activePointerStore: ActiveWorkspacePointerStore;
+  readonly evidenceStore: EvidenceStore;
+  // The Keiko-owned managed worktree root (absolute) — every persisted path is realpath-checked for
+  // containment inside it before it is trusted (SC).
+  readonly managedRoot: string;
+  readonly createAdapter: (workspace: WorkspaceInfo) => GitWorktreeAdapter;
+  readonly redactString: (input: string) => string;
+  readonly now: () => number;
+  readonly newId: () => string;
+  readonly lockTtlMs?: number | undefined;
+}
+
+export type WorkspaceRepairOutcome = "repaired" | "operator-required";
+
+export interface WorkspaceRepairRequest {
+  readonly workspaceId: string;
+  readonly requestedBy: string;
+  readonly strategy: WorkspaceRecoveryStrategy;
+  // The #444 `repair` operation requires operator approval; an automatic repair refuses to mutate
+  // without it.
+  readonly operatorApproved: boolean;
+}
+
+export interface WorkspaceRepairResult {
+  readonly instance: WorkspaceInstance;
+  readonly binding: WorkspaceBinding;
+  readonly strategy: WorkspaceRecoveryStrategy;
+  // True when a controlled mutation completed; false when the recommended recovery needs an operator.
+  readonly applied: boolean;
+  readonly outcome: WorkspaceRepairOutcome;
+  readonly status: WorkspaceReconciliationStatus;
+  readonly driftMarkers: readonly TaskWorkspaceDriftMarker[];
+  readonly operatorActionRequired: boolean;
+}
+
+export interface WorkspaceRepairService {
+  readonly repair: (request: WorkspaceRepairRequest) => Promise<WorkspaceRepairResult>;
+}
+
+export interface WorkspaceRepairServiceDeps {
+  readonly store: WorkspaceInstanceStore;
+  readonly activePointerStore: ActiveWorkspacePointerStore;
+  readonly evidenceStore: EvidenceStore;
+  // Reused #445 service: worktree-recreating repairs delegate the re-materialization walk to it.
+  readonly provisioning: WorkspaceProvisioningService;
+  readonly managedRoot: string;
+  readonly createAdapter: (workspace: WorkspaceInfo) => GitWorktreeAdapter;
+  readonly redactString: (input: string) => string;
+  readonly now: () => number;
+  readonly newId: () => string;
+  readonly lockTtlMs?: number | undefined;
+  // The SAME shared in-process serializer (#449, ADR-0093 D1): repair takes the `ws:<workspaceId>` key so
+  // it cannot race a concurrent activate/pause/cleanup of the same workspace.
+  readonly mutex: WorkspaceMutexRegistry;
+}
+
+// ─── #448 operational health + governed cleanup services ────────────────────────────────────────
+// The health service is read-only: it gathers the SAME #447 reconciliation facts (no second engine),
+// adds a live `git status` dirty probe + a managed-root ownership check, classifies via the pure
+// contract, detects orphaned managed worktrees by cross-referencing the managed-root directory with the
+// store, and returns a content-free WorkspaceHealthReport. It performs NO store writes and emits NO
+// evidence — health is observation. The cleanup service is the mutating counterpart: it re-verifies
+// containment + ownership + dirty + lock LIVE before any removal (never trusting the persisted path),
+// removes through the governed adapter, deletes the retired row, clears the active pointer, and audits
+// every outcome — treating a safety refusal as a first-class successful result, never an error.
+
+// The health/cleanup services need exactly the reconciliation deps bundle (store, active pointer,
+// evidence, managed root, adapter factory, redactor, clock, id). Aliased rather than re-declared so the
+// shape can never drift from the fact-gathering path they reuse.
+export type WorkspaceHealthServiceDeps = WorkspaceReconciliationServiceDeps;
+// Cleanup is the MUTATING counterpart to health, so it carries the shared in-process serializer (#449,
+// ADR-0093 D1) on top of the reconciliation fact-gathering deps: request/complete-cleanup take the
+// `ws:<workspaceId>` key and each orphan sweep takes the orphan's derived `ws:` key, so a governed
+// removal cannot race a concurrent mutation of the same workspace. Health stays read-only (no mutex).
+export interface WorkspaceCleanupServiceDeps extends WorkspaceReconciliationServiceDeps {
+  readonly mutex: WorkspaceMutexRegistry;
+}
+
+export interface WorkspaceHealthService {
+  // Live: classify every persisted instance for a repository root (or all repositories) plus any
+  // orphaned managed worktrees, and return the content-free report. Read-only — no persistence.
+  readonly report: (repositoryRoot?: string) => Promise<WorkspaceHealthReport>;
+}
+
+export type WorkspaceCleanupMode = "request" | "complete";
+
+export interface WorkspaceCleanupRequest {
+  readonly workspaceId: string;
+  readonly requestedBy: string;
+  // The #444 request-cleanup / complete-cleanup operations both require operator approval.
+  readonly operatorApproved: boolean;
+  // `request` transitions a settled instance to cleanup-pending; `complete` performs the live-verified
+  // governed physical removal of a cleanup-pending instance.
+  readonly mode: WorkspaceCleanupMode;
+}
+
+export type WorkspaceCleanupOutcome = "requested" | "completed" | "refused";
+
+export interface WorkspaceCleanupResult {
+  readonly outcome: WorkspaceCleanupOutcome;
+  readonly workspaceId: string;
+  // present for `requested` (the freshly cleanup-pending instance).
+  readonly instance?: WorkspaceInstance;
+  // present for `refused` — the content-free reason the live safety gate declined removal (SC4).
+  readonly refusalReason?: WorkspaceCleanupRefusalReason;
+}
+
+export interface WorkspaceOrphanCleanupRequest {
+  readonly repositoryRoot?: string | undefined;
+  readonly requestedBy: string;
+  readonly operatorApproved: boolean;
+}
+
+export interface WorkspaceOrphanRefusal {
+  readonly orphanId: string;
+  readonly refusalReason: WorkspaceCleanupRefusalReason;
+}
+
+export interface WorkspaceOrphanCleanupResult {
+  readonly removed: number;
+  readonly refused: readonly WorkspaceOrphanRefusal[];
+}
+
+export interface WorkspaceCleanupService {
+  // request-cleanup (settled → cleanup-pending) or complete-cleanup (governed physical removal).
+  readonly cleanup: (request: WorkspaceCleanupRequest) => Promise<WorkspaceCleanupResult>;
+  // Governed removal of orphaned managed worktrees (on-disk directories with no persisted record).
+  readonly cleanupOrphans: (
+    request: WorkspaceOrphanCleanupRequest,
+  ) => Promise<WorkspaceOrphanCleanupResult>;
+}

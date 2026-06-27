@@ -56,8 +56,22 @@ import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./Voi
 import { useRealtimeVoice, type RealtimeVoiceController } from "./hooks/useRealtimeVoice";
 import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
 import { VoiceRealtimeButton, VoiceRealtimeStatusFromController } from "./VoiceRealtime";
-import { useVoicePlayback, type VoicePlaybackBinding } from "./hooks/useVoicePlayback";
+import { type VoicePlaybackBinding } from "./hooks/useVoicePlayback";
+import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton, VoicePlaybackStatusFromBinding } from "./VoicePlayback";
+import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
+import { useVoiceDialogueSession } from "./hooks/useVoiceDialogueSession";
+import {
+  deriveVoiceDialogState,
+  playbackPhaseToTurnState,
+  type VoiceDialogState,
+} from "./hooks/voice-dialog-state";
+import {
+  VoiceDialogModeSwitch,
+  VoiceDialogSessionStatus,
+  VoiceDialogControls,
+  VoiceDialogTurnControls,
+} from "./VoiceDialogMode";
 import {
   useVoiceSessionRecap,
   type VoiceSessionRecapController,
@@ -1128,6 +1142,12 @@ interface ComposerBarProps {
   readonly voiceRecapVisible: boolean;
   readonly recap: VoiceSessionRecapController;
   readonly recapButtonRef: Ref<HTMLButtonElement>;
+  // Issue #1559 — capability-gated voice dialogue switch. Rendered only when `voiceDialogAvailable` is
+  // true (full-realtime advertised AND at least one persona). `voiceDialogActive` drives aria-checked.
+  readonly voiceDialogAvailable: boolean;
+  readonly voiceDialogActive: boolean;
+  readonly onToggleVoiceDialog: () => void;
+  readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
 }
 
 function ComposerBar({
@@ -1151,6 +1171,10 @@ function ComposerBar({
   voiceRecapVisible,
   recap,
   recapButtonRef,
+  voiceDialogAvailable,
+  voiceDialogActive,
+  onToggleVoiceDialog,
+  voiceDialogButtonRef,
 }: ComposerBarProps): ReactNode {
   const {
     models,
@@ -1275,6 +1299,18 @@ function ComposerBar({
             onStart={realtime.start}
             onStop={realtime.stop}
             buttonRef={realtimeButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : null}
+        {/* Issue #1559 — capability-gated voice dialogue switch. Rendered only when the deployment can
+            hold a realtime spoken dialogue AND offers a voice persona; otherwise nothing new appears and
+            the composer stays clean and fully text-capable (AC3). The switch enters / leaves spoken
+            dialogue; the active-session status and controls render in the input stack above the bar. */}
+        {voiceDialogAvailable ? (
+          <VoiceDialogModeSwitch
+            active={voiceDialogActive}
+            onToggle={onToggleVoiceDialog}
+            buttonRef={voiceDialogButtonRef}
             compact={controlsNarrow}
           />
         ) : null}
@@ -1452,6 +1488,7 @@ function ComposerCore({
     removePendingAttachment,
     budget,
     clearHistory,
+    messages,
     activeChat,
     activeProject,
     replaceChat,
@@ -1527,6 +1564,7 @@ function ComposerCore({
   const realtimeButtonRef = useRef<HTMLButtonElement>(null);
   const playbackButtonRef = useRef<HTMLButtonElement>(null);
   const recapButtonRef = useRef<HTMLButtonElement>(null);
+  const voiceDialogButtonRef = useRef<HTMLButtonElement>(null);
   // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
@@ -1538,9 +1576,80 @@ function ComposerCore({
   );
   const dictation = useDictation({ onInsert: insertTranscript });
   const realtime = useRealtimeVoice({});
-  // Issue #501 — assistant speech-output playback binding. Driven by the resolved voice profile; a
-  // non-playback profile yields a dormant controller (AC1). Replay is policy-gated and off by default.
-  const playback = useVoicePlayback({ profile: voiceCapability?.profile ?? "none" });
+  // Issue #1559 — dialog-mode availability + persona selection. Offered ONLY when the deployment can
+  // hold a realtime spoken dialogue AND advertises at least one voice persona, so a no-voice / STT-only
+  // / speech-output-only deployment shows no dialogue switch and the composer stays clean (AC3). The
+  // hook owns no transport: entering / leaving below starts / stops the existing realtime controller.
+  const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
+  // Issue #501 / #1558 — assistant speech-output binding with the live audio engine. The latest
+  // COMPLETE assistant message in the transcript is the only text ever synthesized, so the spoken
+  // answer cannot diverge from the visible text (AC2); a streaming or pending turn is excluded until it
+  // settles. A non-playback profile or a deployment without speech output keeps the engine inert (AC1),
+  // and a synthesis or playback failure degrades to the visible text without breaking the chat (AC4).
+  const latestVisibleMessage = useMemo(() => {
+    const visibleMessages = visibleOnly(messages);
+    return visibleMessages[visibleMessages.length - 1];
+  }, [messages]);
+  const spokenTurnSettled =
+    !sending &&
+    sendStatus !== "streaming" &&
+    latestVisibleMessage !== undefined &&
+    latestVisibleMessage.role === "assistant" &&
+    latestVisibleMessage.content.trim().length > 0;
+  const playback = useAssistantSpeech({
+    profile: voiceCapability?.profile ?? "none",
+    // Issue #1560 — while spoken dialogue is active the dialogue session owns the spoken turn (it runs
+    // its own speech engine bound to the live turn manager), so the standalone composer playback engine
+    // is muted to avoid double synthesis. The mute toggle still surfaces the user's playback preference.
+    enabled: voiceSpeechOutputVisible && !voiceDialog.active,
+    text: spokenTurnSettled ? latestVisibleMessage.content : undefined,
+    messageId: spokenTurnSettled ? latestVisibleMessage.id : undefined,
+  });
+  // Issue #1560 (ADR-0096) — the live dialogue session controller. It drives ONE turn manager as the
+  // single conversational truth, captures via dictation, speaks the settled answer, and routes barge-in
+  // to playback + chat. Entering starts this session (NOT the realtime media plane, D7); leaving runs
+  // its master cleanup (D9). The text composer stays fully usable throughout (AC2).
+  const dialogueSession = useVoiceDialogueSession({
+    capability: voiceCapability,
+    active: voiceDialog.active,
+    persona: voiceDialog.active ? voiceDialog.persona : undefined,
+    session,
+    answerText: spokenTurnSettled ? latestVisibleMessage.content : undefined,
+    answerId: spokenTurnSettled ? latestVisibleMessage.id : undefined,
+    onLeave: voiceDialog.leave,
+  });
+  // Issue #1560 (ADR-0096 D4) — the dialogue surface label is derived from the LIVE turn state (the
+  // dialogue session's snapshot), replacing the #1559 playback-phase synthesis. When dialogue is
+  // inactive the standalone playback floor still feeds the label so the speech-output controls behave.
+  const voiceDialogState: VoiceDialogState = voiceDialog.active
+    ? dialogueSession.state
+    : deriveVoiceDialogState({
+        realtimePhase: realtime.phase,
+        turnState: playbackPhaseToTurnState(playback.snapshot.phase),
+        muted: playback.snapshot.muted,
+      });
+  const dialogMuteButtonRef = useRef<HTMLButtonElement>(null);
+  // Issue #1560 (ADR-0096 D7) — entering records dialog intent and arms the dialogue session; it does
+  // NOT start the realtime media plane (which had no transcript consumer and double-captured the mic).
+  // Leaving runs the dialogue session master cleanup and clears intent.
+  const enterVoiceDialog = useCallback(() => {
+    // Fail-closed symmetry with voiceDialog.enter(): never open the realtime session on a deployment
+    // that does not offer dialogue, even if the switch were ever rendered without its availability gate.
+    if (!voiceDialog.available) {
+      return;
+    }
+    voiceDialog.enter();
+  }, [voiceDialog]);
+  const leaveVoiceDialog = useCallback(() => {
+    dialogueSession.onStop();
+  }, [dialogueSession]);
+  const toggleVoiceDialog = useCallback(() => {
+    if (voiceDialog.active) {
+      leaveVoiceDialog();
+    } else {
+      enterVoiceDialog();
+    }
+  }, [voiceDialog.active, enterVoiceDialog, leaveVoiceDialog]);
   // Issue #504 — voice session recap. Derives memory candidates from the COMMITTED voice transcript via
   // the additive recap route, then lists them through the EXISTING review queue. Live committed-transcript
   // segments are not yet surfaced by the composer (the #500 voice-transcript-segments store is not consumed
@@ -1798,6 +1907,41 @@ function ComposerCore({
             the input stack. Renders nothing between spoken turns; while a spoken response is active or
             freshly settled it announces the state and offers pause / resume / stop / replay (AC1). */}
         {voiceSpeechOutputVisible ? <VoicePlaybackStatusFromBinding binding={playback} /> : null}
+        {/* Issue #1559 — active voice-dialogue status + controls. Shown only while dialogue is active:
+            a live-region status strip (AC2/AC4) plus the control cluster (mute reuse + Stop + Leave +
+            persona selector). Entering / leaving never touches the text composer, which stays usable
+            throughout (AC1). */}
+        {voiceDialog.active ? (
+          <>
+            <VoiceDialogSessionStatus state={voiceDialogState} />
+            {/* Issue #1560 (ADR-0096) — the active dialogue cluster is wired to the LIVE dialogue
+                session, not the standalone playback / realtime bindings (which are inert while dialogue
+                owns the spoken turn). Mute, Stop, and barge-in all route through the session controller. */}
+            <VoiceDialogControls
+              state={voiceDialogState}
+              muted={dialogueSession.muted}
+              onToggleMute={dialogueSession.toggleMute}
+              onStop={dialogueSession.onStop}
+              onLeave={leaveVoiceDialog}
+              personas={voiceDialog.availablePersonas}
+              selectedPersona={voiceDialog.persona}
+              onSelectPersona={voiceDialog.selectPersona}
+              compact={controlsNarrow}
+              muteButtonRef={dialogMuteButtonRef}
+            />
+            {/* Issue #1560 — the per-turn controls that let the user actually speak: a mic toggle
+                (start / stop-and-send) and a barge-in Interrupt. Without these the user has no way to
+                take the floor (AC1). */}
+            <VoiceDialogTurnControls
+              listening={dialogueSession.listening}
+              speaking={dialogueSession.speaking}
+              canInterrupt={dialogueSession.canInterrupt}
+              onListen={dialogueSession.onListen}
+              onInterrupt={dialogueSession.onInterrupt}
+              compact={controlsNarrow}
+            />
+          </>
+        ) : null}
         {/* Issue #504 — voice session recap candidates. Adjacent to the playback status in the input
             stack. Renders nothing until a recap is triggered and proposes candidates; the listed
             candidates use the EXISTING governed accept / edit / reject / forget actions (AC3). */}
@@ -1843,6 +1987,10 @@ function ComposerCore({
           voiceRecapVisible={voiceRecapVisible}
           recap={recap}
           recapButtonRef={recapButtonRef}
+          voiceDialogAvailable={voiceDialog.available}
+          voiceDialogActive={voiceDialog.active}
+          onToggleVoiceDialog={toggleVoiceDialog}
+          voiceDialogButtonRef={voiceDialogButtonRef}
         />
       </div>
     </div>
@@ -2876,7 +3024,17 @@ export function ChatWindow({
         )}
       </div>
 
-      {visible.length > 0 ? (
+      {/* Issue #1560 — ONE composer render site across the empty→populated transition. The composer was
+          previously rendered in two separate conditional slots (one for visible.length === 0, one for
+          > 0). Because those are distinct positions in the child list, React unmounted the empty-state
+          ComposerCore and mounted a fresh one the instant the first message landed — resetting its local
+          voice-dialogue state (voiceDialog.active / persona, and the freshly-undefined useVoiceCapability
+          probe), which silently kicked the user out of an active spoken dialogue right after their first
+          committed turn. Rendering a single ComposerCore at one stable position preserves the instance —
+          and its live dialogue session — across the empty→populated transition. The condition is the
+          exact union of the two prior slots (a chat is open, or messages exist), and the placeholder
+          keeps the empty+loading "Connecting…" wording, so the rendered surface is unchanged. */}
+      {visible.length > 0 || activeChat !== undefined ? (
         <div className="chatw-foot">
           <form
             className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
@@ -2888,38 +3046,11 @@ export function ChatWindow({
             <ComposerCore
               session={session}
               ready={ready}
-              placeholder={COMPOSER_PLACEHOLDER}
-              minimal={effectiveMinimal}
-              compact={effectiveCompact}
-              controlsNarrow={effectiveControlsNarrow}
-              barCompact={effectiveBarCompact}
-            />
-            {error !== undefined ? (
-              <ErrorNoticeFromError
-                error={error}
-                fallback="Could not send message."
-                onDismiss={session.clearError}
-              />
-            ) : null}
-          </form>
-        </div>
-      ) : null}
-
-      {/* Composer for empty state with active chat — the EmptyComposerState shows the
-          welcoming content above, and the form wraps the input below. */}
-      {visible.length === 0 && activeChat !== undefined ? (
-        <div className="chatw-foot">
-          <form
-            className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void sendMessage();
-            }}
-          >
-            <ComposerCore
-              session={session}
-              ready={ready}
-              placeholder={loading ? "Connecting to your gateway…" : COMPOSER_PLACEHOLDER}
+              placeholder={
+                visible.length === 0 && loading
+                  ? "Connecting to your gateway…"
+                  : COMPOSER_PLACEHOLDER
+              }
               minimal={effectiveMinimal}
               compact={effectiveCompact}
               controlsNarrow={effectiveControlsNarrow}

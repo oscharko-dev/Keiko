@@ -53,6 +53,18 @@ function str(cfg: Record<string, unknown>, key: string): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
+// Issue #446 (ADR-0090) — the single root-resolution choke point for bound surfaces. When a task
+// workspace is active, its managed-worktree root OVERRIDES the window's per-window cfg root and the
+// linked-window fallback, so a switch atomically retargets every surface and none can keep executing
+// against the previous workspace (AC1/AC2, SC1/SC3). In unbound mode (no active workspace) the legacy
+// cfg → linkedRoot chain is preserved unchanged.
+export function resolveBoundRoot(
+  ctx: Pick<WindowRenderContext, "activeRoot" | "linkedRoot">,
+  cfgRoot: string | undefined,
+): string | undefined {
+  return ctx.activeRoot ?? cfgRoot ?? ctx.linkedRoot ?? undefined;
+}
+
 function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   const v = cfg[key];
   return typeof v === "boolean" ? v : undefined;
@@ -182,7 +194,10 @@ function ChatWindowSessionHost({
       const cfg: Record<string, string | number | boolean> = { runId: message.runId };
       const workflow = message.workflowId ?? message.taskType;
       if (workflow !== undefined) cfg.workflow = workflow;
-      if (activeProject?.path !== undefined) cfg.workspaceRoot = activeProject.path;
+      // Issue #446 — when a task workspace is active, a run opened from chat is scoped to its root, so
+      // the chat task-context stays consistent with the other bound surfaces.
+      const runRoot = ctx.activeRoot ?? activeProject?.path;
+      if (runRoot !== undefined) cfg.workspaceRoot = runRoot;
       ctx.openWindow("agents", cfg);
     },
     [activeProject?.path, ctx],
@@ -205,7 +220,7 @@ function ChatWindowSessionHost({
           controlsNarrow={ctx.controlsNarrow === true}
           barCompact={ctx.barCompact === true}
           workflowCompact={ctx.workflowCompact === true}
-          linkedRoot={ctx.linkedRoot}
+          linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
           linkedRoots={ctx.linkedRoots}
           openEditorFile={ctx.openEditorFile}
           onOpenRunResult={openRunResult}
@@ -297,7 +312,7 @@ registerWindowRender("qiRun", (cfg, ctx) => {
 registerWindowRender("relationships", () => <RelationshipsView />);
 
 registerWindowRender("files", (cfg, ctx) => {
-  const root = str(cfg, "root");
+  const root = resolveBoundRoot(ctx, str(cfg, "root"));
   const onActiveFileChange = (
     path: string | null,
     resolvedRoot: string | null,
@@ -346,7 +361,7 @@ registerWindowRender("files", (cfg, ctx) => {
   );
 });
 registerWindowRender("editor", (cfg, ctx) => {
-  const root = str(cfg, "root");
+  const root = resolveBoundRoot(ctx, str(cfg, "root"));
   const file = str(cfg, "file");
   const openFiles = stringArray(cfg, "openFiles");
   const layoutJson = str(cfg, "layoutJson");
@@ -390,28 +405,33 @@ registerWindowRender("editor", (cfg, ctx) => {
   props.onWorkspaceChange = (patch) => {
     ctx.updateCfg(patch);
   };
-  return <EditorWidget {...props} />;
+  // Issue #446 (AC4 / SC3) — remount on a workspace switch so no Monaco model or open document from
+  // the previous workspace root survives into the new one. The #1491 dirty-buffer/hot-exit save fires
+  // on unmount before the new tree mounts.
+  return <EditorWidget key={ctx.activeRoot ?? "unbound"} {...props} />;
 });
 registerWindowRender("browser", (cfg) => {
   const url = str(cfg, "url");
   return url !== undefined && url !== "" ? <BrowserWidget url={url} /> : <BrowserWidget />;
 });
-registerWindowRender("terminal", (cfg) => {
-  const cwd = str(cfg, "cwd");
-  const projectPath = str(cfg, "projectPath");
+registerWindowRender("terminal", (cfg, ctx) => {
+  // Issue #446 — when a workspace is active the terminal opens in (and resolves commands against) the
+  // active root; the previous workspace cannot leak in as a stale cwd/projectId after a switch (SC3).
+  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
+  const cwd = ctx.activeRoot ?? str(cfg, "cwd");
   const props: { cwd?: string; projectPath?: string } = {};
   if (cwd !== undefined) props.cwd = cwd;
   if (projectPath !== undefined) props.projectPath = projectPath;
   return <TerminalWidget {...props} />;
 });
-registerWindowRender("commands", (cfg) => {
-  const projectPath = str(cfg, "projectPath");
+registerWindowRender("commands", (cfg, ctx) => {
+  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
   const props: { projectPath?: string } = {};
   if (projectPath !== undefined) props.projectPath = projectPath;
   return <CommandsWidget {...props} />;
 });
 registerWindowRender("runtime", (cfg, ctx) => {
-  const projectPath = str(cfg, "projectPath") ?? ctx.linkedRoot ?? undefined;
+  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
   const openWithProject = (
     type: "commands" | "governedGit" | "governedPullRequest" | "governedMerge",
     root: string,
@@ -439,8 +459,10 @@ registerWindowRender("runtime", (cfg, ctx) => {
 // projectId. Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a
 // linked Files/Editor window root; an empty state renders when none is available.
 registerWindowRender("governedGit", (cfg, ctx) => {
-  const projectId =
-    str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
+  // Issue #446 (AC3 / SC2) — the active workspace root is the projectId, so #470's governed
+  // preview/policy/approval/evidence flow runs scoped to the active worktree and can never execute
+  // against the previous workspace after a switch. #470's route + governance are consumed unchanged.
+  const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
   return (
     <GovernedGitFlowCard
       projectId={projectId}
@@ -452,23 +474,21 @@ registerWindowRender("governedGit", (cfg, ctx) => {
 // Epic #470, Issue #477 — Governed GitHub pull request command center. The active project root acts as
 // the projectId; the published head branch is carried in cfg from the Publish section.
 registerWindowRender("governedPullRequest", (cfg, ctx) => {
-  const projectId =
-    str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
+  const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
   const headBranchName = str(cfg, "headBranchName") ?? undefined;
   return <GovernedPullRequestCard projectId={projectId} headBranchName={headBranchName} />;
 });
 // Epic #470, Issue #478 — Governed merge command center. The active project root acts as the projectId;
 // the head branch under review is carried in cfg from the Pull Request section.
 registerWindowRender("governedMerge", (cfg, ctx) => {
-  const projectId =
-    str(cfg, "projectPath") ?? str(cfg, "workspaceRoot") ?? ctx.linkedRoot ?? undefined;
+  const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
   const headBranchName = str(cfg, "headBranchName") ?? undefined;
   return <GovernedMergeCard projectId={projectId} headBranchName={headBranchName} />;
 });
 // Issue #1388 (ADR-0070) — container engine status surface. Always renders: the unavailable state
 // degrades gracefully and never blocks. An optional project path scopes the allowlisted catalog.
-registerWindowRender("containerStatus", (cfg) => {
-  const projectPath = str(cfg, "projectPath");
+registerWindowRender("containerStatus", (cfg, ctx) => {
+  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
   const props: { projectPath?: string } = {};
   if (projectPath !== undefined) props.projectPath = projectPath;
   return <ContainerStatusWidget {...props} />;

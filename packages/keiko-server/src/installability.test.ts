@@ -151,9 +151,9 @@ describe("Gate 2 — service worker reachable and conformant (ADR-0024 D6)", () 
   });
 });
 
-// ─── Gate 3: CSP header on / includes worker-src + manifest-src ──────────────
+// ─── Gate 3: CSP header on / includes worker-src + manifest-src + media-src ──
 
-describe("Gate 3 — CSP wire headers include worker-src and manifest-src (ADR-0024 D6 / csp.ts)", () => {
+describe("Gate 3 — CSP wire headers include worker-src, manifest-src, and media-src (ADR-0024 D6 / csp.ts)", () => {
   it("GET / returns a Content-Security-Policy header", async () => {
     const res = await fetch(url("/"));
     expect(res.headers.get("content-security-policy")).not.toBeNull();
@@ -169,6 +169,12 @@ describe("Gate 3 — CSP wire headers include worker-src and manifest-src (ADR-0
     const res = await fetch(url("/"));
     const csp = res.headers.get("content-security-policy") ?? "";
     expect(csp).toContain("manifest-src 'self'");
+  });
+
+  it("CSP contains media-src 'self' blob: for generated voice playback", async () => {
+    const res = await fetch(url("/"));
+    const csp = res.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("media-src 'self' blob:");
   });
 });
 
