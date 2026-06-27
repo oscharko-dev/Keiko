@@ -2,31 +2,50 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import type { GitDiffScope } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import { parseUnifiedDiff } from "../shared/diffParser";
 import { DiffFileSection } from "../shared/diffView";
 import type { GitClientSeam } from "./git-client-seam";
 import { formatGitError } from "./git-client-seam";
 import {
+  DIFF_HEADER_STYLE,
+  disabledStyle,
   FOOTER_STYLE,
   PANE_STYLE,
+  scopeButtonStyle,
+  SCOPE_TOGGLE_STYLE,
   SECONDARY_BTN,
   SUBTLE_TEXT_STYLE,
-  disabledStyle,
 } from "./git-client-styles";
 
 interface DiffState {
   readonly loading: boolean;
   readonly diff: string | null;
+  readonly truncated: boolean;
   readonly error: string | null;
 }
 
-const EMPTY_DIFF: DiffState = { loading: false, diff: null, error: null };
+const EMPTY_DIFF: DiffState = { loading: false, diff: null, truncated: false, error: null };
+
+const SCOPES: readonly { readonly id: GitDiffScope; readonly label: string }[] = [
+  { id: "worktree", label: "Worktree" },
+  { id: "staged", label: "Staged" },
+];
+
+// git emits "Binary files a/x and b/x differ" (or a "GIT binary patch") instead of a text hunk.
+function isBinaryDiff(diff: string): boolean {
+  return /^Binary files .+ differ$/m.test(diff) || diff.includes("GIT binary patch");
+}
 
 interface DiffPaneProps {
   readonly client: GitClientSeam;
   readonly repositoryRoot: string | null;
   readonly selectedChangePath: string | null;
+  readonly scope: GitDiffScope;
+  readonly onScopeChange: (scope: GitDiffScope) => void;
+  /** Bumped after a staging/commit mutation so the visible diff reloads. */
+  readonly revision: number;
   readonly onCreatePullRequest?: (() => void) | undefined;
   readonly onMerge?: (() => void) | undefined;
 }
@@ -35,6 +54,9 @@ export function DiffPane({
   client,
   repositoryRoot,
   selectedChangePath,
+  scope,
+  onScopeChange,
+  revision,
   onCreatePullRequest,
   onMerge,
 }: DiffPaneProps): ReactNode {
@@ -46,34 +68,59 @@ export function DiffPane({
       return;
     }
     let cancelled = false;
-    setState({ loading: true, diff: null, error: null });
-    void client.getDiff({ root: repositoryRoot, path: selectedChangePath }).then(
+    setState({ loading: true, diff: null, truncated: false, error: null });
+    void client.getDiff({ root: repositoryRoot, path: selectedChangePath, scope }).then(
       (res) => {
         if (cancelled) return;
-        setState({ loading: false, diff: res.diff, error: null });
+        setState({ loading: false, diff: res.diff, truncated: res.truncated, error: null });
       },
       (err: unknown) => {
         if (cancelled) return;
-        setState({ loading: false, diff: null, error: formatGitError(err) });
+        setState({ loading: false, diff: null, truncated: false, error: formatGitError(err) });
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [client, repositoryRoot, selectedChangePath]);
+  }, [client, repositoryRoot, selectedChangePath, scope, revision]);
 
+  const binary = state.diff !== null && isBinaryDiff(state.diff);
   const parsed = useMemo(
-    () => (state.diff !== null ? parseUnifiedDiff(state.diff) : null),
-    [state.diff],
+    () => (state.diff !== null && !binary ? parseUnifiedDiff(state.diff) : null),
+    [state.diff, binary],
   );
   const hasRepository = repositoryRoot !== null;
 
   return (
     <div style={PANE_STYLE}>
+      {selectedChangePath !== null ? (
+        <div style={DIFF_HEADER_STYLE}>
+          <span className="rv-filerow-path mono" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+            {selectedChangePath}
+          </span>
+          <div role="group" aria-label="Diff scope" style={SCOPE_TOGGLE_STYLE}>
+            {SCOPES.map((entry) => {
+              const active = entry.id === scope;
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  style={scopeButtonStyle(active)}
+                  aria-pressed={active}
+                  onClick={() => onScopeChange(entry.id)}
+                >
+                  {entry.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto" }} className="review">
         <DiffBody
           selectedChangePath={selectedChangePath}
           state={state}
+          binary={binary}
           files={parsed?.files ?? null}
         />
       </div>
@@ -102,10 +149,12 @@ export function DiffPane({
 function DiffBody({
   selectedChangePath,
   state,
+  binary,
   files,
 }: {
   readonly selectedChangePath: string | null;
   readonly state: DiffState;
+  readonly binary: boolean;
   readonly files: ReturnType<typeof parseUnifiedDiff>["files"] | null;
 }): ReactNode {
   if (selectedChangePath === null) {
@@ -130,6 +179,15 @@ function DiffBody({
       </p>
     );
   }
+  if (binary) {
+    return (
+      <div className="rv-empty">
+        <p className="rv-empty-p" style={SUBTLE_TEXT_STYLE}>
+          Binary file — no text diff to display.
+        </p>
+      </div>
+    );
+  }
   if (files === null || files.length === 0) {
     return (
       <div className="rv-empty">
@@ -141,6 +199,15 @@ function DiffBody({
   }
   return (
     <div className="rv-body">
+      {state.truncated ? (
+        <p
+          className="rv-truncated"
+          role="status"
+          style={{ ...SUBTLE_TEXT_STYLE, padding: "var(--space-4)" }}
+        >
+          This diff is large and has been truncated.
+        </p>
+      ) : null}
       {files.map((file, index) => (
         <DiffFileSection
           key={file.path}

@@ -15,8 +15,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProjectWithAvailability } from "@/lib/types";
-import type { GitBranchListResponse } from "@/lib/api";
+import type { GitChangedFile, ProjectWithAvailability } from "@/lib/types";
+import type { GitBranchListResponse, GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import type { GitRepositoryStatusResponse } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
@@ -93,6 +93,37 @@ function makeStatus(
   };
 }
 
+function change(path: string, flags: Partial<GitChangedFile> = {}): GitChangedFile {
+  return {
+    path,
+    indexStatus: " ",
+    worktreeStatus: " ",
+    staged: false,
+    unstaged: false,
+    untracked: false,
+    conflicted: false,
+    ...flags,
+  };
+}
+
+// A repository whose working tree exercises every changed-file state #1575 must represent.
+function makeStatusRich(): GitRepositoryStatusResponse {
+  return makeStatus({
+    clean: false,
+    stagedCount: 2,
+    unstagedCount: 2,
+    untrackedCount: 1,
+    conflictedCount: 1,
+    changes: [
+      change("src/index.ts", { indexStatus: "M", staged: true }),
+      change("README.md", { worktreeStatus: "M", unstaged: true }),
+      change("notes.txt", { indexStatus: "?", worktreeStatus: "?", untracked: true }),
+      change("merge.ts", { indexStatus: "U", worktreeStatus: "U", conflicted: true }),
+      change("partial.ts", { indexStatus: "M", worktreeStatus: "M", staged: true, unstaged: true }),
+    ],
+  });
+}
+
 function makeStatusWithChanges(): GitRepositoryStatusResponse {
   return makeStatus({
     clean: false,
@@ -125,7 +156,7 @@ function makeProjectResponse(repo: ProjectWithAvailability) {
   return { project: repo };
 }
 
-function makeDiffResponse(diff: string) {
+function makeDiffResponse(diff: string, overrides: { readonly truncated?: boolean } = {}) {
   return {
     schemaVersion: "1" as const,
     root: "/repos/alpha",
@@ -133,8 +164,22 @@ function makeDiffResponse(diff: string) {
     available: true,
     scope: "all" as const,
     diff,
-    truncated: false,
+    truncated: overrides.truncated ?? false,
     maxBytes: 131072,
+  };
+}
+
+function makeCommitPreview(
+  overrides: Partial<GitDeliveryCommitPreviewResponse> = {},
+): GitDeliveryCommitPreviewResponse {
+  return {
+    schemaVersion: "1",
+    summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+    intent: { warnings: [], mixedScope: false, isWip: false },
+    messageValidation: { ok: true },
+    preflightFindingCodes: [],
+    policyOutcome: "allowed",
+    ...overrides,
   };
 }
 
@@ -170,7 +215,7 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       status: "succeeded",
       actionKind: "unstage",
     })),
-    commitPreview: vi.fn<GitClientSeam["commitPreview"]>(),
+    commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () => makeCommitPreview()),
     commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
@@ -538,10 +583,12 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
     fireEvent.click(screen.getByText("src/index.ts").closest("button")!);
 
+    // src/index.ts is staged-only, so the pane defaults its scope to "staged".
     await waitFor(() =>
       expect(client.getDiff).toHaveBeenCalledWith({
         root: REPO_A.path,
         path: "src/index.ts",
+        scope: "staged",
       }),
     );
   });
@@ -662,5 +709,221 @@ describe("GitClientWindow — required visible / absent words", () => {
     expect(body).not.toMatch(/\bGovernance\b/);
     expect(body).not.toMatch(/Governed Git/);
     expect(body).not.toMatch(/Delivery path/);
+  });
+});
+
+describe("GitClientWindow — staging controls (Issue #1575)", () => {
+  it("renders staged / unstaged / untracked / conflicted indicators with checkboxes", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+    // A staged file's checkbox is checked and reads "Unstage <path>".
+    expect(screen.getByLabelText("Unstage src/index.ts")).toBeChecked();
+    // An unstaged file's checkbox is unchecked and reads "Stage <path>".
+    expect(screen.getByLabelText("Stage README.md")).not.toBeChecked();
+    // Indicator badges convey state as words (never colour alone).
+    expect(screen.getByText("Untracked")).toBeInTheDocument();
+    expect(screen.getByText("Conflict")).toBeInTheDocument();
+    expect(screen.getByText("Partially staged")).toBeInTheDocument();
+  });
+
+  it("checking an unstaged file stages it through the stage route", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("Stage README.md"));
+
+    await waitFor(() =>
+      expect(client.stage).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        pathspecs: ["README.md"],
+        includeUntracked: false,
+      }),
+    );
+  });
+
+  it("staging an untracked file passes includeUntracked: true", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("notes.txt")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("Stage notes.txt"));
+
+    await waitFor(() =>
+      expect(client.stage).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        pathspecs: ["notes.txt"],
+        includeUntracked: true,
+      }),
+    );
+  });
+
+  it("unchecking a staged file unstages it through the unstage route", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("Unstage src/index.ts"));
+
+    await waitFor(() =>
+      expect(client.unstage).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        pathspecs: ["src/index.ts"],
+      }),
+    );
+  });
+
+  it("Stage all stages every unstaged and untracked path with includeUntracked", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Stage all" }));
+
+    await waitFor(() => expect(client.stage).toHaveBeenCalled());
+    expect(client.stage).toHaveBeenCalledWith({
+      projectId: REPO_A.path,
+      pathspecs: ["README.md", "notes.txt", "partial.ts"],
+      includeUntracked: true,
+    });
+  });
+
+  it("Unstage all unstages every staged path", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Unstage all" }));
+
+    await waitFor(() => expect(client.unstage).toHaveBeenCalled());
+    expect(client.unstage).toHaveBeenCalledWith({
+      projectId: REPO_A.path,
+      pathspecs: ["src/index.ts", "partial.ts"],
+    });
+  });
+
+  it("refreshes the changed-file list after a successful stage", async () => {
+    const getStatus = vi.fn(async () => makeStatusRich());
+    const client = makeClient({ getStatus });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+    const callsBefore = getStatus.mock.calls.length;
+
+    fireEvent.click(screen.getByLabelText("Stage README.md"));
+
+    await waitFor(() => expect(getStatus.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+
+  it("surfaces a blocked staging outcome without refreshing", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      stage: vi.fn<GitClientSeam["stage"]>(async () => ({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "stage",
+        blockReason: "policy-denied",
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("Stage README.md"));
+
+    const outcome = await screen.findByTestId("git-staging-outcome");
+    expect(outcome).toHaveTextContent("Blocked");
+    expect(outcome).toHaveTextContent("policy-denied");
+  });
+});
+
+describe("GitClientWindow — commit composer (Issue #1575)", () => {
+  it("commits the composed summary through the commit-execute route", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+
+    await user.type(screen.getByLabelText("Summary"), "feat: wire commit composer");
+    await user.click(screen.getByRole("button", { name: /^Commit/ }));
+
+    await waitFor(() =>
+      expect(client.commitExecute).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        message: "feat: wire commit composer",
+      }),
+    );
+  });
+
+  it("joins summary and description into a conventional message body", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+
+    await user.type(screen.getByLabelText("Summary"), "feat: subject");
+    await user.type(screen.getByLabelText("Description"), "Body line.");
+    await user.click(screen.getByRole("button", { name: /^Commit/ }));
+
+    await waitFor(() =>
+      expect(client.commitExecute).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        message: "feat: subject\n\nBody line.",
+      }),
+    );
+  });
+
+  it("refreshes status and clears the composer after a successful commit", async () => {
+    const getStatus = vi.fn(async () => makeStatusRich());
+    const client = makeClient({ getStatus });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+    const callsBefore = getStatus.mock.calls.length;
+
+    await user.type(screen.getByLabelText("Summary"), "feat: done");
+    await user.click(screen.getByRole("button", { name: /^Commit/ }));
+
+    await waitFor(() => expect(getStatus.mock.calls.length).toBeGreaterThan(callsBefore));
+    await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
+  });
+
+  it("disables Commit when nothing is staged", async () => {
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatus({ clean: true })) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("No changes")).toBeInTheDocument());
+
+    expect(screen.getByRole("button", { name: /^Commit/ })).toBeDisabled();
+  });
+});
+
+describe("GitClientWindow — diff scope (Issue #1575)", () => {
+  it("toggling to the Staged scope refetches the diff with scope: staged", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      getDiff: vi.fn(async () => makeDiffResponse("")),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+
+    // README.md is unstaged-only, so the pane opens in the Worktree scope.
+    fireEvent.click(screen.getByText("README.md").closest("button")!);
+    await waitFor(() =>
+      expect(client.getDiff).toHaveBeenCalledWith({
+        root: REPO_A.path,
+        path: "README.md",
+        scope: "worktree",
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Staged" }));
+
+    await waitFor(() =>
+      expect(client.getDiff).toHaveBeenCalledWith({
+        root: REPO_A.path,
+        path: "README.md",
+        scope: "staged",
+      }),
+    );
   });
 });

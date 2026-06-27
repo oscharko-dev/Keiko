@@ -4,7 +4,19 @@ import { useId, useRef } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { GitChangedFile, GitRepositoryStatusResponse } from "@/lib/types";
 import { Icons } from "../../../Icons";
-import { EMPTY_STATE_STYLE, SUBTLE_TEXT_STYLE } from "./git-client-styles";
+import type { GitMutationOutcome } from "./git-client-seam";
+import { MutationOutcome } from "./git-client-ui";
+import {
+  badgeStyle,
+  CHANGES_HEADER_STYLE,
+  COMPACT_BTN,
+  disabledStyle,
+  EMPTY_STATE_STYLE,
+  FILE_ROW_SELECTED_STYLE,
+  FILE_ROW_STYLE,
+  FILE_SELECT_BTN_STYLE,
+  SUBTLE_TEXT_STYLE,
+} from "./git-client-styles";
 
 export type ChangesTab = "changes" | "history";
 
@@ -16,6 +28,18 @@ function gitChangeLabel(change: GitChangedFile): string {
   return change.worktreeStatus;
 }
 
+// The indicator badge for a row (text + colour, never colour alone). Conflict and untracked take
+// precedence; otherwise the staged / partially-staged state is surfaced for tracked changes.
+function changeBadge(
+  change: GitChangedFile,
+): { readonly text: string; readonly tone: Parameters<typeof badgeStyle>[0] } | null {
+  if (change.conflicted) return { text: "Conflict", tone: "danger" };
+  if (change.untracked) return { text: "Untracked", tone: "warning" };
+  if (change.staged && change.unstaged) return { text: "Partially staged", tone: "accent" };
+  if (change.staged) return { text: "Staged", tone: "accent" };
+  return null;
+}
+
 interface ChangesPaneProps {
   readonly tab: ChangesTab;
   readonly onTabChange: (tab: ChangesTab) => void;
@@ -24,6 +48,15 @@ interface ChangesPaneProps {
   readonly statusError: string | null;
   readonly selectedChangePath: string | null;
   readonly onSelectChange: (path: string) => void;
+  readonly onStageFile: (change: GitChangedFile) => void;
+  readonly onUnstageFile: (change: GitChangedFile) => void;
+  readonly onStageAll: () => void;
+  readonly onUnstageAll: () => void;
+  readonly stagingBusy: boolean;
+  readonly stagingOutcome: GitMutationOutcome | null;
+  readonly stagingError: string | null;
+  /** Commit composer, pinned beneath the changed-file list on the Changes tab. */
+  readonly commitComposer: ReactNode;
 }
 
 const TABS: readonly { readonly id: ChangesTab; readonly label: string }[] = [
@@ -39,6 +72,14 @@ export function ChangesPane({
   statusError,
   selectedChangePath,
   onSelectChange,
+  onStageFile,
+  onUnstageFile,
+  onStageAll,
+  onUnstageAll,
+  stagingBusy,
+  stagingOutcome,
+  stagingError,
+  commitComposer,
 }: ChangesPaneProps): ReactNode {
   const tablistRef = useRef<HTMLDivElement | null>(null);
   const baseId = useId();
@@ -98,13 +139,23 @@ export function ChangesPane({
         style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}
       >
         {tab === "changes" ? (
-          <ChangesList
-            status={status}
-            statusLoading={statusLoading}
-            statusError={statusError}
-            selectedChangePath={selectedChangePath}
-            onSelectChange={onSelectChange}
-          />
+          <>
+            <ChangesList
+              status={status}
+              statusLoading={statusLoading}
+              statusError={statusError}
+              selectedChangePath={selectedChangePath}
+              onSelectChange={onSelectChange}
+              onStageFile={onStageFile}
+              onUnstageFile={onUnstageFile}
+              onStageAll={onStageAll}
+              onUnstageAll={onUnstageAll}
+              stagingBusy={stagingBusy}
+              stagingOutcome={stagingOutcome}
+              stagingError={stagingError}
+            />
+            {commitComposer}
+          </>
         ) : (
           <div style={EMPTY_STATE_STYLE}>
             <Icons.activity size={20} />
@@ -122,12 +173,26 @@ function ChangesList({
   statusError,
   selectedChangePath,
   onSelectChange,
+  onStageFile,
+  onUnstageFile,
+  onStageAll,
+  onUnstageAll,
+  stagingBusy,
+  stagingOutcome,
+  stagingError,
 }: {
   readonly status: GitRepositoryStatusResponse | null;
   readonly statusLoading: boolean;
   readonly statusError: string | null;
   readonly selectedChangePath: string | null;
   readonly onSelectChange: (path: string) => void;
+  readonly onStageFile: (change: GitChangedFile) => void;
+  readonly onUnstageFile: (change: GitChangedFile) => void;
+  readonly onStageAll: () => void;
+  readonly onUnstageAll: () => void;
+  readonly stagingBusy: boolean;
+  readonly stagingOutcome: GitMutationOutcome | null;
+  readonly stagingError: string | null;
 }): ReactNode {
   if (statusError !== null) {
     return (
@@ -159,37 +224,128 @@ function ChangesList({
       </div>
     );
   }
-  if (status.clean || status.changes.length === 0) {
-    return (
-      <div className="rv-empty">
-        <p className="rv-empty-p">No changes</p>
-      </div>
-    );
-  }
+
+  const hasChanges = !status.clean && status.changes.length > 0;
+  const hasStaged = status.stagedCount > 0;
+  const hasUnstaged = status.unstagedCount > 0 || status.untrackedCount > 0;
 
   return (
-    <nav className="rv-filelist" aria-label="Changed files">
-      <ul>
-        {status.changes.map((change) => {
-          const selected = change.path === selectedChangePath;
-          return (
-            <li key={change.path}>
-              <button
-                type="button"
-                className="rv-filerow"
-                title={change.path}
-                aria-pressed={selected}
-                onClick={() => onSelectChange(change.path)}
-              >
-                <span className="rv-stat mono" aria-hidden="true">
-                  {gitChangeLabel(change)}
-                </span>
-                <span className="rv-filerow-path mono">{change.path}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </nav>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+      {hasChanges ? (
+        <div style={CHANGES_HEADER_STYLE}>
+          <span style={{ ...SUBTLE_TEXT_STYLE, flex: 1, minWidth: 0 }}>
+            {`${status.changes.length.toString()} changed · ${status.stagedCount.toString()} staged`}
+          </span>
+          <button
+            type="button"
+            style={{ ...COMPACT_BTN, ...disabledStyle(stagingBusy || !hasUnstaged) }}
+            disabled={stagingBusy || !hasUnstaged}
+            onClick={onStageAll}
+          >
+            <Icons.check size={11} /> Stage all
+          </button>
+          <button
+            type="button"
+            style={{ ...COMPACT_BTN, ...disabledStyle(stagingBusy || !hasStaged) }}
+            disabled={stagingBusy || !hasStaged}
+            onClick={onUnstageAll}
+          >
+            <Icons.reset size={11} /> Unstage all
+          </button>
+        </div>
+      ) : null}
+
+      {stagingError !== null || stagingOutcome !== null ? (
+        <div style={{ padding: "var(--space-3) var(--space-4) 0" }}>
+          <MutationOutcome
+            outcome={stagingOutcome}
+            error={stagingError}
+            testid="git-staging-outcome"
+          />
+        </div>
+      ) : null}
+
+      {status.truncated ? (
+        <p
+          style={{ ...SUBTLE_TEXT_STYLE, padding: "var(--space-3) var(--space-4) 0" }}
+          role="status"
+        >
+          Showing the first {status.maxChanges.toString()} changes; the list is truncated.
+        </p>
+      ) : null}
+
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        {status.clean || status.changes.length === 0 ? (
+          <div className="rv-empty">
+            <p className="rv-empty-p">No changes</p>
+          </div>
+        ) : (
+          <nav className="rv-filelist" aria-label="Changed files">
+            <ul style={{ listStyle: "none", margin: 0, padding: "var(--space-2)" }}>
+              {status.changes.map((change) => (
+                <ChangeRow
+                  key={change.path}
+                  change={change}
+                  selected={change.path === selectedChangePath}
+                  stagingBusy={stagingBusy}
+                  onSelect={() => onSelectChange(change.path)}
+                  onToggleStage={() =>
+                    change.staged ? onUnstageFile(change) : onStageFile(change)
+                  }
+                />
+              ))}
+            </ul>
+          </nav>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ChangeRow({
+  change,
+  selected,
+  stagingBusy,
+  onSelect,
+  onToggleStage,
+}: {
+  readonly change: GitChangedFile;
+  readonly selected: boolean;
+  readonly stagingBusy: boolean;
+  readonly onSelect: () => void;
+  readonly onToggleStage: () => void;
+}): ReactNode {
+  const badge = changeBadge(change);
+  const toggleLabel = `${change.staged ? "Unstage" : "Stage"} ${change.path}`;
+  return (
+    <li
+      style={{
+        ...FILE_ROW_STYLE,
+        ...(selected ? FILE_ROW_SELECTED_STYLE : null),
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={change.staged}
+        disabled={stagingBusy}
+        onChange={onToggleStage}
+        aria-label={toggleLabel}
+        title={toggleLabel}
+      />
+      <button
+        type="button"
+        style={FILE_SELECT_BTN_STYLE}
+        aria-pressed={selected}
+        onClick={onSelect}
+      >
+        <span className="rv-stat mono" aria-hidden="true">
+          {gitChangeLabel(change)}
+        </span>
+        <span className="rv-filerow-path mono" title={change.path}>
+          {change.path}
+        </span>
+      </button>
+      {badge !== null ? <span style={badgeStyle(badge.tone)}>{badge.text}</span> : null}
+    </li>
   );
 }

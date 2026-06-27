@@ -7,7 +7,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GitBranchListResponse } from "@/lib/api";
+import type { GitBranchListResponse, GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import type { GitRepositoryStatusResponse, ProjectWithAvailability } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
@@ -81,6 +81,17 @@ function makeStatus(
   };
 }
 
+function makeCommitPreview(): GitDeliveryCommitPreviewResponse {
+  return {
+    schemaVersion: "1",
+    summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+    intent: { warnings: [], mixedScope: false, isWip: false },
+    messageValidation: { ok: true },
+    preflightFindingCodes: [],
+    policyOutcome: "allowed",
+  };
+}
+
 // ─── makeClient factory ────────────────────────────────────────────────────────
 
 function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
@@ -122,7 +133,7 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       status: "succeeded",
       actionKind: "unstage",
     })),
-    commitPreview: vi.fn<GitClientSeam["commitPreview"]>(),
+    commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () => makeCommitPreview()),
     commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
@@ -158,6 +169,28 @@ describe("GitClientWindow — axe no-violations", () => {
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
     // Wait for changed file to appear
     await waitFor(() => expect(screen.getByText("src/foo.ts")).toBeInTheDocument());
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("populated state with a selected diff and staging controls has no axe violations", async () => {
+    const client = makeClient({
+      getDiff: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: "/repos/alpha",
+        state: "available" as const,
+        available: true,
+        scope: "staged" as const,
+        diff: "diff --git a/src/foo.ts b/src/foo.ts\n--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1 +1 @@\n-a\n+b\n",
+        truncated: false,
+        maxBytes: 131072,
+      })),
+    });
+    const { container } = render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("src/foo.ts")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("src/foo.ts").closest("button")!);
+    await waitFor(() =>
+      expect(screen.getByRole("group", { name: "Diff scope" })).toBeInTheDocument(),
+    );
     expect(await axe(container)).toHaveNoViolations();
   });
 
@@ -277,6 +310,31 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
 
       expect(screen.getByRole("tab", { name: "History" })).toHaveAttribute("tabindex", "0");
       expect(screen.getByRole("tab", { name: "Changes" })).toHaveAttribute("tabindex", "-1");
+    });
+  });
+
+  describe("staging and commit controls", () => {
+    it("each changed file has a checkbox whose name states the stage action", async () => {
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      await waitFor(() => expect(screen.getByText("src/foo.ts")).toBeInTheDocument());
+      // src/foo.ts is staged → its checkbox reads "Unstage <path>" and is checked.
+      const checkbox = screen.getByRole("checkbox", { name: "Unstage src/foo.ts" });
+      expect(checkbox).toBeChecked();
+    });
+
+    it("the commit composer exposes labelled Summary and Description fields", async () => {
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      await waitFor(() => expect(screen.getByText("src/foo.ts")).toBeInTheDocument());
+      expect(screen.getByRole("region", { name: "Commit" })).toBeInTheDocument();
+      expect(screen.getByLabelText("Summary")).toBeInTheDocument();
+      expect(screen.getByLabelText("Description")).toBeInTheDocument();
+    });
+
+    it("the stage-all and unstage-all actions are buttons with accessible names", async () => {
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      await waitFor(() => expect(screen.getByText("src/foo.ts")).toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "Stage all" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Unstage all" })).toBeInTheDocument();
     });
   });
 

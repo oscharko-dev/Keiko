@@ -1,11 +1,11 @@
 "use client";
 
-// Git client window shell (Issue #1574, Epic #1571). The single coherent Git window from the frozen
-// layout contract (§5): header toolbar (repository + branch selectors + sync status + open actions),
-// a left sidebar (repository search + Changes/History tabs), and a right diff pane with PR/Merge entry
-// points. The shell wires the read surface (repositories, branches, status, diff) and reuses the
-// existing governed Pull Request / Merge windows via openWindow. Mutation flows (staging, commit,
-// branch switch/create, sync execution) are reserved for siblings #1575/#1576/#1577.
+// Git client window (Issue #1574 shell + Issue #1575 Changes/Diff/Staging/Commit, Epic #1571). The
+// single coherent Git window from the frozen layout contract (§5): header toolbar (repository +
+// branch selectors + sync status + open actions), a left sidebar (repository search + Changes/History
+// tabs with explicit staging and a pinned commit composer), and a right diff pane with staged/worktree
+// scope controls and PR/Merge entry points. Reads use the #1574 read surface; staging and commit run
+// through the existing governed mutation routes via the injected seam (stage/unstage/commit*).
 //
 // Visible product text says "Git" only — never "Governed Git", "Governance", or "Delivery path"
 // (contract §7). Styling composes existing globals.css tokens via inline styles (ADR-0051); no new CSS.
@@ -13,15 +13,21 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
-import type { GitRepositoryStatusResponse, ProjectWithAvailability } from "@/lib/types";
+import type {
+  GitChangedFile,
+  GitDiffScope,
+  GitRepositoryStatusResponse,
+  ProjectWithAvailability,
+} from "@/lib/types";
 import type { WindowCfgValue } from "../../../windows/types";
-import { DEFAULT_GIT_CLIENT, formatGitError } from "./git-client-seam";
+import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
 import type { GitClientSeam } from "./git-client-seam";
 import { RepositoryToolbar } from "./RepositoryToolbar";
 import { RepositoryListSearch } from "./RepositoryListSearch";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { ChangesPane } from "./ChangesPane";
 import type { ChangesTab } from "./ChangesPane";
+import { CommitComposer } from "./CommitComposer";
 import { DiffPane } from "./DiffPane";
 import { BODY_STYLE, SIDEBAR_STYLE, WORKSPACE_STYLE } from "./git-client-styles";
 
@@ -57,9 +63,18 @@ export function GitClientWindow({
   const [status, setStatus] = useState<GitRepositoryStatusResponse | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [statusRevision, setStatusRevision] = useState(0);
   const [tab, setTab] = useState<ChangesTab>("changes");
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null);
+  const [diffScope, setDiffScope] = useState<GitDiffScope>("worktree");
+  const [commitNonce, setCommitNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
+
+  // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
+  // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
+  const projectKey = selectedPath ?? "";
+  const staging = useGitActions(client, projectKey);
+  const commit = useGitActions(client, projectKey);
 
   const loadRepositories = useCallback((): void => {
     setReposLoading(true);
@@ -85,18 +100,16 @@ export function GitClientWindow({
     if (projectId !== undefined && projectId !== "") setSelectedPath(projectId);
   }, [projectId]);
 
+  // Repository change: reset the per-repo view (branches, selection, diff scope).
   useEffect(() => {
     if (selectedPath === null) {
       setBranches([]);
-      setStatus(null);
-      setStatusError(null);
       return;
     }
     let cancelled = false;
     setBranchesLoading(true);
-    setStatusLoading(true);
-    setStatusError(null);
     setSelectedChangePath(null);
+    setDiffScope("worktree");
     void client.listBranches(selectedPath).then(
       (res) => {
         if (cancelled) return;
@@ -109,11 +122,30 @@ export function GitClientWindow({
         setBranchesLoading(false);
       },
     );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, selectedPath]);
+
+  // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
+  // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
+  useEffect(() => {
+    if (selectedPath === null) {
+      setStatus(null);
+      setStatusError(null);
+      return;
+    }
+    let cancelled = false;
+    setStatusLoading(true);
+    setStatusError(null);
     void client.getStatus(selectedPath).then(
       (res) => {
         if (cancelled) return;
         setStatus(res);
         setStatusLoading(false);
+        setSelectedChangePath((prev) =>
+          prev !== null && res.changes.some((c) => c.path === prev) ? prev : null,
+        );
       },
       (err: unknown) => {
         if (cancelled) return;
@@ -125,7 +157,22 @@ export function GitClientWindow({
     return () => {
       cancelled = true;
     };
-  }, [client, selectedPath]);
+  }, [client, selectedPath, statusRevision]);
+
+  // Refresh the changed-file list + visible diff after a successful staging mutation.
+  const stagingOutcome = staging.flow.outcome;
+  useEffect(() => {
+    if (stagingOutcome?.status === "succeeded") setStatusRevision((r) => r + 1);
+  }, [stagingOutcome]);
+
+  // After a successful commit, refresh status and remount the composer to clear its fields.
+  const commitOutcome = commit.flow.outcome;
+  useEffect(() => {
+    if (commitOutcome?.status === "succeeded") {
+      setStatusRevision((r) => r + 1);
+      setCommitNonce((n) => n + 1);
+    }
+  }, [commitOutcome]);
 
   const selectRepository = useCallback(
     (path: string): void => {
@@ -143,10 +190,76 @@ export function GitClientWindow({
     [loadRepositories, selectRepository],
   );
 
+  const selectChange = useCallback(
+    (path: string): void => {
+      setSelectedChangePath(path);
+      const change = status?.changes.find((c) => c.path === path);
+      if (change !== undefined)
+        setDiffScope(change.staged && !change.unstaged ? "staged" : "worktree");
+    },
+    [status],
+  );
+
+  const stageFile = useCallback(
+    (change: GitChangedFile): void => {
+      if (selectedPath === null) return;
+      staging.runMutation(() =>
+        client.stage({
+          projectId: selectedPath,
+          pathspecs: [change.path],
+          includeUntracked: change.untracked,
+        }),
+      );
+    },
+    [client, selectedPath, staging],
+  );
+
+  const unstageFile = useCallback(
+    (change: GitChangedFile): void => {
+      if (selectedPath === null) return;
+      staging.runMutation(() =>
+        client.unstage({ projectId: selectedPath, pathspecs: [change.path] }),
+      );
+    },
+    [client, selectedPath, staging],
+  );
+
+  const stageAll = useCallback((): void => {
+    if (selectedPath === null || status === null) return;
+    const pathspecs = status.changes.filter((c) => c.unstaged || c.untracked).map((c) => c.path);
+    if (pathspecs.length === 0) return;
+    const includeUntracked = status.changes.some((c) => c.untracked);
+    staging.runMutation(() =>
+      client.stage({ projectId: selectedPath, pathspecs, includeUntracked }),
+    );
+  }, [client, selectedPath, staging, status]);
+
+  const unstageAll = useCallback((): void => {
+    if (selectedPath === null || status === null) return;
+    const pathspecs = status.changes.filter((c) => c.staged).map((c) => c.path);
+    if (pathspecs.length === 0) return;
+    staging.runMutation(() => client.unstage({ projectId: selectedPath, pathspecs }));
+  }, [client, selectedPath, staging, status]);
+
+  const commitChanges = useCallback(
+    (message: string): void => {
+      if (selectedPath === null) return;
+      commit.runMutation(() => client.commitExecute({ projectId: selectedPath, message }));
+    },
+    [client, commit, selectedPath],
+  );
+
   const openGovernedWindow = (key: string): void => {
     if (selectedPath === null) return;
     openWindow?.(key, { projectPath: selectedPath });
   };
+
+  // Surface only actionable (non-success) staging outcomes near the list; a successful stage is
+  // self-evident from the refreshed file list.
+  const visibleStagingOutcome =
+    staging.flow.outcome !== null && staging.flow.outcome.status !== "succeeded"
+      ? staging.flow.outcome
+      : null;
 
   return (
     <div style={WORKSPACE_STYLE} aria-label="Git">
@@ -178,13 +291,37 @@ export function GitClientWindow({
             statusLoading={statusLoading}
             statusError={statusError}
             selectedChangePath={selectedChangePath}
-            onSelectChange={setSelectedChangePath}
+            onSelectChange={selectChange}
+            onStageFile={stageFile}
+            onUnstageFile={unstageFile}
+            onStageAll={stageAll}
+            onUnstageAll={unstageAll}
+            stagingBusy={staging.flow.busy}
+            stagingOutcome={visibleStagingOutcome}
+            stagingError={staging.flow.error}
+            commitComposer={
+              <CommitComposer
+                key={commitNonce}
+                projectId={selectedPath}
+                stagedFileCount={status?.stagedCount ?? 0}
+                busy={commit.flow.busy}
+                outcome={commit.flow.outcome}
+                error={commit.flow.error}
+                preview={commit.preview}
+                previewError={commit.previewError}
+                onPreview={commit.runPreview}
+                onCommit={commitChanges}
+              />
+            }
           />
         </div>
         <DiffPane
           client={client}
           repositoryRoot={selectedPath}
           selectedChangePath={selectedChangePath}
+          scope={diffScope}
+          onScopeChange={setDiffScope}
+          revision={statusRevision}
           onCreatePullRequest={() => openGovernedWindow("governedPullRequest")}
           onMerge={() => openGovernedWindow("governedMerge")}
         />
