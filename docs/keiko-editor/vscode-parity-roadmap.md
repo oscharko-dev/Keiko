@@ -76,8 +76,8 @@ Legend: ✅ present · 🟧 partial · ⬜ absent · 🚫 out of scope.
 | Diagnostics / hover / symbols / formatting / completion |  ✅   | Deterministic TS/JS language service; degrades gracefully.                                                                                                                                   |
 | Inline (ghost-text) completion                          |  ✅   | Governed, content-free.                                                                                                                                                                      |
 | Language intelligence beyond TS/JS                      |  🟧   | Governed LSP process-manager foundation exists; host provider pilots (Java/Python/Go/Rust/Shell) are not yet wired into the surface.                                                         |
-| Quick-open (`Ctrl/Cmd+P` fuzzy file open)               |  ⬜   | The BFF file-search endpoint exists; no command-palette UI binds it.                                                                                                                         |
-| Command palette (`Ctrl/Cmd+Shift+P`)                    |  ⬜   | A small editor command catalogue exists; no palette surface.                                                                                                                                 |
+| Quick-open (`Ctrl/Cmd+P` fuzzy file open)               |  ✅   | Wave 2: `EditorCommandPalette` over `/api/files/search`.                                                                                                                                     |
+| Command palette (`Ctrl/Cmd+Shift+P`)                    |  ✅   | Wave 2: host command registry surfaced in the same palette (`>` toggle) + browser-safe keybindings.                                                                                          |
 | Find in files / replace across files                    |  ⬜   | Single-file search only.                                                                                                                                                                     |
 | Go-to-definition / find-references / rename-symbol      |  🟧   | Hover + symbols exist; cross-file navigation and symbol rename are not surfaced.                                                                                                             |
 | Breadcrumbs / outline view / sticky scroll / minimap    |  🟧   | Symbols power an outline path; breadcrumbs and minimap are not enabled.                                                                                                                      |
@@ -126,22 +126,25 @@ the undo stack and scroll/folding. Apply theme re-registration and degraded opti
 (`editor.updateOptions`, re-run the theme registration) instead of remounting, and seed view state from
 the host session cache. Effort: large.
 
-### 2.3 Quick-open and command palette
+### 2.3 Quick-open and command palette — ✅ delivered
 
-`Ctrl/Cmd+P` fuzzy file open (bind the existing `/api/files/search` endpoint) and `Ctrl/Cmd+Shift+P`
-command palette over the existing editor command catalogue. Effort: medium. High everyday value.
+`Ctrl/Cmd+P` fuzzy file open (over the existing `/api/files/search` endpoint) and `Ctrl/Cmd+Shift+P`
+command palette over a new host command registry. One `EditorCommandPalette` overlay with both modes
+(a leading `>` toggles command mode), reusing the existing `.ed-dialog-*` / `.edm-item` /
+`.files-root-input` classes + popover tokens — no `globals.css` change.
 
-### 2.4 Native editor keybinding layer
+### 2.4 Native editor keybinding layer — ✅ delivered
 
-Close / next-tab / prev-tab / reopen-closed-tab / save-all / split, routed through the existing host
-callbacks via document/container-level listeners (not Monaco `addAction`, which only fires with editor
-focus). **Note:** `Ctrl/Cmd+W` is browser-reserved and cannot be reliably intercepted in the
-browser-hosted build; bind tab-close to a non-reserved chord (and reserve `Cmd+W` for any desktop
-shell). Effort: medium.
+A container-level capturing keydown listener on `.editor-workspace` (mirrors the on-mount save
+backstop) maps browser-safe chords to the command registry: `Ctrl/Cmd+P` / `Ctrl/Cmd+Shift+P`
+(palette), `Ctrl/Cmd+Alt+→/←` (next/prev tab), `Ctrl/Cmd+Alt+T` (reopen), `Ctrl/Cmd+Alt+\` (split),
+`Ctrl/Cmd+Alt+S` (save-all). `Ctrl/Cmd+W` and `Ctrl/Cmd+Shift+T` remain unbound (browser-reserved) —
+close stays on ×/middle-click/palette; deferred to a future desktop shell.
 
-### 2.5 Closed-tab history / reopen stack
+### 2.5 Closed-tab history / reopen stack — ✅ delivered
 
-A bounded MRU of recently-closed `(paneId, file)` so an accidental close is recoverable. Effort: small.
+A bounded (20) deduped MRU of recently-closed `(paneId, file)`, captured in the close path
+(`closeOpenFile`/`closePane`), surfaced as the "Reopen Closed Editor" command + `Ctrl/Cmd+Alt+T`.
 
 ### 2.6 Optimistic-concurrency for destructive mutations
 
