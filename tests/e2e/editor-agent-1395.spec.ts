@@ -66,6 +66,8 @@ async function registerAgentSnapshot(
         cursor: null,
         selection: null,
         diagnosticsSummary: null,
+        documentVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: HASH },
+        activeFileContentHash: HASH,
         textMode: "none",
         updatedAt: Date.now(),
       },
