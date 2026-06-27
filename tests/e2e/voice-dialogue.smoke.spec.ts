@@ -75,6 +75,46 @@ function fakeMediaInit(): string {
   `;
 }
 
+// Issue #1562, AC2/AC3/D3 — instrumented variant that exposes window.__micStats so the browser smoke
+// can assert exact getUserMedia call counts and deterministic track-stop counts without touching real
+// hardware. Each getUserMedia call increments __micStats.getUserMedia; each fake track.stop() call
+// increments __micStats.stopped. The counters are initialised synchronously before any app script runs
+// so assertions on count=0 before the first capture are race-free.
+function fakeMediaInitWithStats(): string {
+  return `
+    (() => {
+      window.__micStats = { getUserMedia: 0, stopped: 0 };
+      const fakeTrack = {
+        stop() { window.__micStats.stopped++; },
+      };
+      const fakeStream = { getTracks: () => [fakeTrack] };
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia: async () => {
+            window.__micStats.getUserMedia++;
+            return fakeStream;
+          },
+        },
+      });
+      class FakeMediaRecorder {
+        static isTypeSupported() { return true; }
+        constructor() { this.state = "inactive"; this.mimeType = "audio/webm"; this._l = {}; }
+        addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
+        start() { this.state = "recording"; }
+        stop() {
+          this.state = "inactive";
+          for (const cb of this._l["dataavailable"] || []) {
+            cb({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }) });
+          }
+          for (const cb of this._l["stop"] || []) cb({});
+        }
+      }
+      window.MediaRecorder = FakeMediaRecorder;
+    })();
+  `;
+}
+
 async function openComposer(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByRole("button", { name: "Chat History", exact: true }).click();
@@ -151,6 +191,15 @@ function stubChatSend(page: Page): { sentContent: () => string | undefined } {
   return { sentContent: () => captured.body?.content };
 }
 
+// Reads a counter from the browser-side window.__micStats instrument (see fakeMediaInitWithStats), so
+// the lifecycle assertions are on observable call counts rather than on timing.
+async function micStat(page: Page, field: "getUserMedia" | "stopped"): Promise<number | undefined> {
+  return page.evaluate(
+    (key) => (window as unknown as { __micStats?: Record<string, number> }).__micStats?.[key],
+    field,
+  );
+}
+
 async function noVoiceFlow(page: Page): Promise<void> {
   await stubCapability(page, NO_VOICE_CAPABILITY);
   await openComposer(page);
@@ -221,4 +270,74 @@ test("voice dialogue @smoke — STT+TTS fallback renders the turn loop and commi
   page,
 }) => {
   await dialogueTurnFlow(page);
+});
+
+// Issue #1562, Epic #1556 — AC2/AC3/D3: microphone permission lifecycle browser evidence.
+//
+// Drives the real app composer through the documented dialogue path and asserts — at the browser layer —
+// that the microphone is acquired only in response to an explicit user gesture (AC2) and is released
+// deterministically when the user leaves dialogue mode (AC3). Instrumented via window.__micStats
+// (see fakeMediaInitWithStats) so assertions are on observable call counts, not on timing.
+//
+// What this proves (D3 — manual browser verification as automated checked-in evidence):
+//   - Entering dialogue mode does NOT open the microphone (getUserMedia count stays 0).
+//   - Clicking "Start speaking" opens the microphone exactly once (getUserMedia count becomes 1)
+//     and the visible recording state is reflected (aria-pressed="true" on the stop button).
+//   - Clicking "Leave voice dialogue" stops all fake tracks (stopped count >= 1), satisfying the
+//     deterministic resource-release requirement even when a capture cycle was in progress.
+//   - The per-turn controls are removed after leaving, so the surface is clean (composer still usable).
+//
+// A screenshot is captured to docs/voice/evidence/1562-dialogue-mic-lifecycle.png as the D3 artifact.
+// The coordinator runs the test to generate the PNG.
+async function micLifecycleFlow(page: Page): Promise<void> {
+  // Instrumented init: window.__micStats is set before any app script; getUserMedia/track.stop()
+  // increment the counters so assertions on count=0 before capture are race-free.
+  await page.addInitScript(fakeMediaInitWithStats());
+  await stubCapability(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
+  await stubVoiceProviders(page);
+  await openComposer(page);
+
+  // Enter dialogue mode by toggling the switch.
+  const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await expect(dialogSwitch).toBeVisible();
+  await dialogSwitch.click();
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
+
+  // AC2 — the microphone must NOT be opened merely by entering dialogue mode: the turn controls render
+  // but getUserMedia must still be 0.
+  const speak = page.getByRole("button", { name: "Start speaking" });
+  await expect(speak).toBeVisible();
+  await expect.poll(() => micStat(page, "getUserMedia")).toBe(0);
+
+  // AC2 — clicking "Start speaking" is the explicit user gesture that opens the microphone exactly once,
+  // and the visible recording state must be reflected immediately (aria-pressed on the stop control).
+  await speak.click();
+  await expect.poll(() => micStat(page, "getUserMedia")).toBe(1);
+  const stopAndSend = page.getByRole("button", { name: "Stop speaking and send" });
+  await expect(stopAndSend).toBeVisible();
+  await expect(stopAndSend).toHaveAttribute("aria-pressed", "true");
+
+  // Capture the live recording state as the D3 evidence artifact: the mic is open and the visible
+  // recording control is shown. Leaving mid-recording (next) is the strongest AC3 release proof.
+  await page.screenshot({
+    path: "docs/voice/evidence/1562-dialogue-mic-lifecycle.png",
+    fullPage: true,
+  });
+
+  // AC3 — leaving dialogue mode while the microphone is live must release all acquired tracks
+  // deterministically (leaveVoiceDialog → dialogue session master teardown → dictation.cancel →
+  // track.stop). Asserted before any turn commits, isolating the lifecycle from the chat-send re-render.
+  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
+  await expect.poll(() => micStat(page, "stopped")).toBeGreaterThanOrEqual(1);
+
+  // Per-turn controls removed, the switch inactive, and the composer still usable.
+  await expect(speak).toHaveCount(0);
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
+}
+
+test("voice dialogue @smoke — microphone acquired only on explicit gesture, released on leave (AC2/AC3/D3)", async ({
+  page,
+}) => {
+  await micLifecycleFlow(page);
 });
