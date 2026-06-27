@@ -131,6 +131,32 @@ describe("GovernedPullRequestCard", () => {
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("pr: #1499");
   });
 
+  it("dispatches a governed update with the selected PR number and draft transition", async () => {
+    const prExecute = vi.fn(async () => makeExecute({ actionKind: "pr-update" }));
+    render(<GovernedPullRequestCard projectId={PROJECT} client={makeClient({ prExecute })} />);
+    fillForm();
+    fireEvent.click(screen.getByLabelText("Update"));
+    fireEvent.change(screen.getByLabelText("Head branch"), {
+      target: { value: "claude/issue-477-x" },
+    });
+    fireEvent.change(screen.getByLabelText("Pull Request number"), { target: { value: "1499" } });
+    fireEvent.change(screen.getByLabelText("Draft state"), { target: { value: "to-ready" } });
+
+    fireEvent.click(screen.getByTestId("gpr-submit"));
+
+    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(prExecute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: PROJECT,
+        kind: "pr-update",
+        prExternalId: "1499",
+        convertFromDraft: true,
+        convertToDraft: false,
+      }),
+    );
+    expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("pr-update: succeeded");
+  });
+
   it("surfaces a policy-blocked outcome with its reason", async () => {
     const prExecute = vi.fn(async () =>
       makeExecute({
@@ -167,6 +193,28 @@ describe("GovernedPullRequestCard", () => {
     await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("rejected: validation-error");
     expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("recover: user-fixable");
+  });
+
+  it("surfaces provider-auth failures without raw provider details", async () => {
+    const prExecute = vi.fn(async () =>
+      makeExecute({
+        status: "failed",
+        executionErrorCode: "provider-rejected",
+        prRejectionReason: "provider-auth",
+        recoveryDisposition: "user-fixable",
+        recoveryActionHint: "Reconnect provider access.",
+      }),
+    );
+    render(<GovernedPullRequestCard projectId={PROJECT} client={makeClient({ prExecute })} />);
+    fillForm();
+    fireEvent.change(screen.getByLabelText("Head branch"), {
+      target: { value: "claude/issue-477-x" },
+    });
+    fireEvent.click(screen.getByTestId("gpr-submit"));
+    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("rejected: provider-auth");
+    expect(screen.getByTestId("gpr-outcome")).toHaveTextContent("hint: Reconnect provider access.");
+    expect(screen.getByTestId("gpr-outcome")).not.toHaveTextContent(/token|secret|authorization/i);
   });
 
   it("renders API failures as a readable alert", async () => {

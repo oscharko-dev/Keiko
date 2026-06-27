@@ -264,6 +264,68 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
       <h3 style={HEADING_STYLE}>
         <Icons.git size={12} /> Metadata
       </h3>
+      <fieldset
+        style={{
+          border: "1px solid var(--border-default)",
+          borderRadius: "var(--radius-control)",
+          padding: "var(--space-2)",
+        }}
+      >
+        <legend style={KV_LABEL}>Action</legend>
+        <div style={ROW_STYLE}>
+          <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+            <input
+              type="radio"
+              name="pull-request-action"
+              checked={form.kind === "pr-create"}
+              disabled={busy}
+              onChange={() => onChange("kind", "pr-create")}
+            />
+            Create
+          </label>
+          <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+            <input
+              type="radio"
+              name="pull-request-action"
+              checked={form.kind === "pr-update"}
+              disabled={busy}
+              onChange={() => onChange("kind", "pr-update")}
+            />
+            Update
+          </label>
+        </div>
+      </fieldset>
+      {form.kind === "pr-update" ? (
+        <div style={ROW_STYLE}>
+          <label style={{ ...LABEL_STYLE, flex: 1 }}>
+            Pull Request number
+            <input
+              style={FIELD_STYLE}
+              inputMode="numeric"
+              value={form.prExternalId}
+              disabled={busy}
+              onChange={(e) => onChange("prExternalId", e.target.value)}
+              aria-label="Pull Request number"
+            />
+          </label>
+          <label style={{ ...LABEL_STYLE, flex: 1 }}>
+            Draft state
+            <select
+              style={FIELD_STYLE}
+              value={form.draftTransition}
+              disabled={busy}
+              onChange={(e) =>
+                onChange("draftTransition", e.target.value as PrForm["draftTransition"])
+              }
+              aria-label="Draft state"
+            >
+              <option value="none">No change</option>
+              <option value="to-ready">Mark ready</option>
+              <option value="to-draft">Convert to draft</option>
+            </select>
+          </label>
+        </div>
+      ) : null}
       <label style={LABEL_STYLE}>
         Head branch
         <input
@@ -468,7 +530,10 @@ function GovernedPullRequestBody({
 
   // Preview only needs the targets (it SYNTHESIZES a title/body suggestion); execute also needs a title.
   const canPreview =
-    form.ownerAndRepo !== "" && form.headBranchName !== "" && form.baseBranchName !== "";
+    form.ownerAndRepo !== "" &&
+    form.headBranchName !== "" &&
+    form.baseBranchName !== "" &&
+    (form.kind === "pr-create" || form.prExternalId !== "");
   const canExecute = canPreview && form.title !== "";
   return (
     <div

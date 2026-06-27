@@ -5,6 +5,7 @@
 // git-delivery route handlers. It does not import or create any new Git, gh, terminal, or provider
 // adapter authority.
 
+import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import {
@@ -64,10 +65,13 @@ const routeGroups = [
   ...createGitDeliverySyncRouteGroup(),
 ] as const;
 
-const idempotencyCache = new Map<
-  string,
-  { readonly fingerprint: string; readonly result: GitRepositoryAgentOperationResponse }
->();
+interface IdempotencyEntry {
+  readonly fingerprint: string;
+  readonly pending?: Promise<GitRepositoryAgentOperationResponse>;
+  readonly result?: GitRepositoryAgentOperationResponse;
+}
+
+const idempotencyCache = new Map<string, IdempotencyEntry>();
 
 function denied(
   request: Partial<GitRepositoryAgentOperationRequest>,
@@ -326,6 +330,20 @@ function cacheKey(request: GitRepositoryAgentOperationRequest): string | undefin
   return `${request.projectId}\0${request.idempotencyKey}`;
 }
 
+function normalizedForDigest(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizedForDigest);
+  if (!isPlainObject(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, normalizedForDigest(value[key])]),
+  );
+}
+
+function fingerprintRequest(request: GitRepositoryAgentOperationRequest): string {
+  return createHash("sha256").update(JSON.stringify(normalizedForDigest(request))).digest("hex");
+}
+
 function deniedStatus(reason: GitRepositoryAgentDenialReason): number {
   return reason === "unsupported-direct-shell" ? 200 : 400;
 }
@@ -358,42 +376,29 @@ async function parseAgentRequest(
   if (scanUnsafeFormatChars(read.value) || !isPlainObject(read.value)) {
     return { ok: false, result: errResult(400, "GIT_AGENT_OPERATION_BAD_REQUEST") };
   }
-  return { ok: true, request: parsed.value, fingerprint: JSON.stringify(read.value) };
+  return { ok: true, request: parsed.value, fingerprint: fingerprintRequest(parsed.value) };
 }
 
-function replayResult(
-  request: GitRepositoryAgentOperationRequest,
-  fingerprint: string,
-): RouteResult | undefined {
-  const key = cacheKey(request);
-  if (key === undefined) return undefined;
-  const cached = idempotencyCache.get(key);
-  if (cached === undefined) return undefined;
-  if (cached.fingerprint !== fingerprint) {
-    return {
-      status: 409,
-      body: denied(
-        request,
-        "idempotency-conflict",
-        "The idempotencyKey was already used for a different repository operation.",
-      ),
-    };
-  }
-  const body =
-    cached.result.status === "delegated" ? { ...cached.result, replay: true } : cached.result;
+function idempotencyConflict(request: GitRepositoryAgentOperationRequest): RouteResult {
   return {
-    status: cached.result.status === "delegated" ? cached.result.routeStatus : 200,
-    body,
+    status: 409,
+    body: denied(
+      request,
+      "idempotency-conflict",
+      "The idempotencyKey was already used for a different repository operation.",
+    ),
   };
 }
 
-function rememberResult(
-  request: GitRepositoryAgentOperationRequest,
-  fingerprint: string,
+function responseResult(
   body: GitRepositoryAgentOperationResponse,
-): void {
-  const key = cacheKey(request);
-  if (key !== undefined) idempotencyCache.set(key, { fingerprint, result: body });
+  replay = false,
+): RouteResult {
+  const response = body.status === "delegated" && replay ? { ...body, replay: true } : body;
+  return {
+    status: body.status === "delegated" ? body.routeStatus : 200,
+    body: response,
+  };
 }
 
 async function delegateRequest(
@@ -406,18 +411,44 @@ async function delegateRequest(
     : delegateWrite(request, ctx, deps);
 }
 
+export async function handleGitAgentOperationWithDelegate(
+  request: GitRepositoryAgentOperationRequest,
+  fingerprint: string,
+  delegate: () => Promise<RouteResult>,
+): Promise<RouteResult> {
+  const key = cacheKey(request);
+  if (key === undefined) {
+    const result = await delegate();
+    return { status: result.status, body: wrapDelegated(request, result) };
+  }
+  const cached = idempotencyCache.get(key);
+  if (cached !== undefined) {
+    if (cached.fingerprint !== fingerprint) return idempotencyConflict(request);
+    if (cached.result !== undefined) return responseResult(cached.result, true);
+    if (cached.pending !== undefined) return responseResult(await cached.pending, true);
+  }
+  const pending = delegate().then((result) => wrapDelegated(request, result));
+  idempotencyCache.set(key, { fingerprint, pending });
+  try {
+    const body = await pending;
+    idempotencyCache.set(key, { fingerprint, result: body });
+    return responseResult(body);
+  } catch (error) {
+    const current = idempotencyCache.get(key);
+    if (current?.pending === pending) idempotencyCache.delete(key);
+    throw error;
+  }
+}
+
 export async function handleGitAgentOperation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const parsed = await parseAgentRequest(ctx.req);
   if (!parsed.ok) return parsed.result;
-  const replay = replayResult(parsed.request, parsed.fingerprint);
-  if (replay !== undefined) return replay;
-  const result = await delegateRequest(parsed.request, ctx, deps);
-  const body = wrapDelegated(parsed.request, result);
-  rememberResult(parsed.request, parsed.fingerprint, body);
-  return { status: result.status, body };
+  return handleGitAgentOperationWithDelegate(parsed.request, parsed.fingerprint, () =>
+    delegateRequest(parsed.request, ctx, deps),
+  );
 }
 
 export const GIT_AGENT_OPERATION_ROUTE_GROUP: readonly RouteDefinition[] = [
