@@ -77,24 +77,21 @@ function makeRecorder(): RecorderHarness {
 
 interface ChatHarness {
   readonly session: DialogueChatSession;
-  readonly setDraft: ReturnType<typeof vi.fn>;
   readonly sendMessage: ReturnType<typeof vi.fn>;
   readonly cancelSend: ReturnType<typeof vi.fn>;
 }
 
 function makeChatSession(overrides: Partial<DialogueChatSession> = {}): ChatHarness {
-  const setDraft = vi.fn();
   const sendMessage = vi.fn(async () => {});
   const cancelSend = vi.fn();
   const session: DialogueChatSession = {
     sendStatus: "idle",
     sending: false,
-    setDraft,
     sendMessage,
     cancelSend,
     ...overrides,
   };
-  return { session, setDraft, sendMessage, cancelSend };
+  return { session, sendMessage, cancelSend };
 }
 
 interface Harness {
@@ -224,7 +221,9 @@ describe("useVoiceDialogueSession — spoken turn loop (AC1/AC2)", () => {
       await Promise.resolve();
     });
     await flush();
-    expect(h.chat.setDraft).toHaveBeenCalledWith("open the deploy log");
+    // Issue #1561 — the committed transcript is handed to the chat send directly as `text` so it carries
+    // the same context a typed turn would, and never strands on a stale draft.
+    expect(h.chat.sendMessage).toHaveBeenCalledWith({ text: "open the deploy log" });
     expect(h.chat.sendMessage).toHaveBeenCalledTimes(1);
     // The end-of-turn advanced the floor off listening (full-realtime floor path, D4).
     expect(result.current.listening).toBe(false);

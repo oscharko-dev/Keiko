@@ -287,6 +287,21 @@ function hasGroundingScope(chat: Chat): boolean {
 
 export type ChatSessionApi = UseChatSessionResult;
 
+// Issue #1561 — options for an explicit-text send. The voice dialogue session (Epic #1556) commits a
+// spoken transcript and must send it through THIS chat path so the spoken turn carries the identical
+// context (attachments → documentContext, repository/local-knowledge grounding scope, memory) a typed
+// turn would. It cannot rely on `setDraft(text)` + `sendMessage()` in the same tick: `sendMessage`
+// reads `draft` from React state captured in its closure, so the just-set draft is invisible until the
+// next render and the send would early-return on an empty draft. Passing the committed text directly
+// decouples the send from the async draft state. The field is content-only (the committed transcript,
+// already equal to what a typed message carries) — it adds NO audio and NO new wire field, preserving
+// exact context equivalence with the typed path.
+export interface SendMessageOptions {
+  // When present, this text is sent instead of the current draft. Trimmed and empty-guarded identically
+  // to the draft path. The draft is still cleared on a successful send so the composer returns to rest.
+  readonly text?: string;
+}
+
 export interface UseChatSessionResult {
   projects: ProjectWithAvailability[];
   chats: Chat[];
@@ -319,7 +334,9 @@ export interface UseChatSessionResult {
   openProject: (project: ProjectWithAvailability) => Promise<void>;
   openChat: (chat: Chat) => Promise<void>;
   addProject: (path: string) => Promise<void>;
-  sendMessage: () => Promise<void>;
+  // Issue #1561 — `options.text` sends an explicit committed transcript (the spoken-turn handoff) through
+  // the same context-bearing path as a typed send; absent, it sends the current draft as before.
+  sendMessage: (options?: SendMessageOptions) => Promise<void>;
   // Issue #152 — cancel the in-flight send (grounded OR ungrounded). No-op
   // when sendStatus is terminal/idle. Sets sendStatus to "cancelled" and
   // preserves the user message so the user can retry without retyping.
@@ -1360,129 +1377,137 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // should call cancelSend.
   const cancelGrounded = cancelSend;
 
-  const sendMessage = useCallback(async (): Promise<void> => {
-    // Issue #152 / AC#2 — idempotent send. Checking the ref (not the React
-    // state) defends against the same tick double-submit (Enter held, click
-    // burst, etc.). The terminal states are treated as "ready to send again"
-    // — only mid-flight states block.
-    if (isInFlight(sendStatusRef.current)) return;
-    const content = draft.trim();
-    const chat = state.activeChat;
-    const project = state.activeProject;
-    const modelId = resolveSelectedModelId(state.selectedModel, state.models);
-    // AC #1: block submission when no eligible model is configured.
-    if (
-      content.length === 0 ||
-      chat === undefined ||
-      project === undefined ||
-      modelId === undefined
-    )
-      return;
-    // CB-F3: Enter / form-submit must honor the same exceeded-budget block the
-    // send button enforces — otherwise the keyboard path bypasses the gate. Uses
-    // the unknown-limits-safe guard (contextWindowTokens > 0) so a runtime
-    // chat model with contextWindow: 0 is never blocked.
-    const submitBudget = estimateConversationBudget({
-      modelContextWindow: state.models.find((m) => m.id === modelId)?.contextWindow ?? 0,
-      modelMaxOutputTokens: state.models.find((m) => m.id === modelId)?.maxOutputTokens ?? 0,
-      userDraftText: content,
-      conversationHistory: state.messages
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({ role: m.role, content: m.content })),
-    });
-    if (isBudgetExceeded(submitBudget)) {
-      setError(CONTEXT_OVERSIZED_USER_MESSAGE);
-      return;
-    }
-    // Issue #4 — block grounded sends that would silently discard attachments.
-    // The grounded path derives context from the repo/local-knowledge scope and
-    // ignores pendingAttachments entirely. Surface a notice and abort so the
-    // user can remove the attachment before sending.
-    if (hasGroundingScope(chat) && pendingAttachments.length > 0) {
-      setError(GROUNDED_ATTACHMENT_NOTICE);
-      return;
-    }
-    const optimistic: ChatMessage = {
-      id: `local-${String(Date.now())}`,
-      chatId: chat.id,
-      role: "user",
-      content,
-      timestamp: Date.now(),
-      runId: undefined,
-      workflowId: undefined,
-      workflowStatus: undefined,
-      shortResult: undefined,
-      taskType: undefined,
-    };
-    // Synchronously commit to "queued" so a re-entrant call in the same tick
-    // hits the isInFlight guard above (AC#2).
-    updateSendStatus("queued");
-    setDraft("");
-    setError(undefined);
-    setState((previous) => ({ ...previous, messages: [...previous.messages, optimistic] }));
-    // Issue #152 — fresh controller per send. The previous controller (if
-    // any) was either already settled or already aborted via cancelSend.
-    const controller = new AbortController();
-    sendControllerRef.current = controller;
-    setLatestMemory(undefined);
-    try {
-      // Merge resolution (PR #355 + Epic #142): route through sendGrounded
-      // when EITHER a Files connected scope OR a local-knowledge scope is
-      // attached. The epic's sendGrounded signature (with modelId + signal +
-      // SendStatus return) is the canonical one; #355 expanded only the
-      // routing predicate, not the underlying send path.
-      const isGrounded = hasGroundingScope(chat);
-      // Issue #148 — extract bounded document text for the ungrounded path only. The grounded
-      // path derives its context from the repo/local-knowledge scope, not from attachments.
-      const { entries: documentContext, disclosures } = isGrounded
-        ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
-        : await buildDocumentContext();
-      const terminal = isGrounded
-        ? await sendGrounded(chat, project, content, optimistic.id, modelId, controller.signal)
-        : await sendUngrounded(
-            chat,
-            project,
-            content,
-            optimistic.id,
-            modelId,
-            controller.signal,
-            documentContext,
-          );
-      // If cancelSend already flipped the status to "cancelled", do not
-      // override it with a stale "completed" — cancellation wins.
-      if (sendStatusRef.current === "cancelled") {
-        // The send path may have written the assistant message between abort
-        // and the cancel registering. Remove the optimistic user-row's
-        // assistant counterpart by trusting the path-returned terminal — but
-        // for cancelled we already preserved the user row, and we did NOT
-        // persist assistant content (signal.aborted check + AbortError
-        // branch). Nothing to do here.
-      } else {
-        updateSendStatus(terminal);
+  const sendMessage = useCallback(
+    async (options?: SendMessageOptions): Promise<void> => {
+      // Issue #152 / AC#2 — idempotent send. Checking the ref (not the React
+      // state) defends against the same tick double-submit (Enter held, click
+      // burst, etc.). The terminal states are treated as "ready to send again"
+      // — only mid-flight states block.
+      if (isInFlight(sendStatusRef.current)) return;
+      // Issue #1561 — an explicit `options.text` (the committed spoken transcript) is sent instead of the
+      // draft. The voice dialogue session cannot use the draft here: it would have to call setDraft(text)
+      // then sendMessage() in the same tick, but this callback closes over the React `draft` state, so the
+      // just-set value is invisible until the next render and the send would early-return on empty content.
+      // Reading the override directly makes the spoken turn flow through the identical context-bearing path.
+      const content = (options?.text ?? draft).trim();
+      const chat = state.activeChat;
+      const project = state.activeProject;
+      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
+      // AC #1: block submission when no eligible model is configured.
+      if (
+        content.length === 0 ||
+        chat === undefined ||
+        project === undefined ||
+        modelId === undefined
+      )
+        return;
+      // CB-F3: Enter / form-submit must honor the same exceeded-budget block the
+      // send button enforces — otherwise the keyboard path bypasses the gate. Uses
+      // the unknown-limits-safe guard (contextWindowTokens > 0) so a runtime
+      // chat model with contextWindow: 0 is never blocked.
+      const submitBudget = estimateConversationBudget({
+        modelContextWindow: state.models.find((m) => m.id === modelId)?.contextWindow ?? 0,
+        modelMaxOutputTokens: state.models.find((m) => m.id === modelId)?.maxOutputTokens ?? 0,
+        userDraftText: content,
+        conversationHistory: state.messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({ role: m.role, content: m.content })),
+      });
+      if (isBudgetExceeded(submitBudget)) {
+        setError(CONTEXT_OVERSIZED_USER_MESSAGE);
+        return;
       }
-      if (terminal === "completed") {
-        // AC #3 (#147): clear pending attachments after a successful send.
-        clearPendingAttachments();
-        // Issue #148 — record which documents contributed context so the UI can disclose them.
-        setLastSentDocuments(disclosures);
+      // Issue #4 — block grounded sends that would silently discard attachments.
+      // The grounded path derives context from the repo/local-knowledge scope and
+      // ignores pendingAttachments entirely. Surface a notice and abort so the
+      // user can remove the attachment before sending.
+      if (hasGroundingScope(chat) && pendingAttachments.length > 0) {
+        setError(GROUNDED_ATTACHMENT_NOTICE);
+        return;
       }
-    } finally {
-      sendControllerRef.current = null;
-    }
-  }, [
-    draft,
-    state.activeChat,
-    state.activeProject,
-    state.selectedModel,
-    state.models,
-    state.messages,
-    pendingAttachments,
-    sendGrounded,
-    sendUngrounded,
-    buildDocumentContext,
-    clearPendingAttachments,
-    updateSendStatus,
-  ]);
+      const optimistic: ChatMessage = {
+        id: `local-${String(Date.now())}`,
+        chatId: chat.id,
+        role: "user",
+        content,
+        timestamp: Date.now(),
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      };
+      // Synchronously commit to "queued" so a re-entrant call in the same tick
+      // hits the isInFlight guard above (AC#2).
+      updateSendStatus("queued");
+      setDraft("");
+      setError(undefined);
+      setState((previous) => ({ ...previous, messages: [...previous.messages, optimistic] }));
+      // Issue #152 — fresh controller per send. The previous controller (if
+      // any) was either already settled or already aborted via cancelSend.
+      const controller = new AbortController();
+      sendControllerRef.current = controller;
+      setLatestMemory(undefined);
+      try {
+        // Merge resolution (PR #355 + Epic #142): route through sendGrounded
+        // when EITHER a Files connected scope OR a local-knowledge scope is
+        // attached. The epic's sendGrounded signature (with modelId + signal +
+        // SendStatus return) is the canonical one; #355 expanded only the
+        // routing predicate, not the underlying send path.
+        const isGrounded = hasGroundingScope(chat);
+        // Issue #148 — extract bounded document text for the ungrounded path only. The grounded
+        // path derives its context from the repo/local-knowledge scope, not from attachments.
+        const { entries: documentContext, disclosures } = isGrounded
+          ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
+          : await buildDocumentContext();
+        const terminal = isGrounded
+          ? await sendGrounded(chat, project, content, optimistic.id, modelId, controller.signal)
+          : await sendUngrounded(
+              chat,
+              project,
+              content,
+              optimistic.id,
+              modelId,
+              controller.signal,
+              documentContext,
+            );
+        // If cancelSend already flipped the status to "cancelled", do not
+        // override it with a stale "completed" — cancellation wins.
+        if (sendStatusRef.current === "cancelled") {
+          // The send path may have written the assistant message between abort
+          // and the cancel registering. Remove the optimistic user-row's
+          // assistant counterpart by trusting the path-returned terminal — but
+          // for cancelled we already preserved the user row, and we did NOT
+          // persist assistant content (signal.aborted check + AbortError
+          // branch). Nothing to do here.
+        } else {
+          updateSendStatus(terminal);
+        }
+        if (terminal === "completed") {
+          // AC #3 (#147): clear pending attachments after a successful send.
+          clearPendingAttachments();
+          // Issue #148 — record which documents contributed context so the UI can disclose them.
+          setLastSentDocuments(disclosures);
+        }
+      } finally {
+        sendControllerRef.current = null;
+      }
+    },
+    [
+      draft,
+      state.activeChat,
+      state.activeProject,
+      state.selectedModel,
+      state.models,
+      state.messages,
+      pendingAttachments,
+      sendGrounded,
+      sendUngrounded,
+      buildDocumentContext,
+      clearPendingAttachments,
+      updateSendStatus,
+    ],
+  );
 
   // Issue #151 / AC#4 — clear the in-memory history for the next prompt
   // without deleting the conversation row. The chat row stays in `chats`;

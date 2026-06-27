@@ -7,7 +7,9 @@
 //      getUserMedia + MediaRecorder + stubbed /api/voice/transcribe + /api/voice/speak are injected (no
 //      hardware, no provider; privacy contract preserved). The dialogue switch AND the per-turn controls
 //      (Speak + Interrupt) render; activating the mic begins a listening turn and stopping commits the
-//      transcript into the composer draft through the dialogue session's chat-send seam (AC1/AC2);
+//      transcript through the dialogue session's chat-send seam — Issue #1561: the committed text is sent
+//      through the SAME chat send path a typed message uses (carrying the same context), not parked in
+//      the composer draft, so the captured send carries the transcript and the composer clears (AC1/AC2);
 //      leaving removes the controls and runs the master cleanup (AC3). A screenshot of the active
 //      dialogue surface is captured as evidence.
 //
@@ -101,6 +103,54 @@ async function stubVoiceProviders(page: Page): Promise<void> {
   );
 }
 
+// Issue #1561 — captures the chat send dispatched when a spoken turn is committed, and fulfils it with a
+// canned response so the smoke stays deterministic (no model round trip — the deep send routing is proven
+// in the required `ci` keiko-ui suites). The streaming route is forced to a non-SSE response so the
+// client falls back to the buffered send, which is the one we capture. This is the browser-level proof
+// that the committed transcript flows through the SAME chat send path a typed message uses.
+interface CapturedSendBody {
+  readonly chatId?: string;
+  readonly projectPath?: string;
+  readonly modelId?: string;
+  readonly content?: string;
+}
+
+function stubChatSend(page: Page): { sentContent: () => string | undefined } {
+  const captured: { body?: CapturedSendBody } = {};
+  void page.route("**/api/desktop/chat/stream", (route) =>
+    route.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({ code: "STREAMING_UNSUPPORTED", message: "buffered in smoke" }),
+    }),
+  );
+  void page.route("**/api/desktop/chat", (route) => {
+    const body = (route.request().postDataJSON() ?? {}) as CapturedSendBody;
+    captured.body = body;
+    const chatId = body.chatId ?? "chat";
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        chat: {
+          id: chatId,
+          projectPath: body.projectPath ?? "/repo",
+          title: "New chat",
+          selectedModel: body.modelId ?? "model",
+          status: "open",
+          connectedScopes: [],
+          localKnowledgeScopes: [],
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        messages: [
+          { id: "user-1", chatId, role: "user", content: body.content ?? "", timestamp: 2 },
+        ],
+      }),
+    });
+  });
+  return { sentContent: () => captured.body?.content };
+}
+
 async function noVoiceFlow(page: Page): Promise<void> {
   await stubCapability(page, NO_VOICE_CAPABILITY);
   await openComposer(page);
@@ -114,6 +164,7 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeMediaInit());
   await stubCapability(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
   await stubVoiceProviders(page);
+  const send = stubChatSend(page);
   await openComposer(page);
 
   // The dialogue switch is offered even though the browser has no WebRTC media (the STT+TTS fallback).
@@ -134,24 +185,30 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
     fullPage: true,
   });
 
-  // Activate the mic: a listening turn begins and the control flips to stop-and-send (AC1).
+  // AC3 — leaving a freshly-entered dialogue removes the per-turn controls and runs the master cleanup;
+  // the composer stays usable. Asserted before a turn populates the chat so the lifecycle is isolated
+  // from the chat-send re-render that committing a turn triggers.
+  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
+  await expect(speak).toHaveCount(0);
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
+  const composer = page.getByRole("textbox", { name: "Chat message" }).first();
+  await expect(composer).toBeVisible();
+
+  // AC1/AC2 (Issue #1561) — re-enter and run a spoken turn. Activating the mic begins a listening turn
+  // (the control flips to stop-and-send); ending it commits the transcript through the chat-send seam.
+  // The committed text is sent through the SAME chat send path a typed message uses (carrying the same
+  // context), NOT parked in the composer draft: the captured send carries the transcript and the
+  // composer clears. The deep send / grounding routing is proven deterministically in the required `ci`
+  // keiko-ui suites; this smoke proves the spoken turn reaches the chat send in the real browser.
+  await dialogSwitch.click();
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
   await speak.click();
   const stopAndSend = page.getByRole("button", { name: "Stop speaking and send" });
   await expect(stopAndSend).toBeVisible();
   await expect(stopAndSend).toHaveAttribute("aria-pressed", "true");
-
-  // Ending the turn commits the transcript through the dialogue session's chat-send seam (AC2): the
-  // committed text lands in the composer draft via setDraft before the send is dispatched.
   await stopAndSend.click();
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toHaveValue(
-    /what is the deploy status/u,
-  );
-
-  // Leaving removes the per-turn controls and runs the master cleanup (AC3); the composer stays usable.
-  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
-  await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
-  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
+  await expect.poll(() => send.sentContent()).toMatch(/what is the deploy status/u);
+  await expect(composer).toHaveValue("");
 }
 
 test("voice dialogue @smoke — no-voice deployment offers no dialogue switch (AC4)", async ({
