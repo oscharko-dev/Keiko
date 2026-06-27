@@ -7,6 +7,7 @@ import type {
   ReactNode,
 } from "react";
 import {
+  copyFilesEntry,
   createFilesEntry,
   deleteFilesEntry,
   fetchFilesTree,
@@ -121,6 +122,20 @@ function entryParent(path: string): string | null {
 
 function joinRelative(parent: string | null, name: string): string {
   return parent === null || parent.length === 0 ? name : `${parent}/${name}`;
+}
+
+// A collision-free "<base> copy<.ext>" name for a duplicate, given the sibling names already present.
+function nextCopyName(name: string, existing: ReadonlySet<string>): string {
+  const dot = name.lastIndexOf(".");
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  let candidate = `${base} copy${ext}`;
+  let counter = 2;
+  while (existing.has(candidate)) {
+    candidate = `${base} copy ${String(counter)}${ext}`;
+    counter += 1;
+  }
+  return candidate;
 }
 
 // A new entry's name must be a single, safe path segment. The BFF enforces this too; rejecting early
@@ -264,6 +279,8 @@ export function FilesWidget({
   const [opError, setOpError] = useState<string | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<FilesTreeEntry | null>(null);
+  // Root-relative path of the entry currently being dragged in the tree (null when not dragging).
+  const [draggedPath, setDraggedPath] = useState<string | null>(null);
   const onFilesMutatedRef = useRef(onFilesMutated);
   onFilesMutatedRef.current = onFilesMutated;
 
@@ -540,6 +557,58 @@ export function FilesWidget({
     [loadDirectory, mutationRoot, opBusy, selectedPath],
   );
 
+  const duplicateEntry = useCallback(
+    async (entry: FilesTreeEntry): Promise<void> => {
+      if (mutationRoot.length === 0 || opBusy) return;
+      const parent = entryParent(entry.path);
+      const existing = new Set((directories[parent ?? ""]?.entries ?? []).map((row) => row.name));
+      const destPath = joinRelative(parent, nextCopyName(entry.name, existing));
+      setMenu(null);
+      setOpBusy(true);
+      setOpError(null);
+      try {
+        const result = await copyFilesEntry({
+          root: mutationRoot,
+          sourcePath: entry.path,
+          destPath,
+        });
+        await loadDirectory(parent ?? "");
+        // A copy adds a new entry — the host treats it like a create (no open tab to re-home).
+        onFilesMutatedRef.current?.({ op: "create", mutation: result });
+      } catch (error: unknown) {
+        setOpError(errorMessage(error));
+      } finally {
+        setOpBusy(false);
+      }
+    },
+    [directories, loadDirectory, mutationRoot, opBusy],
+  );
+
+  // Drag-move: dropping an entry onto a folder renames it into that folder (move = rename).
+  const moveEntry = useCallback(
+    async (sourcePath: string, targetDir: string | null): Promise<void> => {
+      if (mutationRoot.length === 0 || opBusy) return;
+      const name = sourcePath.slice(sourcePath.lastIndexOf("/") + 1);
+      const newPath = joinRelative(targetDir, name);
+      // No-op when dropped onto its own current directory, onto itself, or into its own subtree.
+      if (newPath === sourcePath || entryParent(sourcePath) === targetDir) return;
+      if (targetDir === sourcePath || targetDir?.startsWith(`${sourcePath}/`) === true) return;
+      setOpBusy(true);
+      setOpError(null);
+      try {
+        const result = await renameFilesEntry({ root: mutationRoot, path: sourcePath, newPath });
+        await loadDirectory(entryParent(sourcePath) ?? "");
+        await loadDirectory(targetDir ?? "");
+        onFilesMutatedRef.current?.({ op: "rename", mutation: result });
+      } catch (error: unknown) {
+        setOpError(errorMessage(error));
+      } finally {
+        setOpBusy(false);
+      }
+    },
+    [loadDirectory, mutationRoot, opBusy],
+  );
+
   const openContextMenu = useCallback(
     (event: ReactMouseEvent, entry: FilesTreeEntry | null): void => {
       if (!mutationsEnabled) return;
@@ -770,11 +839,31 @@ export function FilesWidget({
               data-readable={entry.readable}
               data-path={entry.path}
               type="button"
+              draggable={mutationsEnabled && entry.readable}
               aria-disabled={entry.readable ? undefined : true}
               aria-describedby={entry.readable ? undefined : unreadableReasonId}
               aria-expanded={open}
               onClick={() => enterDirectory(entry)}
               onContextMenu={(event) => openContextMenu(event, entry)}
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", entry.path);
+                setDraggedPath(entry.path);
+              }}
+              onDragEnd={() => setDraggedPath(null)}
+              onDragOver={(event) => {
+                // A folder accepts a drop of any OTHER entry (move into it).
+                if (entry.readable && draggedPath !== null && draggedPath !== entry.path) {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const source = draggedPath;
+                setDraggedPath(null);
+                if (source !== null) void moveEntry(source, entry.path);
+              }}
               title={entry.readable ? entry.path : unreadableTitle}
             >
               <span className="fi-fallback" style={{ color: "var(--accent)" }}>
@@ -804,8 +893,15 @@ export function FilesWidget({
           data-path={entry.path}
           style={{ paddingLeft: pad }}
           type="button"
+          draggable={mutationsEnabled && entry.readable}
           aria-disabled={entry.readable ? undefined : true}
           aria-describedby={entry.readable ? undefined : unreadableReasonId}
+          onDragStart={(event) => {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", entry.path);
+            setDraggedPath(entry.path);
+          }}
+          onDragEnd={() => setDraggedPath(null)}
           onClick={() => {
             if (!entry.readable) return;
             const fileRoot = resolvedRoot ?? apiRoot;
@@ -1158,6 +1254,15 @@ export function FilesWidget({
                     >
                       <Icons.edit size={14} />
                       <span>Rename…</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="edm-item"
+                      role="menuitem"
+                      onClick={() => void duplicateEntry(target)}
+                    >
+                      <Icons.copy size={14} />
+                      <span>Duplicate</span>
                     </button>
                     <button
                       type="button"

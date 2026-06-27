@@ -67,7 +67,7 @@ Legend: ✅ present · 🟧 partial · ⬜ absent · 🚫 out of scope.
 | Capability                                              | State | Notes                                                                                                                                                                                        |
 | ------------------------------------------------------- | :---: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Open file / arbitrary folder                            |  ✅   | Files widget browses any machine folder under containment.                                                                                                                                   |
-| Create / rename / delete / move (tree)                  |  ✅   | Wave 1. Copy / duplicate / drag-move in the tree are still absent.                                                                                                                           |
+| Create / rename / delete / move (tree)                  |  ✅   | Wave 1 + Wave 2.7: copy / duplicate (context menu) and drag-move are now in the tree; rename/delete/move can carry an optimistic `baseVersion`.                                              |
 | Multi-file tabs, split panes, pane resize, drag tabs    |  ✅   | Layout state machine with persistence.                                                                                                                                                       |
 | Tab overflow                                            |  🟧   | Collapses to a `+N` summary menu; a horizontally **scrollable** strip is the VS Code behavior.                                                                                               |
 | Dirty buffers, hot-exit, reload recovery                |  ✅   | Version-aware save with optimistic concurrency.                                                                                                                                              |
@@ -148,16 +148,26 @@ close stays on ×/middle-click/palette; deferred to a future desktop shell.
 A bounded (20) deduped MRU of recently-closed `(paneId, file)`, captured in the close path
 (`closeOpenFile`/`closePane`), surfaced as the "Reopen Closed Editor" command + `Ctrl/Cmd+Alt+T`.
 
-### 2.6 Optimistic-concurrency for destructive mutations
+### 2.6 Optimistic-concurrency for destructive mutations — ✅ delivered
 
-Let rename/delete optionally carry a `baseVersion` and assert the on-disk content still matches before
-destroying it, so an agent cannot delete a file a human just changed. Effort: medium.
+`renameFilesEntry`/`deleteFilesEntry` now optionally carry a `baseVersion` and assert the on-disk
+content still matches (`assertSessionNotStale`, size + mtime±1ms + SHA-256) before destroying or moving
+it, returning `409 STALE_SESSION` on a mismatch — so an agent cannot delete or move a file a human just
+changed. The wire request types and the `/api/files/rename` + `/api/files/delete` handlers thread the
+optional field; the read-only tree omits it (backwards-compatible, no extra round-trip), so the guard
+protects editor- and agent-driven mutations that already hold a version.
 
-### 2.7 Tree polish
+### 2.7 Tree polish — ✅ delivered (scrollable tab strip deferred)
 
-Copy / duplicate, drag-move within the tree, and a horizontally **scrollable** tab strip (replacing
-the `+N` collapse). The scrollable strip touches `globals.css` and so must re-pin the
-[#1300 visual-regression proof](https://github.com/oscharko-dev/Keiko/issues/1300). Effort: medium–large.
+Copy and duplicate (context menu, collision-free `name copy.ext`) over a new contained, deny-checked
+`POST /api/files/copy` endpoint (`fs.cp` with `force:false`/`errorOnExist:true`/`dereference:false`,
+symlink/root reject, `cp`-specific errno mapping), and drag-move within the tree (HTML5 drag from any
+row, drop onto a readable folder → reuses `renameFilesEntry`, which re-homes open tabs via the Wave-1
+mutation mechanic; keyboard-accessible alternative stays Rename/Delete/Duplicate in the context menu).
+The horizontally **scrollable** tab strip (replacing the `+N` collapse) is intentionally **deferred**:
+it touches `globals.css` and so must re-pin the
+[#1300 visual-regression proof](https://github.com/oscharko-dev/Keiko/issues/1300) — tracked below as a
+gate-sensitive follow-up. Drag-move is mouse-only by design.
 
 ### 2.8 Bound the host session cache — ✅ delivered
 
@@ -170,16 +180,17 @@ background-tab save-correctness invariants.
 
 ## Wave 3 — later
 
-| Item                                                                              | Effort | Why                                                                                                                                   |
-| --------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Shared Monaco model registry keyed by URI across panes                            | xlarge | Same file in two split panes should share one model/undo stack and halve diagnostics/worker work — true VS Code split-view semantics. |
-| Visibility-gate / suspend off-screen pane editors                                 | large  | So N-pane layouts do not multiply per-frame and per-keystroke worker cost (mirrors the #1580 visibility gating).                      |
-| Watcher-driven external-change detection → tab update on out-of-app rename/delete | medium | Completes the file lifecycle when the change originates outside the app.                                                              |
-| Host language provider pilots (Java/Python/Go/Rust/Shell) wired into the surface  | large  | Extends governed language intelligence beyond TS/JS using the existing LSP process manager.                                           |
-| Go-to-definition / find-references / rename-symbol surfaced                       | large  | Cross-file navigation on top of the symbol provider.                                                                                  |
-| Breadcrumbs / minimap / sticky scroll                                             | medium | Monaco features behind explicit, governed enablement.                                                                                 |
-| Audit/evidence ledger for destructive file mutations                              | large  | Content-free evidence (op, path, kind, outcome, counts) for recursive delete, matching the Git-delivery ledger.                       |
-| Atomic, crash-safe cross-device directory move/copy (`EXDEV` fallback)            | xlarge | Contained, deny-checked recursive copy+verify+delete when a root is a bind-mount/external volume.                                     |
+| Item                                                                              | Effort | Why                                                                                                                                                                                                    |
+| --------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Shared Monaco model registry keyed by URI across panes                            | xlarge | Same file in two split panes should share one model/undo stack and halve diagnostics/worker work — true VS Code split-view semantics.                                                                  |
+| Visibility-gate / suspend off-screen pane editors                                 | large  | So N-pane layouts do not multiply per-frame and per-keystroke worker cost (mirrors the #1580 visibility gating).                                                                                       |
+| Watcher-driven external-change detection → tab update on out-of-app rename/delete | medium | Completes the file lifecycle when the change originates outside the app.                                                                                                                               |
+| Host language provider pilots (Java/Python/Go/Rust/Shell) wired into the surface  | large  | Extends governed language intelligence beyond TS/JS using the existing LSP process manager.                                                                                                            |
+| Go-to-definition / find-references / rename-symbol surfaced                       | large  | Cross-file navigation on top of the symbol provider.                                                                                                                                                   |
+| Breadcrumbs / minimap / sticky scroll                                             | medium | Monaco features behind explicit, governed enablement.                                                                                                                                                  |
+| Audit/evidence ledger for destructive file mutations                              | large  | Content-free evidence (op, path, kind, outcome, counts) for recursive delete, matching the Git-delivery ledger.                                                                                        |
+| Atomic, crash-safe cross-device directory move/copy (`EXDEV` fallback)            | xlarge | Contained, deny-checked recursive copy+verify+delete when a root is a bind-mount/external volume.                                                                                                      |
+| Horizontally scrollable tab strip (replacing the `+N` collapse)                   | medium | Deferred from Wave 2.7: touches `globals.css`, so it must re-pin the [#1300](https://github.com/oscharko-dev/Keiko/issues/1300) visual-regression proof — gate-sensitive, kept out of the file-ops PR. |
 
 ---
 

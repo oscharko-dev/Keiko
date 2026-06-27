@@ -1022,6 +1022,8 @@ export async function renameFilesEntry(input: {
   readonly root: string;
   readonly path: string;
   readonly newPath: string;
+  // Issue 2.6: optional version-aware precondition; only an editor/agent holding the open buffer sets it.
+  readonly baseVersion?: EditorDocumentVersion | undefined;
 }): Promise<FilesMutationResponse> {
   return fetchJson("/api/files/rename", { method: "POST", body: JSON.stringify(input) });
 }
@@ -1029,8 +1031,17 @@ export async function renameFilesEntry(input: {
 export async function deleteFilesEntry(input: {
   readonly root: string;
   readonly path: string;
+  readonly baseVersion?: EditorDocumentVersion | undefined;
 }): Promise<FilesMutationResponse> {
   return fetchJson("/api/files/delete", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function copyFilesEntry(input: {
+  readonly root: string;
+  readonly sourcePath: string;
+  readonly destPath: string;
+}): Promise<FilesMutationResponse> {
+  return fetchJson("/api/files/copy", { method: "POST", body: JSON.stringify(input) });
 }
 
 export async function fetchGitStatus(root: string): Promise<GitRepositoryStatusResponse> {

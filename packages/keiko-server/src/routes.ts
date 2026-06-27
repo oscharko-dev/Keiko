@@ -114,6 +114,7 @@ import {
 } from "./runtime/containerRoutes.js";
 import {
   handleFilesContent,
+  handleFilesCopy,
   handleFilesCreate,
   handleFilesDelete,
   handleFilesDirectories,
@@ -491,6 +492,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/files/create", handler: handleFilesCreate },
   { method: "POST", pattern: "/api/files/rename", handler: handleFilesRename },
   { method: "POST", pattern: "/api/files/delete", handler: handleFilesDelete },
+  { method: "POST", pattern: "/api/files/copy", handler: handleFilesCopy },
   // Issue #1198 — deterministic, model-free language intelligence (completion, diagnostics, hover,
   // symbols) over an editor overlay (ADR-0042 D4). Capabilities advertises the registered providers.
   {

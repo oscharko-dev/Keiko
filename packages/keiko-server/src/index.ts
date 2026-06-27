@@ -183,9 +183,11 @@ export {
   type ContainerRunEvidenceInput,
 } from "./runtime/containerRunner-evidence.js";
 export {
+  copyFilesEntry,
   createFilesEntry,
   deleteFilesEntry,
   handleFilesContent,
+  handleFilesCopy,
   handleFilesCreate,
   handleFilesDelete,
   handleFilesRename,
