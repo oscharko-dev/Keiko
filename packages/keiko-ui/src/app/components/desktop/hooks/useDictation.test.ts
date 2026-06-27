@@ -13,6 +13,7 @@ import {
   type DictationRecorder,
   type DictationSession,
 } from "./dictation-recorder";
+import type { VoiceActivityDetector, VoiceActivityEvent } from "./voice-activity-detector";
 import { ApiError } from "@/lib/api";
 import type { VoiceTranscriptionResult } from "@/lib/api";
 
@@ -43,6 +44,53 @@ function makeRecorder(opts: {
     return session;
   });
   return { recorder: { start }, session: { stop, cancel }, start };
+}
+
+// A fake VAD: captures the onEvent callback so the test can fire scripted activity, and records that
+// the monitor was started/stopped. No WebAudio.
+function makeFakeVad(): {
+  vad: VoiceActivityDetector;
+  fire: (event: VoiceActivityEvent) => void;
+  started: () => boolean;
+  stopped: () => boolean;
+} {
+  let onEvent: ((event: VoiceActivityEvent) => void) | undefined;
+  let didStart = false;
+  let didStop = false;
+  const vad: VoiceActivityDetector = {
+    start(_stream, cb) {
+      didStart = true;
+      onEvent = cb;
+      return {
+        stop() {
+          didStop = true;
+        },
+      };
+    },
+  };
+  return {
+    vad,
+    fire: (event) => onEvent?.(event),
+    started: () => didStart,
+    stopped: () => didStop,
+  };
+}
+
+// A recorder whose session exposes a (fake) stream, so the VAD can attach.
+function makeStreamingRecorder(): { recorder: DictationRecorder; stop: ReturnType<typeof vi.fn> } {
+  const stop = vi.fn(
+    async (): Promise<DictationCapture> => ({
+      audioBase64: "QQ==",
+      mimeType: "audio/webm",
+      durationMs: 800,
+    }),
+  );
+  const session: DictationSession = {
+    stream: { getTracks: () => [] } as unknown as MediaStream,
+    stop,
+    cancel: vi.fn(),
+  };
+  return { recorder: { start: vi.fn(async () => session) }, stop };
 }
 
 function setup(opts: {
@@ -435,5 +483,56 @@ describe("useDictation — microphone permission-window safety (Issue #1562)", (
     expect(recorder.session.cancel).toHaveBeenCalledTimes(1);
     expect(result.current.phase).toBe("idle");
     expect(result.current.busy).toBe(false);
+  });
+});
+
+describe("useDictation — voice-activity end-of-turn (dialogue mode)", () => {
+  it("attaches the VAD to the recording stream and auto-stops on end-of-turn (no second tap)", async () => {
+    const { recorder, stop } = makeStreamingRecorder();
+    const fake = makeFakeVad();
+    const { result } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        createRecorder: () => recorder,
+        transcribe: vi.fn(async (): Promise<VoiceTranscriptionResult> => ({ transcript: "done" })),
+        vad: fake.vad,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    expect(fake.started()).toBe(true);
+
+    // A trailing silence ends the turn automatically — same path as a manual stop.
+    act(() => fake.fire("end-of-turn"));
+    await waitFor(() => expect(result.current.phase).toBe("transcribing"));
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(fake.stopped()).toBe(true); // the analyser is released when the turn ends
+  });
+
+  it("ignores speech-onset (only a trailing silence ends the turn)", async () => {
+    const { recorder, stop } = makeStreamingRecorder();
+    const fake = makeFakeVad();
+    const { result } = renderHook(() =>
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder, vad: fake.vad }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+
+    act(() => fake.fire("speech-onset"));
+    expect(result.current.phase).toBe("recording"); // still capturing
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("does not attach a VAD when none is provided (composer dictation stays manual)", async () => {
+    const { recorder } = makeStreamingRecorder();
+    const fake = makeFakeVad();
+    const { result } = renderHook(() =>
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder }),
+    );
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    expect(fake.started()).toBe(false);
   });
 });

@@ -15,7 +15,12 @@
 // realized on the existing loopback HTTP + Server-Sent Events seam; a bidirectional WebSocket upgrade
 // is an explicit, ADR-gated transport decision owned by Issue #497 (ADR-0058 D3 / ADR-0059).
 
-import type { VoiceProfile, VoiceProviderLocality, VoiceUnavailableReason } from "./gateway.js";
+import type {
+  VoicePersona,
+  VoiceProfile,
+  VoiceProviderLocality,
+  VoiceUnavailableReason,
+} from "./gateway.js";
 
 // ─── Protocol version ─────────────────────────────────────────────────────────
 export const VOICE_PROTOCOL_VERSION = "1" as const;
@@ -285,6 +290,10 @@ export interface VoiceSessionCreateMessage extends VoiceControlEnvelope<"session
   readonly idempotencyKey: string;
   readonly requestedProfile: VoiceProfile;
   readonly negotiationMode: VoiceNegotiationMode;
+  // Optional product voice persona ("male" | "female" | "neutral") the client selected. Content-free
+  // (an enum, never a provider voice id); the host resolves it server-side to a realtime-valid voice so
+  // the spoken voice matches the user's choice. Absent ⇒ the host uses its configured default voice.
+  readonly persona?: VoicePersona | undefined;
 }
 
 export interface VoiceSessionCreatedMessage extends VoiceControlEnvelope<"session.created"> {

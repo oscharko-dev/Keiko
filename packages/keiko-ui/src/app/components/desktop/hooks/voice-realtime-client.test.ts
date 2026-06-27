@@ -5,7 +5,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserVoiceControlClient, VoiceControlError } from "./voice-realtime-client";
-import { VOICE_PROTOCOL_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
+  VOICE_PROTOCOL_VERSION,
+} from "@oscharko-dev/keiko-contracts";
 
 type WsListener = (event: unknown) => void;
 
@@ -62,10 +65,7 @@ function makeFactory(): { factory: (url: string) => WebSocket; latest: () => Fak
 }
 
 // Helper: build a valid server message envelope.
-function serverMsg(
-  kind: string,
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
+function serverMsg(kind: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     protocolVersion: VOICE_PROTOCOL_VERSION,
     sessionId: "srv-session",
@@ -85,17 +85,21 @@ describe("createBrowserVoiceControlClient", () => {
     const ws = latest();
     // Simulate WS open + session.created + (optionally capability.offer) + signal.sdp.answer
     ws.fireOpen();
-    ws.fireMessage(serverMsg("session.created", {
-      profile: "full-realtime",
-      controlTransport: "loopback-websocket",
-      mediaTransport: "webrtc",
-      negotiationMode: "proxied-sdp",
-    }));
+    ws.fireMessage(
+      serverMsg("session.created", {
+        profile: "full-realtime",
+        controlTransport: "loopback-websocket",
+        mediaTransport: "webrtc",
+        negotiationMode: "proxied-sdp",
+      }),
+    );
     // capability.offer is ignored; media.track.state is ignored.
-    ws.fireMessage(serverMsg("capability.offer", {
-      profile: "full-realtime",
-      capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
-    }));
+    ws.fireMessage(
+      serverMsg("capability.offer", {
+        profile: "full-realtime",
+        capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+      }),
+    );
     ws.fireMessage(serverMsg("signal.sdp.answer", { sdp: "v=0\r\nanswer-sdp" }));
 
     const answerSdp = await negotiatePromise;
@@ -109,12 +113,14 @@ describe("createBrowserVoiceControlClient", () => {
 
     const ws = latest();
     ws.fireOpen();
-    ws.fireMessage(serverMsg("session.created", {
-      profile: "full-realtime",
-      controlTransport: "loopback-websocket",
-      mediaTransport: "webrtc",
-      negotiationMode: "proxied-sdp",
-    }));
+    ws.fireMessage(
+      serverMsg("session.created", {
+        profile: "full-realtime",
+        controlTransport: "loopback-websocket",
+        mediaTransport: "webrtc",
+        negotiationMode: "proxied-sdp",
+      }),
+    );
     ws.fireMessage(serverMsg("error", { code: "negotiation-failed" }));
 
     await expect(negotiatePromise).rejects.toMatchObject({ reason: "negotiation-failed" });
@@ -127,12 +133,14 @@ describe("createBrowserVoiceControlClient", () => {
 
     const ws = latest();
     ws.fireOpen();
-    ws.fireMessage(serverMsg("session.created", {
-      profile: "full-realtime",
-      controlTransport: "loopback-websocket",
-      mediaTransport: "webrtc",
-      negotiationMode: "proxied-sdp",
-    }));
+    ws.fireMessage(
+      serverMsg("session.created", {
+        profile: "full-realtime",
+        controlTransport: "loopback-websocket",
+        mediaTransport: "webrtc",
+        negotiationMode: "proxied-sdp",
+      }),
+    );
     ws.fireMessage(serverMsg("error", { code: "internal" }));
 
     await expect(negotiatePromise).rejects.toMatchObject({ reason: "connection-failed" });
@@ -204,5 +212,69 @@ describe("createBrowserVoiceControlClient", () => {
 
     // Clean up — fire close so the promise doesn't linger.
     ws.fireClose();
+  });
+
+  it("includes the selected persona (content-free) in session.create when provided", async () => {
+    const { factory, latest } = makeFactory();
+    const sendSpy = vi.fn();
+    const client = createBrowserVoiceControlClient(factory, "female");
+    void client.negotiate("v=0\r\noffer").catch(() => {});
+    const ws = latest();
+    ws.send = sendSpy;
+    ws.fireOpen();
+    const parsed = JSON.parse(sendSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    expect(parsed.kind).toBe("session.create");
+    expect(parsed.persona).toBe("female");
+    ws.fireClose();
+  });
+
+  it("omits persona from session.create when none is selected (default voice)", async () => {
+    const { factory, latest } = makeFactory();
+    const sendSpy = vi.fn();
+    const client = createBrowserVoiceControlClient(factory);
+    void client.negotiate("v=0\r\noffer").catch(() => {});
+    const ws = latest();
+    ws.send = sendSpy;
+    ws.fireOpen();
+    const parsed = JSON.parse(sendSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    expect("persona" in parsed).toBe(false);
+    ws.fireClose();
+  });
+
+  it("rejects connection-failed and closes the socket when the handshake stalls past the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { factory, latest } = makeFactory();
+      const client = createBrowserVoiceControlClient(factory);
+      const settled = client.negotiate("v=0\r\noffer");
+      // Attach the rejection expectation BEFORE the timer fires so the rejection is never momentarily
+      // unhandled (vitest reports a transiently-unhandled rejection as a false-positive error).
+      const rejection = expect(settled).rejects.toMatchObject({ reason: "connection-failed" });
+      const ws = latest();
+      ws.fireOpen(); // opens + sends session.create, but the server never replies
+      await vi.advanceTimersByTimeAsync(DEFAULT_VOICE_PROTOCOL_TIMEOUTS.signalingMs + 50);
+      await rejection;
+      expect(ws.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the timeout on a successful handshake (does not close a live socket later)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { factory, latest } = makeFactory();
+      const client = createBrowserVoiceControlClient(factory);
+      const settled = client.negotiate("v=0\r\noffer");
+      const ws = latest();
+      ws.fireOpen();
+      ws.fireMessage(serverMsg("session.created"));
+      ws.fireMessage(serverMsg("signal.sdp.answer", { sdp: "v=0\r\nanswer" }));
+      await expect(settled).resolves.toBe("v=0\r\nanswer");
+      await vi.advanceTimersByTimeAsync(DEFAULT_VOICE_PROTOCOL_TIMEOUTS.signalingMs + 50);
+      expect(ws.closed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
