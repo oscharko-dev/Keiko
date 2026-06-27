@@ -470,4 +470,20 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     expect(sendDesktopChat).not.toHaveBeenCalled();
     expect(result.current.messages).toHaveLength(0);
   });
+
+  it("is idempotent for the explicit-text path — a same-tick double send fires once", async () => {
+    // The in-flight guard reads sendStatusRef synchronously before the content source, so a barge of
+    // two explicit-text sends in one tick (which the voice loop must never double-submit) collapses to
+    // a single request, exactly like the draft path's Issue #152 guard.
+    const { result } = await setupUngroundedSession();
+
+    await act(async () => {
+      const first = result.current.sendMessage({ text: "first" });
+      const second = result.current.sendMessage({ text: "second" });
+      await Promise.all([first, second]);
+    });
+
+    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("first");
+  });
 });
