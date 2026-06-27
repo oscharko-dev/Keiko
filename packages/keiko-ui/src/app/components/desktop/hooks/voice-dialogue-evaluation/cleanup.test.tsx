@@ -15,8 +15,8 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCapabilityResolution } from "@/lib/types";
-import type { DictationRecorder, DictationSession } from "./dictation-recorder";
-import type { AssistantSpeechAudioElement } from "./useAssistantSpeech";
+import type { DictationRecorder, DictationSession } from "../dictation-recorder";
+import type { AssistantSpeechAudioElement } from "../useAssistantSpeech";
 import {
   useVoiceDialogueSession,
   type DialogueChatSession,
