@@ -311,8 +311,8 @@ describe("voice dialogue context grounding (Issue #1561)", () => {
 
   it("AC2 — a spoken local-knowledge question routes through the same grounded path", async () => {
     const lkChat = chat({
-      localKnowledgeScopes: [{ connectorId: "kb-1", connectedAtMs: 1 }],
-    } as Partial<Chat>);
+      localKnowledgeScopes: [{ kind: "capsule", capsuleId: "kb-1" as never, connectedAtMs: 1 }],
+    });
     bootstrapMocks(lkChat);
     vi.mocked(askGrounded).mockResolvedValue({
       groundingKind: "local-knowledge",
