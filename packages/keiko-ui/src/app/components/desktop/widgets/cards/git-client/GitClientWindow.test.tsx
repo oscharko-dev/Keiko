@@ -693,6 +693,7 @@ describe("GitClientWindow — toolbar actions", () => {
     expect(within(panel).getByLabelText("Head branch")).toHaveValue("feat/issue-1577");
     expect(within(panel).getByLabelText("Base branch")).toHaveValue("main");
     expect(within(panel).getByDisplayValue("oscharko-dev/Keiko")).toBeInTheDocument();
+    expect(client.getHistory).not.toHaveBeenCalled();
 
     await user.click(within(panel).getByRole("button", { name: "Preview" }));
     await waitFor(() =>
@@ -704,6 +705,78 @@ describe("GitClientWindow — toolbar actions", () => {
           baseBranchName: "main",
         }),
       ),
+    );
+  });
+
+  it("updates a Pull Request from the embedded panel with selected repository context", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () =>
+        makeSummary({
+          branch: "feat/issue-1577",
+          remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        }),
+      ),
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+    const panel = await screen.findByRole("region", { name: "Pull Request" });
+    await user.click(within(panel).getByLabelText("Update"));
+    await user.type(within(panel).getByLabelText("Pull Request number"), "1640");
+    await user.type(within(panel).getByLabelText("Pull Request title"), "fix: harden pr path");
+    await user.selectOptions(within(panel).getByLabelText("Draft state"), "to-ready");
+    await user.click(within(panel).getByRole("button", { name: "Update Pull Request" }));
+
+    await waitFor(() =>
+      expect(client.prExecute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: REPO_A.path,
+          kind: "pr-update",
+          ownerAndRepo: "oscharko-dev/Keiko",
+          headBranchName: "feat/issue-1577",
+          baseBranchName: "main",
+          prExternalId: "1640",
+          convertFromDraft: true,
+        }),
+      ),
+    );
+  });
+
+  it("surfaces embedded Pull Request provider-auth failures without sensitive text", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () =>
+        makeSummary({
+          branch: "feat/issue-1577",
+          remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
+        }),
+      ),
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
+      prExecute: vi.fn<GitClientSeam["prExecute"]>(async () => ({
+        schemaVersion: "1",
+        status: "failed",
+        actionKind: "pr-create",
+        executionErrorCode: "provider-rejected",
+        prRejectionReason: "provider-auth",
+        recoveryDisposition: "user-fixable",
+        recoveryActionHint: "Reconnect provider access.",
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+    const panel = await screen.findByRole("region", { name: "Pull Request" });
+    await user.type(within(panel).getByLabelText("Pull Request title"), "fix: auth path");
+    await user.click(within(panel).getByRole("button", { name: "Create Pull Request" }));
+
+    await waitFor(() => expect(within(panel).getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(within(panel).getByTestId("gpr-outcome")).toHaveTextContent("rejected: provider-auth");
+    expect(within(panel).getByTestId("gpr-outcome")).not.toHaveTextContent(
+      /token|secret|authorization/i,
     );
   });
 
@@ -758,7 +831,10 @@ describe("GitClientWindow — toolbar actions", () => {
     await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
     expect(await screen.findByRole("region", { name: "Pull Request" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Back to diff" }));
-    expect(screen.getByRole("region", { name: "Diff" })).toBeInTheDocument();
+    const diff = screen.getByRole("region", { name: "Diff" });
+    expect(diff).toBeInTheDocument();
+    await waitFor(() => expect(diff).toHaveFocus());
+    expect(screen.getByText("Diff panel opened.")).toBeInTheDocument();
   });
 });
 
@@ -821,9 +897,11 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     const user = userEvent.setup();
     const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(client.getHistory).toHaveBeenCalledWith({ root: REPO_A.path, limit: 50 }));
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    expect(client.getHistory).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("tab", { name: "History" }));
+    await waitFor(() => expect(client.getHistory).toHaveBeenCalledWith({ root: REPO_A.path, limit: 50 }));
 
     expect(screen.getByRole("listbox", { name: "Commit history" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /feat: add history/ })).toHaveAttribute(

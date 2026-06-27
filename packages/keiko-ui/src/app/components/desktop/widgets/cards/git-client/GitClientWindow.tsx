@@ -150,7 +150,7 @@ export function GitClientWindow({
   const [rightPaneAnnouncement, setRightPaneAnnouncement] = useState("");
   const syncSeqRef = useRef(0);
   const rightPaneRef = useRef<HTMLDivElement | null>(null);
-  const diffReturnFocusRef = useRef<HTMLElement | null>(null);
+  const diffPaneRef = useRef<HTMLDivElement | null>(null);
 
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
@@ -212,6 +212,11 @@ export function GitClientWindow({
     setDiffScope("worktree");
     setRightPaneMode("diff");
     setRightPaneAnnouncement("");
+    setHistory(null);
+    setHistoryProjectKey(null);
+    setHistoryLoading(false);
+    setHistoryError(null);
+    setSelectedCommitSha(null);
   }, [selectedPath, resetStaging, resetCommit, resetBranchActions]);
 
   useEffect(() => {
@@ -279,6 +284,10 @@ export function GitClientWindow({
       setSelectedCommitSha(null);
       return;
     }
+    if (tab !== "history") {
+      setHistoryLoading(false);
+      return;
+    }
     let cancelled = false;
     setHistoryLoading(true);
     setHistoryError(null);
@@ -305,7 +314,7 @@ export function GitClientWindow({
     return () => {
       cancelled = true;
     };
-  }, [client, selectedPath, statusRevision]);
+  }, [client, selectedPath, statusRevision, tab]);
 
   // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
   // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
@@ -557,8 +566,6 @@ export function GitClientWindow({
   const openRightPane = useCallback(
     (mode: Exclude<RightPaneMode, "diff">): void => {
       if (selectedPath === null) return;
-      const active = document.activeElement;
-      diffReturnFocusRef.current = active instanceof HTMLElement ? active : null;
       setRightPaneMode(mode);
       setRightPaneAnnouncement(mode === "pull-request" ? "Pull Request panel opened." : "Merge panel opened.");
     },
@@ -569,7 +576,8 @@ export function GitClientWindow({
     setRightPaneMode("diff");
     setRightPaneAnnouncement("Diff panel opened.");
     window.requestAnimationFrame(() => {
-      diffReturnFocusRef.current?.focus();
+      const diffRegion = diffPaneRef.current?.querySelector('[role="region"][aria-label="Diff"]');
+      if (diffRegion instanceof HTMLElement) diffRegion.focus();
     });
   }, []);
 
@@ -580,6 +588,19 @@ export function GitClientWindow({
 
   return (
     <div style={WORKSPACE_STYLE} aria-label="Git">
+      <p
+        role="status"
+        aria-live="polite"
+        style={{
+          position: "absolute",
+          width: 1,
+          height: 1,
+          overflow: "hidden",
+          clip: "rect(0 0 0 0)",
+        }}
+      >
+        {rightPaneAnnouncement}
+      </p>
       <RepositoryToolbar
         repositories={repositories}
         selectedPath={selectedPath}
@@ -656,17 +677,19 @@ export function GitClientWindow({
           />
         </div>
         {rightPaneMode === "diff" ? (
-          <DiffPane
-            client={client}
-            repositoryRoot={selectedPath}
-            selectedChangePath={selectedChangePath}
-            selectedCommit={tab === "history" ? selectedCommit : null}
-            scope={diffScope}
-            onScopeChange={setDiffScope}
-            revision={statusRevision}
-            onCreatePullRequest={() => openRightPane("pull-request")}
-            onMerge={() => openRightPane("merge")}
-          />
+          <div ref={diffPaneRef} style={{ minWidth: 0, minHeight: 0, display: "contents" }}>
+            <DiffPane
+              client={client}
+              repositoryRoot={selectedPath}
+              selectedChangePath={selectedChangePath}
+              selectedCommit={tab === "history" ? selectedCommit : null}
+              scope={diffScope}
+              onScopeChange={setDiffScope}
+              revision={statusRevision}
+              onCreatePullRequest={() => openRightPane("pull-request")}
+              onMerge={() => openRightPane("merge")}
+            />
+          </div>
         ) : (
           <div
             ref={rightPaneRef}
@@ -678,19 +701,6 @@ export function GitClientWindow({
               <button type="button" style={SECONDARY_BTN} onClick={returnToDiff}>
                 <Icons.chevronR size={12} style={{ transform: "rotate(180deg)" }} /> Back to diff
               </button>
-              <p
-                role="status"
-                aria-live="polite"
-                style={{
-                  position: "absolute",
-                  width: 1,
-                  height: 1,
-                  overflow: "hidden",
-                  clip: "rect(0 0 0 0)",
-                }}
-              >
-                {rightPaneAnnouncement}
-              </p>
             </div>
             {rightPaneMode === "pull-request" ? (
               <GovernedPullRequestCard

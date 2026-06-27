@@ -4,11 +4,15 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GitRepositoryAgentOperationRequest } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import type { GitProcessRunner } from "../gitRoutes.js";
 import { matchRoute, type RouteContext } from "../routes.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
-import { handleGitAgentOperation } from "./agentOperationsRoutes.js";
+import {
+  handleGitAgentOperation,
+  handleGitAgentOperationWithDelegate,
+} from "./agentOperationsRoutes.js";
 
 let store: UiStore;
 let root: string;
@@ -52,6 +56,22 @@ function request(overrides: Record<string, unknown> = {}): Record<string, unknow
     projectId: root,
     ...overrides,
   };
+}
+
+async function waitUntil(assertion: () => void): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1);
+      });
+    }
+  }
+  throw lastError;
 }
 
 beforeEach(() => {
@@ -171,6 +191,43 @@ describe("POST /api/git/agent/operations", () => {
     expect(conflict).toMatchObject({
       status: 409,
       body: { status: "denied", denialReason: "idempotency-conflict" },
+    });
+  });
+
+  it("reserves execute idempotency before the delegated mutation settles", async () => {
+    let releaseDelegate!: () => void;
+    const delegateGate = new Promise<void>((resolve) => {
+      releaseDelegate = resolve;
+    });
+    const delegated = vi.fn(async () => {
+      await delegateGate;
+      return { status: 200, body: { ok: true } };
+    });
+    const body = request({
+      operation: "branch-switch",
+      mode: "execute",
+      idempotencyKey: "switch-concurrent",
+      payload: { branchName: "main" },
+    }) as unknown as GitRepositoryAgentOperationRequest;
+    const first = handleGitAgentOperationWithDelegate(body, "same-fingerprint", delegated);
+
+    await waitUntil(() => {
+      expect(delegated).toHaveBeenCalledTimes(1);
+    });
+    const second = handleGitAgentOperationWithDelegate(body, "same-fingerprint", delegated);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+
+    expect(delegated).toHaveBeenCalledTimes(1);
+    releaseDelegate();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.body).toMatchObject({ status: "delegated", operation: "branch-switch" });
+    expect(secondResult.body).toMatchObject({
+      status: "delegated",
+      operation: "branch-switch",
+      replay: true,
     });
   });
 });
