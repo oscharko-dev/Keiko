@@ -64,7 +64,6 @@ export const INPUT_STYLE: CSSProperties = {
   background: "var(--input-surface)",
   color: "var(--input-text)",
   font: "var(--text-body-sm) var(--font-ui)",
-  outline: "none",
 };
 
 export const LIST_STYLE: CSSProperties = {
