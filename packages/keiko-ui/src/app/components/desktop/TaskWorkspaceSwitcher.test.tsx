@@ -83,6 +83,22 @@ describe("TaskWorkspaceSwitcher", () => {
     expect(screen.getByText("active")).toBeInTheDocument();
   });
 
+  it("exposes the trigger as the task workspace context control with live status", () => {
+    renderSwitcher(api({ activeInstance: instance() }));
+    const trigger = screen.getByRole("button", { name: /task workspace context: task-446/i });
+    expect(trigger).toHaveAttribute("aria-describedby", screen.getByRole("status").id);
+  });
+
+  it("uses readable badge styling instead of accent-colored status text", () => {
+    renderSwitcher(api({ activeInstance: instance() }));
+    openPanel();
+    const activeBadge = screen.getByText("active");
+    const style = activeBadge.getAttribute("style") ?? "";
+    expect(style).toContain("color: var(--text-primary");
+    expect(style).toContain("background: color-mix");
+    expect(style).not.toContain("text-on-accent");
+  });
+
   it("shows a dirty badge and a lock badge from the instance state", () => {
     renderSwitcher(
       api({
@@ -130,6 +146,21 @@ describe("TaskWorkspaceSwitcher", () => {
     expect(value.switchTo).toHaveBeenCalledWith("ws-2");
   });
 
+  it("switches to a listed handoff-ready workspace", () => {
+    const value = api({
+      instances: [
+        instance(),
+        instance({ workspaceId: "ws-2", taskId: "task-2", lifecycleState: "handoff-ready" }),
+      ],
+      activeInstance: instance(),
+    });
+    renderSwitcher(value);
+    openPanel();
+    const list = screen.getByRole("list", { name: /task workspaces/i });
+    fireEvent.click(within(list).getByRole("button", { name: "Switch" }));
+    expect(value.switchTo).toHaveBeenCalledWith("ws-2");
+  });
+
   it("closes the panel on Escape and restores focus to the trigger", () => {
     renderSwitcher(api({ activeInstance: instance() }));
     const trigger = screen.getByRole("button", { name: /task-446/i });
@@ -160,5 +191,18 @@ describe("TaskWorkspaceSwitcher", () => {
       taskId: "new-task",
       baseBranch: "dev",
     });
+  });
+
+  it("does not submit create while a workspace mutation is in flight", () => {
+    const value = api({ instances: [instance()], activeInstance: instance(), switching: true });
+    renderSwitcher(value);
+    openPanel();
+    fireEvent.change(screen.getByPlaceholderText(/446-binding/), { target: { value: "new-task" } });
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. dev/), { target: { value: "dev" } });
+    const submit = screen.getByRole("button", { name: /create task workspace/i });
+    expect(submit).toBeDisabled();
+    expect(submit).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(submit);
+    expect(value.provision).not.toHaveBeenCalled();
   });
 });

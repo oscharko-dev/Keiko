@@ -482,6 +482,51 @@ describe("activate", () => {
     ).toBe(true);
   });
 
+  it("reactivates a handoff-ready workspace (handoff-ready -> active)", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-handoff",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...provisioned.instance, lifecycleState: "handoff-ready", lock: null });
+    const activated = await service.activate({
+      workspaceId: provisioned.instance.workspaceId,
+      taskId: "act-handoff",
+      requestedBy: "u",
+      acquireLock: false,
+    });
+    expect(activated.instance.lifecycleState).toBe("active");
+    expect(activated.binding.activeRoot).toBe(provisioned.instance.managedWorktreePath);
+  });
+
+  it("rejects activation when the persisted managed path escapes the managed root", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-escape",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-prov-escape-")));
+    try {
+      store.upsert({ ...provisioned.instance, managedWorktreePath: outside });
+      await rejectsWithCode(
+        () =>
+          service.activate({
+            workspaceId: provisioned.instance.workspaceId,
+            taskId: "act-escape",
+            requestedBy: "u",
+            acquireLock: false,
+          }),
+        "UNSAFE_PATH",
+      );
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("flags drift (recovery-required) when activating a workspace whose worktree vanished", async () => {
     const service = makeService();
     const provisioned = await service.provision({

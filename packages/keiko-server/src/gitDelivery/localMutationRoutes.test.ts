@@ -8,7 +8,7 @@
 //     exercise the governed outcomes (success, preflight-block, policy-block, approval-required) and
 //     prove evidence is recorded and the mutation never bypasses the kernel.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -20,6 +20,7 @@ import {
   GIT_DELIVERY_SCHEMA_VERSION,
   type GitDeliveryExecutionResult,
   type GitDeliveryRepoPolicyPack,
+  type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitLocalMutationAdapter, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import { createUiServer, UI_HOST } from "../server.js";
@@ -34,6 +35,12 @@ import {
   type GitDeliveryLocalErrorBody,
 } from "./localMutationRoutes.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
+import {
+  deriveManagedWorktreePath,
+  deriveRepositoryId,
+  deriveTaskBranchName,
+  deriveWorkspaceId,
+} from "../task-workspace/naming.js";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const ENABLED_ENV = { KEIKO_GIT_DELIVERY_ENABLED: "true" } as const;
@@ -152,6 +159,53 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     modelPortFactory: () => undefined,
     store,
     ...overrides,
+  };
+}
+
+function managedWorkspaceDeps(taskId = "task-443"): {
+  readonly instance: WorkspaceInstance;
+  readonly override: Partial<UiHandlerDeps>;
+  readonly cleanup: () => void;
+} {
+  const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-local-managed-")));
+  const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-local-repo-")));
+  const repositoryId = deriveRepositoryId(repoRoot);
+  const workspaceId = deriveWorkspaceId({ repositoryId, taskId });
+  const managedWorktreePath = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  mkdirSync(managedWorktreePath, { recursive: true });
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId,
+    taskId,
+    repositoryId,
+    repositoryRoot: repoRoot,
+    baseBranch: "main",
+    taskBranch: deriveTaskBranchName({ taskId }),
+    managedWorktreePath,
+    gitdirIdentity: "gitdir-hash",
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: "2026-06-26T00:00:00.000Z",
+    updatedAt: "2026-06-26T00:00:00.000Z",
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: workspaceId,
+  };
+  return {
+    instance,
+    override: {
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning: {
+        getInstance: (id: string) => (id === workspaceId ? instance : undefined),
+        provision: () => Promise.reject(new Error("not used")),
+        activate: () => Promise.reject(new Error("not used")),
+      },
+    },
+    cleanup: (): void => {
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(managedRoot, { recursive: true, force: true });
+    },
   };
 }
 
@@ -331,6 +385,34 @@ describe("local mutation routes — governed execution (direct handler + seams)"
     expect(cap.records()).toHaveLength(1);
   });
 
+  it("accepts a persisted managed task workspace root as projectId", async () => {
+    const managed = managedWorkspaceDeps();
+    const adapter = recordingAdapter();
+    const handler = createHandleLocalMutation(
+      {
+        pattern: SWITCH,
+        allowedKeys: new Set(["schemaVersion", "projectId", "approval", "branchName"]),
+        parse: () => ({ ok: true, command: { kind: "branch-switch", branchName: "feature/x" } }),
+      },
+      { execution: seams({ adapterFactory: () => adapter.adapter }) },
+    );
+    try {
+      const res = await handler(
+        ctxFor(SWITCH, {
+          schemaVersion: "1",
+          projectId: managed.instance.managedWorktreePath,
+          branchName: "feature/x",
+        }),
+        deps(managed.override),
+      );
+      expect(res.status).toBe(200);
+      expect((res.body as { status: string }).status).toBe("succeeded");
+      expect(adapter.calls()).toEqual(["switchBranch"]);
+    } finally {
+      managed.cleanup();
+    }
+  });
+
   it("blocks at preflight (switch target missing) and never calls the adapter", async () => {
     const cap = capturingEvidenceStore();
     const adapter = recordingAdapter();
@@ -442,7 +524,12 @@ describe("local mutation routes — real specs through the route group (direct h
   it("stages and unstages via the real staging specs", async () => {
     const a1 = recordingAdapter();
     const staged = await handlerFor(STAGE, seams({ adapterFactory: () => a1.adapter }))(
-      ctxFor(STAGE, { schemaVersion: "1", projectId, pathspecs: ["src/a.ts"], includeUntracked: false }),
+      ctxFor(STAGE, {
+        schemaVersion: "1",
+        projectId,
+        pathspecs: ["src/a.ts"],
+        includeUntracked: false,
+      }),
       deps(),
     );
     expect((staged.body as { status: string }).status).toBe("succeeded");
@@ -464,7 +551,12 @@ describe("local mutation routes — real specs through the route group (direct h
     );
     expect(missing.status).toBe(400);
     const badApproval = await handlerFor(SWITCH, seams())(
-      ctxFor(SWITCH, { schemaVersion: "1", projectId, branchName: "feature/x", approval: { required: "no" } }),
+      ctxFor(SWITCH, {
+        schemaVersion: "1",
+        projectId,
+        branchName: "feature/x",
+        approval: { required: "no" },
+      }),
       deps(),
     );
     expect(badApproval.status).toBe(400);

@@ -63,6 +63,16 @@ interface CleanupCtx {
   readonly lockTtlMs: number;
 }
 
+interface OrphanCleanupOutcome {
+  readonly removed: boolean;
+  readonly refusal?: WorkspaceOrphanRefusal;
+}
+
+interface RemovalOutcome {
+  readonly removed: boolean;
+  readonly refusalReason?: WorkspaceCleanupRefusalReason;
+}
+
 function isBoundedNonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_FIELD_LENGTH;
 }
@@ -142,6 +152,27 @@ function loadInstance(ctx: CleanupCtx, workspaceId: string): WorkspaceInstance {
     throw new TaskWorkspaceError("WORKSPACE_NOT_FOUND", "workspace not found");
   }
   return instance;
+}
+
+function hasPersistedWorkspaceForCandidate(
+  ctx: CleanupCtx,
+  repositoryId: string,
+  leaf: string,
+  candidate: string,
+): boolean {
+  const byWorkspaceId = ctx.deps.store.getById(leaf);
+  if (
+    byWorkspaceId?.repositoryId === repositoryId &&
+    byWorkspaceId.managedWorktreePath === candidate
+  ) {
+    return true;
+  }
+  return ctx.deps.store
+    .listAll()
+    .some(
+      (instance) =>
+        instance.repositoryId === repositoryId && instance.managedWorktreePath === candidate,
+    );
 }
 
 // request-cleanup: a settled (cleanup-eligible) instance → cleanup-pending. Operator-approval gated by
@@ -268,12 +299,19 @@ async function removeManagedWorktree(
   ctx: CleanupCtx,
   repositoryRoot: string,
   worktreePath: string,
-): Promise<void> {
+): Promise<RemovalOutcome> {
   try {
     const adapter = ctx.deps.createAdapter(detectWorkspaceAt(repositoryRoot));
-    await adapter.removeWorktree({ worktreePath, force: true });
+    const removal = await adapter.removeWorktree({ worktreePath, force: true });
     await adapter.pruneWorktrees();
-    if (existsSync(worktreePath)) safelyRemoveManagedPath(ctx.deps.managedRoot, worktreePath);
+    if (existsSync(worktreePath)) {
+      const dirty = await probeCleanupDirty(ctx, worktreePath, true);
+      if (dirty || !removal.ok) {
+        return { removed: false, refusalReason: "worktree-dirty" };
+      }
+      safelyRemoveManagedPath(ctx.deps.managedRoot, worktreePath);
+    }
+    return { removed: true };
   } catch (error) {
     if (error instanceof TaskWorkspaceError) throw error;
     throw new TaskWorkspaceError("CLEANUP_FAILED", "governed worktree removal failed");
@@ -326,7 +364,19 @@ async function finalizeCleanup(
     lock: cleanupLock(ctx, requestedBy, nowMs),
     updatedAt: isoFrom(nowMs),
   });
-  await removeManagedWorktree(ctx, locked.repositoryRoot, locked.managedWorktreePath);
+  const removal = await removeManagedWorktree(
+    ctx,
+    locked.repositoryRoot,
+    locked.managedWorktreePath,
+  );
+  if (!removal.removed) {
+    const unlocked = ctx.deps.store.upsert({
+      ...locked,
+      lock: null,
+      updatedAt: isoFrom(ctx.deps.now()),
+    });
+    return refuseCleanup(ctx, unlocked, removal.refusalReason);
+  }
   if (ctx.deps.activePointerStore.get()?.workspaceId === locked.workspaceId) {
     ctx.deps.activePointerStore.clear();
   }
@@ -397,9 +447,12 @@ async function cleanupOneOrphan(
   repositoryId: string,
   leaf: string,
   ownershipProven: boolean,
-): Promise<WorkspaceOrphanRefusal | undefined> {
+): Promise<OrphanCleanupOutcome> {
   const orphanId = deriveOrphanId(repositoryId, leaf);
   const candidate = join(ctx.deps.managedRoot, repositoryId, leaf);
+  if (hasPersistedWorkspaceForCandidate(ctx, repositoryId, leaf, candidate)) {
+    return { removed: false };
+  }
   const pathContained = isManagedTargetContained(ctx.deps.managedRoot, candidate);
   // Fail closed: an orphan whose `git status` is inconclusive (broken pointer) is treated as dirty and
   // refused, never force-removed (SC4) — it may still hold uncommitted work.
@@ -413,7 +466,17 @@ async function cleanupOneOrphan(
     lockLive: false,
   });
   if (!decision.allowed) {
-    return { orphanId, refusalReason: decision.refusalReason ?? "path-escape" };
+    return {
+      removed: false,
+      refusal: { orphanId, refusalReason: decision.refusalReason ?? "path-escape" },
+    };
+  }
+  const stillDirty = await probeCleanupDirty(ctx, candidate, pathContained);
+  if (stillDirty) {
+    return {
+      removed: false,
+      refusal: { orphanId, refusalReason: "worktree-dirty" },
+    };
   }
   safelyRemoveManagedPath(ctx.deps.managedRoot, candidate);
   emit(ctx, {
@@ -424,7 +487,7 @@ async function cleanupOneOrphan(
     correlationId: orphanId,
     nowMs: ctx.deps.now(),
   });
-  return undefined;
+  return { removed: true };
 }
 
 function orphanLeavesFor(
@@ -495,14 +558,13 @@ async function cleanupOrphansImpl(
   for (const repositoryId of resolveOrphanRepositoryIds(ctx, request, knownByRepo)) {
     const known = knownByRepo.get(repositoryId) ?? new Set<string>();
     for (const leaf of orphanLeavesFor(ctx, repositoryId, known)) {
-      // Serialize each orphan removal under its derived `ws:` key (#449, ADR-0093 D1) so a sweep cannot
-      // race a concurrent provision that is re-materializing that exact managed directory.
-      const refusal = await ctx.deps.mutex.runExclusive(
-        [workspaceKey(deriveOrphanId(repositoryId, leaf))],
-        () => cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven),
+      // Serialize each candidate leaf and re-check persisted liveness inside the critical section. The
+      // initial known-path snapshot may be stale if a provision finishes while a sweep is walking disk.
+      const outcome = await ctx.deps.mutex.runExclusive([workspaceKey(leaf)], () =>
+        cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven),
       );
-      if (refusal === undefined) removed += 1;
-      else refused.push(refusal);
+      if (outcome.removed) removed += 1;
+      if (outcome.refusal !== undefined) refused.push(outcome.refusal);
     }
   }
   return { removed, refused };

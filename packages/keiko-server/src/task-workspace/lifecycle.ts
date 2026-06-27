@@ -28,8 +28,8 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { buildBinding } from "./binding.js";
 import { assertSafeFieldValue } from "./field-safety.js";
-import { deriveRepositoryId } from "./naming.js";
-import { managedTargetExists } from "./managed-root.js";
+import { deriveManagedWorktreePath, deriveRepositoryId } from "./naming.js";
+import { isManagedTargetContained, managedTargetExists } from "./managed-root.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
 import { activePointerKey, workspaceKey } from "./mutex.js";
 import { TaskWorkspaceError } from "./errors.js";
@@ -123,6 +123,35 @@ function loadInstance(ctx: LifecycleCtx, workspaceId: string): WorkspaceInstance
   return instance;
 }
 
+function assertBindableManagedPath(ctx: LifecycleCtx, instance: WorkspaceInstance): void {
+  const expected = deriveManagedWorktreePath({
+    managedRoot: ctx.deps.managedRoot,
+    repositoryId: instance.repositoryId,
+    workspaceId: instance.workspaceId,
+  });
+  if (
+    instance.managedWorktreePath !== expected ||
+    !isManagedTargetContained(ctx.deps.managedRoot, instance.managedWorktreePath)
+  ) {
+    throw new TaskWorkspaceError(
+      "POINTER_DRIFT",
+      "persisted managed worktree path is not bindable",
+    );
+  }
+}
+
+function canExposeBinding(ctx: LifecycleCtx, instance: WorkspaceInstance): boolean {
+  if (instance.lifecycleState !== "active" && instance.lifecycleState !== "handoff-ready") {
+    return false;
+  }
+  try {
+    assertBindableManagedPath(ctx, instance);
+  } catch {
+    return false;
+  }
+  return managedTargetExists(instance.managedWorktreePath);
+}
+
 // Resolves the #444 transition context for a direct (pause / handoff) action. The actor holds the
 // mutation lock by construction unless ANOTHER actor holds a live lock (then it is contention, not a
 // transition rejection). worktree-clean is the persisted drift signal; path-contained is the managed
@@ -138,7 +167,9 @@ function resolveTransitionContext(
   }
   return {
     lockHeldByActor: true,
-    pathContained: managedTargetExists(instance.managedWorktreePath),
+    pathContained:
+      isManagedTargetContained(ctx.deps.managedRoot, instance.managedWorktreePath) &&
+      managedTargetExists(instance.managedWorktreePath),
     worktreeClean: !instance.driftMarkers.includes("uncommitted-changes"),
     branchReady: true,
     providerReady: false,
@@ -234,6 +265,7 @@ async function setActiveImpl(
           "workspace state changed during activation; retry",
         );
       }
+      assertBindableManagedPath(ctx, current);
       return ctx.deps.activePointerStore.set({
         workspaceId: current.workspaceId,
         setBy: request.requestedBy,
@@ -251,6 +283,10 @@ function getActiveImpl(ctx: LifecycleCtx): ActiveWorkspaceView | undefined {
   if (instance === undefined) {
     // Defensive: a dangling pointer (instance deleted without the FK cascade firing) self-heals to
     // unbound mode rather than reporting a phantom active workspace.
+    ctx.deps.activePointerStore.clear();
+    return undefined;
+  }
+  if (!canExposeBinding(ctx, instance)) {
     ctx.deps.activePointerStore.clear();
     return undefined;
   }

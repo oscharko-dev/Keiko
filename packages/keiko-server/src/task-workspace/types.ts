@@ -135,6 +135,9 @@ export interface WorkspaceLifecycleService {
 export interface WorkspaceLifecycleServiceDeps {
   readonly store: WorkspaceInstanceStore;
   readonly activePointerStore: ActiveWorkspacePointerStore;
+  // The Keiko-owned managed worktree root. Active binding re-proves persisted paths are still
+  // contained before exposing them to task-bound surfaces.
+  readonly managedRoot: string;
   // Reused #445 service: setActive/resume delegate the lifecycle walk into `active` to it.
   readonly provisioning: WorkspaceProvisioningService;
   readonly evidenceStore: EvidenceStore;

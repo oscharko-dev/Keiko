@@ -63,7 +63,11 @@ import type {
 } from "./types.js";
 
 const MAX_FIELD_LENGTH = 512;
-const RESUMABLE_STATES: readonly TaskWorkspaceLifecycleState[] = ["active", "paused"];
+const RESUMABLE_STATES: readonly TaskWorkspaceLifecycleState[] = [
+  "active",
+  "paused",
+  "handoff-ready",
+];
 const COMPLETABLE_STATES: readonly TaskWorkspaceLifecycleState[] = [
   "provisioning",
   "failed",
@@ -123,6 +127,21 @@ function gitdirIdentity(worktreePath: string): string {
   }
   // Content-free, stable identity of the worktree's admin dir. The raw target stays in-process.
   return createHash("sha256").update(match[1].trim(), "utf8").digest("hex").slice(0, 32);
+}
+
+function assertPersistedManagedPath(ctx: ProvisioningCtx, instance: WorkspaceInstance): void {
+  assertManagedTargetContained(ctx.deps.managedRoot, instance.managedWorktreePath);
+  const expected = deriveManagedWorktreePath({
+    managedRoot: ctx.deps.managedRoot,
+    repositoryId: instance.repositoryId,
+    workspaceId: instance.workspaceId,
+  });
+  if (instance.managedWorktreePath !== expected) {
+    throw new TaskWorkspaceError(
+      "POINTER_DRIFT",
+      "persisted managed worktree path does not match its workspace identity",
+    );
+  }
 }
 
 // ─── lock helpers ──────────────────────────────────────────────────────────────────────────────
@@ -431,6 +450,7 @@ function resumeExisting(
   existing: WorkspaceInstance,
   nowMs: number,
 ): WorkspaceProvisionResult {
+  assertPersistedManagedPath(ctx, existing);
   const identity = gitdirIdentity(repo.worktreePath);
   const refreshed = ctx.deps.store.upsert({
     ...existing,
@@ -494,6 +514,7 @@ function reuseExistingOrUndefined(
   }
   if (!COMPLETABLE_STATES.includes(existing.lifecycleState)) {
     // Terminal state (archived/merged/abandoned/cleanup-pending): idempotent no-op, return as-is.
+    assertPersistedManagedPath(ctx, existing);
     return { instance: existing, binding: buildBinding(existing), created: false };
   }
   return undefined; // COMPLETABLE: fall through to (re)provision/complete.
@@ -588,7 +609,7 @@ function activateActiveOrResume(instance: WorkspaceInstance): {
     return { next: instance, type: "activated" };
   }
   const transition = validateTaskWorkspaceTransition({
-    from: "paused",
+    from: instance.lifecycleState,
     to: "active",
     context: {
       lockHeldByActor: true,
@@ -677,6 +698,7 @@ function activateLocked(
   }
   const nowMs = ctx.deps.now();
   assertActivatable(ctx, instance, request, nowMs);
+  assertPersistedManagedPath(ctx, instance);
   if (!managedTargetExists(instance.managedWorktreePath)) {
     flagActivateDrift(ctx, instance, nowMs);
   }

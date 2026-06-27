@@ -48,11 +48,16 @@ export function isWorkspaceDirty(instance: WorkspaceInstance): boolean {
 }
 
 function canSwitchTo(instance: WorkspaceInstance): boolean {
-  // setActive delegates to the #445 activation, which only walks `active`/`paused` → active.
-  return instance.lifecycleState === "active" || instance.lifecycleState === "paused";
+  // setActive delegates to the #445 activation, which walks active/paused/handoff-ready → active.
+  return (
+    instance.lifecycleState === "active" ||
+    instance.lifecycleState === "paused" ||
+    instance.lifecycleState === "handoff-ready"
+  );
 }
 
 function badge(label: string, tone: Tone, title?: string): ReactNode {
+  const toneVar = TONE_VAR[tone];
   const style: CSSProperties = {
     display: "inline-flex",
     alignItems: "center",
@@ -61,8 +66,9 @@ function badge(label: string, tone: Tone, title?: string): ReactNode {
     borderRadius: "var(--radius-sm, 4px)",
     fontSize: "0.72rem",
     fontWeight: 600,
-    color: "var(--text-on-accent, #fff)",
-    background: TONE_VAR[tone],
+    color: "var(--text-primary, #111)",
+    background: `color-mix(in oklch, ${toneVar} 18%, var(--surface-raised, var(--surface, transparent)))`,
+    border: `1px solid color-mix(in oklch, ${toneVar} 48%, var(--border-subtle, transparent))`,
   };
   return (
     <span className="tw-switcher-badge" style={style} title={title}>
@@ -187,9 +193,15 @@ export function TaskWorkspaceSwitcher(): ReactNode {
     active === null
       ? "No active task workspace"
       : `Active: ${active.taskId} on ${active.taskBranch} (${active.lifecycleState}, ${active.health})`;
+  const triggerLabel =
+    active === null
+      ? "Task workspace context: no active workspace"
+      : `Task workspace context: ${active.taskId}`;
 
   const repositoryRoot =
     api.activeInstance?.repositoryRoot ?? api.instances[0]?.repositoryRoot ?? null;
+  const createDisabled =
+    api.switching || repositoryRoot === null || taskId.trim() === "" || baseBranch.trim() === "";
 
   return (
     <div className="tw-switcher" style={{ position: "relative" }}>
@@ -199,6 +211,8 @@ export function TaskWorkspaceSwitcher(): ReactNode {
         className="tw-switcher-trigger"
         aria-expanded={open}
         aria-controls={panelId}
+        aria-describedby={statusId}
+        aria-label={triggerLabel}
         aria-busy={api.switching}
         onClick={() => {
           setOpen((value) => !value);
@@ -332,7 +346,7 @@ export function TaskWorkspaceSwitcher(): ReactNode {
             className="tw-switcher-create"
             onSubmit={(event) => {
               event.preventDefault();
-              if (repositoryRoot === null || taskId.trim() === "" || baseBranch.trim() === "") {
+              if (createDisabled || repositoryRoot === null) {
                 return;
               }
               void api
@@ -372,12 +386,8 @@ export function TaskWorkspaceSwitcher(): ReactNode {
             <button
               type="submit"
               className="tw-switcher-create-submit"
-              aria-disabled={
-                api.switching ||
-                repositoryRoot === null ||
-                taskId.trim() === "" ||
-                baseBranch.trim() === ""
-              }
+              disabled={createDisabled}
+              aria-disabled={createDisabled}
             >
               Create task workspace
             </button>
