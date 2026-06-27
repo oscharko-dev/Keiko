@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { GitDiffScope } from "@/lib/types";
+import type { GitDiffScope, GitHistoryEntry } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import { parseUnifiedDiff } from "../shared/diffParser";
 import { DiffFileSection } from "../shared/diffView";
 import type { GitClientSeam } from "./git-client-seam";
 import { formatGitError } from "./git-client-seam";
+import { HistoryCommitDetail } from "./HistoryPane";
 import {
   DIFF_HEADER_STYLE,
   disabledStyle,
@@ -42,6 +43,7 @@ interface DiffPaneProps {
   readonly client: GitClientSeam;
   readonly repositoryRoot: string | null;
   readonly selectedChangePath: string | null;
+  readonly selectedCommit: GitHistoryEntry | null;
   readonly scope: GitDiffScope;
   readonly onScopeChange: (scope: GitDiffScope) => void;
   /** Bumped after a staging/commit mutation so the visible diff reloads. */
@@ -54,6 +56,7 @@ export function DiffPane({
   client,
   repositoryRoot,
   selectedChangePath,
+  selectedCommit,
   scope,
   onScopeChange,
   revision,
@@ -63,6 +66,10 @@ export function DiffPane({
   const [state, setState] = useState<DiffState>(EMPTY_DIFF);
 
   useEffect(() => {
+    if (selectedCommit !== null) {
+      setState(EMPTY_DIFF);
+      return;
+    }
     if (repositoryRoot === null || selectedChangePath === null) {
       setState(EMPTY_DIFF);
       return;
@@ -82,7 +89,7 @@ export function DiffPane({
     return () => {
       cancelled = true;
     };
-  }, [client, repositoryRoot, selectedChangePath, scope, revision]);
+  }, [client, repositoryRoot, selectedChangePath, selectedCommit, scope, revision]);
 
   const binary = state.diff !== null && isBinaryDiff(state.diff);
   const parsed = useMemo(
@@ -93,7 +100,13 @@ export function DiffPane({
 
   return (
     <div style={PANE_STYLE}>
-      {selectedChangePath !== null ? (
+      {selectedCommit !== null ? (
+        <div style={DIFF_HEADER_STYLE}>
+          <span className="rv-filerow-path mono" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+            {selectedCommit.shortSha}
+          </span>
+        </div>
+      ) : selectedChangePath !== null ? (
         <div style={DIFF_HEADER_STYLE}>
           <span className="rv-filerow-path mono" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
             {selectedChangePath}
@@ -126,6 +139,7 @@ export function DiffPane({
       >
         <DiffBody
           selectedChangePath={selectedChangePath}
+          selectedCommit={selectedCommit}
           state={state}
           binary={binary}
           files={parsed?.files ?? null}
@@ -155,15 +169,18 @@ export function DiffPane({
 
 function DiffBody({
   selectedChangePath,
+  selectedCommit,
   state,
   binary,
   files,
 }: {
   readonly selectedChangePath: string | null;
+  readonly selectedCommit: GitHistoryEntry | null;
   readonly state: DiffState;
   readonly binary: boolean;
   readonly files: ReturnType<typeof parseUnifiedDiff>["files"] | null;
 }): ReactNode {
+  if (selectedCommit !== null) return <HistoryCommitDetail entry={selectedCommit} />;
   if (selectedChangePath === null) {
     return (
       <div className="rv-empty" aria-label="Diff">

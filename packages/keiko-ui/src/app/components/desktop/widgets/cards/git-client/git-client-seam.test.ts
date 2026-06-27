@@ -13,6 +13,8 @@ import {
   cloneRepository as fetchCloneRepository,
   createProject,
   fetchGitBranches,
+  fetchGitDeliverySyncExecute,
+  fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
   fetchGitDeliveryLocalBranchCreate,
@@ -22,6 +24,9 @@ import {
   fetchGitDeliveryStage,
   fetchGitDeliveryUnstage,
   fetchGitDiff,
+  fetchGitHistory,
+  fetchGitRemotes,
+  fetchGitSummary,
   fetchGitStatus,
   fetchProjects,
 } from "@/lib/api";
@@ -59,6 +64,18 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
     expect(DEFAULT_GIT_CLIENT.getStatus).toBe(fetchGitStatus);
   });
 
+  it("getSummary is fetchGitSummary", () => {
+    expect(DEFAULT_GIT_CLIENT.getSummary).toBe(fetchGitSummary);
+  });
+
+  it("getHistory is fetchGitHistory", () => {
+    expect(DEFAULT_GIT_CLIENT.getHistory).toBe(fetchGitHistory);
+  });
+
+  it("getRemotes is fetchGitRemotes", () => {
+    expect(DEFAULT_GIT_CLIENT.getRemotes).toBe(fetchGitRemotes);
+  });
+
   it("getDiff is fetchGitDiff", () => {
     expect(DEFAULT_GIT_CLIENT.getDiff).toBe(fetchGitDiff);
   });
@@ -85,6 +102,14 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
 
   it("commitExecute is fetchGitDeliveryCommitExecute", () => {
     expect(DEFAULT_GIT_CLIENT.commitExecute).toBe(fetchGitDeliveryCommitExecute);
+  });
+
+  it("syncPreview is fetchGitDeliverySyncPreview", () => {
+    expect(DEFAULT_GIT_CLIENT.syncPreview).toBe(fetchGitDeliverySyncPreview);
+  });
+
+  it("syncExecute is fetchGitDeliverySyncExecute", () => {
+    expect(DEFAULT_GIT_CLIENT.syncExecute).toBe(fetchGitDeliverySyncExecute);
   });
 
   it("pushPreview is fetchGitDeliveryPushPreview", () => {
@@ -246,6 +271,41 @@ describe("useGitActions", () => {
         truncated: false,
         maxChanges: 50,
       })),
+      getSummary: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: "/r",
+        state: "available" as const,
+        available: true,
+        branch: "main",
+        detached: false,
+        ahead: 0,
+        behind: 0,
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        conflictedCount: 0,
+        clean: true,
+        remotes: [],
+        truncated: false,
+      })),
+      getHistory: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: "/r",
+        state: "available" as const,
+        available: true,
+        entries: [],
+        limit: 50,
+        skip: 0,
+        truncated: false,
+      })),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: "/r",
+        state: "available" as const,
+        available: true,
+        remotes: [],
+        truncated: false,
+      })),
       getDiff: vi.fn(async () => ({
         schemaVersion: "1" as const,
         root: "/r",
@@ -286,6 +346,8 @@ describe("useGitActions", () => {
         status: "succeeded",
         actionKind: "commit",
       })),
+      syncPreview: vi.fn<GitClientSeam["syncPreview"]>(),
+      syncExecute: vi.fn<GitClientSeam["syncExecute"]>(),
       pushPreview: vi.fn<GitClientSeam["pushPreview"]>(),
       pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
         schemaVersion: "1",

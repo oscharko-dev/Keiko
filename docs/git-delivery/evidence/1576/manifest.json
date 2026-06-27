@@ -1,0 +1,52 @@
+{
+  "issue": "#1576",
+  "epic": "#1571",
+  "harness": "playwright.issue-1576-git-branch-sync.config.ts",
+  "appPath": "packaged-cli-ui",
+  "route": "/",
+  "evidencePath": "docs/git-delivery/evidence/1576",
+  "generatedAt": "2026-06-27T19:02:10.565Z",
+  "fixtureRoot": "/private/var/folders/nz/l9bkdcg15sn8tfbbt4gv0dfm0000gn/T/keiko-e2e-git-branch-sync-1576-0CQ7ni/worktree",
+  "localBareRemoteRoot": "/private/var/folders/nz/l9bkdcg15sn8tfbbt4gv0dfm0000gn/T/keiko-e2e-git-branch-sync-1576-0CQ7ni/remote.git",
+  "routesIntercepted": [
+    "/api/projects",
+    "/api/git/branches",
+    "/api/git/status",
+    "/api/git/summary",
+    "/api/git/history",
+    "/api/git/remotes",
+    "/api/git-delivery/local-branch/create",
+    "/api/git-delivery/local-branch/switch",
+    "/api/git-delivery/fetch/preview",
+    "/api/git-delivery/fetch/execute",
+    "/api/git-delivery/pull/preview",
+    "/api/git-delivery/pull/execute",
+    "/api/git-delivery/push/preview",
+    "/api/git-delivery/push/execute"
+  ],
+  "windowRegistration": {
+    "windowType": "governedGit",
+    "seededVia": "keiko.workspace.v4",
+    "renderedBy": "GitClientWindow",
+    "cfgPersistence": "fs-reference"
+  },
+  "statesCovered": [
+    "branch list and searchable branch switch",
+    "new branch from selected real branch data with hidden hash",
+    "history list and selected commit metadata",
+    "behind -> pull",
+    "ahead -> push",
+    "no upstream -> publish upstream",
+    "diverged -> fetch with merge guidance",
+    "detached and conflicted blocked sync states"
+  ],
+  "notes": [
+    "The fixture uses git init --bare plus a local worktree remote; no external network or credentials.",
+    "Read and mutation routes are intercepted for deterministic browser assertions.",
+    "Branch create uses headRefHash internally; the UI assertions verify hashes are not rendered."
+  ],
+  "artifacts": [
+    "manifest.json",
+    "git-branch-history-sync.png"
+  ]
+}

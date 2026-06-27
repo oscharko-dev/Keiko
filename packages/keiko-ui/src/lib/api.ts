@@ -29,6 +29,12 @@ import type {
   GitDiffScope,
   GitRepositoryDiffResponse,
   GitRepositoryStatusResponse,
+  GitHistoryResponse,
+  GitRepositorySummary,
+  GitRemotesResponse,
+  GitSyncExecuteResponse,
+  GitSyncOperation,
+  GitSyncPreview,
   GatewayReadinessOptions,
   GatewayReadinessReport,
   EditorDocumentVersion,
@@ -1037,6 +1043,30 @@ export async function fetchGitBranches(root: string): Promise<GitBranchListRespo
   return fetchJson(`/api/git/branches?${params.toString()}`);
 }
 
+export async function fetchGitSummary(root: string): Promise<GitRepositorySummary> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  return fetchJson(`/api/git/summary?${params.toString()}`);
+}
+
+export async function fetchGitHistory(input: {
+  readonly root: string;
+  readonly limit?: number | undefined;
+  readonly skip?: number | undefined;
+}): Promise<GitHistoryResponse> {
+  const params = new URLSearchParams();
+  params.set("root", input.root);
+  if (input.limit !== undefined) params.set("limit", input.limit.toString());
+  if (input.skip !== undefined) params.set("skip", input.skip.toString());
+  return fetchJson(`/api/git/history?${params.toString()}`);
+}
+
+export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  return fetchJson(`/api/git/remotes?${params.toString()}`);
+}
+
 export async function fetchGitDiff(input: {
   readonly root: string;
   readonly path?: string | undefined;
@@ -1670,6 +1700,48 @@ export async function fetchGitDeliveryPushExecute(
   return fetchJson("/api/git-delivery/push/execute", {
     method: "POST",
     body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// ─── Fetch / pull sync (Issue #1573 API, consumed by Issue #1576 UI) ─────────────────────────
+
+export interface GitDeliverySyncInput {
+  readonly operation: GitSyncOperation;
+  readonly projectId: string;
+  readonly remote?: string | undefined;
+}
+
+function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    ...(input.remote === undefined ? {} : { remote: input.remote }),
+  });
+}
+
+function gitDeliverySyncPath(operation: GitSyncOperation, phase: "preview" | "execute"): string {
+  return `/api/git-delivery/${operation}/${phase}`;
+}
+
+export async function fetchGitDeliverySyncPreview(
+  input: GitDeliverySyncInput,
+  signal?: AbortSignal,
+): Promise<GitSyncPreview> {
+  return fetchJson(gitDeliverySyncPath(input.operation, "preview"), {
+    method: "POST",
+    body: gitDeliverySyncBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliverySyncExecute(
+  input: GitDeliverySyncInput,
+  signal?: AbortSignal,
+): Promise<GitSyncExecuteResponse> {
+  return fetchJson(gitDeliverySyncPath(input.operation, "execute"), {
+    method: "POST",
+    body: gitDeliverySyncBody(input),
     ...(signal === undefined ? {} : { signal }),
   });
 }

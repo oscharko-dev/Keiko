@@ -28,6 +28,9 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     registerRepository: vi.fn<GitClientSeam["registerRepository"]>(),
     cloneRepository: vi.fn<GitClientSeam["cloneRepository"]>(),
     listBranches: vi.fn<GitClientSeam["listBranches"]>(),
+    getSummary: vi.fn<GitClientSeam["getSummary"]>(),
+    getHistory: vi.fn<GitClientSeam["getHistory"]>(),
+    getRemotes: vi.fn<GitClientSeam["getRemotes"]>(),
     getStatus: vi.fn<GitClientSeam["getStatus"]>(),
     getDiff: vi.fn(async () => makeDiffResponse("")),
     branchCreate: vi.fn<GitClientSeam["branchCreate"]>(async () => ok),
@@ -36,6 +39,8 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     unstage: vi.fn<GitClientSeam["unstage"]>(async () => ok),
     commitPreview: vi.fn<GitClientSeam["commitPreview"]>(),
     commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ok),
+    syncPreview: vi.fn<GitClientSeam["syncPreview"]>(),
+    syncExecute: vi.fn<GitClientSeam["syncExecute"]>(),
     pushPreview: vi.fn<GitClientSeam["pushPreview"]>(),
     pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ok),
     ...overrides,
@@ -50,6 +55,7 @@ function renderPane(props: Partial<Parameters<typeof DiffPane>[0]> = {}) {
       client={client}
       repositoryRoot="/repos/alpha"
       selectedChangePath="src/index.ts"
+      selectedCommit={null}
       scope="worktree"
       onScopeChange={onScopeChange}
       revision={0}

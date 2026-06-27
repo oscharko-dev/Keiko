@@ -17,6 +17,8 @@ import {
   cloneRepository as fetchCloneRepository,
   createProject,
   fetchGitBranches,
+  fetchGitDeliverySyncExecute,
+  fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
   fetchGitDeliveryLocalBranchCreate,
@@ -26,6 +28,9 @@ import {
   fetchGitDeliveryStage,
   fetchGitDeliveryUnstage,
   fetchGitDiff,
+  fetchGitHistory,
+  fetchGitRemotes,
+  fetchGitSummary,
   fetchGitStatus,
   fetchProjects,
   type GitDeliveryCommitPreviewResponse,
@@ -48,6 +53,9 @@ export interface GitClientSeam {
   readonly registerRepository: typeof createProject;
   readonly cloneRepository: typeof fetchCloneRepository;
   readonly listBranches: typeof fetchGitBranches;
+  readonly getSummary: typeof fetchGitSummary;
+  readonly getHistory: typeof fetchGitHistory;
+  readonly getRemotes: typeof fetchGitRemotes;
   readonly getStatus: typeof fetchGitStatus;
   readonly getDiff: typeof fetchGitDiff;
   // Carry-forward mutation refs (consumed by #1575/#1576/#1577, not by the shell).
@@ -57,6 +65,8 @@ export interface GitClientSeam {
   readonly unstage: typeof fetchGitDeliveryUnstage;
   readonly commitPreview: typeof fetchGitDeliveryCommitPreview;
   readonly commitExecute: typeof fetchGitDeliveryCommitExecute;
+  readonly syncPreview: typeof fetchGitDeliverySyncPreview;
+  readonly syncExecute: typeof fetchGitDeliverySyncExecute;
   readonly pushPreview: typeof fetchGitDeliveryPushPreview;
   readonly pushExecute: typeof fetchGitDeliveryPushExecute;
 }
@@ -66,6 +76,9 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   registerRepository: createProject,
   cloneRepository: fetchCloneRepository,
   listBranches: fetchGitBranches,
+  getSummary: fetchGitSummary,
+  getHistory: fetchGitHistory,
+  getRemotes: fetchGitRemotes,
   getStatus: fetchGitStatus,
   getDiff: fetchGitDiff,
   branchCreate: fetchGitDeliveryLocalBranchCreate,
@@ -74,6 +87,8 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   unstage: fetchGitDeliveryUnstage,
   commitPreview: fetchGitDeliveryCommitPreview,
   commitExecute: fetchGitDeliveryCommitExecute,
+  syncPreview: fetchGitDeliverySyncPreview,
+  syncExecute: fetchGitDeliverySyncExecute,
   pushPreview: fetchGitDeliveryPushPreview,
   pushExecute: fetchGitDeliveryPushExecute,
 };

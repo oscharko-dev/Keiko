@@ -8,7 +8,12 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GitBranchListResponse, GitDeliveryCommitPreviewResponse } from "@/lib/api";
-import type { GitRepositoryStatusResponse, ProjectWithAvailability } from "@/lib/types";
+import type {
+  GitHistoryResponse,
+  GitRepositoryStatusResponse,
+  GitRepositorySummary,
+  ProjectWithAvailability,
+} from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
 
@@ -92,6 +97,53 @@ function makeCommitPreview(): GitDeliveryCommitPreviewResponse {
   };
 }
 
+function makeSummary(overrides: Partial<GitRepositorySummary> = {}): GitRepositorySummary {
+  return {
+    schemaVersion: "1",
+    root: "/repos/alpha",
+    state: "available",
+    available: true,
+    branch: "main",
+    detached: false,
+    ahead: 0,
+    behind: 0,
+    stagedCount: 1,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    clean: false,
+    upstream: { ref: "origin/main", remote: "origin", branch: "main" },
+    remotes: [{ name: "origin" }],
+    truncated: false,
+    ...overrides,
+  };
+}
+
+function makeHistory(overrides: Partial<GitHistoryResponse> = {}): GitHistoryResponse {
+  return {
+    schemaVersion: "1",
+    root: "/repos/alpha",
+    state: "available",
+    available: true,
+    entries: [
+      {
+        sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        shortSha: "aaaaaaa",
+        subject: "feat: history detail",
+        author: "Ada",
+        date: "2026-06-27T10:00:00Z",
+        refs: ["HEAD -> main"],
+        parentCount: 1,
+        changedFileCount: 2,
+      },
+    ],
+    limit: 50,
+    skip: 0,
+    truncated: false,
+    ...overrides,
+  };
+}
+
 // ─── makeClient factory ────────────────────────────────────────────────────────
 
 function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
@@ -100,6 +152,16 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     registerRepository: vi.fn(async () => ({ project: REPO_A })),
     cloneRepository: vi.fn(async () => ({ project: REPO_A })),
     listBranches: vi.fn(async () => makeBranchList()),
+    getSummary: vi.fn(async () => makeSummary()),
+    getHistory: vi.fn(async () => makeHistory({ entries: [] })),
+    getRemotes: vi.fn(async () => ({
+      schemaVersion: "1" as const,
+      root: "/repos/alpha",
+      state: "available" as const,
+      available: true,
+      remotes: [{ name: "origin" }],
+      truncated: false,
+    })),
     getStatus: vi.fn(async () => makeStatus()),
     getDiff: vi.fn(async () => ({
       schemaVersion: "1" as const,
@@ -139,6 +201,8 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       status: "succeeded",
       actionKind: "commit",
     })),
+    syncPreview: vi.fn<GitClientSeam["syncPreview"]>(),
+    syncExecute: vi.fn<GitClientSeam["syncExecute"]>(),
     pushPreview: vi.fn<GitClientSeam["pushPreview"]>(),
     pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ({
       schemaVersion: "1",
@@ -393,6 +457,77 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       render(<GitClientWindow projectId={REPO_A.path} client={client} />);
       await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
       expect(screen.getByRole("status", { name: /^Sync/ })).toBeInTheDocument();
+    });
+
+    it("branch selector exposes searchable listbox controls", async () => {
+      const user = userEvent.setup();
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      await waitFor(() =>
+        expect(screen.getByRole("combobox", { name: "Branch" })).toBeInTheDocument(),
+      );
+
+      await user.click(screen.getByRole("combobox", { name: "Branch" }));
+
+      expect(screen.getByRole("searchbox", { name: "Search branches" })).toBeInTheDocument();
+      expect(screen.getByRole("listbox", { name: "Branches" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /main/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
+
+    it("new-branch dialog is modal, initially focuses the branch-name input, and traps Tab", async () => {
+      const user = userEvent.setup();
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      await waitFor(() => expect(screen.getByRole("button", { name: "New branch" })).toBeEnabled());
+
+      await user.click(screen.getByRole("button", { name: "New branch" }));
+
+      const dialog = screen.getByRole("dialog", { name: "New branch" });
+      expect(dialog).toHaveAttribute("aria-modal", "true");
+      expect(within(dialog).getByLabelText("Branch name")).toHaveFocus();
+      within(dialog).getByRole("button", { name: "Cancel" }).focus();
+      fireEvent.keyDown(dialog, { key: "Tab" });
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+
+    it("history list and selected commit details expose name, role, and selected value", async () => {
+      const user = userEvent.setup();
+      const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
+      render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+      await user.click(screen.getByRole("tab", { name: "History" }));
+
+      const listbox = await screen.findByRole("listbox", { name: "Commit history" });
+      expect(listbox).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /feat: history detail/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(screen.getByRole("region", { name: "Commit details" })).toBeInTheDocument();
+    });
+
+    it("detached and conflicted states expose alert guidance and disabled sync actions", async () => {
+      const detachedClient = makeClient({
+        getStatus: vi.fn(async () => makeStatus({ detached: true, branch: undefined })),
+        getSummary: vi.fn(async () => makeSummary({ detached: true, branch: undefined })),
+      });
+      const { rerender } = render(
+        <GitClientWindow projectId={REPO_A.path} client={detachedClient} />,
+      );
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Detached HEAD");
+      expect(screen.getByRole("button", { name: "Run sync: Detached HEAD" })).toBeDisabled();
+
+      const conflictedClient = makeClient({
+        getStatus: vi.fn(async () => makeStatus({ conflictedCount: 1, clean: false })),
+        getSummary: vi.fn(async () => makeSummary({ conflictedCount: 1, clean: false })),
+      });
+      rerender(<GitClientWindow projectId={REPO_A.path} client={conflictedClient} />);
+
+      await waitFor(() =>
+        expect(screen.getByRole("alert")).toHaveTextContent("Resolve conflicted files"),
+      );
+      expect(screen.getByRole("button", { name: "Run sync: Resolve conflicts" })).toBeDisabled();
     });
   });
 
