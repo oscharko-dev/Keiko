@@ -22,7 +22,7 @@ function validSummary(): Record<string, unknown> {
     untrackedCount: 0,
     conflictedCount: 0,
     clean: false,
-    remotes: [{ name: "origin", fetchUrl: "u", pushUrl: "u" }],
+    remotes: [{ name: "origin" }],
     lastSync: { lastFetchAtMs: 1700000000000 },
     truncated: false,
   };
@@ -35,7 +35,7 @@ function validRemotes(): Record<string, unknown> {
     repositoryRoot: "/repo",
     state: "available",
     available: true,
-    remotes: [{ name: "origin" }],
+    remotes: [{ name: "origin", fetchUrl: "u", pushUrl: "u" }],
     truncated: false,
   };
 }
@@ -125,25 +125,25 @@ describe("validateGitRepositorySummary", () => {
     if (!result.ok) expect(result.reasons).toContain("remotes[0].name must be a string");
   });
 
-  it("rejects a remote with a non-string fetchUrl when present", () => {
+  it("rejects remote URL fields in the compact summary", () => {
     const result = validateGitRepositorySummary({
       ...validSummary(),
-      remotes: [{ name: "origin", fetchUrl: 1 }],
+      remotes: [{ name: "origin", fetchUrl: "https://example.invalid/repo.git" }],
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reasons).toContain("remotes[0].fetchUrl must be a string when present");
+      expect(result.reasons).toContain("remotes[0].fetchUrl is not allowed in summary");
     }
   });
 
-  it("rejects a remote with a non-string pushUrl when present", () => {
+  it("rejects remote push URL fields in the compact summary", () => {
     const result = validateGitRepositorySummary({
       ...validSummary(),
-      remotes: [{ name: "origin", pushUrl: 1 }],
+      remotes: [{ name: "origin", pushUrl: "https://example.invalid/repo.git" }],
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reasons).toContain("remotes[0].pushUrl must be a string when present");
+      expect(result.reasons).toContain("remotes[0].pushUrl is not allowed in summary");
     }
   });
 
@@ -187,5 +187,33 @@ describe("validateGitRemotesResponse", () => {
     const result = validateGitRemotesResponse({ ...validRemotes(), remotes: [{ name: 1 }] });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reasons).toContain("remotes[0].name must be a string");
+  });
+
+  it("rejects a remote with a non-string fetchUrl when present", () => {
+    const result = validateGitRemotesResponse({
+      ...validRemotes(),
+      remotes: [{ name: "origin", fetchUrl: 1 }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons).toContain("remotes[0].fetchUrl must be a string when present");
+    }
+  });
+
+  it("rejects a remote with a non-string pushUrl when present", () => {
+    const result = validateGitRemotesResponse({
+      ...validRemotes(),
+      remotes: [{ name: "origin", pushUrl: 1 }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons).toContain("remotes[0].pushUrl must be a string when present");
+    }
+  });
+
+  it("rejects a non-object remote entry", () => {
+    const result = validateGitRemotesResponse({ ...validRemotes(), remotes: ["origin"] });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasons).toContain("remotes[0] must be an object");
   });
 });

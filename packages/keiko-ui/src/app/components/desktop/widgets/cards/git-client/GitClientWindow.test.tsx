@@ -640,7 +640,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
 
-    await user.click(screen.getByRole("combobox", { name: "Branch" }));
+    await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
     const search = screen.getByRole("searchbox", { name: "Search branches" });
     await user.type(search, "feat");
 
@@ -656,6 +656,30 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         branchName: "feat/x",
       }),
     );
+    expect(screen.getByRole("combobox", { name: "Branch: main" })).toHaveFocus();
+  });
+
+  it("keeps the current branch option focusable for keyboard users", async () => {
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+
+    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
+    const search = screen.getByRole("searchbox", { name: "Search branches" });
+    await user.keyboard("{ArrowDown}");
+
+    expect(search).not.toHaveFocus();
+    expect(screen.getByRole("option", { name: /main/ })).toHaveFocus();
+  });
+
+  it("restores focus to the branch trigger when the popup is dismissed", async () => {
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+
+    const trigger = await screen.findByRole("combobox", { name: "Branch: main" });
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("creates a new branch from a real base branch while keeping hashes out of the UI", async () => {
@@ -686,6 +710,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     });
     expect(document.body).not.toHaveTextContent("aaa");
     expect(document.body).not.toHaveTextContent("bbb");
+    await waitFor(() => expect(screen.getByRole("button", { name: "New branch" })).toHaveFocus());
   });
 
   it("renders commit history and selected commit diff metadata", async () => {
@@ -1062,7 +1087,7 @@ describe("GitClientWindow — required visible / absent words", () => {
   it("renders 'Branch' as the branch combobox label in the toolbar", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Branch" })).toBeInTheDocument(),
+      expect(screen.getByRole("combobox", { name: "Branch: main" })).toBeInTheDocument(),
     );
   });
 

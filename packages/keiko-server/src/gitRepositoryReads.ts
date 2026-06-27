@@ -166,6 +166,7 @@ function buildSummary(
   lastSync: GitLastSyncMetadata | undefined,
 ): GitRepositorySummary {
   const parsed = parsePorcelainV2Branch(status.stdout);
+  const remoteAliases = remotes.map((remote) => ({ name: remote.name }));
   return {
     schemaVersion: GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION,
     root: repo.root,
@@ -182,7 +183,7 @@ function buildSummary(
     untrackedCount: parsed.untrackedCount,
     conflictedCount: parsed.conflictedCount,
     clean: !parsed.dirty,
-    remotes,
+    remotes: remoteAliases,
     lastSync,
     truncated: status.truncated,
   };

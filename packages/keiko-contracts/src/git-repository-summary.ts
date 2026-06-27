@@ -17,6 +17,10 @@ export interface GitRemoteSummary {
   readonly pushUrl?: string | undefined;
 }
 
+export interface GitRepositorySummaryRemote {
+  readonly name: string;
+}
+
 export interface GitUpstreamSummary {
   readonly ref: string; // e.g. "origin/main"
   readonly remote?: string | undefined;
@@ -45,7 +49,7 @@ export interface GitRepositorySummary {
   readonly untrackedCount: number;
   readonly conflictedCount: number;
   readonly clean: boolean;
-  readonly remotes: readonly GitRemoteSummary[];
+  readonly remotes: readonly GitRepositorySummaryRemote[];
   readonly lastSync?: GitLastSyncMetadata | undefined;
   readonly truncated: boolean;
 }
@@ -80,12 +84,26 @@ function isNonNegativeInteger(input: unknown): input is number {
   return typeof input === "number" && Number.isInteger(input) && input >= 0;
 }
 
-function validateRemote(input: unknown, reasons: string[], index: number): void {
+function validateRemote(
+  input: unknown,
+  reasons: string[],
+  index: number,
+  options: { readonly allowUrls: boolean },
+): void {
   if (!isRecord(input)) {
     reasons.push(`remotes[${String(index)}] must be an object`);
     return;
   }
   if (!isString(input.name)) reasons.push(`remotes[${String(index)}].name must be a string`);
+  if (!options.allowUrls) {
+    if (input.fetchUrl !== undefined) {
+      reasons.push(`remotes[${String(index)}].fetchUrl is not allowed in summary`);
+    }
+    if (input.pushUrl !== undefined) {
+      reasons.push(`remotes[${String(index)}].pushUrl is not allowed in summary`);
+    }
+    return;
+  }
   if (input.fetchUrl !== undefined && !isString(input.fetchUrl)) {
     reasons.push(`remotes[${String(index)}].fetchUrl must be a string when present`);
   }
@@ -94,13 +112,17 @@ function validateRemote(input: unknown, reasons: string[], index: number): void 
   }
 }
 
-function validateRemotesArray(input: unknown, reasons: string[]): void {
+function validateRemotesArray(
+  input: unknown,
+  reasons: string[],
+  options: { readonly allowUrls: boolean },
+): void {
   if (!Array.isArray(input)) {
     reasons.push("remotes must be an array");
     return;
   }
   input.forEach((remote, index) => {
-    validateRemote(remote, reasons, index);
+    validateRemote(remote, reasons, index, options);
   });
 }
 
@@ -131,7 +153,7 @@ export function validateGitRepositorySummary(input: unknown): GitRepositoryValid
   ] as const) {
     if (!isNonNegativeInteger(input[key])) reasons.push(`${key} must be a non-negative integer`);
   }
-  validateRemotesArray(input.remotes, reasons);
+  validateRemotesArray(input.remotes, reasons, { allowUrls: false });
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
@@ -147,6 +169,6 @@ export function validateGitRemotesResponse(input: unknown): GitRepositoryValidat
   }
   if (!isBoolean(input.available)) reasons.push("available must be a boolean");
   if (!isBoolean(input.truncated)) reasons.push("truncated must be a boolean");
-  validateRemotesArray(input.remotes, reasons);
+  validateRemotesArray(input.remotes, reasons, { allowUrls: true });
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }

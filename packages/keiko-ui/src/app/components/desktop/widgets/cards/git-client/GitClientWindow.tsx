@@ -103,6 +103,7 @@ export function GitClientWindow({
   const [syncOutcome, setSyncOutcome] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const syncSeqRef = useRef(0);
+  const newBranchReturnFocusRef = useRef<HTMLElement | null>(null);
 
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
@@ -113,6 +114,19 @@ export function GitClientWindow({
   const resetBranchActions = branchActions.reset;
   const resetStaging = staging.reset;
   const resetCommit = commit.reset;
+
+  const openNewBranchDialog = useCallback((): void => {
+    newBranchReturnFocusRef.current =
+      typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null);
+    setNewBranchOpen(true);
+  }, []);
+
+  const closeNewBranchDialog = useCallback((): void => {
+    setNewBranchOpen(false);
+    const target = newBranchReturnFocusRef.current;
+    newBranchReturnFocusRef.current = null;
+    if (target !== null) queueMicrotask(() => target.focus());
+  }, []);
 
   const loadRepositories = useCallback((): void => {
     setReposLoading(true);
@@ -302,10 +316,10 @@ export function GitClientWindow({
   const branchOutcome = branchActions.flow.outcome;
   useEffect(() => {
     if (branchOutcome?.status === "succeeded") {
-      setNewBranchOpen(false);
+      closeNewBranchDialog();
       setStatusRevision((r) => r + 1);
     }
-  }, [branchOutcome]);
+  }, [branchOutcome, closeNewBranchDialog]);
 
   const selectRepository = useCallback(
     (path: string): void => {
@@ -524,7 +538,7 @@ export function GitClientWindow({
         syncError={syncError}
         onSelectRepository={selectRepository}
         onSwitchBranch={switchBranch}
-        onCreateBranch={() => setNewBranchOpen(true)}
+        onCreateBranch={openNewBranchDialog}
         onRunSync={runSync}
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
@@ -602,7 +616,7 @@ export function GitClientWindow({
           busy={branchActions.flow.busy}
           error={branchActions.flow.error}
           onCreate={createBranch}
-          onClose={() => setNewBranchOpen(false)}
+          onClose={closeNewBranchDialog}
         />
       ) : null}
     </div>
