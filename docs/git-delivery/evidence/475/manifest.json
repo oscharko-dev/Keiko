@@ -5,7 +5,7 @@
   "appPath": "packaged-cli-ui",
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/475",
-  "generatedAt": "2026-06-25T20:49:17.895Z",
+  "generatedAt": "2026-06-27T11:34:19.487Z",
   "governedRoutes": [
     "/api/git-delivery/commit/preview",
     "/api/git-delivery/commit/execute"

@@ -171,7 +171,7 @@ async function openGovernedPrWindow(page: Page, ledger: RouteLedger): Promise<vo
 }
 
 async function fillTarget(page: Page, base: string): Promise<void> {
-  await page.getByLabel("Repository owner and name").fill("oscharko-dev/Keiko");
+  await page.getByLabel("Repository (owner/repo)").fill("oscharko-dev/Keiko");
   await page.getByLabel("Base branch").fill(base);
   await page.getByLabel("Pull request title").fill("feat: governed pr command center");
 }
@@ -181,7 +181,7 @@ async function fillTarget(page: Page, base: string): Promise<void> {
 async function assertBlockedBaseIsBlocked(page: Page, ledger: RouteLedger): Promise<void> {
   await fillTarget(page, BLOCKED_BASE);
 
-  await page.getByRole("button", { name: "Preview" }).click();
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
   const readiness = page.getByTestId("gpr-readiness");
   await expect(readiness).toBeVisible();
   await expect(readiness).toContainText("Policy: blocked");

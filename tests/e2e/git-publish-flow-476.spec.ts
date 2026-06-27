@@ -159,9 +159,9 @@ async function openGovernedWindow(page: Page, ledger: RouteLedger): Promise<void
   await seedGovernedGitWindow(page);
   await page.goto("/");
   await expect(page.locator("body")).toBeVisible();
-  await expect(page.getByRole("heading", { name: /Governed Git/u })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Repository Manager" })).toBeVisible();
   await expect(page.getByTestId("ggit-empty")).toHaveCount(0);
-  await expect(page.getByLabel("Publish")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Publish" })).toBeVisible();
 }
 
 async function fillPublishTarget(page: Page, remoteBranch: string): Promise<void> {
