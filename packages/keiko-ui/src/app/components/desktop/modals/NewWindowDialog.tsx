@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import {
   ApiError,
@@ -28,6 +28,7 @@ import {
 import KeikoSelect from "../KeikoSelect";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
+import { useI18n, type I18nTranslate } from "@/lib/i18n";
 
 interface NewWindowDialogProps {
   readonly type: WindowType;
@@ -43,6 +44,24 @@ function initialCfg(fields: readonly ConfigField[]): Cfg {
     out[f.key] = f.def ?? "";
   }
   return out;
+}
+
+function localizedNewWindowFields(
+  type: WindowType,
+  fields: readonly ConfigField[],
+  t: I18nTranslate,
+): readonly ConfigField[] {
+  if (type !== "chat") return fields;
+  return fields.map((field) =>
+    field.key === "title"
+      ? {
+          ...field,
+          label: t("newWindow.chat.fieldTitle"),
+          def: t("newWindow.chat.defaultTitle"),
+          placeholder: t("newWindow.chat.placeholder"),
+        }
+      : field,
+  );
 }
 
 function focusableInside(root: HTMLElement): readonly HTMLElement[] {
@@ -1052,8 +1071,12 @@ export function NewWindowDialog({
   onConfirm,
   onClose,
 }: NewWindowDialogProps): ReactNode {
+  const { t: translate } = useI18n();
   const t = types[type];
-  const fields = t.config ?? [];
+  const fields = useMemo(
+    () => localizedNewWindowFields(type, t.config ?? [], translate),
+    [translate, t.config, type],
+  );
   const [cfg, setCfg] = useState<Cfg>(() => initialCfg(fields));
   const [shown, setShown] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
@@ -1061,6 +1084,9 @@ export function NewWindowDialog({
   const firstFieldRef = useRef<HTMLElement | null>(null);
   const dlgRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const dialogTitle = type === "chat" ? translate("newWindow.chat.title") : `New ${t.title} window`;
+  const dialogDesc = type === "chat" ? translate("newWindow.chat.description") : t.desc;
+  const cta = type === "chat" ? translate("newWindow.chat.open") : (t.cta ?? `Open ${t.title}`);
 
   useEffect(() => {
     // capture the element that opened this dialog so we can return focus on close
@@ -1178,7 +1204,6 @@ export function NewWindowDialog({
   };
 
   const Icon = Icons[t.icon];
-  const cta = t.cta ?? `Open ${t.title}`;
 
   return (
     <div className={"dlg-overlay" + (shown ? " in" : "")} onPointerDown={onClose}>
@@ -1200,10 +1225,10 @@ export function NewWindowDialog({
           </span>
           <div className="dlg-htext">
             <span id="new-window-title" className="dlg-title">
-              New {t.title} window
+              {dialogTitle}
             </span>
             <span id="new-window-desc" className="dlg-sub">
-              {t.desc}
+              {dialogDesc}
             </span>
           </div>
           <span className="spacer" />
@@ -1211,8 +1236,8 @@ export function NewWindowDialog({
             type="button"
             className="palette-x"
             onClick={onClose}
-            aria-label="Cancel"
-            title="Cancel"
+            aria-label={translate("common.cancel")}
+            title={translate("common.cancel")}
           >
             <Icons.close size={16} />
           </button>
@@ -1240,7 +1265,9 @@ export function NewWindowDialog({
               <label className="dlg-field" key={f.key}>
                 <span className="dlg-label">
                   {f.label}
-                  {f.optional === true && <span className="dlg-opt">optional</span>}
+                  {f.optional === true && (
+                    <span className="dlg-opt">{translate("common.optional")}</span>
+                  )}
                 </span>
                 {renderField(
                   f,
@@ -1272,7 +1299,7 @@ export function NewWindowDialog({
         {type !== "agents" ? (
           <div className="dlg-foot">
             <button type="button" className="dlg-btn" onClick={onClose}>
-              Cancel
+              {translate("common.cancel")}
             </button>
             <button type="button" className="dlg-btn dlg-primary" onClick={submit}>
               {cta}

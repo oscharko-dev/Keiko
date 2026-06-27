@@ -4984,33 +4984,34 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .settings-language-select {
   width: auto;
-  min-height: 30px;
-  padding: 0 10px;
+  min-width: 132px;
+  min-height: var(--control-height);
+  padding: 0 10px 0 11px;
+  gap: 8px;
   border-radius: var(--radius-control);
+  border: 1px solid var(--combobox-border);
   border-color: var(--combobox-border);
   background: var(--combobox-surface);
-  color: var(--fg);
-  font-size: 14px;
-  font-weight: 650;
-  box-shadow: none;
+  color: var(--input-text);
+  font-size: var(--text-body-sm);
+  font-weight: var(--weight-semibold);
+  box-shadow: 0 1px 0 var(--border-subtle) inset;
 }
-.settings-language-flag {
-  width: 19px;
-  height: 11px;
-  flex-shrink: 0;
-  border-radius: 1px;
-  box-shadow: 0 0 0 1px var(--line) inset;
-  background:
-    linear-gradient(var(--accent) 0 0) left top / 8px 6px no-repeat,
-    repeating-linear-gradient(to bottom, var(--danger) 0 1px, var(--surface) 1px 2px);
+.settings-language-select:hover {
+  border-color: var(--input-border-focus);
+  background: var(--input-surface);
 }
-:root[data-locale="de"] .settings-language-flag {
-  background: linear-gradient(
-    to bottom,
-    var(--fg) 0 33.33%,
-    var(--danger) 33.33% 66.66%,
-    var(--warn) 66.66% 100%
-  );
+.settings-language-select:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px var(--input-ring-focus);
+}
+.settings-language-select .ksel-trigger-leading,
+.settings-language-select .ksel-trigger-caret {
+  color: var(--text-accent);
+}
+.settings-language-select .ksel-trigger-copy {
+  flex: 0 1 auto;
 }
 .gpref-val {
   font-size: 12px;

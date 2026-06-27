@@ -270,7 +270,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
       },
       () => {
         setCopyState("failed");
-        setStatus("Clipboard access failed. Select the answer manually and copy it.");
+        setStatus(t("chat.copy.failedStatus"));
       },
     );
   }, [content, t]);
@@ -378,7 +378,7 @@ function ChatBubbleImpl({
                   }}
                 >
                   <Icons.chevron size={12} aria-hidden="true" />
-                  <span>{collapsed ? "Expand answer" : "Collapse answer"}</span>
+                  <span>{collapsed ? t("chat.answer.expand") : t("chat.answer.collapse")}</span>
                 </button>
               ) : null}
             </div>
@@ -408,12 +408,13 @@ function ChatBubbleImpl({
 const ChatBubble = memo(ChatBubbleImpl);
 
 function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): ReactNode {
+  const { t } = useI18n();
   return (
     <div
       className="chat-msg-brand"
       data-pulsing={pulsing ? "true" : "false"}
       role="img"
-      aria-label="Keiko logo"
+      aria-label={t("chat.keikoLogo")}
     >
       <Image src="/assets/keiko-logo.svg" width={22} height={22} alt="" aria-hidden="true" />
     </div>
@@ -421,6 +422,7 @@ function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): 
 }
 
 function TypingBubble(): ReactNode {
+  const { t } = useI18n();
   return (
     <article className="chat-msg" data-role="assistant">
       <div className="chat-msg-bubble">
@@ -428,7 +430,7 @@ function TypingBubble(): ReactNode {
         {/* uiux-fix F042 (C319) — aria-label is prohibited on a generic span and
             ignored by AT; role="img" makes the label exposed. The lifecycle
             announcement itself comes from SendLifecycleStatus. */}
-        <span className="chat-typing" role="img" aria-label="Keiko is responding">
+        <span className="chat-typing" role="img" aria-label={t("chat.keikoResponding")}>
           <i />
           <i />
           <i />
@@ -1224,14 +1226,14 @@ function ComposerBar({
 
   // AC #2 / title for disabled model select.
   const selectTitle = noEligibleModels
-    ? "No conversation-eligible model is configured — connect a gateway in Settings"
-    : "Model";
+    ? t("chat.model.noneConfiguredTitle")
+    : t("chat.model.title");
   const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
   const compactModelTip = loading
-    ? "Loading models…"
+    ? t("chat.model.loading")
     : noEligibleModels
-      ? "No conversation-eligible model"
-      : "Change model";
+      ? t("chat.model.noEligible")
+      : t("chat.model.change");
 
   return (
     <div className={`cmp-bar${barCompact ? " cmp-bar-compact" : ""}`}>
@@ -1254,29 +1256,29 @@ function ComposerBar({
           <KeikoSelect
             triggerClassName="cmp-model-select"
             value={selectValue}
-            ariaLabel="Models"
+            ariaLabel={t("chat.model.menuTitle")}
             ariaDescribedBy={selectDescribedBy}
             disabled={loading}
             placeholder={
               loading
-                ? "Loading models…"
+                ? t("chat.model.loading")
                 : noEligibleModels
-                  ? "No conversation-eligible model"
-                  : "Models"
+                  ? t("chat.model.noEligible")
+                  : t("chat.model.menuTitle")
             }
             leadingVisual={
               <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
             }
-            menuTitle="Models"
+            menuTitle={t("chat.model.menuTitle")}
             menuClassName="cmp-model-menu"
             menuMinWidth={controlsNarrow ? 118 : 280}
             mono
             sections={[
               {
                 options: loading
-                  ? [{ value: "", label: "Loading models…", disabled: true }]
+                  ? [{ value: "", label: t("chat.model.loading"), disabled: true }]
                   : noEligibleModels
-                    ? [{ value: "", label: "No conversation-eligible model", disabled: true }]
+                    ? [{ value: "", label: t("chat.model.noEligible"), disabled: true }]
                     : modelList(models).map((model) => ({
                         value: model.id,
                         label: model.id,
@@ -1413,10 +1415,11 @@ function NoModelAlert(): ReactNode {
 // screen-reader users hear the state without interruption. No fake progress
 // percentage — engineering note forbids it.
 function LoadingStatus(): ReactNode {
+  const { t } = useI18n();
   return (
     <div id={LOADING_STATUS_ID} role="status" className="cmp-loading-status">
       <span className="cmp-loading-dot" aria-hidden="true" />
-      Connecting to your gateway…
+      {t("chat.loadingGateway")}
     </div>
   );
 }
@@ -1449,7 +1452,17 @@ export function sendStatusLabel(status: SendStatus): string {
 // without interruption. Hidden when there is nothing to say (idle/completed/
 // failed — the error string carries its own role="alert").
 function SendLifecycleStatus({ status }: { readonly status: SendStatus }): ReactNode {
-  const label = sendStatusLabel(status);
+  const { t } = useI18n();
+  const label =
+    status === "queued"
+      ? t("chat.send.statusQueued")
+      : status === "contacting"
+        ? t("chat.send.statusContacting")
+        : status === "streaming"
+          ? t("chat.send.statusStreaming")
+          : status === "cancelled"
+            ? t("chat.send.statusCancelled")
+            : "";
   // uiux-fix F041 (C170, WCAG 4.1.3) — the live region stays permanently mounted
   // and only its CONTENT changes: a role="status" region inserted into the DOM
   // together with its first message is unreliably announced (VoiceOver/Safari,
@@ -2019,16 +2032,21 @@ interface EmptyComposerStateProps {
 }
 
 function EmptyComposerState({ minimal = false }: EmptyComposerStateProps): ReactNode {
+  const { t } = useI18n();
   if (minimal) {
     return (
-      <div className="chatw-empty chatw-empty-minimal" role="note" aria-label="Conversation ready">
-        <h2 className="chatw-empty-headline">How can I help you today?</h2>
+      <div
+        className="chatw-empty chatw-empty-minimal"
+        role="note"
+        aria-label={t("chat.conversationReady")}
+      >
+        <h2 className="chatw-empty-headline">{t("chat.empty.headline")}</h2>
       </div>
     );
   }
   return (
     <div className="chatw-empty">
-      <h2 className="chatw-empty-headline">How can I help you today?</h2>
+      <h2 className="chatw-empty-headline">{t("chat.empty.headline")}</h2>
     </div>
   );
 }
@@ -2036,15 +2054,14 @@ function EmptyComposerState({ minimal = false }: EmptyComposerStateProps): React
 // Rendered when no chat has been selected yet (activeChat is undefined).
 // Instructs the user to pick or start a chat from the project sidebar.
 function NoChatState(): ReactNode {
+  const { t } = useI18n();
   return (
     <div className="chatw-empty-no-chat">
       <div className="chatw-empty-no-chat-icon" aria-hidden="true">
         <Icons.spark size={20} />
       </div>
-      <p className="chatw-empty-no-chat-label">Pick or start a chat</p>
-      <p className="chatw-empty-no-chat-hint">
-        Select a conversation from the project sidebar, or create a new one to get started.
-      </p>
+      <p className="chatw-empty-no-chat-label">{t("chat.empty.noChat.title")}</p>
+      <p className="chatw-empty-no-chat-hint">{t("chat.empty.noChat.hint")}</p>
     </div>
   );
 }
@@ -2056,6 +2073,7 @@ function ChatHero({
   readonly session: ChatSessionApi;
   readonly ready: boolean;
 }): ReactNode {
+  const { t } = useI18n();
   const { loading, activeProject, sendMessage } = session;
   return (
     <form
@@ -2065,13 +2083,11 @@ function ChatHero({
         void sendMessage();
       }}
     >
-      <h1 className="composer-title">What should we build?</h1>
+      <h1 className="composer-title">{t("chat.hero.title")}</h1>
       <ComposerCore
         session={session}
         ready={ready}
-        placeholder={
-          loading ? "Loading local workspace…" : "Describe a task, paste a link, or ask anything…"
-        }
+        placeholder={loading ? t("chat.hero.loadingWorkspace") : t("chat.hero.placeholder")}
       />
       <div className="cmp-context">
         {activeProject !== undefined && (
@@ -2083,7 +2099,7 @@ function ChatHero({
         )}
         <button type="button" className="chip">
           <Icons.cube size={14} style={{ color: "var(--fg-dim)" }} />
-          <span className="chip-label">Work locally</span>
+          <span className="chip-label">{t("chat.workLocally")}</span>
           <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
         </button>
       </div>
@@ -2214,9 +2230,9 @@ function hasGroundingScope(chat: Chat | undefined): boolean {
   return hasFolderGroundingScope(chat) || hasConnectorGroundingScope(chat);
 }
 
-function formatScopeUpdateError(error: unknown): string {
+function formatScopeUpdateError(error: unknown, t: ReturnType<typeof useI18n>["t"]): string {
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
-  return formatUserError(error, "Unable to update knowledge scope.");
+  return formatUserError(error, t("chat.error.scopeUpdate"));
 }
 
 interface ScopeOption {
@@ -2224,10 +2240,14 @@ interface ScopeOption {
   readonly label: string;
 }
 
-function capsuleOptions(chat: Chat, capsules: readonly CapsuleListEntry[]): readonly ScopeOption[] {
+function capsuleOptions(
+  chat: Chat,
+  capsules: readonly CapsuleListEntry[],
+  t: ReturnType<typeof useI18n>["t"],
+): readonly ScopeOption[] {
   const options = capsules.map((capsule) => ({
     value: `capsule:${capsule.id}`,
-    label: `Knowledge capsule: ${capsule.displayName}`,
+    label: t("chat.grounding.capsule", { name: capsule.displayName }),
   }));
   const selectedValue = groundedModeValue(chat);
   if (!selectedValue.startsWith("capsule:")) {
@@ -2243,7 +2263,9 @@ function capsuleOptions(chat: Chat, capsules: readonly CapsuleListEntry[]): read
       value: selectedValue,
       // uiux-fix F041 (C173) — "(unavailable)" matches the capsule-set degraded
       // suffix; two different words previously named the same state.
-      label: `Knowledge capsule: ${capsuleId} (unavailable)`,
+      label: t("chat.grounding.unavailable", {
+        label: t("chat.grounding.capsule", { name: capsuleId }),
+      }),
     },
   ];
 }
@@ -2251,10 +2273,11 @@ function capsuleOptions(chat: Chat, capsules: readonly CapsuleListEntry[]): read
 function capsuleSetOptions(
   chat: Chat,
   capsuleSets: readonly CapsuleSetListEntry[],
+  t: ReturnType<typeof useI18n>["t"],
 ): readonly ScopeOption[] {
   const options = capsuleSets.map((capsuleSet) => ({
     value: `capsule-set:${capsuleSet.id}`,
-    label: `Capsule set: ${capsuleSet.displayName}`,
+    label: t("chat.grounding.capsuleSet", { name: capsuleSet.displayName }),
   }));
   const selectedValue = groundedModeValue(chat);
   if (!selectedValue.startsWith("capsule-set:")) {
@@ -2268,7 +2291,9 @@ function capsuleSetOptions(
     ...options,
     {
       value: selectedValue,
-      label: `Capsule set: ${capsuleSetId} (unavailable)`,
+      label: t("chat.grounding.unavailable", {
+        label: t("chat.grounding.capsuleSet", { name: capsuleSetId }),
+      }),
     },
   ];
 }
@@ -2282,6 +2307,7 @@ interface KnowledgeCatalog {
 }
 
 function useKnowledgeCatalog(): KnowledgeCatalog {
+  const { t } = useI18n();
   const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
   const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -2305,17 +2331,17 @@ function useKnowledgeCatalog(): KnowledgeCatalog {
           setCapsuleSets(capsuleSetResult.value.capsuleSets);
         } else {
           setCapsuleSets([]);
-          setLoadError(formatScopeUpdateError(capsuleSetResult.reason));
+          setLoadError(formatScopeUpdateError(capsuleSetResult.reason, t));
         }
       } catch (caught) {
-        if (!cancelled) setLoadError(formatScopeUpdateError(caught));
+        if (!cancelled) setLoadError(formatScopeUpdateError(caught, t));
       }
     }
     void load();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   return { capsules, capsuleSets, loadError };
 }
@@ -2331,6 +2357,7 @@ function LocalKnowledgeScopeControl({
   readonly catalog: KnowledgeCatalog;
   readonly connected: boolean;
 }): ReactNode {
+  const { t } = useI18n();
   const { capsules, capsuleSets, loadError } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2347,7 +2374,13 @@ function LocalKnowledgeScopeControl({
         const sourceCount = activeGroundingSourceCount(chat);
         if (sourceCount > 0) {
           const confirmed = window.confirm(
-            `This will disconnect ${String(sourceCount)} grounding ${sourceCount === 1 ? "source" : "sources"}. Continue?`,
+            t("chat.grounding.disconnectConfirm", {
+              count: sourceCount,
+              sourceLabel:
+                sourceCount === 1
+                  ? t("chat.grounding.sourceSingular")
+                  : t("chat.grounding.sourcePlural"),
+            }),
           );
           if (!confirmed) return;
         }
@@ -2404,39 +2437,39 @@ function LocalKnowledgeScopeControl({
         onChatChanged(response.chat);
       }
     } catch (caught) {
-      setError(formatScopeUpdateError(caught));
+      setError(formatScopeUpdateError(caught, t));
     } finally {
       setBusy(false);
     }
   }
 
   const value = groundedModeValue(chat);
-  const capsuleChoices = capsuleOptions(chat, capsules);
-  const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets);
+  const capsuleChoices = capsuleOptions(chat, capsules, t);
+  const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets, t);
   // C172 — a catalog load failure surfaces here too; an update error wins.
   const displayedError = error ?? loadError;
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
     <div className="scope-grounding" data-connected={connected ? "true" : "false"}>
-      <span className="scope-grounding-label mono">Grounding</span>
+      <span className="scope-grounding-label mono">{t("chat.grounding.label")}</span>
       <KeikoSelect
         triggerClassName="scope-grounding-select"
         value={value}
         disabled={busy}
-        ariaLabel="Grounding mode"
-        menuTitle="Strategy"
+        ariaLabel={t("chat.grounding.mode")}
+        menuTitle={t("chat.grounding.strategy")}
         sections={[
           {
             options: [
-              { value: "none", label: "Model only" },
+              { value: "none", label: t("chat.grounding.modelOnly") },
               {
                 value: "files",
-                label: "Live Files context",
+                label: t("chat.grounding.liveFiles"),
                 disabled: !hasFolderGroundingScope(chat),
               },
               ...(value === "multi"
-                ? [{ value: "multi", label: "Multiple sources", disabled: true }]
+                ? [{ value: "multi", label: t("chat.grounding.multiple"), disabled: true }]
                 : []),
               ...capsuleChoices.map((capsule) => ({
                 value: capsule.value,
@@ -2537,6 +2570,7 @@ function MemoryActionCard({
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
   readonly onActionSettled: (message: string) => void;
 }): ReactNode {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [confirmForget, setConfirmForget] = useState(false);
@@ -2561,7 +2595,11 @@ function MemoryActionCard({
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
           <strong>{action.scopeLabel}</strong>
-          <span>{action.requiresApproval ? "Approval required" : "Proposed memory"}</span>
+          <span>
+            {action.requiresApproval
+              ? t("chat.memory.approvalRequired")
+              : t("chat.memory.proposedMemory")}
+          </span>
         </div>
         <p>{action.body}</p>
         <div className="chat-memory-action-buttons">
@@ -2572,12 +2610,12 @@ function MemoryActionCard({
             onClick={() => {
               runAction(
                 () => acceptCandidate(action.proposalId),
-                "MemoriaViva proposal accepted.",
-                "Unable to accept memory.",
+                t("chat.memory.accepted"),
+                t("chat.memory.acceptError"),
               );
             }}
           >
-            Accept
+            {t("chat.memory.accept")}
           </button>
           <button
             type="button"
@@ -2586,18 +2624,18 @@ function MemoryActionCard({
             onClick={() => {
               runAction(
                 () => rejectCandidate(action.proposalId),
-                "MemoriaViva proposal rejected.",
-                "Unable to reject memory.",
+                t("chat.memory.rejected"),
+                t("chat.memory.rejectError"),
               );
             }}
           >
-            Reject
+            {t("chat.memory.reject")}
           </button>
         </div>
         {error !== undefined ? (
           <ErrorNoticeFromError
             error={error}
-            fallback="Unable to update memory."
+            fallback={t("chat.error.memoryUpdate")}
             onDismiss={() => setError(undefined)}
           />
         ) : null}
@@ -2608,13 +2646,13 @@ function MemoryActionCard({
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
-          <strong>MemoriaViva update detected</strong>
+          <strong>{t("chat.memory.updateDetected")}</strong>
           <span>{action.memoryId}</span>
         </div>
         <p>
           {action.bodyPatch !== undefined
-            ? `Suggested update: ${action.bodyPatch}`
-            : "Suggested update."}
+            ? t("chat.memory.suggestedUpdate", { body: action.bodyPatch })
+            : t("chat.memory.suggestedUpdateFallback")}
         </p>
       </article>
     );
@@ -2623,21 +2661,23 @@ function MemoryActionCard({
     const executeForget = (): void => {
       runAction(
         () => forgetMemoryAction(action.memoryId).then(() => setConfirmForget(false)),
-        "MemoriaViva forget action completed.",
-        "Unable to forget memory.",
+        t("chat.memory.forgetCompleted"),
+        t("chat.memory.forgetError"),
       );
     };
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
-          <strong>MemoriaViva forget detected</strong>
-          <span>{action.requiresConfirmation ? "Confirmation required" : action.memoryId}</span>
+          <strong>{t("chat.memory.forgetDetected")}</strong>
+          <span>
+            {action.requiresConfirmation ? t("chat.memory.confirmationRequired") : action.memoryId}
+          </span>
         </div>
-        <p>{`Matched memory ${action.memoryId} for a forget operation.`}</p>
+        <p>{t("chat.memory.forgetMatched", { id: action.memoryId })}</p>
         <div className="chat-memory-action-buttons">
           {!action.requiresConfirmation ? (
             <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
-              Forget
+              {t("chat.memory.forget")}
             </button>
           ) : !confirmForget ? (
             <button
@@ -2650,12 +2690,12 @@ function MemoryActionCard({
                 setConfirmForget(true);
               }}
             >
-              Review forget
+              {t("chat.memory.reviewForget")}
             </button>
           ) : (
             <>
               <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
-                Forget permanently
+                {t("chat.memory.forgetPermanently")}
               </button>
               <button
                 type="button"
@@ -2667,7 +2707,7 @@ function MemoryActionCard({
                   setConfirmForget(false);
                 }}
               >
-                Cancel
+                {t("common.cancel")}
               </button>
             </>
           )}
@@ -2675,7 +2715,7 @@ function MemoryActionCard({
         {error !== undefined ? (
           <ErrorNoticeFromError
             error={error}
-            fallback="Unable to update memory."
+            fallback={t("chat.error.memoryUpdate")}
             onDismiss={() => setError(undefined)}
           />
         ) : null}
@@ -2689,16 +2729,16 @@ function MemoryActionCard({
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
-          <strong>Memory proposal declined</strong>
+          <strong>{t("chat.memory.proposalDeclined")}</strong>
         </div>
-        <p>{action.reason !== "" ? action.reason : "No reason provided"}</p>
+        <p>{action.reason !== "" ? action.reason : t("chat.memory.noReason")}</p>
       </article>
     );
   }
   return (
     <article className="chat-memory-action">
       <div className="chat-memory-action-head">
-        <strong>MemoriaViva action not created</strong>
+        <strong>{t("chat.memory.actionNotCreated")}</strong>
       </div>
     </article>
   );
@@ -2707,9 +2747,6 @@ function MemoryActionCard({
 function formatMemoryCapturedAt(capturedAt: number): string {
   return new Date(capturedAt).toISOString().slice(0, 10);
 }
-
-const MEMORY_BUDGET_HELP =
-  "Limits only the MemoriaViva memory context added to the next model request. It is not the model context window, response limit, or cost budget.";
 
 function MemoryPanel({
   memoryEnabled,
@@ -2749,6 +2786,7 @@ function MemoryPanel({
     memoryCount > 0
       ? t("chat.memory.included", { count: memoryCount })
       : t("chat.memory.noneIncluded");
+  const memoryBudgetHelp = t("chat.memory.budgetHelp");
   const stepMemoryBudget = (delta: number): void => {
     setMemoryBudgetTokens(Math.max(0, memoryBudgetTokens + delta));
   };
@@ -2760,14 +2798,14 @@ function MemoryPanel({
   };
   const budgetControl = (
     <div className="chat-memory-budget">
-      <span className="chat-memory-budget-label" data-tip={MEMORY_BUDGET_HELP}>
+      <span className="chat-memory-budget-label" data-tip={memoryBudgetHelp}>
         <label htmlFor={budgetInputId}>{t("chat.memory.budget")}</label>
         {/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- matches the existing BudgetIndicator info affordance: keyboard-focusable data-tip tooltip. */}
         <span
           className="cmp-budget-info chat-memory-budget-info"
           role="img"
           tabIndex={0}
-          aria-label={MEMORY_BUDGET_HELP}
+          aria-label={memoryBudgetHelp}
         >
           i
         </span>
@@ -2792,25 +2830,21 @@ function MemoryPanel({
         />
       </span>
       <span id={budgetHelpId} className="sr-only">
-        {MEMORY_BUDGET_HELP}
+        {memoryBudgetHelp}
       </span>
     </div>
   );
 
   return (
-    <section className="chat-memory-panel" aria-label="Conversation memory">
+    <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
       <div className="chat-memory-panel-head">
         <div className="chat-memory-toggle">
           {/* uiux-fix F042 (C323) — the panel mixed generic "memory" with the
               product name: feature = MemoriaViva, items = memories. The budget
               unit (tokens) was previously only discoverable from the disclosure
               line after the next send. */}
-          <Toggle
-            on={memoryEnabled}
-            onChange={setMemoryEnabled}
-            label="Enable MemoriaViva for the next request"
-          />
-          <span>MemoriaViva {memoryEnabled ? "on" : "off"}</span>
+          <Toggle on={memoryEnabled} onChange={setMemoryEnabled} label={t("chat.memory.enable")} />
+          <span>{memoryEnabled ? t("chat.memory.stateOn") : t("chat.memory.stateOff")}</span>
         </div>
         {compact ? null : budgetControl}
         <button
@@ -2834,10 +2868,13 @@ function MemoryPanel({
         <div id={disclosureId} className="chat-memory-disclosure">
           <p className="chat-memory-summary">
             {latestMemory === undefined
-              ? "MemoriaViva disclosure appears after the next response."
+              ? t("chat.memory.disclosurePending")
               : latestMemory.context.enabled
-                ? `Used ${String(latestMemory.context.budget.used)} of ${String(latestMemory.context.budget.tokens)} MemoriaViva tokens.`
-                : "MemoriaViva was disabled for the last request."}
+                ? t("chat.memory.usedTokens", {
+                    used: latestMemory.context.budget.used,
+                    tokens: latestMemory.context.budget.tokens,
+                  })
+                : t("chat.memory.disabledLast")}
           </p>
           {latestMemory?.context.memories.map((memory) => (
             <article key={memory.memoryId} className="chat-memory-item">
@@ -2846,25 +2883,28 @@ function MemoryPanel({
                 <span>{memory.inclusionReason}</span>
               </div>
               <p>{memory.bodyExcerpt}</p>
-              <dl className="chat-memory-meta" aria-label={`Provenance for ${memory.memoryId}`}>
+              <dl
+                className="chat-memory-meta"
+                aria-label={t("chat.memory.provenance", { id: memory.memoryId })}
+              >
                 <div>
-                  <dt>Source</dt>
+                  <dt>{t("chat.memory.source")}</dt>
                   <dd>{memory.sourceKind}</dd>
                 </div>
                 <div>
-                  <dt>Sensitivity</dt>
+                  <dt>{t("chat.memory.sensitivity")}</dt>
                   <dd>{memory.sensitivity}</dd>
                 </div>
                 <div>
-                  <dt>Status</dt>
+                  <dt>{t("chat.memory.status")}</dt>
                   <dd>{memory.status}</dd>
                 </div>
                 <div>
-                  <dt>Confidence</dt>
+                  <dt>{t("chat.memory.confidence")}</dt>
                   <dd>{`${String(Math.round(memory.confidence * 100))}%`}</dd>
                 </div>
                 <div>
-                  <dt>Captured</dt>
+                  <dt>{t("chat.memory.captured")}</dt>
                   <dd>{formatMemoryCapturedAt(memory.capturedAt)}</dd>
                 </div>
               </dl>

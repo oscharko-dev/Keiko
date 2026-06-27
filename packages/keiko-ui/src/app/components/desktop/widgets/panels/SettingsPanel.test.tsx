@@ -478,7 +478,7 @@ describe("SettingsPanel workspace wallpaper controls", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "General" }));
     fireEvent.click(screen.getByRole("combobox", { name: "Interface language" }));
-    fireEvent.click(screen.getByRole("option", { name: "German" }));
+    fireEvent.click(screen.getByRole("option", { name: "Deutsch" }));
 
     expect(window.localStorage.getItem("keiko.locale")).toBe("de");
     expect(document.documentElement.lang).toBe("de");
