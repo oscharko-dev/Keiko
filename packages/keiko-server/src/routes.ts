@@ -120,6 +120,7 @@ import {
   handleFilesTree,
 } from "./files.js";
 import { handleGitBranches, handleGitDiff, handleGitStatus } from "./gitRoutes.js";
+import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepositoryReads.js";
 import {
   handleEditorLanguage,
   handleEditorLanguageCapabilitiesForRoute,
@@ -219,6 +220,7 @@ import { GIT_DELIVERY_COMMIT_ROUTE_GROUP } from "./gitDelivery/commitRoutes.js";
 import { GIT_DELIVERY_PUSH_ROUTE_GROUP } from "./gitDelivery/pushRoutes.js";
 import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
 import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
+import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -355,6 +357,24 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/git/branches",
     handler: (ctx, deps) => handleGitBranches(ctx, deps, deps.gitRouteOptions),
+  },
+  // Issue #1573 — read-only Git repository summary, history, and remotes BFF. Reuses the hardened
+  // runner + selected-root containment from the #1386 reads; responses are content-free (counts,
+  // typed codes, branch/remote names, ISO dates) and pass through the live-payload redactor.
+  {
+    method: "GET",
+    pattern: "/api/git/summary",
+    handler: (ctx, deps) => handleGitSummary(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/history",
+    handler: (ctx, deps) => handleGitHistory(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/remotes",
+    handler: (ctx, deps) => handleGitRemotes(ctx, deps, deps.gitRouteOptions),
   },
   // Issue #1387 — controlled test/build/run command executor. Tasks are discovered from package
   // scripts and run through the single governed spawn boundary (keiko-tools runCommand): allowlisted
@@ -849,6 +869,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // execute through the SEPARATE merge gateway (dedicated `gh api` merge allowlist, readiness gate, final
   // approval) + #474 evidence ledger; same capability flag and CSRF.
   ...GIT_DELIVERY_MERGE_ROUTE_GROUP,
+  // #1573 governed fetch/pull sync: sync preview (read-only readiness + executable gate) + execute
+  // through the reused hardened runner (NOT the #472 kernel — fetch/pull have no GitDeliveryActionKind)
+  // + a dedicated content-free sync evidence ledger; same central CSRF + JSON content-type gate.
+  ...GIT_DELIVERY_SYNC_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured
