@@ -447,6 +447,18 @@ function usePanZoom({
     [cameraSmoothness, setView],
   );
 
+  const settleCameraAnimation = useCallback((): void => {
+    if (
+      animationFrameRef.current !== null &&
+      typeof window.cancelAnimationFrame === "function"
+    ) {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+      setView(animationTargetRef.current);
+      renderedViewRef.current = animationTargetRef.current;
+    }
+  }, [setView]);
+
   const queueView = useCallback(
     (next: View | ((current: View) => View)): void => {
       const base = pendingViewRef.current ?? viewRef.current;
@@ -483,6 +495,7 @@ function usePanZoom({
         e.preventDefault();
         const windowId = windowIdFromWheelTarget(e.target);
         if (windowId !== null) {
+          settleCameraAnimation();
           setWins((ws) =>
             ws === null
               ? ws
@@ -515,7 +528,7 @@ function usePanZoom({
     return () => {
       el.removeEventListener("wheel", onWheel);
     };
-  }, [wsRef, setWins, queueView]);
+  }, [wsRef, setWins, queueView, settleCameraAnimation]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),

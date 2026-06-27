@@ -3766,6 +3766,11 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .window[data-max="true"] {
   border-radius: 0;
 }
+.win-content-zoom {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+}
 .win-head {
   display: flex;
   align-items: center;
