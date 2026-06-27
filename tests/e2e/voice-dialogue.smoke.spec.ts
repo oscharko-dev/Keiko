@@ -9,9 +9,12 @@
 //      (Speak + Interrupt) render; activating the mic begins a listening turn and stopping commits the
 //      transcript through the dialogue session's chat-send seam — Issue #1561: the committed text is sent
 //      through the SAME chat send path a typed message uses (carrying the same context), not parked in
-//      the composer draft, so the captured send carries the transcript and the composer clears (AC1/AC2);
-//      leaving removes the controls and runs the master cleanup (AC3). A screenshot of the active
-//      dialogue surface is captured as evidence.
+//      the composer draft, so the captured send carries the transcript and the composer clears (AC1/AC2).
+//      Issue #1560 lifecycle: committing that first turn flips the chat from empty to populated, and the
+//      dialogue session SURVIVES it — the switch stays on and the controls remain, so a SECOND spoken
+//      turn can be taken (the user is never silently kicked back to the text composer); only leaving
+//      removes the controls and runs the master cleanup (AC3). A screenshot of the active dialogue
+//      surface is captured as evidence.
 //
 // Scope note (mirrors the #501 / #504 voice smokes): the assistant answer → spoken playback → barge-in
 // half of the loop depends on a live chat + TTS provider that CI does not deploy, and the deep
@@ -155,8 +158,10 @@ interface CapturedSendBody {
   readonly content?: string;
 }
 
-function stubChatSend(page: Page): { sentContent: () => string | undefined } {
-  const captured: { body?: CapturedSendBody } = {};
+function stubChatSend(page: Page): { sends: () => readonly string[] } {
+  // Every committed turn is captured in order, so the test can assert BOTH that the first spoken turn
+  // reached the chat send AND that a second turn fired after the chat went from empty to populated.
+  const captured: { sends: string[] } = { sends: [] };
   void page.route("**/api/desktop/chat/stream", (route) =>
     route.fulfill({
       status: 400,
@@ -166,8 +171,11 @@ function stubChatSend(page: Page): { sentContent: () => string | undefined } {
   );
   void page.route("**/api/desktop/chat", (route) => {
     const body = (route.request().postDataJSON() ?? {}) as CapturedSendBody;
-    captured.body = body;
+    if (typeof body.content === "string" && body.content.length > 0) {
+      captured.sends.push(body.content);
+    }
     const chatId = body.chatId ?? "chat";
+    const turn = captured.sends.length;
     return route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -183,12 +191,18 @@ function stubChatSend(page: Page): { sentContent: () => string | undefined } {
           updatedAt: 2,
         },
         messages: [
-          { id: "user-1", chatId, role: "user", content: body.content ?? "", timestamp: 2 },
+          {
+            id: `user-${String(turn)}`,
+            chatId,
+            role: "user",
+            content: body.content ?? "",
+            timestamp: 2,
+          },
         ],
       }),
     });
   });
-  return { sentContent: () => captured.body?.content };
+  return { sends: () => captured.sends };
 }
 
 // Reads a counter from the browser-side window.__micStats instrument (see fakeMediaInitWithStats), so
@@ -234,30 +248,44 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
     fullPage: true,
   });
 
-  // AC3 — leaving a freshly-entered dialogue removes the per-turn controls and runs the master cleanup;
-  // the composer stays usable. Asserted before a turn populates the chat so the lifecycle is isolated
-  // from the chat-send re-render that committing a turn triggers.
-  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
-  await expect(speak).toHaveCount(0);
-  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
-  await expect(composer).toBeVisible();
-
-  // AC1/AC2 (Issue #1561) — re-enter and run a spoken turn. Activating the mic begins a listening turn
-  // (the control flips to stop-and-send); ending it commits the transcript through the chat-send seam.
-  // The committed text is sent through the SAME chat send path a typed message uses (carrying the same
-  // context), NOT parked in the composer draft: the captured send carries the transcript and the
-  // composer clears. The deep send / grounding routing is proven deterministically in the required `ci`
-  // keiko-ui suites; this smoke proves the spoken turn reaches the chat send in the real browser.
-  await dialogSwitch.click();
-  await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
-  await speak.click();
   const stopAndSend = page.getByRole("button", { name: "Stop speaking and send" });
+
+  // AC1/AC2 (Issue #1561) — run a spoken turn from the FRESH, empty chat. Activating the mic begins a
+  // listening turn (the control flips to stop-and-send); ending it commits the transcript through the
+  // chat-send seam. The committed text is sent through the SAME chat send path a typed message uses
+  // (carrying the same context), NOT parked in the composer draft: the captured send carries the
+  // transcript and the composer clears. The deep send / grounding routing is proven deterministically in
+  // the required `ci` keiko-ui suites; this smoke proves the spoken turn reaches the chat send in the
+  // real browser.
+  await speak.click();
   await expect(stopAndSend).toBeVisible();
   await expect(stopAndSend).toHaveAttribute("aria-pressed", "true");
   await stopAndSend.click();
-  await expect.poll(() => send.sentContent()).toMatch(/what is the deploy status/u);
+  await expect.poll(() => send.sends().length).toBeGreaterThanOrEqual(1);
+  expect(send.sends()[0]).toMatch(/what is the deploy status/u);
   await expect(composer).toHaveValue("");
+
+  // Issue #1560 lifecycle regression — committing that first turn flips the chat from empty to populated.
+  // The dialogue session MUST survive that transition: the switch stays on and the per-turn controls
+  // remain, so the user is NOT silently kicked back to the plain text composer mid-conversation. (On the
+  // pre-fix two-slot composer layout the ComposerCore remounted here, resetting voiceDialog.active —
+  // this is the assertion that fails against that regression.)
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
+  await expect(speak).toBeVisible();
+
+  // The continuous colleague-like dialogue: a SECOND spoken turn can be taken on the now-populated chat.
+  await speak.click();
+  await expect(stopAndSend).toBeVisible();
+  await stopAndSend.click();
+  await expect.poll(() => send.sends().length).toBeGreaterThanOrEqual(2);
+
+  // AC3 — leaving removes the per-turn controls, flips the switch off, and runs the master cleanup; the
+  // composer stays fully usable.
+  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
+  await expect(speak).toHaveCount(0);
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
+  await expect(composer).toBeVisible();
 }
 
 test("voice dialogue @smoke — no-voice deployment offers no dialogue switch (AC4)", async ({
