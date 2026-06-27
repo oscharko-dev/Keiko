@@ -677,13 +677,21 @@ describe("GitClientWindow — toolbar actions", () => {
       getSummary: vi.fn(async () =>
         makeSummary({
           branch: "feat/issue-1577",
-          remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
         }),
       ),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
       getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} openWindow={openWindow} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
     await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
 
@@ -714,13 +722,21 @@ describe("GitClientWindow — toolbar actions", () => {
       getSummary: vi.fn(async () =>
         makeSummary({
           branch: "feat/issue-1577",
-          remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
         }),
       ),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
       getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
     await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
     const panel = await screen.findByRole("region", { name: "Pull Request" });
@@ -751,9 +767,16 @@ describe("GitClientWindow — toolbar actions", () => {
       getSummary: vi.fn(async () =>
         makeSummary({
           branch: "feat/issue-1577",
-          remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
         }),
       ),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
       getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
       prExecute: vi.fn<GitClientSeam["prExecute"]>(async () => ({
         schemaVersion: "1",
@@ -767,6 +790,7 @@ describe("GitClientWindow — toolbar actions", () => {
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
     await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
     const panel = await screen.findByRole("region", { name: "Pull Request" });
@@ -787,13 +811,21 @@ describe("GitClientWindow — toolbar actions", () => {
       getSummary: vi.fn(async () =>
         makeSummary({
           branch: "feat/issue-1577",
-          remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
         }),
       ),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
       getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} openWindow={openWindow} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
     await user.click(screen.getByRole("button", { name: /Merge/ }));
 

@@ -18,6 +18,7 @@ import type {
   GitDiffScope,
   GitHistoryEntry,
   GitHistoryResponse,
+  GitRemoteSummary,
   GitRepositorySummary,
   GitRepositoryStatusResponse,
   ProjectWithAvailability,
@@ -91,8 +92,8 @@ function ownerRepoFromRemoteUrl(value: string | undefined): string | undefined {
   return undefined;
 }
 
-function inferOwnerAndRepo(summary: GitRepositorySummary | null): string | undefined {
-  for (const remote of summary?.remotes ?? []) {
+function inferOwnerAndRepo(remotes: readonly GitRemoteSummary[]): string | undefined {
+  for (const remote of remotes) {
     const ownerRepo = ownerRepoFromRemoteUrl(remote.fetchUrl) ?? ownerRepoFromRemoteUrl(remote.pushUrl);
     if (ownerRepo !== undefined) return ownerRepo;
   }
@@ -127,6 +128,8 @@ export function GitClientWindow({
   const [summaryProjectKey, setSummaryProjectKey] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [remotes, setRemotes] = useState<readonly GitRemoteSummary[]>([]);
+  const [remotesProjectKey, setRemotesProjectKey] = useState<string | null>(null);
   const [history, setHistory] = useState<GitHistoryResponse | null>(null);
   const [historyProjectKey, setHistoryProjectKey] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -288,6 +291,32 @@ export function GitClientWindow({
     };
   }, [client, selectedPath, statusRevision]);
 
+  // Dedicated remotes data may contain provider URLs for safe owner/repo inference. The compact
+  // summary remains alias-only so sync state never needs URL metadata.
+  useEffect(() => {
+    if (selectedPath === null) {
+      setRemotes([]);
+      setRemotesProjectKey(null);
+      return;
+    }
+    let cancelled = false;
+    void client.getRemotes(selectedPath).then(
+      (res) => {
+        if (cancelled) return;
+        setRemotes(res.available ? res.remotes : []);
+        setRemotesProjectKey(selectedPath);
+      },
+      () => {
+        if (cancelled) return;
+        setRemotes([]);
+        setRemotesProjectKey(null);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, selectedPath]);
+
   // History loads independently from status; selecting the first commit gives the detail pane a
   // deterministic populated state while preserving user selection when it still exists.
   useEffect(() => {
@@ -411,6 +440,8 @@ export function GitClientWindow({
   const activeStatus = selectedPath !== null && statusProjectKey === selectedPath ? status : null;
   const activeSummary =
     selectedPath !== null && summaryProjectKey === selectedPath ? summary : null;
+  const activeRemotes =
+    selectedPath !== null && remotesProjectKey === selectedPath ? remotes : [];
   const activeHistory =
     selectedPath !== null && historyProjectKey === selectedPath ? history : null;
   const selectedCommit: GitHistoryEntry | null =
@@ -597,7 +628,7 @@ export function GitClientWindow({
 
   const visibleStagingOutcome = staging.flow.outcome;
   const currentBranch = activeStatus?.branch ?? activeSummary?.branch;
-  const inferredOwnerAndRepo = inferOwnerAndRepo(activeSummary);
+  const inferredOwnerAndRepo = inferOwnerAndRepo(activeRemotes);
   const inferredBaseBranch = inferBaseBranch(currentBranch, activeSummary);
 
   return (

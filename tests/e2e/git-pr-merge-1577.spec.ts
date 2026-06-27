@@ -87,7 +87,7 @@ function summaryBody(root: string): unknown {
     untrackedCount: 0,
     conflictedCount: 0,
     clean: true,
-    remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+    remotes: [{ name: "origin" }],
     truncated: false,
   };
 }
