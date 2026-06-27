@@ -4,8 +4,10 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
+  type DependencyList,
   type Dispatch,
   type MutableRefObject,
   type RefObject,
@@ -108,6 +110,82 @@ function persistList<T>(key: string, value: T): void {
   } catch {
     /* ignore */
   }
+}
+
+// Issue #1580 — persistence is debounced so a drag/resize/pan (which mutates wins
+// or view every animation frame) no longer fires a synchronous localStorage write
+// and a server PUT per frame. A short trailing delay coalesces a whole gesture into
+// a single write; a pagehide/visibility-hidden flush guarantees the final state is
+// never lost if the tab closes mid-gesture.
+const PERSIST_DEBOUNCE_MS = 300;
+
+interface TrailingDebounce {
+  readonly schedule: (run: () => void) => void;
+  readonly flush: () => void;
+  readonly cancel: () => void;
+}
+
+function createTrailingDebounce(delayMs: number): TrailingDebounce {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pending: (() => void) | null = null;
+  const flush = (): void => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const run = pending;
+    pending = null;
+    if (run !== null) run();
+  };
+  const schedule = (run: () => void): void => {
+    pending = run;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(flush, delayMs);
+  };
+  const cancel = (): void => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    pending = null;
+  };
+  return { schedule, flush, cancel };
+}
+
+// Run `write` on a trailing debounce when `deps` change, and always flush the
+// latest pending write on pagehide / visibility-hidden / unmount so a debounced
+// localStorage write is never dropped (issue #1580 No-Data-Loss invariant).
+function useDebouncedPersist(write: () => void, deps: DependencyList): void {
+  const debounceRef = useRef<TrailingDebounce | null>(null);
+  if (debounceRef.current === null)
+    debounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
+  const writeRef = useRef(write);
+  writeRef.current = write;
+
+  useEffect(
+    () => {
+      debounceRef.current?.schedule(() => writeRef.current());
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps are forwarded verbatim by the caller
+    deps,
+  );
+
+  useEffect(() => {
+    const debounce = debounceRef.current;
+    if (debounce === null) return;
+    const flushNow = (): void => debounce.flush();
+    const flushOnHide = (): void => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden")
+        debounce.flush();
+    };
+    window.addEventListener("pagehide", flushNow);
+    document.addEventListener("visibilitychange", flushOnHide);
+    return () => {
+      window.removeEventListener("pagehide", flushNow);
+      document.removeEventListener("visibilitychange", flushOnHide);
+      debounce.flush();
+    };
+  }, []);
 }
 
 interface ArrowState {
@@ -234,6 +312,9 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
   const pendingViewRef = useRef<View | null>(null);
   const frameRef = useRef<number | null>(null);
 
+  // The view is a tiny {zoom,x,y} object written with no sanitize pass, so a
+  // per-frame setItem is negligible (unlike the windows/connections snapshots,
+  // which are debounced). Kept synchronous so it never lags the live view.
   useEffect(() => {
     persistList(VIEW_LS, view);
   }, [view]);
@@ -438,6 +519,7 @@ async function fetchServerWorkspaceSnapshot(): Promise<ServerWorkspaceSnapshot |
 async function putServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
+  opts: { readonly signal?: AbortSignal; readonly keepalive?: boolean } = {},
 ): Promise<number | null> {
   if (typeof fetch !== "function") return null;
   try {
@@ -449,6 +531,11 @@ async function putServerWorkspaceSnapshot(
         "X-Keiko-CSRF": "1",
       },
       body: JSON.stringify({ windows: wins, connections: conns }),
+      // keepalive lets the final flush survive page unload (sanitize already drops
+      // large data-URL payloads, so the body stays well under the 64KB limit).
+      // sendBeacon cannot set the required X-Keiko-CSRF header, hence keepalive.
+      ...(opts.keepalive === true ? { keepalive: true } : {}),
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
     if (!response.ok) return null;
     const body: unknown = await response.json();
@@ -532,8 +619,33 @@ function useWorkspaceServerSync({
   const revisionRef = useRef(0);
   const winsRef = useRef<AppWindow[] | null>(wins);
   winsRef.current = wins;
+  const connsRef = useRef<readonly Connection[]>(conns);
+  connsRef.current = conns;
+  const putDebounceRef = useRef<TrailingDebounce | null>(null);
+  if (putDebounceRef.current === null)
+    putDebounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
+  const putAbortRef = useRef<AbortController | null>(null);
 
   const serverSyncEnabled = typeof navigator === "undefined" || navigator.webdriver !== true;
+
+  // One sanitize+PUT of the LATEST snapshot (read from refs so a debounced/flush run
+  // never sends stale geometry). Supersedes any in-flight PUT via AbortController and
+  // advances the revision monotonically (issue #1580).
+  const runServerPut = useCallback((keepalive: boolean): void => {
+    const latestWins = winsRef.current;
+    if (latestWins === null) return;
+    const persistedWins = sanitizePersistedWindows(latestWins);
+    const persistedConns = sanitizePersistedConnections(connsRef.current, persistedWins);
+    putAbortRef.current?.abort();
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    putAbortRef.current = controller;
+    void putServerWorkspaceSnapshot(persistedWins, persistedConns, {
+      ...(controller !== null ? { signal: controller.signal } : {}),
+      keepalive,
+    }).then((revision) => {
+      if (revision !== null && revision > revisionRef.current) revisionRef.current = revision;
+    });
+  }, []);
 
   const applyServerSnapshot = useCallback(
     (serverSnapshot: ServerWorkspaceSnapshot): void => {
@@ -550,6 +662,7 @@ function useWorkspaceServerSync({
   useEffect(() => {
     if (!serverSyncEnabled) return;
     let stopped = false;
+    let interval: number | null = null;
     const pull = async (): Promise<void> => {
       const serverSnapshot = await fetchServerWorkspaceSnapshot();
       if (stopped || serverSnapshot === null) return;
@@ -563,16 +676,41 @@ function useWorkspaceServerSync({
       }
       applyServerSnapshot(serverSnapshot);
     };
-    void pull();
-    const interval = window.setInterval(() => {
-      void pull();
-    }, WORKSPACE_STATE_POLL_MS);
+    const startPolling = (): void => {
+      if (interval !== null) return;
+      interval = window.setInterval(() => {
+        void pull();
+      }, WORKSPACE_STATE_POLL_MS);
+    };
+    const stopPolling = (): void => {
+      if (interval === null) return;
+      window.clearInterval(interval);
+      interval = null;
+    };
+    // Issue #1580 — only poll while the document is visible; the old fixed interval
+    // kept fetching/parsing forever in background tabs. Returning to visible does an
+    // immediate catch-up pull so multi-tab convergence is unchanged.
+    const sync = (): void => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        stopPolling();
+      } else {
+        void pull();
+        startPolling();
+      }
+    };
+    sync();
+    document.addEventListener("visibilitychange", sync);
     return () => {
       stopped = true;
-      window.clearInterval(interval);
+      stopPolling();
+      document.removeEventListener("visibilitychange", sync);
     };
   }, [applyServerSnapshot, serverSyncEnabled]);
 
+  // Debounced server PUT (issue #1580): an uncoalesced drag previously fired one
+  // full-snapshot PUT per pointer frame. The echo-suppression flag is consumed
+  // SYNCHRONOUSLY here so a snapshot just applied from server/storage is never
+  // echoed back; the actual PUT is deferred to the trailing flush.
   useEffect(() => {
     if (!serverSyncEnabled) return;
     if (wins === null) return;
@@ -580,18 +718,31 @@ function useWorkspaceServerSync({
       suppressNextPersistRef.current = false;
       return;
     }
-    let cancelled = false;
-    const persistedWins = sanitizePersistedWindows(wins);
-    const persistedConns = sanitizePersistedConnections(conns, persistedWins);
-    void putServerWorkspaceSnapshot(persistedWins, persistedConns).then((revision) => {
-      if (!cancelled && revision !== null && revision > revisionRef.current) {
-        revisionRef.current = revision;
-      }
-    });
-    return () => {
-      cancelled = true;
+    putDebounceRef.current?.schedule(() => runServerPut(false));
+  }, [wins, conns, suppressNextPersistRef, serverSyncEnabled, runServerPut]);
+
+  // Guarantee the final snapshot reaches the server even if the tab closes during a
+  // gesture: cancel the pending debounce and send one keepalive PUT on unload, and
+  // flush any pending PUT on unmount.
+  useEffect(() => {
+    if (!serverSyncEnabled) return;
+    const debounce = putDebounceRef.current;
+    const flushKeepalive = (): void => {
+      debounce?.cancel();
+      runServerPut(true);
     };
-  }, [wins, conns, suppressNextPersistRef, serverSyncEnabled]);
+    const onHide = (): void => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden")
+        flushKeepalive();
+    };
+    window.addEventListener("pagehide", flushKeepalive);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", flushKeepalive);
+      document.removeEventListener("visibilitychange", onHide);
+      debounce?.flush();
+    };
+  }, [serverSyncEnabled, runServerPut]);
 }
 
 interface UseKeyboardArgs {
@@ -772,6 +923,11 @@ export function useWorkspace(
   const [conns, setConns] = useState<Connection[]>([]);
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
   const [view, setView] = useState<View>(readView);
+  // Issue #1580 — destructure the optional scope-bind callbacks so the memoized
+  // action factories below depend on their (stable) identities rather than on the
+  // `opts` object, which defaults to a fresh `{}` every render and would otherwise
+  // re-create the whole api each frame and defeat memoization.
+  const { onScopeBind, onScopeUnbind, onConnectorBind, onConnectorUnbind } = opts;
   const zc = useRef<number>(3);
   const snapZone = useRef<SnapZone | null>(null);
   const suppressNextServerPersistRef = useRef(false);
@@ -811,60 +967,75 @@ export function useWorkspace(
     suppressNextPersistRef: suppressNextServerPersistRef,
   });
 
-  useEffect(() => {
-    if (wins === null) return;
-    persistList(CONN_LS, sanitizePersistedConnections(conns, wins));
+  // Debounced localStorage persistence (issue #1580): a drag/resize mutates wins
+  // every frame; without this each frame ran a synchronous sanitize + JSON.stringify
+  // + setItem. The sanitize pipeline still runs in full on the eventual write, so
+  // multi-tab byte-identity is preserved.
+  useDebouncedPersist(() => {
+    if (wins !== null) persistList(CONN_LS, sanitizePersistedConnections(conns, wins));
   }, [conns, wins]);
 
   useConnectionPrune(wins, setConns);
 
-  useEffect(() => {
+  useDebouncedPersist(() => {
     if (wins !== null) persistList(WS_LS, sanitizePersistedWindows(wins));
   }, [wins]);
 
   useKeyboardCtrls({ setWins, rect, cancelConnectRef });
   useFitMaximized({ wsRef, viewRef, setWins });
 
-  const { update, focus, close, minimize, restore, maximize, add, openEditorFile, toggleTool } =
-    makeMutations({
-      setWins,
-      zc,
-      worldVP,
+  // Issue #1580 — the WorkspaceApi object and all of its action closures are the
+  // props that flow into every WindowFrame and the ConnectionsLayer. Built fresh
+  // each render they change identity every pan/zoom rAF frame, which makes any
+  // React.memo on those children a permanent no-op and re-renders all N windows
+  // per frame. Every closure below already mutates via setWins functional updaters
+  // and reads live state through winsRef/connsRef/viewRef/zc, so it captures NO
+  // stale wins/conns/view and can be built ONCE. The only non-stable inputs are the
+  // optional scope-bind callbacks, which are listed in the relevant deps so a parent
+  // swapping a callback still rebinds.
+  const mutations = useMemo(
+    () => makeMutations({ setWins, zc, worldVP, winsRef }),
+    [setWins, zc, worldVP, winsRef],
+  );
+  const layout = useMemo(() => makeLayoutActions({ setWins, worldVP }), [setWins, worldVP]);
+  const snap = useMemo(
+    () => makeSnapActions({ setSnapPrev, snapZone, worldVP, update: mutations.update }),
+    [setSnapPrev, snapZone, worldVP, mutations],
+  );
+  const connectActions = useMemo(
+    () =>
+      makeConnectActions({
+        wsRef,
+        viewRef,
+        winsRef,
+        connsRef,
+        connectingRef,
+        connectCleanupRef,
+        focus: mutations.focus,
+        setConns,
+        setConnecting,
+        onScopeBind,
+        onScopeUnbind,
+        onConnectorBind,
+        onConnectorUnbind,
+      }),
+    [
+      wsRef,
+      viewRef,
       winsRef,
-    });
-  const { tileAll, splitFront, cascade } = makeLayoutActions({ setWins, worldVP });
-  const { setSnap, commitSnap } = makeSnapActions({ setSnapPrev, snapZone, worldVP, update });
-  const {
-    startConnect,
-    confirmConnect,
-    cancelConnect,
-    removeConn,
-    connect,
-    linkedFilesRoot,
-    linkedFilesContext,
-    linkedAllFilesRoots,
-    linkedConnectorCapsuleIds,
-    linkedConnectorCapsuleSetIds,
-    linkedFigmaSnapshotRunIds,
-    linkedFigmaSnapshotSources,
-    linkedImageSources,
-    currentFilesContext,
-  } = makeConnectActions({
-    wsRef,
-    viewRef,
-    winsRef,
-    connsRef,
-    connectingRef,
-    connectCleanupRef,
-    focus,
-    setConns,
-    setConnecting,
-    onScopeBind: opts.onScopeBind,
-    onScopeUnbind: opts.onScopeUnbind,
-    onConnectorBind: opts.onConnectorBind,
-    onConnectorUnbind: opts.onConnectorUnbind,
-  });
-  cancelConnectRef.current = cancelConnect;
+      connsRef,
+      connectingRef,
+      connectCleanupRef,
+      mutations,
+      setConns,
+      setConnecting,
+      onScopeBind,
+      onScopeUnbind,
+      onConnectorBind,
+      onConnectorUnbind,
+    ],
+  );
+  cancelConnectRef.current = connectActions.cancelConnect;
 
   // uiux-fix F008 C120 — closing a connected window must fire the same unbind callbacks as
   // removing the edge badge (removeConn), otherwise the visible relationship disappears while
@@ -872,51 +1043,58 @@ export function useWorkspace(
   // do this: by the time it runs, the closed window is gone from winsRef and the bind roots can
   // no longer be derived — so the teardown runs here, BEFORE the window list shrinks. The prune
   // effect afterwards only sweeps the now-orphaned edge objects.
-  const closeWithTeardown: WorkspaceApi["close"] = (id) => {
-    const win = winsRef.current.find((w) => w.id === id);
-    if (win !== undefined) {
-      for (const c of connsRef.current) {
-        const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
-        if (otherId === null) continue;
-        const other = winsRef.current.find((w) => w.id === otherId);
-        if (other === undefined) continue;
-        // Release 0.2.0 — prefer the bind-time snapshot on the Connection: the window's current
-        // cfg may have moved on (Files window navigated elsewhere, another capsule selected) and
-        // re-deriving from it would unbind the WRONG source. cfg-derivation remains the fallback
-        // for edges persisted before the snapshot fields existed.
-        const chatWindowId =
-          c.boundChatWindowId ??
-          (win.type === "chat" ? win.id : other.type === "chat" ? other.id : null);
-        const scope = boundScopeOf(c) ?? filesChatBindScope(win, other, Date.now());
-        if (scope !== null && chatWindowId !== null) opts.onScopeUnbind?.(chatWindowId, scope);
-        const connectorScope = boundConnectorScopeOf(c) ?? connectorChatBind(win, other);
-        if (connectorScope !== null && chatWindowId !== null) {
-          opts.onConnectorUnbind?.(chatWindowId, connectorScope);
+  const closeWithTeardown = useCallback<WorkspaceApi["close"]>(
+    (id) => {
+      const win = winsRef.current.find((w) => w.id === id);
+      if (win !== undefined) {
+        for (const c of connsRef.current) {
+          const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+          if (otherId === null) continue;
+          const other = winsRef.current.find((w) => w.id === otherId);
+          if (other === undefined) continue;
+          // Release 0.2.0 — prefer the bind-time snapshot on the Connection: the window's current
+          // cfg may have moved on (Files window navigated elsewhere, another capsule selected) and
+          // re-deriving from it would unbind the WRONG source. cfg-derivation remains the fallback
+          // for edges persisted before the snapshot fields existed.
+          const chatWindowId =
+            c.boundChatWindowId ??
+            (win.type === "chat" ? win.id : other.type === "chat" ? other.id : null);
+          const scope = boundScopeOf(c) ?? filesChatBindScope(win, other, Date.now());
+          if (scope !== null && chatWindowId !== null) onScopeUnbind?.(chatWindowId, scope);
+          const connectorScope = boundConnectorScopeOf(c) ?? connectorChatBind(win, other);
+          if (connectorScope !== null && chatWindowId !== null) {
+            onConnectorUnbind?.(chatWindowId, connectorScope);
+          }
         }
       }
-    }
-    close(id);
-  };
+      mutations.close(id);
+    },
+    [winsRef, connsRef, mutations, onScopeUnbind, onConnectorUnbind],
+  );
 
-  const updateConnBoundScope: WorkspaceApi["updateConnBoundScope"] = (
-    connId: string,
-    scope: ChatConnectedScope,
-  ) => {
-    setConns((cs) =>
-      cs.map((conn) =>
-        conn.id === connId
-          ? {
-              ...conn,
-              boundScopeKind: scope.kind,
-              ...(scope.root !== undefined ? { boundRoot: scope.root } : {}),
-              ...(scope.relativePaths[0] !== undefined
-                ? { boundRelativePath: scope.relativePaths[0] }
-                : {}),
-            }
-          : conn,
-      ),
-    );
-  };
+  const updateConnBoundScope = useCallback<WorkspaceApi["updateConnBoundScope"]>(
+    (connId, scope) => {
+      setConns((cs) =>
+        cs.map((conn) =>
+          conn.id === connId
+            ? {
+                ...conn,
+                boundScopeKind: scope.kind,
+                ...(scope.root !== undefined ? { boundRoot: scope.root } : {}),
+                ...(scope.relativePaths[0] !== undefined
+                  ? { boundRelativePath: scope.relativePaths[0] }
+                  : {}),
+              }
+            : conn,
+        ),
+      );
+    },
+    [setConns],
+  );
+
+  // Issue #1580 — stable accessor for the live view (mirrors rect()); lets window
+  // children read pan/zoom at gesture-start without a per-frame `view` prop.
+  const currentView = useCallback((): View => viewRef.current, [viewRef]);
 
   // Component unmount must also drop the global listener.
   useEffect(
@@ -929,42 +1107,64 @@ export function useWorkspace(
     [],
   );
 
-  const api: WorkspaceApi = {
-    add,
-    openEditorFile,
-    toggleTool,
-    focus,
-    close: closeWithTeardown,
-    minimize,
-    restore,
-    maximize,
-    update,
-    setSnap,
-    commitSnap,
-    tileAll,
-    splitFront,
-    cascade,
-    startConnect,
-    confirmConnect,
-    cancelConnect,
-    removeConn,
-    updateConnBoundScope,
-    connect,
-    linkedFilesRoot,
-    linkedFilesContext,
-    linkedAllFilesRoots,
-    linkedConnectorCapsuleIds,
-    linkedConnectorCapsuleSetIds,
-    linkedFigmaSnapshotRunIds,
-    linkedFigmaSnapshotSources,
-    linkedImageSources,
-    currentFilesContext,
-    zoomTo,
-    fitView,
-    resetView,
-    panBy,
-    rect,
-  };
+  // Issue #1580 — assemble the api once per stable-input change. Because every
+  // member above is now referentially stable across pan/zoom/drag frames, this
+  // object keeps a constant identity during gestures, which is what lets the
+  // React.memo on WindowFrame/ConnectionsLayer collapse the per-frame re-render
+  // storm from O(N windows) to O(windows that actually changed).
+  const api = useMemo<WorkspaceApi>(
+    () => ({
+      add: mutations.add,
+      openEditorFile: mutations.openEditorFile,
+      toggleTool: mutations.toggleTool,
+      focus: mutations.focus,
+      close: closeWithTeardown,
+      minimize: mutations.minimize,
+      restore: mutations.restore,
+      maximize: mutations.maximize,
+      update: mutations.update,
+      setSnap: snap.setSnap,
+      commitSnap: snap.commitSnap,
+      tileAll: layout.tileAll,
+      splitFront: layout.splitFront,
+      cascade: layout.cascade,
+      startConnect: connectActions.startConnect,
+      confirmConnect: connectActions.confirmConnect,
+      cancelConnect: connectActions.cancelConnect,
+      removeConn: connectActions.removeConn,
+      updateConnBoundScope,
+      connect: connectActions.connect,
+      linkedFilesRoot: connectActions.linkedFilesRoot,
+      linkedFilesContext: connectActions.linkedFilesContext,
+      linkedAllFilesRoots: connectActions.linkedAllFilesRoots,
+      linkedConnectorCapsuleIds: connectActions.linkedConnectorCapsuleIds,
+      linkedConnectorCapsuleSetIds: connectActions.linkedConnectorCapsuleSetIds,
+      linkedFigmaSnapshotRunIds: connectActions.linkedFigmaSnapshotRunIds,
+      linkedFigmaSnapshotSources: connectActions.linkedFigmaSnapshotSources,
+      linkedImageSources: connectActions.linkedImageSources,
+      currentFilesContext: connectActions.currentFilesContext,
+      zoomTo,
+      fitView,
+      resetView,
+      panBy,
+      rect,
+      currentView,
+    }),
+    [
+      mutations,
+      snap,
+      layout,
+      connectActions,
+      closeWithTeardown,
+      updateConnBoundScope,
+      currentView,
+      zoomTo,
+      fitView,
+      resetView,
+      panBy,
+      rect,
+    ],
+  );
 
   return { wins, snapPrev, palOpen, setPalOpen, conns, connecting, view, api };
 }

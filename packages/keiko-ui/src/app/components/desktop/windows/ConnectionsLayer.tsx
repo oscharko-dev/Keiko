@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { GroundedAnswer as GroundedAnswerWire } from "@/lib/types";
 import { Icons } from "../Icons";
 import { connPath, relLabel } from "./connectionUtils";
@@ -287,12 +287,7 @@ function FlowParticles({
   );
 }
 
-export function ConnectionsLayer({
-  wins,
-  conns,
-  connecting,
-  api,
-}: ConnectionsLayerProps): ReactNode {
+function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayerProps): ReactNode {
   const session = useOptionalChatSessionContext();
   const reducedMotion = usePrefersReducedMotion();
   const { armedId, arm, disarm } = useArmedRemove();
@@ -301,7 +296,11 @@ export function ConnectionsLayer({
   // animates nothing. Heavy/light intensity is remembered from the last settled answer (see useChannelFlow).
   const { flowing, intensity } = useChannelFlow(session?.sending === true, session?.latestGrounded);
 
-  const items = resolveConnections(wins, conns);
+  // Issue #1580 — edge geometry depends only on window rects + the connection set,
+  // never on the pan/zoom view (the SVG lives inside the CSS-transformed .ws-scene),
+  // so recompute only when those actually change. Combined with the memo wrapper
+  // below this keeps the connections layer idle during pan/zoom.
+  const items = useMemo(() => resolveConnections(wins, conns), [wins, conns]);
   const temp = connecting !== null ? tempPath(connecting, wins) : null;
   return (
     <>
@@ -393,3 +392,9 @@ export function ConnectionsLayer({
     </>
   );
 }
+
+// Issue #1580 — memoized so the connections layer is skipped on pan/zoom frames
+// (its props — visibleWins, conns, connecting, the now-stable api — are all
+// referentially stable unless windows/edges actually change). A window drag
+// changes `wins` and correctly re-renders it so edges track the moved window.
+export const ConnectionsLayer = memo(ConnectionsLayerImpl);

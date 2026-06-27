@@ -233,11 +233,39 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   const t0 = performance.now();
   let raf = 0;
   let running = true;
+  let lastDraw = 0;
   const ripT = new Float32Array(RN);
+
+  // Issue #1580 — the wallpaper is a near-static ambient field most of the time,
+  // yet it redrew a full-screen 5-octave fbm fragment pass at the display refresh
+  // rate forever, competing with pan/zoom compositing on integrated GPUs (the
+  // reporter's environment). Cap it to ~30fps when idle (60fps only while a click
+  // ripple is animating) and skip the draw entirely while the canvas pan is active
+  // or a maximized window fully occludes the wallpaper. rAF keeps ticking (cheap);
+  // only the expensive GPU draw is gated, so motion resumes instantly on the next
+  // frame once the gesture/occlusion clears (lastDraw is intentionally not advanced
+  // while skipping).
+  const IDLE_FRAME_MS = 1000 / 30;
+  const ACTIVE_FRAME_MS = 1000 / 60;
+  const RIPPLE_LIFETIME_MS = 2400;
+
+  function rippleActive(now: number): boolean {
+    for (let i = 0; i < RN; i++) {
+      if (now - (ripStart[i] ?? Number.NEGATIVE_INFINITY) < RIPPLE_LIFETIME_MS) return true;
+    }
+    return false;
+  }
 
   function frame(): void {
     if (!running) return;
+    raf = requestAnimationFrame(frame);
     const now = performance.now();
+
+    const minInterval = rippleActive(now) ? ACTIVE_FRAME_MS : IDLE_FRAME_MS;
+    if (now - lastDraw < minInterval) return;
+    if (host.dataset.panning === "true" || host.dataset.windowMaxed === "true") return;
+
+    lastDraw = now;
     const time = (now - t0) / 1000;
 
     for (let i = 0; i < RN; i++) {
@@ -254,8 +282,6 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
       gl.uniform1fv(uRipT, ripT);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
-
-    raf = requestAnimationFrame(frame);
   }
   raf = requestAnimationFrame(frame);
 

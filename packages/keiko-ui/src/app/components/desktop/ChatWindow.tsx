@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import {
+  memo,
   useCallback,
   useEffect,
   useId,
@@ -303,7 +304,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
   );
 }
 
-function ChatBubble({
+function ChatBubbleImpl({
   message,
   onOpenRunResult,
   repositoryRoots,
@@ -403,6 +404,13 @@ function ChatBubble({
   );
 }
 
+// Issue #1580 — memoized so appending a message (or a streaming token) re-renders
+// only the new/last bubble, not the whole transcript. The props are stable for
+// settled bubbles: `message` keeps its identity, repositoryRoots is useMemo'd,
+// openRepositoryReference === openEditorFile (a WindowFrame useCallback), and
+// `streaming` is false for every bubble except the live one.
+const ChatBubble = memo(ChatBubbleImpl);
+
 function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): ReactNode {
   return (
     <div
@@ -445,7 +453,7 @@ interface ConversationThreadProps {
   readonly onCancelGrounded: () => void;
 }
 
-function ConversationThread({
+function ConversationThreadImpl({
   messages,
   onOpenRunResult,
   repositoryRoots,
@@ -514,6 +522,12 @@ function ConversationThread({
     </div>
   );
 }
+
+// Issue #1580 — memoized so a chat-window re-render that does not change the
+// transcript inputs (e.g. a resize, or unrelated composer state) skips reconciling
+// the whole thread; combined with the per-bubble memo above, a new message renders
+// just the new bubble.
+const ConversationThread = memo(ConversationThreadImpl);
 
 const REPOSITORY_FILE_SEARCH_LIMIT = 24;
 const MAX_REPOSITORY_FOCUS_PATHS = 50;
