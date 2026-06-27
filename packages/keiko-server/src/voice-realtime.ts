@@ -180,10 +180,7 @@ function buildNegotiationRequest(
     transcriptionModel: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
     offerSdp,
     signal,
-    timeoutMs: Math.min(
-      provider.timeoutMs ?? REALTIME_NEGOTIATION_TIMEOUT_MS,
-      REALTIME_NEGOTIATION_TIMEOUT_MS,
-    ),
+    timeoutMs: Math.min(provider.timeoutMs, REALTIME_NEGOTIATION_TIMEOUT_MS),
     ...(egress !== undefined ? { egress } : {}),
   };
 }
