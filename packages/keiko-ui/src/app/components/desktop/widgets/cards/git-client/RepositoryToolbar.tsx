@@ -113,7 +113,13 @@ export function RepositoryToolbar({
         onValueChange={() => undefined}
       />
 
-      <span style={STATUS_PILL_STYLE} aria-label={syncLabel(status, statusLoading)}>
+      <span
+        style={STATUS_PILL_STYLE}
+        aria-label={syncLabel(status, statusLoading)}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
         <Icons.reset size={11} />
         {syncLabel(status, statusLoading)}
       </span>

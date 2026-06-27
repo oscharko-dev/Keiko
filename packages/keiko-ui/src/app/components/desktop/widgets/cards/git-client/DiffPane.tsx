@@ -70,7 +70,14 @@ export function DiffPane({
 
   return (
     <div style={PANE_STYLE}>
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }} className="review">
+      <div
+        style={{ flex: 1, minHeight: 0, overflow: "auto" }}
+        className="review"
+        role="region"
+        aria-label="Diff"
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Long diffs need a named, keyboard-scrollable region.
+        tabIndex={0}
+      >
         <DiffBody
           selectedChangePath={selectedChangePath}
           state={state}
