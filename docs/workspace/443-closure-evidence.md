@@ -6,18 +6,21 @@ Issue #450 records the proof that governed isolated task workspaces are implemen
 
 The implementation landed through these merged pull requests targeting `feat/keiko-isolated-task-workspaces`:
 
-| PR    | Issue | Scope                                                                             | Squash mergeCommit |
-| ----- | ----- | --------------------------------------------------------------------------------- | ------------------ |
-| #1555 | #444  | Define task-workspace domain contract on existing workspace and Git architecture  | `0f37aca8`         |
-| #1565 | #445  | Implement managed Git worktree provisioning and activation                        | `8826ec3d`         |
-| #1567 | #446  | Bind task workspaces across Studio, editor runtime, and Git Delivery surfaces     | `14cde552`         |
-| #1570 | #446  | Browser e2e for active-binding task switching                                     | `a954ddbd`         |
-| #1579 | #447  | Persist task-workspace state with startup reconciliation and repair semantics     | `c8d216ef`         |
-| #1581 | #447  | Address review findings on reconciliation and repair                              | `98e599c9`         |
-| #1585 | #448  | Add workspace health, drift detection, audit trail, and governed cleanup controls | `2a2267fc`         |
-| #1587 | #449  | Harden task-workspace security, concurrency control, and failure recovery         | `9df0a638`         |
+| PR    | Issue | Scope                                                                               | Squash mergeCommit |
+| ----- | ----- | ----------------------------------------------------------------------------------- | ------------------ |
+| #1555 | #444  | Define task-workspace domain contract on existing workspace and Git architecture    | `0f37aca8`         |
+| #1565 | #445  | Implement managed Git worktree provisioning and activation                          | `8826ec3d`         |
+| #1567 | #446  | Bind task workspaces across Studio, editor runtime, and Git Delivery surfaces       | `14cde552`         |
+| #1570 | #446  | Browser e2e for active-binding task switching                                       | `a954ddbd`         |
+| #1579 | #447  | Persist task-workspace state with startup reconciliation and repair semantics       | `c8d216ef`         |
+| #1581 | #447  | Address review findings on reconciliation and repair                                | `98e599c9`         |
+| #1585 | #448  | Add workspace health, drift detection, audit trail, and governed cleanup controls   | `2a2267fc`         |
+| #1587 | #449  | Harden task-workspace security, concurrency control, and failure recovery           | `9df0a638`         |
+| #1588 | #449  | Scan the store once in the global orphan sweep (perf follow-up)                     | `35e0bbfa`         |
+| #1589 | #449  | Reject control/zero-width/bidi chars in `requestedBy`/`taskId` (security follow-up) | `247826df`         |
+| #1591 | #450  | Verification matrix, operator runbook, and closure evidence (this capstone)         | `2854b086`         |
 
-**ADRs**: ADR-0088 through ADR-0093 (one per child issue #444–#449). Final `KEIKO_CONTRACTS_VERSION` on the branch: **0.12.0** (progressed 0.8.0 → 0.9.0 → 0.10.0 → 0.11.0 → 0.12.0 across #444, #447, #448, #449).
+**ADRs**: ADR-0088 through ADR-0093 (one per child issue #444–#449). Final `KEIKO_CONTRACTS_VERSION` on the branch: **0.12.0** (progressed 0.8.0 → 0.9.0 → 0.10.0 → 0.11.0 → 0.12.0 across #444, #447, #448, #449; the #1588/#1589 follow-ups did not change the contract surface).
 
 ## Reuse, not duplication
 
@@ -152,17 +155,19 @@ Cleanup operations refuse dirty, locked, unowned, or out-of-root workspaces, lea
 
 4. **Performance bounds validated at N=200 paused workspaces** (scale.test.ts: listAll, reconciliation, health, switch latency all within documented bounds).
 
-### Two LOW-severity follow-ups from #449 (non-blocking for closure)
+### Two LOW-severity follow-ups from #449 — RESOLVED
 
-1. **cleanupOrphans double listAll** — optimization opportunity to consolidate two store queries into one. No correctness risk (SC1 side effect is idempotent).
+Both LOW-severity follow-ups flagged at #449 merge time have since been resolved on this branch (after the original #450 doc commit `2854b086`):
 
-2. **Control/bidi characters in requestedBy/taskId survive into lock owner** — content-free redaction does not strip these chars (e.g., emoji in task name). No sink created; predates #449. Can be addressed as a future evidence hardening pass.
+1. **cleanupOrphans double listAll — RESOLVED** by PR #1588 (`35e0bbfa`). `cleanupOrphansImpl` now calls `store.listAll()` exactly once (`buildKnownPathsByRepo`, `cleanup.ts`), and `resolveOrphanRepositoryIds` reuses the resulting map keys instead of issuing a second store query. Behaviour is unchanged; the redundant scan is gone.
 
-Both are documented in ADR-0093 and do not block production readiness.
+2. **Control/bidi characters in requestedBy/taskId — RESOLVED** by PR #1589 (`247826df`). `field-safety.ts` `assertSafeFieldValue` now rejects (not strips) C0/C1/DEL, zero-width, and bidi code points, wired at both the route and service boundaries (`routes.ts`, `provisioning.ts`, `lifecycle.ts`, `repair.ts`, `cleanup.ts`). Covered by 10 dedicated `field-safety.test.ts` cases.
+
+Both fixes were verified green during Epic #443 closeout and do not change any contract or governance surface.
 
 ## Project-state note
 
-All six child issues (#444–#449) are CLOSED with `status: done`. Epic #443 itself is OPEN and remains open pending this #450 capstone PR. The epic's seven Definition-of-Done checkboxes are satisfied by this artifact set (closure evidence + verification matrix + operator runbook + consolidated fixture):
+All seven child issues (#444–#450) are CLOSED `completed` with `status: done`, and the #450 capstone (PR #1591) plus the #1588/#1589 follow-ups are merged into `feat/keiko-isolated-task-workspaces`. Epic #443 is being formally closed as `completed` by the closeout pass that produced this update. The epic's seven Definition-of-Done checkboxes are satisfied by this artifact set (closure evidence + verification matrix + operator runbook + consolidated fixture) and were re-verified against the merged branch during closeout:
 
 - [x] All child issues closed with acceptance criteria and verification evidence.
 - [x] Required GitHub checks green on implementation PRs.
@@ -174,4 +179,4 @@ All six child issues (#444–#449) are CLOSED with `status: done`. Epic #443 its
 
 ## Closure decision
 
-The Epic #443 closure artifact set — this summary, [443-verification-matrix.md](./443-verification-matrix.md), [443-operator-runbook.md](./443-operator-runbook.md), the consolidated epic-443-lifecycle.test.ts fixture, and the merged child-issue evidence (ADRs, contracts versions, PR squash commits) — is sufficient for maintainers to assess rollout and support readiness without rerunning ad hoc investigation. With all child issues closed and this #450 PR green on the required `ci` check, Epic #443 is ready for formal closure as completed.
+The Epic #443 closure artifact set — this summary, [443-verification-matrix.md](./443-verification-matrix.md), [443-operator-runbook.md](./443-operator-runbook.md), the consolidated epic-443-lifecycle.test.ts fixture, and the merged child-issue evidence (ADRs, contracts versions, PR squash commits) — is sufficient for maintainers to assess rollout and support readiness without rerunning ad hoc investigation. With all seven child issues closed and the implementation PRs green on the required `ci` check, Epic #443 is closed as completed.
