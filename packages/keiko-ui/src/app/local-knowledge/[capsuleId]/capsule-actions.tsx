@@ -10,7 +10,7 @@
 // Focus trap: Tab/Shift+Tab cycle within the dialog; Escape cancels.
 // WCAG: min 30×30 button targets, focus-visible ring, colour tokens for danger text.
 
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
 import {
@@ -35,7 +35,7 @@ import {
 } from "@/lib/local-knowledge-limits";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import { LocalFileBrowserDialog } from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
-import { Icons } from "@/app/components/desktop/Icons";
+import KeikoSelect from "@/app/components/desktop/KeikoSelect";
 import { formatError } from "../format-error";
 
 // ---------------------------------------------------------------------------
@@ -199,6 +199,24 @@ function pickerFileMeta(entry: FilesTreeEntry): ReactNode {
   );
 }
 
+const SOURCE_KIND_OPTIONS = [
+  {
+    value: "folder",
+    label: "Folder",
+    description: "Index every supported document under one folder.",
+  },
+  {
+    value: "repository",
+    label: "Repository",
+    description: "Connect a repository root as a capsule source.",
+  },
+  {
+    value: "files",
+    label: "Files",
+    description: "Choose specific files below a shared root.",
+  },
+] as const;
+
 function ConnectSourceForm({
   capsuleId,
   onConnected,
@@ -210,6 +228,7 @@ function ConnectSourceForm({
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const sourceKindLabelId = useId();
   const scope = buildScope(scopeKind, rootPath, filesInput);
 
   async function handleConnect(): Promise<void> {
@@ -230,33 +249,24 @@ function ConnectSourceForm({
 
   return (
     <div className="lkd-connect-form" aria-label="Connect a source">
-      <label htmlFor="lkd-connect-kind" className="lkd-connect-label">
+      <span id={sourceKindLabelId} className="lkd-connect-label">
         Connect source
-      </label>
+      </span>
       <div className="lkd-connect-row">
-        {/* No aria-label here: the visible "Connect source" label (htmlFor above)
-            provides the accessible name, so WCAG 2.5.3 Label in Name holds
-            (uiux-fix F033, C365). The select sits in the app's .dlg-selwrap
-            chevron wrapper so it is recognisable as a dropdown (C234). */}
-        <span className="dlg-selwrap">
-          <select
-            id="lkd-connect-kind"
-            className="dlg-input"
-            value={scopeKind}
-            disabled={busy}
-            onChange={(e) => {
-              setScopeKind(e.target.value as ConnectCapsuleSourceScope["kind"]);
-              setConnectError(null);
-            }}
-          >
-            <option value="folder">Folder</option>
-            <option value="repository">Repository</option>
-            <option value="files">Files</option>
-          </select>
-          <span className="dlg-selchev">
-            <Icons.chevron size={15} />
-          </span>
-        </span>
+        <KeikoSelect
+          value={scopeKind}
+          sections={[{ options: SOURCE_KIND_OPTIONS }]}
+          onValueChange={(next) => {
+            setScopeKind(next as ConnectCapsuleSourceScope["kind"]);
+            setConnectError(null);
+          }}
+          disabled={busy}
+          ariaLabelledBy={sourceKindLabelId}
+          triggerClassName="lkd-source-kind-select"
+          menuClassName="lkd-source-kind-menu"
+          menuTitle="Source type"
+          showMenuHeader={false}
+        />
       </div>
       <div className="lkd-connect-row">
         <label htmlFor="lkd-connect-path-input" className="dlg-label">
