@@ -311,13 +311,35 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
   viewRef.current = view;
   const pendingViewRef = useRef<View | null>(null);
   const frameRef = useRef<number | null>(null);
+  const viewPersistDebounceRef = useRef<TrailingDebounce | null>(null);
+  if (viewPersistDebounceRef.current === null)
+    viewPersistDebounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
 
-  // The view is a tiny {zoom,x,y} object written with no sanitize pass, so a
-  // per-frame setItem is negligible (unlike the windows/connections snapshots,
-  // which are debounced). Kept synchronous so it never lags the live view.
+  const scheduleViewPersist = useCallback((): void => {
+    viewPersistDebounceRef.current?.schedule(() => persistList(VIEW_LS, viewRef.current));
+  }, []);
+
+  // Issue #1580 follow-up — keep the live view synchronous through viewRef, but
+  // take the durable localStorage write out of the pan/zoom frame path. Even this
+  // tiny JSON setItem can contend on weaker Windows/iGPU systems when wheel/pan
+  // frames arrive continuously; pagehide/visibility-hidden/unmount still flush the
+  // latest value so reload state is not lost.
   useEffect(() => {
-    persistList(VIEW_LS, view);
-  }, [view]);
+    const debounce = viewPersistDebounceRef.current;
+    if (debounce === null) return;
+    const flushNow = (): void => debounce.flush();
+    const flushOnHide = (): void => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden")
+        debounce.flush();
+    };
+    window.addEventListener("pagehide", flushNow);
+    document.addEventListener("visibilitychange", flushOnHide);
+    return () => {
+      window.removeEventListener("pagehide", flushNow);
+      document.removeEventListener("visibilitychange", flushOnHide);
+      debounce.flush();
+    };
+  }, []);
 
   useEffect(
     () => () => {
@@ -334,6 +356,7 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
       const resolved = typeof next === "function" ? next(base) : next;
       viewRef.current = resolved;
       pendingViewRef.current = resolved;
+      scheduleViewPersist();
 
       if (
         typeof window.requestAnimationFrame !== "function" ||
@@ -352,7 +375,7 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
         if (pending !== null) setView(pending);
       });
     },
-    [setView],
+    [scheduleViewPersist, setView],
   );
 
   useEffect(() => {
@@ -902,15 +925,13 @@ function useConnectionPrune(
 // reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
   readonly onScopeBind?:
-    | ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>)
-    | undefined;
+    ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>) | undefined;
   readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
   readonly onConnectorBind?:
     | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void)
-    | undefined;
+    ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 
 export function useWorkspace(
@@ -939,6 +960,32 @@ export function useWorkspace(
   winsRef.current = wins ?? [];
   const connsRef = useRef<Connection[]>([]);
   connsRef.current = conns;
+  const winsById = useMemo<ReadonlyMap<string, AppWindow>>(
+    () => new Map((wins ?? []).map((win) => [win.id, win])),
+    [wins],
+  );
+  const connsById = useMemo<ReadonlyMap<string, Connection>>(
+    () => new Map(conns.map((conn) => [conn.id, conn])),
+    [conns],
+  );
+  const connsByEndpoint = useMemo<ReadonlyMap<string, readonly Connection[]>>(() => {
+    const next = new Map<string, Connection[]>();
+    for (const conn of conns) {
+      const a = next.get(conn.a);
+      if (a === undefined) next.set(conn.a, [conn]);
+      else a.push(conn);
+      const b = next.get(conn.b);
+      if (b === undefined) next.set(conn.b, [conn]);
+      else b.push(conn);
+    }
+    return next;
+  }, [conns]);
+  const winsByIdRef = useRef<ReadonlyMap<string, AppWindow>>(winsById);
+  winsByIdRef.current = winsById;
+  const connsByIdRef = useRef<ReadonlyMap<string, Connection>>(connsById);
+  connsByIdRef.current = connsById;
+  const connsByEndpointRef = useRef<ReadonlyMap<string, readonly Connection[]>>(connsByEndpoint);
+  connsByEndpointRef.current = connsByEndpoint;
   // Refs for the click-to-connect flow. connectingRef is a synchronous view of
   // the `connecting` state for handlers fired from child components (confirm).
   // connectCleanupRef stores the global pointermove listener disposer so we
@@ -1009,6 +1056,9 @@ export function useWorkspace(
         viewRef,
         winsRef,
         connsRef,
+        winsByIdRef,
+        connsByIdRef,
+        connsByEndpointRef,
         connectingRef,
         connectCleanupRef,
         focus: mutations.focus,
@@ -1024,6 +1074,9 @@ export function useWorkspace(
       viewRef,
       winsRef,
       connsRef,
+      winsByIdRef,
+      connsByIdRef,
+      connsByEndpointRef,
       connectingRef,
       connectCleanupRef,
       mutations,
@@ -1045,12 +1098,12 @@ export function useWorkspace(
   // effect afterwards only sweeps the now-orphaned edge objects.
   const closeWithTeardown = useCallback<WorkspaceApi["close"]>(
     (id) => {
-      const win = winsRef.current.find((w) => w.id === id);
+      const win = winsByIdRef.current.get(id);
       if (win !== undefined) {
-        for (const c of connsRef.current) {
+        for (const c of connsByEndpointRef.current.get(id) ?? []) {
           const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
           if (otherId === null) continue;
-          const other = winsRef.current.find((w) => w.id === otherId);
+          const other = winsByIdRef.current.get(otherId);
           if (other === undefined) continue;
           // Release 0.2.0 — prefer the bind-time snapshot on the Connection: the window's current
           // cfg may have moved on (Files window navigated elsewhere, another capsule selected) and
@@ -1069,7 +1122,7 @@ export function useWorkspace(
       }
       mutations.close(id);
     },
-    [winsRef, connsRef, mutations, onScopeUnbind, onConnectorUnbind],
+    [winsByIdRef, connsByEndpointRef, mutations, onScopeUnbind, onConnectorUnbind],
   );
 
   const updateConnBoundScope = useCallback<WorkspaceApi["updateConnBoundScope"]>(

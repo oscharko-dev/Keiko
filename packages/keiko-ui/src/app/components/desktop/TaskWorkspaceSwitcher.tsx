@@ -10,7 +10,15 @@
 // busy controls use aria-disabled (focus stays put), errors use role=alert, recovery hints sit in a
 // <details> disclosure. No globals.css edits — visual tone comes from inline design tokens.
 
-import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  memo,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import {
   nextLegalTaskWorkspaceStates,
   type TaskWorkspaceHealth,
@@ -160,7 +168,7 @@ function actionButton(props: {
   );
 }
 
-export function TaskWorkspaceSwitcher(): ReactNode {
+function TaskWorkspaceSwitcherImpl(): ReactNode {
   const api = useActiveWorkspace();
   const [open, setOpen] = useState(false);
   const [taskId, setTaskId] = useState("");
@@ -402,3 +410,5 @@ export function TaskWorkspaceSwitcher(): ReactNode {
     </div>
   );
 }
+
+export const TaskWorkspaceSwitcher = memo(TaskWorkspaceSwitcherImpl);

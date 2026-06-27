@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { memo } from "react";
 import { useI18n } from "@/lib/i18n";
 import { Icons } from "./Icons";
 
@@ -16,13 +17,7 @@ interface HeaderProps {
   readonly onCascade: () => void;
 }
 
-export function Header({
-  openPalette,
-  openCommandPalette,
-  onTileAll,
-  onSplitFront,
-  onCascade,
-}: HeaderProps): ReactNode {
+function HeaderImpl({ onTileAll, onSplitFront, onCascade }: HeaderProps): ReactNode {
   const { t } = useI18n();
 
   return (
@@ -69,7 +64,8 @@ export function Header({
           <Icons.cascade size={16} />
         </button>
       </div>
-
     </header>
   );
 }
+
+export const Header = memo(HeaderImpl);

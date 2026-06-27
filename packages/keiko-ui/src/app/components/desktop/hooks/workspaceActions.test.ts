@@ -433,11 +433,23 @@ function makeConnectHarness(
 ): ReturnType<typeof makeConnectActions> {
   const winsRef = ref(wins);
   const connsRef = ref(conns);
+  const connsByEndpoint = new Map<string, Connection[]>();
+  for (const c of conns) {
+    const a = connsByEndpoint.get(c.a);
+    if (a === undefined) connsByEndpoint.set(c.a, [c]);
+    else a.push(c);
+    const b = connsByEndpoint.get(c.b);
+    if (b === undefined) connsByEndpoint.set(c.b, [c]);
+    else b.push(c);
+  }
   return makeConnectActions({
     wsRef: { current: null } as RefObject<HTMLElement | null>,
     viewRef: ref<View>({ zoom: 1, x: 0, y: 0 }),
     winsRef,
     connsRef,
+    winsByIdRef: ref<ReadonlyMap<string, AppWindow>>(new Map(wins.map((w) => [w.id, w]))),
+    connsByIdRef: ref<ReadonlyMap<string, Connection>>(new Map(conns.map((c) => [c.id, c]))),
+    connsByEndpointRef: ref<ReadonlyMap<string, readonly Connection[]>>(connsByEndpoint),
     connectingRef: ref<ConnectingState | null>(overrides.connecting ?? null),
     connectCleanupRef: ref<(() => void) | null>(null),
     focus: () => undefined,
@@ -1596,6 +1608,7 @@ describe("makeMutations.maximize", () => {
 
 describe("makeMutations.minimize/restore", () => {
   function harness(initial: AppWindow[]): {
+    focus: ReturnType<typeof makeMutations>["focus"];
     minimize: ReturnType<typeof makeMutations>["minimize"];
     restore: ReturnType<typeof makeMutations>["restore"];
     windows: () => readonly AppWindow[];
@@ -1604,12 +1617,12 @@ describe("makeMutations.minimize/restore", () => {
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
       wins = typeof fn === "function" ? fn(wins) : fn;
     };
-    const { minimize, restore } = makeMutations({
+    const { focus, minimize, restore } = makeMutations({
       setWins,
       zc: { current: 10 },
       worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
     });
-    return { minimize, restore, windows: () => wins ?? [] };
+    return { focus, minimize, restore, windows: () => wins ?? [] };
   }
 
   it("marks a window minimized without removing it", () => {
@@ -1627,6 +1640,52 @@ describe("makeMutations.minimize/restore", () => {
     h.restore("files-1");
 
     expect(h.windows()[0]).toMatchObject({ id: "files-1", minimized: false, z: 11 });
+  });
+
+  it("keeps the same window-list reference when focusing the already-front window", () => {
+    const h = harness([
+      { ...win("files", {}, "files-1"), z: 1 },
+      { ...win("chat", {}, "chat-1"), z: 10 },
+    ]);
+    const before = h.windows();
+
+    h.focus("chat-1");
+
+    expect(h.windows()).toBe(before);
+  });
+
+  it("raises a non-front window when focused", () => {
+    const h = harness([
+      { ...win("files", {}, "files-1"), z: 1 },
+      { ...win("chat", {}, "chat-1"), z: 10 },
+    ]);
+
+    h.focus("files-1");
+
+    expect(h.windows().find((w) => w.id === "files-1")).toMatchObject({ z: 11 });
+  });
+
+  it("raises above the current maximum z even when the z counter is stale", () => {
+    const h = harness([
+      { ...win("files", {}, "files-1"), z: 1 },
+      { ...win("chat", {}, "chat-1"), z: 100 },
+    ]);
+
+    h.focus("files-1");
+
+    expect(h.windows().find((w) => w.id === "files-1")).toMatchObject({ z: 101 });
+  });
+
+  it("keeps the same window-list reference when restoring an already-front visible window", () => {
+    const h = harness([
+      { ...win("files", {}, "files-1"), z: 1 },
+      { ...win("chat", {}, "chat-1"), z: 10 },
+    ]);
+    const before = h.windows();
+
+    h.restore("chat-1");
+
+    expect(h.windows()).toBe(before);
   });
 });
 

@@ -14,6 +14,7 @@ import { useWorkspace } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
 
 const WS_LS = "keiko.workspace.v4";
+const VIEW_LS = "keiko.view";
 const POLL_MS = 1500;
 
 function seedWindow(): AppWindow {
@@ -38,6 +39,9 @@ function Harness(): ReactElement {
     <main ref={wsRef} className="workspace" data-testid="ws">
       <button type="button" data-testid="minimize" onClick={() => ws.api.minimize("agents-1")}>
         minimize
+      </button>
+      <button type="button" data-testid="pan" onClick={() => ws.api.panBy(10, 20)}>
+        pan
       </button>
     </main>
   );
@@ -64,6 +68,7 @@ describe("Issue #1580 — debounced workspace persistence", () => {
   });
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -115,6 +120,42 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     expect(debouncedWsWrites).toBe(1);
     setItemSpy.mockRestore();
   });
+
+  it("debounces the view write and flushes it on pagehide", () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    window.localStorage.setItem(VIEW_LS, JSON.stringify({ x: 0, y: 0, zoom: 1 }));
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        callback(1);
+        return 1;
+      },
+    );
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const { getByTestId } = render(<Harness />);
+    act(() => {
+      vi.advanceTimersByTime(POLL_MS);
+    });
+    const baseline = window.localStorage.getItem(VIEW_LS);
+    expect(JSON.parse(baseline ?? "null")).toEqual({ zoom: 1, x: 0, y: 0 });
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+
+    act(() => {
+      getByTestId("pan").click();
+    });
+
+    expect(window.localStorage.getItem(VIEW_LS)).toBe(baseline);
+    expect(setItemSpy.mock.calls.filter(([key]) => key === VIEW_LS)).toHaveLength(0);
+
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(JSON.parse(window.localStorage.getItem(VIEW_LS) ?? "null")).toEqual({
+      zoom: 1,
+      x: 10,
+      y: 20,
+    });
+    setItemSpy.mockRestore();
+  });
 });
 
 describe("Issue #1580 — visibility-gated server poll", () => {
@@ -136,6 +177,7 @@ describe("Issue #1580 — visibility-gated server poll", () => {
   });
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     setWebdriver(true);
