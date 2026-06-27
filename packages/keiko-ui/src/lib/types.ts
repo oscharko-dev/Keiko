@@ -25,6 +25,7 @@ export type {
   GitDiffScope,
   GitRepositoryDiffResponse,
   GitRepositorySummary,
+  GitRepositorySummaryRemote,
   GitRemoteSummary,
   GitRemotesResponse,
   GitHistoryEntry,

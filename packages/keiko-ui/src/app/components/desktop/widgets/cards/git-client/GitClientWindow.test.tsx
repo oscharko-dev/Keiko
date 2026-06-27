@@ -677,13 +677,21 @@ describe("GitClientWindow — toolbar actions", () => {
       getSummary: vi.fn(async () =>
         makeSummary({
           branch: "feat/issue-1577",
-          remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
         }),
       ),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
       getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} openWindow={openWindow} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
     await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
 
@@ -714,13 +722,21 @@ describe("GitClientWindow — toolbar actions", () => {
       getSummary: vi.fn(async () =>
         makeSummary({
           branch: "feat/issue-1577",
-          remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
         }),
       ),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
       getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
     await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
     const panel = await screen.findByRole("region", { name: "Pull Request" });
@@ -751,9 +767,16 @@ describe("GitClientWindow — toolbar actions", () => {
       getSummary: vi.fn(async () =>
         makeSummary({
           branch: "feat/issue-1577",
-          remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
         }),
       ),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
       getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
       prExecute: vi.fn<GitClientSeam["prExecute"]>(async () => ({
         schemaVersion: "1",
@@ -767,6 +790,7 @@ describe("GitClientWindow — toolbar actions", () => {
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
     await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
     const panel = await screen.findByRole("region", { name: "Pull Request" });
@@ -787,13 +811,21 @@ describe("GitClientWindow — toolbar actions", () => {
       getSummary: vi.fn(async () =>
         makeSummary({
           branch: "feat/issue-1577",
-          remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
         }),
       ),
+      getRemotes: vi.fn(async () => ({
+        schemaVersion: "1" as const,
+        root: REPO_A.path,
+        state: "available" as const,
+        available: true,
+        remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
+        truncated: false,
+      })),
       getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} openWindow={openWindow} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
     await user.click(screen.getByRole("button", { name: /Merge/ }));
 
@@ -845,7 +877,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
 
-    await user.click(screen.getByRole("combobox", { name: "Branch" }));
+    await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
     const search = screen.getByRole("searchbox", { name: "Search branches" });
     await user.type(search, "feat");
 
@@ -861,6 +893,30 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         branchName: "feat/x",
       }),
     );
+    expect(screen.getByRole("combobox", { name: "Branch: main" })).toHaveFocus();
+  });
+
+  it("keeps the current branch option focusable for keyboard users", async () => {
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+
+    await user.click(await screen.findByRole("combobox", { name: "Branch: main" }));
+    const search = screen.getByRole("searchbox", { name: "Search branches" });
+    await user.keyboard("{ArrowDown}");
+
+    expect(search).not.toHaveFocus();
+    expect(screen.getByRole("option", { name: /main/ })).toHaveFocus();
+  });
+
+  it("restores focus to the branch trigger when the popup is dismissed", async () => {
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+
+    const trigger = await screen.findByRole("combobox", { name: "Branch: main" });
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("creates a new branch from a real base branch while keeping hashes out of the UI", async () => {
@@ -891,6 +947,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     });
     expect(document.body).not.toHaveTextContent("aaa");
     expect(document.body).not.toHaveTextContent("bbb");
+    await waitFor(() => expect(screen.getByRole("button", { name: "New branch" })).toHaveFocus());
   });
 
   it("renders commit history and selected commit diff metadata", async () => {
@@ -1269,7 +1326,7 @@ describe("GitClientWindow — required visible / absent words", () => {
   it("renders 'Branch' as the branch combobox label in the toolbar", async () => {
     render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Branch" })).toBeInTheDocument(),
+      expect(screen.getByRole("combobox", { name: "Branch: main" })).toBeInTheDocument(),
     );
   });
 

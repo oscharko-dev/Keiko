@@ -286,7 +286,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
     it("Branch combobox has accessible name 'Branch'", async () => {
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
       await waitFor(() =>
-        expect(screen.getByRole("combobox", { name: "Branch" })).toBeInTheDocument(),
+        expect(screen.getByRole("combobox", { name: "Branch: main" })).toBeInTheDocument(),
       );
     });
 
@@ -467,10 +467,10 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       const user = userEvent.setup();
       render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
       await waitFor(() =>
-        expect(screen.getByRole("combobox", { name: "Branch" })).toBeInTheDocument(),
+        expect(screen.getByRole("combobox", { name: "Branch: main" })).toBeInTheDocument(),
       );
 
-      await user.click(screen.getByRole("combobox", { name: "Branch" }));
+      await user.click(screen.getByRole("combobox", { name: "Branch: main" }));
 
       expect(screen.getByRole("searchbox", { name: "Search branches" })).toBeInTheDocument();
       expect(screen.getByRole("listbox", { name: "Branches" })).toBeInTheDocument();
@@ -478,6 +478,21 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
         "aria-selected",
         "true",
       );
+    });
+
+    it("branch popup restores focus and exposes the selected branch value", async () => {
+      const user = userEvent.setup();
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      const trigger = await screen.findByRole("combobox", { name: "Branch: main" });
+
+      await user.click(trigger);
+      fireEvent.keyDown(screen.getByRole("searchbox", { name: "Search branches" }), {
+        key: "ArrowDown",
+      });
+      expect(screen.getByRole("option", { name: /main/ })).toHaveFocus();
+
+      fireEvent.keyDown(screen.getByRole("option", { name: /main/ }), { key: "Escape" });
+      await waitFor(() => expect(trigger).toHaveFocus());
     });
 
     it("new-branch dialog is modal, initially focuses the branch-name input, and traps Tab", async () => {

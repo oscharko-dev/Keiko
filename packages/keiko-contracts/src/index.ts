@@ -411,6 +411,7 @@ export {
 // process execution stays server-side. Reuses GitRepositoryState/GitUnavailableReason unions.
 export type {
   GitRemoteSummary,
+  GitRepositorySummaryRemote,
   GitUpstreamSummary,
   GitLastSyncMetadata,
   GitRepositorySummary,

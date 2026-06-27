@@ -74,7 +74,7 @@ afterEach(async () => {
 });
 
 describe("GET /api/git/summary", () => {
-  it("summarizes a clean repository with upstream, remotes, and last-sync metadata", async () => {
+  it("summarizes a clean repository with upstream, remote aliases, and last-sync metadata", async () => {
     // FETCH_HEAD must resolve UNDER the repository root for lastSync to be reported (containment
     // guard). Create a real file inside the repo and return its realpath from the rev-parse mock,
     // matching the realpath'd repositoryRoot that resolveRepository computes.
@@ -113,11 +113,10 @@ describe("GET /api/git/summary", () => {
       remotes: [
         {
           name: "origin",
-          fetchUrl: "https://example.invalid/repo.git",
-          pushUrl: "https://example.invalid/repo.git",
         },
       ],
     });
+    expect(JSON.stringify(result.body)).not.toContain("https://example.invalid/repo.git");
     // The in-repo FETCH_HEAD exists and is contained, so lastSync is reported.
     expect((result.body as { lastSync?: unknown }).lastSync).toBeDefined();
   });

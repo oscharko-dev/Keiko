@@ -5,9 +5,15 @@
   "appPath": "packaged-cli-ui",
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/1576",
-  "generatedAt": "2026-06-27T19:02:10.565Z",
-  "fixtureRoot": "/private/var/folders/nz/l9bkdcg15sn8tfbbt4gv0dfm0000gn/T/keiko-e2e-git-branch-sync-1576-0CQ7ni/worktree",
-  "localBareRemoteRoot": "/private/var/folders/nz/l9bkdcg15sn8tfbbt4gv0dfm0000gn/T/keiko-e2e-git-branch-sync-1576-0CQ7ni/remote.git",
+  "fixture": {
+    "kind": "local-bare-repository",
+    "worktree": "temporary-local-worktree",
+    "remote": "temporary-local-bare-remote",
+    "branches": [
+      "main",
+      "feature/local"
+    ]
+  },
   "routesIntercepted": [
     "/api/projects",
     "/api/git/branches",

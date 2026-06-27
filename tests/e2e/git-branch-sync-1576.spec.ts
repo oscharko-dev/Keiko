@@ -5,6 +5,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -19,6 +20,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "git-delivery", "evidence", "1576");
+const EVIDENCE_PROJECT_PATH = "keiko-git-branch-sync-1576";
 const ARTIFACT_NAMES = ["manifest.json", "git-branch-history-sync.png"] as const;
 type ArtifactName = (typeof ARTIFACT_NAMES)[number];
 
@@ -61,6 +63,7 @@ type SummaryMode = "behind" | "ahead" | "publish" | "diverged" | "detached" | "c
 interface GitFixture {
   readonly worktreeRoot: string;
   readonly remoteRoot: string;
+  readonly browserProjectPath: string;
   readonly baseSha: string;
   readonly aheadSha: string;
 }
@@ -83,7 +86,15 @@ test.afterAll(() => {
 });
 
 function git(args: readonly string[], cwd: string): string {
-  return execFileSync("git", [...args], { cwd, encoding: "utf8" });
+  return execFileSync("git", [...args], {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_DATE: "2026-06-27T12:00:00Z",
+      GIT_COMMITTER_DATE: "2026-06-27T12:00:00Z",
+    },
+  });
 }
 
 function buildGitFixture(): GitFixture {
@@ -111,7 +122,7 @@ function buildGitFixture(): GitFixture {
   git(["commit", "-m", "feat: local branch evidence"], worktreeRoot);
   const aheadSha = git(["rev-parse", "HEAD"], worktreeRoot).trim();
 
-  return { worktreeRoot, remoteRoot, baseSha, aheadSha };
+  return { worktreeRoot, remoteRoot, browserProjectPath: EVIDENCE_PROJECT_PATH, baseSha, aheadSha };
 }
 
 function jsonBody(body: unknown): { status: number; contentType: string; body: string } {
@@ -122,7 +133,7 @@ function projectBody(fixture: GitFixture): unknown {
   return {
     projects: [
       {
-        path: fixture.worktreeRoot,
+        path: fixture.browserProjectPath,
         name: "keiko-git-branch-sync-1576",
         favorite: false,
         createdAt: Date.now(),
@@ -136,8 +147,8 @@ function projectBody(fixture: GitFixture): unknown {
 function branchBody(fixture: GitFixture): unknown {
   return {
     schemaVersion: "1",
-    root: fixture.worktreeRoot,
-    repositoryRoot: fixture.worktreeRoot,
+    root: fixture.browserProjectPath,
+    repositoryRoot: fixture.browserProjectPath,
     state: "available",
     available: true,
     branches: [
@@ -151,8 +162,8 @@ function branchBody(fixture: GitFixture): unknown {
 function baseStatusBody(fixture: GitFixture): Record<string, unknown> {
   return {
     schemaVersion: "1",
-    root: fixture.worktreeRoot,
-    repositoryRoot: fixture.worktreeRoot,
+    root: fixture.browserProjectPath,
+    repositoryRoot: fixture.browserProjectPath,
     state: "available",
     available: true,
     branch: "main",
@@ -207,7 +218,7 @@ function statusBody(fixture: GitFixture, mode: SummaryMode): unknown {
 function summaryBody(fixture: GitFixture, mode: SummaryMode): unknown {
   const base = {
     schemaVersion: "1",
-    root: fixture.worktreeRoot,
+    root: fixture.browserProjectPath,
     state: "available",
     available: true,
     branch: mode === "publish" ? "feature/local" : "main",
@@ -242,7 +253,7 @@ function summaryBody(fixture: GitFixture, mode: SummaryMode): unknown {
 function historyBody(fixture: GitFixture): unknown {
   return {
     schemaVersion: "1",
-    root: fixture.worktreeRoot,
+    root: fixture.browserProjectPath,
     state: "available",
     available: true,
     entries: [
@@ -333,7 +344,7 @@ function pushPreviewBody(): unknown {
 function remotesBody(fixture: GitFixture): unknown {
   return {
     schemaVersion: "1",
-    root: fixture.worktreeRoot,
+    root: fixture.browserProjectPath,
     state: "available",
     available: true,
     remotes: [{ name: "origin" }],
@@ -344,7 +355,7 @@ function remotesBody(fixture: GitFixture): unknown {
 function emptyDiffBody(fixture: GitFixture): unknown {
   return {
     schemaVersion: "1",
-    root: fixture.worktreeRoot,
+    root: fixture.browserProjectPath,
     state: "available",
     available: true,
     scope: "worktree",
@@ -464,7 +475,7 @@ async function seedGitClientWindow(page: Page, fixture: GitFixture): Promise<voi
       ]),
     );
     window.localStorage.removeItem("keiko.conns.v1");
-  }, fixture.worktreeRoot);
+  }, fixture.browserProjectPath);
 }
 
 function ensureEvidenceDir(): void {
@@ -490,7 +501,7 @@ function artifactPath(name: ArtifactName): string {
   return resolved;
 }
 
-function writeEvidenceManifest(fixture: GitFixture): void {
+function writeEvidenceManifest(): void {
   const manifest = {
     issue: "#1576",
     epic: "#1571",
@@ -498,9 +509,12 @@ function writeEvidenceManifest(fixture: GitFixture): void {
     appPath: "packaged-cli-ui",
     route: "/",
     evidencePath: "docs/git-delivery/evidence/1576",
-    generatedAt: new Date().toISOString(),
-    fixtureRoot: fixture.worktreeRoot,
-    localBareRemoteRoot: fixture.remoteRoot,
+    fixture: {
+      kind: "local-bare-repository",
+      worktree: "temporary-local-worktree",
+      remote: "temporary-local-bare-remote",
+      branches: ["main", "feature/local"],
+    },
     routesIntercepted: MANIFEST_ROUTES,
     windowRegistration: {
       windowType: "governedGit",
@@ -513,6 +527,26 @@ function writeEvidenceManifest(fixture: GitFixture): void {
     artifacts: ARTIFACT_NAMES,
   };
   writeFileSync(artifactPath("manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+}
+
+function expectEvidenceManifestIsPathFree(fixture: GitFixture): void {
+  const manifestText = readFileSync(artifactPath("manifest.json"), "utf8");
+  expect(manifestText).not.toContain(fixture.worktreeRoot);
+  expect(manifestText).not.toContain(fixture.remoteRoot);
+  expect(manifestText).not.toContain("generatedAt");
+  expect(manifestText).not.toContain(fixture.baseSha);
+  expect(manifestText).not.toContain(fixture.baseSha.slice(0, 7));
+  expect(manifestText).not.toContain(fixture.aheadSha);
+  expect(manifestText).not.toContain(fixture.aheadSha.slice(0, 7));
+  expect(manifestText).toContain("temporary-local-bare-remote");
+}
+
+async function expectEvidenceSurfaceIsPathFree(
+  gitWindow: Locator,
+  fixture: GitFixture,
+): Promise<void> {
+  await expect(gitWindow).not.toContainText(fixture.worktreeRoot);
+  await expect(gitWindow).not.toContainText(fixture.remoteRoot);
 }
 
 async function openGitWindow(page: Page, mode: SummaryMode): Promise<{
@@ -543,7 +577,7 @@ test("Issue #1576 - branch selector, new branch, history, and pull evidence", as
   ensureEvidenceDir();
   const { fixture, gitWindow, calls } = await openGitWindow(page, "behind");
 
-  await gitWindow.getByRole("combobox", { name: "Branch" }).click();
+  await gitWindow.getByRole("combobox", { name: "Branch: main" }).click();
   await gitWindow.getByRole("searchbox", { name: "Search branches" }).fill("feature");
   await expect(gitWindow.getByRole("option", { name: /feature\/local/u })).toBeVisible();
   await expect(gitWindow).not.toContainText(fixture.aheadSha);
@@ -562,7 +596,7 @@ test("Issue #1576 - branch selector, new branch, history, and pull evidence", as
     .poll(() => calls.branchCreates.length, { message: "branch create route called" })
     .toBeGreaterThan(0);
   expect(calls.branchCreates.at(-1)).toMatchObject({
-    projectId: fixture.worktreeRoot,
+    projectId: fixture.browserProjectPath,
     branchName: "feature/e2e-new",
     baseBranchName: "main",
     startPointRefHash: fixture.baseSha,
@@ -584,12 +618,14 @@ test("Issue #1576 - branch selector, new branch, history, and pull evidence", as
     .toBeGreaterThan(0);
   expect(calls.syncPreviews.at(-1)).toMatchObject({
     schemaVersion: "1",
-    projectId: fixture.worktreeRoot,
+    projectId: fixture.browserProjectPath,
     remote: "origin",
   });
 
+  await expectEvidenceSurfaceIsPathFree(gitWindow, fixture);
   await page.locator("body").screenshot({ path: artifactPath("git-branch-history-sync.png") });
-  writeEvidenceManifest(fixture);
+  writeEvidenceManifest();
+  expectEvidenceManifestIsPathFree(fixture);
 });
 
 test("Issue #1576 - ahead-only state pushes without force", async ({ page }) => {
@@ -605,7 +641,7 @@ test("Issue #1576 - ahead-only state pushes without force", async ({ page }) => 
     .toBeGreaterThan(0);
   expect(calls.pushPreviews.at(-1)).toMatchObject({
     schemaVersion: "1",
-    projectId: fixture.worktreeRoot,
+    projectId: fixture.browserProjectPath,
     remoteAlias: "origin",
     remoteBranchName: "main",
     sourceBranchName: "main",
@@ -624,7 +660,7 @@ test("Issue #1576 - no-upstream state publishes and sets upstream tracking", asy
     .toBeGreaterThan(0);
   expect(calls.pushPreviews.at(-1)).toMatchObject({
     schemaVersion: "1",
-    projectId: fixture.worktreeRoot,
+    projectId: fixture.browserProjectPath,
     remoteAlias: "origin",
     remoteBranchName: "feature/local",
     sourceBranchName: "feature/local",

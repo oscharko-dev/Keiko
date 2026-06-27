@@ -2,7 +2,7 @@
 
 import { useId } from "react";
 import type { ReactNode } from "react";
-import type { GitRemoteSummary, GitRepositorySummary } from "@/lib/types";
+import type { GitRepositorySummary, GitRepositorySummaryRemote } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import {
   PRIMARY_BTN,
@@ -24,7 +24,7 @@ export interface GitSyncView {
   readonly setUpstreamTracking?: boolean | undefined;
 }
 
-function preferredRemote(summary: GitRepositorySummary): GitRemoteSummary | undefined {
+function preferredRemote(summary: GitRepositorySummary): GitRepositorySummaryRemote | undefined {
   return summary.remotes.find((remote) => remote.name === "origin") ?? summary.remotes[0];
 }
 

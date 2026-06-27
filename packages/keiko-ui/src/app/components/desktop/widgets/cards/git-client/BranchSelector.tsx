@@ -43,6 +43,8 @@ export function BranchSelector({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const listboxId = useId();
+  const searchId = useId();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const filtered = useMemo(
@@ -55,9 +57,10 @@ export function BranchSelector({
     setOpen((value) => !value);
   };
 
-  const close = (): void => {
+  const close = (restoreFocus = false): void => {
     setOpen(false);
     setQuery("");
+    if (restoreFocus) queueMicrotask(() => triggerRef.current?.focus());
   };
 
   const moveFocus = (index: number): void => {
@@ -83,7 +86,7 @@ export function BranchSelector({
       moveFocus(filtered.length - 1);
     } else if (event.key === "Escape") {
       event.preventDefault();
-      close();
+      close(true);
     }
   };
 
@@ -97,9 +100,10 @@ export function BranchSelector({
   return (
     <div style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 6 }}>
       <button
+        ref={triggerRef}
         type="button"
         role="combobox"
-        aria-label="Branch"
+        aria-label={`Branch: ${triggerLabel}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listboxId}
@@ -138,7 +142,7 @@ export function BranchSelector({
           }}
         >
           <label
-            htmlFor="git-branch-search"
+            htmlFor={searchId}
             style={{
               display: "block",
               marginBottom: "var(--space-2)",
@@ -151,14 +155,14 @@ export function BranchSelector({
           </label>
           <input
             ref={searchRef}
-            id="git-branch-search"
+            id={searchId}
             type="search"
             value={query}
             aria-label="Search branches"
             style={{ ...INPUT_STYLE, marginBottom: "var(--space-3)" }}
             onChange={(event) => setQuery(event.currentTarget.value)}
             onKeyDown={(event) => {
-              if (event.key === "Escape") close();
+              if (event.key === "Escape") close(true);
               if (event.key === "ArrowDown") {
                 event.preventDefault();
                 moveFocus(0);
@@ -187,15 +191,15 @@ export function BranchSelector({
                     type="button"
                     role="option"
                     aria-selected={selected}
-                    disabled={busy || selected}
+                    disabled={busy}
                     style={{
                       ...REPO_OPTION_STYLE,
                       ...(selected ? REPO_OPTION_SELECTED_STYLE : {}),
-                      ...disabledStyle(busy || selected),
+                      ...disabledStyle(busy),
                     }}
                     onClick={() => {
-                      onSwitchBranch(branch.name);
-                      close();
+                      if (!selected) onSwitchBranch(branch.name);
+                      close(true);
                     }}
                     onKeyDown={(event) => onOptionKeyDown(event, index)}
                   >
