@@ -20,6 +20,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket as WsSocket } from "ws";
 import {
   requestRealtimeNegotiation,
+  resolveRealtimeVoice,
   resolveVoiceCapability,
   selectRealtimeVoiceModel,
   type GatewayConfig,
@@ -28,6 +29,7 @@ import {
   type RealtimeNegotiationRequest,
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
+import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import {
   isVoiceReplayEligible,
   stripUnsafeFormatChars,
@@ -123,6 +125,39 @@ function resolveRealtimeProvider(config: GatewayConfig): ModelProviderConfig | u
   return config.providers.find((provider) => provider.modelId === modelId);
 }
 
+// The spoken-dialogue persona for the realtime session. It is the SAME Keiko system persona the text
+// chat uses (CONVERSATION_SYSTEM_PROMPT) plus a short voice-delivery addendum, so spoken and written
+// Keiko cannot diverge. Setting it explicitly replaces the provider's default demo persona ("a helpful,
+// witty, and friendly AI … Talk quickly … knowledge cutoff 2023-10"), which would otherwise make the
+// realtime voice a separate, ungrounded assistant — a direct violation of the dialogue-mode invariant.
+const REALTIME_SPOKEN_ADDENDUM =
+  " You are speaking with the user by voice. Keep replies short, natural, and conversational. " +
+  "Do not read code, file paths, or long identifiers aloud verbatim; summarize them in words.";
+
+// Whisper transcription enables input-audio transcripts so the chat transcript can capture what the
+// user said by voice (the dialogue-mode grounding/evidence path).
+const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "whisper-1";
+
+// Realtime SDP negotiation is interactive: a user is waiting with the microphone open. The generic
+// provider request timeout (commonly 30s) is far too long here — a hung provider would freeze the
+// session on "negotiating" for half a minute before surfacing an error. Clamp to a short interactive
+// bound so a stalled handshake fails fast and the composer can degrade to text.
+const REALTIME_NEGOTIATION_TIMEOUT_MS = 8_000;
+
+function realtimeInstructions(): string {
+  return `${CONVERSATION_SYSTEM_PROMPT}${REALTIME_SPOKEN_ADDENDUM}`;
+}
+
+// Resolves the realtime session voice from the provider's persona→voice mapping, guarded to a
+// realtime-valid id. Without an explicit voice the session would use the provider default; with a
+// TTS-only id (e.g. the operator-config `nova`) the realtime model rejects the session. The neutral
+// persona is the session default until per-user persona selection is plumbed through the control protocol.
+function resolveRealtimeVoiceId(provider: ModelProviderConfig): string {
+  const profiles = provider.voiceProfiles ?? [];
+  const neutral = profiles.find((profile) => profile.persona === "neutral")?.voiceId;
+  return resolveRealtimeVoice(neutral ?? profiles[0]?.voiceId);
+}
+
 function buildNegotiationRequest(
   provider: ModelProviderConfig,
   offerSdp: string,
@@ -140,9 +175,12 @@ function buildNegotiationRequest(
       ? { realtimeAuthMode: provider.realtimeAuthMode }
       : {}),
     modelId: provider.modelId,
+    instructions: realtimeInstructions(),
+    voiceId: resolveRealtimeVoiceId(provider),
+    transcriptionModel: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
     offerSdp,
     signal,
-    timeoutMs: provider.timeoutMs,
+    timeoutMs: Math.min(provider.timeoutMs, REALTIME_NEGOTIATION_TIMEOUT_MS),
     ...(egress !== undefined ? { egress } : {}),
   };
 }
