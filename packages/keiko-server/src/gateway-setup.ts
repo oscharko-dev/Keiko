@@ -390,7 +390,20 @@ function currentImageInputModelIds(config: GatewayConfig | undefined): readonly 
   );
 }
 
-function rawConfigFromCurrent(
+// `supportedVoicePersonas` is DERIVED at parse time from a provider's `voiceProfiles` (Issue #1557,
+// ADR-0094 D2 / HAZARD-3). It must NOT be persisted: the strict top-level `capabilities` parser
+// rejects it as an unrecognised input key, and re-deriving it on reload keeps a single source of
+// truth (the credential-tier `voiceProfiles`). Strip it so a save → reload round-trip re-derives.
+function stripDerivedVoicePersonas(capability: ModelCapability): ModelCapability {
+  const { supportedVoicePersonas, ...rest } = capability;
+  return supportedVoicePersonas === undefined ? capability : rest;
+}
+
+// Exported as a test seam (mirroring `smokeTestCandidates` / the discovery-normalization exports):
+// the preserve-existing save path round-trips a parsed config back to raw for persistence, and the
+// Issue #1557 voice-persona round-trip (voiceProfiles preserved, derived supportedVoicePersonas
+// stripped and re-derived on reload — ADR-0094 D2) is pinned directly against this function.
+export function rawConfigFromCurrent(
   config: GatewayConfig,
   figmaAccessToken: string | undefined,
   timeoutMs?: number,
@@ -406,11 +419,16 @@ function rawConfigFromCurrent(
         timeoutMs: timeoutMs ?? provider.timeoutMs,
         maxRetries: provider.maxRetries,
         retryBaseDelayMs: provider.retryBaseDelayMs,
-        ...(capability === undefined ? {} : { capability }),
+        // Persist the credential-tier persona → voice-id mapping so personas survive a save; the
+        // derived content-free `supportedVoicePersonas` is stripped and re-derived on reload.
+        ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
+        ...(capability === undefined ? {} : { capability: stripDerivedVoicePersonas(capability) }),
       };
     }),
     circuitBreaker: config.circuitBreaker,
-    ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
+    ...(config.capabilities === undefined
+      ? {}
+      : { capabilities: config.capabilities.map(stripDerivedVoicePersonas) }),
     ...(config.grounding === undefined ? {} : { grounding: config.grounding }),
     ...(figmaAccessToken === undefined ? {} : { figma: { accessToken: figmaAccessToken } }),
   };
@@ -985,10 +1003,7 @@ function optionalSetupSecret(value: unknown, path: string): string | RouteResult
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
-function optionalSetupPositiveInt(
-  value: unknown,
-  path: string,
-): number | RouteResult | undefined {
+function optionalSetupPositiveInt(value: unknown, path: string): number | RouteResult | undefined {
   if (value === undefined) {
     return undefined;
   }

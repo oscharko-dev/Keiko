@@ -318,3 +318,122 @@ describe("useDictation — capture bounds", () => {
     expect(recorder.session.stop).toHaveBeenCalledTimes(1);
   });
 });
+
+// ─── Issue #1562 — microphone permission-window safety ──────────────────────────────────────────
+//
+// Regression suite for the `startingRef` + `cancelledRef` guards added to `useDictation` as part of
+// Issue #1562 (security/privacy hardening). These tests are structured so they would FAIL if either
+// guard were removed:
+//
+//   - `startingRef` prevents a second `getUserMedia` from opening during the permission window (AC2).
+//   - `cancelledRef` ensures a mic grant that arrives after `cancel()` is released instead of
+//     establishing a session (AC3 — deterministic release even mid-permission).
+//
+// The browser-layer invariants (getUserMedia → track.stop on cancel) are proven at the
+// `createBrowserDictationRecorder` level in `dictation-recorder.test.ts`; this suite covers the
+// dictation-state-machine layer above it.
+describe("useDictation — microphone permission-window safety (Issue #1562)", () => {
+  it("double-start race: a second start() during the permission window opens only one recorder session", async () => {
+    // Arrange: a recorder whose start() returns a manually-controlled deferred promise so we can
+    // call start() a second time before the first permission grant resolves.
+    let resolveFirst: (session: DictationSession) => void = () => {};
+    const cancel = vi.fn();
+    const session: DictationSession = {
+      stop: vi.fn(async () => ({
+        audioBase64: "QUJDRA==",
+        mimeType: "audio/webm",
+        durationMs: 500,
+      })),
+      cancel,
+    };
+    const startSpy = vi.fn(
+      () =>
+        new Promise<DictationSession>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const recorder: DictationRecorder = { start: startSpy };
+
+    const { result } = renderHook(() =>
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder }),
+    );
+
+    // Act: two synchronous start() calls before the permission window resolves.
+    act(() => {
+      result.current.start();
+      result.current.start(); // must be a no-op: startingRef is already true
+    });
+
+    // Resolve the pending permission grant.
+    await act(async () => {
+      resolveFirst(session);
+      await Promise.resolve();
+    });
+
+    // Assert: recorder.start() was invoked exactly once — the second start() hit the guard and
+    // returned immediately. Without startingRef this would be called twice, opening two mic streams.
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(result.current.phase).toBe("recording");
+  });
+
+  it("cancel during permission window releases the granted mic and never reaches recording", async () => {
+    // Arrange: a recorder whose start() is deferred so cancel() can be called while the permission
+    // request is still pending (the user leaves dialog mode mid-permission).
+    let resolveStart: (session: DictationSession) => void = () => {};
+    const cancel = vi.fn();
+    const session: DictationSession = { stop: vi.fn(), cancel };
+    const recorder: DictationRecorder = {
+      start: vi.fn(
+        () =>
+          new Promise<DictationSession>((resolve) => {
+            resolveStart = resolve;
+          }),
+      ),
+    };
+
+    const { result } = renderHook(() =>
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder }),
+    );
+
+    // Act: start() enters the permission window (requesting phase), then cancel() fires.
+    act(() => result.current.start());
+    expect(result.current.phase).toBe("requesting");
+
+    act(() => result.current.cancel()); // sets cancelledRef = true; resets to idle
+    expect(result.current.phase).toBe("idle");
+
+    // Now the permission grant arrives — the resolve branch checks cancelledRef and must call
+    // session.cancel() (releasing the mic) instead of establishing a session.
+    await act(async () => {
+      resolveStart(session);
+      await Promise.resolve();
+    });
+
+    // Assert: the session was immediately cancelled (mic released), and the phase never became
+    // "recording". Without cancelledRef the resolve branch would call dispatch({ type: "recording" })
+    // and sessionRef.current would become set, leaking the mic track.
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(result.current.phase).toBe("idle");
+  });
+
+  it("cancel() while recording calls session.cancel() (mic released) and resets to idle", async () => {
+    // Arrange: a standard fake recorder that resolves immediately.
+    const recorder = makeRecorder({});
+    const { result } = renderHook(() =>
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder.recorder }),
+    );
+
+    // Act: start → wait for recording phase → cancel.
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+
+    act(() => result.current.cancel());
+
+    // Assert: the live session was cancelled (OS-level "recording" indicator clears, AC3) and the
+    // state machine returned to idle. Without the cancel() implementation touching sessionRef this
+    // would leave the mic open and the phase non-idle.
+    expect(recorder.session.cancel).toHaveBeenCalledTimes(1);
+    expect(result.current.phase).toBe("idle");
+    expect(result.current.busy).toBe(false);
+  });
+});

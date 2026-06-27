@@ -27,6 +27,7 @@ import {
   sendDesktopChatStream,
   fetchWorkspaceSummary,
   transcribeDictation,
+  synthesizeAssistantSpeech,
   ApiError,
   type StreamHandlers,
 } from "./api";
@@ -1047,5 +1048,64 @@ describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
 
     expect(handlers.onDone).toHaveBeenCalledTimes(1);
     expect(handlers.onError).not.toHaveBeenCalled();
+  });
+});
+
+describe("synthesizeAssistantSpeech (Issue #1558)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs the visible text inside the JSON + CSRF envelope and returns the audio", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ audio: "QUJDRA==", mimeType: "audio/mpeg" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await synthesizeAssistantSpeech({ text: "the visible answer" });
+
+    expect(result).toEqual({ audio: "QUJDRA==", mimeType: "audio/mpeg" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/voice/speak",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({ text: "the visible answer" }),
+      }),
+    );
+  });
+
+  it("forwards an abort signal so a stop / mute can cancel pending synthesis", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ audio: "QUJDRA==", mimeType: "audio/mpeg" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await synthesizeAssistantSpeech({ text: "answer" }, controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/voice/speak",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
+  it("surfaces a content-free VOICE_UNAVAILABLE as an ApiError", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ error: { code: "VOICE_UNAVAILABLE", message: "unavailable" } }, 503),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await synthesizeAssistantSpeech({ text: "answer" }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe("VOICE_UNAVAILABLE");
+    expect((error as ApiError).status).toBe(503);
   });
 });

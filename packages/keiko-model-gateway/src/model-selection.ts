@@ -5,6 +5,7 @@ import {
   listCapabilities,
   modelSupportsRealtimeVoice,
   modelSupportsSpeechInput,
+  modelSupportsSpeechOutput,
   resolveVoiceCapabilityFromCapabilities,
   selectCompletionModelFromCapabilities,
   type CompletionSelectionOptions,
@@ -17,6 +18,7 @@ import type {
   ModelCapability,
   ModelKind,
   VoiceCapabilityResolution,
+  VoicePersona,
 } from "./types.js";
 
 const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
@@ -161,4 +163,59 @@ export function selectRealtimeVoiceModel(config: ConfiguredCapabilitySource): st
     }
   }
   return best?.id;
+}
+
+// Speech-output model selection (Issue #1557, ADR-0094 D6). Returns the configured voice provider
+// that advertises speech output (synthesis / playback), cheapest-first by cost class, or undefined
+// when none is configured. Only configured providers are eligible — the same fail-closed rule as
+// `selectSpeechToTextModel` — so a no-voice / STT-only deployment yields undefined.
+export function selectSpeechOutputModel(config: ConfiguredCapabilitySource): string | undefined {
+  let best: ModelCapability | undefined;
+  for (const capability of listConfiguredCapabilities(config)) {
+    if (!modelSupportsSpeechOutput(capability)) {
+      continue;
+    }
+    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
+      best = capability;
+    }
+  }
+  return best?.id;
+}
+
+// The persona → voice-id resolution for one configured voice provider, or undefined when the
+// provider does not map the persona. Reads the credential-tier `voiceProfiles` (Issue #1557).
+function voiceIdForPersona(
+  config: GatewayConfig,
+  modelId: string,
+  persona: VoicePersona,
+): string | undefined {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  return provider?.voiceProfiles?.find((profile) => profile.persona === persona)?.voiceId;
+}
+
+// Server-side persona → voice-id resolver (Issue #1557, ADR-0094 D6) — the seam Issue #1558 consumes.
+// Among configured providers whose capability advertises speech output OR realtime voice AND whose
+// `voiceProfiles` maps `persona`, returns the cheapest-first `{ modelId, voiceId }`, or undefined.
+// The returned `voiceId` is provider-sensitive, so this STAYS server-side and is never a BFF body.
+export function selectVoicePersonaVoice(
+  config: GatewayConfig,
+  persona: VoicePersona,
+): { readonly modelId: string; readonly voiceId: string } | undefined {
+  let best: { readonly capability: ModelCapability; readonly voiceId: string } | undefined;
+  for (const capability of listConfiguredCapabilities(config)) {
+    if (!modelSupportsSpeechOutput(capability) && !modelSupportsRealtimeVoice(capability)) {
+      continue;
+    }
+    const voiceId = voiceIdForPersona(config, capability.id, persona);
+    if (voiceId === undefined) {
+      continue;
+    }
+    if (
+      best === undefined ||
+      COST_RANK[capability.costClass] < COST_RANK[best.capability.costClass]
+    ) {
+      best = { capability, voiceId };
+    }
+  }
+  return best === undefined ? undefined : { modelId: best.capability.id, voiceId: best.voiceId };
 }

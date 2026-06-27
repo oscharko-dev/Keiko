@@ -11,7 +11,12 @@ import {
   resolveGroundingLimits,
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { VOICE_PROVIDER_LOCALITIES } from "./types.js";
+import { VOICE_PERSONAS, VOICE_PROVIDER_LOCALITIES } from "./types.js";
+import {
+  isVoiceCapability,
+  modelSupportsRealtimeVoice,
+  modelSupportsSpeechOutput,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   CircuitBreakerConfig,
   CostClass,
@@ -23,6 +28,8 @@ import type {
   ModelKind,
   ModelProviderConfig,
   OutboundHttpEgressConfig,
+  VoicePersona,
+  VoicePersonaVoice,
   VoiceProviderLocality,
 } from "./types.js";
 
@@ -653,6 +660,45 @@ function parseVoiceCapabilityFields(
   return resolveVoiceKindFields(raw, path, flags);
 }
 
+// Parses one provider `voiceProfiles` entry into a structurally-valid `VoicePersonaVoice` (Issue
+// #1557, ADR-0094 D2): `persona` ∈ VOICE_PERSONAS, `voiceId` a non-empty trimmed string. The
+// capability cross-check (voice kind + speech-output/realtime) happens later in `buildGatewayConfig`
+// against the MERGED capability, not here.
+function parseVoiceProfileEntry(raw: unknown, path: string): VoicePersonaVoice {
+  if (!isRecord(raw)) {
+    throw new ConfigInvalidError(`${path} must be an object`);
+  }
+  const persona = requireEnum<VoicePersona>(raw.persona, `${path}.persona`, VOICE_PERSONAS);
+  const trimmed = typeof raw.voiceId === "string" ? raw.voiceId.trim() : "";
+  if (trimmed.length === 0) {
+    throw new ConfigInvalidError(`${path}.voiceId must be a non-empty string`);
+  }
+  return { persona, voiceId: trimmed };
+}
+
+// Parses a provider's optional `voiceProfiles` array (present-only). Rejects a duplicate persona so
+// a persona maps to exactly one voice id. Returns undefined when the key is absent so the provider
+// record round-trips exactly.
+function parseVoiceProfiles(raw: unknown, path: string): readonly VoicePersonaVoice[] | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(raw)) {
+    throw new ConfigInvalidError(`${path} must be an array`);
+  }
+  const seen = new Set<VoicePersona>();
+  const profiles = raw.map((entry, index) =>
+    parseVoiceProfileEntry(entry, `${path}[${String(index)}]`),
+  );
+  for (const profile of profiles) {
+    if (seen.has(profile.persona)) {
+      throw new ConfigInvalidError(`${path} declares persona "${profile.persona}" more than once`);
+    }
+    seen.add(profile.persona);
+  }
+  return profiles;
+}
+
 function buildProviderCapabilityBody(
   raw: Record<string, unknown>,
   path: string,
@@ -919,6 +965,7 @@ function parseProviderConfig(
   options: ParseGatewayConfigOptions,
 ): ModelProviderConfig {
   const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env, options);
+  const voiceProfiles = parseVoiceProfiles(raw.voiceProfiles, `${path}.voiceProfiles`);
   return {
     modelId,
     baseUrl,
@@ -935,6 +982,7 @@ function parseProviderConfig(
       raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
       `${path}.retryBaseDelayMs`,
     ),
+    ...(voiceProfiles === undefined ? {} : { voiceProfiles }),
   };
 }
 
@@ -1060,6 +1108,56 @@ function mergeCapabilities(
   return [...mergedCapabilities.values()];
 }
 
+// Personas of a provider's voiceProfiles, sorted in canonical VOICE_PERSONAS order and deduped
+// (the parser already rejects duplicates; the sort makes the wire surface deterministic).
+function personasFromVoiceProfiles(
+  voiceProfiles: readonly VoicePersonaVoice[],
+): readonly VoicePersona[] {
+  const present = new Set<VoicePersona>(voiceProfiles.map((profile) => profile.persona));
+  return VOICE_PERSONAS.filter((persona) => present.has(persona));
+}
+
+// Derives `supportedVoicePersonas` onto the EFFECTIVE merged capability for one voice provider
+// (Issue #1557, ADR-0094 D2 / HAZARD-1): validates against the MERGED capability (not the inline
+// one) so a top-level `capabilities` override is the surface personas attach to. Returns a new
+// capability carrying the derived field; throws when the provider/capability cannot carry personas.
+function deriveSupportedPersonas(
+  merged: ReadonlyMap<string, ModelCapability>,
+  provider: ModelProviderConfig,
+): ModelCapability {
+  const { modelId } = provider;
+  const capability = merged.get(modelId);
+  if (
+    capability === undefined ||
+    !isVoiceCapability(capability) ||
+    !(modelSupportsSpeechOutput(capability) || modelSupportsRealtimeVoice(capability))
+  ) {
+    throw new ConfigInvalidError(
+      `provider '${modelId}' voiceProfiles requires a kind:"voice" capability that advertises supportsSpeechOutput or supportsRealtimeVoice`,
+    );
+  }
+  return {
+    ...capability,
+    supportedVoicePersonas: personasFromVoiceProfiles(provider.voiceProfiles ?? []),
+  };
+}
+
+// Applies persona derivation to the merged capability set: each provider with `voiceProfiles` has
+// its effective capability replaced by one carrying `supportedVoicePersonas`. Providers without
+// voiceProfiles, and capabilities with no matching provider, pass through unchanged.
+function applyVoicePersonaDerivation(
+  capabilities: readonly ModelCapability[],
+  providers: readonly ModelProviderConfig[],
+): readonly ModelCapability[] {
+  const byId = new Map<string, ModelCapability>(capabilities.map((cap) => [cap.id, cap]));
+  for (const provider of providers) {
+    if (provider.voiceProfiles !== undefined) {
+      byId.set(provider.modelId, deriveSupportedPersonas(byId, provider));
+    }
+  }
+  return [...byId.values()];
+}
+
 function buildGatewayConfig(
   raw: Record<string, unknown>,
   providersRaw: readonly unknown[],
@@ -1068,11 +1166,13 @@ function buildGatewayConfig(
   options: ParseGatewayConfigOptions,
 ): GatewayConfig {
   const parsed = providersRaw.map((item, index) => parseProvider(item, index, env, options));
-  const capabilities = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
+  const providers = providersWithEgress(parsed, egress);
+  const merged = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
+  const capabilities = applyVoicePersonaDerivation(merged, providers);
   const grounding = parseGroundingLimits(raw);
   const figma = parseFigmaConnectorConfig(raw);
   return {
-    providers: providersWithEgress(parsed, egress),
+    providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
     ...(capabilities.length === 0 ? {} : { capabilities }),
     ...(grounding !== undefined ? { grounding } : {}),
@@ -1143,6 +1243,11 @@ export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
       retryBaseDelayMs: provider.retryBaseDelayMs,
     })),
     circuitBreaker: config.circuitBreaker,
+    // INVARIANT (ADR-0019 / ADR-0094 D2): `ModelCapability` is the wire-tier, browser-serialisable
+    // shape and MUST NEVER carry a secret — all credential-/provider-sensitive data (apiKey, baseUrl,
+    // voiceProfiles voice ids) lives on `ModelProviderConfig`, which the allowlisted provider
+    // projection above drops. Capabilities are therefore passed through un-projected. Any future
+    // sensitive field must go on `ModelProviderConfig`, never here, or this projection must change.
     ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
     ...(config.grounding !== undefined ? { grounding: config.grounding } : {}),
   };
