@@ -1,0 +1,38 @@
+{
+  "issue": "#1577",
+  "epic": "#1571",
+  "harness": "playwright.issue-1577-git-pr-merge.config.ts",
+  "appPath": "packaged-cli-ui",
+  "evidencePath": "docs/git-delivery/evidence/1577",
+  "routesIntercepted": [
+    "/api/projects",
+    "/api/git/status",
+    "/api/git/branches",
+    "/api/git/summary",
+    "/api/git/history",
+    "/api/git/remotes",
+    "/api/git/diff",
+    "/api/git-delivery/pr/preview",
+    "/api/git-delivery/pr/execute",
+    "/api/git-delivery/merge/preview",
+    "/api/git-delivery/merge/execute"
+  ],
+  "fixture": "temporary registered repository with deterministic route stubs",
+  "statesVerified": [
+    "Git-window right pane switches from Diff to Pull Request and back",
+    "Git-window right pane switches from Diff to Merge",
+    "owner/repo, head branch, and base branch prefill without rendering remote URLs",
+    "Pull Request preview delegates to /api/git-delivery/pr/preview and renders blocked policy",
+    "Merge preview delegates to /api/git-delivery/merge/preview and renders readiness recovery"
+  ],
+  "assertions": {
+    "prPreviewCalls": 1,
+    "mergePreviewCalls": 1,
+    "remoteUrlsRendered": false,
+    "externalCredentialsUsed": false
+  },
+  "artifacts": [
+    "manifest.json",
+    "git-pr-merge-agent-ops.png"
+  ]
+}

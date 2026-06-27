@@ -63,7 +63,7 @@ function fillForm(): void {
     target: { value: "oscharko-dev/Keiko" },
   });
   fireEvent.change(screen.getByLabelText("Base branch"), { target: { value: "dev" } });
-  fireEvent.change(screen.getByLabelText("Pull request title"), {
+  fireEvent.change(screen.getByLabelText("Pull Request title"), {
     target: { value: "feat: x" },
   });
 }
@@ -96,7 +96,7 @@ describe("GovernedPullRequestCard", () => {
     render(<GovernedPullRequestCard projectId={PROJECT} client={makeClient()} />);
     fillForm();
     // Clear the title so the draft seeds it.
-    fireEvent.change(screen.getByLabelText("Pull request title"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Pull Request title"), { target: { value: "" } });
     fireEvent.change(screen.getByLabelText("Repository (owner/repo)"), {
       target: { value: "oscharko-dev/Keiko" },
     });
@@ -105,7 +105,7 @@ describe("GovernedPullRequestCard", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
     await waitFor(() =>
-      expect(screen.getByLabelText("Pull request title")).toHaveValue(
+      expect(screen.getByLabelText("Pull Request title")).toHaveValue(
         "feat(keiko-server): github pr command center",
       ),
     );
