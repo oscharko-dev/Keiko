@@ -610,3 +610,123 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
   });
 });
+
+// ─── Issue #1560 — dialogue survives the empty→populated chat transition ─────────────────────────────
+//
+// Lifecycle regression: committing the FIRST turn in a fresh chat flips it from empty to populated. The
+// composer was previously rendered in two separate conditional slots (one for the empty state, one for
+// the populated state), so React remounted ComposerCore on that transition and reset its local
+// voice-dialogue state — silently kicking the user out of an active spoken dialogue right after their
+// first committed turn. These tests drive the transition (via a provider rerender, exactly what the real
+// chat session does when the first message lands) and assert the dialogue session stays live. They fail
+// against the two-slot layout (the remount drops the switch and the per-turn controls).
+
+describe("ChatWindow voice dialogue survives the first committed turn (Issue #1560)", () => {
+  beforeEach(() => {
+    clearVoiceCapabilityCacheForTests();
+    vi.mocked(api.fetchVoiceCapability).mockReset();
+    vi.mocked(api.synthesizeAssistantSpeech).mockReset();
+    vi.mocked(api.synthesizeAssistantSpeech).mockResolvedValue({
+      audio: btoa("stub-audio"),
+      mimeType: "audio/mpeg",
+    });
+  });
+
+  // The first committed user turn — the message that flips the chat from empty to populated. Its origin
+  // (spoken via the dialogue send seam, or typed) is irrelevant: both land a user message and drive the
+  // SAME empty→populated re-render, so this one fixture covers the spoken and the typed path alike.
+  function makeSessionWithUserMessage(): ReturnType<typeof makeSession> {
+    return makeSession({
+      messages: [
+        {
+          id: "user-1",
+          chatId: "chat-1",
+          role: "user",
+          content: "what is the deploy status",
+          timestamp: Date.now(),
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        },
+      ],
+    });
+  }
+
+  it("keeps dialogue mode active when the first message populates an empty chat (spoken or typed)", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_NO_WEBRTC_WITH_PERSONAS,
+    });
+    stubCaptureBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+
+    // Start in a fresh, empty chat (messages: [] -> the empty composer slot).
+    const { rerender } = render(
+      <ChatSessionProvider value={makeSession()}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    // Enter spoken dialogue while the chat is still empty.
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    await userEvent.click(dialogSwitch);
+    expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Start speaking" })).toBeInTheDocument();
+
+    // The first turn lands and the chat flips empty → populated (what useChatSession does on the first
+    // send). The dialogue session must survive: the switch stays on and the per-turn controls remain.
+    rerender(
+      <ChatSessionProvider value={makeSessionWithUserMessage()}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Start speaking" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeInTheDocument();
+    // The conversation is now shown and the composer stays fully usable.
+    expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Chat message" })).not.toBeDisabled();
+  });
+
+  it("can take a SECOND spoken turn after the first one populated the chat (the session is still live)", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: FULL_REALTIME_NO_WEBRTC_WITH_PERSONAS,
+    });
+    stubCaptureBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+
+    const { rerender } = render(
+      <ChatSessionProvider value={makeSession()}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    await userEvent.click(dialogSwitch);
+    expect(screen.getByRole("button", { name: "Start speaking" })).toBeInTheDocument();
+
+    // First turn populates the chat (empty → populated transition).
+    rerender(
+      <ChatSessionProvider value={makeSessionWithUserMessage()}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    // A second turn can still be taken: the live mic control flips to stop-and-send, proving the dialogue
+    // session (not just the switch label) survived the transition. On the old two-slot layout the dialogue
+    // had already exited here, so "Start speaking" would be absent.
+    await userEvent.click(screen.getByRole("button", { name: "Start speaking" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Stop speaking and send" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+  });
+});

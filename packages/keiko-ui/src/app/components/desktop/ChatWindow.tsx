@@ -3024,7 +3024,17 @@ export function ChatWindow({
         )}
       </div>
 
-      {visible.length > 0 ? (
+      {/* Issue #1560 — ONE composer render site across the empty→populated transition. The composer was
+          previously rendered in two separate conditional slots (one for visible.length === 0, one for
+          > 0). Because those are distinct positions in the child list, React unmounted the empty-state
+          ComposerCore and mounted a fresh one the instant the first message landed — resetting its local
+          voice-dialogue state (voiceDialog.active / persona, and the freshly-undefined useVoiceCapability
+          probe), which silently kicked the user out of an active spoken dialogue right after their first
+          committed turn. Rendering a single ComposerCore at one stable position preserves the instance —
+          and its live dialogue session — across the empty→populated transition. The condition is the
+          exact union of the two prior slots (a chat is open, or messages exist), and the placeholder
+          keeps the empty+loading "Connecting…" wording, so the rendered surface is unchanged. */}
+      {visible.length > 0 || activeChat !== undefined ? (
         <div className="chatw-foot">
           <form
             className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
@@ -3036,38 +3046,11 @@ export function ChatWindow({
             <ComposerCore
               session={session}
               ready={ready}
-              placeholder={COMPOSER_PLACEHOLDER}
-              minimal={effectiveMinimal}
-              compact={effectiveCompact}
-              controlsNarrow={effectiveControlsNarrow}
-              barCompact={effectiveBarCompact}
-            />
-            {error !== undefined ? (
-              <ErrorNoticeFromError
-                error={error}
-                fallback="Could not send message."
-                onDismiss={session.clearError}
-              />
-            ) : null}
-          </form>
-        </div>
-      ) : null}
-
-      {/* Composer for empty state with active chat — the EmptyComposerState shows the
-          welcoming content above, and the form wraps the input below. */}
-      {visible.length === 0 && activeChat !== undefined ? (
-        <div className="chatw-foot">
-          <form
-            className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void sendMessage();
-            }}
-          >
-            <ComposerCore
-              session={session}
-              ready={ready}
-              placeholder={loading ? "Connecting to your gateway…" : COMPOSER_PLACEHOLDER}
+              placeholder={
+                visible.length === 0 && loading
+                  ? "Connecting to your gateway…"
+                  : COMPOSER_PLACEHOLDER
+              }
               minimal={effectiveMinimal}
               compact={effectiveCompact}
               controlsNarrow={effectiveControlsNarrow}
