@@ -355,14 +355,14 @@ function ModelCapabilityRow({
 }): ReactNode {
   const conversationEligible = isConversationEligibleModel(model);
   const embeddingReady = model.kind === "embedding";
-  const voiceReady = isVoiceReady(model);
+  const voiceReady = isConfiguredVoiceProvider(model);
   const statusClass = conversationEligible || embeddingReady || voiceReady ? "connected" : "ineligible";
   const statusTitle = conversationEligible
     ? "conversation-eligible"
     : embeddingReady
       ? "available for embeddings"
       : voiceReady
-        ? "available for voice"
+        ? voiceProviderAvailabilityLabel(model)
         : "not selectable for conversation";
   const RowIcon = model.kind === "voice" ? Icons.mic : Icons.cube;
   return (
