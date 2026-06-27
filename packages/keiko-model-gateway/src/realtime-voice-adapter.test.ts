@@ -86,6 +86,62 @@ describe("requestRealtimeNegotiation", () => {
     );
   });
 
+  it("supports Azure-style ephemeral realtime sessions before the SDP call", async () => {
+    const seen: {
+      url: string;
+      auth?: string | undefined;
+      apiKey?: string | undefined;
+      contentType?: string | undefined;
+      body: string;
+    }[] = [];
+    const fetchImpl = mockFetch((url, init) => {
+      const headers = init.headers as Record<string, string>;
+      seen.push({
+        url,
+        auth: headers.authorization,
+        apiKey: headers["api-key"],
+        contentType: headers["content-type"],
+        body: bodyToText(init),
+      });
+      if (url.endsWith("/realtime/client_secrets")) {
+        return new Response(JSON.stringify({ value: "ephemeral-session-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return sdp(ANSWER_SDP);
+    });
+
+    const outcome = await requestRealtimeNegotiation({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      apiKeyHeaderName: "api-key",
+      realtimeAuthMode: "ephemeral-session",
+      modelId: "keiko-realtime",
+      offerSdp: OFFER_SDP,
+      fetchImpl,
+    });
+
+    expect(outcome).toEqual({ ok: true, value: { answerSdp: ANSWER_SDP } });
+    expect(seen.map((entry) => entry.url)).toEqual([
+      "https://realtime.example.invalid/v1/realtime/client_secrets",
+      "https://realtime.example.invalid/v1/realtime/calls?model=keiko-realtime",
+    ]);
+    expect(seen[0]).toMatchObject({
+      apiKey: SECRET_API_KEY,
+      contentType: "application/json",
+    });
+    expect(JSON.parse(seen[0]?.body ?? "{}")).toMatchObject({
+      session: { type: "realtime", model: "keiko-realtime" },
+    });
+    expect(seen[1]).toMatchObject({
+      auth: "Bearer ephemeral-session-token",
+      contentType: "application/sdp",
+      body: OFFER_SDP,
+    });
+    expect(seen[1]?.apiKey).toBeUndefined();
+  });
+
   it("appends /realtime/calls without doubling a trailing slash on the endpoint", async () => {
     let seenUrl = "";
     const fetchImpl = mockFetch((url) => {

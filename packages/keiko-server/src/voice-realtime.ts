@@ -136,6 +136,9 @@ function buildNegotiationRequest(
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
+    ...(provider.realtimeAuthMode !== undefined
+      ? { realtimeAuthMode: provider.realtimeAuthMode }
+      : {}),
     modelId: provider.modelId,
     offerSdp,
     signal,

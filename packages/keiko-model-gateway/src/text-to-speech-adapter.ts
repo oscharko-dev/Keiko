@@ -23,6 +23,7 @@ import {
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
+import type { ProviderEndpointStyle } from "./types.js";
 
 // Closed set of response formats the OpenAI-compatible `/audio/speech` contract accepts, mapped to
 // the audio container MIME type the provider returns. The adapter requests one of these and labels
@@ -47,6 +48,8 @@ export interface TextToSpeechRequest {
   readonly endpoint: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string;
+  readonly endpointStyle?: ProviderEndpointStyle;
+  readonly apiVersion?: string;
   readonly modelId: string;
   // The assistant answer text to synthesize. Validated/bounded by the caller; never persisted here.
   readonly input: string;
@@ -102,9 +105,23 @@ const OUTBOUND_TTS_KINDS: Record<OutboundHttpEgressErrorCode, TextToSpeechErrorK
   TLS_CA_FAILURE: "tls-ca-failure",
 };
 
-function joinUrl(endpoint: string): string {
+function joinOpenAiCompatibleUrl(endpoint: string): string {
   const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
   return `${trimmed}/audio/speech`;
+}
+
+function joinAzureDeploymentUrl(endpoint: string, modelId: string, apiVersion: string): string {
+  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  return `${trimmed}/openai/deployments/${encodeURIComponent(
+    modelId,
+  )}/audio/speech?api-version=${encodeURIComponent(apiVersion)}`;
+}
+
+function joinUrl(request: TextToSpeechRequest): string {
+  if (request.endpointStyle === "azure-openai-deployment") {
+    return joinAzureDeploymentUrl(request.endpoint, request.modelId, request.apiVersion ?? "");
+  }
+  return joinOpenAiCompatibleUrl(request.endpoint);
 }
 
 function headerName(name: string | undefined): string {
@@ -168,7 +185,7 @@ function buildRequest(request: TextToSpeechRequest): BuiltRequest {
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {
-    url: joinUrl(request.endpoint),
+    url: joinUrl(request),
     headers,
     body,
     signal,
