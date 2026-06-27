@@ -39,6 +39,8 @@ import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
+import { EditorCommandPalette, type EditorPaletteMode } from "./EditorCommandPalette";
+import { type EditorPaletteHost } from "./editorCommands";
 
 const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
   () => import("./EditorRuntimeWidget"),
@@ -78,6 +80,7 @@ const DEFAULT_SIDEBAR_WIDTH = 260;
 const MAX_SIDEBAR_WIDTH = 440;
 const MIN_SPLIT_RATIO = 15;
 const MAX_SPLIT_RATIO = 85;
+const CLOSED_TAB_HISTORY_LIMIT = 20;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -337,6 +340,11 @@ export function EditorWidget({
   const saveResolversRef = useRef(new Map<number, (ok: boolean) => void>());
   const lastPropRootRef = useRef(root?.trim() ?? "");
   const workspaceRef = useRef<HTMLDivElement | null>(null);
+  // Quick-Open / command-palette overlay (null = closed). Closed-tab MRU backs the reopen command.
+  const [paletteState, setPaletteState] = useState<{ readonly mode: EditorPaletteMode } | null>(
+    null,
+  );
+  const closedTabsRef = useRef<{ readonly paneId: string; readonly file: string }[]>([]);
 
   const buildPatch = useCallback(
     (nextRoot: string, nextLayout: EditorLayoutStateV2): EditorWidgetWorkspacePatch => {
@@ -613,6 +621,15 @@ export function EditorWidget({
     [commitLayout, workspaceRoot],
   );
 
+  // Bounded MRU of closed (paneId, file) for the "Reopen Closed Editor" command. Deduped by file so a
+  // repeatedly closed file does not flood the stack; capped so it never grows unbounded.
+  const pushClosedTab = useCallback((paneId: string, file: string): void => {
+    if (file.length === 0) return;
+    const next = closedTabsRef.current.filter((entry) => entry.file !== file);
+    next.push({ paneId, file });
+    closedTabsRef.current = next.slice(-CLOSED_TAB_HISTORY_LIMIT);
+  }, []);
+
   const closeOpenFile = useCallback(
     async (paneId: string, path: string): Promise<boolean> =>
       requestDirtyClose({
@@ -621,12 +638,13 @@ export function EditorWidget({
         reason: "tab-close",
         apply: () => {
           markDirty(paneId, path, false);
+          pushClosedTab(paneId, path);
           commitLayout(
             editorLayoutReducer(layoutRef.current, { type: "close-tab", paneId, file: path }),
           );
         },
       }),
-    [commitLayout, markDirty, requestDirtyClose],
+    [commitLayout, markDirty, pushClosedTab, requestDirtyClose],
   );
 
   const splitPane = useCallback(
@@ -647,6 +665,7 @@ export function EditorWidget({
         files: pane.openFiles,
         reason: "pane-close",
         apply: () => {
+          for (const file of pane.openFiles) pushClosedTab(paneId, file);
           setDirtyByPane((current) => {
             const { [paneId]: _removed, ...remaining } = current;
             return remaining;
@@ -655,7 +674,7 @@ export function EditorWidget({
         },
       });
     },
-    [commitLayout, requestDirtyClose],
+    [commitLayout, pushClosedTab, requestDirtyClose],
   );
 
   const toggleSidebar = useCallback((): void => {
@@ -901,6 +920,106 @@ export function EditorWidget({
     [commitLayout],
   );
 
+  // ── Command/keybinding/palette actions (Wave 2 items 2.3/2.4/2.5) ──────────────────────────────
+  // All read the live layout from `layoutRef`, so they act on the active pane regardless of where
+  // focus is, and route through the existing close/select/split/save callbacks.
+  const closeActiveTab = useCallback((): void => {
+    const pane = activeEditorPane(layoutRef.current);
+    if (pane.activeFile.length > 0) void closeOpenFile(pane.id, pane.activeFile);
+  }, [closeOpenFile]);
+
+  const cycleActiveTab = useCallback(
+    (delta: number): void => {
+      const pane = activeEditorPane(layoutRef.current);
+      const order = pane.tabOrder;
+      if (order.length < 2) return;
+      const index = order.indexOf(pane.activeFile);
+      const next = order[(index + delta + order.length) % order.length];
+      if (next !== undefined) selectOpenFile(pane.id, next);
+    },
+    [selectOpenFile],
+  );
+
+  const reopenClosedTab = useCallback((): void => {
+    const last = closedTabsRef.current.pop();
+    if (last !== undefined) openFile(workspaceRoot, last.file);
+  }, [openFile, workspaceRoot]);
+
+  const saveAllDirty = useCallback((): void => {
+    for (const [paneId, files] of Object.entries(dirtyByPane)) {
+      for (const file of Object.keys(files)) void requestExternalSave(paneId, file);
+    }
+  }, [dirtyByPane, requestExternalSave]);
+
+  const splitActivePane = useCallback(
+    (direction: EditorSplitDirection): void =>
+      splitPane(activeEditorPane(layoutRef.current).id, direction),
+    [splitPane],
+  );
+
+  const closeActivePane = useCallback(
+    (): void => closePane(activeEditorPane(layoutRef.current).id),
+    [closePane],
+  );
+
+  const openQuickOpen = useCallback((): void => setPaletteState({ mode: "files" }), []);
+  const openCommandPalette = useCallback((): void => setPaletteState({ mode: "commands" }), []);
+
+  // Content-free host snapshot consumed by the palette + keybinding layer. Rebuilt each render and
+  // mirrored into a ref so the document-level keydown listener always dispatches against current state.
+  const commandHost: EditorPaletteHost = {
+    root: workspaceRoot,
+    activePaneId: layout.activePaneId,
+    paneCount: editorLayoutPaneIds(layout).length,
+    activeFile: activeFile.length > 0 ? activeFile : null,
+    closedTabCount: closedTabsRef.current.length,
+    dirtyCount: dirtyFileList.length,
+    openQuickOpen,
+    openCommandPalette,
+    splitActive: splitActivePane,
+    closeActiveSplit: closeActivePane,
+    closeActiveTab,
+    nextTab: () => cycleActiveTab(1),
+    prevTab: () => cycleActiveTab(-1),
+    reopenClosed: reopenClosedTab,
+    saveAll: saveAllDirty,
+  };
+  const commandHostRef = useRef(commandHost);
+  commandHostRef.current = commandHost;
+
+  // Container-level capturing keydown for editor-chrome chords (mirrors the on-mount save backstop,
+  // but scoped to the whole editor so it also fires from the sidebar/tab strip). Only browser-safe
+  // chords are bound — Cmd/Ctrl+W and Cmd/Ctrl+Shift+T are reserved and intentionally omitted.
+  useEffect(() => {
+    const node = workspaceRef.current;
+    if (node === null) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      const host = commandHostRef.current;
+      const key = event.key.toLowerCase();
+      if (key === "p" && !event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.shiftKey) host.openCommandPalette();
+        else host.openQuickOpen();
+        return;
+      }
+      if (!event.altKey) return;
+      const handled = (action: () => void): void => {
+        event.preventDefault();
+        event.stopPropagation();
+        action();
+      };
+      if (key === "arrowright") handled(host.nextTab);
+      else if (key === "arrowleft") handled(host.prevTab);
+      else if (key === "t") handled(host.reopenClosed);
+      else if (key === "\\") handled(() => host.splitActive("row"));
+      else if (key === "s") handled(host.saveAll);
+    };
+    node.addEventListener("keydown", onKeyDown, true);
+    return () => node.removeEventListener("keydown", onKeyDown, true);
+  }, [workspaceRoot]);
+
   // Agent-pane snapshots, memoized by the pane SET. A split resize only changes a tree node's ratio,
   // leaving `layout.panes` untouched, so this stays referentially stable across a resize and does not
   // churn the per-pane editor-host props.
@@ -1135,6 +1254,15 @@ export function EditorWidget({
           onSave={savePendingClose}
           onDiscard={discardPendingClose}
           onCancel={cancelPendingClose}
+        />
+      ) : null}
+      {paletteState !== null ? (
+        <EditorCommandPalette
+          mode={paletteState.mode}
+          root={workspaceRoot}
+          host={commandHost}
+          onOpenFile={openFile}
+          onClose={() => setPaletteState(null)}
         />
       ) : null}
     </div>
