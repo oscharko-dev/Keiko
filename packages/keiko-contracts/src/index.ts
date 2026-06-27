@@ -1349,6 +1349,30 @@ export {
   validateCapsuleRowShape,
   redactPathInDiagnostic,
 } from "./local-knowledge-schema-validation.js";
+export type {
+  CurrentPdfCitationPreviewSnapshot,
+  PdfCitationPreviewAnchorQuality,
+  PdfCitationPreviewAuthorizationResponse,
+  PdfCitationPreviewAuthorized,
+  PdfCitationPreviewDisplay,
+  PdfCitationPreviewFailureState,
+  PdfCitationPreviewReasonCode,
+  PdfCitationPreviewRejected,
+  PdfCitationPreviewSelection,
+  PdfCitationPreviewStatusRequest,
+  PdfCitationPreviewStatusResponse,
+  PdfCitationPreviewStatusState,
+  StoredPdfCitationPreviewCitation,
+  StoredPdfCitationPreviewLineage,
+} from "./local-knowledge-preview.js";
+export {
+  PDF_CITATION_PREVIEW_ANCHOR_QUALITIES,
+  PDF_CITATION_PREVIEW_FAILURE_STATES,
+  PDF_CITATION_PREVIEW_REASON_CODES,
+  PDF_CITATION_PREVIEW_STATUS_STATES,
+  pdfCitationPreviewAnchorQuality,
+  pdfCitationPreviewFailureState,
+} from "./local-knowledge-preview.js";
 
 // ─── Governed Enterprise Memory Vault (Issue #205 / Epic #204) ──────────────────
 // Pure contract surface for durable, scoped, governed memory: scopes, sensitivity,

@@ -75,6 +75,7 @@ import {
   selectedCapsulesForScope,
   type SelectedLocalKnowledgeScope,
 } from "./local-knowledge-grounded-qa.js";
+import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import {
   normalizeGroundedAnswerPayload,
@@ -524,6 +525,28 @@ function selectedConnectorCitations(
         (value) => redactString(redactor, value),
       ),
     );
+}
+
+function selectedConnectorPreviewCitations(
+  store: KnowledgeStore,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  redactor: Redactor,
+): readonly import("@oscharko-dev/keiko-contracts").StoredPdfCitationPreviewCitation[] {
+  return buildStoredPreviewCitations(
+    store,
+    selected
+      .filter((s): s is SelectedCandidate<ConnectorPayload> => s.kind === "connector")
+      .map((s) => {
+        const sourceLabel = s.payload.lookup(s.payload.reference);
+        return {
+          marker: `[${String(s.marker)}]`,
+          ...(sourceLabel === undefined
+            ? {}
+            : { sourceLabel: redactString(redactor, sourceLabel) }),
+          reference: s.payload.reference,
+        };
+      }),
+  );
 }
 
 function zeroExploration(): GroundedAnswerContextPackSummary["usage"] {
@@ -977,7 +1000,8 @@ function assembleHybridNoEvidenceRoute(
     { content, usage: { promptTokens: 0, completionTokens: 0 } },
     { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   );
-  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer);
+  const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
+  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer, previewCitations);
   return { status: 200, body: answer };
 }
 
@@ -1227,7 +1251,8 @@ async function answerAndAssemble(
     assistant,
     { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   );
-  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer);
+  const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
+  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer, previewCitations);
   return { status: 200, body: answer };
 }
 
