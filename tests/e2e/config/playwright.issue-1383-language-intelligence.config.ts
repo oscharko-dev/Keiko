@@ -3,8 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
-const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32197");
-const stateId = process.env.GITHUB_RUN_ID ?? `issue-1394-editor-agent-${String(process.pid)}`;
+const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32207");
+const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32208");
+const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32209");
+const stateId =
+  process.env.GITHUB_RUN_ID ?? `issue-1383-language-intelligence-${String(process.pid)}`;
 const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
@@ -15,20 +18,19 @@ const prepareRuntimeConfig = [
 ].join(" ");
 
 export default defineConfig({
-  testDir: "tests/e2e",
-  testMatch: "editor-agent-1394.spec.ts",
+  testDir: join(root, "tests", "e2e"),
+  testMatch: "editor-language-intelligence-1383.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: 180_000,
+  timeout: 120_000,
   expect: {
     timeout: 20_000,
   },
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
   use: {
     baseURL: `http://127.0.0.1:${String(publicPort)}`,
-    trace: "off",
-    video: "off",
-    screenshot: "off",
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
   },
   projects: [
     {
@@ -37,16 +39,17 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command:
-      `node -e ${JSON.stringify(prepareRuntimeConfig)} && ` +
-      "npm run build && npm run prepare:bin && npm run build:ui && " +
-      `node dist/cli/index.js ui --port ${String(publicPort)} ` +
-      `--config ${runtimeConfigPath} ` +
-      `--ui-db ${join(stateDir, "ui", "ui.sqlite")}`,
+    cwd: root,
+    command: `node -e ${JSON.stringify(prepareRuntimeConfig)} && npm run build:packages && node scripts/dev-runner.mjs`,
     url: `http://127.0.0.1:${String(publicPort)}`,
     reuseExistingServer: false,
-    timeout: 240_000,
+    timeout: 120_000,
     env: {
+      KEIKO_DEV_UI_PORT: String(publicPort),
+      KEIKO_DEV_BFF_PORT: String(bffPort),
+      KEIKO_DEV_NEXT_PORT: String(nextPort),
+      KEIKO_DEV_MAX_RESTARTS: "0",
+      KEIKO_DEV_NEXT_BUNDLER: "webpack",
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),

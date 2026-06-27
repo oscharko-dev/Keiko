@@ -1,6 +1,6 @@
 {
   "measuredAtIso": "2026-06-20T06:24:18.554Z",
-  "harness": "packaged CLI serving the production static UI via playwright.editor-performance.config.ts",
+  "harness": "packaged CLI serving the production static UI via tests/e2e/config/playwright.editor-performance.config.ts",
   "b4ColdStartMs": {
     "budgetP50": 1500,
     "budgetP95": 2500,

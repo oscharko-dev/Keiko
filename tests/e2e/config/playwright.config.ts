@@ -3,34 +3,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
-const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32207");
-const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32208");
-const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32209");
-const stateId =
-  process.env.GITHUB_RUN_ID ?? `issue-1383-language-intelligence-${String(process.pid)}`;
+const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32183");
+const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32184");
+const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32185");
+const stateId = process.env.GITHUB_RUN_ID ?? String(process.pid);
 const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
-const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
-const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
-const prepareRuntimeConfig = [
-  "const fs = require('node:fs');",
-  `fs.mkdirSync(${JSON.stringify(stateDir)}, { recursive: true });`,
-  `fs.copyFileSync(${JSON.stringify(fixtureConfigPath)}, ${JSON.stringify(runtimeConfigPath)});`,
-].join(" ");
 
 export default defineConfig({
-  testDir: "tests/e2e",
-  testMatch: "editor-language-intelligence-1383.spec.ts",
+  testDir: join(root, "tests", "e2e"),
   fullyParallel: false,
   workers: 1,
-  timeout: 120_000,
+  timeout: 60_000,
   expect: {
-    timeout: 20_000,
+    timeout: 15_000,
   },
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
   use: {
     baseURL: `http://127.0.0.1:${String(publicPort)}`,
     trace: "retain-on-failure",
-    screenshot: "only-on-failure",
   },
   projects: [
     {
@@ -39,7 +29,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `node -e ${JSON.stringify(prepareRuntimeConfig)} && npm run build:packages && node scripts/dev-runner.mjs`,
+    cwd: root,
+    command: "npm run build:packages && node scripts/dev-runner.mjs",
     url: `http://127.0.0.1:${String(publicPort)}`,
     reuseExistingServer: false,
     timeout: 120_000,
@@ -52,7 +43,7 @@ export default defineConfig({
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
-      KEIKO_CONFIG_FILE: runtimeConfigPath,
+      KEIKO_CONFIG_FILE: join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json"),
     },
   },
 });

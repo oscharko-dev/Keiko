@@ -2,7 +2,7 @@
  * Issue #1395 — Agent editor action governance, policy, and audit (ADR-0062).
  *
  * Browser-level Playwright tests that drive the REAL packaged app (`node dist/cli/index.js ui`).
- * The webServer is defined in playwright.issue-1395-editor-agent.config.ts.
+ * The webServer is defined in tests/e2e/config/playwright.issue-1395-editor-agent.config.ts.
  *
  * What is proven against the real running server + a real browser:
  *

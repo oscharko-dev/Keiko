@@ -7,7 +7,7 @@ npm run test:e2e:editor-fidelity-1295
 ```
 
 The harness starts `dist/cli/index.js ui` through
-`playwright.issue-1295-editor-fidelity.config.ts`, opens a synthetic temp workspace in the real
+`tests/e2e/config/playwright.issue-1295-editor-fidelity.config.ts`, opens a synthetic temp workspace in the real
 desktop shell, and records live Monaco editor evidence under this fixed directory.
 
 Committed artifacts:

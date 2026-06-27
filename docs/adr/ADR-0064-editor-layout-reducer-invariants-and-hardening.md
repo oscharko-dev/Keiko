@@ -89,7 +89,7 @@ button — and preserves the existing Arrow-key resize behaviour.
   and accessible split-resizer semantics (AC5); a dedicated accessibility smoke (`jest-axe` plus the
   splitter pattern and accessible-name checks) for the layout chrome.
 - Browser: a Playwright spec (`tests/e2e/editor-layout-1375.spec.ts`, run against the packaged app
-  via `playwright.issue-1375-editor-layout.config.ts`) exercises split creation, recursive nested
+  via `tests/e2e/config/playwright.issue-1375-editor-layout.config.ts`) exercises split creation, recursive nested
   resize, keyboard tab reorder and cross-pane move, and reload persistence against the real app
   path. As with the other editor specs, it is coordinator-run evidence and is not part of the
   required `ci` check.

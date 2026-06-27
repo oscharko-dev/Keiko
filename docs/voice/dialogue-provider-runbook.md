@@ -204,7 +204,7 @@ npm run build:packages && npx vitest run \
   packages/keiko-server/src/voice-handlers.dialogue-safety.test.ts
 
 # Browser smoke (real app path, headless Chromium; injects fake media — no hardware, no provider).
-npx playwright test --project=chromium --grep "voice dialogue @smoke"
+npx playwright test --config tests/e2e/config/playwright.config.ts --project=chromium --grep "voice dialogue @smoke"
 ```
 
 The browser smoke regenerates the acceptance screenshots under `docs/voice/evidence/`

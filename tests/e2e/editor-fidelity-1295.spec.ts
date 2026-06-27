@@ -171,7 +171,7 @@ interface ThemeSceneEvidence {
 
 interface EvidenceManifest {
   readonly issue: "#1295";
-  readonly harness: "playwright.issue-1295-editor-fidelity.config.ts";
+  readonly harness: "tests/e2e/config/playwright.issue-1295-editor-fidelity.config.ts";
   readonly route: "/";
   readonly appPath: "packaged-cli-ui";
   readonly workspace: "synthetic-temp-project";
@@ -1246,7 +1246,7 @@ async function buildManifest(
 ): Promise<EvidenceManifest> {
   return {
     issue: "#1295",
-    harness: "playwright.issue-1295-editor-fidelity.config.ts",
+    harness: "tests/e2e/config/playwright.issue-1295-editor-fidelity.config.ts",
     route: "/",
     appPath: "packaged-cli-ui",
     workspace: "synthetic-temp-project",

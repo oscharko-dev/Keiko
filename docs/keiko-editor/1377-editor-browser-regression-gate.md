@@ -29,7 +29,7 @@ evidence collection.
 npm run test:e2e:editor-baseline-1377
 ```
 
-The Playwright config (`../../playwright.issue-1377-editor-baseline.config.ts`) builds the full
+The Playwright config (`../../tests/e2e/config/playwright.issue-1377-editor-baseline.config.ts`) builds the full
 application and then serves it from the packaged CLI (`node dist/cli/index.js ui`), so the tests
 exercise the real product path, not a mock. The suite runs with a single worker on the default port
 `32201` (override with `KEIKO_E2E_UI_PORT`). It is deterministic and locally runnable; it does not
