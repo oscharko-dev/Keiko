@@ -3,7 +3,7 @@
   "epic": 1290,
   "appPath": "packages/keiko-ui/out",
   "route": "/",
-  "shotCount": 72,
+  "shotCount": 108,
   "modes": [
     "dark",
     "light",
@@ -51,6 +51,30 @@
         "[data-window-id=\"issue-1300-files\"]",
         "[data-window-id=\"issue-1300-editor\"]"
       ]
+    },
+    {
+      "id": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ]
+    },
+    {
+      "id": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ]
     }
   ],
   "manifest": [
@@ -69,7 +93,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 812,
+      "textLen": 1099,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -88,7 +112,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1808,
+      "textLen": 2095,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -106,7 +130,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1686,
+      "textLen": 1973,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -124,7 +148,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1220,
+      "textLen": 1640,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-desktop__dark.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "desktop",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-constrained__dark.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "desktop",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -143,7 +211,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 812,
+      "textLen": 1099,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -162,7 +230,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1808,
+      "textLen": 2095,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -180,7 +248,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1686,
+      "textLen": 1973,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -198,7 +266,51 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1220,
+      "textLen": 1640,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-desktop__light.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "desktop",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-constrained__light.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "desktop",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -217,7 +329,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 812,
+      "textLen": 1099,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -236,7 +348,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1808,
+      "textLen": 2095,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -254,7 +366,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1686,
+      "textLen": 1973,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -272,7 +384,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1220,
+      "textLen": 1640,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-desktop__dark-hc.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "desktop",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-constrained__dark-hc.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "desktop",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -291,7 +447,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 812,
+      "textLen": 1099,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -310,7 +466,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1808,
+      "textLen": 2095,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -328,7 +484,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1686,
+      "textLen": 1973,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -346,7 +502,51 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1220,
+      "textLen": 1640,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-desktop__light-hc.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "desktop",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-constrained__light-hc.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "desktop",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -365,7 +565,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 812,
+      "textLen": 1099,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -384,7 +584,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1808,
+      "textLen": 2095,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -402,7 +602,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1686,
+      "textLen": 1973,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -420,7 +620,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1220,
+      "textLen": 1640,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-desktop__reduced-motion.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "desktop",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-constrained__reduced-motion.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "desktop",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -439,7 +683,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 812,
+      "textLen": 1099,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -458,7 +702,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1808,
+      "textLen": 2095,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -476,7 +720,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1686,
+      "textLen": 1973,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -494,7 +738,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1220,
+      "textLen": 1640,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-desktop__forced-colors.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "desktop",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "desktop__git-window-constrained__forced-colors.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "desktop",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1345,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -513,7 +801,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -532,7 +820,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -550,7 +838,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -568,7 +856,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-desktop__dark.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "tablet",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-constrained__dark.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "tablet",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -587,7 +919,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -606,7 +938,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -624,7 +956,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -642,7 +974,51 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-desktop__light.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "tablet",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-constrained__light.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "tablet",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -661,7 +1037,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -680,7 +1056,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -698,7 +1074,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -716,7 +1092,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-desktop__dark-hc.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "tablet",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-constrained__dark-hc.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "tablet",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -735,7 +1155,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -754,7 +1174,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -772,7 +1192,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -790,7 +1210,51 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-desktop__light-hc.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "tablet",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-constrained__light-hc.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "tablet",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -809,7 +1273,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -828,7 +1292,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -846,7 +1310,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -864,7 +1328,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-desktop__reduced-motion.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "tablet",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-constrained__reduced-motion.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "tablet",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -883,7 +1391,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -902,7 +1410,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -920,7 +1428,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -938,7 +1446,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-desktop__forced-colors.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "tablet",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "tablet__git-window-constrained__forced-colors.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "tablet",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -957,7 +1509,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -976,7 +1528,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -994,7 +1546,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1012,7 +1564,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-desktop__dark.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "mobile",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-constrained__dark.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "mobile",
+      "mode": "dark",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1031,7 +1627,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1050,7 +1646,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1068,7 +1664,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1086,7 +1682,51 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-desktop__light.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "mobile",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-constrained__light.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "mobile",
+      "mode": "light",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1105,7 +1745,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1124,7 +1764,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1142,7 +1782,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1160,7 +1800,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-desktop__dark-hc.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "mobile",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-constrained__dark-hc.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "mobile",
+      "mode": "dark-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1179,7 +1863,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1198,7 +1882,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1216,7 +1900,7 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1234,7 +1918,51 @@
       "theme": "light",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-desktop__light-hc.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "mobile",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-constrained__light-hc.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "mobile",
+      "mode": "light-hc",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "light",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1253,7 +1981,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1272,7 +2000,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1290,7 +2018,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1308,7 +2036,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-desktop__reduced-motion.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "mobile",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-constrained__reduced-motion.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "mobile",
+      "mode": "reduced-motion",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1327,7 +2099,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 0,
-      "textLen": 806,
+      "textLen": 1093,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1346,7 +2118,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 3,
-      "textLen": 1802,
+      "textLen": 2089,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1364,7 +2136,7 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1680,
+      "textLen": 1967,
       "missingRequiredSelectors": [],
       "pageErrors": []
     },
@@ -1382,7 +2154,51 @@
       "theme": "dark",
       "hasShell": true,
       "windowCount": 2,
-      "textLen": 1214,
+      "textLen": 1634,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-desktop__forced-colors.png",
+      "route": "/",
+      "scenario": "git-window-desktop",
+      "description": "Git client window shell at a generous desktop size",
+      "viewport": "mobile",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-desktop\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-desktop\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
+      "missingRequiredSelectors": [],
+      "pageErrors": []
+    },
+    {
+      "file": "mobile__git-window-constrained__forced-colors.png",
+      "route": "/",
+      "scenario": "git-window-constrained",
+      "description": "Git client window shell at a constrained window size",
+      "viewport": "mobile",
+      "mode": "forced-colors",
+      "requiredSelectors": [
+        "[data-window-id=\"issue-1574-git-constrained\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [aria-label=\"Git\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Repository\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"combobox\"][aria-label=\"Branch\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] [role=\"tablist\"][aria-label=\"Changes and history\"]",
+        "[data-window-id=\"issue-1574-git-constrained\"] nav.rv-filelist[aria-label=\"Changed files\"]"
+      ],
+      "theme": "dark",
+      "hasShell": true,
+      "windowCount": 1,
+      "textLen": 1339,
       "missingRequiredSelectors": [],
       "pageErrors": []
     }
