@@ -10,7 +10,7 @@
 // path. Raw audio is transient render-thread data and is never persisted.
 
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
-import { ApiError, streamAssistantSpeech } from "@/lib/api";
+import { streamAssistantSpeech } from "@/lib/api";
 
 export interface AssistantSpeechStreamHandlers {
   // Fired when audible output actually begins (the worklet confirms it produced samples).
@@ -110,6 +110,7 @@ export function createBrowserAssistantSpeechStreamingSink():
   ): Promise<void> {
     const reader = body.getReader();
     let leftover: Uint8Array | undefined;
+    let posted = 0;
     try {
       for (;;) {
         const { done, value } = await reader.read();
@@ -123,10 +124,17 @@ export function createBrowserAssistantSpeechStreamingSink():
         const { samples, leftover: rest } = pcmBytesToInt16(value, leftover);
         leftover = rest;
         if (samples.length > 0) {
+          posted += samples.length;
           workletNode.port.postMessage(samples, [samples.buffer]);
         }
       }
-      workletNode.port.postMessage({ type: "end" });
+      if (posted === 0) {
+        // A 200 with no audio: degrade to the visible text rather than waiting on a stream that will
+        // never play (the worklet emits no "ended" without samples).
+        handlers.onError();
+      } else {
+        workletNode.port.postMessage({ type: "end" });
+      }
     } catch {
       if (!signal.aborted) {
         handlers.onError();
@@ -168,18 +176,15 @@ export function createBrowserAssistantSpeechStreamingSink():
       try {
         response = await streamAssistantSpeech(input, signal);
       } catch (error) {
-        if (isAbortError(error) || error instanceof ApiError) {
-          if (!isAbortError(error)) {
-            handlers.onError();
-          }
-          return true;
+        if (isAbortError(error)) {
+          return true; // cancelled mid-flight — do not fall back
         }
-        handlers.onError();
-        return true;
+        // Any up-front failure (provider error, network) before audio has started: fall back to the
+        // buffered path so a turn is never lost and a stubbed/working buffered route still plays.
+        return false;
       }
       if (response.body === null) {
-        handlers.onError();
-        return true;
+        return false;
       }
       void pump(workletNode, response.body, signal, handlers);
       return true;

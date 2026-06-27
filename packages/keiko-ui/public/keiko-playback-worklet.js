@@ -78,8 +78,9 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
     }
     if (typeof data === "object" && data.type === "end") {
       this.draining = true;
-      // A zero-length stream (end with nothing buffered) completes immediately.
-      if (this.size === 0 && this.everPlayed) {
+      // Force any sub-prime remainder to play out, then complete once drained.
+      this.primed = true;
+      if (this.size === 0) {
         this.finish();
       }
       return;
@@ -145,7 +146,7 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
     }
 
     // Natural completion: the sender marked the end and the buffer has fully drained.
-    if (this.draining && this.size === 0 && this.everPlayed) {
+    if (this.draining && this.size === 0) {
       this.finish();
     }
     return true;
