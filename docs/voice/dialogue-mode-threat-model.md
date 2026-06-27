@@ -67,6 +67,8 @@ Each numbered hop is the concrete code that executes one full dialogue turn:
 6. **Playback (browser).** `useAssistantSpeech` plays the returned audio through a single
    `HTMLAudioElement` fed by an object URL (`useAssistantSpeech.ts:218`–`221`); the URL is revoked and the
    element released on every completion / stop / mute / interrupt (`useAssistantSpeech.ts:155`–`175`).
+   The BFF CSP permits this playback with `media-src 'self' blob:` only (`csp.ts`), leaving
+   `default-src 'none'`, `script-src`, and `connect-src` unchanged.
 7. **Interruption / barge-in (browser).** Activating the mic while the assistant holds the floor, or pressing
    Interrupt, applies a content-free turn signal whose emitted effects stop playback and cancel an in-flight
    chat request (`useVoiceDialogueSession.ts:161`–`174`, `289`–`292`); only enum kinds, integers, and
@@ -152,6 +154,7 @@ STRIDE categories in brackets: **S**poofing, **T**ampering, **R**epudiation, **I
 | 11  | Mic affordance exposed on a no-voice / unsupported deployment (E)              | `Permissions-Policy` keeps `microphone=()` by default and emits `microphone=(self)` only when the resolved capability is dictation- or realtime-capable, never wider (`headers.ts:25`–`28`, `43`; wired in `server.ts:182`–`185`); the UI fallback matrix offers dialogue only for the full conjunction (`useVoiceDialogMode.ts:87`–`92`, `useVoiceDialogueSession.ts:117`–`121`).                                                             |
 | 12  | Late provider answer playing after the turn is gone (T)                        | Synthesis is aborted via `AbortController`, and a settled promise is dropped when `cancelled` or `signal.aborted` (`useAssistantSpeech.ts:204`–`216`, `247`–`253`, `255`–`258`).                                                                                                                                                                                                                                                               |
 | 13  | Disabled / unconfigured deployment doing audio work (D, defense in depth)      | Both routes run the capability gate **before** any body is read (`voice-handlers.ts:324`–`332`, `374`–`377`, `485`–`493`, `599`–`600`), and honor the `KEIKO_VOICE_DISABLED` policy kill-switch (`read-handlers.ts:77`–`78`, used at `voice-handlers.ts:326`, `487`).                                                                                                                                                                          |
+| 14  | CSP blocks generated assistant audio or is widened too far (D/I)               | Playback is allowed only by `media-src 'self' blob:` for same-origin media and ephemeral object URLs (`csp.ts`); `connect-src 'self'` and hash-based `script-src` are unchanged, so the repair does not open browser-to-provider egress or script execution.                                                                                                                                                                                   |
 
 ## 5. Acceptance criteria → evidence validation matrix
 
@@ -211,6 +214,8 @@ The security review of the **voice dialogue-mode surface** introduced by Epic #1
   re-grant and late-grant races ([§4](#4-threats--mitigations), threats 4–6).
 - Egress is bounded to configured provider endpoints over verified HTTPS, with the named allowlist limitation
   carried forward honestly ([§6](#6-residual-risks-and-honest-limitations), item 1).
+- Generated-audio playback is permitted only through the narrow CSP `media-src 'self' blob:` directive; no
+  browser network, script, provider endpoint, credential, or voice-id surface is widened.
 - Every claim is grounded in cited code and in the automated tests of the AC → evidence matrix
   ([§5](#5-acceptance-criteria--evidence-validation-matrix)).
 
