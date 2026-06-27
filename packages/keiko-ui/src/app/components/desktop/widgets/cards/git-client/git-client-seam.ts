@@ -21,8 +21,12 @@ import {
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
+  fetchGitDeliveryMergeExecute,
+  fetchGitDeliveryMergePreview,
   fetchGitDeliveryLocalBranchCreate,
   fetchGitDeliveryLocalBranchSwitch,
+  fetchGitDeliveryPrExecute,
+  fetchGitDeliveryPrPreview,
   fetchGitDeliveryPushExecute,
   fetchGitDeliveryPushPreview,
   fetchGitDeliveryStage,
@@ -69,6 +73,10 @@ export interface GitClientSeam {
   readonly syncExecute: typeof fetchGitDeliverySyncExecute;
   readonly pushPreview: typeof fetchGitDeliveryPushPreview;
   readonly pushExecute: typeof fetchGitDeliveryPushExecute;
+  readonly prPreview: typeof fetchGitDeliveryPrPreview;
+  readonly prExecute: typeof fetchGitDeliveryPrExecute;
+  readonly mergePreview: typeof fetchGitDeliveryMergePreview;
+  readonly mergeExecute: typeof fetchGitDeliveryMergeExecute;
 }
 
 export const DEFAULT_GIT_CLIENT: GitClientSeam = {
@@ -91,6 +99,10 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   syncExecute: fetchGitDeliverySyncExecute,
   pushPreview: fetchGitDeliveryPushPreview,
   pushExecute: fetchGitDeliveryPushExecute,
+  prPreview: fetchGitDeliveryPrPreview,
+  prExecute: fetchGitDeliveryPrExecute,
+  mergePreview: fetchGitDeliveryMergePreview,
+  mergeExecute: fetchGitDeliveryMergeExecute,
 };
 
 // ─── Label maps (typed codes → human text; never colour-alone) ──────────────────────────────────

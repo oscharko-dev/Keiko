@@ -221,6 +221,7 @@ import { GIT_DELIVERY_PUSH_ROUTE_GROUP } from "./gitDelivery/pushRoutes.js";
 import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
 import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
 import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
+import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -874,6 +875,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // GitDeliveryActionKind) + a dedicated content-free sync evidence ledger; same central CSRF + JSON
   // content-type gate.
   ...GIT_DELIVERY_SYNC_ROUTE_GROUP,
+  // #1577 agent repository operations: typed facade over existing Git read and governed delivery
+  // handlers. No shell/provider authority is introduced; command-shaped payloads are denied first.
+  ...GIT_AGENT_OPERATION_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

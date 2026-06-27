@@ -61,7 +61,7 @@ function fillTarget(): void {
   fireEvent.change(screen.getByLabelText("Repository (owner/repo)"), {
     target: { value: "oscharko-dev/Keiko" },
   });
-  fireEvent.change(screen.getByLabelText("Pull request number"), { target: { value: "1500" } });
+  fireEvent.change(screen.getByLabelText("Pull Request number"), { target: { value: "1500" } });
   fireEvent.change(screen.getByLabelText("Base branch"), { target: { value: "dev" } });
   fireEvent.change(screen.getByLabelText("Head branch"), {
     target: { value: "claude/issue-478-x" },
@@ -178,7 +178,7 @@ describe("GovernedMergeCard", () => {
     // Mergeable, no approval required → enabled for the previewed target.
     expect(screen.getByTestId("gm-submit")).not.toBeDisabled();
     // Editing the target invalidates the stale preview gate until a fresh preview is run.
-    fireEvent.change(screen.getByLabelText("Pull request number"), { target: { value: "2001" } });
+    fireEvent.change(screen.getByLabelText("Pull Request number"), { target: { value: "2001" } });
     expect(screen.getByTestId("gm-submit")).toBeDisabled();
   });
 

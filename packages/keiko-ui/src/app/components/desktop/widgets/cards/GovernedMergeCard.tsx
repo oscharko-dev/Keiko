@@ -122,11 +122,21 @@ interface MergeForm {
   readonly deleteBranchAfterMerge: boolean;
 }
 
-function initialForm(headBranchName: string | undefined): MergeForm {
+function initialForm({
+  headBranchName,
+  ownerAndRepo,
+  baseBranchName,
+  prExternalId,
+}: {
+  readonly headBranchName?: string | undefined;
+  readonly ownerAndRepo?: string | undefined;
+  readonly baseBranchName?: string | undefined;
+  readonly prExternalId?: string | undefined;
+}): MergeForm {
   return {
-    ownerAndRepo: "",
-    prExternalId: "",
-    baseBranchName: "",
+    ownerAndRepo: ownerAndRepo ?? "",
+    prExternalId: prExternalId ?? "",
+    baseBranchName: baseBranchName ?? "",
     headBranchName: headBranchName ?? "",
     mergeStrategy: "",
     deleteBranchAfterMerge: false,
@@ -250,13 +260,13 @@ function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
           />
         </label>
         <label style={{ ...LABEL_STYLE, flex: 1 }}>
-          Pull request number
+          Pull Request number
           <input
             style={FIELD_STYLE}
             value={form.prExternalId}
             disabled={busy}
             onChange={(e) => onChange("prExternalId", e.target.value)}
-            aria-label="Pull request number"
+            aria-label="Pull Request number"
             inputMode="numeric"
           />
         </label>
@@ -501,6 +511,7 @@ function MergeOutcome({
 // ─── Card body ─────────────────────────────────────────────────────────────────────────────────────
 
 function liveTextFor(async: MergeAsync): string {
+  if (async.busy) return "Merge action running.";
   if (async.error !== null) return `Merge action failed: ${async.error}`;
   if (async.outcome !== null) return `Merge ${async.outcome.status}.`;
   if (async.preview !== null)
@@ -512,16 +523,24 @@ function GovernedMergeBody({
   client,
   projectId,
   headBranchName,
+  ownerAndRepo,
+  baseBranchName,
+  prExternalId,
   titleId,
   liveId,
 }: {
   readonly client: GovernedMergeClient;
   readonly projectId: string;
   readonly headBranchName: string | undefined;
+  readonly ownerAndRepo?: string | undefined;
+  readonly baseBranchName?: string | undefined;
+  readonly prExternalId?: string | undefined;
   readonly titleId: string;
   readonly liveId: string;
 }): ReactNode {
-  const [form, setForm] = useState<MergeForm>(() => initialForm(headBranchName));
+  const [form, setForm] = useState<MergeForm>(() =>
+    initialForm({ headBranchName, ownerAndRepo, baseBranchName, prExternalId }),
+  );
   const [confirmed, setConfirmed] = useState(false);
   // The merge-target key the loaded preview is valid for. Empty until a preview loads.
   const [previewedKey, setPreviewedKey] = useState("");
@@ -581,7 +600,7 @@ function GovernedMergeBody({
       aria-labelledby={titleId}
     >
       <h2 id={titleId} style={{ ...HEADING_STYLE, font: "var(--text-title)" }}>
-        <Icons.git size={14} /> Merge command center
+        <Icons.git size={14} /> Merge
       </h2>
       <p
         id={liveId}
@@ -620,7 +639,7 @@ function GovernedMergeBody({
           onClick={onExecute}
           data-testid="gm-submit"
         >
-          Merge pull request
+          Merge Pull Request
         </button>
       </div>
       <MergeOutcome outcome={async.outcome} error={async.error} />
@@ -633,6 +652,12 @@ export interface GovernedMergeCardProps {
   readonly projectId?: string | undefined;
   /** The head branch under review, carried from the governed Git flow Pull Request section. */
   readonly headBranchName?: string | undefined;
+  /** Optional safe GitHub owner/repo inferred from configured remotes. */
+  readonly ownerAndRepo?: string | undefined;
+  /** Optional base branch inferred from upstream/current branch metadata. */
+  readonly baseBranchName?: string | undefined;
+  /** Optional PR number when a branch already has a known PR context. */
+  readonly prExternalId?: string | undefined;
   /** DI seam; defaults to the real BFF client. */
   readonly client?: GovernedMergeClient;
 }
@@ -640,6 +665,9 @@ export interface GovernedMergeCardProps {
 export function GovernedMergeCard({
   projectId,
   headBranchName,
+  ownerAndRepo,
+  baseBranchName,
+  prExternalId,
   client = DEFAULT_CLIENT,
 }: GovernedMergeCardProps): ReactNode {
   const titleId = useId();
@@ -651,7 +679,7 @@ export function GovernedMergeCard({
         style={{ padding: "var(--space-4)", color: "var(--fg-muted)", font: "var(--text-body-sm)" }}
       >
         <p>
-          <Icons.git size={13} /> Select a project to open a governed merge.
+          <Icons.git size={13} /> Select a project to open a merge.
         </p>
       </div>
     );
@@ -661,6 +689,9 @@ export function GovernedMergeCard({
       client={client}
       projectId={projectId}
       headBranchName={headBranchName}
+      ownerAndRepo={ownerAndRepo}
+      baseBranchName={baseBranchName}
+      prExternalId={prExternalId}
       titleId={titleId}
       liveId={liveId}
     />

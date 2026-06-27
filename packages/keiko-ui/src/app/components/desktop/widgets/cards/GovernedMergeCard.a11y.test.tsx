@@ -57,7 +57,7 @@ function fillTarget(): void {
   fireEvent.change(screen.getByLabelText("Repository (owner/repo)"), {
     target: { value: "oscharko-dev/Keiko" },
   });
-  fireEvent.change(screen.getByLabelText("Pull request number"), { target: { value: "1500" } });
+  fireEvent.change(screen.getByLabelText("Pull Request number"), { target: { value: "1500" } });
   fireEvent.change(screen.getByLabelText("Base branch"), { target: { value: "dev" } });
   fireEvent.change(screen.getByLabelText("Head branch"), {
     target: { value: "claude/issue-478-x" },
