@@ -453,6 +453,30 @@ export {
   validateGitSyncExecuteResponse,
 } from "./git-sync.js";
 
+// ─── Agent repository operation facade (Issue #1577, Epic #1571) ─────────────
+// Typed agent admission contract over existing Git reads and governed Git delivery routes. It grants
+// no shell/provider authority and reject command-shaped payloads before the BFF can delegate.
+export type {
+  GitRepositoryAgentOperationMode,
+  GitRepositoryAgentOperationKind,
+  GitRepositoryAgentDenialReason,
+  GitRepositoryAgentOperationRequest,
+  GitRepositoryAgentOperationDelegatedResponse,
+  GitRepositoryAgentOperationDeniedResponse,
+  GitRepositoryAgentOperationResponse,
+  GitRepositoryAgentParseOk,
+  GitRepositoryAgentParseFail,
+  GitRepositoryAgentParseResult,
+} from "./git-repository-agent.js";
+export {
+  GIT_REPOSITORY_AGENT_SCHEMA_VERSION,
+  GIT_REPOSITORY_AGENT_OPERATION_MODES,
+  GIT_REPOSITORY_AGENT_OPERATION_KINDS,
+  GIT_REPOSITORY_AGENT_DENIAL_REASONS,
+  parseGitRepositoryAgentOperationRequest,
+  isGitRepositoryAgentOperationResponse,
+} from "./git-repository-agent.js";
+
 // ─── Controlled command executor (Issue #1387, Epic #1491) ────────────────────────
 // Wire contract for the governed test/build/run command runner: a server-discovered catalog of
 // vetted tasks, a run request that names a catalog `taskId` (never free-form argv), the structured

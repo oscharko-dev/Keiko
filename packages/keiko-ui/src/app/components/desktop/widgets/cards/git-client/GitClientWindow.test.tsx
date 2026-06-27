@@ -24,7 +24,9 @@ import type {
 } from "@/lib/types";
 import type {
   GitBranchListResponse,
+  GitDeliveryMergePreviewResponse,
   GitDeliveryCommitPreviewResponse,
+  GitDeliveryPrPreviewResponse,
   GitDeliveryPushPreviewResponse,
 } from "@/lib/api";
 import type { GitRepositoryStatusResponse } from "@/lib/types";
@@ -292,6 +294,54 @@ function makePushPreview(
   };
 }
 
+function makePrPreview(
+  overrides: Partial<GitDeliveryPrPreviewResponse> = {},
+): GitDeliveryPrPreviewResponse {
+  return {
+    schemaVersion: "1",
+    actionKind: "pr-create",
+    headBranchName: "main",
+    baseBranchName: "main",
+    riskClass: "protected-or-merge",
+    riskSeverity: 3,
+    isDraft: false,
+    policyOutcome: "allowed",
+    composedTitle: "feat: test pull request",
+    composedBody: "Updates the Git window.",
+    riskNarrative: "Repository UI integration.",
+    recommendation: "create-ready",
+    readiness: { objectExists: false, reviewReady: true, blockerCodes: [] },
+    suggestedLabels: [],
+    suggestedIssueRefs: ["#1577"],
+    titleByteLength: 23,
+    bodyByteLength: 23,
+    ...overrides,
+  };
+}
+
+function makeMergePreview(
+  overrides: Partial<GitDeliveryMergePreviewResponse> = {},
+): GitDeliveryMergePreviewResponse {
+  return {
+    schemaVersion: "1",
+    actionKind: "merge",
+    baseBranchName: "main",
+    headBranchName: "main",
+    prExternalId: "1577",
+    riskClass: "protected-or-merge",
+    riskSeverity: 4,
+    requestedStrategy: "squash",
+    requestedStrategyEligible: true,
+    eligibleStrategies: ["squash", "provider-default"],
+    selectedDefaultStrategy: "squash",
+    recommendation: "merge-ready",
+    policyOutcome: "approval-gated",
+    requiresApproval: true,
+    readiness: { mergeable: true, blockers: [] },
+    ...overrides,
+  };
+}
+
 // ─── makeClient factory ────────────────────────────────────────────────────────
 
 function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
@@ -360,6 +410,20 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       schemaVersion: "1",
       status: "succeeded",
       actionKind: "push",
+    })),
+    prPreview: vi.fn<GitClientSeam["prPreview"]>(async () => makePrPreview()),
+    prExecute: vi.fn<GitClientSeam["prExecute"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      actionKind: "pr-create",
+      createdPrExternalId: "1577",
+    })),
+    mergePreview: vi.fn<GitClientSeam["mergePreview"]>(async () => makeMergePreview()),
+    mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      actionKind: "merge",
+      merged: true,
     })),
     ...overrides,
   };
@@ -606,30 +670,171 @@ describe("GitClientWindow — toolbar actions", () => {
     expect(pill).toBeInTheDocument();
   });
 
-  it("Create Pull Request opens the reused PR window with the selected repository", async () => {
+  it("Create Pull Request opens an embedded PR panel with selected repository context", async () => {
+    const user = userEvent.setup();
     const openWindow = vi.fn();
-    const client = makeClient();
+    const client = makeClient({
+      getSummary: vi.fn(async () =>
+        makeSummary({
+          branch: "feat/issue-1577",
+          remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        }),
+      ),
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
+    });
     render(<GitClientWindow projectId={REPO_A.path} client={client} openWindow={openWindow} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+    await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
 
-    expect(openWindow).toHaveBeenCalledWith("governedPullRequest", {
-      projectPath: REPO_A.path,
-    });
+    expect(openWindow).not.toHaveBeenCalled();
+    const panel = await screen.findByRole("region", { name: "Pull Request" });
+    expect(panel).toBeInTheDocument();
+    expect(within(panel).getByLabelText("Head branch")).toHaveValue("feat/issue-1577");
+    expect(within(panel).getByLabelText("Base branch")).toHaveValue("main");
+    expect(within(panel).getByDisplayValue("oscharko-dev/Keiko")).toBeInTheDocument();
+    expect(client.getHistory).not.toHaveBeenCalled();
+
+    await user.click(within(panel).getByRole("button", { name: "Preview" }));
+    await waitFor(() =>
+      expect(client.prPreview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: REPO_A.path,
+          ownerAndRepo: "oscharko-dev/Keiko",
+          headBranchName: "feat/issue-1577",
+          baseBranchName: "main",
+        }),
+      ),
+    );
   });
 
-  it("Merge opens the reused merge window with the selected repository", async () => {
+  it("updates a Pull Request from the embedded panel with selected repository context", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () =>
+        makeSummary({
+          branch: "feat/issue-1577",
+          remotes: [{ name: "origin", fetchUrl: "git@github.com:oscharko-dev/Keiko.git" }],
+        }),
+      ),
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+    const panel = await screen.findByRole("region", { name: "Pull Request" });
+    await user.click(within(panel).getByLabelText("Update"));
+    await user.type(within(panel).getByLabelText("Pull Request number"), "1640");
+    await user.type(within(panel).getByLabelText("Pull Request title"), "fix: harden pr path");
+    await user.selectOptions(within(panel).getByLabelText("Draft state"), "to-ready");
+    await user.click(within(panel).getByRole("button", { name: "Update Pull Request" }));
+
+    await waitFor(() =>
+      expect(client.prExecute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: REPO_A.path,
+          kind: "pr-update",
+          ownerAndRepo: "oscharko-dev/Keiko",
+          headBranchName: "feat/issue-1577",
+          baseBranchName: "main",
+          prExternalId: "1640",
+          convertFromDraft: true,
+        }),
+      ),
+    );
+  });
+
+  it("surfaces embedded Pull Request provider-auth failures without sensitive text", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () =>
+        makeSummary({
+          branch: "feat/issue-1577",
+          remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
+        }),
+      ),
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
+      prExecute: vi.fn<GitClientSeam["prExecute"]>(async () => ({
+        schemaVersion: "1",
+        status: "failed",
+        actionKind: "pr-create",
+        executionErrorCode: "provider-rejected",
+        prRejectionReason: "provider-auth",
+        recoveryDisposition: "user-fixable",
+        recoveryActionHint: "Reconnect provider access.",
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+    const panel = await screen.findByRole("region", { name: "Pull Request" });
+    await user.type(within(panel).getByLabelText("Pull Request title"), "fix: auth path");
+    await user.click(within(panel).getByRole("button", { name: "Create Pull Request" }));
+
+    await waitFor(() => expect(within(panel).getByTestId("gpr-outcome")).toBeInTheDocument());
+    expect(within(panel).getByTestId("gpr-outcome")).toHaveTextContent("rejected: provider-auth");
+    expect(within(panel).getByTestId("gpr-outcome")).not.toHaveTextContent(
+      /token|secret|authorization/i,
+    );
+  });
+
+  it("Merge opens an embedded merge panel with selected repository context", async () => {
+    const user = userEvent.setup();
     const openWindow = vi.fn();
-    const client = makeClient();
+    const client = makeClient({
+      getSummary: vi.fn(async () =>
+        makeSummary({
+          branch: "feat/issue-1577",
+          remotes: [{ name: "origin", fetchUrl: "https://github.com/oscharko-dev/Keiko.git" }],
+        }),
+      ),
+      getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
+    });
     render(<GitClientWindow projectId={REPO_A.path} client={client} openWindow={openWindow} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByRole("button", { name: /Merge/ }));
+    await user.click(screen.getByRole("button", { name: /Merge/ }));
 
-    expect(openWindow).toHaveBeenCalledWith("governedMerge", {
-      projectPath: REPO_A.path,
+    expect(openWindow).not.toHaveBeenCalled();
+    const panel = await screen.findByRole("region", { name: "Merge" });
+    expect(panel).toBeInTheDocument();
+    expect(within(panel).getByLabelText("Head branch")).toHaveValue("feat/issue-1577");
+    expect(within(panel).getByLabelText("Base branch")).toHaveValue("main");
+    expect(within(panel).getByDisplayValue("oscharko-dev/Keiko")).toBeInTheDocument();
+
+    fireEvent.change(within(panel).getByLabelText("Pull Request number"), {
+      target: { value: "1577" },
     });
+    expect(within(panel).getByLabelText("Pull Request number")).toHaveValue("1577");
+    await user.click(within(panel).getByRole("button", { name: "Preview" }));
+    await waitFor(() =>
+      expect(client.mergePreview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: REPO_A.path,
+          ownerAndRepo: "oscharko-dev/Keiko",
+          headBranchName: "feat/issue-1577",
+          baseBranchName: "main",
+          prExternalId: "1577",
+        }),
+      ),
+    );
+  });
+
+  it("returns from embedded PR and Merge panels to the diff pane", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+    expect(await screen.findByRole("region", { name: "Pull Request" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to diff" }));
+    const diff = screen.getByRole("region", { name: "Diff" });
+    expect(diff).toBeInTheDocument();
+    await waitFor(() => expect(diff).toHaveFocus());
+    expect(screen.getByText("Diff panel opened.")).toBeInTheDocument();
   });
 });
 
@@ -717,9 +922,11 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     const user = userEvent.setup();
     const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(client.getHistory).toHaveBeenCalledWith({ root: REPO_A.path, limit: 50 }));
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+    expect(client.getHistory).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("tab", { name: "History" }));
+    await waitFor(() => expect(client.getHistory).toHaveBeenCalledWith({ root: REPO_A.path, limit: 50 }));
 
     expect(screen.getByRole("listbox", { name: "Commit history" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /feat: add history/ })).toHaveAttribute(

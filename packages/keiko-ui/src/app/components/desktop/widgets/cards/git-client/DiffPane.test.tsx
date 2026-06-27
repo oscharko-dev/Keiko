@@ -43,6 +43,10 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     syncExecute: vi.fn<GitClientSeam["syncExecute"]>(),
     pushPreview: vi.fn<GitClientSeam["pushPreview"]>(),
     pushExecute: vi.fn<GitClientSeam["pushExecute"]>(async () => ok),
+    prPreview: vi.fn<GitClientSeam["prPreview"]>(),
+    prExecute: vi.fn<GitClientSeam["prExecute"]>(),
+    mergePreview: vi.fn<GitClientSeam["mergePreview"]>(),
+    mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(),
     ...overrides,
   };
 }
