@@ -23,6 +23,7 @@ import type {
   GroundedAskRequest,
   FilesDirectoryListing,
   FilesContentResponse,
+  FilesMutationResponse,
   FilesPreviewResponse,
   FilesSearchResponse,
   FilesTreeResponse,
@@ -1005,6 +1006,31 @@ export async function saveFilesContent(input: {
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
+
+// File-tree mutations. fetchJson adds the CSRF header + JSON content-type for these POSTs and maps a
+// non-2xx envelope to ApiError; the server keeps every mutation inside the selected root.
+export async function createFilesEntry(input: {
+  readonly root: string;
+  readonly path: string;
+  readonly kind: "file" | "directory";
+}): Promise<FilesMutationResponse> {
+  return fetchJson("/api/files/create", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function renameFilesEntry(input: {
+  readonly root: string;
+  readonly path: string;
+  readonly newPath: string;
+}): Promise<FilesMutationResponse> {
+  return fetchJson("/api/files/rename", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function deleteFilesEntry(input: {
+  readonly root: string;
+  readonly path: string;
+}): Promise<FilesMutationResponse> {
+  return fetchJson("/api/files/delete", { method: "POST", body: JSON.stringify(input) });
 }
 
 export async function fetchGitStatus(root: string): Promise<GitRepositoryStatusResponse> {

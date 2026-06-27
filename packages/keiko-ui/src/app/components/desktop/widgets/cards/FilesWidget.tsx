@@ -1,14 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+} from "react";
 import {
+  createFilesEntry,
+  deleteFilesEntry,
   fetchFilesTree,
   fetchGitDiff,
   fetchGitStatus,
   fetchProjects,
+  renameFilesEntry,
 } from "../../../../../lib/api";
 import type {
+  FilesMutationResponse,
   FilesTreeEntry,
   GitChangedFile,
   GitRepositoryDiffResponse,
@@ -33,6 +41,14 @@ interface FilesWidgetProps {
   onRootChange?: (root: string) => void;
   onOpenFile?: ((root: string, path: string) => void) | undefined;
   onOpenGitDelivery?: ((root: string) => void) | undefined;
+  // Notified after a successful create/rename/delete so the host can re-home open editor tabs (rename)
+  // or close them (delete). Omitted in read-only contexts; its presence does not gate the affordances.
+  onFilesMutated?: ((event: FilesMutationEvent) => void) | undefined;
+}
+
+export interface FilesMutationEvent {
+  readonly op: "create" | "rename" | "delete";
+  readonly mutation: FilesMutationResponse;
 }
 
 // Parent directory of an absolute POSIX/Windows path, or null at the filesystem root. Pure string
@@ -82,6 +98,38 @@ interface GitDiffState {
   readonly loading: boolean;
   readonly response: GitRepositoryDiffResponse | null;
   readonly error: string | null;
+}
+
+// The inline editor reused for all three create/rename flows. `parentPath` is the root-relative
+// directory the new entry lands in (null = root); `path`/`name` identify the entry being renamed.
+type PendingEntry =
+  | { readonly kind: "new-file" | "new-folder"; readonly parentPath: string | null }
+  | { readonly kind: "rename"; readonly path: string; readonly name: string };
+
+interface ContextMenuState {
+  readonly x: number;
+  readonly y: number;
+  // The row the menu was opened on, or null for the empty tree background (new file/folder at root).
+  readonly entry: FilesTreeEntry | null;
+}
+
+// Parent directory (root-relative) of a tree entry, for scoping a new sibling or a rename target.
+function entryParent(path: string): string | null {
+  const idx = path.lastIndexOf("/");
+  return idx < 0 ? null : path.slice(0, idx);
+}
+
+function joinRelative(parent: string | null, name: string): string {
+  return parent === null || parent.length === 0 ? name : `${parent}/${name}`;
+}
+
+// A new entry's name must be a single, safe path segment. The BFF enforces this too; rejecting early
+// keeps the inline editor responsive and the error message specific.
+function invalidEntryName(name: string): string | null {
+  if (name.length === 0) return "Enter a name.";
+  if (name === "." || name === "..") return "That name is reserved.";
+  if (/[/\\]/u.test(name)) return "A name cannot contain a slash.";
+  return null;
 }
 
 function errorMessage(error: unknown): string {
@@ -177,6 +225,7 @@ export function FilesWidget({
   onRootChange,
   onOpenFile,
   onOpenGitDelivery,
+  onFilesMutated,
 }: FilesWidgetProps): ReactNode {
   const trimmedRoot = root?.trim();
   const configuredRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : null;
@@ -206,6 +255,17 @@ export function FilesWidget({
     error: null,
   });
   const [gitDiffState, setGitDiffState] = useState<GitDiffState | null>(null);
+  // File-operation state (new file/folder, rename, delete). `pendingEntry` drives the single inline
+  // input reused for all three create/rename flows; `menu` is the right-click context menu; `confirm`
+  // gates a destructive delete. All three are mutually exclusive in practice.
+  const [pendingEntry, setPendingEntry] = useState<PendingEntry | null>(null);
+  const [entryDraft, setEntryDraft] = useState("");
+  const [opBusy, setOpBusy] = useState(false);
+  const [opError, setOpError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<FilesTreeEntry | null>(null);
+  const onFilesMutatedRef = useRef(onFilesMutated);
+  onFilesMutatedRef.current = onFilesMutated;
 
   useEffect(() => {
     if (selectedPath !== null || gitDiffState !== null) return;
@@ -365,6 +425,149 @@ export function FilesWidget({
     void loadDirectory(currentDirectoryPath ?? "");
   }, [currentDirectoryPath, loadDirectory]);
 
+  // The root every mutation targets — the resolved real root, or the configured one before it loads.
+  const mutationRoot = resolvedRoot ?? apiRoot;
+  const mutationsEnabled = mutationRoot.length > 0;
+
+  const startNewEntry = useCallback(
+    (kind: "new-file" | "new-folder", parentPath: string | null): void => {
+      setMenu(null);
+      setOpError(null);
+      setEntryDraft("");
+      setPendingEntry({ kind, parentPath });
+      // Make sure the folder the new entry lands in is expanded so the inline editor is visible.
+      if (parentPath !== null) {
+        setExpanded((current) =>
+          current.has(parentPath) ? current : new Set(current).add(parentPath),
+        );
+        if (directories[parentPath] === undefined) void loadDirectory(parentPath);
+      }
+    },
+    [directories, loadDirectory],
+  );
+
+  const startRename = useCallback((entry: FilesTreeEntry): void => {
+    setMenu(null);
+    setOpError(null);
+    setEntryDraft(entry.name);
+    setPendingEntry({ kind: "rename", path: entry.path, name: entry.name });
+  }, []);
+
+  const cancelPendingEntry = useCallback((): void => {
+    setPendingEntry(null);
+    setEntryDraft("");
+    setOpError(null);
+  }, []);
+
+  const commitPendingEntry = useCallback(async (): Promise<void> => {
+    if (pendingEntry === null || mutationRoot.length === 0 || opBusy) return;
+    const name = entryDraft.trim();
+    if (pendingEntry.kind === "rename" && name === pendingEntry.name) {
+      cancelPendingEntry();
+      return;
+    }
+    const invalid = invalidEntryName(name);
+    if (invalid !== null) {
+      setOpError(invalid);
+      return;
+    }
+    setOpBusy(true);
+    setOpError(null);
+    try {
+      if (pendingEntry.kind === "rename") {
+        const parent = entryParent(pendingEntry.path);
+        const result = await renameFilesEntry({
+          root: mutationRoot,
+          path: pendingEntry.path,
+          newPath: joinRelative(parent, name),
+        });
+        setPendingEntry(null);
+        setEntryDraft("");
+        if (selectedPath === pendingEntry.path) setSelectedPath(result.path);
+        await loadDirectory(parent ?? "");
+        onFilesMutatedRef.current?.({ op: "rename", mutation: result });
+      } else {
+        const result = await createFilesEntry({
+          root: mutationRoot,
+          path: joinRelative(pendingEntry.parentPath, name),
+          kind: pendingEntry.kind === "new-file" ? "file" : "directory",
+        });
+        setPendingEntry(null);
+        setEntryDraft("");
+        await loadDirectory(pendingEntry.parentPath ?? "");
+        if (result.kind === "directory") {
+          setExpanded((current) => new Set(current).add(result.path));
+        } else if (onOpenFile !== undefined) {
+          // Open the freshly created (empty) file so the user can start typing immediately.
+          activeFileChangeRef.current?.(result.path, mutationRoot);
+          onOpenFile(mutationRoot, result.path);
+        }
+        onFilesMutatedRef.current?.({ op: "create", mutation: result });
+      }
+    } catch (error: unknown) {
+      setOpError(errorMessage(error));
+    } finally {
+      setOpBusy(false);
+    }
+  }, [
+    cancelPendingEntry,
+    entryDraft,
+    loadDirectory,
+    mutationRoot,
+    onOpenFile,
+    opBusy,
+    pendingEntry,
+    selectedPath,
+  ]);
+
+  const performDelete = useCallback(
+    async (entry: FilesTreeEntry): Promise<void> => {
+      if (mutationRoot.length === 0 || opBusy) return;
+      setOpBusy(true);
+      setOpError(null);
+      try {
+        const result = await deleteFilesEntry({ root: mutationRoot, path: entry.path });
+        setConfirmDelete(null);
+        if (selectedPath === entry.path) setSelectedPath(null);
+        await loadDirectory(entryParent(entry.path) ?? "");
+        onFilesMutatedRef.current?.({ op: "delete", mutation: result });
+      } catch (error: unknown) {
+        setOpError(errorMessage(error));
+      } finally {
+        setOpBusy(false);
+      }
+    },
+    [loadDirectory, mutationRoot, opBusy, selectedPath],
+  );
+
+  const openContextMenu = useCallback(
+    (event: ReactMouseEvent, entry: FilesTreeEntry | null): void => {
+      if (!mutationsEnabled) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpError(null);
+      setMenu({ x: event.clientX, y: event.clientY, entry });
+    },
+    [mutationsEnabled],
+  );
+
+  // Close the context menu on any outside interaction or Escape while it is open.
+  useEffect(() => {
+    if (menu === null) return;
+    const close = (): void => setMenu(null);
+    const onKey = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") setMenu(null);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
   const goUp = useCallback((): void => {
     if (currentDirectoryPath !== null) {
       goToDirectory(parentRelativePath(currentDirectoryPath));
@@ -414,9 +617,40 @@ export function FilesWidget({
     [apiRoot, resolvedRoot],
   );
 
+  // Locate a loaded tree entry by its root-relative path, across every fetched directory level.
+  const findEntry = useCallback(
+    (path: string): FilesTreeEntry | null => {
+      for (const dir of Object.values(directories)) {
+        const found = dir.entries.find((entry) => entry.path === path);
+        if (found !== undefined) return found;
+      }
+      return null;
+    },
+    [directories],
+  );
+
   // Arrow-key navigation across the currently visible rows (audit C215). Scope-connect pills
   // are intentionally NOT part of the arrow order — only `.tr-row` buttons are traversed.
   const onTreeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    // F2 renames and Delete removes the focused readable row (VS Code parity), reusing the same
+    // inline-edit / confirm flows as the context menu.
+    if (mutationsEnabled && (event.key === "F2" || event.key === "Delete")) {
+      const focusedRow =
+        event.target instanceof HTMLElement
+          ? event.target.closest<HTMLButtonElement>("button.tr-row[data-readable='true']")
+          : null;
+      const path = focusedRow?.getAttribute("data-path");
+      const entry = path !== null && path !== undefined ? findEntry(path) : null;
+      if (entry !== null) {
+        event.preventDefault();
+        if (event.key === "F2") startRename(entry);
+        else {
+          setOpError(null);
+          setConfirmDelete(entry);
+        }
+      }
+      return;
+    }
     if (!TREE_NAV_KEYS.has(event.key)) return;
     const target = event.target;
     const row =
@@ -446,9 +680,62 @@ export function FilesWidget({
     gitStatusState.status?.available === true &&
     gitDeliveryRoot.length > 0;
 
+  // One inline input reused for new file / new folder / rename, styled with the existing root-bar
+  // input class so no globals.css change is needed (keeps the #1300 proof gate untouched).
+  const renderInlineEditor = (depth: number, icon: ReactNode, ariaLabel: string): ReactNode => (
+    <div className="tr-row-wrap" key="__files-inline-editor__">
+      <div className="tr-dir-line" style={{ paddingLeft: treeIndent(depth) }}>
+        <span className="tr-caret tr-caret-ghost" aria-hidden="true">
+          <Icons.chevronR size={11} />
+        </span>
+        {icon}
+        <input
+          className="files-root-input mono"
+          style={{ flex: 1, minWidth: 0 }}
+          aria-label={ariaLabel}
+          // eslint-disable-next-line jsx-a11y/no-autofocus -- the inline editor is opened on demand.
+          autoFocus
+          spellCheck={false}
+          disabled={opBusy}
+          value={entryDraft}
+          onChange={(event) => setEntryDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void commitPendingEntry();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              cancelPendingEntry();
+            }
+          }}
+          onBlur={() => {
+            // A blur that is not the result of an in-flight commit discards the draft (click-away).
+            if (!opBusy) cancelPendingEntry();
+          }}
+        />
+      </div>
+      {opError !== null ? (
+        <div className="files-error" role="alert" style={{ marginLeft: treeIndent(depth) }}>
+          <span>{opError}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+
   const renderEntry = (entry: FilesTreeEntry, depth: number): ReactNode => {
     const pad = treeIndent(depth);
     const open = expanded.has(entry.path);
+    if (pendingEntry?.kind === "rename" && pendingEntry.path === entry.path) {
+      const icon =
+        entry.kind === "directory" ? (
+          <span className="fi-fallback" style={{ color: "var(--accent)" }}>
+            <Icons.folder size={14} />
+          </span>
+        ) : (
+          <FileIcon name={entryDraft.length > 0 ? entryDraft : entry.name} />
+        );
+      return renderInlineEditor(depth, icon, `Rename ${entry.name}`);
+    }
     // Unreadable symlinks stay focusable via aria-disabled (instead of native disabled) so
     // keyboard/screen-reader users can reach the row and hear the reason (audit C196). The
     // neutral copy covers all server cases — outside root, deny-listed AND broken links
@@ -487,6 +774,7 @@ export function FilesWidget({
               aria-describedby={entry.readable ? undefined : unreadableReasonId}
               aria-expanded={open}
               onClick={() => enterDirectory(entry)}
+              onContextMenu={(event) => openContextMenu(event, entry)}
               title={entry.readable ? entry.path : unreadableTitle}
             >
               <span className="fi-fallback" style={{ color: "var(--accent)" }}>
@@ -507,6 +795,7 @@ export function FilesWidget({
       <div className="tr-row-wrap tr-file-wrap" key={entry.path}>
         <button
           className="tr-row tr-file"
+          onContextMenu={(event) => openContextMenu(event, entry)}
           role="treeitem"
           aria-level={depth + 1}
           aria-selected={activePath === entry.path}
@@ -594,6 +883,21 @@ export function FilesWidget({
           Showing only the first {state.entries.length} entries — this folder contains more.
         </div>
       ) : null}
+      {pendingEntry !== null &&
+      pendingEntry.kind !== "rename" &&
+      (pendingEntry.parentPath ?? "") === path
+        ? renderInlineEditor(
+            depth,
+            pendingEntry.kind === "new-folder" ? (
+              <span className="fi-fallback" style={{ color: "var(--accent)" }}>
+                <Icons.folder size={14} />
+              </span>
+            ) : (
+              <FileIcon name={entryDraft.length > 0 ? entryDraft : "new-file"} />
+            ),
+            pendingEntry.kind === "new-folder" ? "New folder name" : "New file name",
+          )
+        : null}
       {state?.entries.map((entry) => renderEntry(entry, depth))}
       {state !== undefined &&
       !state.loading &&
@@ -770,6 +1074,32 @@ export function FilesWidget({
       >
         <Icons.reset size={13} />
       </button>
+      {mutationsEnabled ? (
+        <>
+          {/* New file / new folder reuse the hover-revealed `.files-refresh` icon-button styling;
+              only the horizontal offset is inline, so globals.css (and the #1300 proof) is untouched. */}
+          <button
+            className="files-refresh"
+            style={{ right: 62 }}
+            type="button"
+            onClick={() => startNewEntry("new-file", currentDirectoryPath)}
+            title="New file"
+            aria-label="New file"
+          >
+            <Icons.file size={13} />
+          </button>
+          <button
+            className="files-refresh"
+            style={{ right: 34 }}
+            type="button"
+            onClick={() => startNewEntry("new-folder", currentDirectoryPath)}
+            title="New folder"
+            aria-label="New folder"
+          >
+            <Icons.folder size={13} />
+          </button>
+        </>
+      ) : null}
       <span id={unreadableReasonId} className="visually-hidden">
         This link can&apos;t be opened from this folder.
       </span>
@@ -784,6 +1114,131 @@ export function FilesWidget({
       >
         {renderDirectory(currentDirectoryPath ?? "", 0)}
       </div>
+      {menu !== null ? (
+        <div
+          role="menu"
+          aria-label="File actions"
+          // Positioned at the cursor and themed with the same popover tokens as `.edm-menu`, so the
+          // context menu needs no globals.css rule. Stopping pointerdown keeps the window-level
+          // outside-close listener from dismissing it before a menu item's click fires.
+          onPointerDown={(event) => event.stopPropagation()}
+          style={{
+            position: "fixed",
+            top: menu.y,
+            left: menu.x,
+            zIndex: 9700,
+            minWidth: 176,
+            padding: 6,
+            background: "var(--popover-surface)",
+            border: "1px solid var(--popover-border)",
+            borderRadius: "var(--radius)",
+            boxShadow: "var(--popover-shadow)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+          }}
+        >
+          {(() => {
+            const target = menu.entry !== null && menu.entry.readable ? menu.entry : null;
+            const parent =
+              menu.entry === null
+                ? currentDirectoryPath
+                : menu.entry.kind === "directory"
+                  ? menu.entry.path
+                  : entryParent(menu.entry.path);
+            return (
+              <>
+                {target !== null ? (
+                  <>
+                    <button
+                      type="button"
+                      className="edm-item"
+                      role="menuitem"
+                      onClick={() => startRename(target)}
+                    >
+                      <Icons.edit size={14} />
+                      <span>Rename…</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="edm-item"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenu(null);
+                        setOpError(null);
+                        setConfirmDelete(target);
+                      }}
+                    >
+                      <Icons.trash size={14} />
+                      <span>Delete…</span>
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  className="edm-item"
+                  role="menuitem"
+                  onClick={() => startNewEntry("new-file", parent)}
+                >
+                  <Icons.file size={14} />
+                  <span>New File…</span>
+                </button>
+                <button
+                  type="button"
+                  className="edm-item"
+                  role="menuitem"
+                  onClick={() => startNewEntry("new-folder", parent)}
+                >
+                  <Icons.folder size={14} />
+                  <span>New Folder…</span>
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      ) : null}
+      {confirmDelete !== null ? (
+        <div className="ed-dialog-backdrop" role="presentation">
+          <div
+            className="ed-dirty-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="files-delete-title"
+            tabIndex={-1}
+          >
+            <h2 id="files-delete-title">
+              Delete {confirmDelete.kind === "directory" ? "folder" : "file"}?
+            </h2>
+            <p>
+              “{confirmDelete.name}” will be permanently deleted
+              {confirmDelete.kind === "directory" ? ", including everything inside it" : ""}. This
+              cannot be undone.
+            </p>
+            {opError !== null ? <p role="alert">{opError}</p> : null}
+            <div className="ed-dialog-actions">
+              <button
+                type="button"
+                className="ed-reload"
+                onClick={() => void performDelete(confirmDelete)}
+                disabled={opBusy}
+              >
+                {opBusy ? "Deleting…" : "Delete"}
+              </button>
+              <button
+                type="button"
+                className="ed-icon-action"
+                onClick={() => {
+                  setConfirmDelete(null);
+                  setOpError(null);
+                }}
+                disabled={opBusy}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
