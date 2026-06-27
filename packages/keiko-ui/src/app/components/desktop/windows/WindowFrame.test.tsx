@@ -75,6 +75,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
+    currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
     ...patch,
   };
 }
@@ -234,7 +235,7 @@ describe("WindowFrame content zoom controls", () => {
           win={appWindow({ type })}
           top
           connState={null}
-          view={{ x: 0, y: 0, zoom: 1 }}
+          linkRevision={0}
           api={api()}
           wsRef={createRef<HTMLElement>()}
         />,
@@ -263,7 +264,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ minimize, close })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -285,7 +286,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ update, maximize })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -303,7 +304,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow({ type: "quality", id: "quality-1", w: 300, h: 420 })}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api()}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -332,7 +333,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow({ w: 700, h: 420, zoom: 1.4 })}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api()}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -348,9 +349,9 @@ describe("WindowFrame content zoom controls", () => {
       zoom: "1.4",
     });
     expect(body?.style.zoom).toBe("");
-    expect(
-      screen.getByRole("button", { name: "Zoom Agents content out" }).closest(".window"),
-    ).toBe(windowSection);
+    expect(screen.getByRole("button", { name: "Zoom Agents content out" }).closest(".window")).toBe(
+      windowSection,
+    );
     expect(screen.getByRole("group", { name: "Agents window controls" }).closest(".window")).toBe(
       windowSection,
     );
@@ -375,7 +376,7 @@ describe("WindowFrame content zoom controls", () => {
         })}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ linkedFilesRoot, linkedFilesContext, linkedAllFilesRoots })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -404,7 +405,7 @@ describe("WindowFrame content zoom controls", () => {
         })}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ focus })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -427,7 +428,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ maximize })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -458,7 +459,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ maximize })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -492,7 +493,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ focus, update, setSnap, commitSnap })}
         wsRef={workspaceRef(domRect())}
       />,
@@ -526,7 +527,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ focus, update, setSnap, commitSnap })}
         wsRef={workspaceRef(domRect())}
       />,
@@ -546,6 +547,45 @@ describe("WindowFrame content zoom controls", () => {
     expect(document.body.style.cursor).toBe("");
   });
 
+  it("coalesces rapid drag pointermoves into one update per animation frame (issue #1580)", () => {
+    const update = vi.fn();
+    const setSnap = vi.fn();
+    const frames = installAnimationFrameQueue();
+    try {
+      const { container } = render(
+        <WindowFrame
+          win={appWindow()}
+          top
+          connState={null}
+          linkRevision={0}
+          api={api({ update, setSnap })}
+          wsRef={workspaceRef(domRect())}
+        />,
+      );
+      const header = container.querySelector<HTMLElement>(".win-head");
+      expect(header).not.toBeNull();
+
+      fireEvent.pointerDown(header as HTMLElement, { button: 1, clientX: 100, clientY: 90 });
+      // Three moves inside one frame: the work is buffered, not committed per event.
+      fireEvent.pointerMove(window, { clientX: 200, clientY: 150 });
+      fireEvent.pointerMove(window, { clientX: 250, clientY: 180 });
+      fireEvent.pointerMove(window, { clientX: 300, clientY: 200 });
+      expect(update).not.toHaveBeenCalled();
+      expect(setSnap).not.toHaveBeenCalled();
+
+      // One frame collapses the burst into a single update + setSnap.
+      frames.flushNextFrame();
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(setSnap).toHaveBeenCalledTimes(1);
+
+      // pointerUp adds no extra commit when nothing moved since the last flush.
+      fireEvent.pointerUp(window);
+      expect(update).toHaveBeenCalledTimes(1);
+    } finally {
+      frames.restore();
+    }
+  });
+
   it("does not start header dragging from right click or macOS control click", () => {
     const focus = vi.fn();
     const update = vi.fn();
@@ -554,7 +594,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ focus, update })}
         wsRef={workspaceRef(domRect())}
       />,
@@ -583,7 +623,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow({ max: true, prev: { x: 20, y: 25, w: 520, h: 360 } })}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ update })}
         wsRef={workspaceRef(domRect())}
       />,
@@ -609,8 +649,8 @@ describe("WindowFrame content zoom controls", () => {
           win={appWindow()}
           top
           connState={null}
-          view={{ x: 0, y: 0, zoom: 2 }}
-          api={api({ focus, update })}
+          linkRevision={0}
+          api={api({ focus, update, currentView: () => ({ x: 0, y: 0, zoom: 2 }) })}
           wsRef={createRef<HTMLElement>()}
         />,
       );
@@ -651,7 +691,7 @@ describe("WindowFrame content zoom controls", () => {
           win={appWindow()}
           top
           connState={null}
-          view={{ x: 0, y: 0, zoom: 1 }}
+          linkRevision={0}
           api={api({ focus, update })}
           wsRef={createRef<HTMLElement>()}
         />,
@@ -688,7 +728,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ update })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -722,7 +762,7 @@ describe("WindowFrame content zoom controls", () => {
           win={appWindow()}
           top
           connState={null}
-          view={{ x: 0, y: 0, zoom: 1 }}
+          linkRevision={0}
           api={api({ update })}
           wsRef={createRef<HTMLElement>()}
         />,
@@ -753,7 +793,7 @@ describe("WindowFrame content zoom controls", () => {
           win={appWindow()}
           top
           connState={null}
-          view={{ x: 0, y: 0, zoom: 1 }}
+          linkRevision={0}
           api={api({ update })}
           wsRef={createRef<HTMLElement>()}
         />,
@@ -797,7 +837,7 @@ describe("WindowFrame content zoom controls", () => {
         win={figmaViewWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ update })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -821,14 +861,13 @@ describe("WindowFrame content zoom controls", () => {
     const harness = installAutoGrowHarness();
     const update = vi.fn();
     const testApi = api({ update });
-    const view = { x: 0, y: 0, zoom: 1 };
     const wsRef = createRef<HTMLElement>();
     const { container, rerender } = render(
       <WindowFrame
         win={figmaViewWindow({ h: 360 })}
         top
         connState={null}
-        view={view}
+        linkRevision={0}
         api={testApi}
         wsRef={wsRef}
       />,
@@ -871,7 +910,7 @@ describe("WindowFrame content zoom controls", () => {
           })}
           top
           connState={null}
-          view={view}
+          linkRevision={0}
           api={testApi}
           wsRef={wsRef}
         />,
@@ -897,7 +936,7 @@ describe("WindowFrame content zoom controls", () => {
           win={appWindow()}
           top
           connState={null}
-          view={{ x: 0, y: 0, zoom: 1 }}
+          linkRevision={0}
           api={api({ update })}
           wsRef={createRef<HTMLElement>()}
         />,
@@ -927,7 +966,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ focus, update })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -961,7 +1000,7 @@ describe("WindowFrame content zoom controls", () => {
           win={appWindow({ w: 260, h: 170 })}
           top
           connState={null}
-          view={{ x: 0, y: 0, zoom: 1 }}
+          linkRevision={0}
           api={api({ update })}
           wsRef={createRef<HTMLElement>()}
         />,
@@ -994,7 +1033,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ startConnect })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -1028,7 +1067,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api()}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -1050,7 +1089,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow()}
         top
         connState="valid"
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api({ confirmConnect, startConnect })}
         wsRef={createRef<HTMLElement>()}
       />,
@@ -1074,7 +1113,7 @@ describe("WindowFrame content zoom controls", () => {
         win={appWindow({ type: "files", id: "files-1", w: 120, h: 90 })}
         top
         connState={null}
-        view={{ x: 0, y: 0, zoom: 1 }}
+        linkRevision={0}
         api={api()}
         wsRef={createRef<HTMLElement>()}
       />,

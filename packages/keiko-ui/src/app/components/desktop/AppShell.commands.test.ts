@@ -54,6 +54,7 @@ function fakeApi(): WorkspaceApi {
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
+    currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
   };
 }
 

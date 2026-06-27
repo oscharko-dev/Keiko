@@ -69,6 +69,13 @@ export interface WorkspaceApi {
     | ((id: string) => readonly QualityIntelligenceImageSource[])
     | undefined;
   readonly currentFilesContext: () => FilesWindowContext | null;
+  /**
+   * Live snapshot of the pan/zoom view, read through a ref so window children can
+   * compute drag/resize geometry at gesture-start WITHOUT taking `view` as a prop
+   * (which changes identity every rAF pan/zoom frame and would defeat memoization
+   * of WindowFrame). Mirrors the existing `rect()` accessor (issue #1580).
+   */
+  readonly currentView: () => View;
   readonly zoomTo: (z: number) => void;
   readonly fitView: () => void;
   readonly resetView: () => void;
