@@ -34,7 +34,8 @@
  *     which needs a human-driven edit before the agent fires; the dirty-write server path is fully
  *     covered by the unit tests in agentRoutes.test.ts).
  */
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { createHash } from "node:crypto";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,8 +45,19 @@ import { join } from "node:path";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1", "Content-Type": "application/json" };
 const AGENT_SCHEMA_VERSION = "1" as const;
 
+function sha256Hex(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
 /** Create a temp workspace with a seeded TypeScript file. */
-function createWorkspace(): { root: string; filePath: string; relPath: string; content: string } {
+function createWorkspace(): {
+  root: string;
+  filePath: string;
+  relPath: string;
+  content: string;
+  contentHash: string;
+  sizeBytes: number;
+} {
   const root = mkdtempSync(join(tmpdir(), "keiko-1394-e2e-"));
   const srcDir = join(root, "src");
   mkdirSync(srcDir);
@@ -53,7 +65,14 @@ function createWorkspace(): { root: string; filePath: string; relPath: string; c
   const filePath = join(root, relPath);
   const content = "export const VALUE = 1;\n";
   writeFileSync(filePath, content, "utf8");
-  return { root, filePath, relPath, content };
+  return {
+    root,
+    filePath,
+    relPath,
+    content,
+    contentHash: sha256Hex(content),
+    sizeBytes: Buffer.byteLength(content, "utf8"),
+  };
 }
 
 /** Build a minimal valid agent action body. */
@@ -77,6 +96,7 @@ async function postApplyPatch(
   request: APIRequestContext,
   sessionId: string,
   patch: string,
+  expectedContentHash: string,
 ): Promise<{ httpStatus: number; status: string; code: string | undefined }> {
   const patchId = `e2e-patch-${String(Date.now())}`;
   const res = await request.post("/api/editor/agent/actions", {
@@ -85,6 +105,7 @@ async function postApplyPatch(
       agentActionBody(sessionId, "applyPatch", {
         actionId: patchId,
         idempotencyKey: patchId,
+        expectedContentHash,
         patch,
       }),
     ),
@@ -100,8 +121,17 @@ async function registerAgentSnapshot(
     sessionId,
     root,
     relPath,
+    contentHash,
+    sizeBytes,
     dirtyFiles = [],
-  }: { sessionId: string; root: string; relPath: string; dirtyFiles?: string[] },
+  }: {
+    sessionId: string;
+    root: string;
+    relPath: string;
+    contentHash: string;
+    sizeBytes: number;
+    dirtyFiles?: string[];
+  },
 ): Promise<void> {
   const res = await request.post("/api/editor/agent/snapshot", {
     headers: MUTATION_HEADERS,
@@ -120,6 +150,8 @@ async function registerAgentSnapshot(
         cursor: null,
         selection: null,
         diagnosticsSummary: null,
+        documentVersion: { sizeBytes, modifiedAt: 1, contentHash },
+        activeFileContentHash: contentHash,
         textMode: "none",
         updatedAt: Date.now(),
       },
@@ -128,13 +160,24 @@ async function registerAgentSnapshot(
   expect(res.ok()).toBe(true);
 }
 
+/** Open a live SSE bridge for the session so otherwise-valid actions can reach the queue. */
+async function openBridge(page: Page, sessionId: string): Promise<void> {
+  await page.evaluate((sid) => {
+    const w = window as unknown as { __keiko1394Bridge?: EventSource };
+    w.__keiko1394Bridge = new EventSource(
+      `/api/editor/agent/events?sessionId=${encodeURIComponent(sid)}`,
+    );
+  }, sessionId);
+  await page.waitForTimeout(750);
+}
+
 // ─── AC3: Conflict banner appears and is non-destructive ─────────────────────
 
 test("AC3: conflict result from SSE causes AgentConflictBanner to appear without clearing the editor buffer", async ({
   page,
   request,
 }) => {
-  const { root, relPath } = createWorkspace();
+  const { root, relPath, contentHash, sizeBytes } = createWorkspace();
 
   try {
     // Navigate to the root of the app and wait for it to load.
@@ -144,7 +187,7 @@ test("AC3: conflict result from SSE causes AgentConflictBanner to appear without
     // to manual browser capture (requires a pre-configured project or deep-link URL contract).
 
     const sessionId = `e2e-ac3-${String(Date.now())}`;
-    await registerAgentSnapshot(request, { sessionId, root, relPath });
+    await registerAgentSnapshot(request, { sessionId, root, relPath, contentHash, sizeBytes });
 
     // Emit a conflict result for the session.
     const conflictBody = {
@@ -181,14 +224,15 @@ test("AC4: applied text edits can be undone via Monaco's undo stack (regression 
   page,
   request,
 }) => {
-  const { root, relPath } = createWorkspace();
+  const { root, relPath, contentHash, sizeBytes } = createWorkspace();
 
   try {
     await page.goto("/");
     await expect(page.locator("body")).toBeVisible();
 
     const sessionId = `e2e-ac4-${String(Date.now())}`;
-    await registerAgentSnapshot(request, { sessionId, root, relPath });
+    await registerAgentSnapshot(request, { sessionId, root, relPath, contentHash, sizeBytes });
+    await openBridge(page, sessionId);
 
     // Post an applyTextEdits action.
     const actionId = `e2e-ac4-apply-${String(Date.now())}`;
@@ -198,6 +242,7 @@ test("AC4: applied text edits can be undone via Monaco's undo stack (regression 
         agentActionBody(sessionId, "applyTextEdits", {
           actionId,
           idempotencyKey: actionId,
+          expectedContentHash: contentHash,
           textEdits: [
             {
               range: { start: { line: 0, character: 7 }, end: { line: 0, character: 12 } },
@@ -262,45 +307,50 @@ const PATCH_PATH_ESCAPE = [
 ].join("\n");
 
 test("applyPatch: valid single-file patch is queued by server (202); invalid patch is rejected (409 INVALID_EDITS)", async ({
+  page,
   request,
 }) => {
-  const { root, relPath, filePath, content } = createWorkspace();
+  const { root, relPath, filePath, content, contentHash, sizeBytes } = createWorkspace();
 
   try {
+    await page.goto("/");
+    await expect(page.locator("body")).toBeVisible();
+
     // Register session with the real workspace root so validatePatch can read files from disk.
     const sessionId = `e2e-patch-${String(Date.now())}`;
-    await registerAgentSnapshot(request, { sessionId, root, relPath });
+    await registerAgentSnapshot(request, { sessionId, root, relPath, contentHash, sizeBytes });
+    await openBridge(page, sessionId);
 
     // The pre-image is already written; confirm the file exists.
     expect(content).toBe("export const VALUE = 1;\n");
     void filePath; // already written in createWorkspace.
 
     // Valid single-file patch: should be queued (202).
-    const valid = await postApplyPatch(request, sessionId, PATCH_VALID_SINGLE);
+    const valid = await postApplyPatch(request, sessionId, PATCH_VALID_SINGLE, contentHash);
     expect(valid.httpStatus).toBe(202);
     expect(valid.status).toBe("queued");
 
     // Malformed patch: should be rejected with INVALID_EDITS.
-    const bad = await postApplyPatch(request, sessionId, PATCH_MALFORMED);
+    const bad = await postApplyPatch(request, sessionId, PATCH_MALFORMED, contentHash);
     expect(bad.httpStatus).toBe(409);
     expect(bad.status).toBe("conflict");
     expect(bad.code).toBe("INVALID_EDITS");
 
     // Binary patch: should be rejected with OUT_OF_SCOPE.
-    const binary = await postApplyPatch(request, sessionId, PATCH_BINARY);
+    const binary = await postApplyPatch(request, sessionId, PATCH_BINARY, contentHash);
     expect(binary.httpStatus).toBe(409);
     expect(binary.status).toBe("conflict");
     expect(binary.code).toBe("OUT_OF_SCOPE");
 
     // Multi-file patch: should be rejected with OUT_OF_SCOPE.
     writeFileSync(join(root, "src", "other.ts"), "export const Y = 2;\n", "utf8");
-    const multi = await postApplyPatch(request, sessionId, PATCH_MULTI_FILE);
+    const multi = await postApplyPatch(request, sessionId, PATCH_MULTI_FILE, contentHash);
     expect(multi.httpStatus).toBe(409);
     expect(multi.status).toBe("conflict");
     expect(multi.code).toBe("OUT_OF_SCOPE");
 
     // Path-escape patch: should be rejected with OUT_OF_SCOPE (path-unsafe paths map to OUT_OF_SCOPE).
-    const escape = await postApplyPatch(request, sessionId, PATCH_PATH_ESCAPE);
+    const escape = await postApplyPatch(request, sessionId, PATCH_PATH_ESCAPE, contentHash);
     expect(escape.httpStatus).toBe(409);
     expect(escape.status).toBe("conflict");
     expect(escape.code).toBe("OUT_OF_SCOPE");
@@ -314,11 +364,11 @@ test("applyPatch: valid single-file patch is queued by server (202); invalid pat
 test("AC5: applyTextEdits with an absolute target.file path is rejected as OUT_OF_SCOPE", async ({
   request,
 }) => {
-  const { root, relPath } = createWorkspace();
+  const { root, relPath, contentHash, sizeBytes } = createWorkspace();
 
   try {
     const sessionId = `e2e-scope-${String(Date.now())}`;
-    await registerAgentSnapshot(request, { sessionId, root, relPath });
+    await registerAgentSnapshot(request, { sessionId, root, relPath, contentHash, sizeBytes });
 
     const actionId = `e2e-abs-${String(Date.now())}`;
     const res = await request.post("/api/editor/agent/actions", {
@@ -354,11 +404,11 @@ test("AC5: applyTextEdits with an absolute target.file path is rejected as OUT_O
 test("AC2: applyTextEdits with an inverted range is rejected as INVALID_EDITS by the BFF preflight", async ({
   request,
 }) => {
-  const { root, relPath } = createWorkspace();
+  const { root, relPath, contentHash, sizeBytes } = createWorkspace();
 
   try {
     const sessionId = `e2e-inv-${String(Date.now())}`;
-    await registerAgentSnapshot(request, { sessionId, root, relPath });
+    await registerAgentSnapshot(request, { sessionId, root, relPath, contentHash, sizeBytes });
 
     const actionId = `e2e-inv-range-${String(Date.now())}`;
     const res = await request.post("/api/editor/agent/actions", {

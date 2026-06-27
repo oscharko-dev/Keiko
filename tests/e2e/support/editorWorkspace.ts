@@ -284,6 +284,10 @@ export function isBenignMonacoCancellation(message: string): boolean {
   return /\b(monaco|inline[-\s]?completion|suggest|editor)\b/iu.test(message);
 }
 
+function isExpectedTaskWorkspaceProbeDenial(message: string): boolean {
+  return message.includes("status of 403") && message.includes("/api/task-workspaces?root=");
+}
+
 /**
  * Start collecting page/console errors, filtering benign Monaco cancellations and Vite notices.
  * Returns a live array; assert it is empty at the end of the scenario.
@@ -296,8 +300,16 @@ export function collectPageErrors(page: Page): readonly string[] {
   });
   page.on("console", (message) => {
     if (message.type() !== "error") return;
-    const text = message.text().slice(0, 160);
-    if (/^\[vite\]/iu.test(text) || isBenignMonacoCancellation(text)) return;
+    const location = message.location();
+    const source = location.url.length > 0 ? ` @ ${location.url}` : "";
+    const text = `${message.text()}${source}`.slice(0, 240);
+    if (
+      /^\[vite\]/iu.test(text) ||
+      isBenignMonacoCancellation(text) ||
+      isExpectedTaskWorkspaceProbeDenial(text)
+    ) {
+      return;
+    }
     errors.push(text);
   });
   return errors;
