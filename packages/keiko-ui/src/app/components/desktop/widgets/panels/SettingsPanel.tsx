@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
+import { useI18n, type I18nTranslate } from "@/lib/i18n";
 import type {
   ConversationIneligibilityReason,
   GatewayReadinessProbeResult,
@@ -17,6 +18,7 @@ import {
   isConversationEligibleModel,
 } from "@/lib/types";
 import { Icons } from "../../Icons";
+import KeikoSelect from "../../KeikoSelect";
 import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
 import { Toggle } from "../shared/Toggle";
 import { GATEWAY_SETUP_REQUEST_EVENT, consumePendingGatewaySetup } from "../shared/gatewaySetupBus";
@@ -54,100 +56,122 @@ function kindLabel(kind: ModelCapability["kind"]): string {
 // ineligibility reason. Pure function of the typed reason — never reads
 // model.baseUrl / model.apiKey / anything credential-shaped (those fields do
 // not exist on ModelCapability by design; this comment pins the invariant).
-function conversationIneligibilityLabel(reason: ConversationIneligibilityReason): string {
-  if (reason === "embedding-only") return "Embedding model — not selectable for text conversation";
-  if (reason === "ocr-vision-only") return "OCR/vision-only — not selectable for text conversation";
-  return "Not a chat model — not selectable for text conversation";
+function conversationIneligibilityLabel(
+  reason: ConversationIneligibilityReason,
+  t: I18nTranslate,
+): string {
+  if (reason === "embedding-only") return t("settings.models.ineligibleEmbedding");
+  if (reason === "ocr-vision-only") return t("settings.models.ineligibleOcr");
+  return t("settings.models.ineligibleGeneric");
 }
 
-function embeddingAvailabilityLabel(): string {
-  return "Available for embeddings; not shown in the chat model picker";
+function embeddingAvailabilityLabel(t: I18nTranslate): string {
+  return t("settings.models.embeddingAvailable");
 }
 
 // Issue #1557 (AC4, ADR-0094 D5): a content-free, human-readable description of a configured voice
 // provider's availability, so the model list presents it as available (with its voice capabilities
 // and the personas it offers) rather than a chat-ineligibility warning. Reads only enum/boolean
 // fields — never a base URL, credential, or provider voice id.
-function voiceProviderAvailabilityLabel(model: ModelCapability): string {
+function voiceProviderAvailabilityLabel(model: ModelCapability, t: I18nTranslate): string {
   const availability = describeVoiceProviderAvailability(model);
   const capabilities: string[] = [];
-  if (availability.speechToText) capabilities.push("speech-to-text");
-  if (availability.speechOutput) capabilities.push("speech output");
-  if (availability.realtimeVoice) capabilities.push("realtime dialogue");
-  const capabilityText = capabilities.length > 0 ? capabilities.join(", ") : "voice";
+  if (availability.speechToText)
+    capabilities.push(t("settings.models.voiceCapabilitySpeechToText"));
+  if (availability.speechOutput)
+    capabilities.push(t("settings.models.voiceCapabilitySpeechOutput"));
+  if (availability.realtimeVoice) {
+    capabilities.push(t("settings.models.voiceCapabilityRealtimeDialogue"));
+  }
+  const capabilityText =
+    capabilities.length > 0 ? capabilities.join(", ") : t("settings.models.voiceCapabilityVoice");
   const personaText =
-    availability.personas.length > 0 ? `; voices: ${availability.personas.join(", ")}` : "";
-  return `Voice provider — available for ${capabilityText}${personaText}`;
+    availability.personas.length > 0
+      ? t("settings.models.voicePersonas", { personas: availability.personas.join(", ") })
+      : "";
+  return t("settings.models.voiceProviderAvailable", {
+    capabilities: capabilityText,
+    personas: personaText,
+  });
 }
 
 // Short visible badge copy for a configured voice provider (the long form stays in aria-label/title).
-function voiceProviderShortLabel(model: ModelCapability): string {
+function voiceProviderShortLabel(model: ModelCapability, t: I18nTranslate): string {
   const availability = describeVoiceProviderAvailability(model);
-  if (availability.realtimeVoice) return "realtime dialogue";
-  if (availability.speechOutput) return "speech output";
-  if (availability.speechToText) return "speech-to-text";
-  return "voice";
+  if (availability.realtimeVoice) return t("settings.models.voiceCapabilityRealtimeDialogue");
+  if (availability.speechOutput) return t("settings.models.voiceCapabilitySpeechOutput");
+  if (availability.speechToText) return t("settings.models.voiceCapabilitySpeechToText");
+  return t("settings.models.voiceCapabilityVoice");
 }
 
 // uiux-fix C359/C057: short visible badge copy — the long form stays in
 // aria-label/title so the model list does not read like a transport warning.
-function conversationIneligibilityShortLabel(reason: ConversationIneligibilityReason): string {
-  if (reason === "ocr-vision-only") return "OCR/vision-only";
-  return "not a chat model";
+function conversationIneligibilityShortLabel(
+  reason: ConversationIneligibilityReason,
+  t: I18nTranslate,
+): string {
+  if (reason === "ocr-vision-only") return t("settings.models.ineligibleShortOcr");
+  return t("settings.models.ineligibleShortGeneric");
 }
 
 function ConversationEligibilityBadge({ model }: { readonly model: ModelCapability }): ReactNode {
+  const { t } = useI18n();
   const reason = explainConversationIneligibility(model);
+  // Issue #1557 (AC4): a correctly configured voice provider is available for its voice purpose, not a
+  // chat-ineligibility warning. `isConversationEligibleModel` stays unchanged (voice is genuinely not
+  // a chat model) — only the presentation differs.
+  if (isConfiguredVoiceProvider(model)) {
+    const label = voiceProviderAvailabilityLabel(model, t);
+    return (
+      <span
+        className="ml-elig ml-elig-voice"
+        data-testid="voice-elig-ok"
+        role="status"
+        aria-label={t("settings.models.eligibilityPrefix", { label })}
+        title={label}
+      >
+        {t("settings.models.voiceProviderBadge", { label: voiceProviderShortLabel(model, t) })}
+      </span>
+    );
+  }
   if (reason === undefined) {
     return (
       <span
         className="ml-elig ml-elig-ok"
         data-testid="conv-elig-ok"
         role="status"
-        aria-label="Model eligibility: eligible for conversation"
+        aria-label={t("settings.models.eligibilityOkAria")}
       >
-        Conversation-eligible
+        {t("settings.models.eligibilityOk")}
       </span>
     );
   }
   if (reason === "embedding-only") {
+    const label = embeddingAvailabilityLabel(t);
     return (
       <span
         className="ml-elig ml-elig-embed"
         data-testid="embedding-elig-ok"
         role="status"
-        aria-label={"Model eligibility: " + embeddingAvailabilityLabel()}
-        title={embeddingAvailabilityLabel()}
+        aria-label={t("settings.models.eligibilityPrefix", { label })}
+        title={label}
       >
-        Embedding-ready
+        {t("settings.models.embeddingLabel")}
       </span>
     );
   }
-  // Issue #1557 (AC4): a correctly configured voice provider is available for its voice purpose, not a
-  // chat-ineligibility warning. `isConversationEligibleModel` stays unchanged (voice is genuinely not
-  // a chat model) — only the presentation differs.
-  if (isConfiguredVoiceProvider(model)) {
-    return (
-      <span
-        className="ml-elig ml-elig-voice"
-        data-testid="voice-elig-ok"
-        role="status"
-        aria-label={"Model eligibility: " + voiceProviderAvailabilityLabel(model)}
-        title={voiceProviderAvailabilityLabel(model)}
-      >
-        Voice provider — {voiceProviderShortLabel(model)}
-      </span>
-    );
-  }
+  const label = conversationIneligibilityLabel(reason, t);
   return (
     <span
       className="ml-elig ml-elig-no"
       data-testid="conv-elig-no"
       role="status"
-      aria-label={"Model eligibility: " + conversationIneligibilityLabel(reason)}
-      title={conversationIneligibilityLabel(reason)}
+      aria-label={t("settings.models.eligibilityPrefix", { label })}
+      title={label}
     >
-      Not selectable — {conversationIneligibilityShortLabel(reason)}
+      {t("settings.models.notSelectable", {
+        reason: conversationIneligibilityShortLabel(reason, t),
+      })}
     </span>
   );
 }
@@ -160,11 +184,11 @@ type ReadinessRunState =
 
 type ReportCopyState = "idle" | "copied" | "failed";
 
-function readinessErrorMessage(error: unknown): string {
+function readinessErrorMessage(error: unknown, t: I18nTranslate): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }
-  return "Readiness check failed. The gateway configuration was not changed.";
+  return t("settings.models.readinessError");
 }
 
 async function writeTextWithFallback(text: string): Promise<void> {
@@ -258,6 +282,7 @@ function ReadinessReportCopyButton({
 }: {
   readonly report: GatewayReadinessReport;
 }): ReactNode {
+  const { t } = useI18n();
   const [copyState, setCopyState] = useState<ReportCopyState>("idle");
   const [status, setStatus] = useState("");
 
@@ -265,10 +290,10 @@ function ReadinessReportCopyButton({
     try {
       await writeTextWithFallback(formatGatewayReadinessReport(report));
       setCopyState("copied");
-      setStatus("Readiness report copied.");
+      setStatus(t("settings.models.reportCopied"));
     } catch {
       setCopyState("failed");
-      setStatus("Clipboard access failed. Select and copy the report details manually.");
+      setStatus(t("settings.models.reportCopyFailed"));
     }
   }
 
@@ -284,7 +309,7 @@ function ReadinessReportCopyButton({
         }}
       >
         <Icons.copy size={12} aria-hidden="true" />
-        {copyState === "copied" ? "Copied" : "Copy report"}
+        {copyState === "copied" ? t("settings.models.copied") : t("settings.models.copyReport")}
       </button>
       <span
         className="ml-url mono"
@@ -298,11 +323,16 @@ function ReadinessReportCopyButton({
 }
 
 function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undefined }): ReactNode {
+  const { t } = useI18n();
   if (state === undefined || state.status === "idle") return null;
   if (state.status === "running") {
     return (
       <div className="ml-readiness" role="status">
-        Checking {state.deep ? "deep" : "basic"} readiness…
+        {t("settings.models.checkingReadiness", {
+          mode: state.deep
+            ? t("settings.models.readinessModeDeep")
+            : t("settings.models.readinessModeBasic"),
+        })}
       </div>
     );
   }
@@ -322,19 +352,35 @@ function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undef
         <div className="ml-rsummary" role={report.overallStatus === "failed" ? "alert" : "status"}>
           <div className="ml-rhead">
             <span className={"ml-rstatus " + report.overallStatus}>
-              {workingToday ? "Working today" : "Not verified"}
+              {workingToday ? t("settings.models.workingToday") : t("settings.models.notVerified")}
             </span>
             <span className="ml-rtime mono">{new Date(report.checkedAt).toLocaleTimeString()}</span>
           </div>
-          <div className="ml-rbadges" aria-label="Verified capabilities">
-            {probePassed(report, "streaming") ? <span>Streaming</span> : null}
-            {probePassed(report, "tool_calling") ? <span>Tools</span> : null}
-            {probePassed(report, "json_schema") ? <span>JSON</span> : null}
-            {probePassed(report, "reasoning") ? <span>Reasoning</span> : null}
-            {probePassed(report, "image_input") ? <span>Image</span> : null}
-            {probePassed(report, "document_input") ? <span>PDF</span> : null}
+          <div className="ml-rbadges" aria-label={t("settings.models.verifiedCapabilities")}>
+            {probePassed(report, "streaming") ? (
+              <span>{t("settings.models.capabilityStreaming")}</span>
+            ) : null}
+            {probePassed(report, "tool_calling") ? (
+              <span>{t("settings.models.capabilityTools")}</span>
+            ) : null}
+            {probePassed(report, "json_schema") ? (
+              <span>{t("settings.models.capabilityJson")}</span>
+            ) : null}
+            {probePassed(report, "reasoning") ? (
+              <span>{t("settings.models.capabilityReasoning")}</span>
+            ) : null}
+            {probePassed(report, "image_input") ? (
+              <span>{t("settings.models.capabilityImage")}</span>
+            ) : null}
+            {probePassed(report, "document_input") ? (
+              <span>{t("settings.models.capabilityPdf")}</span>
+            ) : null}
             {report.verifiedCapabilities.testedContextTokens !== undefined ? (
-              <span>{report.verifiedCapabilities.testedContextTokens.toLocaleString()} ctx</span>
+              <span>
+                {t("settings.models.contextTokensShort", {
+                  count: report.verifiedCapabilities.testedContextTokens.toLocaleString(),
+                })}
+              </span>
             ) : null}
           </div>
           {warning !== undefined ? <div className="ml-rwarn">{warning}</div> : null}
@@ -353,17 +399,19 @@ function ModelCapabilityRow({
   readonly readiness: ReadinessRunState | undefined;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
 }): ReactNode {
+  const { t } = useI18n();
   const conversationEligible = isConversationEligibleModel(model);
   const embeddingReady = model.kind === "embedding";
   const voiceReady = isConfiguredVoiceProvider(model);
-  const statusClass = conversationEligible || embeddingReady || voiceReady ? "connected" : "ineligible";
+  const statusClass =
+    conversationEligible || embeddingReady || voiceReady ? "connected" : "ineligible";
   const statusTitle = conversationEligible
-    ? "conversation-eligible"
+    ? t("settings.models.statusConversationEligible")
     : embeddingReady
-      ? "available for embeddings"
+      ? t("settings.models.statusEmbedding")
       : voiceReady
-        ? voiceProviderAvailabilityLabel(model)
-        : "not selectable for conversation";
+        ? voiceProviderAvailabilityLabel(model, t)
+        : t("settings.models.statusNotSelectable");
   const RowIcon = model.kind === "voice" ? Icons.mic : Icons.cube;
   return (
     <div className="ml-row">
@@ -377,8 +425,12 @@ function ModelCapabilityRow({
           <ConversationEligibilityBadge model={model} />
         </div>
         <div className="ml-url mono">
-          tools {model.toolCalling ? "yes" : "no"} · structured{" "}
-          {model.structuredOutput ? "yes" : "no"} · {model.costClass}/{model.latencyClass}
+          {t("settings.models.capabilitySummary", {
+            tools: model.toolCalling ? t("settings.models.yes") : t("settings.models.no"),
+            structured: model.structuredOutput ? t("settings.models.yes") : t("settings.models.no"),
+            costClass: model.costClass,
+            latencyClass: model.latencyClass,
+          })}
         </div>
         <ReadinessSummary state={readiness} />
       </div>
@@ -391,7 +443,7 @@ function ModelCapabilityRow({
             onClick={() => onRunReadiness(model.id, false)}
           >
             <Icons.activity size={13} />
-            Run readiness check
+            {t("settings.models.runReadiness")}
           </button>
           <button
             type="button"
@@ -399,7 +451,7 @@ function ModelCapabilityRow({
             disabled={readiness?.status === "running"}
             onClick={() => onRunReadiness(model.id, true)}
           >
-            Deep probes
+            {t("settings.models.deepProbes")}
           </button>
           {readiness?.status === "done" ? (
             <ReadinessReportCopyButton report={readiness.report} />
@@ -412,6 +464,7 @@ function ModelCapabilityRow({
 }
 
 function GeneralPrefs(): ReactNode {
+  const { locale, setLocale, t } = useI18n();
   const [wallpaperEnabled, setWallpaperEnabled] = useState<boolean>(readWallpaperEnabled);
   const [wp, setWp] = useState<number>(readWallpaperOpacity);
   const [bgBrightness, setBgBrightness] = useState<number>(readWorkspaceBackgroundBrightness);
@@ -501,28 +554,69 @@ function GeneralPrefs(): ReactNode {
   const frameInnerGlowFill: CSSProperties = {
     ["--p"]: `${String(frameInnerGlowStrength)}%`,
   } as CSSProperties;
+  const languageHelpId = "settings-language-help";
+  const languageSections = [
+    {
+      options: [
+        { value: "en", label: "English" },
+        { value: "de", label: "German" },
+      ],
+    },
+  ] as const;
   return (
     <>
       <div className="set-sec-h">
         <div>
-          <div className="set-sec-t">Workspace wallpaper</div>
-          <div className="set-sec-d">
-            Liquid Chrome — a subtle metallic flow behind the grid that reacts to your cursor and
-            clicks. Turn it off to stop the WebGL animation completely.
-          </div>
+          <div className="set-sec-t">{t("settings.language.title")}</div>
+          <div className="set-sec-d">{t("settings.language.description")}</div>
+        </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <span className="gpref-label">{t("settings.language.label")}</span>
+          <KeikoSelect
+            ariaLabel={t("settings.language.label")}
+            ariaDescribedBy={languageHelpId}
+            attached={false}
+            leadingVisual={<span aria-hidden="true" className="settings-language-flag" />}
+            menuMinWidth={148}
+            onValueChange={(next) => {
+              if (next === "en" || next === "de") setLocale(next);
+            }}
+            sections={languageSections}
+            showChevron={false}
+            showMenuHeader={false}
+            triggerClassName="settings-language-select"
+            value={locale}
+          />
+        </div>
+        <div id={languageHelpId} className="gpref-help">
+          {t("settings.language.help")}
+        </div>
+      </div>
+      <div className="set-sec-h">
+        <div>
+          <div className="set-sec-t">{t("settings.wallpaper.title")}</div>
+          <div className="set-sec-d">{t("settings.wallpaper.description")}</div>
         </div>
       </div>
       <div className="gpref">
         <div className="gpref-row">
           <div>
-            <div className="gpref-label">Liquid wallpaper</div>
-            <div className="gpref-help">{wallpaperEnabled ? "Running" : "Stopped"}</div>
+            <div className="gpref-label">{t("settings.wallpaper.toggle")}</div>
+            <div className="gpref-help">
+              {wallpaperEnabled ? t("settings.wallpaper.running") : t("settings.wallpaper.stopped")}
+            </div>
           </div>
-          <Toggle on={wallpaperEnabled} onChange={setWallpaperEnabled} label="Liquid wallpaper" />
+          <Toggle
+            on={wallpaperEnabled}
+            onChange={setWallpaperEnabled}
+            label={t("settings.wallpaper.toggle")}
+          />
         </div>
         <div className="gpref-row">
           <label className="gpref-label" htmlFor="wp-op">
-            Wallpaper opacity
+            {t("settings.wallpaper.opacity")}
           </label>
           <span className="gpref-val mono">{wp}%</span>
         </div>
@@ -537,17 +631,17 @@ function GeneralPrefs(): ReactNode {
           disabled={!wallpaperEnabled}
           onChange={(e) => setWp(Number.parseInt(e.target.value, 10))}
           style={fill}
-          aria-label="Wallpaper opacity"
+          aria-label={t("settings.wallpaper.opacity")}
         />
         <div className="gpref-scale">
-          <span>Off</span>
-          <span>Full</span>
+          <span>{t("settings.scale.off")}</span>
+          <span>{t("settings.scale.full")}</span>
         </div>
       </div>
       <div className="gpref">
         <div className="gpref-row">
           <label className="gpref-label" htmlFor="ws-bg-bright">
-            Workspace background brightness
+            {t("settings.workspace.backgroundBrightness")}
           </label>
           <span className="gpref-val mono">{bgBrightness}%</span>
         </div>
@@ -561,17 +655,17 @@ function GeneralPrefs(): ReactNode {
           value={bgBrightness}
           onChange={(e) => setBgBrightness(Number.parseInt(e.target.value, 10))}
           style={bgFill}
-          aria-label="Workspace background brightness"
+          aria-label={t("settings.workspace.backgroundBrightness")}
         />
         <div className="gpref-scale">
-          <span>Base</span>
-          <span>Lighter</span>
+          <span>{t("settings.scale.base")}</span>
+          <span>{t("settings.scale.lighter")}</span>
         </div>
       </div>
       <div className="gpref">
         <div className="gpref-row">
           <label className="gpref-label" htmlFor="ws-grid-strength">
-            Workspace grid strength
+            {t("settings.workspace.gridStrength")}
           </label>
           <span className="gpref-val mono">{gridStrength}%</span>
         </div>
@@ -585,17 +679,17 @@ function GeneralPrefs(): ReactNode {
           value={gridStrength}
           onChange={(e) => setGridStrength(Number.parseInt(e.target.value, 10))}
           style={gridFill}
-          aria-label="Workspace grid strength"
+          aria-label={t("settings.workspace.gridStrength")}
         />
         <div className="gpref-scale">
-          <span>Subtle</span>
-          <span>Strong</span>
+          <span>{t("settings.scale.subtle")}</span>
+          <span>{t("settings.scale.strong")}</span>
         </div>
       </div>
       <div className="gpref">
         <div className="gpref-row">
           <label className="gpref-label" htmlFor="frame-border-strength">
-            Workspace border strength
+            {t("settings.workspace.borderStrength")}
           </label>
           <span className="gpref-val mono">{frameBorderStrength}%</span>
         </div>
@@ -609,17 +703,17 @@ function GeneralPrefs(): ReactNode {
           value={frameBorderStrength}
           onChange={(e) => setFrameBorderStrength(Number.parseInt(e.target.value, 10))}
           style={frameBorderFill}
-          aria-label="Workspace border strength"
+          aria-label={t("settings.workspace.borderStrength")}
         />
         <div className="gpref-scale">
-          <span>Subtle</span>
-          <span>Strong</span>
+          <span>{t("settings.scale.subtle")}</span>
+          <span>{t("settings.scale.strong")}</span>
         </div>
       </div>
       <div className="gpref">
         <div className="gpref-row">
           <label className="gpref-label" htmlFor="frame-inner-glow-strength">
-            Workspace inner glow
+            {t("settings.workspace.innerGlow")}
           </label>
           <span className="gpref-val mono">{frameInnerGlowStrength}%</span>
         </div>
@@ -633,11 +727,11 @@ function GeneralPrefs(): ReactNode {
           value={frameInnerGlowStrength}
           onChange={(e) => setFrameInnerGlowStrength(Number.parseInt(e.target.value, 10))}
           style={frameInnerGlowFill}
-          aria-label="Workspace inner glow"
+          aria-label={t("settings.workspace.innerGlow")}
         />
         <div className="gpref-scale">
-          <span>Off</span>
-          <span>Strong</span>
+          <span>{t("settings.scale.off")}</span>
+          <span>{t("settings.scale.strong")}</span>
         </div>
       </div>
     </>
@@ -649,8 +743,8 @@ type Tab = "models" | "general" | "security";
 // uiux-fix C287: raw transport strings ("HTTP 500", "Failed to fetch") are
 // codes, not explanations — map them to a human-readable message. Messages
 // from the BFF error envelope (anything else) pass through unchanged.
-function describeSettingsLoadError(error: unknown): string {
-  const fallback = "Could not load gateway settings — the local Keiko backend did not respond.";
+function describeSettingsLoadError(error: unknown, t: I18nTranslate): string {
+  const fallback = t("settings.models.loadError");
   if (!(error instanceof Error)) return fallback;
   const message = error.message.trim();
   if (message.length === 0 || /^HTTP \d+$/u.test(message)) return fallback;
@@ -666,6 +760,7 @@ function describeSettingsLoadError(error: unknown): string {
 }
 
 export function SettingsPanel(): ReactNode {
+  const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("models");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
   const [config, setConfig] = useState<SafeGatewayConfig | null>(null);
@@ -725,7 +820,7 @@ export function SettingsPanel(): ReactNode {
         setModels(modelPayload.models);
       } catch (error) {
         if (cancelled) return;
-        setModelError(describeSettingsLoadError(error));
+        setModelError(describeSettingsLoadError(error, t));
       } finally {
         if (!cancelled) setLoadingModels(false);
       }
@@ -735,26 +830,26 @@ export function SettingsPanel(): ReactNode {
     return () => {
       cancelled = true;
     };
-  }, [reloadTick]);
+  }, [reloadTick, t]);
 
   // Issue #144: source of truth is the helper, not an inline kind check.
   const chatCount = models.filter(isConversationEligibleModel).length;
   const gatewayConfigured = configPresent;
   const hasDiscoveredModels = models.length > 0;
   const gatewayStatusLabel = !gatewayConfigured
-    ? "Gateway setup required"
+    ? t("settings.models.setupRequired")
     : hasDiscoveredModels
-      ? "Gateway connected"
-      : "Gateway configured";
+      ? t("settings.models.connected")
+      : t("settings.models.configured");
   // uiux-fix C286: with models discovered but zero conversation-eligible ones
   // (e.g. embedding/OCR-only gateways) the detail must not claim chat works.
   const gatewayStatusDetail = !gatewayConfigured
-    ? "Enter the gateway base URL and API token before using chat or agent workflows."
+    ? t("settings.models.detailSetup")
     : !hasDiscoveredModels
-      ? "The gateway is configured, but no conversation-capable models are currently available."
+      ? t("settings.models.detailNoModels")
       : chatCount === 0
-        ? "Gateway connected, but none of the discovered models can be used for conversation. Add a chat-capable deployment."
-        : "Keiko can use the configured gateway models for chat and agent workflows.";
+        ? t("settings.models.detailNoChat")
+        : t("settings.models.detailReady");
   const gatewayStatusTone = gatewayConfigured ? "connected" : "untested";
 
   async function handleRunReadiness(modelId: string, deep: boolean): Promise<void> {
@@ -768,7 +863,7 @@ export function SettingsPanel(): ReactNode {
     } catch (error) {
       setReadiness((current) => ({
         ...current,
-        [modelId]: { status: "error", message: readinessErrorMessage(error) },
+        [modelId]: { status: "error", message: readinessErrorMessage(error, t) },
       }));
     }
   }
@@ -777,9 +872,10 @@ export function SettingsPanel(): ReactNode {
     <div className="set">
       <div className="set-hero">
         <Icons.settings size={18} />
-        <span className="set-title">Settings</span>
-        <span className="set-onprem" title="Runs inside your network">
-          <span className="dot" style={{ background: "var(--accent)" }} /> Self-hosted
+        <span className="set-title">{t("settings.title")}</span>
+        <span className="set-onprem" title={t("settings.selfHostedTitle")}>
+          <span className="dot" style={{ background: "var(--accent)" }} />{" "}
+          {t("settings.selfHosted")}
         </span>
       </div>
       <div className="set-tabs">
@@ -797,7 +893,11 @@ export function SettingsPanel(): ReactNode {
             onClick={() => setTab(id)}
           >
             {/* uiux-fix C147: the tab shows the remote model gateway, not local models */}
-            {id === "models" ? "Models" : id === "general" ? "General" : "Security"}
+            {id === "models"
+              ? t("settings.tabs.models")
+              : id === "general"
+                ? t("settings.tabs.general")
+                : t("settings.tabs.security")}
           </button>
         ))}
       </div>
@@ -806,15 +906,14 @@ export function SettingsPanel(): ReactNode {
           <>
             <div className="set-sec-h">
               <div>
-                <div className="set-sec-t">Model gateway</div>
-                <div className="set-sec-d">
-                  Credentials are stored locally by the Keiko loopback server; secrets are never
-                  returned to the browser.
-                </div>
+                <div className="set-sec-t">{t("settings.models.gatewayTitle")}</div>
+                <div className="set-sec-d">{t("settings.models.gatewayDescription")}</div>
               </div>
               <button type="button" className="set-add" onClick={() => setSetupOpen(true)}>
                 <Icons.plus size={14} />
-                {gatewayConfigured ? "Update credentials" : "Connect gateway"}
+                {gatewayConfigured
+                  ? t("settings.models.updateCredentials")
+                  : t("settings.models.connectGateway")}
               </button>
             </div>
 
@@ -825,14 +924,22 @@ export function SettingsPanel(): ReactNode {
               <div className="ml-info">
                 <div className="ml-top">
                   <span className="ml-name">{gatewayStatusLabel}</span>
-                  <span className="ml-type mono">{models.length.toString()} models</span>
-                  <span className="ml-type mono">{chatCount.toString()} chat</span>
+                  <span className="ml-type mono">
+                    {t("settings.models.modelCount", { count: models.length })}
+                  </span>
+                  <span className="ml-type mono">
+                    {t("settings.models.chatCount", { count: chatCount })}
+                  </span>
                 </div>
                 <div className="ml-url mono">{gatewayStatusDetail}</div>
               </div>
               <span
                 className={"ml-status " + gatewayStatusTone}
-                title={gatewayConfigured ? "gateway configured" : "setup required"}
+                title={
+                  gatewayConfigured
+                    ? t("settings.models.statusConfigured")
+                    : t("settings.models.statusSetupRequired")
+                }
                 aria-hidden="true"
               />
             </div>
@@ -848,7 +955,7 @@ export function SettingsPanel(): ReactNode {
                   className="gw-error-retry"
                   onClick={() => setReloadTick((tick) => tick + 1)}
                 >
-                  Retry
+                  {t("settings.models.retry")}
                 </button>
               </div>
             ) : null}
@@ -856,13 +963,13 @@ export function SettingsPanel(): ReactNode {
             {/* uiux-fix C285: loading -> result transition is announced */}
             {loadingModels ? (
               <div className="set-placeholder" role="status">
-                Loading gateway models…
+                {t("settings.models.loading")}
               </div>
             ) : models.length === 0 ? (
               <div className="set-placeholder" role="status">
                 {gatewayConfigured
-                  ? "No conversation-capable models are currently available. Review the gateway configuration or discovered model set."
-                  : "No models are configured yet. Connect the gateway to load configured model capabilities."}
+                  ? t("settings.models.emptyConfigured")
+                  : t("settings.models.emptyUnconfigured")}
               </div>
             ) : (
               <div className="set-list">
@@ -891,7 +998,7 @@ export function SettingsPanel(): ReactNode {
         )}
         {tab === "general" && <GeneralPrefs />}
         {tab === "security" && (
-          <div className="set-placeholder">SSO · audit log · data residency — coming soon.</div>
+          <div className="set-placeholder">{t("settings.security.placeholder")}</div>
         )}
       </div>
     </div>

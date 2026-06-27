@@ -79,6 +79,7 @@ import {
 import { VoiceRecapButton, VoiceRecapPanel } from "./VoiceRecap";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import {
   fetchCapsules,
@@ -121,13 +122,6 @@ const SEND_HINT_ID = "cmp-send-hint";
 // Stable id for the loading status so blocked actions can reference it.
 const LOADING_STATUS_ID = "cmp-loading-status";
 
-// One canonical composer placeholder. The same field previously flickered between
-// long task-oriented prompts depending on whether the chat already had messages.
-const COMPOSER_PLACEHOLDER = "Ask Keiko...";
-
-// uiux-fix F042 (C308/C322) — keep the visible send tooltip short and
-// consistent; the keyboard hint remains in accessible descriptions.
-const SEND_TOOLTIP = "Send message";
 function timeLabel(timestamp: number): string {
   const date = new Date(timestamp);
   const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -259,6 +253,7 @@ function isCollapsibleAssistantAnswer(content: string): boolean {
 // responses. Mirrors SafeMarkdown's code-block CopyButton: clipboard guard for
 // non-secure contexts, announced status (WCAG 4.1.3), width-stable label swap.
 function MessageCopyButton({ content }: { readonly content: string }): ReactNode {
+  const { t } = useI18n();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [status, setStatus] = useState("");
 
@@ -266,7 +261,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
     void writeTextWithFallback(copyableMessageText(content)).then(
       () => {
         setCopyState("copied");
-        setStatus("Answer copied");
+        setStatus(t("chat.copy.copiedStatus"));
         setTimeout(() => {
           setCopyState("idle");
           setStatus("");
@@ -277,7 +272,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
         setStatus("Clipboard access failed. Select the answer manually and copy it.");
       },
     );
-  }, [content]);
+  }, [content, t]);
 
   const copied = copyState === "copied";
   const failed = copyState === "failed";
@@ -287,14 +282,14 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
       <button
         type="button"
         className="chat-msg-copy ui-tip"
-        aria-label={copied ? "Copied" : "Copy answer"}
-        data-tip={copied ? "Copied" : "Copy answer"}
+        aria-label={copied ? t("chat.copy.copied") : t("chat.copy.message")}
+        data-tip={copied ? t("chat.copy.copied") : t("chat.copy.message")}
         data-copied={copied ? "true" : "false"}
         data-failed={failed ? "true" : "false"}
         onClick={handleCopy}
       >
         <Icons.copy size={13} aria-hidden="true" />
-        <span>{copied ? "Copied" : "Copy answer"}</span>
+        <span>{copied ? t("chat.copy.copied") : t("chat.copy.short")}</span>
       </button>
       <span role="status" className="chat-msg-copy-status">
         {status}
@@ -320,6 +315,7 @@ function ChatBubble({
   readonly streaming?: boolean;
   readonly layout?: "stack" | "turn";
 }): ReactNode {
+  const { t } = useI18n();
   const contentId = useId();
   const [collapsed, setCollapsed] = useState(false);
   const isRunSummary = isRunSummaryMessage(message);
@@ -336,7 +332,7 @@ function ChatBubble({
   return (
     <article className="chat-msg" data-role={message.role} data-layout={layout}>
       <div className="chat-msg-bubble">
-        {isUser ? <div className="chat-msg-role">You</div> : <KeikoMessageMark />}
+        {isUser ? <div className="chat-msg-role">{t("chat.role.user")}</div> : <KeikoMessageMark />}
         <div
           id={isUser ? undefined : contentId}
           className="chat-msg-content"
@@ -455,6 +451,7 @@ function ConversationThread({
   activeChat,
   onCancelGrounded,
 }: ConversationThreadProps): ReactNode {
+  const { t } = useI18n();
   const turns = useMemo(() => conversationTurns(messages), [messages]);
   return (
     <div className="chatw-thread">
@@ -501,10 +498,10 @@ function ConversationThread({
                 <button
                   type="button"
                   className="grounded-cancel-btn"
-                  aria-label="Cancel grounded request"
+                  aria-label={t("chat.grounded.cancel")}
                   onClick={onCancelGrounded}
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
               ) : null}
             </div>
@@ -1176,6 +1173,7 @@ function ComposerBar({
   onToggleVoiceDialog,
   voiceDialogButtonRef,
 }: ComposerBarProps): ReactNode {
+  const { t } = useI18n();
   const {
     models,
     selectedModel,
@@ -1341,7 +1339,7 @@ function ComposerBar({
       {/* AC #2: visually-hidden hint for screen readers when send is blocked by empty draft */}
       {sendDescribedBy === SEND_HINT_ID ? (
         <span id={SEND_HINT_ID} className="sr-only">
-          Type a message to send
+          {t("chat.send.hint")}
         </span>
       ) : null}
       {/* Issue #152 — while a send is in flight the primary action button
@@ -1353,8 +1351,8 @@ function ComposerBar({
           type="button"
           className="cmp-send cmp-send-cancel cmp-tip-end"
           data-on
-          aria-label="Cancel response"
-          data-tip="Cancel response"
+          aria-label={t("chat.send.cancel")}
+          data-tip={t("chat.send.cancel")}
           onClick={cancelSend}
         >
           <Icons.close size={16} />
@@ -1366,16 +1364,16 @@ function ComposerBar({
           data-on={!sendBlocked}
           data-tip={
             noEligibleModels
-              ? "No model available"
+              ? t("chat.send.noModel")
               : budgetExceeded
-                ? "Context too large"
+                ? t("chat.send.contextTooLarge")
                 : loading
-                  ? "Connecting to gateway"
-                  : SEND_TOOLTIP
+                  ? t("chat.send.connecting")
+                  : t("chat.send.label")
           }
           aria-disabled={sendBlocked}
           aria-describedby={sendDescribedBy}
-          aria-label="Send message"
+          aria-label={t("chat.send.label")}
         >
           <Icons.arrowUp size={16} />
         </button>
@@ -1389,9 +1387,10 @@ function ComposerBar({
 // CSS class (var(--fg) text) for WCAG AA contrast compliance.
 // Stable id enables aria-describedby wiring from disabled controls (AC #2).
 function NoModelAlert(): ReactNode {
+  const { t } = useI18n();
   return (
     <div id={NO_MODEL_ALERT_ID} role="alert" className="gw-error cmp-no-model">
-      No conversation-eligible model is configured. Connect a gateway in Settings to enable chat.
+      {t("chat.noModelAlert")}
     </div>
   );
 }
@@ -1474,6 +1473,7 @@ function ComposerCore({
   controlsNarrow = false,
   barCompact = false,
 }: ComposerCoreProps): ReactNode {
+  const { t } = useI18n();
   const {
     draft,
     loading,
@@ -1841,7 +1841,7 @@ function ComposerCore({
           ref={taRef}
           rows={2}
           value={draft}
-          aria-label="Chat message"
+          aria-label={t("chat.messageLabel")}
           placeholder={placeholder}
           onChange={handleDraftChange}
           onSelect={handleDraftSelect}
@@ -2084,6 +2084,7 @@ function MiniChat({
   readonly session: ChatSessionApi;
   readonly ready: boolean;
 }): ReactNode {
+  const { t } = useI18n();
   const { draft, loading, sending, sendStatus, cancelSend, setDraft, sendMessage } = session;
   return (
     <form
@@ -2097,8 +2098,8 @@ function MiniChat({
         <textarea
           className="cmp-input cmp-input-mini"
           value={draft}
-          aria-label="Chat message"
-          placeholder={loading ? "Loading…" : COMPOSER_PLACEHOLDER}
+          aria-label={t("chat.messageLabel")}
+          placeholder={loading ? t("chat.composer.loading") : t("chat.composer.placeholder")}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={onComposerKeyDown(sendMessage)}
           // uiux-fix F041 (C205) — see ComposerCore: editable while sending so the
@@ -2112,8 +2113,8 @@ function MiniChat({
             type="button"
             className="cmp-send cmp-send-float cmp-send-cancel cmp-tip-end"
             data-on
-            aria-label="Cancel response"
-            data-tip="Cancel response"
+            aria-label={t("chat.send.cancel")}
+            data-tip={t("chat.send.cancel")}
             onClick={cancelSend}
           >
             <Icons.close size={16} />
@@ -2123,9 +2124,9 @@ function MiniChat({
             type={ready ? "submit" : "button"}
             className="cmp-send cmp-send-float cmp-tip-end"
             data-on={ready}
-            data-tip={SEND_TOOLTIP}
+            data-tip={t("chat.send.label")}
             aria-disabled={!ready}
-            aria-label="Send message"
+            aria-label={t("chat.send.label")}
           >
             <Icons.arrowUp size={16} />
           </button>
@@ -2717,6 +2718,7 @@ function MemoryPanel({
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
   readonly compact?: boolean;
 }): ReactNode {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
   const generatedId = useId();
@@ -2730,7 +2732,9 @@ function MemoryPanel({
   }, []);
   const memoryCount = latestMemory?.context.memories.length ?? 0;
   const memoryDisclosureLabel =
-    memoryCount > 0 ? `${String(memoryCount)} memories included` : "No memories included";
+    memoryCount > 0
+      ? t("chat.memory.included", { count: memoryCount })
+      : t("chat.memory.noneIncluded");
   const stepMemoryBudget = (delta: number): void => {
     setMemoryBudgetTokens(Math.max(0, memoryBudgetTokens + delta));
   };
@@ -2743,7 +2747,7 @@ function MemoryPanel({
   const budgetControl = (
     <div className="chat-memory-budget">
       <span className="chat-memory-budget-label" data-tip={MEMORY_BUDGET_HELP}>
-        <label htmlFor={budgetInputId}>MemoriaViva budget</label>
+        <label htmlFor={budgetInputId}>{t("chat.memory.budget")}</label>
         {/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- matches the existing BudgetIndicator info affordance: keyboard-focusable data-tip tooltip. */}
         <span
           className="cmp-budget-info chat-memory-budget-info"
@@ -2768,7 +2772,7 @@ function MemoryPanel({
           onWheel={handleBudgetWheel}
         />
         <NumberControlStepper
-          label="MemoriaViva budget"
+          label={t("chat.memory.budgetStepper")}
           onStepUp={() => stepMemoryBudget(100)}
           onStepDown={() => stepMemoryBudget(-100)}
         />
@@ -2892,6 +2896,7 @@ export function ChatWindow({
   openEditorFile,
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
+  const { t } = useI18n();
   const session = useChatSessionContext();
   const {
     messages,
@@ -3048,8 +3053,8 @@ export function ChatWindow({
               ready={ready}
               placeholder={
                 visible.length === 0 && loading
-                  ? "Connecting to your gateway…"
-                  : COMPOSER_PLACEHOLDER
+                  ? t("chat.loadingGateway")
+                  : t("chat.composer.placeholder")
               }
               minimal={effectiveMinimal}
               compact={effectiveCompact}
@@ -3059,7 +3064,7 @@ export function ChatWindow({
             {error !== undefined ? (
               <ErrorNoticeFromError
                 error={error}
-                fallback="Could not send message."
+                fallback={t("chat.error.send")}
                 onDismiss={session.clearError}
               />
             ) : null}

@@ -146,8 +146,10 @@
     "@oscharko-dev/keiko-verification": "0.2.8",
     "@oscharko-dev/keiko-workflows": "0.2.8",
     "@oscharko-dev/keiko-workspace": "0.2.8",
+    "pdfjs-dist": "^6.0.227",
     "typescript": "^6.0.3",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "yauzl": "^3.4.0"
   },
   "bundleDependencies": [
     "@oscharko-dev/keiko-contracts",
