@@ -40,40 +40,63 @@ state-changing methods so the server CSRF + JSON gate applies. See
 
 ---
 
+## Wave 2 — delivered (multi-pane render performance, item 2.1)
+
+The headline Wave-2 item — the multi-pane render-performance refactor (§2.1 below) — is now done,
+applying the proven [#1580](https://github.com/oscharko-dev/Keiko/issues/1580) pattern to the editor
+host (`EditorWidget`):
+
+- **Stable callback identity** — every pane callback reads the live layout from a `layoutRef` instead
+  of closing over `layout`, so its identity no longer churns on each `setLayout`.
+- **Memoized per-pane bindings + agent snapshots** — built once per pane SET, so a layout mutation
+  that does not touch a given pane leaves its prop bundle referentially identical.
+- **`React.memo` on `EditorRuntimeWidget`** — with stable props, panes the mutation did not touch bail
+  out of the re-render. A tab-select, split, or resize in one pane no longer re-renders every pane.
+- **Resize via CSS variable during the gesture** — a split/sidebar drag writes the ratio/width
+  straight to the DOM and commits to layout state (and persists) only on release, so a drag is a pure
+  style update with no per-frame React render or persistence. Keyboard resize still commits per step.
+
+The remaining Wave-2 items (2.2 onward) are unchanged below.
+
+---
+
 ## Capability gap analysis (where Keiko stands today)
 
 Legend: ✅ present · 🟧 partial · ⬜ absent · 🚫 out of scope.
 
-| Capability                                              | State | Notes                                                                                                                                |
-| ------------------------------------------------------- | :---: | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Open file / arbitrary folder                            |  ✅   | Files widget browses any machine folder under containment.                                                                           |
-| Create / rename / delete / move (tree)                  |  ✅   | Wave 1. Copy / duplicate / drag-move in the tree are still absent.                                                                   |
-| Multi-file tabs, split panes, pane resize, drag tabs    |  ✅   | Layout state machine with persistence.                                                                                               |
-| Tab overflow                                            |  🟧   | Collapses to a `+N` summary menu; a horizontally **scrollable** strip is the VS Code behavior.                                       |
-| Dirty buffers, hot-exit, reload recovery                |  ✅   | Version-aware save with optimistic concurrency.                                                                                      |
-| Find / replace **in file**                              |  ✅   | Monaco's built-in widget (`Ctrl/Cmd+F`, `Ctrl/Cmd+H`).                                                                               |
-| Multi-cursor, column select, go-to-line                 |  ✅   | Monaco built-ins.                                                                                                                    |
-| Diagnostics / hover / symbols / formatting / completion |  ✅   | Deterministic TS/JS language service; degrades gracefully.                                                                           |
-| Inline (ghost-text) completion                          |  ✅   | Governed, content-free.                                                                                                              |
-| Language intelligence beyond TS/JS                      |  🟧   | Governed LSP process-manager foundation exists; host provider pilots (Java/Python/Go/Rust/Shell) are not yet wired into the surface. |
-| Quick-open (`Ctrl/Cmd+P` fuzzy file open)               |  ⬜   | The BFF file-search endpoint exists; no command-palette UI binds it.                                                                 |
-| Command palette (`Ctrl/Cmd+Shift+P`)                    |  ⬜   | A small editor command catalogue exists; no palette surface.                                                                         |
-| Find in files / replace across files                    |  ⬜   | Single-file search only.                                                                                                             |
-| Go-to-definition / find-references / rename-symbol      |  🟧   | Hover + symbols exist; cross-file navigation and symbol rename are not surfaced.                                                     |
-| Breadcrumbs / outline view / sticky scroll / minimap    |  🟧   | Symbols power an outline path; breadcrumbs and minimap are not enabled.                                                              |
-| Source control (stage / commit / branch UI)             |  🟧   | A separate governed **Git Delivery** surface owns commit/push/PR; the editor shows status + diff and links into it.                  |
-| External-change detection / auto-reload                 |  ⬜   | No filesystem watcher; out-of-app renames/deletes are not reflected until refresh.                                                   |
-| Multi-pane performance at scale                         |  🟧   | Each pane is a full Monaco instance; cross-pane re-render fan-out on layout mutation is the Wave-2 target below.                     |
-| Integrated terminal                                     |  🟧   | Governed command execution exists; no interactive terminal panel in the editor.                                                      |
-| Debugging (DAP)                                         |  🚫   | Out of scope for the governed editor.                                                                                                |
-| Extension host / marketplace                            |  🚫   | Out of scope.                                                                                                                        |
-| Settings / keybinding customization UI                  |  ⬜   | No in-app editor-settings surface yet.                                                                                               |
+| Capability                                              | State | Notes                                                                                                                                                                                        |
+| ------------------------------------------------------- | :---: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Open file / arbitrary folder                            |  ✅   | Files widget browses any machine folder under containment.                                                                                                                                   |
+| Create / rename / delete / move (tree)                  |  ✅   | Wave 1. Copy / duplicate / drag-move in the tree are still absent.                                                                                                                           |
+| Multi-file tabs, split panes, pane resize, drag tabs    |  ✅   | Layout state machine with persistence.                                                                                                                                                       |
+| Tab overflow                                            |  🟧   | Collapses to a `+N` summary menu; a horizontally **scrollable** strip is the VS Code behavior.                                                                                               |
+| Dirty buffers, hot-exit, reload recovery                |  ✅   | Version-aware save with optimistic concurrency.                                                                                                                                              |
+| Find / replace **in file**                              |  ✅   | Monaco's built-in widget (`Ctrl/Cmd+F`, `Ctrl/Cmd+H`).                                                                                                                                       |
+| Multi-cursor, column select, go-to-line                 |  ✅   | Monaco built-ins.                                                                                                                                                                            |
+| Diagnostics / hover / symbols / formatting / completion |  ✅   | Deterministic TS/JS language service; degrades gracefully.                                                                                                                                   |
+| Inline (ghost-text) completion                          |  ✅   | Governed, content-free.                                                                                                                                                                      |
+| Language intelligence beyond TS/JS                      |  🟧   | Governed LSP process-manager foundation exists; host provider pilots (Java/Python/Go/Rust/Shell) are not yet wired into the surface.                                                         |
+| Quick-open (`Ctrl/Cmd+P` fuzzy file open)               |  ⬜   | The BFF file-search endpoint exists; no command-palette UI binds it.                                                                                                                         |
+| Command palette (`Ctrl/Cmd+Shift+P`)                    |  ⬜   | A small editor command catalogue exists; no palette surface.                                                                                                                                 |
+| Find in files / replace across files                    |  ⬜   | Single-file search only.                                                                                                                                                                     |
+| Go-to-definition / find-references / rename-symbol      |  🟧   | Hover + symbols exist; cross-file navigation and symbol rename are not surfaced.                                                                                                             |
+| Breadcrumbs / outline view / sticky scroll / minimap    |  🟧   | Symbols power an outline path; breadcrumbs and minimap are not enabled.                                                                                                                      |
+| Source control (stage / commit / branch UI)             |  🟧   | A separate governed **Git Delivery** surface owns commit/push/PR; the editor shows status + diff and links into it.                                                                          |
+| External-change detection / auto-reload                 |  ⬜   | No filesystem watcher; out-of-app renames/deletes are not reflected until refresh.                                                                                                           |
+| Multi-pane performance at scale                         |  ✅   | Wave 2: cross-pane re-render fan-out removed via memo + stable bindings; resize is a gesture-time CSS update. Each pane is still a full Monaco instance (a shared model registry is Wave 3). |
+| Integrated terminal                                     |  🟧   | Governed command execution exists; no interactive terminal panel in the editor.                                                                                                              |
+| Debugging (DAP)                                         |  🚫   | Out of scope for the governed editor.                                                                                                                                                        |
+| Extension host / marketplace                            |  🚫   | Out of scope.                                                                                                                                                                                |
+| Settings / keybinding customization UI                  |  ⬜   | No in-app editor-settings surface yet.                                                                                                                                                       |
 
 ---
 
 ## Wave 2 — next (the high-value, medium-risk work)
 
-### 2.1 Multi-pane render performance (top priority)
+### 2.1 Multi-pane render performance (top priority) — ✅ delivered
+
+> Delivered. The four steps below were implemented on `EditorWidget` / `EditorRuntimeWidget`; see the
+> "Wave 2 — delivered" section above. This entry is kept for the rationale and the technique.
 
 **Problem.** The editor host (`EditorWidget`) re-renders on every layout mutation, and `renderPane`
 rebuilds each pane's props and callbacks with fresh identity every render, while no pane component is

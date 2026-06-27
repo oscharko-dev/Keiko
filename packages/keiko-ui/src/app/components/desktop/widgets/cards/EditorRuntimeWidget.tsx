@@ -24,6 +24,7 @@
  */
 import dynamic from "next/dynamic";
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -429,7 +430,7 @@ function buildAgentPatchDiffModel(
   };
 }
 
-export default function EditorRuntimeWidget({
+function EditorRuntimeWidget({
   windowId,
   paneId,
   activePaneId,
@@ -2246,3 +2247,12 @@ export default function EditorRuntimeWidget({
     </div>
   );
 }
+
+/**
+ * Memoized so a layout mutation in one pane (tab-select, split, or — most expensively — a split-resize
+ * drag) does not re-render the OTHER panes' editor hosts. The host (`EditorWidget`) feeds each pane a
+ * referentially-stable prop bundle for panes the mutation did not touch (stable callbacks via
+ * `layoutRef`, memoized snapshots/bindings), so `React.memo`'s shallow compare bails them out. It only
+ * skips on shallow-equal props, so it never shows stale content.
+ */
+export default memo(EditorRuntimeWidget);
