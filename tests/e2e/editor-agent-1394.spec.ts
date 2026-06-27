@@ -2,7 +2,7 @@
  * Issue #1394 — Safe apply-edits and patch workflow for agents (ADR-0058).
  *
  * Browser-level Playwright tests that drive the REAL packaged app (`node dist/cli/index.js ui`).
- * The webServer is defined in playwright.issue-1394-editor-agent.config.ts.
+ * The webServer is defined in tests/e2e/config/playwright.issue-1394-editor-agent.config.ts.
  *
  * These tests cover the five acceptance criteria that require a real browser to prove:
  *

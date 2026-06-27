@@ -248,7 +248,7 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
   const manifest = {
     issue: "#478",
     epic: "#470",
-    harness: "playwright.issue-478-merge-governance.config.ts",
+    harness: "tests/e2e/config/playwright.issue-478-merge-governance.config.ts",
     appPath: "packaged-cli-ui",
     route: "/",
     evidencePath: "docs/git-delivery/evidence/478",

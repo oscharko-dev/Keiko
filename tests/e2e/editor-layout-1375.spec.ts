@@ -3,7 +3,7 @@
  *
  * Browser-level Playwright tests that drive the REAL packaged app
  * (`node dist/cli/index.js ui`). The webServer is defined in
- * playwright.issue-1375-editor-layout.config.ts.
+ * tests/e2e/config/playwright.issue-1375-editor-layout.config.ts.
  *
  * These cover the acceptance criteria that the issue asks to prove in a browser:
  *   - Split creation and recursive nested resize via the keyboard splitter (AC5).

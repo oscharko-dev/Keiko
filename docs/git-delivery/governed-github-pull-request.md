@@ -78,7 +78,7 @@ approval-gates the requested action.
   normalized rejection, approval-gated hold — all with a fake adapter, no `gh`, no network).
 - ui: `GovernedPullRequestCard.test.tsx` + `.a11y.test.tsx` (metadata seeding, dispatch payloads,
   outcome banner, readable API failure alert, WCAG 2.2 AA).
-- browser evidence (non-gating, coordinator): `playwright.issue-477-pr-command-center.config.ts` +
+- browser evidence (non-gating, coordinator): `tests/e2e/config/playwright.issue-477-pr-command-center.config.ts` +
   `tests/e2e/pr-command-center-477.spec.ts` drive the real packaged app, proving the UI PR path reaches
   the governed BFF routes and surfaces the policy block with no client-side escape. Run with
   `npm run test:e2e:pr-command-center-477`. Evidence under `docs/git-delivery/evidence/477/`.

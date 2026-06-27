@@ -496,7 +496,7 @@ function buildEvidence(
 ): Record<string, unknown> {
   return {
     measuredAtIso: new Date().toISOString(),
-    harness: "packaged CLI serving the production static UI via playwright.editor-performance.config.ts",
+    harness: "packaged CLI serving the production static UI via tests/e2e/config/playwright.editor-performance.config.ts",
     b4ColdStartMs: {
       budgetP50: 1500,
       budgetP95: 2500,

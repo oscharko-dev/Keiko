@@ -3,7 +3,7 @@
  *
  * The reusable QUALITY BACKBONE for the editor roadmap (Epic #1491). This consolidated matrix
  * drives the REAL packaged app (`node dist/cli/index.js ui`, webServer in
- * playwright.issue-1377-editor-baseline.config.ts) through every load-bearing editor behavior —
+ * tests/e2e/config/playwright.issue-1377-editor-baseline.config.ts) through every load-bearing editor behavior —
  * tree-open, tabs, persistence, split/resize, dirty buffers, the dirty-close guard, hot-exit
  * recovery, the empty state, and the load-failure state — asserting only DETERMINISTIC signals
  * (roles, ARIA attributes, persisted state, IndexedDB keys). There are no arbitrary sleeps (AC3):

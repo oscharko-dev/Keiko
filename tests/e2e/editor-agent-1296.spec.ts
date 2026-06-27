@@ -43,7 +43,7 @@ interface ModeEvidence {
 
 interface EvidenceManifest {
   readonly issue: "#1296";
-  readonly harness: "playwright.issue-1296-editor-agent.config.ts";
+  readonly harness: "tests/e2e/config/playwright.issue-1296-editor-agent.config.ts";
   readonly appPath: "packaged-cli-ui";
   readonly route: "/";
   readonly evidencePath: "docs/design-system/evidence/1296/editor";
@@ -375,7 +375,7 @@ test("Issue #1296 editor-agent context parity evidence", async ({ page }) => {
 
   const manifest: EvidenceManifest = {
     issue: "#1296",
-    harness: "playwright.issue-1296-editor-agent.config.ts",
+    harness: "tests/e2e/config/playwright.issue-1296-editor-agent.config.ts",
     appPath: "packaged-cli-ui",
     route: "/",
     evidencePath: "docs/design-system/evidence/1296/editor",

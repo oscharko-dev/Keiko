@@ -221,7 +221,7 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
   const manifest = {
     issue: "#475",
     epic: "#470",
-    harness: "playwright.issue-475-git-delivery.config.ts",
+    harness: "tests/e2e/config/playwright.issue-475-git-delivery.config.ts",
     appPath: "packaged-cli-ui",
     route: "/",
     evidencePath: "docs/git-delivery/evidence/475",
