@@ -49,6 +49,33 @@ const NO_VOICE_CAPABILITY = {
   },
 };
 
+// Issue #1563 — the two partial deployments that must NOT offer spoken dialogue (no full STT+TTS
+// conjunction): speech-to-text only (dictation, no spoken answer) and speech-output only (spoken
+// answer, no capture). Both carry personas, so the gate's persona check is not what hides the switch —
+// the missing capability is. These exercise the evaluation's AC1 "all configured profiles" coverage at
+// the real browser layer (the keiko-ui suites prove the gate itself).
+const STT_ONLY_CAPABILITY = {
+  voice: {
+    available: true,
+    profile: "speech-to-text",
+    capabilities: { speechToText: true, speechOutput: false, realtimeVoice: false },
+    transport: { websocketControl: true, webrtcMedia: false },
+    availableVoicePersonas: ["male", "female", "neutral"],
+    providerLocality: "azure-foundry",
+  },
+};
+
+const SPEECH_OUTPUT_ONLY_CAPABILITY = {
+  voice: {
+    available: true,
+    profile: "speech-output",
+    capabilities: { speechToText: false, speechOutput: true, realtimeVoice: false },
+    transport: { websocketControl: true, webrtcMedia: false },
+    availableVoicePersonas: ["male", "female", "neutral"],
+    providerLocality: "azure-foundry",
+  },
+};
+
 // Injected before any app script runs: a fake getUserMedia + MediaRecorder so the real dialogue
 // dictation exercises a complete capture cycle in the browser without touching hardware or a provider.
 function fakeMediaInit(): string {
@@ -368,4 +395,81 @@ test("voice dialogue @smoke — microphone acquired only on explicit gesture, re
   page,
 }) => {
   await micLifecycleFlow(page);
+});
+
+// Issue #1563, Epic #1556 — production evaluation browser evidence.
+//
+// A no-voice deployment is already covered above; this asserts the OTHER two partial profiles the
+// evaluation enumerates (speech-to-text only, speech-output only) also keep the dialogue switch absent
+// while the composer stays fully text-capable. Together with the no-voice and full-realtime cases, the
+// browser smoke now covers every configured capability profile (AC1).
+async function unavailableProfileFlow(page: Page, capability: unknown): Promise<void> {
+  await stubCapability(page, capability);
+  await openComposer(page);
+  const composer = page.getByRole("textbox", { name: "Chat message" }).first();
+  await composer.fill("plain typed message");
+  await expect(composer).toHaveValue("plain typed message");
+  // The partial deployment does not offer spoken dialogue: no switch, and text chat is unaffected.
+  await expect(page.getByRole("switch", { name: "Voice dialogue mode" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
+}
+
+// Issue #1563 — voice selection + live session status browser evidence.
+//
+// Proves, in the real browser, two surfaces the evaluation's accessibility and lifecycle dimensions
+// depend on: the voice/persona selector is operable and its visible active-voice label updates, and the
+// live-region status strip announces the listening state when a turn begins. Captures the #1563 evidence
+// screenshot of the active evaluation surface.
+async function voiceSelectionAndStatusFlow(page: Page): Promise<void> {
+  await page.addInitScript(fakeMediaInit());
+  await stubCapability(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
+  await stubVoiceProviders(page);
+  stubChatSend(page);
+  await openComposer(page);
+
+  const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await dialogSwitch.click();
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
+
+  // Voice selection: the persona selector is operable, and choosing a voice updates its visible
+  // active-voice label (the accessible name is the "Voice profile: <persona>" label).
+  const profile = page.getByRole("combobox", { name: /^Voice profile/u });
+  await expect(profile).toBeVisible();
+  await profile.click();
+  await page.getByRole("option", { name: "Neutral voice" }).click();
+  await expect(page.getByRole("combobox", { name: "Voice profile: Neutral voice" })).toBeVisible();
+
+  // Live status: beginning a turn announces the listening state through the live region.
+  const speak = page.getByRole("button", { name: "Start speaking" });
+  await speak.click();
+  await expect(page.getByText("Listening to you.")).toBeVisible();
+
+  await page.screenshot({
+    path: "docs/voice/evidence/1563-dialogue-evaluation.png",
+    fullPage: true,
+  });
+
+  // Leave returns to a clean, text-capable composer (master cleanup).
+  await page.getByRole("button", { name: "Stop speaking and send" }).click();
+  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
+  await expect(speak).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
+}
+
+test("voice dialogue @smoke — speech-to-text-only deployment offers no dialogue switch (AC1)", async ({
+  page,
+}) => {
+  await unavailableProfileFlow(page, STT_ONLY_CAPABILITY);
+});
+
+test("voice dialogue @smoke — speech-output-only deployment offers no dialogue switch (AC1)", async ({
+  page,
+}) => {
+  await unavailableProfileFlow(page, SPEECH_OUTPUT_ONLY_CAPABILITY);
+});
+
+test("voice dialogue @smoke — voice selection updates the active voice and status announces listening (AC1/AC4)", async ({
+  page,
+}) => {
+  await voiceSelectionAndStatusFlow(page);
 });
