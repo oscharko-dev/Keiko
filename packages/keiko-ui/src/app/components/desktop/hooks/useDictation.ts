@@ -21,6 +21,7 @@ import {
   type DictationSession,
   type DictationStartFailure,
 } from "./dictation-recorder";
+import type { VoiceActivityDetector, VoiceActivityMonitor } from "./voice-activity-detector";
 
 // Upper bound on a single dictation clip, matching the BFF's MAX_DICTATION_MS (voice-handlers.ts).
 // Recording auto-stops at this point so a clip can never exceed the server's accepted duration.
@@ -96,6 +97,10 @@ export interface UseDictationOptions {
   readonly onInsert: (text: string) => void;
   // Optional BCP-47 hint forwarded to the provider.
   readonly language?: string | undefined;
+  // Optional voice-activity detector. When provided (dialogue mode), the recording stream is monitored
+  // and a trailing silence after detected speech auto-stops the turn — the hands-free end-of-turn that
+  // removes the manual second mic tap. Omitted (composer dictation) keeps capture fully manual.
+  readonly vad?: VoiceActivityDetector | undefined;
   // Test seams: inject a fake recorder factory / transcribe client. Production uses the browser
   // recorder and the BFF client.
   readonly createRecorder?: (() => DictationRecorder) | undefined;
@@ -160,9 +165,13 @@ export function useDictation(options: UseDictationOptions): DictationController 
   // referentially stable and the reducer stays pure.
   const recorderFactory = options.createRecorder ?? createBrowserDictationRecorder;
   const transcribe = options.transcribe ?? transcribeDictation;
+  const vad = options.vad;
   const recorderRef = useRef<DictationRecorder | undefined>(undefined);
   const sessionRef = useRef<DictationSession | undefined>(undefined);
   const autoStopRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The live voice-activity monitor for the current recording (dialogue mode only). Released whenever
+  // the recording ends so the WebAudio analyser never outlives the stream.
+  const vadMonitorRef = useRef<VoiceActivityMonitor | undefined>(undefined);
   // Guards every state update that runs after an `await`, so a composer that unmounts mid-flow (e.g.
   // while permission is pending or a transcription is in flight) never dispatches onto an unmounted
   // component, never leaks the auto-stop timer, and never leaves the microphone open.
@@ -185,6 +194,13 @@ export function useDictation(options: UseDictationOptions): DictationController 
     }
   }, []);
 
+  const detachVad = useCallback((): void => {
+    if (vadMonitorRef.current !== undefined) {
+      vadMonitorRef.current.stop();
+      vadMonitorRef.current = undefined;
+    }
+  }, []);
+
   const stop = useCallback((): void => {
     const session = sessionRef.current;
     if (session === undefined) {
@@ -192,6 +208,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
     }
     sessionRef.current = undefined;
     clearAutoStop();
+    detachVad();
     dispatch({ type: "transcribing" });
     void session
       .stop()
@@ -205,7 +222,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
         const { reason, message } = classifyError(error);
         dispatch({ type: "error", reason, message });
       });
-  }, [clearAutoStop, language, transcribe]);
+  }, [clearAutoStop, detachVad, language, transcribe]);
 
   const start = useCallback((): void => {
     // Never open a second microphone stream: bail if a session is already live OR a start() is still
@@ -231,6 +248,15 @@ export function useDictation(options: UseDictationOptions): DictationController 
         sessionRef.current = session;
         dispatch({ type: "recording" });
         autoStopRef.current = setTimeout(() => stop(), MAX_DICTATION_MS);
+        // Dialogue mode: monitor the live capture stream so a trailing silence after speech ends the
+        // turn automatically (hands-free). end-of-turn drives the same stop() as a manual mic tap.
+        if (vad !== undefined && session.stream !== undefined) {
+          vadMonitorRef.current = vad.start(session.stream, (event) => {
+            if (event === "end-of-turn") {
+              stop();
+            }
+          });
+        }
       },
       (error: unknown) => {
         startingRef.current = false;
@@ -239,7 +265,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
         dispatch({ type: "error", reason, message });
       },
     );
-  }, [recorderFactory, stop]);
+  }, [recorderFactory, stop, vad]);
 
   const cancel = useCallback((): void => {
     // Mark any in-flight start() as cancelled so a microphone grant that resolves after this call is
@@ -247,10 +273,11 @@ export function useDictation(options: UseDictationOptions): DictationController 
     // even when the user leaves dialog mode mid-permission).
     cancelledRef.current = true;
     clearAutoStop();
+    detachVad();
     sessionRef.current?.cancel();
     sessionRef.current = undefined;
     dispatch({ type: "reset" });
-  }, [clearAutoStop]);
+  }, [clearAutoStop, detachVad]);
 
   const discard = useCallback((): void => {
     cancel();
@@ -283,6 +310,10 @@ export function useDictation(options: UseDictationOptions): DictationController 
       if (autoStopRef.current !== undefined) {
         clearTimeout(autoStopRef.current);
         autoStopRef.current = undefined;
+      }
+      if (vadMonitorRef.current !== undefined) {
+        vadMonitorRef.current.stop();
+        vadMonitorRef.current = undefined;
       }
       sessionRef.current?.cancel();
       sessionRef.current = undefined;

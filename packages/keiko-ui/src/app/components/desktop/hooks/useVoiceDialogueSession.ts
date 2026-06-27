@@ -32,6 +32,10 @@ import { useDictation } from "./useDictation";
 import { useAssistantSpeech, type AssistantSpeechAudioElement } from "./useAssistantSpeech";
 import { dictationCaptureSupported, type DictationRecorder } from "./dictation-recorder";
 import {
+  createBrowserVoiceActivityDetector,
+  type VoiceActivityDetector,
+} from "./voice-activity-detector";
+import {
   createVoiceTurnManager,
   resolutionToVoiceProfile,
   type VoiceTurnManagerEngine,
@@ -76,6 +80,9 @@ export interface UseVoiceDialogueSessionOptions {
   // Test seams forwarded to the composed dictation / speech hooks. Production uses the browser recorder,
   // the BFF clients, `new Audio()`, and the URL object-store.
   readonly createRecorder?: (() => DictationRecorder) | undefined;
+  // Optional voice-activity detector override (tests inject a fake firing scripted events). Production
+  // uses the WebAudio detector so a trailing silence ends the user's turn hands-free.
+  readonly vad?: VoiceActivityDetector | undefined;
   readonly transcribe?:
     | ((input: VoiceTranscriptionRequest) => Promise<VoiceTranscriptionResult>)
     | undefined;
@@ -199,10 +206,15 @@ export function useVoiceDialogueSession(
     void sessionRef.current.sendMessage({ text: trimmed });
   }, []);
 
+  // The voice-activity detector that makes the turn hands-free: production uses the WebAudio detector,
+  // tests inject a fake. Stable across renders so the dictation hook never re-binds it.
+  const vad = useMemo(() => options.vad ?? createBrowserVoiceActivityDetector(), [options.vad]);
+
   const dictation = useDictation({
     onInsert: sendCommittedTranscript,
     createRecorder,
     transcribe,
+    vad,
   });
   const dictationRef = useRef(dictation);
   dictationRef.current = dictation;
