@@ -59,8 +59,8 @@ describe("isGitSyncOutcome", () => {
     }
   });
 
-  it("has exactly twelve outcomes", () => {
-    expect(GIT_SYNC_OUTCOMES).toHaveLength(12);
+  it("has exactly thirteen outcomes", () => {
+    expect(GIT_SYNC_OUTCOMES).toHaveLength(13);
   });
 
   it.each(["ok", "failed", "", 0, null, undefined])("rejects %s", (value) => {

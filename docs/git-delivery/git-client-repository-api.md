@@ -129,7 +129,7 @@ POST and are not re-checked here.
 | --------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------- |
 | `schemaVersion` | `"1"`  | yes      | Must equal `GIT_SYNC_SCHEMA_VERSION`.                                                                         |
 | `projectId`     | string | yes      | The workspace root path; authorized through the project store.                                                |
-| `remote`        | string | no       | Optional remote alias; validated by `isSafeGitRef` (no whitespace, no leading `-`, no `:`, no control chars). |
+| `remote`        | string | no       | Optional remote alias; syntactically validated by `isSafeGitRef` and accepted only when present in `git remote`. |
 
 ### Error envelope
 
@@ -169,10 +169,11 @@ non-detached HEAD. `GitSyncBlockReason` is one of `no-remote`, `no-upstream`, `d
 
 ### `POST /api/git-delivery/fetch/execute` and `POST /api/git-delivery/pull/execute`
 
-Runs ONE bounded fetch or pull through the reused hardened runner (NOT the governed mutation kernel —
-see §4), reads a best-effort pre-op preview for the before-counts, classifies the outcome, re-reads
-branch/upstream/ahead/behind after a settled op, builds a redacted `GitSyncExecuteResponse`, and
-appends a content-free sync evidence record.
+Runs ONE bounded fetch or pull through the preflight-gated credential-capable runner (NOT the governed
+mutation kernel — see §4) only after a successful executable preview. Blocked inspectable previews
+return the matching typed outcome and record content-free evidence without invoking network Git.
+Settled network operations re-read branch/upstream/ahead/behind, build a redacted
+`GitSyncExecuteResponse`, and append a content-free sync evidence record.
 
 - **fetch argv**: `fetch --no-tags [remote]`.
 - **pull argv**: `pull --ff-only --no-edit [remote]` (fast-forward only; never creates a merge commit).
@@ -183,7 +184,7 @@ appends a content-free sync evidence record.
 
 ### `GitSyncOutcome` taxonomy
 
-The evidence-friendly outcome union (`GIT_SYNC_OUTCOMES`, frozen at 12 members):
+The evidence-friendly outcome union (`GIT_SYNC_OUTCOMES`, 13 members):
 
 | Outcome             | Operation | Meaning                                                       |
 | ------------------- | --------- | ------------------------------------------------------------- |
@@ -195,15 +196,17 @@ The evidence-friendly outcome union (`GIT_SYNC_OUTCOMES`, frozen at 12 members):
 | `dirty-worktree`    | pull      | Local changes would be overwritten.                           |
 | `not-fast-forward`  | pull      | `--ff-only` refused a non-fast-forward.                       |
 | `auth-failed`       | both      | Credentials/permission/terminal-prompt-disabled failure.      |
+| `untrusted-host-key` | both     | SSH refused an unknown or changed host key.                   |
 | `timeout`           | both      | The bounded process was truncated (timeout or byte cap).      |
 | `git-missing`       | both      | The `git` executable was unavailable (exit code 127).         |
 | `unsafe-repository` | both      | Dubious ownership / `safe.directory` refusal.                 |
 | `git-error`         | both      | A non-zero result none of the above classifies.               |
 
 Outcome classification scans stderr case-insensitively in a fixed precedence: truncation → exit code
-127 → ownership → auth → remote/repository → (pull only) tracking/fast-forward/local-changes →
-exit-code-0 success/up-to-date → `git-error`. Ownership and auth precede the generic remote checks so a
-credential failure is never mislabeled.
+127 → ownership → host-key trust → auth → remote/repository → (pull only)
+tracking/fast-forward/local-changes → exit-code-0 success/up-to-date → `git-error`. Ownership,
+host-key trust, and auth precede the generic remote checks so a credential or SSH-trust failure is
+never mislabeled.
 
 ## 4. Reuse and safety boundaries
 

@@ -96,7 +96,7 @@ union is changed.
 - `git-history.ts` — `GitHistoryEntry` (sha, shortSha, subject, author, ISO date, refs[],
   parentCount, changedFileCount) and the paginated `GitHistoryResponse` (entries, limit, skip,
   truncated). `GIT_HISTORY_SCHEMA_VERSION = "1"`. Validator `validateGitHistoryResponse`.
-- `git-sync.ts` — the sync contracts (D3): `GitSyncOperation`, `GitSyncOutcome` (12 members),
+- `git-sync.ts` — the sync contracts (D3): `GitSyncOperation`, `GitSyncOutcome` (13 members),
   `GitSyncBlockReason`, `GitSyncExecuteRequest`, `GitSyncPreview`, `GitSyncExecuteResponse`,
   `GIT_SYNC_SCHEMA_VERSION = "1"`, the frozen `GIT_SYNC_OPERATIONS` / `GIT_SYNC_OUTCOMES` /
   `GIT_SYNC_BLOCK_REASONS` arrays, the `isGitSyncOperation` / `isGitSyncOutcome` guards, and the
@@ -190,9 +190,10 @@ it, because a **local read** and a **network sync** have opposite credential req
   pull against a private or SSH remote *must* be able to authenticate, so this env inherits the real
   process environment (the user's global `~/.gitconfig` `credential.helper`, the macOS `osxkeychain`
   helper, and the real `~/.ssh` identities). It still **never prompts**: `GIT_TERMINAL_PROMPT=0` and
-  `GIT_SSH_COMMAND="ssh -oBatchMode=yes -oStrictHostKeyChecking=accept-new"` force the operation to
-  **fail closed** (returning `auth-failed`) when no stored credential satisfies the remote, rather
-  than hang on an interactive prompt or a new-host confirmation.
+  `GIT_SSH_COMMAND="ssh -oBatchMode=yes -oStrictHostKeyChecking=yes"` force the operation to
+  **fail closed** when no stored credential satisfies the remote (`auth-failed`) or when SSH cannot
+  verify a known host key (`untrusted-host-key`), rather than hang on an interactive prompt or trust
+  a first-use host implicitly.
 
 `syncExecution.ts` therefore resolves two runners from its seams: the local read runner
 (`seams.runner ?? defaultGitProcessRunner`) drives `buildSyncPreview` and the pre/post ahead-behind
@@ -232,7 +233,9 @@ in ADR-0083.
 (`readGitDeliveryBody`), allowed-key whitelist (`schemaVersion`, `projectId`, `remote`), credential-
 shape and unsafe-format-char scans (`scanForbiddenStrings` / `scanUnsafeFormatChars`), an
 `isSafeGitRef` operand guard on the optional remote alias (rejecting whitespace, a leading `-`, a
-`:`, and control characters so a malformed remote is a clean 400 rather than an internal error),
+`:`, and control characters so a malformed remote is a clean 400 rather than an internal error), a
+configured-remote check that prevents the optional alias from becoming an arbitrary Git
+`<repository>` operand,
 content-free typed error envelopes (`GitDeliverySyncErrorCode`), and a
 `createGitDeliverySyncRouteGroup(options)` factory with an injectable `execution` seam plus a
 `GIT_DELIVERY_SYNC_ROUTE_GROUP` default export. CSRF and JSON content-type are enforced **centrally**
@@ -244,9 +247,10 @@ The group registers four POST routes:
   resolve the workspace through `resolveProjectWorkspace(deps, projectId)` (404 when the project is
   unknown), run `buildSyncPreview` (a 409 when the worktree cannot be inspected), and return the
   redacted `GitSyncPreview`. They never mutate and never record evidence.
-- `/api/git-delivery/fetch/execute` and `/api/git-delivery/pull/execute` — read a best-effort pre-op
-  preview for the before-counts, run `runSyncExecute`, build a redacted `GitSyncExecuteResponse`, and
-  append a content-free `recordGitSyncEvidence` for the terminal outcome.
+- `/api/git-delivery/fetch/execute` and `/api/git-delivery/pull/execute` — require a successful
+  executable pre-op preview before network Git runs. Inspectable blocked previews return a typed
+  `GitSyncOutcome` and append content-free `recordGitSyncEvidence`; uninspectable worktrees return a
+  409 without invoking network Git.
 
 The group is registered in `routes.ts` by spreading `...GIT_DELIVERY_SYNC_ROUTE_GROUP` next to the
 other git-delivery groups, with a comment citing #1573.
