@@ -532,7 +532,10 @@ If `Get-Command npm` points at `npm.ps1` and the original failure names
 `PSSecurityException`, this entry applies. If `npm.cmd run dev:start`
 starts npm but fails later during dependency install, build, port bind,
 or UI health checks, continue with the entry that matches that later
-error.
+error. Keiko 0.2.8 on Windows could also fail inside the launcher with
+`npm.cmd ci --no-audit --no-fund failed (null)`; that was a launcher
+spawn-wrapper defect, not the PowerShell execution-policy defect
+described here.
 
 **Resolution**
 
@@ -551,6 +554,49 @@ error.
 - Do not weaken the machine-wide PowerShell execution policy just to
   start Keiko. The `.cmd` shim preserves the existing host policy and
   still runs the same npm lifecycle script.
+
+---
+
+### 9. Windows dev launcher reports `npm.cmd ci ... failed (null)`
+
+| Field             | Value                                           |
+| ----------------- | ----------------------------------------------- |
+| Severity          | Blocker                                         |
+| Surface           | Development startup, dependency install wrapper |
+| Stable identifier | `npm.cmd ci --no-audit --no-fund failed (null)` |
+
+**Symptom**
+
+From Windows, `npm run dev:start` or `npm.cmd run dev:start` enters the
+Keiko launcher, prints the dependency install command, and exits with a
+message like:
+
+```text
+[dev:start] npm.cmd ci --no-audit --no-fund
+npm.cmd ci --no-audit --no-fund failed (null)
+```
+
+**Root Cause**
+
+The development launcher invoked the Windows `npm.cmd` shim through
+Node's default direct spawn path. Modern Node releases harden `.cmd`
+execution, so command shims need to be launched through the platform
+shell. The launcher also failed to surface `spawnSync.error`, which
+collapsed the actionable spawn failure into `failed (null)`.
+
+**Resolution**
+
+Upgrade to a Keiko build that routes Windows npm shims through the shell
+inside `scripts/dev-start.mjs`. After the fix, the same command runs the
+dependency install path normally:
+
+```powershell
+npm.cmd run dev:start
+```
+
+If the dependency install itself fails after npm starts, use npm's
+reported package or network error as the stable identifier; the
+`failed (null)` wrapper failure no longer applies.
 
 ---
 
