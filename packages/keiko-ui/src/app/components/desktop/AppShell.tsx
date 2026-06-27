@@ -35,6 +35,7 @@ import {
   totalSourceCap,
 } from "./hooks/workspaceActions";
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
+import { I18nProvider, useI18n } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
   Chat,
@@ -352,6 +353,7 @@ export function buildAppShellCommands(
 }
 
 function AppShellInner(): ReactNode {
+  const { t } = useI18n();
   const { theme, toggle: toggleTheme } = useTheme();
   const twin = useTwin();
   const session = useChatSession({ autoCreate: false });
@@ -752,10 +754,10 @@ function AppShellInner(): ReactNode {
             {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
               users past the header/rail straight to the workspace (design/accessibility.html §04). */}
             <a className="skip-link" href="#main">
-              Skip to content
+              {t("app.skipToContent")}
             </a>
             {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
-            <h1 className="visually-hidden">Keiko workspace</h1>
+            <h1 className="visually-hidden">{t("app.workspaceHeading")}</h1>
             <Header
               openPalette={openPalette}
               openCommandPalette={openCmdk}
@@ -868,8 +870,10 @@ export function AppShell(): ReactNode {
     );
   }
   return (
-    <TwinProvider>
-      <AppShellInner />
-    </TwinProvider>
+    <I18nProvider>
+      <TwinProvider>
+        <AppShellInner />
+      </TwinProvider>
+    </I18nProvider>
   );
 }

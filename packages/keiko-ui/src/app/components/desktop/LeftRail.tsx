@@ -1,26 +1,28 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useI18n } from "@/lib/i18n";
 import { Icons, type IconName } from "./Icons";
 import type { Theme } from "./hooks/useTheme";
 
 interface RailTool {
   readonly id: string;
   readonly icon: IconName;
-  readonly label: string;
   readonly img?: string;
 }
 
 const PRIMARY: readonly RailTool[] = [
-  { id: "chatHistory", icon: "archive", label: "Chat History" },
+  { id: "chatHistory", icon: "archive" },
 ];
 
 function RailButton({
   tool,
+  label,
   active,
   onClick,
 }: {
   readonly tool: RailTool;
+  readonly label: string;
   readonly active: boolean;
   readonly onClick: () => void;
 }): ReactNode {
@@ -31,9 +33,9 @@ function RailButton({
       className="rail-btn"
       data-active={active ? "true" : "false"}
       data-side="left"
-      aria-label={tool.label}
+      aria-label={label}
       aria-pressed={active}
-      data-tip={tool.label}
+      data-tip={label}
       onClick={onClick}
     >
       {tool.img !== undefined ? (
@@ -59,15 +61,18 @@ export function LeftRail({
   readonly theme: Theme;
   readonly onToggleTheme: () => void;
 }): ReactNode {
+  const { t } = useI18n();
+  const themeLabel = theme === "light" ? t("rail.darkMode") : t("rail.lightMode");
+
   return (
-    <nav className="rail rail-left" aria-label="Primary workspace navigation">
+    <nav className="rail rail-left" aria-label={t("rail.primaryNavigation")}>
       <button
         type="button"
         className="rail-new"
         onClick={onNewChat}
         data-side="left"
-        aria-label="New chat"
-        data-tip="New chat"
+        aria-label={t("rail.newChat")}
+        data-tip={t("rail.newChat")}
       >
         <Icons.newChat size={18} />
       </button>
@@ -77,6 +82,7 @@ export function LeftRail({
           <RailButton
             key={tool.id}
             tool={tool}
+            label={t("rail.chatHistory")}
             active={openTools.has(tool.id)}
             onClick={() => onTool(tool.id)}
           />
@@ -89,9 +95,9 @@ export function LeftRail({
           className="rail-btn"
           data-active={openTools.has("memoria") ? "true" : "false"}
           data-side="left"
-          aria-label="MemoriaViva"
+          aria-label={t("rail.memoria")}
           aria-pressed={openTools.has("memoria")}
-          data-tip="MemoriaViva"
+          data-tip={t("rail.memoria")}
           onClick={() => onTool("memoria")}
         >
           <Icons.brain size={19} />
@@ -102,9 +108,9 @@ export function LeftRail({
           className="rail-btn"
           data-side="left"
           data-active={openTools.has("quality") ? "true" : "false"}
-          aria-label="Quality Intelligence"
+          aria-label={t("rail.quality")}
           aria-pressed={openTools.has("quality")}
-          data-tip="Quality Intelligence"
+          data-tip={t("rail.quality")}
           onClick={() => onTool("quality")}
         >
           <Icons.check size={19} />
@@ -115,9 +121,9 @@ export function LeftRail({
           className="rail-btn"
           data-side="left"
           data-active={openTools.has("promptEnhancer") ? "true" : "false"}
-          aria-label="Prompt Enhancer"
+          aria-label={t("rail.promptEnhancer")}
           aria-pressed={openTools.has("promptEnhancer")}
-          data-tip="Prompt Enhancer"
+          data-tip={t("rail.promptEnhancer")}
           onClick={() => onTool("promptEnhancer")}
         >
           <Icons.spark size={19} />
@@ -139,9 +145,9 @@ export function LeftRail({
           className="rail-btn"
           data-side="left"
           data-active={openTools.has("localKnowledge") ? "true" : "false"}
-          aria-label="Local Knowledge"
+          aria-label={t("rail.localKnowledge")}
           aria-pressed={openTools.has("localKnowledge")}
-          data-tip="Local Knowledge"
+          data-tip={t("rail.localKnowledge")}
           onClick={() => onTool("localKnowledge")}
         >
           <Icons.localKnowledge size={19} />
@@ -151,9 +157,9 @@ export function LeftRail({
           className="rail-btn"
           data-side="left"
           data-active={openTools.has("figma") ? "true" : "false"}
-          aria-label="Figma Snapshot"
+          aria-label={t("rail.figma")}
           aria-pressed={openTools.has("figma")}
-          data-tip="Figma Snapshot"
+          data-tip={t("rail.figma")}
           onClick={() => onTool("figma")}
         >
           <Icons.layers size={19} />
@@ -167,9 +173,9 @@ export function LeftRail({
         type="button"
         className="rail-btn"
         data-side="left"
-        aria-label={theme === "light" ? "Dark mode" : "Light mode"}
+        aria-label={themeLabel}
         aria-pressed={theme === "light"}
-        data-tip={theme === "light" ? "Dark mode" : "Light mode"}
+        data-tip={themeLabel}
         onClick={onToggleTheme}
       >
         {theme === "light" ? <Icons.moon size={19} /> : <Icons.sun size={19} />}
@@ -179,9 +185,9 @@ export function LeftRail({
         className="rail-btn"
         data-side="left"
         data-active={openTools.has("settings") ? "true" : "false"}
-        aria-label="Settings"
+        aria-label={t("rail.settings")}
         aria-pressed={openTools.has("settings")}
-        data-tip="Settings"
+        data-tip={t("rail.settings")}
         onClick={() => onTool("settings")}
       >
         <Icons.settings size={19} />
