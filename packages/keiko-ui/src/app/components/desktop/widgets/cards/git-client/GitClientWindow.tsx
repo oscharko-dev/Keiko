@@ -75,6 +75,8 @@ export function GitClientWindow({
   const projectKey = selectedPath ?? "";
   const staging = useGitActions(client, projectKey);
   const commit = useGitActions(client, projectKey);
+  const resetStaging = staging.reset;
+  const resetCommit = commit.reset;
 
   const loadRepositories = useCallback((): void => {
     setReposLoading(true);
@@ -100,8 +102,12 @@ export function GitClientWindow({
     if (projectId !== undefined && projectId !== "") setSelectedPath(projectId);
   }, [projectId]);
 
-  // Repository change: reset the per-repo view (branches, selection, diff scope).
+  // Repository change: reset the per-repo view (branches, selection, diff scope) and invalidate any
+  // in-flight staging/commit mutation so a late response from the previous repository cannot surface
+  // its outcome under the newly selected one.
   useEffect(() => {
+    resetStaging();
+    resetCommit();
     if (selectedPath === null) {
       setBranches([]);
       return;
@@ -125,7 +131,7 @@ export function GitClientWindow({
     return () => {
       cancelled = true;
     };
-  }, [client, selectedPath]);
+  }, [client, selectedPath, resetStaging, resetCommit]);
 
   // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
   // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
@@ -301,7 +307,7 @@ export function GitClientWindow({
             stagingError={staging.flow.error}
             commitComposer={
               <CommitComposer
-                key={commitNonce}
+                key={`${selectedPath ?? "none"}:${commitNonce.toString()}`}
                 projectId={selectedPath}
                 stagedFileCount={status?.stagedCount ?? 0}
                 busy={commit.flow.busy}

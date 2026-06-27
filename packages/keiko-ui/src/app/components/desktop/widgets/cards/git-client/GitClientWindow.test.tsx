@@ -835,6 +835,48 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     expect(outcome).toHaveTextContent("Blocked");
     expect(outcome).toHaveTextContent("policy-denied");
   });
+
+  it("does not surface an in-flight staging outcome after switching repositories", async () => {
+    // A staging response for repo A that lands after the user has switched to repo B must not
+    // write repo A's outcome into the flow now displayed under repo B (stale-flow invalidation).
+    let resolveStage!: (v: {
+      readonly schemaVersion: "1";
+      readonly status: "blocked";
+      readonly actionKind: string;
+      readonly blockReason: string;
+    }) => void;
+    const stagePending = new Promise<{
+      readonly schemaVersion: "1";
+      readonly status: "blocked";
+      readonly actionKind: string;
+      readonly blockReason: string;
+    }>((res) => {
+      resolveStage = res;
+    });
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      stage: vi.fn<GitClientSeam["stage"]>(() => stagePending),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
+
+    // Begin staging in repo A (in flight), then switch to repo B before it resolves.
+    fireEvent.click(screen.getByLabelText("Stage README.md"));
+    fireEvent.click(screen.getByRole("option", { name: /beta/ }));
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+
+    await act(async () => {
+      resolveStage({
+        schemaVersion: "1",
+        status: "blocked",
+        actionKind: "stage",
+        blockReason: "policy-denied",
+      });
+    });
+
+    // The repo-A outcome was invalidated on switch — no banner appears under repo B.
+    expect(screen.queryByTestId("git-staging-outcome")).not.toBeInTheDocument();
+  });
 });
 
 describe("GitClientWindow — commit composer (Issue #1575)", () => {

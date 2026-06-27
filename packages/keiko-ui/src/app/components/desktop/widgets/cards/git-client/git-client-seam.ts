@@ -136,6 +136,7 @@ export function useGitActions(
   readonly previewError: string | null;
   readonly runMutation: (op: () => Promise<GitMutationOutcome>) => void;
   readonly runPreview: (messageDraft: string) => void;
+  readonly reset: () => void;
 } {
   const [flow, setFlow] = useState<GitActionFlowState>({
     busy: false,
@@ -175,5 +176,15 @@ export function useGitActions(
     [client, projectId],
   );
 
-  return { flow, preview, previewError, runMutation, runPreview };
+  // Invalidates any in-flight mutation (so a late response cannot write into this flow) and clears
+  // the displayed outcome/preview. Callers reset on repository switch to prevent a stale result from
+  // one repository surfacing under another.
+  const reset = useCallback((): void => {
+    seqRef.current += 1;
+    setFlow({ busy: false, outcome: null, error: null });
+    setPreview(null);
+    setPreviewError(null);
+  }, []);
+
+  return { flow, preview, previewError, runMutation, runPreview, reset };
 }

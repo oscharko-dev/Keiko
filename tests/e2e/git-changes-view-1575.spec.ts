@@ -424,7 +424,8 @@ function writeEvidenceManifest(fixtureRoot: string): void {
     fixtureRoot,
     routesIntercepted: MANIFEST_ROUTES,
     windowRegistration: {
-      kind: "governedGit",
+      kind: "gitClient",
+      windowType: "governedGit",
       seededVia: "keiko.workspace.v4",
       renderedBy: "GitClientWindow",
       cfgPersistence: "fs-reference",
