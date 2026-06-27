@@ -49,7 +49,7 @@ export interface GitRouteOptions {
   readonly timeoutMs?: number | undefined;
 }
 
-interface NormalizedGitRouteOptions {
+export interface NormalizedGitRouteOptions {
   readonly runner: GitProcessRunner;
   readonly maxStatusBytes: number;
   readonly maxDiffBytes: number;
@@ -57,7 +57,7 @@ interface NormalizedGitRouteOptions {
   readonly timeoutMs: number;
 }
 
-interface RepositoryContext {
+export interface RepositoryContext {
   readonly root: string;
   readonly realRoot: string;
   readonly repositoryRoot: string;
@@ -86,7 +86,10 @@ function devNullPath(): string {
   return process.platform === "win32" ? "NUL" : "/dev/null";
 }
 
-function gitEnv(): NodeJS.ProcessEnv {
+// Local-read env: fully config-isolated. HOME/XDG/global+system config are neutralized so a read
+// can never load a user `~/.gitconfig`, a credential helper, or an SSH identity. Correct for the
+// local status/diff/branches/summary/history/remotes reads, which never authenticate to a remote.
+export function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "",
     GIT_TERMINAL_PROMPT: "0",
@@ -106,79 +109,109 @@ function gitEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-// The runner owns process lifecycle state, byte caps, timeout, and spawn-error mapping together.
+// Network-sync env: a fetch/pull MUST be able to authenticate to a private/SSH remote, so it
+// inherits the real environment (the user's global `~/.gitconfig` credential.helper, the macOS
+// osxkeychain helper, and the real `~/.ssh` identities). It still never prompts — GIT_TERMINAL_PROMPT
+// is forced off and SSH runs in BatchMode — so it fails closed if no stored credential satisfies the
+// remote rather than hanging on an interactive prompt. Used ONLY for the actual fetch/pull command;
+// local reads keep the hardened, config-isolated `gitEnv` above.
+export function networkGitEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0", // never prompt — fail closed
+    GIT_PAGER: "cat",
+    PAGER: "cat",
+    GIT_OPTIONAL_LOCKS: "0",
+    // No SSH credential prompt or new-host hang; still allow known/first-use hosts non-interactively.
+    GIT_SSH_COMMAND: "ssh -oBatchMode=yes -oStrictHostKeyChecking=accept-new",
+  };
+}
+
+// Factory: the runner owns process lifecycle state, byte caps, timeout, and spawn-error mapping
+// together. `buildEnv` is the only seam — the local reads pass the hardened `gitEnv`, network sync
+// passes the credential-capable `networkGitEnv`; everything else is identical.
 // eslint-disable-next-line max-lines-per-function
-export const defaultGitProcessRunner: GitProcessRunner = (args, options) =>
+export function createGitProcessRunner(buildEnv: () => NodeJS.ProcessEnv): GitProcessRunner {
   // eslint-disable-next-line max-lines-per-function
-  new Promise((resolveResult) => {
-    const child = spawn("git", args, {
-      cwd: options.cwd,
-      env: gitEnv(),
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let truncated = false;
-    let settled = false;
-    const timer = setTimeout(() => {
-      truncated = true;
-      child.kill("SIGTERM");
-    }, options.timeoutMs);
-
-    const capture = (chunks: Buffer[], currentBytes: number, chunk: Buffer): number => {
-      const remaining = options.maxBytes - currentBytes;
-      if (remaining <= 0) {
+  return (args, options) =>
+    // eslint-disable-next-line max-lines-per-function
+    new Promise((resolveResult) => {
+      const child = spawn("git", args, {
+        cwd: options.cwd,
+        env: buildEnv(),
+        shell: false,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
+      let truncated = false;
+      let settled = false;
+      const timer = setTimeout(() => {
         truncated = true;
         child.kill("SIGTERM");
-        return currentBytes;
-      }
-      if (chunk.byteLength > remaining) {
-        chunks.push(chunk.subarray(0, remaining));
-        truncated = true;
-        child.kill("SIGTERM");
-        return options.maxBytes;
-      }
-      chunks.push(chunk);
-      return currentBytes + chunk.byteLength;
-    };
+      }, options.timeoutMs);
 
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBytes = capture(stdoutChunks, stdoutBytes, chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderrBytes = capture(stderrChunks, stderrBytes, chunk);
-    });
-    child.on("error", () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveResult({
-        exitCode: 127,
-        signal: null,
-        stdout: "",
-        stderr: "git executable unavailable",
-        truncated,
+      const capture = (chunks: Buffer[], currentBytes: number, chunk: Buffer): number => {
+        const remaining = options.maxBytes - currentBytes;
+        if (remaining <= 0) {
+          truncated = true;
+          child.kill("SIGTERM");
+          return currentBytes;
+        }
+        if (chunk.byteLength > remaining) {
+          chunks.push(chunk.subarray(0, remaining));
+          truncated = true;
+          child.kill("SIGTERM");
+          return options.maxBytes;
+        }
+        chunks.push(chunk);
+        return currentBytes + chunk.byteLength;
+      };
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdoutBytes = capture(stdoutChunks, stdoutBytes, chunk);
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderrBytes = capture(stderrChunks, stderrBytes, chunk);
+      });
+      child.on("error", () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolveResult({
+          exitCode: 127,
+          signal: null,
+          stdout: "",
+          stderr: "git executable unavailable",
+          truncated,
+        });
+      });
+      child.on("close", (exitCode, signal) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolveResult({
+          exitCode,
+          signal,
+          stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+          stderr: Buffer.concat(stderrChunks).toString("utf8"),
+          truncated,
+        });
       });
     });
-    child.on("close", (exitCode, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveResult({
-        exitCode,
-        signal,
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-        stderr: Buffer.concat(stderrChunks).toString("utf8"),
-        truncated,
-      });
-    });
-  });
+}
 
-function isContained(root: string, target: string): boolean {
+// Local reads use the hardened, config-isolated env; network sync needs the user's credential
+// configuration but must still never prompt (fail-closed) — see networkGitEnv.
+export const defaultGitProcessRunner: GitProcessRunner = createGitProcessRunner(gitEnv);
+
+export const defaultGitNetworkProcessRunner: GitProcessRunner =
+  createGitProcessRunner(networkGitEnv);
+
+export function isContained(root: string, target: string): boolean {
   const rootCmp = process.platform === "win32" ? root.toLowerCase() : root;
   const targetCmp = process.platform === "win32" ? target.toLowerCase() : target;
   const rel = relative(rootCmp, targetCmp);
@@ -213,7 +246,7 @@ function genericUnavailable(
   };
 }
 
-function classifyFailure(result: GitProcessResult): GitRepositoryStatusResponse["reason"] {
+export function classifyFailure(result: GitProcessResult): GitRepositoryStatusResponse["reason"] {
   const text = `${result.stdout}\n${result.stderr}`.toLowerCase();
   if (result.exitCode === 127) return "git-missing";
   if (text.includes("dubious ownership") || text.includes("safe.directory")) {
@@ -226,7 +259,9 @@ function classifyFailure(result: GitProcessResult): GitRepositoryStatusResponse[
 }
 
 // eslint-disable-next-line complexity
-function optionsWithDefaults(options: GitRouteOptions | undefined): NormalizedGitRouteOptions {
+export function optionsWithDefaults(
+  options: GitRouteOptions | undefined,
+): NormalizedGitRouteOptions {
   return {
     runner: options?.runner ?? defaultGitProcessRunner,
     maxStatusBytes: options?.maxStatusBytes ?? DEFAULT_STATUS_MAX_BYTES,
@@ -236,7 +271,7 @@ function optionsWithDefaults(options: GitRouteOptions | undefined): NormalizedGi
   };
 }
 
-async function resolveRepository(
+export async function resolveRepository(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   options: NormalizedGitRouteOptions,
