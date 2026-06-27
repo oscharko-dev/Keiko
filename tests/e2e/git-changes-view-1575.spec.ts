@@ -465,9 +465,11 @@ async function assertChangedFileList(gitWindow: Locator): Promise<Locator> {
   ).toBeVisible();
 
   // Word indicators (never colour alone) for the staged / untracked / conflicted states.
-  await expect(nav.getByText("Staged").first()).toBeVisible();
-  await expect(nav.getByText("Untracked")).toBeVisible();
-  await expect(nav.getByText("Conflict")).toBeVisible();
+  // Exact, case-sensitive match targets the visible badge text only — the rows also carry a
+  // lowercase screen-reader status label (e.g. "untracked") that a loose match would collide with.
+  await expect(nav.getByText("Staged", { exact: true }).first()).toBeVisible();
+  await expect(nav.getByText("Untracked", { exact: true })).toBeVisible();
+  await expect(nav.getByText("Conflict", { exact: true })).toBeVisible();
   return nav;
 }
 
