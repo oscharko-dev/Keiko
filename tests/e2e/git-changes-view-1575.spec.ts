@@ -449,8 +449,8 @@ async function assertChangedFileList(gitWindow: Locator): Promise<Locator> {
 
   // Header counter (6 changes, 3 staged) and the stage-all / unstage-all actions.
   await expect(gitWindow.getByText(/6 changed · 3 staged/u)).toBeVisible();
-  await expect(gitWindow.getByRole("button", { name: "Stage all" })).toBeVisible();
-  await expect(gitWindow.getByRole("button", { name: "Unstage all" })).toBeVisible();
+  await expect(gitWindow.getByRole("button", { name: "Stage all", exact: true })).toBeVisible();
+  await expect(gitWindow.getByRole("button", { name: "Unstage all", exact: true })).toBeVisible();
 
   // MODIFIED (unstaged → "Stage") vs staged ADDED/DELETED/RENAMED (→ "Unstage").
   await expect(nav.locator('input[type="checkbox"][aria-label="Stage src/app.ts"]')).toBeVisible();
@@ -484,8 +484,8 @@ async function assertDiffAndCommitComposer(
   await nav.getByRole("button").filter({ hasText: "src/app.ts" }).click();
   const scopeGroup = gitWindow.getByRole("group", { name: "Diff scope" });
   await expect(scopeGroup).toBeVisible();
-  await expect(scopeGroup.getByRole("button", { name: "Worktree" })).toBeVisible();
-  await expect(scopeGroup.getByRole("button", { name: "Staged" })).toBeVisible();
+  await expect(scopeGroup.getByRole("button", { name: "Worktree", exact: true })).toBeVisible();
+  await expect(scopeGroup.getByRole("button", { name: "Staged", exact: true })).toBeVisible();
   await expect(gitWindow.getByText(/version = 2/u)).toBeVisible();
 
   // Select the RENAMED file (no text diff) → the no-diff empty state.
@@ -512,7 +512,7 @@ test("Issue #1575 — Git Changes view renders all six file states against a rea
   await seedGitClientWindow(page, fixtureRoot);
   await page.goto("/");
 
-  const gitWindow = page.locator('[aria-label="Git"]');
+  const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
 
   const nav = await assertChangedFileList(gitWindow);
@@ -532,9 +532,9 @@ test("Issue #1575 — Stage all button is enabled when unstaged changes are pres
   await seedGitClientWindow(page, fixtureRoot);
   await page.goto("/");
 
-  const gitWindow = page.locator('[aria-label="Git"]');
+  const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
-  const stageAllBtn = gitWindow.getByRole("button", { name: "Stage all" });
+  const stageAllBtn = gitWindow.getByRole("button", { name: "Stage all", exact: true });
   await expect(stageAllBtn).toBeVisible();
   // The fixture has 1 unstaged (app.ts) + 1 untracked (notes.txt) → Stage all must be enabled.
   await expect(stageAllBtn).toBeEnabled();
@@ -548,9 +548,9 @@ test("Issue #1575 — Unstage all button is enabled when staged changes are pres
   await seedGitClientWindow(page, fixtureRoot);
   await page.goto("/");
 
-  const gitWindow = page.locator('[aria-label="Git"]');
+  const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
-  const unstageAllBtn = gitWindow.getByRole("button", { name: "Unstage all" });
+  const unstageAllBtn = gitWindow.getByRole("button", { name: "Unstage all", exact: true });
   await expect(unstageAllBtn).toBeVisible();
   // The fixture has 3 staged files → Unstage all must be enabled.
   await expect(unstageAllBtn).toBeEnabled();
@@ -564,7 +564,7 @@ test("Issue #1575 — Untracked row checkbox aria-label uses 'Stage' not 'Unstag
   await seedGitClientWindow(page, fixtureRoot);
   await page.goto("/");
 
-  const gitWindow = page.locator('[aria-label="Git"]');
+  const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
   const nav = gitWindow.locator('nav[aria-label="Changed files"]');
   // Untracked files are unstaged; their checkbox must say "Stage <path>", not "Unstage <path>".
@@ -580,7 +580,7 @@ test("Issue #1575 — Conflicted row checkbox aria-label uses 'Stage' not 'Unsta
   await seedGitClientWindow(page, fixtureRoot);
   await page.goto("/");
 
-  const gitWindow = page.locator('[aria-label="Git"]');
+  const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
   const nav = gitWindow.locator('nav[aria-label="Changed files"]');
   // Conflicted files show staged=false; their checkbox must say "Stage <path>".
@@ -596,7 +596,7 @@ test("Issue #1575 — Switching diff scope from Worktree to Staged changes aria-
   await seedGitClientWindow(page, fixtureRoot);
   await page.goto("/");
 
-  const gitWindow = page.locator('[aria-label="Git"]');
+  const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
 
   // Select the modified file so the diff pane activates.
@@ -604,8 +604,8 @@ test("Issue #1575 — Switching diff scope from Worktree to Staged changes aria-
   await nav.getByRole("button").filter({ hasText: "src/app.ts" }).click();
 
   const scopeGroup = gitWindow.getByRole("group", { name: "Diff scope" });
-  const worktreeBtn = scopeGroup.getByRole("button", { name: "Worktree" });
-  const stagedBtn = scopeGroup.getByRole("button", { name: "Staged" });
+  const worktreeBtn = scopeGroup.getByRole("button", { name: "Worktree", exact: true });
+  const stagedBtn = scopeGroup.getByRole("button", { name: "Staged", exact: true });
 
   // Default: Worktree is active (aria-pressed=true), Staged is inactive.
   await expect(worktreeBtn).toHaveAttribute("aria-pressed", "true");
