@@ -73,7 +73,66 @@ To stop Keiko: `keiko stop`.
 
 See [Install and start](#install-and-start) below for package-manager variations and the [Troubleshooting](#troubleshooting) section for setup issues.
 
-## Development Start
+## Developer quickstart
+
+Use this path when you want to work on Keiko itself rather than install it into another project.
+
+### Prerequisites
+
+- Node.js 22 or newer
+- npm 10.9 or newer
+- A local clone of this repository
+
+### Install dependencies
+
+```bash
+npm install
+```
+
+### Run the repository checks
+
+These are the baseline commands called out by the contributing guide and expected before opening a pull request:
+
+```bash
+npm run build
+npm test
+npm run lint
+npm run typecheck
+```
+
+### Start the repository in development mode
+
+```bash
+npm run dev:start
+```
+
+The development server starts the Node BFF, launches the Next.js UI, and binds to one loopback URL. Stop it with:
+
+```bash
+npm run dev:stop
+```
+
+### Repository map
+
+| Path | Purpose |
+| ---- | ------- |
+| `src/` | Root TypeScript entrypoints and shared runtime wiring. |
+| `packages/` | Workspace packages for the CLI, UI, contracts, workflows, security, memory, and supporting subsystems. |
+| `tests/` | Unit, integration, fixture, and Playwright end-to-end coverage. |
+| `docs/` | ADRs, operator runbooks, verification notes, and architecture documentation. |
+| `scripts/` | Build, validation, release, and repository maintenance scripts. |
+| `sandbox/` | Versioned install sandbox for packaged-application verification. |
+
+### How to orient in the codebase
+
+Start with these files when you are new to the repository:
+
+- `CONTRIBUTING.md` for the required quality bar and CI expectations
+- `docs/adr/README.md` for the current architectural decisions
+- `package.json` for the supported scripts and release gates
+- `docs/troubleshooting/README.md` for operator-facing failure modes
+
+## Repository development
 
 From the repository root, start the development UI:
 
@@ -483,6 +542,8 @@ This repository already carries several strong open-source engineering patterns 
 - Required `ci`, CodeQL, dependency review, pinned-action SHA checks, SBOM generation, and supply-chain gates
 - Explicit security and audit boundaries in the product and in the workflow design
 - Installability, smoke, and verification-oriented scripts for release discipline
+
+When you contribute, prefer extending an existing package or workflow over introducing a parallel implementation. The ADR set, package graph checks, and import-policy checks are part of the repository contract, not optional documentation.
 
 ## Further reading
 
