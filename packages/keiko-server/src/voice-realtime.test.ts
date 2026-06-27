@@ -327,26 +327,31 @@ describe("VoiceControlConnection transcripts, replay & teardown", () => {
 
 describe("sweepControlHeartbeat (liveness)", () => {
   it("terminates a socket that missed the previous ping; re-arms and pings a live one", () => {
-    const dead = { isAlive: false, ping: vi.fn(), terminate: vi.fn() };
-    const live = { isAlive: true, ping: vi.fn(), terminate: vi.fn() };
+    const deadPing = vi.fn<() => void>();
+    const deadTerminate = vi.fn<() => void>();
+    const livePing = vi.fn<() => void>();
+    const liveTerminate = vi.fn<() => void>();
+    const dead = { isAlive: false, ping: deadPing, terminate: deadTerminate };
+    const live = { isAlive: true, ping: livePing, terminate: liveTerminate };
     sweepControlHeartbeat([dead, live]);
-    expect(dead.terminate).toHaveBeenCalledTimes(1);
-    expect(dead.ping).not.toHaveBeenCalled();
-    expect(live.terminate).not.toHaveBeenCalled();
-    expect(live.ping).toHaveBeenCalledTimes(1);
+    expect(deadTerminate).toHaveBeenCalledTimes(1);
+    expect(deadPing).not.toHaveBeenCalled();
+    expect(liveTerminate).not.toHaveBeenCalled();
+    expect(livePing).toHaveBeenCalledTimes(1);
     // The live socket must answer THIS ping (isAlive re-armed to false) or be terminated next sweep.
     expect(live.isAlive).toBe(false);
   });
 
   it("treats a freshly-connected socket (isAlive undefined) as live", () => {
-    const fresh: {
-      isAlive?: boolean;
-      ping: ReturnType<typeof vi.fn>;
-      terminate: ReturnType<typeof vi.fn>;
-    } = { ping: vi.fn(), terminate: vi.fn() };
+    const ping = vi.fn<() => void>();
+    const terminate = vi.fn<() => void>();
+    const fresh: { isAlive?: boolean; ping: () => void; terminate: () => void } = {
+      ping,
+      terminate,
+    };
     sweepControlHeartbeat([fresh]);
-    expect(fresh.terminate).not.toHaveBeenCalled();
-    expect(fresh.ping).toHaveBeenCalledTimes(1);
+    expect(terminate).not.toHaveBeenCalled();
+    expect(ping).toHaveBeenCalledTimes(1);
     expect(fresh.isAlive).toBe(false);
   });
 });
