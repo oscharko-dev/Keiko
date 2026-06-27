@@ -8,6 +8,7 @@
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { I18nProvider } from "@/lib/i18n";
 import type { ModelCapability } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
 import { consumePendingGatewaySetup, requestGatewaySetup } from "../shared/gatewaySetupBus";
@@ -131,6 +132,8 @@ afterEach(() => {
   // Issue #1399: clear any residual gateway-setup latch so it cannot leak across tests.
   consumePendingGatewaySetup();
   window.localStorage.clear();
+  document.documentElement.lang = "en";
+  document.documentElement.removeAttribute("data-locale");
   document.documentElement.style.removeProperty("--workspace-bg-brightness");
   document.documentElement.style.removeProperty("--workspace-grid-strength");
   document.documentElement.style.removeProperty("--frame-border-strength");
@@ -465,6 +468,28 @@ describe("SettingsPanel tabs (uiux-fix C070/C147)", () => {
 });
 
 describe("SettingsPanel workspace wallpaper controls", () => {
+  it("persists the selected interface language from General settings", async () => {
+    primeFetches([]);
+    render(
+      <I18nProvider>
+        <SettingsPanel />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Interface language" }));
+    fireEvent.click(screen.getByRole("option", { name: "German" }));
+
+    expect(window.localStorage.getItem("keiko.locale")).toBe("de");
+    expect(document.documentElement.lang).toBe("de");
+    expect(document.documentElement.dataset.locale).toBe("de");
+    expect(screen.getByText("Einstellungen")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allgemein" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
   it("defaults the liquid wallpaper off and enables opacity only after opt-in", async () => {
     primeFetches([]);
     render(<SettingsPanel />);
