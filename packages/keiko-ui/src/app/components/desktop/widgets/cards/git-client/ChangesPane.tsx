@@ -40,6 +40,30 @@ function changeBadge(
   return null;
 }
 
+function gitStatusCodeLabel(status: string): string {
+  if (status === "A") return "added";
+  if (status === "C") return "copied";
+  if (status === "D") return "deleted";
+  if (status === "M") return "modified";
+  if (status === "R") return "renamed";
+  if (status === "T") return "type changed";
+  if (status === "U") return "unmerged";
+  return `status ${status}`;
+}
+
+// Spoken status for the changed-file row (carried from the #1574 audit-gap repair). Conveys the
+// staged/worktree state to assistive tech without relying on the single-char glyph alone.
+function gitChangeStatusLabel(change: GitChangedFile): string {
+  if (change.conflicted) return "conflicted";
+  if (change.untracked) return "untracked";
+  const staged = change.indexStatus !== " " ? gitStatusCodeLabel(change.indexStatus) : null;
+  const worktree = change.worktreeStatus !== " " ? gitStatusCodeLabel(change.worktreeStatus) : null;
+  if (staged !== null && worktree !== null) return `staged ${staged}; worktree ${worktree}`;
+  if (staged !== null) return `staged ${staged}`;
+  if (worktree !== null) return worktree;
+  return "changed";
+}
+
 interface ChangesPaneProps {
   readonly tab: ChangesTab;
   readonly onTabChange: (tab: ChangesTab) => void;
@@ -134,34 +158,48 @@ export function ChangesPane({
 
       <div
         role="tabpanel"
-        id={`${baseId}-panel-${tab}`}
-        aria-labelledby={`${baseId}-tab-${tab}`}
-        style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}
+        id={`${baseId}-panel-changes`}
+        aria-labelledby={`${baseId}-tab-changes`}
+        hidden={tab !== "changes"}
+        style={{
+          display: tab === "changes" ? "flex" : "none",
+          flexDirection: "column",
+          minHeight: 0,
+          flex: 1,
+        }}
       >
-        {tab === "changes" ? (
-          <>
-            <ChangesList
-              status={status}
-              statusLoading={statusLoading}
-              statusError={statusError}
-              selectedChangePath={selectedChangePath}
-              onSelectChange={onSelectChange}
-              onStageFile={onStageFile}
-              onUnstageFile={onUnstageFile}
-              onStageAll={onStageAll}
-              onUnstageAll={onUnstageAll}
-              stagingBusy={stagingBusy}
-              stagingOutcome={stagingOutcome}
-              stagingError={stagingError}
-            />
-            {commitComposer}
-          </>
-        ) : (
-          <div style={EMPTY_STATE_STYLE}>
-            <Icons.activity size={20} />
-            <p style={SUBTLE_TEXT_STYLE}>Commit history appears here once a commit is selected.</p>
-          </div>
-        )}
+        <ChangesList
+          status={status}
+          statusLoading={statusLoading}
+          statusError={statusError}
+          selectedChangePath={selectedChangePath}
+          onSelectChange={onSelectChange}
+          onStageFile={onStageFile}
+          onUnstageFile={onUnstageFile}
+          onStageAll={onStageAll}
+          onUnstageAll={onUnstageAll}
+          stagingBusy={stagingBusy}
+          stagingOutcome={stagingOutcome}
+          stagingError={stagingError}
+        />
+        {commitComposer}
+      </div>
+      <div
+        role="tabpanel"
+        id={`${baseId}-panel-history`}
+        aria-labelledby={`${baseId}-tab-history`}
+        hidden={tab !== "history"}
+        style={{
+          display: tab === "history" ? "flex" : "none",
+          flexDirection: "column",
+          minHeight: 0,
+          flex: 1,
+        }}
+      >
+        <div style={EMPTY_STATE_STYLE}>
+          <Icons.activity size={20} />
+          <p style={SUBTLE_TEXT_STYLE}>Commit history appears here once a commit is selected.</p>
+        </div>
       </div>
     </div>
   );
@@ -210,7 +248,7 @@ function ChangesList({
   }
   if (status === null) {
     return (
-      <div style={EMPTY_STATE_STYLE}>
+      <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
         <Icons.git size={20} />
         <p style={SUBTLE_TEXT_STYLE}>Select a repository to view its changes.</p>
       </div>
@@ -218,7 +256,7 @@ function ChangesList({
   }
   if (!status.available) {
     return (
-      <div style={EMPTY_STATE_STYLE}>
+      <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
         <Icons.git size={20} />
         <p style={SUBTLE_TEXT_STYLE}>{status.message ?? "This folder is not a Git repository."}</p>
       </div>
@@ -316,6 +354,7 @@ function ChangeRow({
   readonly onToggleStage: () => void;
 }): ReactNode {
   const badge = changeBadge(change);
+  const statusLabel = gitChangeStatusLabel(change);
   const toggleLabel = `${change.staged ? "Unstage" : "Stage"} ${change.path}`;
   return (
     <li
@@ -335,13 +374,16 @@ function ChangeRow({
       <button
         type="button"
         style={FILE_SELECT_BTN_STYLE}
+        title={change.path}
+        aria-label={`${change.path}, ${statusLabel}`}
         aria-pressed={selected}
         onClick={onSelect}
       >
         <span className="rv-stat mono" aria-hidden="true">
           {gitChangeLabel(change)}
         </span>
-        <span className="rv-filerow-path mono" title={change.path}>
+        <span className="rv-filerow-path mono">
+          <span className="rv-sr-only">{statusLabel} </span>
           {change.path}
         </span>
       </button>

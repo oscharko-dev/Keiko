@@ -353,6 +353,25 @@ const ZERO_RELATIONSHIP_TOTALS = {
   blocked: 0,
   stale: 0,
 };
+const DEMO_MODELS = [
+  {
+    id: "static-evidence-chat",
+    kind: "chat",
+    contextWindow: 128000,
+    maxOutputTokens: 4096,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "standard",
+    preferredUseCases: ["static browser evidence"],
+    knownLimitations: [],
+  },
+];
 
 function apiBody(url) {
   const pathname = typeof url === "string" ? url : url.pathname;
@@ -365,7 +384,7 @@ function apiBody(url) {
       effectiveGroundingLimits: { maxConnectedSources: 16 },
     };
   }
-  if (pathname === "/api/models") return { models: [] };
+  if (pathname === "/api/models") return { models: DEMO_MODELS };
   if (pathname === "/api/workflows") return { workflows: [] };
   if (pathname === "/api/chats") return { chats: [] };
   if (pathname === "/api/projects") {

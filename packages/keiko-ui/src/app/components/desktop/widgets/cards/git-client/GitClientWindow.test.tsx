@@ -274,7 +274,7 @@ describe("GitClientWindow — repository list", () => {
     const client = makeClient({ listRepositories: vi.fn(() => pending) });
     render(<GitClientWindow client={client} />);
 
-    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.getByText("Loading repositories…")).toBeInTheDocument();
 
     // Resolve to avoid async leak in test runner
     act(() => resolve({ projects: [] }));
@@ -294,6 +294,24 @@ describe("GitClientWindow — repository list", () => {
   it("renders search input with accessible label", async () => {
     render(<GitClientWindow client={makeClient()} />);
     expect(screen.getByRole("searchbox", { name: "Search repositories" })).toBeInTheDocument();
+  });
+
+  it("supports Arrow, Home, and End keyboard movement between repositories", async () => {
+    render(<GitClientWindow client={makeClient()} />);
+    await waitFor(() => expect(screen.getByRole("option", { name: /alpha/ })).toBeInTheDocument());
+
+    const alpha = screen.getByRole("option", { name: /alpha/ });
+    const beta = screen.getByRole("option", { name: /beta/ });
+    alpha.focus();
+
+    fireEvent.keyDown(alpha, { key: "ArrowDown" });
+    expect(beta).toHaveFocus();
+
+    fireEvent.keyDown(beta, { key: "Home" });
+    expect(alpha).toHaveFocus();
+
+    fireEvent.keyDown(alpha, { key: "End" });
+    expect(beta).toHaveFocus();
   });
 });
 
@@ -428,9 +446,34 @@ describe("GitClientWindow — toolbar actions", () => {
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
 
-    // The sync pill renders with accessible text containing "Sync"
-    const pill = await screen.findByLabelText(/Sync/);
+    const pill = await screen.findByRole("status", { name: /^Sync/ });
     expect(pill).toBeInTheDocument();
+  });
+
+  it("Create Pull Request opens the reused PR window with the selected repository", async () => {
+    const openWindow = vi.fn();
+    const client = makeClient();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} openWindow={openWindow} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+
+    expect(openWindow).toHaveBeenCalledWith("governedPullRequest", {
+      projectPath: REPO_A.path,
+    });
+  });
+
+  it("Merge opens the reused merge window with the selected repository", async () => {
+    const openWindow = vi.fn();
+    const client = makeClient();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} openWindow={openWindow} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: /Merge/ }));
+
+    expect(openWindow).toHaveBeenCalledWith("governedMerge", {
+      projectPath: REPO_A.path,
+    });
   });
 });
 
@@ -533,8 +576,7 @@ describe("GitClientWindow — empty / loading / error states", () => {
 
     // listBranches resolves quickly; status is still pending
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
-    expect(screen.getByRole("status")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent(/Loading changes/i);
+    expect(screen.getByText(/Loading changes/i)).toBeInTheDocument();
 
     act(() => resolveStatus(makeStatus()));
   });
@@ -687,7 +729,9 @@ describe("GitClientWindow — required visible / absent words", () => {
     const user = userEvent.setup();
     render(<GitClientWindow client={makeClient()} />);
     await user.click(screen.getByRole("tab", { name: "History" }));
-    expect(screen.getByText(/Commit/)).toBeInTheDocument();
+    // The commit composer (which also renders the word "Commit") lives in the always-mounted
+    // Changes panel, so target the History panel's own empty-state copy precisely.
+    expect(screen.getByText(/Commit history/)).toBeInTheDocument();
   });
 
   it("never renders forbidden governance / delivery vocabulary in visible text", async () => {

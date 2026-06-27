@@ -231,6 +231,36 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       const trigger = screen.getByRole("combobox", { name: "Repository" });
       expect(trigger).toBeInTheDocument();
     });
+
+    it("Repository combobox popup listbox has an accessible name", async () => {
+      const user = userEvent.setup();
+      render(<GitClientWindow client={makeClient()} />);
+      await waitFor(() =>
+        expect(screen.getByRole("combobox", { name: "Repository" })).toBeInTheDocument(),
+      );
+
+      const trigger = screen.getByRole("combobox", { name: "Repository" });
+      vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+        bottom: 90,
+        height: 36,
+        left: 120,
+        right: 320,
+        top: 54,
+        width: 200,
+        x: 120,
+        y: 54,
+        toJSON: () => ({}),
+      });
+      await user.click(trigger);
+
+      expect(screen.getByRole("listbox", { name: "Repository" })).toBeInTheDocument();
+    });
+
+    it("search inputs keep a visible native focus outline", () => {
+      render(<GitClientWindow client={makeClient()} />);
+      const search = screen.getByRole("searchbox", { name: "Search repositories" });
+      expect(search).not.toHaveStyle({ outline: "none" });
+    });
   });
 
   describe("repository listbox", () => {
@@ -284,13 +314,16 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(historyTab).toHaveAttribute("aria-selected", "false");
     });
 
-    it("each tab has a matching aria-controls pointing to its panel", () => {
+    it("each tab has a matching aria-controls pointing to its mounted panel", () => {
       render(<GitClientWindow client={makeClient()} />);
       const changesTab = screen.getByRole("tab", { name: "Changes" });
-      const controlsId = changesTab.getAttribute("aria-controls");
-      expect(controlsId).toBeTruthy();
-      // The controlled panel must exist
-      expect(document.getElementById(controlsId!)).toBeInTheDocument();
+      const historyTab = screen.getByRole("tab", { name: "History" });
+
+      for (const tab of [changesTab, historyTab]) {
+        const controlsId = tab.getAttribute("aria-controls");
+        expect(controlsId).toBeTruthy();
+        expect(document.getElementById(controlsId!)).toBeInTheDocument();
+      }
     });
 
     it("active tab has tabIndex=0 and inactive has tabIndex=-1", () => {
@@ -335,6 +368,31 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       await waitFor(() => expect(screen.getByText("src/foo.ts")).toBeInTheDocument());
       expect(screen.getByRole("button", { name: "Stage all" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Unstage all" })).toBeInTheDocument();
+    });
+  });
+
+  describe("changed files and diff region", () => {
+    it("changed-file rows expose the Git status in their accessible names", async () => {
+      const client = makeClient();
+      render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: /src\/foo\.ts, staged modified/i }),
+        ).toBeInTheDocument(),
+      );
+    });
+
+    it("diff content is a named keyboard-scrollable region", () => {
+      render(<GitClientWindow client={makeClient()} />);
+      const diffRegion = screen.getByRole("region", { name: "Diff" });
+      expect(diffRegion).toHaveAttribute("tabindex", "0");
+    });
+
+    it("sync state is exposed through a polite status role", async () => {
+      const client = makeClient();
+      render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+      await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+      expect(screen.getByRole("status", { name: /^Sync/ })).toBeInTheDocument();
     });
   });
 
