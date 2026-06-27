@@ -70,6 +70,7 @@ interface RunnerScript {
 interface ScriptedRunner {
   readonly runner: GitProcessRunner;
   readonly calls: () => readonly string[];
+  readonly args: () => readonly (readonly string[])[];
 }
 
 function subcommand(args: readonly string[]): string {
@@ -79,8 +80,10 @@ function subcommand(args: readonly string[]): string {
 
 function scriptedRunner(script: RunnerScript): ScriptedRunner {
   const calls: string[] = [];
+  const argsSeen: string[][] = [];
   const runner: GitProcessRunner = (args) => {
     const cmd = subcommand(args);
+    argsSeen.push([...args]);
     calls.push(cmd);
     if (cmd === "status") return Promise.resolve(script.status ?? ok(porcelain()));
     if (cmd === "remote") return Promise.resolve(script.remote ?? ok("origin\n"));
@@ -88,7 +91,7 @@ function scriptedRunner(script: RunnerScript): ScriptedRunner {
     if (cmd === "pull") return Promise.resolve(script.pull ?? ok("Already up to date.\n"));
     return Promise.resolve(ok(""));
   };
-  return { runner, calls: () => calls };
+  return { runner, calls: () => calls, args: () => argsSeen };
 }
 
 function seams(script: RunnerScript): GitDeliverySyncSeams {
@@ -192,6 +195,30 @@ describe("fetch preview — readiness", () => {
     expect(body.blockReason).toBe("no-remote");
   });
 
+  it("blocks a requested remote that is not configured", async () => {
+    const handler = createHandleSyncPreview("fetch", {
+      execution: seams({ remote: ok("origin\n") }),
+    });
+    const res = await handler(ctxFor(FETCH_PREVIEW, syncBody({ remote: "upstream" })), deps());
+    const body = res.body as GitSyncPreview;
+    expect(body.remote).toBe("upstream");
+    expect(body.hasRemote).toBe(false);
+    expect(body.executable).toBe(false);
+    expect(body.blockReason).toBe("no-remote");
+  });
+
+  it("accepts a requested remote only when it is configured", async () => {
+    const handler = createHandleSyncPreview("fetch", {
+      execution: seams({ remote: ok("origin\nupstream\n") }),
+    });
+    const res = await handler(ctxFor(FETCH_PREVIEW, syncBody({ remote: "upstream" })), deps());
+    const body = res.body as GitSyncPreview;
+    expect(body.remote).toBe("upstream");
+    expect(body.hasRemote).toBe(true);
+    expect(body.executable).toBe(true);
+    expect(body.blockReason).toBeUndefined();
+  });
+
   it("409s when the status read fails (not a repository)", async () => {
     const handler = createHandleSyncPreview("fetch", {
       execution: seams({ status: fail("fatal: not a git repository", 128) }),
@@ -292,6 +319,13 @@ describe("fetch execute — outcomes", () => {
     expect(body.status).toBe("auth-failed");
   });
 
+  it("reports untrusted-host-key when SSH host verification fails", async () => {
+    const body = await runFetch({
+      fetch: fail("Host key verification failed.", 128),
+    });
+    expect(body.status).toBe("untrusted-host-key");
+  });
+
   it("reports no-remote on an unknown remote", async () => {
     const body = await runFetch({
       fetch: fail("fatal: 'up' does not appear to be a git repository", 128),
@@ -321,6 +355,54 @@ describe("fetch execute — outcomes", () => {
     const body = await runFetch({ fetch: fail("fatal: unknown internal error", 1) });
     expect(body.status).toBe("git-error");
   });
+
+  it("does not run fetch when preview blocks with no-remote", async () => {
+    const scripted = scriptedRunner({ remote: ok("") });
+    const cap = capturingEvidenceStore();
+    const handler = createHandleSyncExecute("fetch", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+    const res = await handler(ctxFor(FETCH_EXECUTE, syncBody()), deps({ evidenceStore: cap.store }));
+    const body = res.body as GitSyncExecuteResponse;
+    expect(body.status).toBe("no-remote");
+    expect(scripted.calls()).toEqual(["status", "remote"]);
+    expect(cap.records()[0]?.outcome).toBe("no-remote");
+  });
+
+  it("does not run fetch for a requested remote that is not configured", async () => {
+    const scripted = scriptedRunner({ remote: ok("origin\n") });
+    const handler = createHandleSyncExecute("fetch", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+    const res = await handler(ctxFor(FETCH_EXECUTE, syncBody({ remote: "upstream" })), deps());
+    const body = res.body as GitSyncExecuteResponse;
+    expect(body.status).toBe("no-remote");
+    expect(scripted.calls()).toEqual(["status", "remote"]);
+  });
+
+  it("passes a configured requested remote as a remote alias", async () => {
+    const scripted = scriptedRunner({ remote: ok("origin\nupstream\n"), fetch: ok("") });
+    const handler = createHandleSyncExecute("fetch", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+    const res = await handler(ctxFor(FETCH_EXECUTE, syncBody({ remote: "upstream" })), deps());
+    const body = res.body as GitSyncExecuteResponse;
+    expect(body.status).toBe("succeeded");
+    const fetchArgs = scripted.args().find((args) => subcommand(args) === "fetch");
+    expect(fetchArgs).toBeDefined();
+    expect(fetchArgs?.slice(-2)).toEqual(["--no-tags", "upstream"]);
+  });
+
+  it("does not run fetch when preview status fails", async () => {
+    const scripted = scriptedRunner({ status: fail("fatal: not a git repository", 128) });
+    const handler = createHandleSyncExecute("fetch", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+    const res = await handler(ctxFor(FETCH_EXECUTE, syncBody()), deps());
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_SYNC_WORKTREE_UNAVAILABLE" } });
+    expect(scripted.calls()).toEqual(["status"]);
+  });
 });
 
 // ─── pull execute ───────────────────────────────────────────────────────────
@@ -329,7 +411,11 @@ async function runPull(
   script: RunnerScript,
   store?: EvidenceStore,
 ): Promise<GitSyncExecuteResponse> {
-  const handler = createHandleSyncExecute("pull", { execution: seams(script) });
+  const readyScript: RunnerScript = {
+    status: ok(porcelain({ upstream: "origin/main", ahead: 0, behind: 1 })),
+    ...script,
+  };
+  const handler = createHandleSyncExecute("pull", { execution: seams(readyScript) });
   const res = await handler(
     ctxFor(PULL_EXECUTE, syncBody()),
     deps(store ? { evidenceStore: store } : {}),
@@ -383,6 +469,13 @@ describe("pull execute — outcomes", () => {
     expect(body.status).toBe("auth-failed");
   });
 
+  it("reports untrusted-host-key when SSH host identity changes", async () => {
+    const body = await runPull({
+      pull: fail("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!", 128),
+    });
+    expect(body.status).toBe("untrusted-host-key");
+  });
+
   it("reports timeout when the process truncated", async () => {
     const body = await runPull({ pull: fail("", null as unknown as number, true) });
     expect(body.status).toBe("timeout");
@@ -410,6 +503,28 @@ describe("pull execute — outcomes", () => {
   it("reports git-error when a non-zero pull matches no known stderr pattern", async () => {
     const body = await runPull({ pull: fail("fatal: unknown internal error", 1) });
     expect(body.status).toBe("git-error");
+  });
+
+  it("does not run pull when preview blocks with no-upstream", async () => {
+    const scripted = scriptedRunner({ status: ok(porcelain({ branch: "main" })) });
+    const handler = createHandleSyncExecute("pull", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+    const res = await handler(ctxFor(PULL_EXECUTE, syncBody()), deps());
+    const body = res.body as GitSyncExecuteResponse;
+    expect(body.status).toBe("no-upstream");
+    expect(scripted.calls()).toEqual(["status", "remote"]);
+  });
+
+  it("does not run pull when preview blocks with detached-head", async () => {
+    const scripted = scriptedRunner({ status: ok(porcelain({ detached: true })) });
+    const handler = createHandleSyncExecute("pull", {
+      execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+    });
+    const res = await handler(ctxFor(PULL_EXECUTE, syncBody()), deps());
+    const body = res.body as GitSyncExecuteResponse;
+    expect(body.status).toBe("detached-head");
+    expect(scripted.calls()).toEqual(["status", "remote"]);
   });
 });
 

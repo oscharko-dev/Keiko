@@ -870,8 +870,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // approval) + #474 evidence ledger; same capability flag and CSRF.
   ...GIT_DELIVERY_MERGE_ROUTE_GROUP,
   // #1573 governed fetch/pull sync: sync preview (read-only readiness + executable gate) + execute
-  // through the reused hardened runner (NOT the #472 kernel — fetch/pull have no GitDeliveryActionKind)
-  // + a dedicated content-free sync evidence ledger; same central CSRF + JSON content-type gate.
+  // through a preflight-gated credential-capable runner (NOT the #472 kernel — fetch/pull have no
+  // GitDeliveryActionKind) + a dedicated content-free sync evidence ledger; same central CSRF + JSON
+  // content-type gate.
   ...GIT_DELIVERY_SYNC_ROUTE_GROUP,
 ];
 

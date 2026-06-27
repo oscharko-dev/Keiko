@@ -26,6 +26,7 @@ export type GitSyncOutcome =
   | "dirty-worktree" // pull blocked: local changes would be overwritten
   | "not-fast-forward" // pull --ff-only refused
   | "auth-failed"
+  | "untrusted-host-key"
   | "timeout"
   | "git-missing"
   | "unsafe-repository"
@@ -39,6 +40,7 @@ export const GIT_SYNC_OUTCOMES: readonly GitSyncOutcome[] = [
   "dirty-worktree",
   "not-fast-forward",
   "auth-failed",
+  "untrusted-host-key",
   "timeout",
   "git-missing",
   "unsafe-repository",

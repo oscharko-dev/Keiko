@@ -3,13 +3,15 @@
 //   * POST /api/git-delivery/{fetch,pull}/preview  — READ-ONLY. Projects the sync readiness envelope
 //       (branch / upstream / ahead / behind / hasRemote / hasUpstream / dirty + an executable gate and
 //       typed blockReason). Never mutates, never records evidence.
-//   * POST /api/git-delivery/{fetch,pull}/execute  — Runs ONE bounded fetch/pull through the reused
-//       hardened runner (NOT the #472 kernel — fetch/pull have no GitDeliveryActionKind) and appends a
-//       content-free sync evidence record for the terminal outcome.
+//   * POST /api/git-delivery/{fetch,pull}/execute  — Requires an executable preview before running
+//       ONE bounded fetch/pull through the credential-capable runner (NOT the #472 kernel —
+//       fetch/pull have no GitDeliveryActionKind) and appends a content-free sync evidence record for
+//       the terminal outcome.
 //
 // Mirrors pushRoutes.ts: the same bounded body read, allowed-key whitelist, credential-shape +
-// unsafe-format-char scans, isSafeGitRef operand guard, content-free typed error envelope, and a
-// `createGitDeliverySyncRouteGroup(options)` factory with an injectable execution seam. CSRF + JSON
+// unsafe-format-char scans, isSafeGitRef operand guard plus configured-remote preflight,
+// content-free typed error envelope, and a `createGitDeliverySyncRouteGroup(options)` factory with
+// an injectable execution seam. CSRF + JSON
 // content type are enforced CENTRALLY by server.ts for POST, so they are NOT re-checked here.
 
 import type { IncomingMessage } from "node:http";
@@ -218,21 +220,6 @@ function evidenceRecord(
   };
 }
 
-// Best-effort pre-op readiness read for the before-counts. A failure (not a repository) leaves the
-// before-counts undefined; the execute itself still runs and reports its own typed outcome.
-async function readBefore(
-  operation: GitSyncOperation,
-  repoRoot: string,
-  remote: string | undefined,
-  seams: GitDeliverySyncSeams,
-): Promise<GitSyncPreview | undefined> {
-  try {
-    return await buildSyncPreview(operation, repoRoot, remote, seams);
-  } catch {
-    return undefined;
-  }
-}
-
 export const createHandleSyncExecute = (
   operation: GitSyncOperation,
   options: GitDeliverySyncRouteOptions = {},
@@ -247,8 +234,13 @@ export const createHandleSyncExecute = (
     const { projectId, remote } = validation.value;
     const workspace = resolveProjectWorkspace(deps, projectId);
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_SYNC_UNKNOWN_PROJECT");
-    const before = await readBefore(operation, workspace.root, remote, seams);
-    const result = await runSyncExecute(operation, workspace.root, remote, seams);
+    let before: GitSyncPreview;
+    try {
+      before = await buildSyncPreview(operation, workspace.root, remote, seams);
+    } catch {
+      return errResult(409, "GIT_DELIVERY_SYNC_WORKTREE_UNAVAILABLE");
+    }
+    const result = await runSyncExecute(operation, workspace.root, remote, seams, before);
     const record = evidenceRecord(
       operation,
       remote,

@@ -9,8 +9,8 @@
 //   * buildSyncPreview — READ-ONLY readiness: parse `status --porcelain=v2 --branch` + remote names to
 //       compute branch/detached/upstream/ahead/behind/hasRemote/hasUpstream/dirty + an executable gate
 //       and a typed blockReason.
-//   * runSyncExecute — runs the bounded fetch/pull command and classifies the outcome from
-//       exitCode/stderr/stdout/truncated; re-reads ahead/behind after a successful op (best-effort).
+//   * runSyncExecute — requires an executable preview before running the bounded fetch/pull command,
+//       classifies exitCode/stderr/stdout/truncated, and re-reads ahead/behind after success.
 //
 // Pure parsing lives in gitPorcelainStatus.ts; this module owns only the bounded process effect and
 // the deterministic outcome classifier. Both are seam-injectable for tests.
@@ -103,6 +103,10 @@ function parseRemoteNames(stdout: string): readonly string[] {
 
 // --- preview ---------------------------------------------------------------
 
+function hasRequestedRemote(remoteNames: readonly string[], remote: string | undefined): boolean {
+  return remote === undefined ? remoteNames.length > 0 : remoteNames.includes(remote);
+}
+
 function previewBlockReason(
   operation: GitSyncOperation,
   status: PorcelainV2Status,
@@ -166,7 +170,7 @@ export async function buildSyncPreview(
   const parsed = parsePorcelainV2Branch(status.stdout);
   const remotesResult = await runGit(repoRoot, normalized, ["remote"]);
   const remoteNames = remotesResult.exitCode === 0 ? parseRemoteNames(remotesResult.stdout) : [];
-  return previewFor(operation, parsed, remote, remoteNames.length > 0);
+  return previewFor(operation, parsed, remote, hasRequestedRemote(remoteNames, remote));
 }
 
 // --- execute ---------------------------------------------------------------
@@ -187,25 +191,41 @@ function syncArgs(operation: GitSyncOperation, remote: string | undefined): read
     : ["pull", "--ff-only", "--no-edit", ...remoteArgs];
 }
 
-// Classifies the most-specific failure the stderr surfaces. Order matters: ownership and auth checks
-// precede the generic remote/repository checks so a credential failure is never mislabeled.
-function classifyStderr(stderr: string): GitSyncOutcome | undefined {
-  const text = stderr.toLowerCase();
-  if (text.includes("dubious ownership") || text.includes("safe.directory")) {
-    return "unsafe-repository";
-  }
-  if (
+// Classifies the most-specific failure the stderr surfaces. Order matters: ownership, host trust, and
+// auth checks precede generic remote/repository checks so trust and credential failures stay precise.
+function isUnsafeRepositoryStderr(text: string): boolean {
+  return text.includes("dubious ownership") || text.includes("safe.directory");
+}
+
+function isUntrustedHostKeyStderr(text: string): boolean {
+  return (
+    text.includes("host key verification failed") ||
+    text.includes("remote host identification has changed") ||
+    text.includes("strict host key checking") ||
+    text.includes("offending key")
+  );
+}
+
+function isAuthFailedStderr(text: string): boolean {
+  return (
     text.includes("could not read username") ||
     text.includes("authentication failed") ||
     text.includes("permission denied") ||
     text.includes("could not read from remote") ||
     text.includes("terminal prompts disabled")
-  ) {
-    return "auth-failed";
-  }
-  if (text.includes("no such remote") || text.includes("does not appear to be a git repository")) {
-    return "no-remote";
-  }
+  );
+}
+
+function isNoRemoteStderr(text: string): boolean {
+  return text.includes("no such remote") || text.includes("does not appear to be a git repository");
+}
+
+function classifyStderr(stderr: string): GitSyncOutcome | undefined {
+  const text = stderr.toLowerCase();
+  if (isUnsafeRepositoryStderr(text)) return "unsafe-repository";
+  if (isUntrustedHostKeyStderr(text)) return "untrusted-host-key";
+  if (isAuthFailedStderr(text)) return "auth-failed";
+  if (isNoRemoteStderr(text)) return "no-remote";
   return undefined;
 }
 
@@ -213,7 +233,7 @@ function classifyStderr(stderr: string): GitSyncOutcome | undefined {
 function classifyPullStderr(stderr: string): GitSyncOutcome | undefined {
   const text = stderr.toLowerCase();
   // A pull on a detached HEAD aborts with "You are not currently on a branch." — the execute-side
-  // mirror of the preview block reason, keeping the 12-member taxonomy fully live from execute.
+  // mirror of the preview block reason, keeping the sync taxonomy fully live from execute.
   if (text.includes("not currently on a branch")) return "detached-head";
   if (
     text.includes("there is no tracking information") ||
@@ -250,6 +270,35 @@ function classifyOutcome(operation: GitSyncOperation, result: GitProcessResult):
 
 function isSettledOk(outcome: GitSyncOutcome): boolean {
   return outcome === "succeeded" || outcome === "up-to-date";
+}
+
+function blockedOutcomeFor(preview: GitSyncPreview): GitSyncOutcome {
+  switch (preview.blockReason) {
+    case "no-remote":
+      return "no-remote";
+    case "no-upstream":
+      return "no-upstream";
+    case "detached-head":
+      return "detached-head";
+    case "git-missing":
+      return "git-missing";
+    case "unsafe-repository":
+      return "unsafe-repository";
+    case "unavailable":
+    case undefined:
+      return "git-error";
+  }
+}
+
+function blockedResultFor(preview: GitSyncPreview): SyncExecuteResult {
+  return {
+    outcome: blockedOutcomeFor(preview),
+    branch: preview.branch,
+    upstream: preview.upstream,
+    ahead: preview.ahead,
+    behind: preview.behind,
+    truncated: false,
+  };
 }
 
 // Re-reads branch/upstream/ahead/behind after a settled op so the response reflects the post-sync
@@ -289,8 +338,11 @@ export async function runSyncExecute(
   repoRoot: string,
   remote: string | undefined,
   seams: GitDeliverySyncSeams = {},
+  preflight?: GitSyncPreview,
 ): Promise<SyncExecuteResult> {
   const normalized = normalizeSeams(seams);
+  const preview = preflight ?? (await buildSyncPreview(operation, repoRoot, remote, seams));
+  if (!preview.executable) return blockedResultFor(preview);
   // ONLY the network fetch/pull uses the credential-capable runner; the post-state re-read below
   // stays on the hardened local read runner.
   const result = await runNetworkGit(repoRoot, normalized, syncArgs(operation, remote));

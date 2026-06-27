@@ -122,8 +122,9 @@ export function networkGitEnv(): NodeJS.ProcessEnv {
     GIT_PAGER: "cat",
     PAGER: "cat",
     GIT_OPTIONAL_LOCKS: "0",
-    // No SSH credential prompt or new-host hang; still allow known/first-use hosts non-interactively.
-    GIT_SSH_COMMAND: "ssh -oBatchMode=yes -oStrictHostKeyChecking=accept-new",
+    // No SSH credential prompt and no implicit first-use trust. Unknown or changed host keys fail
+    // closed and are surfaced by the sync outcome classifier.
+    GIT_SSH_COMMAND: "ssh -oBatchMode=yes -oStrictHostKeyChecking=yes",
   };
 }
 
