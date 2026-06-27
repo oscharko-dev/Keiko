@@ -138,7 +138,12 @@ export {
 
 export {
   MAX_SDP_BYTES,
+  REALTIME_VOICES,
+  DEFAULT_REALTIME_VOICE,
+  isRealtimeVoice,
+  resolveRealtimeVoice,
   requestRealtimeNegotiation,
+  type RealtimeVoice,
   type RealtimeNegotiationErrorKind,
   type RealtimeNegotiationOutcome,
   type RealtimeNegotiationRequest,

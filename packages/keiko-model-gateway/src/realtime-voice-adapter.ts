@@ -32,12 +32,53 @@ import type { RealtimeAuthMode } from "./types.js";
 // endpoint cannot stream an unbounded body into the loopback control plane.
 export const MAX_SDP_BYTES = 256_000;
 
+// The voice ids the OpenAI/Azure-Foundry realtime models accept. This set is NARROWER than the
+// text-to-speech voice set (TTS also offers e.g. 'nova'/'onyx'); a persona→voice mapping authored for
+// TTS can therefore carry a voice the realtime model rejects — verified against the live endpoint,
+// where realtime `voice: "nova"` returns HTTP 400 and would break session creation. `resolveRealtimeVoice`
+// guards against that by falling back to a safe default for any non-realtime voice id.
+export const REALTIME_VOICES = [
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "sage",
+  "shimmer",
+  "verse",
+] as const;
+export type RealtimeVoice = (typeof REALTIME_VOICES)[number];
+export const DEFAULT_REALTIME_VOICE: RealtimeVoice = "alloy";
+
+export function isRealtimeVoice(voiceId: string | undefined): voiceId is RealtimeVoice {
+  return voiceId !== undefined && (REALTIME_VOICES as readonly string[]).includes(voiceId);
+}
+
+// Returns the requested voice when it is realtime-valid, otherwise the safe default — so an operator
+// mapping that reuses a TTS-only voice id for the realtime model never breaks the session.
+export function resolveRealtimeVoice(voiceId: string | undefined): RealtimeVoice {
+  return isRealtimeVoice(voiceId) ? voiceId : DEFAULT_REALTIME_VOICE;
+}
+
 export interface RealtimeNegotiationRequest {
   readonly endpoint: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string;
   readonly realtimeAuthMode?: RealtimeAuthMode;
   readonly modelId: string;
+  // Grounded session configuration applied server-side at ephemeral-session mint time so the realtime
+  // assistant speaks as Keiko (not the provider's default demo persona) and emits user-utterance
+  // transcripts. These never reach the browser as anything other than the session's own behavior.
+  //   - instructions: the Keiko system persona (same source the text chat uses), so spoken and written
+  //     Keiko cannot diverge.
+  //   - voiceId: a provider realtime-VALID voice id resolved from the configured persona mapping.
+  //   - transcriptionModel: enables input-audio transcription so the chat transcript can capture what
+  //     the user said by voice.
+  // Applied only in ephemeral-session mode (the path that mints the session config). Omitted fields
+  // fall back to provider defaults.
+  readonly instructions?: string;
+  readonly voiceId?: string;
+  readonly transcriptionModel?: string;
   // The browser's opaque SDP offer (already validated for length by the caller). Never persisted or
   // logged by this module; forwarded verbatim to the provider's realtime SDP-exchange endpoint.
   readonly offerSdp: string;
@@ -219,14 +260,34 @@ async function dispatch(
   }
 }
 
-function buildClientSecretBody(modelId: string): string {
-  return JSON.stringify({
-    session: {
-      type: "realtime",
-      model: modelId,
-      output_modalities: ["audio"],
-    },
-  });
+// Builds the ephemeral client-secret request body. The session-config schema is the GA nested
+// `audio.{input,output}` shape (verified against the live Azure Foundry realtime endpoint: the older
+// top-level `voice`/`input_audio_transcription` shape is rejected with HTTP 500). `instructions`,
+// `audio.output.voice`, and `audio.input.transcription` are only included when supplied, so an
+// unconfigured deployment still mints a valid (provider-default) session.
+function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
+  const session: Record<string, unknown> = {
+    type: "realtime",
+    model: request.modelId,
+    output_modalities: ["audio"],
+  };
+  if (request.instructions !== undefined && request.instructions.length > 0) {
+    session.instructions = request.instructions;
+  }
+  const audioInput: Record<string, unknown> = {
+    // server_vad gives provider-side end-of-turn detection and barge-in (interrupt_response) for the
+    // realtime media plane without any client polling.
+    turn_detection: { type: "server_vad" },
+  };
+  if (request.transcriptionModel !== undefined && request.transcriptionModel.length > 0) {
+    audioInput.transcription = { model: request.transcriptionModel };
+  }
+  const audio: Record<string, unknown> = { input: audioInput };
+  if (request.voiceId !== undefined && request.voiceId.length > 0) {
+    audio.output = { voice: request.voiceId };
+  }
+  session.audio = audio;
+  return JSON.stringify({ session });
 }
 
 function extractEphemeralToken(parsed: unknown): string | undefined {
@@ -259,7 +320,7 @@ async function requestEphemeralToken(
         "content-type": "application/json",
         [name]: apiKeyHeaderValue(name, request.apiKey),
       },
-      body: buildClientSecretBody(request.modelId),
+      body: buildClientSecretBody(request),
       signal: built.signal,
       maxResponseBytes: MAX_SDP_BYTES,
       ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),

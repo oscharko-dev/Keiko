@@ -145,6 +145,14 @@ Server-side, `selectVoicePersonaVoice(config, persona)` resolves the cheapest co
 provider that maps the requested persona to its `voiceId`; the resolver result carries the `voiceId` and
 therefore stays server-side. It is the seam the assistant speech-output feature (Issue #1558) consumes.
 
+> **Realtime voice ids are a narrower set than text-to-speech voice ids.** The realtime models accept
+> `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, and `verse`; some text-to-speech-only voices
+> (for example `nova` and `onyx`) are **rejected** by the realtime model and would break realtime session
+> creation. For this reason a `keiko-realtime` provider's `voiceProfiles` must map each persona to a
+> realtime-valid voice id. The realtime negotiation applies `resolveRealtimeVoice` as a defense-in-depth
+> guard: a configured voice id outside the realtime set falls back to `alloy` rather than failing the
+> session. A `keiko-tts` provider keeps the broader text-to-speech voice set.
+
 ## 3. Reading the capability: the BFF endpoint
 
 The UI reads the resolved voice capability before rendering any voice affordance:

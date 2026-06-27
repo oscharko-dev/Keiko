@@ -22,6 +22,47 @@ import {
   type VoiceControlClient,
 } from "./voice-realtime-client";
 
+// A transient WebRTC `disconnected` state is recoverable (a brief network blip, an ICE restart): the
+// connection often returns to `connected` on its own. Tearing the session down the instant it appears
+// drops a live conversation over a momentary hiccup. We keep the session alive for this grace window
+// and only treat the connection as lost if it has not recovered by the time it elapses.
+const ICE_DISCONNECT_GRACE_MS = 5_000;
+
+// The audio sink for the assistant's remote media stream. Without it the negotiated remote track is
+// never attached to any output and the realtime assistant is completely silent — the single most
+// severe realtime defect. Production attaches the stream to a hidden, autoplaying HTMLAudioElement;
+// tests inject a fake to assert the wiring without touching real media APIs.
+export interface RealtimeAudioSink {
+  attach(stream: MediaStream): void;
+  release(): void;
+}
+
+function createBrowserRealtimeAudioSink(): RealtimeAudioSink {
+  const audio = typeof Audio !== "undefined" ? new Audio() : undefined;
+  if (audio !== undefined) {
+    audio.autoplay = true;
+  }
+  return {
+    attach(stream: MediaStream): void {
+      if (audio === undefined) return;
+      audio.srcObject = stream;
+      // play() may reject if autoplay policy blocks it; the realtime session is always started by a
+      // user gesture (the composer button), so it resolves in practice. Swallow a late rejection so it
+      // never surfaces as an unhandled promise rejection.
+      void audio.play?.().catch(() => {});
+    },
+    release(): void {
+      if (audio === undefined) return;
+      try {
+        audio.pause?.();
+      } catch {
+        // ignore — element already torn down
+      }
+      audio.srcObject = null;
+    },
+  };
+}
+
 export type RealtimeVoicePhase = "idle" | "requesting" | "negotiating" | "connected" | "error";
 
 // Why the realtime connection could not start or was lost. Combines transport and control errors.
@@ -79,13 +120,16 @@ export interface UseRealtimeVoiceOptions {
   // Test seams: inject fake factories. Production uses the browser transport and the BFF client.
   readonly createTransport?: (() => VoiceRtcTransport) | undefined;
   readonly createControl?: (() => VoiceControlClient) | undefined;
+  readonly createAudioSink?: (() => RealtimeAudioSink) | undefined;
 }
 
 export interface RealtimeVoiceController {
   readonly phase: RealtimeVoicePhase;
   // True while a connection attempt is in progress (requesting | negotiating | connected).
   readonly busy: boolean;
-  readonly error: { readonly reason: RealtimeVoiceErrorReason; readonly message: string } | undefined;
+  readonly error:
+    | { readonly reason: RealtimeVoiceErrorReason; readonly message: string }
+    | undefined;
   readonly start: () => void;
   readonly stop: () => void;
   readonly retry: () => void;
@@ -110,15 +154,25 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
 
   const transportFactory = options.createTransport ?? createBrowserVoiceRtcTransport;
   const controlFactory = options.createControl ?? createBrowserVoiceControlClient;
+  const audioSinkFactory = options.createAudioSink ?? createBrowserRealtimeAudioSink;
 
   const sessionRef = useRef<VoiceRtcSession | undefined>(undefined);
   const controlRef = useRef<VoiceControlClient | undefined>(undefined);
+  const audioSinkRef = useRef<RealtimeAudioSink | undefined>(undefined);
+  // Pending teardown timer for a transient `disconnected` state (see ICE_DISCONNECT_GRACE_MS).
+  const graceTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Guards every state update that runs after an `await`, so a composer that unmounts mid-flow
   // (e.g. while permission is pending or negotiation is in flight) never dispatches onto an
   // unmounted component and never leaves the microphone open.
   const mountedRef = useRef(true);
 
   const cleanupRefs = useCallback((): void => {
+    if (graceTimerRef.current !== undefined) {
+      clearTimeout(graceTimerRef.current);
+      graceTimerRef.current = undefined;
+    }
+    audioSinkRef.current?.release();
+    audioSinkRef.current = undefined;
     sessionRef.current?.close();
     sessionRef.current = undefined;
     controlRef.current?.close();
@@ -150,19 +204,39 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         sessionRef.current = session;
         dispatch({ type: "negotiating" });
 
+        // Attach the assistant's remote audio to an output sink BEFORE applying the answer, so the
+        // remote-track event (which can fire as soon as setRemoteDescription runs) is never missed.
+        // Without this the negotiated audio track plays nowhere and the assistant is silent.
+        const audioSink = audioSinkFactory();
+        audioSinkRef.current = audioSink;
+        session.onRemoteTrack((stream) => {
+          if (!mountedRef.current) return;
+          audioSink.attach(stream);
+        });
+
         // Wire connection-state changes before applying the answer so early "failed" events are
-        // caught.
+        // caught. A transient `disconnected` is given a bounded grace window to recover instead of
+        // tearing the live session down on a momentary blip.
         session.onConnectionStateChange((rtcState) => {
           if (!mountedRef.current) return;
           if (rtcState === "connected") {
+            if (graceTimerRef.current !== undefined) {
+              clearTimeout(graceTimerRef.current);
+              graceTimerRef.current = undefined;
+            }
             dispatch({ type: "connected" });
-          } else if (
-            rtcState === "failed" ||
-            rtcState === "disconnected" ||
-            rtcState === "closed"
-          ) {
+          } else if (rtcState === "failed" || rtcState === "closed") {
             cleanupRefs();
             dispatch({ type: "reset" });
+          } else if (rtcState === "disconnected") {
+            if (graceTimerRef.current === undefined) {
+              graceTimerRef.current = setTimeout(() => {
+                graceTimerRef.current = undefined;
+                if (!mountedRef.current) return;
+                cleanupRefs();
+                dispatch({ type: "reset" });
+              }, ICE_DISCONNECT_GRACE_MS);
+            }
           }
         });
 
@@ -184,7 +258,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         const { reason, message } = classifyError(error);
         dispatch({ type: "error", reason, message });
       });
-  }, [transportFactory, controlFactory, cleanupRefs]);
+  }, [transportFactory, controlFactory, audioSinkFactory, cleanupRefs]);
 
   const retry = useCallback((): void => {
     cleanupRefs();
@@ -205,9 +279,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   return {
     phase: state.phase,
     busy:
-      state.phase === "requesting" ||
-      state.phase === "negotiating" ||
-      state.phase === "connected",
+      state.phase === "requesting" || state.phase === "negotiating" || state.phase === "connected",
     error:
       state.errorReason !== undefined && state.errorMessage !== undefined
         ? { reason: state.errorReason, message: state.errorMessage }

@@ -81,6 +81,32 @@ function stopTracks(stream: MediaStream): void {
   }
 }
 
+// Full-duplex voice capture constraints. In a realtime dialogue the assistant's audio plays through
+// the user's speakers and would otherwise feed back into the microphone — the model then hears itself,
+// producing false barge-ins and garbled, "choppy" dialogue. Enabling the browser's echo canceller,
+// noise suppression, and auto gain control is the standard fix; mono is sufficient for speech and
+// halves the uplink. Bare `{ audio: true }` (the previous behavior) negotiates none of these.
+const FULL_DUPLEX_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+};
+
+// Acquire the microphone with the full-duplex constraints, falling back to the unconstrained mic only
+// when a device/driver cannot satisfy them (OverconstrainedError) — so a constrained-but-capable
+// device gets echo cancellation while an inflexible one still connects rather than failing the session.
+async function acquireMicrophone(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: FULL_DUPLEX_AUDIO_CONSTRAINTS });
+  } catch (error) {
+    if (error instanceof Error && error.name === "OverconstrainedError") {
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    throw error;
+  }
+}
+
 // Non-trickle ICE gathering: wait until pc.iceGatheringState is "complete" before resolving with
 // the local description. A bounded fallback timeout (~2 s) avoids hanging forever if the browser
 // never fires the event (e.g. in a headless test environment with no network interfaces).
@@ -175,7 +201,7 @@ export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
 
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await acquireMicrophone();
       } catch (error) {
         throw new VoiceRtcError(
           classifyGetUserMediaError(error),
