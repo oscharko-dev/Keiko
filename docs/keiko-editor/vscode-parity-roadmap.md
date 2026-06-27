@@ -118,13 +118,15 @@ Effort: large. Risk: medium — `sessionCacheRef` is the save-correctness store 
 the `layoutRef` must always read current layout, and stale-response / save invariants must hold.
 Ships with its own e2e perf check.
 
-### 2.2 View-state and undo preserved across `editorSurfaceKey` remounts
+### 2.2 View-state and undo preserved across `editorSurfaceKey` remounts — ✅ delivered
 
-A theme switch, the language-provider id flip after the capabilities GET resolves, and crossing the
-large-file boundary currently change the surface's React `key` and fully **remount** Monaco — discarding
-the undo stack and scroll/folding. Apply theme re-registration and degraded options imperatively
-(`editor.updateOptions`, re-run the theme registration) instead of remounting, and seed view state from
-the host session cache. Effort: large.
+A theme switch and crossing the large-file boundary used to change the surface's React `key` and fully
+**remount** Monaco — discarding the undo stack and scroll/folding. Both are now applied imperatively on
+the SAME live editor: `editorSurfaceKey` no longer includes the theme variant or large-file mode, a
+theme toggle re-registers the theme via `setTheme` (keiko-editor `reapplyEditorTheme` /
+`useThemeReapply`), and the degraded options flip via the live `options` prop (`editor.updateOptions`).
+The provider-id flip still remounts, but it happens once on load before any edit, so no undo/view state
+is at risk. (A host-cache view-state seed for that remaining remount is a small follow-up.)
 
 ### 2.3 Quick-open and command palette — ✅ delivered
 
@@ -157,10 +159,12 @@ Copy / duplicate, drag-move within the tree, and a horizontally **scrollable** t
 the `+N` collapse). The scrollable strip touches `globals.css` and so must re-pin the
 [#1300 visual-regression proof](https://github.com/oscharko-dev/Keiko/issues/1300). Effort: medium–large.
 
-### 2.8 Bound the host session cache
+### 2.8 Bound the host session cache — ✅ delivered
 
-The per-window content cache (`sessionCacheRef`) grows unbounded as files are opened. Add an LRU cap by
-last access, never evicting a tab that is open, dirty, or mid-save. Effort: medium.
+The per-window content cache (`sessionCacheRef`) grew unbounded as files were opened. It is now a
+bounded `LruSessionCache` (cap 64, API-compatible with the `Map` it replaced) that evicts the
+least-recently-used entry on overflow but never the active file, a mid-save, or a dirty buffer — the
+background-tab save-correctness invariants.
 
 ---
 

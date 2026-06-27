@@ -143,6 +143,7 @@ import {
   readEditorHotExitSnapshot,
   writeEditorHotExitSnapshot,
 } from "./editorHotExitStore";
+import { LruSessionCache } from "./editorSessionCache";
 
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
   ssr: false,
@@ -160,6 +161,9 @@ const TEST_GENERATION_CONTEXT_BUDGET_BYTES = 65_536;
 // Content-free transport-failure message; the editor stays usable after a failed run.
 const TEST_GENERATION_FAILURE_MESSAGE =
   "Test generation could not be reached. The editor is still usable.";
+// Per-window session-cache cap (Issue 2.8). Open tabs + recently-visited files stay cached for instant
+// switching; the LRU evicts older clean/closed entries beyond this, never a saving/dirty/active one.
+const SESSION_CACHE_CAPACITY = 64;
 const COMPACT_TABS_ENTER_WIDTH_PX = 420;
 const COMPACT_TABS_EXIT_WIDTH_PX = 460;
 // Pre-GET bootstrap seed for `languageCapabilities` before the async `/api/editor/language/capabilities`
@@ -572,8 +576,18 @@ function EditorRuntimeWidget({
       patchAcceptButtonRef.current?.focus();
     }
   }, [agentPatchPending]);
-  const sessionCacheRef = useRef(new Map<string, EditorFileSessionSnapshot>());
   const activeSessionKeyRef = useRef<string | null>(null);
+  // Bounded LRU (Issue 2.8): evict the least-recently-used snapshot on overflow, but never the active
+  // file, a mid-save, or a dirty buffer — those are the background-tab save-correctness invariants.
+  const sessionCacheRef = useRef(
+    new LruSessionCache<EditorFileSessionSnapshot>(
+      SESSION_CACHE_CAPACITY,
+      (key, snapshot) =>
+        key === activeSessionKeyRef.current ||
+        snapshot.saveStatus === "saving" ||
+        (snapshot.fileModel !== null && isDocumentDirty(snapshot.fileModel)),
+    ),
+  );
   activeSessionKeyRef.current =
     root !== undefined && file !== undefined && root.length > 0 && file.length > 0
       ? documentSessionKey(root, file)
@@ -1379,7 +1393,13 @@ function EditorRuntimeWidget({
   // D4). Reuses the editor-tier label table; falls back to a generic noun when no language is known.
   const formattingLanguageLabel =
     completionLanguage === undefined ? "this file" : editorLanguageLabel(completionLanguage);
-  const editorSurfaceKey = `${themeVariant ?? "dark"}:${languageProvider?.id ?? "none"}:${largeFileMode}`;
+  // Issue 2.2: only the language-provider id keys the surface (a change there genuinely needs a
+  // remount to re-register providers, and it happens once on load before editing). The theme variant
+  // and large-file mode are NO LONGER part of the key — a theme toggle re-themes the live editor via
+  // `setTheme` (use-editor-handlers `useThemeReapply`), and crossing the large-file boundary flips the
+  // degraded options live via `editor.updateOptions` (the `options` prop), so neither discards the
+  // undo stack or scroll/fold/cursor view state.
+  const editorSurfaceKey = languageProvider?.id ?? "none";
 
   const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
   const saveUnavailable = !canSave;
