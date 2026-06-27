@@ -4,7 +4,6 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
-import type { WorkspaceCameraAnimationMode } from "../workspace-appearance";
 
 const WORKSPACE_STORAGE_KEY = "keiko.workspace.v4";
 
@@ -25,12 +24,12 @@ function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
 }
 
 function Harness({
-  cameraAnimationMode = "minimal",
+  cameraSmoothness = 0,
 }: {
-  readonly cameraAnimationMode?: WorkspaceCameraAnimationMode;
+  readonly cameraSmoothness?: number;
 }): ReactElement {
   const wsRef = useRef<HTMLDivElement>(null);
-  const ws = useWorkspace(wsRef, { cameraAnimationMode });
+  const ws = useWorkspace(wsRef, { cameraSmoothness });
   const files = ws.wins?.find((win) => win.id === "files-1");
 
   return (
@@ -193,7 +192,7 @@ describe("useWorkspace wheel zoom routing", () => {
         }) as unknown as MediaQueryList,
     );
     window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
-    render(<Harness cameraAnimationMode="smooth" />);
+    render(<Harness cameraSmoothness={100} />);
     mockWorkspaceRect();
 
     await waitFor(() => expect(screen.getByTestId("view-x")).toHaveTextContent("0"));
@@ -210,7 +209,7 @@ describe("useWorkspace wheel zoom routing", () => {
     expect(requestAnimationFrameSpy).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("view-x")).toHaveTextContent("0");
 
-    callbacks[1]?.(90);
+    callbacks[1]?.(140);
 
     await waitFor(() => {
       const x = Number(screen.getByTestId("view-x").textContent);
@@ -221,7 +220,7 @@ describe("useWorkspace wheel zoom routing", () => {
       expect(y).toBeGreaterThan(-40);
     });
 
-    callbacks[2]?.(180);
+    callbacks[2]?.(280);
 
     await waitFor(() => {
       expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
@@ -247,7 +246,7 @@ describe("useWorkspace wheel zoom routing", () => {
         }) as unknown as MediaQueryList,
     );
     window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
-    render(<Harness cameraAnimationMode="smooth" />);
+    render(<Harness cameraSmoothness={100} />);
     mockWorkspaceRect();
 
     await waitFor(() => expect(screen.getByTestId("view-x")).toHaveTextContent("0"));

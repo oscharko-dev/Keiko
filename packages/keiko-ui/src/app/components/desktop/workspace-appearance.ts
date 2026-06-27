@@ -4,7 +4,7 @@ export const WORKSPACE_BACKGROUND_BRIGHTNESS_KEY = "keiko.workspace.background.b
 export const WORKSPACE_GRID_STRENGTH_KEY = "keiko.workspace.grid.strength";
 export const FRAME_BORDER_STRENGTH_KEY = "keiko.frame.border.strength";
 export const FRAME_INNER_GLOW_STRENGTH_KEY = "keiko.frame.inner.glow.strength";
-export const WORKSPACE_CAMERA_ANIMATION_MODE_KEY = "keiko.workspace.camera.animationMode";
+export const WORKSPACE_CAMERA_SMOOTHNESS_KEY = "keiko.workspace.camera.smoothness";
 
 export const DEFAULT_WALLPAPER_ENABLED = false;
 
@@ -14,9 +14,9 @@ export const WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT = "keiko:workspace-background
 export const WORKSPACE_GRID_STRENGTH_EVENT = "keiko:workspace-grid-strength";
 export const FRAME_BORDER_STRENGTH_EVENT = "keiko:frame-border-strength";
 export const FRAME_INNER_GLOW_STRENGTH_EVENT = "keiko:frame-inner-glow-strength";
-export const WORKSPACE_CAMERA_ANIMATION_MODE_EVENT = "keiko:workspace-camera-animation-mode";
+export const WORKSPACE_CAMERA_SMOOTHNESS_EVENT = "keiko:workspace-camera-smoothness";
 
-export type WorkspaceCameraAnimationMode = "minimal" | "smooth";
+export const DEFAULT_WORKSPACE_CAMERA_SMOOTHNESS = 0;
 
 export function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -93,15 +93,17 @@ export function readFrameInnerGlowStrength(): number {
   }
 }
 
-export function readWorkspaceCameraAnimationMode(): WorkspaceCameraAnimationMode {
-  if (typeof window === "undefined") return "minimal";
+export function readWorkspaceCameraSmoothness(): number {
+  if (typeof window === "undefined") return DEFAULT_WORKSPACE_CAMERA_SMOOTHNESS;
   try {
-    if (typeof window.localStorage?.getItem !== "function") return "minimal";
-    return window.localStorage.getItem(WORKSPACE_CAMERA_ANIMATION_MODE_KEY) === "smooth"
-      ? "smooth"
-      : "minimal";
+    if (typeof window.localStorage?.getItem !== "function")
+      return DEFAULT_WORKSPACE_CAMERA_SMOOTHNESS;
+    const raw = window.localStorage.getItem(WORKSPACE_CAMERA_SMOOTHNESS_KEY);
+    if (raw !== null) return clampPercent(Number.parseInt(raw, 10));
+    const legacy = window.localStorage.getItem("keiko.workspace.camera.animationMode");
+    return legacy === "smooth" ? 100 : DEFAULT_WORKSPACE_CAMERA_SMOOTHNESS;
   } catch {
-    return "minimal";
+    return DEFAULT_WORKSPACE_CAMERA_SMOOTHNESS;
   }
 }
 

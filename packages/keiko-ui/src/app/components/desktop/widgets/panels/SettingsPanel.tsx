@@ -36,8 +36,8 @@ import {
   WORKSPACE_BACKGROUND_BRIGHTNESS_KEY,
   WORKSPACE_GRID_STRENGTH_EVENT,
   WORKSPACE_GRID_STRENGTH_KEY,
-  WORKSPACE_CAMERA_ANIMATION_MODE_EVENT,
-  WORKSPACE_CAMERA_ANIMATION_MODE_KEY,
+  WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
+  WORKSPACE_CAMERA_SMOOTHNESS_KEY,
   applyFrameBorderStrength,
   applyWorkspaceBackgroundBrightness,
   applyWorkspaceGridStrength,
@@ -46,9 +46,8 @@ import {
   readWallpaperEnabled,
   readWallpaperOpacity,
   readWorkspaceBackgroundBrightness,
-  readWorkspaceCameraAnimationMode,
+  readWorkspaceCameraSmoothness,
   readWorkspaceGridStrength,
-  type WorkspaceCameraAnimationMode,
 } from "../../workspace-appearance";
 
 function kindLabel(kind: ModelCapability["kind"]): string {
@@ -473,8 +472,7 @@ function GeneralPrefs(): ReactNode {
   const [wp, setWp] = useState<number>(readWallpaperOpacity);
   const [bgBrightness, setBgBrightness] = useState<number>(readWorkspaceBackgroundBrightness);
   const [gridStrength, setGridStrength] = useState<number>(readWorkspaceGridStrength);
-  const [cameraAnimationMode, setCameraAnimationMode] =
-    useState<WorkspaceCameraAnimationMode>(readWorkspaceCameraAnimationMode);
+  const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
   const [frameBorderStrength, setFrameBorderStrength] = useState<number>(readFrameBorderStrength);
   const [frameInnerGlowStrength, setFrameInnerGlowStrength] = useState<number>(
     readFrameInnerGlowStrength,
@@ -527,14 +525,14 @@ function GeneralPrefs(): ReactNode {
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      window.localStorage.setItem(WORKSPACE_CAMERA_ANIMATION_MODE_KEY, cameraAnimationMode);
+      window.localStorage.setItem(WORKSPACE_CAMERA_SMOOTHNESS_KEY, String(cameraSmoothness));
     } catch {
       /* ignore quota / private mode */
     }
     window.dispatchEvent(
-      new CustomEvent(WORKSPACE_CAMERA_ANIMATION_MODE_EVENT, { detail: cameraAnimationMode }),
+      new CustomEvent(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, { detail: cameraSmoothness }),
     );
-  }, [cameraAnimationMode]);
+  }, [cameraSmoothness]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -566,6 +564,9 @@ function GeneralPrefs(): ReactNode {
   const fill: CSSProperties = { ["--p"]: `${String(wp)}%` } as CSSProperties;
   const bgFill: CSSProperties = { ["--p"]: `${String(bgBrightness)}%` } as CSSProperties;
   const gridFill: CSSProperties = { ["--p"]: `${String(gridStrength)}%` } as CSSProperties;
+  const cameraSmoothnessFill: CSSProperties = {
+    ["--p"]: `${String(cameraSmoothness)}%`,
+  } as CSSProperties;
   const frameBorderFill: CSSProperties = {
     ["--p"]: `${String(frameBorderStrength)}%`,
   } as CSSProperties;
@@ -705,25 +706,26 @@ function GeneralPrefs(): ReactNode {
       </div>
       <div className="gpref">
         <div className="gpref-row">
-          <span className="gpref-label">{t("settings.workspace.cameraAnimation")}</span>
-          <div className="seg" role="group" aria-label={t("settings.workspace.cameraAnimation")}>
-            <button
-              type="button"
-              className={cameraAnimationMode === "minimal" ? "on" : ""}
-              aria-pressed={cameraAnimationMode === "minimal"}
-              onClick={() => setCameraAnimationMode("minimal")}
-            >
-              {t("settings.workspace.cameraAnimationMinimal")}
-            </button>
-            <button
-              type="button"
-              className={cameraAnimationMode === "smooth" ? "on" : ""}
-              aria-pressed={cameraAnimationMode === "smooth"}
-              onClick={() => setCameraAnimationMode("smooth")}
-            >
-              {t("settings.workspace.cameraAnimationSmooth")}
-            </button>
-          </div>
+          <label className="gpref-label" htmlFor="ws-camera-smoothness">
+            {t("settings.workspace.cameraAnimation")}
+          </label>
+          <span className="gpref-val mono">{cameraSmoothness}%</span>
+        </div>
+        <input
+          id="ws-camera-smoothness"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={cameraSmoothness}
+          onChange={(e) => setCameraSmoothness(Number.parseInt(e.target.value, 10))}
+          style={cameraSmoothnessFill}
+          aria-label={t("settings.workspace.cameraAnimation")}
+        />
+        <div className="gpref-scale">
+          <span>{t("settings.workspace.cameraAnimationMinimal")}</span>
+          <span>{t("settings.workspace.cameraAnimationSmooth")}</span>
         </div>
         <div className="gpref-help">{t("settings.workspace.cameraAnimationHelp")}</div>
       </div>

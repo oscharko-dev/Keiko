@@ -14,9 +14,8 @@ import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
 import {
-  readWorkspaceCameraAnimationMode,
-  WORKSPACE_CAMERA_ANIMATION_MODE_EVENT,
-  type WorkspaceCameraAnimationMode,
+  readWorkspaceCameraSmoothness,
+  WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
 } from "./workspace-appearance";
 import { CommandPalette, type Command } from "./modals/CommandPalette";
 import { GatewaySetupDialog } from "./modals/GatewaySetupDialog";
@@ -542,22 +541,21 @@ function AppShellInner(): ReactNode {
     },
     [chatForWindow, session],
   );
-  const [cameraAnimationMode, setCameraAnimationMode] =
-    useState<WorkspaceCameraAnimationMode>(readWorkspaceCameraAnimationMode);
+  const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
 
   useEffect(() => {
-    const onCameraAnimationMode = (event: Event): void => {
+    const onCameraSmoothness = (event: Event): void => {
       const detail = (event as CustomEvent<unknown>).detail;
-      setCameraAnimationMode(detail === "smooth" ? "smooth" : "minimal");
+      setCameraSmoothness(typeof detail === "number" ? detail : 0);
     };
-    window.addEventListener(WORKSPACE_CAMERA_ANIMATION_MODE_EVENT, onCameraAnimationMode);
+    window.addEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
     return () => {
-      window.removeEventListener(WORKSPACE_CAMERA_ANIMATION_MODE_EVENT, onCameraAnimationMode);
+      window.removeEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
     };
   }, []);
 
   const ws = useWorkspace(wsRef, {
-    cameraAnimationMode,
+    cameraSmoothness,
     onScopeBind: handleScopeBind,
     onScopeUnbind: handleScopeUnbind,
     onConnectorBind: handleConnectorBind,

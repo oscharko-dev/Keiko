@@ -35,7 +35,6 @@ import {
   makeSnapActions,
 } from "./workspaceActions";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
-import type { WorkspaceCameraAnimationMode } from "../workspace-appearance";
 
 export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
 export type { SnapZone } from "../windows/connectionUtils";
@@ -52,7 +51,8 @@ export const MIN_ZOOM = 0.3;
 export const MAX_ZOOM = 2.5;
 const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
-const CAMERA_ANIMATION_DURATION_MS = 180;
+const MIN_CAMERA_ANIMATION_DURATION_MS = 90;
+const MAX_CAMERA_ANIMATION_DURATION_MS = 280;
 
 function readView(): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
@@ -254,7 +254,7 @@ function windowIdFromWheelTarget(target: EventTarget | null): string | null {
 interface UsePanZoomArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
-  readonly cameraAnimationMode: WorkspaceCameraAnimationMode;
+  readonly cameraSmoothness: number;
   readonly winsRef: MutableRefObject<AppWindow[]>;
   readonly setView: Dispatch<SetStateAction<View>>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
@@ -329,7 +329,7 @@ function interpolateView(from: View, to: View, progress: number): View {
 function usePanZoom({
   wsRef,
   view,
-  cameraAnimationMode,
+  cameraSmoothness,
   winsRef,
   setView,
   setWins,
@@ -392,7 +392,7 @@ function usePanZoom({
   const animateView = useCallback(
     (target: View): void => {
       if (
-        cameraAnimationMode !== "smooth" ||
+        cameraSmoothness <= 0 ||
         prefersReducedCameraMotion() ||
         typeof window.requestAnimationFrame !== "function" ||
         typeof window.cancelAnimationFrame !== "function"
@@ -405,6 +405,11 @@ function usePanZoom({
         return;
       }
 
+      const durationMs =
+        MIN_CAMERA_ANIMATION_DURATION_MS +
+        ((MAX_CAMERA_ANIMATION_DURATION_MS - MIN_CAMERA_ANIMATION_DURATION_MS) *
+          Math.min(100, Math.max(0, cameraSmoothness))) /
+          100;
       const now =
         typeof performance !== "undefined" && typeof performance.now === "function"
           ? performance.now()
@@ -416,7 +421,7 @@ function usePanZoom({
               animationStartRef.current,
               animationTargetRef.current,
               easeCamera(
-                Math.min(1, (now - animationStartedAtRef.current) / CAMERA_ANIMATION_DURATION_MS),
+                Math.min(1, (now - animationStartedAtRef.current) / durationMs),
               ),
             );
       animationTargetRef.current = target;
@@ -426,7 +431,7 @@ function usePanZoom({
       const step = (time: number): void => {
         const progress = Math.min(
           1,
-          Math.max(0, (time - animationStartedAtRef.current) / CAMERA_ANIMATION_DURATION_MS),
+          Math.max(0, (time - animationStartedAtRef.current) / durationMs),
         );
         const eased = easeCamera(progress);
         if (progress >= 1) {
@@ -439,7 +444,7 @@ function usePanZoom({
       };
       animationFrameRef.current = window.requestAnimationFrame(step);
     },
-    [cameraAnimationMode, setView],
+    [cameraSmoothness, setView],
   );
 
   const queueView = useCallback(
@@ -1016,7 +1021,7 @@ function useConnectionPrune(
 // Release 0.2.0 — bind callbacks return whether the bind was ACCEPTED; `false` (source limit
 // reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
-  readonly cameraAnimationMode?: WorkspaceCameraAnimationMode | undefined;
+  readonly cameraSmoothness?: number | undefined;
   readonly onScopeBind?:
     ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>) | undefined;
   readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
@@ -1042,7 +1047,7 @@ export function useWorkspace(
   // `opts` object, which defaults to a fresh `{}` every render and would otherwise
   // re-create the whole api each frame and defeat memoization.
   const {
-    cameraAnimationMode = "minimal",
+    cameraSmoothness = 0,
     onScopeBind,
     onScopeUnbind,
     onConnectorBind,
@@ -1097,7 +1102,7 @@ export function useWorkspace(
   const { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect } = usePanZoom({
     wsRef,
     view,
-    cameraAnimationMode,
+    cameraSmoothness,
     winsRef,
     setView,
     setWins,
