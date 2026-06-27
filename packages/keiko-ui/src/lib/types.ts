@@ -324,6 +324,7 @@ export type {
   FilesCreateRequest,
   FilesRenameRequest,
   FilesDeleteRequest,
+  FilesCopyRequest,
   FilesMutationResponse,
   EditorDocumentSession,
   EditorDocumentVersion,

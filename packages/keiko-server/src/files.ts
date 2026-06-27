@@ -6,6 +6,7 @@ import type { IncomingMessage } from "node:http";
 import type { Dirent, Stats } from "node:fs";
 import { createHash } from "node:crypto";
 import {
+  cp,
   lstat,
   mkdir,
   opendir,
@@ -1536,11 +1537,42 @@ export interface FilesMutationResponse {
   readonly kind: FilesEntryKind;
 }
 
-function isErrnoException(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" && error !== null && (error as NodeJS.ErrnoException).code === code
-  );
-}
+// errno → client-safe (status, code, message), one row per outcome. fs.cp reports collisions and
+// shape mismatches with bespoke ERR_FS_CP_* codes, so each row groups every code that should map to
+// the same response. A flat table keeps mapNodeFsError a single lookup (no branch-per-code) and well
+// under the complexity budget. None of these messages echoes a path or the raw OS string.
+const FS_ERRNO_TABLE: readonly (readonly [readonly string[], number, string, string])[] = [
+  // `fs.cp` reports a no-overwrite collision with its own code, not the bare EEXIST.
+  [
+    ["EEXIST", "ENOTEMPTY", "ERR_FS_CP_EEXIST"],
+    409,
+    "ALREADY_EXISTS",
+    "An entry with that name already exists.",
+  ],
+  [["ENOENT"], 404, "NOT_FOUND", "The requested path was not found."],
+  // `fs.cp` shape-mismatch / invalid-argument codes (e.g. copying a dir over a file) → bad request.
+  [
+    [
+      "ERR_FS_CP_DIR_TO_NON_DIR",
+      "ERR_FS_CP_NON_DIR_TO_DIR",
+      "ERR_FS_CP_EINVAL",
+      "ERR_FS_CP_FIFO_PIPE_OR_SOCKET",
+    ],
+    400,
+    "BAD_PATH",
+    "This entry cannot be copied here.",
+  ],
+  [["EACCES", "EPERM"], 403, "DENIED", DENIED_MESSAGE],
+  [["EXDEV"], 400, "CROSS_DEVICE", "This move crosses filesystems and is not supported here."],
+  [["ENOTDIR"], 400, "NOT_DIRECTORY", "Part of the path is not a folder."],
+  [["EISDIR"], 400, "IS_DIRECTORY", "The target is a folder."],
+];
+
+const FS_ERRNO_LOOKUP: ReadonlyMap<string, readonly [number, string, string]> = new Map(
+  FS_ERRNO_TABLE.flatMap(([codes, status, code, message]) =>
+    codes.map((errno) => [errno, [status, code, message] as const] as const),
+  ),
+);
 
 // Translate a Node fs errno into a FilesError without ever echoing the absolute path or the raw OS
 // message back to the client — mirroring the non-probeable DENIED_MESSAGE discipline. A FilesError is
@@ -1548,27 +1580,11 @@ function isErrnoException(error: unknown, code: string): boolean {
 // a path embedded in the OS message) cannot leak through the response body.
 function mapNodeFsError(error: unknown): FilesError {
   if (error instanceof FilesError) return error;
-  if (isErrnoException(error, "EEXIST") || isErrnoException(error, "ENOTEMPTY")) {
-    return new FilesError(409, "ALREADY_EXISTS", "An entry with that name already exists.");
-  }
-  if (isErrnoException(error, "ENOENT")) {
-    return new FilesError(404, "NOT_FOUND", "The requested path was not found.");
-  }
-  if (isErrnoException(error, "EACCES") || isErrnoException(error, "EPERM")) {
-    return new FilesError(403, "DENIED", DENIED_MESSAGE);
-  }
-  if (isErrnoException(error, "EXDEV")) {
-    return new FilesError(
-      400,
-      "CROSS_DEVICE",
-      "This move crosses filesystems and is not supported here.",
-    );
-  }
-  if (isErrnoException(error, "ENOTDIR")) {
-    return new FilesError(400, "NOT_DIRECTORY", "Part of the path is not a folder.");
-  }
-  if (isErrnoException(error, "EISDIR")) {
-    return new FilesError(400, "IS_DIRECTORY", "The target is a folder.");
+  const code =
+    typeof error === "object" && error !== null ? (error as NodeJS.ErrnoException).code : undefined;
+  const mapped = code !== undefined ? FS_ERRNO_LOOKUP.get(code) : undefined;
+  if (mapped !== undefined) {
+    return new FilesError(mapped[0], mapped[1], mapped[2]);
   }
   return new FilesError(500, "IO_ERROR", "The file operation could not be completed.");
 }
@@ -1711,6 +1727,10 @@ export async function renameFilesEntry(args: {
   readonly rootInput: string | null;
   readonly pathInput: string | null;
   readonly newPathInput: string | null;
+  // Issue 2.6: optional version-aware precondition. When supplied (only the editor/agent that read the
+  // file holds it; the metadata-only tree does not), the rename is rejected with STALE_SESSION (409) if
+  // the on-disk file changed since that revision — so a move never races a concurrent edit.
+  readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
 }): Promise<FilesMutationResponse> {
   const redactor = args.redactor ?? staticFilesMetadataRedactor;
@@ -1720,6 +1740,9 @@ export async function renameFilesEntry(args: {
   }
   if (source.symlink) {
     throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be renamed here.");
+  }
+  if (args.baseVersion !== undefined && source.stats.isFile()) {
+    await assertSessionNotStale(source, args.baseVersion);
   }
   const kind: FilesEntryKind = source.stats.isDirectory() ? "directory" : "file";
   const target = await resolveCreationTarget(
@@ -1753,6 +1776,9 @@ export async function deleteFilesEntry(args: {
   readonly store: UiStore;
   readonly rootInput: string | null;
   readonly pathInput: string | null;
+  // Issue 2.6: optional version-aware precondition (see renameFilesEntry) — rejects the delete with
+  // STALE_SESSION (409) if the on-disk file changed since this revision.
+  readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
 }): Promise<FilesMutationResponse> {
   const target = await resolveInsideRoot(
@@ -1767,6 +1793,9 @@ export async function deleteFilesEntry(args: {
   if (target.symlink) {
     throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be deleted here.");
   }
+  if (args.baseVersion !== undefined && target.stats.isFile()) {
+    await assertSessionNotStale(target, args.baseVersion);
+  }
   const kind: FilesEntryKind = target.stats.isDirectory() ? "directory" : "file";
   // `recursive` removes a non-empty folder, matching editor expectations. Containment + the deny-list
   // bound the blast radius to inside the selected root and away from .git/node_modules/secrets, and
@@ -1777,6 +1806,61 @@ export async function deleteFilesEntry(args: {
     throw mapNodeFsError(error);
   }
   return { root: target.root, path: target.relativePath, kind };
+}
+
+export async function copyFilesEntry(args: {
+  readonly store: UiStore;
+  readonly rootInput: string | null;
+  readonly sourcePathInput: string | null;
+  readonly destPathInput: string | null;
+  readonly redactor?: FilesMetadataRedactor | undefined;
+}): Promise<FilesMutationResponse> {
+  const redactor = args.redactor ?? staticFilesMetadataRedactor;
+  // Source must exist, be contained, and not be denied or a symlink (we never dereference one).
+  const source = await resolveInsideRoot(
+    args.store,
+    args.rootInput,
+    args.sourcePathInput,
+    redactor,
+  );
+  if (source.relativePath.length === 0) {
+    throw new FilesError(400, "BAD_PATH", "The root folder cannot be copied.");
+  }
+  if (source.symlink) {
+    throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be copied here.");
+  }
+  const kind: FilesEntryKind = source.stats.isDirectory() ? "directory" : "file";
+  // Destination resolves like a create target: parent must exist + be contained + non-denied.
+  const target = await resolveCreationTarget(
+    args.store,
+    args.rootInput,
+    args.destPathInput,
+    redactor,
+  );
+  if (
+    target.relativePath === source.relativePath ||
+    target.relativePath.startsWith(`${source.relativePath}/`)
+  ) {
+    throw new FilesError(400, "BAD_PATH", "A folder cannot be copied into itself.");
+  }
+  try {
+    // `force:false` + `errorOnExist` refuse to overwrite; `dereference:false` copies symlinks as
+    // links (never follows one out of the root). Contents stay inside the root throughout.
+    await cp(source.path, target.path, {
+      recursive: kind === "directory",
+      force: false,
+      errorOnExist: true,
+      dereference: false,
+    });
+  } catch (error) {
+    throw mapNodeFsError(error);
+  }
+  return {
+    root: target.root,
+    path: target.relativePath,
+    previousPath: source.relativePath,
+    kind,
+  };
 }
 
 export async function readFilesPreview(
@@ -1969,6 +2053,19 @@ export async function handleFilesCreate(
   });
 }
 
+// Parse an optional `baseVersion` from a mutation body: undefined when absent, the parsed version when
+// valid, or a 400 RouteResult when present-but-malformed (Issue 2.6).
+function parseOptionalBaseVersion(
+  body: Record<string, unknown>,
+): { readonly version: EditorDocumentVersion | undefined } | RouteResult {
+  if (body.baseVersion === undefined) return { version: undefined };
+  const parsed = parseEditorDocumentVersion(body.baseVersion);
+  if (!parsed.ok) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "baseVersion is not a valid version.") };
+  }
+  return { version: parsed.value };
+}
+
 export async function handleFilesRename(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1985,6 +2082,8 @@ export async function handleFilesRename(
         body: errorBody("BAD_REQUEST", "root, path, and newPath are required to rename an entry."),
       };
     }
+    const baseVersion = parseOptionalBaseVersion(body);
+    if (isRouteResult(baseVersion)) return baseVersion;
     return {
       status: 200,
       body: await renameFilesEntry({
@@ -1992,6 +2091,7 @@ export async function handleFilesRename(
         rootInput,
         pathInput,
         newPathInput,
+        baseVersion: baseVersion.version,
         redactor: deps.redactor,
       }),
     };
@@ -2013,12 +2113,47 @@ export async function handleFilesDelete(
         body: errorBody("BAD_REQUEST", "root and path are required to delete an entry."),
       };
     }
+    const baseVersion = parseOptionalBaseVersion(body);
+    if (isRouteResult(baseVersion)) return baseVersion;
     return {
       status: 200,
       body: await deleteFilesEntry({
         store: deps.store,
         rootInput,
         pathInput,
+        baseVersion: baseVersion.version,
+        redactor: deps.redactor,
+      }),
+    };
+  });
+}
+
+export async function handleFilesCopy(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => {
+    const body = await readJsonObject(ctx.req, MAX_FILES_MUTATION_BODY_BYTES);
+    if (isRouteResult(body)) return body;
+    const rootInput = typeof body.root === "string" ? body.root : null;
+    const sourcePathInput = typeof body.sourcePath === "string" ? body.sourcePath : null;
+    const destPathInput = typeof body.destPath === "string" ? body.destPath : null;
+    if (rootInput === null || sourcePathInput === null || destPathInput === null) {
+      return {
+        status: 400,
+        body: errorBody(
+          "BAD_REQUEST",
+          "root, sourcePath, and destPath are required to copy an entry.",
+        ),
+      };
+    }
+    return {
+      status: 201,
+      body: await copyFilesEntry({
+        store: deps.store,
+        rootInput,
+        sourcePathInput,
+        destPathInput,
         redactor: deps.redactor,
       }),
     };

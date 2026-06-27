@@ -1140,12 +1140,26 @@ export interface FilesRenameRequest {
   readonly path: string;
   // Root-relative POSIX destination path; its parent must exist and it must not already exist.
   readonly newPath: string;
+  // Issue 2.6: optional version-aware precondition for a FILE move — the BFF rejects with
+  // STALE_SESSION (409) if the on-disk file changed since this revision. Only a caller holding an open
+  // buffer (editor/agent) has it; the metadata-only tree omits it.
+  readonly baseVersion?: EditorDocumentVersion;
 }
 
 export interface FilesDeleteRequest {
   readonly root: string;
   // Root-relative POSIX path of the entry to delete. A directory is removed recursively.
   readonly path: string;
+  // Issue 2.6: optional version-aware precondition for a FILE delete (see FilesRenameRequest).
+  readonly baseVersion?: EditorDocumentVersion;
+}
+
+export interface FilesCopyRequest {
+  readonly root: string;
+  // Root-relative POSIX path of the existing entry to copy (a directory is copied recursively).
+  readonly sourcePath: string;
+  // Root-relative POSIX destination path; its parent must exist and it must not already exist.
+  readonly destPath: string;
 }
 
 // Shared response for create / rename / delete: the affected entry's canonical root-relative path

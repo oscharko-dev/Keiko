@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  copyFilesEntry,
   createFilesEntry,
   deleteFilesEntry,
   fetchFilesPreview,
@@ -33,6 +34,7 @@ vi.mock("../../../../../lib/api", async () => {
     createFilesEntry: vi.fn(),
     renameFilesEntry: vi.fn(),
     deleteFilesEntry: vi.fn(),
+    copyFilesEntry: vi.fn(),
     updateChatConnectedScopes: vi.fn(),
   };
 });
@@ -1131,5 +1133,62 @@ describe("FilesWidget file operations", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("already exists");
     expect(screen.getByLabelText("New file name")).toBeInTheDocument();
+  });
+
+  it("duplicates a file from the context menu with a collision-free copy name", async () => {
+    vi.mocked(copyFilesEntry).mockResolvedValue({
+      root: "/repo",
+      path: "app copy.ts",
+      kind: "file",
+    });
+    const onFilesMutated = vi.fn();
+    render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
+    fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Duplicate" }));
+
+    await waitFor(() =>
+      expect(copyFilesEntry).toHaveBeenCalledWith({
+        root: "/repo",
+        sourcePath: "app.ts",
+        destPath: "app copy.ts",
+      }),
+    );
+    // A copy adds a new entry, so the host treats it like a create (no open tab to re-home).
+    expect(onFilesMutated).toHaveBeenCalledWith({
+      op: "create",
+      mutation: { root: "/repo", path: "app copy.ts", kind: "file" },
+    });
+  });
+
+  it("moves a file into a folder when dropped on its row (drag-move = rename)", async () => {
+    vi.mocked(renameFilesEntry).mockResolvedValue({
+      root: "/repo",
+      path: "src/app.ts",
+      previousPath: "app.ts",
+      kind: "file",
+    });
+    const onFilesMutated = vi.fn();
+    render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
+    await screen.findByText("app.ts");
+
+    const source = screen.getByRole("treeitem", { name: /app\.ts/ });
+    const target = screen.getByRole("treeitem", { name: /src/ });
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: "", dropEffect: "" };
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(target, { dataTransfer });
+    fireEvent.drop(target, { dataTransfer });
+
+    await waitFor(() =>
+      expect(renameFilesEntry).toHaveBeenCalledWith({
+        root: "/repo",
+        path: "app.ts",
+        newPath: "src/app.ts",
+      }),
+    );
+    expect(onFilesMutated).toHaveBeenCalledWith({
+      op: "rename",
+      mutation: expect.objectContaining({ path: "src/app.ts", previousPath: "app.ts" }),
+    });
   });
 });

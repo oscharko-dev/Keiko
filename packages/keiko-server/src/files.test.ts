@@ -10,6 +10,7 @@ import {
   buildRedactor,
   createFilesEntry,
   createInMemoryUiStore,
+  copyFilesEntry,
   deleteFilesEntry,
   handleFilesContent,
   listFilesDirectories,
@@ -1252,5 +1253,108 @@ describe("desktop files mutations (create / rename / delete)", () => {
     await expect(
       deleteFilesEntry({ store, rootInput: root, pathInput: "src/ghost.ts" }),
     ).rejects.toMatchObject({ status: 404, code: "NOT_FOUND" });
+  });
+
+  it("copies a file and a directory, never overwriting", async () => {
+    const file = await copyFilesEntry({
+      store,
+      rootInput: root,
+      sourcePathInput: "src/app.ts",
+      destPathInput: "src/app-copy.ts",
+    });
+    expect(file).toMatchObject({
+      path: "src/app-copy.ts",
+      previousPath: "src/app.ts",
+      kind: "file",
+    });
+    expect(await readFile(join(root, "src", "app-copy.ts"), "utf8")).toBe("export const a = 1;\n");
+    // Original is untouched.
+    expect(await readFile(join(root, "src", "app.ts"), "utf8")).toBe("export const a = 1;\n");
+
+    const dir = await copyFilesEntry({
+      store,
+      rootInput: root,
+      sourcePathInput: "src",
+      destPathInput: "src-copy",
+    });
+    expect(dir).toMatchObject({ path: "src-copy", kind: "directory" });
+    expect(await readFile(join(root, "src-copy", "app.ts"), "utf8")).toBe("export const a = 1;\n");
+
+    // No overwrite.
+    await expect(
+      copyFilesEntry({
+        store,
+        rootInput: root,
+        sourcePathInput: "src/app.ts",
+        destPathInput: "src/app-copy.ts",
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "ALREADY_EXISTS" });
+  });
+
+  it("deny-checks both ends of a copy, rejects symlinks and copy-into-itself", async () => {
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "config"), "[core]\n");
+    await expect(
+      copyFilesEntry({
+        store,
+        rootInput: root,
+        sourcePathInput: ".git/config",
+        destPathInput: "src/config",
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "DENIED" });
+    await expect(
+      copyFilesEntry({
+        store,
+        rootInput: root,
+        sourcePathInput: "src/app.ts",
+        destPathInput: "node_modules/app.ts",
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "DENIED" });
+    await symlink(join(root, "src"), join(root, "link"), "dir");
+    await expect(
+      copyFilesEntry({
+        store,
+        rootInput: root,
+        sourcePathInput: "link",
+        destPathInput: "link-copy",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "UNSUPPORTED" });
+    await expect(
+      copyFilesEntry({
+        store,
+        rootInput: root,
+        sourcePathInput: "src",
+        destPathInput: "src/inner",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "BAD_PATH" });
+  });
+
+  it("enforces baseVersion on a file rename/delete (optimistic concurrency)", async () => {
+    const opened = await readFilesContent(store, root, "src/app.ts");
+    const version = opened.session.version;
+    // Matching version → the rename proceeds.
+    const renamed = await renameFilesEntry({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      newPathInput: "src/renamed.ts",
+      baseVersion: version,
+    });
+    expect(renamed.path).toBe("src/renamed.ts");
+
+    // The file then changes on disk; a delete carrying the now-stale version is rejected.
+    await writeFile(join(root, "src", "renamed.ts"), "export const a = 999;\n");
+    await expect(
+      deleteFilesEntry({
+        store,
+        rootInput: root,
+        pathInput: "src/renamed.ts",
+        baseVersion: version,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "STALE_SESSION" });
+
+    // Without a baseVersion the delete is unconditional (the metadata-only tree path).
+    const deleted = await deleteFilesEntry({ store, rootInput: root, pathInput: "src/renamed.ts" });
+    expect(deleted.path).toBe("src/renamed.ts");
   });
 });
