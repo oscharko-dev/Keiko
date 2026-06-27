@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
-import { handleVoiceSpeak } from "./voice-handlers.js";
+import { handleVoiceSpeak, handleVoiceSpeakStream } from "./voice-handlers.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import type { RouteContext } from "./routes.js";
+import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 import type {
   GatewayConfig,
   TextToSpeechOutcome,
   TextToSpeechRequest,
+  TextToSpeechStreamOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
 
 const PROVIDER_SECRET = "voice-tts-secret-token-1234567890";
@@ -358,5 +359,119 @@ describe("POST /api/voice/speak — provider failure mapping (AC4)", () => {
     const serialized = JSON.stringify(result.body);
     expect(serialized).not.toContain(PROVIDER_SECRET);
     expect(serialized).not.toContain(PROVIDER_BASE_URL);
+  });
+});
+
+// A minimal ServerResponse fake capturing the streaming write path.
+class FakeRes {
+  statusCode: number | undefined;
+  headers: Record<string, string> | undefined;
+  readonly chunks: Uint8Array[] = [];
+  ended = false;
+  destroyed = false;
+  writeHead(status: number, headers?: Record<string, string>): this {
+    this.statusCode = status;
+    this.headers = headers;
+    return this;
+  }
+  write(chunk: Uint8Array): boolean {
+    this.chunks.push(chunk);
+    return true;
+  }
+  end(): void {
+    this.ended = true;
+  }
+  on(): this {
+    return this;
+  }
+  destroy(): void {
+    this.destroyed = true;
+  }
+}
+
+function streamOf(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
+  let i = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller): void {
+      const chunk = chunks[i];
+      if (chunk !== undefined) {
+        i += 1;
+        controller.enqueue(chunk);
+      } else {
+        controller.close();
+      }
+    },
+  });
+}
+
+function streamCtx(body: unknown, res: FakeRes): RouteContext {
+  return {
+    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
+    res: res as unknown as RouteContext["res"],
+    params: {},
+    url: new URL("http://127.0.0.1/api/voice/speak/stream"),
+  };
+}
+
+function streamOk(
+  body: ReadableStream<Uint8Array>,
+  mimeType = "audio/pcm",
+): TextToSpeechStreamOutcome {
+  return { ok: true, value: { body, mimeType } };
+}
+
+describe("POST /api/voice/speak/stream", () => {
+  it("requests pcm, streams the provider bytes with audio/pcm, and returns STREAMING", async () => {
+    const seen: TextToSpeechRequest[] = [];
+    const res = new FakeRes();
+    const deps = depsWith({
+      config: SPEECH_OUTPUT_CONFIG,
+      configPresent: true,
+      voiceSpeechStreamRequest: (
+        request: TextToSpeechRequest,
+      ): Promise<TextToSpeechStreamOutcome> => {
+        seen.push(request);
+        return Promise.resolve(
+          streamOk(streamOf([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])])),
+        );
+      },
+    });
+
+    const outcome = await handleVoiceSpeakStream(streamCtx({ text: "spoken answer" }, res), deps);
+    expect(outcome).toBe(STREAMING);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["Content-Type"]).toBe("audio/pcm");
+    expect(Buffer.concat(res.chunks.map((c) => Buffer.from(c)))).toEqual(
+      Buffer.from([1, 2, 3, 4, 5]),
+    );
+    expect(res.ended).toBe(true);
+    // The streaming path requests raw pcm (fastest to first audio).
+    expect(seen[0]?.responseFormat).toBe("pcm");
+    expect(seen[0]?.signal).toBeDefined();
+  });
+
+  it("returns a coded error RouteResult BEFORE any headers when synthesis fails", async () => {
+    const res = new FakeRes();
+    const deps = depsWith({
+      config: SPEECH_OUTPUT_CONFIG,
+      configPresent: true,
+      voiceSpeechStreamRequest: (): Promise<TextToSpeechStreamOutcome> =>
+        Promise.resolve({ ok: false, kind: "rate-limited" }),
+    });
+    const outcome = await handleVoiceSpeakStream(streamCtx({ text: "spoken answer" }, res), deps);
+    expect(outcome).not.toBe(STREAMING);
+    expect((outcome as RouteResult).status).toBe(429);
+    expect(res.statusCode).toBeUndefined(); // never committed a 200 + audio headers
+    expect(res.ended).toBe(false);
+  });
+
+  it("returns 503 VOICE_UNAVAILABLE for an STT-only deployment (no streaming)", async () => {
+    const res = new FakeRes();
+    const outcome = await handleVoiceSpeakStream(
+      streamCtx({ text: "x" }, res),
+      depsWith({ config: STT_ONLY_CONFIG, configPresent: true }),
+    );
+    expect((outcome as RouteResult).status).toBe(503);
+    expect(res.statusCode).toBeUndefined();
   });
 });

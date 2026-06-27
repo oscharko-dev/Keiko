@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { MAX_SPEECH_AUDIO_BYTES, requestTextToSpeech } from "./text-to-speech-adapter.js";
+import {
+  MAX_SPEECH_AUDIO_BYTES,
+  requestTextToSpeech,
+  requestTextToSpeechStream,
+} from "./text-to-speech-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
 
 // A recognizable audio byte marker so a test can assert the adapter returns the provider body verbatim
@@ -329,5 +333,69 @@ describe("requestTextToSpeech", () => {
     });
     expect(seenUrl).not.toContain(SECRET_API_KEY);
     expect(seenBody).not.toContain(SECRET_API_KEY);
+  });
+});
+
+async function collect(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const parts: Uint8Array[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+  }
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+
+describe("requestTextToSpeechStream", () => {
+  it("returns the provider body as a byte stream with the resolved mime type", async () => {
+    const fetchImpl = mockFetch(() => audioResponse(AUDIO_BYTES, "audio/pcm"));
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      responseFormat: "pcm",
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.mimeType).toBe("audio/pcm");
+    expect(new TextDecoder().decode(await collect(outcome.value.body))).toBe(AUDIO_MARKER);
+  });
+
+  it("maps a provider error status to a coded kind without streaming a body", async () => {
+    const fetchImpl = mockFetch(() => new Response("provider error page", { status: 429 }));
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      fetchImpl,
+    });
+    expect(outcome).toEqual({ ok: false, kind: "rate-limited" });
+  });
+
+  it("errors the stream once the audio exceeds the size cap", async () => {
+    const fetchImpl = mockFetch(() => audioResponse(new Uint8Array(100), "audio/pcm"));
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      responseFormat: "pcm",
+      maxAudioBytes: 10,
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    await expect(collect(outcome.value.body)).rejects.toThrow();
   });
 });

@@ -13,6 +13,10 @@ import {
   type AssistantSpeechAudioElement,
   type UseAssistantSpeechOptions,
 } from "./useAssistantSpeech";
+import type {
+  AssistantSpeechStreamHandlers,
+  AssistantSpeechStreamingSink,
+} from "./assistant-speech-streaming";
 
 // Issue #1559 persona routing is proved against the REAL production synthesize path: the BFF client
 // `synthesizeAssistantSpeech` is mocked so the hook's own `makeDefaultSynthesize(persona)` closure runs
@@ -453,5 +457,68 @@ describe("useAssistantSpeech — Issue #1559 persona routing", () => {
       { text: "Turn text.", persona: "neutral" },
       expect.any(AbortSignal),
     );
+  });
+});
+
+function makeFakeStreamingSink(engage: boolean): {
+  sink: AssistantSpeechStreamingSink;
+  handlers: () => AssistantSpeechStreamHandlers | undefined;
+  stops: () => number;
+} {
+  let captured: AssistantSpeechStreamHandlers | undefined;
+  let stops = 0;
+  return {
+    sink: {
+      play: (_input, _signal, handlers): Promise<boolean> => {
+        captured = handlers;
+        return Promise.resolve(engage);
+      },
+      stop: (): void => {
+        stops += 1;
+      },
+      positionMs: (): number | undefined => undefined,
+    },
+    handlers: () => captured,
+    stops: () => stops,
+  };
+}
+
+describe("useAssistantSpeech — streamed PCM playback", () => {
+  it("uses the streaming sink when it engages and drives the playback lifecycle (no buffered work)", async () => {
+    const fake = makeFakeStreamingSink(true);
+    const h = harness({ createStreamingSink: () => fake.sink });
+    const { result } = renderHook(() => useAssistantSpeech(h.options));
+    await flush();
+    // Streaming took over — the buffered synthesize + audio element are never touched.
+    expect(h.synthCalls).toHaveLength(0);
+    expect(h.audios).toHaveLength(0);
+    expect(result.current.snapshot.phase).toBe("preparing");
+
+    act(() => fake.handlers()?.onStart());
+    expect(result.current.snapshot.phase).toBe("speaking");
+    act(() => fake.handlers()?.onEnded());
+    expect(result.current.snapshot.phase).toBe("complete");
+  });
+
+  it("falls back to the buffered path when the streaming sink does not engage", async () => {
+    const fake = makeFakeStreamingSink(false);
+    const h = harness({ createStreamingSink: () => fake.sink });
+    const { result } = renderHook(() => useAssistantSpeech(h.options));
+    await flush();
+    await flush();
+    expect(h.synthCalls).toHaveLength(1);
+    expect(h.audios).toHaveLength(1);
+    act(() => h.audios[0]?.firePlaying());
+    expect(result.current.snapshot.phase).toBe("speaking");
+  });
+
+  it("flushes the streaming sink on stop (sub-frame barge-in)", async () => {
+    const fake = makeFakeStreamingSink(true);
+    const h = harness({ createStreamingSink: () => fake.sink });
+    const { result } = renderHook(() => useAssistantSpeech(h.options));
+    await flush();
+    act(() => fake.handlers()?.onStart());
+    act(() => result.current.stop());
+    expect(fake.stops()).toBeGreaterThanOrEqual(1);
   });
 });

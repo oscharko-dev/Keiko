@@ -276,3 +276,77 @@ export async function requestTextToSpeech(
   }
   return decodeSuccess(dispatched, built);
 }
+
+export interface TextToSpeechStreamSuccess {
+  // The synthesized audio bytes as they arrive from the provider, capped incrementally so a hostile or
+  // misconfigured endpoint cannot stream an unbounded body. The BFF pipes these straight to the browser
+  // (no whole-clip buffering, no base64 envelope) for start-on-first-chunk playback.
+  readonly body: ReadableStream<Uint8Array>;
+  readonly mimeType: string;
+}
+
+export type TextToSpeechStreamOutcome =
+  | { readonly ok: true; readonly value: TextToSpeechStreamSuccess }
+  | { readonly ok: false; readonly kind: TextToSpeechErrorKind };
+
+// Wraps the provider body in a passthrough that aborts once `maxBytes` is exceeded, so the streamed
+// response inherits the same size ceiling as the buffered path without ever holding the whole clip.
+function boundBodyStream(
+  source: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  let total = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller): Promise<void> {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel();
+          controller.error(new Error("synthesized audio exceeded the size limit"));
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason): void {
+      void reader.cancel(reason);
+    },
+  });
+}
+
+// Streaming variant of requestTextToSpeech: returns the provider audio as a bounded byte stream instead
+// of a fully-buffered clip, so the BFF can forward it chunk-by-chunk and the browser can start playback
+// on the first chunk. Same provider contract, auth, egress seam, error coding, and size cap; only the
+// delivery shape differs. Raw audio is never persisted here.
+export async function requestTextToSpeechStream(
+  request: TextToSpeechRequest,
+): Promise<TextToSpeechStreamOutcome> {
+  const built = buildRequest(request);
+  const dispatched = await dispatch(built, request.fetchImpl, request.egress);
+  if (typeof dispatched === "string") {
+    return { ok: false, kind: dispatched };
+  }
+  if (!dispatched.ok) {
+    const kind = classifyStatus(dispatched.status) ?? "transport";
+    await discardBody(dispatched);
+    return { ok: false, kind };
+  }
+  if (dispatched.body === null) {
+    return { ok: false, kind: "empty-audio" };
+  }
+  return {
+    ok: true,
+    value: {
+      body: boundBodyStream(dispatched.body, built.maxAudioBytes),
+      mimeType: resolveMimeType(dispatched, built.responseFormat),
+    },
+  };
+}

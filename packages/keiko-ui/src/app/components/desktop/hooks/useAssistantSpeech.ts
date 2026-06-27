@@ -21,6 +21,10 @@ import { ApiError, synthesizeAssistantSpeech, type VoiceSpeechResult } from "@/l
 import type { VoiceTurnManagerEngine } from "./voice-turn-manager";
 import { useVoicePlayback, type VoicePlaybackBinding } from "./useVoicePlayback";
 import type { VoicePlaybackFailureKind } from "./voice-playback-state";
+import {
+  createBrowserAssistantSpeechStreamingSink,
+  type AssistantSpeechStreamingSink,
+} from "./assistant-speech-streaming";
 
 // The minimal audio-element surface the engine drives. `HTMLAudioElement` satisfies it structurally,
 // so production passes `new Audio()`; tests inject a controllable fake without a real media element.
@@ -62,6 +66,10 @@ export interface UseAssistantSpeechOptions {
   readonly createAudio?: (() => AssistantSpeechAudioElement) | undefined;
   readonly createObjectUrl?: ((blob: Blob) => string) | undefined;
   readonly revokeObjectUrl?: ((url: string) => void) | undefined;
+  // Optional streamed-PCM playback sink (AudioWorklet). When it engages, audio starts on the first
+  // chunk and barge-in is sub-frame; when it is unavailable (no WebAudio, e.g. under test) or fails up
+  // front, the engine falls back to the buffered <audio> path below. Tests inject a fake sink.
+  readonly createStreamingSink?: (() => AssistantSpeechStreamingSink | undefined) | undefined;
 }
 
 // Builds the default BFF synthesis seam bound to the current persona. A persona is included in the
@@ -149,12 +157,29 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
   const handledRef = useRef<HandledTurn>({ id: undefined, nonce: 0 });
   const [replayNonce, setReplayNonce] = useState(0);
 
+  // Created once: the streamed-PCM sink, or undefined when WebAudio/AudioWorklet is unavailable (e.g.
+  // under test) — in which case the engine always uses the buffered path below.
+  const streamingSinkInitRef = useRef(false);
+  const streamingSinkRef = useRef<AssistantSpeechStreamingSink | undefined>(undefined);
+  if (!streamingSinkInitRef.current) {
+    streamingSinkInitRef.current = true;
+    streamingSinkRef.current = (
+      options.createStreamingSink ?? createBrowserAssistantSpeechStreamingSink
+    )();
+  }
+  // Read the current persona inside the engine effect without making it an effect dependency (mirrors
+  // the synthesizeRef pattern, so a persona change never re-triggers a turn that handledRef already owns).
+  const personaRef = useRef(persona);
+  personaRef.current = persona;
+
   // Releases the audio element, revokes the object URL, and aborts any pending synthesis fetch. Safe to
   // call repeatedly: every reference is cleared and re-checked. This is the single teardown used by the
   // effect cleanup (unmount / message switch) and by the stop / mute / interrupt controls (AC3).
   const teardown = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    // Flush the streamed-PCM queue immediately (sub-frame barge-in) when one is active.
+    streamingSinkRef.current?.stop();
     const audio = audioRef.current;
     if (audio !== null) {
       audio.onplaying = null;
@@ -203,54 +228,98 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
     let cancelled = false;
     const controller = new AbortController();
     abortRef.current = controller;
-    const audio = createAudioRef.current();
-    audio.muted = false;
-    audioRef.current = audio;
     pb.prepare();
 
-    Promise.resolve(synthesizeRef.current(text, controller.signal))
-      .then((result) => {
-        // `cancelled` covers an effect re-run / unmount; `controller.signal.aborted` covers a stop /
-        // mute / interrupt control that aborted this turn. Either way a late provider answer must not
-        // start playback on a turn that is already gone.
-        if (cancelled || controller.signal.aborted) {
-          return;
-        }
-        const blob = new Blob([decodeBase64(result.audio)], { type: result.mimeType });
-        const url = createUrlRef.current(blob);
-        urlRef.current = url;
-        audio.src = url;
-        audio.onplaying = (): void => {
-          if (!cancelled) {
-            playbackRef.current.playStarted();
+    // The buffered fallback: synthesize the whole clip, then play it through one HTMLAudioElement.
+    // `cancelled` covers an effect re-run / unmount; `controller.signal.aborted` covers a stop / mute /
+    // interrupt that aborted this turn — either way a late provider answer must not start playback.
+    const runBuffered = (): void => {
+      const audio = createAudioRef.current();
+      audio.muted = false;
+      audioRef.current = audio;
+      Promise.resolve(synthesizeRef.current(text, controller.signal))
+        .then((result) => {
+          if (cancelled || controller.signal.aborted) {
+            return undefined;
           }
-        };
-        audio.onended = (): void => {
-          if (!cancelled) {
-            playbackRef.current.complete();
-            teardown();
+          const blob = new Blob([decodeBase64(result.audio)], { type: result.mimeType });
+          const url = createUrlRef.current(blob);
+          urlRef.current = url;
+          audio.src = url;
+          audio.onplaying = (): void => {
+            if (!cancelled) {
+              playbackRef.current.playStarted();
+            }
+          };
+          audio.onended = (): void => {
+            if (!cancelled) {
+              playbackRef.current.complete();
+              teardown();
+            }
+          };
+          audio.onerror = (): void => {
+            if (!cancelled) {
+              playbackRef.current.fail("internal");
+              teardown();
+            }
+          };
+          return Promise.resolve(audio.play()).catch((error: unknown) => {
+            if (!cancelled && !isAbortError(error)) {
+              playbackRef.current.fail("internal");
+              teardown();
+            }
+          });
+        })
+        .catch((error: unknown) => {
+          if (cancelled || isAbortError(error)) {
+            return;
           }
-        };
-        audio.onerror = (): void => {
-          if (!cancelled) {
-            playbackRef.current.fail("internal");
-            teardown();
+          playbackRef.current.fail(failureFromError(error));
+          teardown();
+        });
+    };
+
+    const sink = streamingSinkRef.current;
+    if (sink === undefined) {
+      runBuffered();
+    } else {
+      // Try the streamed-PCM sink first; if it does not engage (unsupported / failed to start), fall
+      // back to the buffered path so a turn is never silently dropped.
+      void sink
+        .play(
+          { text, ...(personaRef.current !== undefined ? { persona: personaRef.current } : {}) },
+          controller.signal,
+          {
+            onStart: (): void => {
+              if (!cancelled) {
+                playbackRef.current.playStarted();
+              }
+            },
+            onEnded: (): void => {
+              if (!cancelled) {
+                playbackRef.current.complete();
+                teardown();
+              }
+            },
+            onError: (): void => {
+              if (!cancelled && !controller.signal.aborted) {
+                playbackRef.current.fail("internal");
+                teardown();
+              }
+            },
+          },
+        )
+        .then((engaged) => {
+          if (!engaged && !cancelled && !controller.signal.aborted) {
+            runBuffered();
           }
-        };
-        return Promise.resolve(audio.play()).catch((error: unknown) => {
-          if (!cancelled && !isAbortError(error)) {
-            playbackRef.current.fail("internal");
-            teardown();
+        })
+        .catch(() => {
+          if (!cancelled && !controller.signal.aborted) {
+            runBuffered();
           }
         });
-      })
-      .catch((error: unknown) => {
-        if (cancelled || isAbortError(error)) {
-          return;
-        }
-        playbackRef.current.fail(failureFromError(error));
-        teardown();
-      });
+    }
 
     return () => {
       cancelled = true;
