@@ -19,6 +19,7 @@ The implementation landed through these merged pull requests targeting `feat/kei
 | #1588 | #449  | Scan the store once in the global orphan sweep (perf follow-up)                     | `35e0bbfa`         |
 | #1589 | #449  | Reject control/zero-width/bidi chars in `requestedBy`/`taskId` (security follow-up) | `247826df`         |
 | #1591 | #450  | Verification matrix, operator runbook, and closure evidence (this capstone)         | `2854b086`         |
+| #1593 | #443  | Epic closeout/project-field completion and final branch verification                | `cef11bb6`         |
 
 **ADRs**: ADR-0088 through ADR-0093 (one per child issue #444–#449). Final `KEIKO_CONTRACTS_VERSION` on the branch: **0.12.0** (progressed 0.8.0 → 0.9.0 → 0.10.0 → 0.11.0 → 0.12.0 across #444, #447, #448, #449; the #1588/#1589 follow-ups did not change the contract surface).
 
@@ -164,6 +165,50 @@ Both LOW-severity follow-ups flagged at #449 merge time have since been resolved
 2. **Control/bidi characters in requestedBy/taskId — RESOLVED** by PR #1589 (`247826df`). `field-safety.ts` `assertSafeFieldValue` now rejects (not strips) C0/C1/DEL, zero-width, and bidi code points, wired at both the route and service boundaries (`routes.ts`, `provisioning.ts`, `lifecycle.ts`, `repair.ts`, `cleanup.ts`). Covered by 10 dedicated `field-safety.test.ts` cases.
 
 Both fixes were verified green during Epic #443 closeout and do not change any contract or governance surface.
+
+### Post-closeout audit findings — RESOLVED
+
+The autonomous Epic #443 audit pass on 2026-06-27 found additional production-readiness gaps after
+the original closeout evidence was written. The audit fix PR targeting
+`feat/keiko-isolated-task-workspaces` resolves them without adding product scope:
+
+1. **Managed active roots rejected by legacy route authorization — RESOLVED.** `/api/runs` and
+   Git Delivery now authorize a task-bound `activeRoot` when it matches a persisted managed
+   `WorkspaceInstance`, the derived `<managedRoot>/<repositoryId>/<workspaceId>` path, realpath
+   containment, and on-disk presence. Legacy registered project authorization remains unchanged.
+
+2. **Persisted path trusted before active binding — RESOLVED.** Provisioning activation and
+   lifecycle `getActive()` now re-prove derived-path identity and managed-root containment before
+   returning `WorkspaceBinding`; invalid active pointers self-heal to unbound mode.
+
+3. **Cleanup race after clean probe — RESOLVED.** Governed cleanup now refuses if Git removal fails
+   while the path remains, re-probes before fallback deletion, unlocks the row on refusal, and
+   re-probes orphan candidates immediately before physical removal.
+
+4. **`handoff-ready -> active` contract mismatch — RESOLVED.** Backend activation and the switcher
+   now allow handoff-ready workspaces to reactivate, matching the #444 lifecycle contract.
+
+5. **Malformed optional route fields widened scope — RESOLVED.** Present-but-invalid optional
+   `taskId` and body `root` fields now return `INVALID_REQUEST` instead of being treated as absent.
+
+6. **Switcher accessibility defects — RESOLVED.** Status badges use readable text-on-surface
+   styling, the trigger exposes a descriptive context label associated with the live status region,
+   and create-submit is natively disabled while workspace mutations are in flight.
+
+Audit verification run:
+
+```bash
+npx vitest run --config vitest.coverage.packages.config.ts packages/keiko-server/src/task-workspace/
+npx vitest run --config vitest.coverage.packages.config.ts packages/keiko-contracts/src/task-workspace.test.ts packages/keiko-contracts/src/task-workspace-reconciliation.test.ts packages/keiko-contracts/src/task-workspace-health.test.ts packages/keiko-server/src/gitDelivery/ packages/keiko-server/src/run-handlers.test.ts packages/keiko-server/src/voice-action-governance.test.ts
+npx vitest run src/app/components/desktop/TaskWorkspaceSwitcher.test.tsx src/app/components/desktop/TaskWorkspaceSwitcher.a11y.test.tsx src/app/components/desktop/hooks/useActiveWorkspaceState.test.tsx src/app/components/desktop/widgets/index.test.tsx src/app/components/desktop/widgets/resolveBoundRoot.test.ts
+npm run typecheck
+npm run lint
+npm run arch:check
+npm run arch:check:negative
+npm run check:git-delivery-evidence
+npm run check:version-consistency
+npm run test:e2e:task-binding-446
+```
 
 ## Project-state note
 

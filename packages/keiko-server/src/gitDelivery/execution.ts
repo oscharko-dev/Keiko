@@ -30,6 +30,7 @@ import {
   readStagedPaths,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import { resolveRegisteredOrManagedWorkspaceRoot } from "../task-workspace/authorization.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 
@@ -64,24 +65,10 @@ export interface GitDeliveryExecutionSeams {
 // the UI project store both AUTHORIZES the path (only a registered project may be mutated) and yields
 // the WorkspaceInfo the spawn boundary runs in.
 export function resolveProjectWorkspace(
-  deps: Pick<UiHandlerDeps, "store">,
+  deps: Pick<UiHandlerDeps, "managedTaskWorkspaceRoot" | "store" | "workspaceProvisioning">,
   projectId: string,
 ): WorkspaceInfo | undefined {
-  for (const project of deps.store.listProjects()) {
-    if (project.path === projectId) {
-      return {
-        root: project.path,
-        name: undefined,
-        version: undefined,
-        testFramework: "unknown",
-        sourceDirs: [],
-        testDirs: [],
-        languages: [],
-        ignoreLines: [],
-      };
-    }
-  }
-  return undefined;
+  return resolveRegisteredOrManagedWorkspaceRoot(deps, projectId);
 }
 
 export function readWorktreeSnapshotFor(

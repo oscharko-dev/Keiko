@@ -106,6 +106,7 @@ function buildServices(): void {
   lifecycle = createWorkspaceLifecycleService({
     store,
     activePointerStore: pointerStore,
+    managedRoot,
     provisioning,
     evidenceStore: noopEvidence(),
     redactString: (s: string): string => s,

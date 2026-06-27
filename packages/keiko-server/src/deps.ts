@@ -235,6 +235,9 @@ export interface UiHandlerDeps {
   // legacy tests that do not exercise /api/task-workspaces/* keep their fixtures unchanged; production
   // wiring composes a sqlite-backed WorkspaceInstanceStore + worktree adapter in buildUiHandlerDeps.
   readonly workspaceProvisioning?: WorkspaceProvisioningService | undefined;
+  // The Keiko-owned managed worktree root that backs workspaceProvisioning. Routes that accept a
+  // task-bound activeRoot as their execution root use this to re-prove containment before authorizing.
+  readonly managedTaskWorkspaceRoot?: string | undefined;
   // Issue #446 (Epic #443, ADR-0090) — active task-workspace binding + lifecycle service. Owns the
   // singleton active pointer and the switch/pause/resume/handoff actions surfaces consume. Optional so
   // legacy tests that do not exercise the active-binding routes keep their fixtures unchanged;
@@ -852,6 +855,7 @@ function buildWorkspaceLifecycle(
   instanceStore: WorkspaceInstanceStore | undefined,
   activePointerStore: ActiveWorkspacePointerStore | undefined,
   provisioning: WorkspaceProvisioningService | undefined,
+  resolvedUiDbPath: string,
   evidenceStore: EvidenceStore,
   redactString: (value: string) => string,
   mutex: WorkspaceMutexRegistry,
@@ -867,6 +871,7 @@ function buildWorkspaceLifecycle(
   return createWorkspaceLifecycleService({
     store: instanceStore,
     activePointerStore,
+    managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
     provisioning,
     evidenceStore,
     redactString,
@@ -1117,6 +1122,7 @@ interface PersistenceBundle {
   readonly workspaceRepair: WorkspaceRepairService | undefined;
   readonly workspaceHealth: WorkspaceHealthService | undefined;
   readonly workspaceCleanup: WorkspaceCleanupService | undefined;
+  readonly managedTaskWorkspaceRoot: string | undefined;
   readonly preferredProjectPath: string | undefined;
 }
 
@@ -1187,6 +1193,7 @@ function composeCoreTaskWorkspaceServices(
       workspaceInstanceStore,
       activeWorkspacePointerStore,
       workspaceProvisioning,
+      resolvedUiDbPath,
       evidenceStore,
       redactString,
       mutex,
@@ -1260,6 +1267,10 @@ function buildPersistenceBundle(
     uiStore: store,
     relationship,
     ...services,
+    managedTaskWorkspaceRoot:
+      services.workspaceProvisioning === undefined
+        ? undefined
+        : resolveManagedWorktreeRoot(resolvedUiDbPath),
     preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
   };
 }
@@ -1273,6 +1284,9 @@ function optionalPersistenceServices(bundle: PersistenceBundle): Partial<UiHandl
     ...(bundle.workspaceProvisioning === undefined
       ? {}
       : { workspaceProvisioning: bundle.workspaceProvisioning }),
+    ...(bundle.managedTaskWorkspaceRoot === undefined
+      ? {}
+      : { managedTaskWorkspaceRoot: bundle.managedTaskWorkspaceRoot }),
     ...(bundle.workspaceLifecycle === undefined
       ? {}
       : { workspaceLifecycle: bundle.workspaceLifecycle }),

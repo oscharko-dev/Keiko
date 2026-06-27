@@ -5,6 +5,9 @@
 // provisioning service so the lifecycle walk delegation is exercised without real git worktrees.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
@@ -31,6 +34,7 @@ const REPO_ROOT = "/repo";
 const REPO_ID = deriveRepositoryId(REPO_ROOT);
 
 let db: DatabaseSync;
+let managedRoot: string;
 let store: WorkspaceInstanceStore;
 let pointerStore: ActiveWorkspacePointerStore;
 let evidence: { id: string; json: string }[];
@@ -51,6 +55,8 @@ function capturingEvidence(): EvidenceStore {
 
 function instance(taskId: string, overrides: Partial<WorkspaceInstance> = {}): WorkspaceInstance {
   const workspaceId = `ws_${taskId.padEnd(24, "x").slice(0, 24)}`;
+  const managedWorktreePath = join(managedRoot, REPO_ID, workspaceId);
+  mkdirSync(managedWorktreePath, { recursive: true });
   return {
     schemaVersion: "1",
     workspaceId,
@@ -59,7 +65,7 @@ function instance(taskId: string, overrides: Partial<WorkspaceInstance> = {}): W
     repositoryRoot: REPO_ROOT,
     baseBranch: "main",
     taskBranch: `keiko/task/${taskId}`,
-    managedWorktreePath: `/managed/${REPO_ID}/${workspaceId}`,
+    managedWorktreePath,
     gitdirIdentity: "gitdir-hash",
     lifecycleState: "active",
     health: "healthy",
@@ -109,6 +115,7 @@ async function rejectsWithCode(
 }
 
 beforeEach(() => {
+  managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lifecycle-managed-")));
   db = new DatabaseSync(":memory:");
   runMigrations(db);
   store = buildWorkspaceInstanceStoreOverDatabase(db);
@@ -118,6 +125,7 @@ beforeEach(() => {
   service = createWorkspaceLifecycleService({
     store,
     activePointerStore: pointerStore,
+    managedRoot,
     provisioning: fakeProvisioning(),
     evidenceStore: capturingEvidence(),
     redactString: (s: string): string => s,
@@ -129,6 +137,7 @@ beforeEach(() => {
 
 afterEach(() => {
   db.close();
+  rmSync(managedRoot, { recursive: true, force: true });
 });
 
 describe("getActive / list", () => {
@@ -157,6 +166,23 @@ describe("getActive / list", () => {
     store.delete(inst.workspaceId);
     expect(service.getActive()).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();
+  });
+
+  it("self-heals an active pointer whose persisted path no longer contains to the managed root", () => {
+    const inst = store.upsert(instance("a"));
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-lifecycle-escape-")));
+    try {
+      store.upsert({ ...inst, managedWorktreePath: outside });
+      pointerStore.set({
+        workspaceId: inst.workspaceId,
+        setBy: "op",
+        atIso: "2026-06-26T00:00:00.000Z",
+      });
+      expect(service.getActive()).toBeUndefined();
+      expect(pointerStore.get()).toBeUndefined();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
 
@@ -267,6 +293,13 @@ describe("pause", () => {
 describe("resume", () => {
   it("walks paused→active and re-binds the pointer", async () => {
     const inst = store.upsert(instance("a", { lifecycleState: "paused" }));
+    const result = await service.resume({ workspaceId: inst.workspaceId, requestedBy: "op" });
+    expect(result.instance.lifecycleState).toBe("active");
+    expect(pointerStore.get()?.workspaceId).toBe(inst.workspaceId);
+  });
+
+  it("walks handoff-ready→active and re-binds the pointer", async () => {
+    const inst = store.upsert(instance("a", { lifecycleState: "handoff-ready" }));
     const result = await service.resume({ workspaceId: inst.workspaceId, requestedBy: "op" });
     expect(result.instance.lifecycleState).toBe("active");
     expect(pointerStore.get()?.workspaceId).toBe(inst.workspaceId);

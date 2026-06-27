@@ -162,8 +162,11 @@ function requireSafeField(value: unknown, field: string): string {
 
 // As requireSafeField, but for an OPTIONAL field: absent → undefined, present → must be safe.
 function optionalSafeField(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
   const bounded = boundedString(value);
-  if (bounded === undefined) return undefined;
+  if (bounded === undefined) {
+    throw new TaskWorkspaceError("INVALID_REQUEST", `missing or invalid field: ${field}`);
+  }
   assertSafeFieldValue(bounded, field);
   return bounded;
 }
@@ -482,7 +485,7 @@ export async function handleReconcileTaskWorkspaces(
   if (isRouteResult(guard)) return guard;
   return runHandler(deps, async () => {
     const body = await readJsonObject(ctx.req);
-    const root = await resolveOptionalRoot(deps, boundedString(body.root));
+    const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
     const report = await guard.reconcile(root);
     return { status: 200, body: redacted(deps, { report }) };
   });
@@ -597,7 +600,7 @@ export async function handleCleanupOrphanTaskWorkspaces(
   return runHandler(deps, async () => {
     const body = await readJsonObject(ctx.req);
     const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
-    const root = await resolveOptionalRoot(deps, boundedString(body.root));
+    const root = await resolveOptionalRoot(deps, optionalSafeField(body.root, "root"));
     const result = await guard.cleanupOrphans({
       ...(root !== undefined ? { repositoryRoot: root } : {}),
       requestedBy,

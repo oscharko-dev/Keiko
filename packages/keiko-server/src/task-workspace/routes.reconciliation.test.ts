@@ -228,6 +228,17 @@ describe("POST /api/task-workspaces/reconciliation", () => {
     });
     expect(res.status).toBe(403);
   });
+
+  it("rejects a malformed present optional root instead of reconciling every repository", async () => {
+    const res = await fetch(`${baseUrl()}/api/task-workspaces/reconciliation`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ root: 42 }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("INVALID_REQUEST");
+  });
 });
 
 describe("POST /api/task-workspaces/:workspaceId/repair", () => {

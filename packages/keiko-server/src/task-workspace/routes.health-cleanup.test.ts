@@ -284,6 +284,17 @@ describe("POST /api/task-workspaces/cleanup/orphans", () => {
     expect(existsSync(instance.managedWorktreePath)).toBe(false);
   });
 
+  it("rejects a malformed present optional root instead of sweeping every repository", async () => {
+    const res = await fetch(`${baseUrl()}/api/task-workspaces/cleanup/orphans`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ root: 42, requestedBy: "u", operatorApproved: true }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("INVALID_REQUEST");
+  });
+
   it("returns 503 when cleanup is not configured", async () => {
     await rebuild({ workspaceCleanup: undefined });
     const res = await fetch(`${baseUrl()}/api/task-workspaces/cleanup/orphans`, {

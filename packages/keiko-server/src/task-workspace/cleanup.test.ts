@@ -22,7 +22,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
-import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type {
+  GitWorktreeAdapter,
+  WorktreeOperationResult,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
   TaskWorkspaceLifecycleState,
@@ -93,13 +96,16 @@ function provisioning(): WorkspaceProvisioningService {
   });
 }
 
-function cleanup(): WorkspaceCleanupService {
+function cleanup(
+  instanceStore: WorkspaceInstanceStore = store,
+  adapterFactory: (workspace: WorkspaceInfo) => GitWorktreeAdapter = realAdapter,
+): WorkspaceCleanupService {
   return createWorkspaceCleanupService({
-    store,
+    store: instanceStore,
     activePointerStore: pointerStore,
     evidenceStore: capturingEvidence(),
     managedRoot,
-    createAdapter: realAdapter,
+    createAdapter: adapterFactory,
     redactString: (s: string): string => s,
     now: (): number => nowMs,
     newId: (): string => `id-${String(idCounter++)}`,
@@ -276,6 +282,31 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
     expect(result.refusalReason).toBe("worktree-dirty");
     expect(existsSync(join(instance.managedWorktreePath, "wip.txt"))).toBe(true);
     expect(store.getById(instance.workspaceId)).toBeDefined();
+  });
+
+  it("refuses when git removal fails and the managed path is still present", async () => {
+    const instance = await provisionTask("t-remove-refuse");
+    setState(instance, "cleanup-pending");
+    const fail: WorktreeOperationResult = {
+      ok: false,
+      exitCode: 128,
+      durationMs: 0,
+      timedOut: false,
+      truncated: false,
+    };
+    const result = await cleanup(store, (workspace) => ({
+      ...realAdapter(workspace),
+      removeWorktree: (): Promise<WorktreeOperationResult> => Promise.resolve(fail),
+    })).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("worktree-dirty");
+    expect(existsSync(instance.managedWorktreePath)).toBe(true);
+    expect(store.getById(instance.workspaceId)?.lock).toBeNull();
   });
 
   it("proceeds when only a STALE (expired) lock is present (stale lock does not block cleanup)", async () => {
@@ -463,6 +494,29 @@ describe("orphan cleanup", () => {
     expect(existsSync(orphanPath)).toBe(true);
   });
 
+  it("refuses an orphan that becomes dirty after the initial safety probe", async () => {
+    const instance = await provisionTask("t-orphan-race-dirty");
+    const orphanPath = instance.managedWorktreePath;
+    store.delete(instance.workspaceId);
+    let probes = 0;
+    const result = await cleanup(store, (workspace) => ({
+      ...realAdapter(workspace),
+      worktreeStatus: (): Promise<{ ok: boolean; dirty: boolean }> => {
+        probes += 1;
+        if (probes === 1) return Promise.resolve({ ok: true, dirty: false });
+        writeFileSync(join(orphanPath, "late-wip.txt"), "late work\n");
+        return Promise.resolve({ ok: true, dirty: true });
+      },
+    })).cleanupOrphans({
+      repositoryRoot: repoRoot,
+      requestedBy: "u",
+      operatorApproved: true,
+    });
+    expect(result.removed).toBe(0);
+    expect(result.refused[0]?.refusalReason).toBe("worktree-dirty");
+    expect(existsSync(join(orphanPath, "late-wip.txt"))).toBe(true);
+  });
+
   it("global sweep finds orphans across multiple repositories while sparing live worktrees", async () => {
     // Two distinct repositories → two distinct repository-id directories under the managed root. Each
     // keeps one live (persisted) worktree and contributes one orphan (record deleted, directory kept).
@@ -505,6 +559,44 @@ describe("orphan cleanup", () => {
     });
     expect(result.removed).toBe(0);
     expect(existsSync(instance.managedWorktreePath)).toBe(true);
+  });
+
+  it("skips a candidate that gains a persisted workspace record after the sweep snapshot", async () => {
+    const instance = await provisionTask("t-race-live");
+    const livePath = instance.managedWorktreePath;
+    store.delete(instance.workspaceId);
+    expect(existsSync(livePath)).toBe(true);
+
+    let firstSnapshot = true;
+    const racingStore: WorkspaceInstanceStore = {
+      getById: (workspaceId: string): WorkspaceInstance | undefined => {
+        if (workspaceId === instance.workspaceId && store.getById(workspaceId) === undefined) {
+          store.upsert(instance);
+        }
+        return store.getById(workspaceId);
+      },
+      findByRepositoryAndTask: store.findByRepositoryAndTask,
+      listByRepository: store.listByRepository,
+      listAll: (): readonly WorkspaceInstance[] => {
+        if (firstSnapshot) {
+          firstSnapshot = false;
+          return [];
+        }
+        return store.listAll();
+      },
+      upsert: store.upsert,
+      delete: store.delete,
+    };
+
+    const result = await cleanup(racingStore).cleanupOrphans({
+      requestedBy: "u",
+      operatorApproved: true,
+    });
+
+    expect(result.removed).toBe(0);
+    expect(result.refused).toHaveLength(0);
+    expect(existsSync(livePath)).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
   });
 
   it("rejects orphan cleanup without operator approval", async () => {

@@ -28,6 +28,7 @@ import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
 import { approvalTokenInputFor, createApprovalToken } from "./governed-workflow.js";
 import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
 import { evaluateSpokenActionGovernance } from "./voice-action-governance.js";
+import { resolveRegisteredOrManagedWorkspaceRoot } from "./task-workspace/authorization.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -81,7 +82,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 // directories. Returns a RouteResult to return, or null when the check passes.
 function rejectUnregisteredWorkspace(parsed: RunRequest, deps: UiHandlerDeps): RouteResult | null {
   const root = typeof parsed.input.workspaceRoot === "string" ? parsed.input.workspaceRoot : "";
-  const registered = deps.store.listProjects().some((p) => p.path === root);
+  const registered = resolveRegisteredOrManagedWorkspaceRoot(deps, root) !== undefined;
   return registered
     ? null
     : {
