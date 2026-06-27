@@ -19154,13 +19154,12 @@ button.figma-view-preview {
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
-.connector-node-id {
+.connector-node-meta {
   margin: 8px 0 0;
   color: var(--text-secondary);
   font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 600;
+  line-height: 1.35;
 }
 .connector-node-manage {
   justify-self: start;
@@ -20009,6 +20008,12 @@ ul.integ {
 }
 .lkd-connect-input {
   width: 100%;
+}
+.lkd-source-kind-select {
+  width: min(280px, 100%);
+}
+.lkd-source-kind-menu {
+  width: min(320px, calc(100vw - 32px));
 }
 .lkd-connect-path-group {
   display: grid;
