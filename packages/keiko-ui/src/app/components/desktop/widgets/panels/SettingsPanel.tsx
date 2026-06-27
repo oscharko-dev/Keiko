@@ -36,6 +36,8 @@ import {
   WORKSPACE_BACKGROUND_BRIGHTNESS_KEY,
   WORKSPACE_GRID_STRENGTH_EVENT,
   WORKSPACE_GRID_STRENGTH_KEY,
+  WORKSPACE_CAMERA_ANIMATION_MODE_EVENT,
+  WORKSPACE_CAMERA_ANIMATION_MODE_KEY,
   applyFrameBorderStrength,
   applyWorkspaceBackgroundBrightness,
   applyWorkspaceGridStrength,
@@ -44,7 +46,9 @@ import {
   readWallpaperEnabled,
   readWallpaperOpacity,
   readWorkspaceBackgroundBrightness,
+  readWorkspaceCameraAnimationMode,
   readWorkspaceGridStrength,
+  type WorkspaceCameraAnimationMode,
 } from "../../workspace-appearance";
 
 function kindLabel(kind: ModelCapability["kind"]): string {
@@ -469,6 +473,8 @@ function GeneralPrefs(): ReactNode {
   const [wp, setWp] = useState<number>(readWallpaperOpacity);
   const [bgBrightness, setBgBrightness] = useState<number>(readWorkspaceBackgroundBrightness);
   const [gridStrength, setGridStrength] = useState<number>(readWorkspaceGridStrength);
+  const [cameraAnimationMode, setCameraAnimationMode] =
+    useState<WorkspaceCameraAnimationMode>(readWorkspaceCameraAnimationMode);
   const [frameBorderStrength, setFrameBorderStrength] = useState<number>(readFrameBorderStrength);
   const [frameInnerGlowStrength, setFrameInnerGlowStrength] = useState<number>(
     readFrameInnerGlowStrength,
@@ -517,6 +523,18 @@ function GeneralPrefs(): ReactNode {
     applyWorkspaceGridStrength(gridStrength);
     window.dispatchEvent(new CustomEvent(WORKSPACE_GRID_STRENGTH_EVENT, { detail: gridStrength }));
   }, [gridStrength]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(WORKSPACE_CAMERA_ANIMATION_MODE_KEY, cameraAnimationMode);
+    } catch {
+      /* ignore quota / private mode */
+    }
+    window.dispatchEvent(
+      new CustomEvent(WORKSPACE_CAMERA_ANIMATION_MODE_EVENT, { detail: cameraAnimationMode }),
+    );
+  }, [cameraAnimationMode]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -684,6 +702,30 @@ function GeneralPrefs(): ReactNode {
           <span>{t("settings.scale.subtle")}</span>
           <span>{t("settings.scale.strong")}</span>
         </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <span className="gpref-label">{t("settings.workspace.cameraAnimation")}</span>
+          <div className="seg" role="group" aria-label={t("settings.workspace.cameraAnimation")}>
+            <button
+              type="button"
+              className={cameraAnimationMode === "minimal" ? "on" : ""}
+              aria-pressed={cameraAnimationMode === "minimal"}
+              onClick={() => setCameraAnimationMode("minimal")}
+            >
+              {t("settings.workspace.cameraAnimationMinimal")}
+            </button>
+            <button
+              type="button"
+              className={cameraAnimationMode === "smooth" ? "on" : ""}
+              aria-pressed={cameraAnimationMode === "smooth"}
+              onClick={() => setCameraAnimationMode("smooth")}
+            >
+              {t("settings.workspace.cameraAnimationSmooth")}
+            </button>
+          </div>
+        </div>
+        <div className="gpref-help">{t("settings.workspace.cameraAnimationHelp")}</div>
       </div>
       <div className="gpref">
         <div className="gpref-row">

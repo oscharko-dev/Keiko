@@ -4,6 +4,7 @@ export const WORKSPACE_BACKGROUND_BRIGHTNESS_KEY = "keiko.workspace.background.b
 export const WORKSPACE_GRID_STRENGTH_KEY = "keiko.workspace.grid.strength";
 export const FRAME_BORDER_STRENGTH_KEY = "keiko.frame.border.strength";
 export const FRAME_INNER_GLOW_STRENGTH_KEY = "keiko.frame.inner.glow.strength";
+export const WORKSPACE_CAMERA_ANIMATION_MODE_KEY = "keiko.workspace.camera.animationMode";
 
 export const DEFAULT_WALLPAPER_ENABLED = false;
 
@@ -13,6 +14,9 @@ export const WORKSPACE_BACKGROUND_BRIGHTNESS_EVENT = "keiko:workspace-background
 export const WORKSPACE_GRID_STRENGTH_EVENT = "keiko:workspace-grid-strength";
 export const FRAME_BORDER_STRENGTH_EVENT = "keiko:frame-border-strength";
 export const FRAME_INNER_GLOW_STRENGTH_EVENT = "keiko:frame-inner-glow-strength";
+export const WORKSPACE_CAMERA_ANIMATION_MODE_EVENT = "keiko:workspace-camera-animation-mode";
+
+export type WorkspaceCameraAnimationMode = "minimal" | "smooth";
 
 export function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -86,6 +90,18 @@ export function readFrameInnerGlowStrength(): number {
     return clampPercent(Number.parseInt(raw, 10));
   } catch {
     return 0;
+  }
+}
+
+export function readWorkspaceCameraAnimationMode(): WorkspaceCameraAnimationMode {
+  if (typeof window === "undefined") return "minimal";
+  try {
+    if (typeof window.localStorage?.getItem !== "function") return "minimal";
+    return window.localStorage.getItem(WORKSPACE_CAMERA_ANIMATION_MODE_KEY) === "smooth"
+      ? "smooth"
+      : "minimal";
+  } catch {
+    return "minimal";
   }
 }
 

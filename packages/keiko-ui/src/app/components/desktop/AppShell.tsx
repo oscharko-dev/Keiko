@@ -13,6 +13,11 @@ import { Header, type HeaderStatusTone } from "./Header";
 import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
+import {
+  readWorkspaceCameraAnimationMode,
+  WORKSPACE_CAMERA_ANIMATION_MODE_EVENT,
+  type WorkspaceCameraAnimationMode,
+} from "./workspace-appearance";
 import { CommandPalette, type Command } from "./modals/CommandPalette";
 import { GatewaySetupDialog } from "./modals/GatewaySetupDialog";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
@@ -537,7 +542,22 @@ function AppShellInner(): ReactNode {
     },
     [chatForWindow, session],
   );
+  const [cameraAnimationMode, setCameraAnimationMode] =
+    useState<WorkspaceCameraAnimationMode>(readWorkspaceCameraAnimationMode);
+
+  useEffect(() => {
+    const onCameraAnimationMode = (event: Event): void => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      setCameraAnimationMode(detail === "smooth" ? "smooth" : "minimal");
+    };
+    window.addEventListener(WORKSPACE_CAMERA_ANIMATION_MODE_EVENT, onCameraAnimationMode);
+    return () => {
+      window.removeEventListener(WORKSPACE_CAMERA_ANIMATION_MODE_EVENT, onCameraAnimationMode);
+    };
+  }, []);
+
   const ws = useWorkspace(wsRef, {
+    cameraAnimationMode,
     onScopeBind: handleScopeBind,
     onScopeUnbind: handleScopeUnbind,
     onConnectorBind: handleConnectorBind,

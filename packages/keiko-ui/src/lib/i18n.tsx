@@ -241,6 +241,11 @@ const EN_MESSAGES = {
   "settings.scale.strong": "Strong",
   "settings.workspace.backgroundBrightness": "Workspace background brightness",
   "settings.workspace.gridStrength": "Workspace grid strength",
+  "settings.workspace.cameraAnimation": "Workspace camera animation",
+  "settings.workspace.cameraAnimationMinimal": "Minimal",
+  "settings.workspace.cameraAnimationSmooth": "Smooth",
+  "settings.workspace.cameraAnimationHelp":
+    "Minimal applies pan and zoom immediately. Smooth eases the workspace camera toward the target view.",
   "settings.workspace.borderStrength": "Workspace border strength",
   "settings.workspace.innerGlow": "Workspace inner glow",
   "settings.models.gatewayTitle": "Model gateway",
@@ -545,6 +550,11 @@ const DE_MESSAGES: Record<MessageKey, string> = {
   "settings.scale.strong": "Stark",
   "settings.workspace.backgroundBrightness": "Arbeitsbereich-Helligkeit",
   "settings.workspace.gridStrength": "Rasterstaerke",
+  "settings.workspace.cameraAnimation": "Workspace-Kameraanimation",
+  "settings.workspace.cameraAnimationMinimal": "Minimal",
+  "settings.workspace.cameraAnimationSmooth": "Sanft",
+  "settings.workspace.cameraAnimationHelp":
+    "Minimal wendet Schwenken und Zoom direkt an. Sanft bewegt die Workspace-Kamera weich zur Zielansicht.",
   "settings.workspace.borderStrength": "Rahmenstaerke",
   "settings.workspace.innerGlow": "Inneres Leuchten",
   "settings.models.gatewayTitle": "Modell-Gateway",

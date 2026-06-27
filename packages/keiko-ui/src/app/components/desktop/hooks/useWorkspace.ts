@@ -35,6 +35,7 @@ import {
   makeSnapActions,
 } from "./workspaceActions";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import type { WorkspaceCameraAnimationMode } from "../workspace-appearance";
 
 export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
 export type { SnapZone } from "../windows/connectionUtils";
@@ -51,6 +52,7 @@ export const MIN_ZOOM = 0.3;
 export const MAX_ZOOM = 2.5;
 const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
+const CAMERA_ANIMATION_DURATION_MS = 180;
 
 function readView(): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
@@ -252,6 +254,7 @@ function windowIdFromWheelTarget(target: EventTarget | null): string | null {
 interface UsePanZoomArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
+  readonly cameraAnimationMode: WorkspaceCameraAnimationMode;
   readonly winsRef: MutableRefObject<AppWindow[]>;
   readonly setView: Dispatch<SetStateAction<View>>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
@@ -306,11 +309,41 @@ export function fitWorkspaceViewToWindows(
   };
 }
 
-function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs): PanZoomResult {
+function prefersReducedCameraMotion(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function easeCamera(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function interpolateView(from: View, to: View, progress: number): View {
+  return {
+    zoom: from.zoom + (to.zoom - from.zoom) * progress,
+    x: from.x + (to.x - from.x) * progress,
+    y: from.y + (to.y - from.y) * progress,
+  };
+}
+
+function usePanZoom({
+  wsRef,
+  view,
+  cameraAnimationMode,
+  winsRef,
+  setView,
+  setWins,
+}: UsePanZoomArgs): PanZoomResult {
   const viewRef = useRef<View>(view);
   viewRef.current = view;
+  const renderedViewRef = useRef<View>(view);
+  renderedViewRef.current = view;
   const pendingViewRef = useRef<View | null>(null);
   const frameRef = useRef<number | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const animationStartRef = useRef<View>(view);
+  const animationTargetRef = useRef<View>(view);
+  const animationStartedAtRef = useRef<number>(0);
   const viewPersistDebounceRef = useRef<TrailingDebounce | null>(null);
   if (viewPersistDebounceRef.current === null)
     viewPersistDebounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
@@ -346,8 +379,67 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
       if (frameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
         window.cancelAnimationFrame(frameRef.current);
       }
+      if (
+        animationFrameRef.current !== null &&
+        typeof window.cancelAnimationFrame === "function"
+      ) {
+        window.cancelAnimationFrame(animationFrameRef.current);
+      }
     },
     [],
+  );
+
+  const animateView = useCallback(
+    (target: View): void => {
+      if (
+        cameraAnimationMode !== "smooth" ||
+        prefersReducedCameraMotion() ||
+        typeof window.requestAnimationFrame !== "function" ||
+        typeof window.cancelAnimationFrame !== "function"
+      ) {
+        if (animationFrameRef.current !== null) {
+          window.cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
+        }
+        setView(target);
+        return;
+      }
+
+      const now =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+      animationStartRef.current =
+        animationFrameRef.current === null
+          ? renderedViewRef.current
+          : interpolateView(
+              animationStartRef.current,
+              animationTargetRef.current,
+              easeCamera(
+                Math.min(1, (now - animationStartedAtRef.current) / CAMERA_ANIMATION_DURATION_MS),
+              ),
+            );
+      animationTargetRef.current = target;
+      animationStartedAtRef.current = now;
+
+      if (animationFrameRef.current !== null) return;
+      const step = (time: number): void => {
+        const progress = Math.min(
+          1,
+          Math.max(0, (time - animationStartedAtRef.current) / CAMERA_ANIMATION_DURATION_MS),
+        );
+        const eased = easeCamera(progress);
+        if (progress >= 1) {
+          animationFrameRef.current = null;
+          setView(animationTargetRef.current);
+          return;
+        }
+        setView(interpolateView(animationStartRef.current, animationTargetRef.current, eased));
+        animationFrameRef.current = window.requestAnimationFrame(step);
+      };
+      animationFrameRef.current = window.requestAnimationFrame(step);
+    },
+    [cameraAnimationMode, setView],
   );
 
   const queueView = useCallback(
@@ -372,10 +464,10 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
         frameRef.current = null;
         const pending = pendingViewRef.current;
         pendingViewRef.current = null;
-        if (pending !== null) setView(pending);
+        if (pending !== null) animateView(pending);
       });
     },
-    [scheduleViewPersist, setView],
+    [animateView, scheduleViewPersist, setView],
   );
 
   useEffect(() => {
@@ -924,6 +1016,7 @@ function useConnectionPrune(
 // Release 0.2.0 — bind callbacks return whether the bind was ACCEPTED; `false` (source limit
 // reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
+  readonly cameraAnimationMode?: WorkspaceCameraAnimationMode | undefined;
   readonly onScopeBind?:
     ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>) | undefined;
   readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
@@ -948,7 +1041,13 @@ export function useWorkspace(
   // action factories below depend on their (stable) identities rather than on the
   // `opts` object, which defaults to a fresh `{}` every render and would otherwise
   // re-create the whole api each frame and defeat memoization.
-  const { onScopeBind, onScopeUnbind, onConnectorBind, onConnectorUnbind } = opts;
+  const {
+    cameraAnimationMode = "minimal",
+    onScopeBind,
+    onScopeUnbind,
+    onConnectorBind,
+    onConnectorUnbind,
+  } = opts;
   const zc = useRef<number>(3);
   const snapZone = useRef<SnapZone | null>(null);
   const suppressNextServerPersistRef = useRef(false);
@@ -998,6 +1097,7 @@ export function useWorkspace(
   const { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect } = usePanZoom({
     wsRef,
     view,
+    cameraAnimationMode,
     winsRef,
     setView,
     setWins,
