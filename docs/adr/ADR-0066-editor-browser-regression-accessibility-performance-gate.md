@@ -83,7 +83,7 @@ gate, not a per-spec convention.
 ### D4 — Gate placement: deterministic, locally-runnable, plus coordinator evidence — not in required `ci`
 
 The baseline matrix runs through a named configuration,
-`playwright.issue-1377-editor-baseline.config.ts`, behind the npm script
+`tests/e2e/config/playwright.issue-1377-editor-baseline.config.ts`, behind the npm script
 `test:e2e:editor-baseline-1377`. It is a deterministic, locally-runnable gate and is run as
 coordinator evidence on editor-touching pull requests. It is deliberately **not** added to the
 required, time-boxed `ci` check.

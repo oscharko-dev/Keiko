@@ -2,16 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Issue #475 (Epic #470) — browser evidence that governed commit creation cannot bypass preview
-// or policy evaluation. Mirrors playwright.issue-1296-editor-agent.config.ts: build the packaged
-// CLI, boot the real UI server, run a single deterministic chromium worker. The only delta is the
-// webServer env flag KEIKO_GIT_DELIVERY_ENABLED=true, which makes the governed /api/git-delivery/*
-// routes live in the running app (the spec intercepts the commit routes for determinism, but the
-// gate proves the surface reaches the governed BFF path rather than a no-op stub).
-
 const root = process.cwd();
-const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32198");
-const stateId = process.env.GITHUB_RUN_ID ?? `issue-475-git-delivery-${String(process.pid)}`;
+const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32183");
+const stateId = process.env.GITHUB_RUN_ID ?? `editor-perf-${String(process.pid)}`;
 const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
@@ -22,30 +15,27 @@ const prepareRuntimeConfig = [
 ].join(" ");
 
 export default defineConfig({
-  testDir: "tests/e2e",
-  testMatch: "git-delivery-flow-475.spec.ts",
+  testDir: join(root, "tests", "e2e"),
+  testMatch: "editor-performance.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: 180_000,
+  timeout: 120_000,
   expect: {
-    timeout: 20_000,
+    timeout: 15_000,
   },
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
   use: {
     baseURL: `http://127.0.0.1:${String(publicPort)}`,
-    trace: "off",
-    video: "off",
-    screenshot: "off",
+    trace: "retain-on-failure",
   },
   projects: [
     {
       name: "chromium",
-      // A tall viewport so the maximized governedGit window's commit controls are within the page —
-      // the desktop window is fixed-positioned, so vertical room must come from the viewport itself.
-      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 1100 } },
+      use: { ...devices["Desktop Chrome"] },
     },
   ],
   webServer: {
+    cwd: root,
     command:
       `node -e ${JSON.stringify(prepareRuntimeConfig)} && ` +
       "npm run build && npm run prepare:bin && npm run build:ui && " +
@@ -60,7 +50,6 @@ export default defineConfig({
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
       KEIKO_CONFIG_FILE: runtimeConfigPath,
-      KEIKO_GIT_DELIVERY_ENABLED: "true",
     },
   },
 });

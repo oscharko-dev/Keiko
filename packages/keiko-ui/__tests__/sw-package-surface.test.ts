@@ -14,10 +14,20 @@ interface PackResult {
   readonly files: readonly PackEntry[];
 }
 
+function npmCommand(): string {
+  return process.platform === "win32" ? "npm.cmd" : "npm";
+}
+
+function needsShell(command: string): boolean {
+  return process.platform === "win32" && command.endsWith(".cmd");
+}
+
 function packDryRun(): readonly string[] {
-  const result = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+  const npm = npmCommand();
+  const result = spawnSync(npm, ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: PKG_ROOT,
     encoding: "utf8",
+    shell: needsShell(npm),
   });
   if (result.status !== 0) {
     throw new Error(`npm pack --dry-run failed: ${result.stderr}`);

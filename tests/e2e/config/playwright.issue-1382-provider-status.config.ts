@@ -3,19 +3,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
-const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32183");
-const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32184");
-const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32185");
-const stateId = process.env.GITHUB_RUN_ID ?? String(process.pid);
+const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32204");
+const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32205");
+const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32206");
+const stateId = process.env.GITHUB_RUN_ID ?? `issue-1382-provider-status-${String(process.pid)}`;
 const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
 
 export default defineConfig({
-  testDir: "tests/e2e",
+  testDir: join(root, "tests", "e2e"),
+  testMatch: "editor-provider-status-1382.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: 60_000,
+  timeout: 90_000,
   expect: {
-    timeout: 15_000,
+    timeout: 20_000,
   },
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
   use: {
@@ -29,6 +30,7 @@ export default defineConfig({
     },
   ],
   webServer: {
+    cwd: root,
     command: "npm run build:packages && node scripts/dev-runner.mjs",
     url: `http://127.0.0.1:${String(publicPort)}`,
     reuseExistingServer: false,

@@ -11,7 +11,7 @@ const corpusDataRoot = join(corpusRoot, "fixtures");
 const stateDir = process.env.KEIKO_LK_E2E_STATE_DIR ?? join(corpusRoot, "state");
 
 export default defineConfig({
-  testDir: "tests/e2e",
+  testDir: join(root, "tests", "e2e"),
   testMatch: /local-knowledge-regression\.spec\.ts/u,
   fullyParallel: false,
   workers: 1,
@@ -32,6 +32,7 @@ export default defineConfig({
     },
   ],
   webServer: {
+    cwd: root,
     command: "npm run build:packages && node tests/e2e/fixtures/local-knowledge-e2e-server.js",
     url: `http://127.0.0.1:${String(publicPort)}`,
     reuseExistingServer: false,

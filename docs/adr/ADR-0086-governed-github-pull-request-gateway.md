@@ -143,7 +143,7 @@ The `GovernedPullRequestCard` is launched from the "PR" action button in the Pub
 
 These tests run in the `ci` job (the required gating check) and require no live GitHub credentials.
 
-**Playwright e2e** (non-gating, coordinator evidence, `playwright.issue-477-pr-gateway.config.ts`, `test:e2e:pr-gateway-477`): drives the real packaged app to assert the read-only preview path (policy outcome display, readiness blockers, metadata-draft editor render), the disabled state when `KEIKO_GIT_DELIVERY_ENABLED` is unset (404 response causes the card to render a "not enabled" notice), and the blocked state when the base branch is outside the policy namespace. No live `gh api` calls are made in CI; the e2e suite exercises only the preview path and the blocked/disabled UI states.
+**Playwright e2e** (non-gating, coordinator evidence, `tests/e2e/config/playwright.issue-477-pr-command-center.config.ts`, `test:e2e:pr-command-center-477`): drives the real packaged app to assert the read-only preview path (policy outcome display, readiness blockers, metadata-draft editor render), the disabled state when `KEIKO_GIT_DELIVERY_ENABLED` is unset (404 response causes the card to render a "not enabled" notice), and the blocked state when the base branch is outside the policy namespace. No live `gh api` calls are made in CI; the e2e suite exercises only the preview path and the blocked/disabled UI states.
 
 ## Consequences
 

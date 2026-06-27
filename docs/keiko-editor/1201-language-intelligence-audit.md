@@ -36,7 +36,7 @@ original feature scope and hardens the already-merged language intelligence path
 | Unsupported-language degradation  | Satisfied by PR #1266; unchanged         | Existing server route tests still cover unsupported language response.                                                                                       |
 | Bounded server/editor behavior    | Fixed and satisfied                      | Contract tab-size cap, provider clamp, aggregate formatting byte cap, and redaction-preserving route regression.                                             |
 | Required server/editor/UI tests   | Satisfied locally                        | Focused contracts, server, editor, and UI suites passed after package build.                                                                                 |
-| Browser smoke                     | Satisfied locally; pending final PR `ci` | `npx playwright test --project=chromium -g "diagnostics and hover"` passed on this branch.                                                                   |
+| Browser smoke                     | Satisfied locally; pending final PR `ci` | `npx playwright test --config tests/e2e/config/playwright.config.ts --project=chromium -g "diagnostics and hover"` passed on this branch.                    |
 | Required `ci` check               | Pending final PR                         | Must be green on the final PR head before merge.                                                                                                             |
 | Stop conditions                   | Not triggered                            | No repository governance, unsupported product-scope, security stop, or branch-protection stop condition was triggered by the audit.                          |
 
@@ -57,7 +57,7 @@ npm run arch:check
 npm run arch:check:negative
 npm run check:version-consistency
 npm run check:qi-supply-chain
-npx playwright test --project=chromium -g "diagnostics and hover"
+npx playwright test --config tests/e2e/config/playwright.config.ts --project=chromium -g "diagnostics and hover"
 npm test
 ```
 

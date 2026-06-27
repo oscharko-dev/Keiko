@@ -173,7 +173,7 @@ not modified (ADR-0051 gate); all styling uses inline CSS custom properties.
   `gh`, no network).
 - ui: `GovernedMergeCard.test.tsx` + `.a11y.test.tsx` (eligible-strategy seeding, dispatch payloads,
   blocker panel, outcome banner, readable API failure alert, WCAG 2.2 AA).
-- browser evidence (non-gating, coordinator): `playwright.issue-478-merge-governance.config.ts` +
+- browser evidence (non-gating, coordinator): `tests/e2e/config/playwright.issue-478-merge-governance.config.ts` +
   `tests/e2e/merge-governance-478.spec.ts` drive the real packaged app for the read-only preview, the
   blocked-merge state, and governed error surfacing, proving the UI merge path reaches the governed BFF
   routes with no client-side escape. Run with `npm run test:e2e:merge-governance-478`. Evidence under

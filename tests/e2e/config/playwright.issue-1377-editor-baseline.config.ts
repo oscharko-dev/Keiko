@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
-const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32196");
-const stateId = process.env.GITHUB_RUN_ID ?? `issue-1296-editor-agent-${String(process.pid)}`;
+const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32201");
+const stateId = process.env.GITHUB_RUN_ID ?? `issue-1377-editor-${String(process.pid)}`;
 const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
@@ -15,8 +15,8 @@ const prepareRuntimeConfig = [
 ].join(" ");
 
 export default defineConfig({
-  testDir: "tests/e2e",
-  testMatch: "editor-agent-1296.spec.ts",
+  testDir: join(root, "tests", "e2e"),
+  testMatch: "editor-baseline-1377.spec.ts",
   fullyParallel: false,
   workers: 1,
   timeout: 180_000,
@@ -28,7 +28,7 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${String(publicPort)}`,
     trace: "off",
     video: "off",
-    screenshot: "off",
+    screenshot: "only-on-failure",
   },
   projects: [
     {
@@ -37,6 +37,7 @@ export default defineConfig({
     },
   ],
   webServer: {
+    cwd: root,
     command:
       `node -e ${JSON.stringify(prepareRuntimeConfig)} && ` +
       "npm run build && npm run prepare:bin && npm run build:ui && " +

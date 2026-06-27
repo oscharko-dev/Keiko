@@ -67,7 +67,7 @@ default-off. #1213 remains a deferred non-goal.)_
   committed, unit-tested `scripts/editor-release-evidence.mjs` (§7).
 - Browser-measured evidence (B4/B5/B6/B11) and the runtime worker-load capture gathered against the
   packaged CLI serving the production static UI by the committed `tests/e2e/editor-performance.spec.ts`
-  and `playwright.editor-performance.config.ts` (`npm run test:e2e:editor-perf`), recorded in
+  and `tests/e2e/config/playwright.editor-performance.config.ts` (`npm run test:e2e:editor-perf`), recorded in
   `docs/release/1209-perf-evidence.json` (§7).
 - Every security, FIM-governance, accessibility, and per-child claim below was re-verified against the
   live code on the PR head (file:line citations throughout); claims are not carried from prose alone.
@@ -200,7 +200,7 @@ budget. The full machine-readable inventory is `docs/release/1209-bundle-evidenc
 ### 7.2 Browser-measured figures
 
 Measured against the packaged CLI serving the production static UI by
-`tests/e2e/editor-performance.spec.ts` and `playwright.editor-performance.config.ts`
+`tests/e2e/editor-performance.spec.ts` and `tests/e2e/config/playwright.editor-performance.config.ts`
 (`npm run test:e2e:editor-perf`), recorded in `docs/release/1209-perf-evidence.json`.
 
 - **B4 cold-start (open → interactive):** samples 940 / 845 / 848 ms → p50 848 ms, p95 940 ms (after
