@@ -31,6 +31,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import {
+  DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   isVoiceReplayEligible,
   stripUnsafeFormatChars,
   validateVoiceControlMessage,
@@ -509,11 +510,50 @@ export interface VoiceControlPlaneDeps {
 // The realtime voice control plane bound to one server. `handleUpgrade` is the gated replacement for
 // server.ts's hard-reject upgrade handler; it accepts ONLY the voice control path, ONLY on a loopback
 // Host/Origin, and ONLY when the deployment is full-realtime capable.
+// The minimal liveness surface a control socket exposes for the heartbeat. `ws` sockets satisfy it
+// structurally (ping/terminate are native; `isAlive` is the standard `ws` heartbeat flag carried on the
+// socket). Modelled as an interface so the sweep is unit-testable with a fake socket.
+export interface AliveControlSocket {
+  isAlive?: boolean;
+  ping(): void;
+  terminate(): void;
+}
+
+// One heartbeat sweep over the live control sockets: a socket that did not answer the previous ping
+// (isAlive === false) is terminated so a half-open connection cannot linger and hold a session slot;
+// every other socket is re-armed (isAlive = false) and pinged. Pure over the iterable — no clock, no
+// timer — so it is directly unit-testable without a real WebSocket server.
+export function sweepControlHeartbeat(sockets: Iterable<AliveControlSocket>): void {
+  for (const socket of sockets) {
+    if (socket.isAlive === false) {
+      socket.terminate();
+      continue;
+    }
+    socket.isAlive = false;
+    socket.ping();
+  }
+}
+
 class VoiceControlPlaneImpl implements VoiceControlPlane {
   private readonly wss = new WebSocketServer({ noServer: true });
   private readonly sessions = new Map<string, SessionState>();
+  // Liveness sweep timer, started lazily on the first connection and cleared on closeAll (shutdown).
+  // A socket that misses a ping/pong cycle is terminated by the next sweep.
+  private heartbeat: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly planeDeps: VoiceControlPlaneDeps) {}
+
+  private startHeartbeat(): void {
+    if (this.heartbeat !== undefined) {
+      return;
+    }
+    const timer = setInterval(() => {
+      sweepControlHeartbeat(this.wss.clients as Set<AliveControlSocket>);
+    }, DEFAULT_VOICE_PROTOCOL_TIMEOUTS.heartbeatIntervalMs);
+    // Do not keep the Node process alive solely for the heartbeat.
+    timer.unref();
+    this.heartbeat = timer;
+  }
 
   handleUpgrade(req: IncomingMessage, sock: Duplex, head: Buffer): boolean {
     if (!isVoiceControlUpgrade(req)) {
@@ -539,6 +579,10 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
   }
 
   closeAll(): void {
+    if (this.heartbeat !== undefined) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = undefined;
+    }
     for (const client of this.wss.clients) {
       client.close(1001, "server shutting down");
     }
@@ -658,7 +702,19 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
     return { state, resume: false };
   }
 
+  // Heartbeat liveness for one socket: mark it alive, refresh on each pong, and ensure the sweep timer
+  // is running. A socket that stops answering pings is terminated by the next sweep (no half-open leaks).
+  private attachHeartbeat(ws: WsSocket): void {
+    const live = ws as AliveControlSocket;
+    live.isAlive = true;
+    ws.on("pong", () => {
+      live.isAlive = true;
+    });
+    this.startHeartbeat();
+  }
+
   private onConnection(ws: WsSocket, deps: UiHandlerDeps): void {
+    this.attachHeartbeat(ws);
     const voice = resolveVoiceCapability(currentGatewayConfig(deps) ?? { providers: [] }, {
       policyDisabled: isVoiceDisabledByPolicy(deps.env),
     });

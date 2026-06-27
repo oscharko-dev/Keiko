@@ -4,7 +4,11 @@
 // reviewable-text sanitisation, the replay buffer, and deterministic teardown.
 
 import { describe, expect, it, vi } from "vitest";
-import { VoiceControlConnection, type VoiceControlSocket } from "./voice-realtime.js";
+import {
+  sweepControlHeartbeat,
+  VoiceControlConnection,
+  type VoiceControlSocket,
+} from "./voice-realtime.js";
 import type { RealtimeNegotiationOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { VoiceControlMessage, VoicePersona } from "@oscharko-dev/keiko-contracts";
 
@@ -318,5 +322,31 @@ describe("VoiceControlConnection transcripts, replay & teardown", () => {
     socket.sent.length = 0;
     await conn.receive(clientMessage("capability.select", 1, { profile: "full-realtime" }));
     expect(socket.sent).toHaveLength(0);
+  });
+});
+
+describe("sweepControlHeartbeat (liveness)", () => {
+  it("terminates a socket that missed the previous ping; re-arms and pings a live one", () => {
+    const dead = { isAlive: false, ping: vi.fn(), terminate: vi.fn() };
+    const live = { isAlive: true, ping: vi.fn(), terminate: vi.fn() };
+    sweepControlHeartbeat([dead, live]);
+    expect(dead.terminate).toHaveBeenCalledTimes(1);
+    expect(dead.ping).not.toHaveBeenCalled();
+    expect(live.terminate).not.toHaveBeenCalled();
+    expect(live.ping).toHaveBeenCalledTimes(1);
+    // The live socket must answer THIS ping (isAlive re-armed to false) or be terminated next sweep.
+    expect(live.isAlive).toBe(false);
+  });
+
+  it("treats a freshly-connected socket (isAlive undefined) as live", () => {
+    const fresh: {
+      isAlive?: boolean;
+      ping: ReturnType<typeof vi.fn>;
+      terminate: ReturnType<typeof vi.fn>;
+    } = { ping: vi.fn(), terminate: vi.fn() };
+    sweepControlHeartbeat([fresh]);
+    expect(fresh.terminate).not.toHaveBeenCalled();
+    expect(fresh.ping).toHaveBeenCalledTimes(1);
+    expect(fresh.isAlive).toBe(false);
   });
 });

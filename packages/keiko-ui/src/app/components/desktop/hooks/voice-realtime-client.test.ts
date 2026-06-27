@@ -5,7 +5,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserVoiceControlClient, VoiceControlError } from "./voice-realtime-client";
-import { VOICE_PROTOCOL_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
+  VOICE_PROTOCOL_VERSION,
+} from "@oscharko-dev/keiko-contracts";
 
 type WsListener = (event: unknown) => void;
 
@@ -236,5 +239,42 @@ describe("createBrowserVoiceControlClient", () => {
     const parsed = JSON.parse(sendSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
     expect("persona" in parsed).toBe(false);
     ws.fireClose();
+  });
+
+  it("rejects connection-failed and closes the socket when the handshake stalls past the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { factory, latest } = makeFactory();
+      const client = createBrowserVoiceControlClient(factory);
+      const settled = client.negotiate("v=0\r\noffer");
+      // Attach the rejection expectation BEFORE the timer fires so the rejection is never momentarily
+      // unhandled (vitest reports a transiently-unhandled rejection as a false-positive error).
+      const rejection = expect(settled).rejects.toMatchObject({ reason: "connection-failed" });
+      const ws = latest();
+      ws.fireOpen(); // opens + sends session.create, but the server never replies
+      await vi.advanceTimersByTimeAsync(DEFAULT_VOICE_PROTOCOL_TIMEOUTS.signalingMs + 50);
+      await rejection;
+      expect(ws.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the timeout on a successful handshake (does not close a live socket later)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { factory, latest } = makeFactory();
+      const client = createBrowserVoiceControlClient(factory);
+      const settled = client.negotiate("v=0\r\noffer");
+      const ws = latest();
+      ws.fireOpen();
+      ws.fireMessage(serverMsg("session.created"));
+      ws.fireMessage(serverMsg("signal.sdp.answer", { sdp: "v=0\r\nanswer" }));
+      await expect(settled).resolves.toBe("v=0\r\nanswer");
+      await vi.advanceTimersByTimeAsync(DEFAULT_VOICE_PROTOCOL_TIMEOUTS.signalingMs + 50);
+      expect(ws.closed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
