@@ -49,6 +49,18 @@ const SECRET_KEY_VALUE_PATTERN = new RegExp(
 // userinfo class on each side of the ':' and bounded by '@', so no catastrophic backtracking.
 const URL_CREDENTIALS_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s:@/]+@/gi;
 
+// scheme://<userinfo>@host with NO ':' in the userinfo. A personal-access token used as the
+// username (https://<pat>@github.com/o/r.git — common for GitHub/GitLab) carries no colon, so the
+// colon-bearing pattern above misses it unless the token matches a known SHAPE (ghp_, sk-, …); an
+// opaque token would otherwise reach the browser via `git remote -v` output (#1573). This masks the
+// userinfo for credential-carrying schemes. A bare SSH userinfo is conventionally a non-secret login
+// name (git@…) — SSH authenticates with keys, not userinfo — so SSH-family schemes are preserved,
+// matching the existing intent of stripping credentials rather than usernames. Scoped to the URL
+// authority (a real scheme:// must precede the userinfo), so general '@' text is not over-matched.
+// ReDoS-safe: one linear userinfo class bounded by '@', no nesting.
+const URL_USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+@/gi;
+const SSH_USERINFO_SCHEME = /^(?:git\+)?ssh(?:\+git)?:\/\/$/i;
+
 const BUILTIN_PATTERNS: readonly RegExp[] = [
   GITHUB_TOKEN_PATTERN,
   AWS_ACCESS_KEY_PATTERN,
@@ -74,6 +86,9 @@ export function redact(input: string, additionalSecrets: readonly string[] = [])
     .replace(GENERIC_API_KEY_ASSIGNMENT_PATTERN, `$1${REDACTED}`)
     .replace(SECRET_KEY_VALUE_PATTERN, `$1$2${REDACTED}`)
     .replace(URL_CREDENTIALS_PATTERN, `$1${REDACTED}@`)
+    .replace(URL_USERINFO_PATTERN, (match, scheme: string) =>
+      SSH_USERINFO_SCHEME.test(scheme) ? match : `${scheme}${REDACTED}@`,
+    )
     .replace(API_KEY_PATTERN, REDACTED);
   for (const pattern of BUILTIN_PATTERNS) {
     output = output.replace(pattern, REDACTED);
