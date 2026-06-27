@@ -53,6 +53,7 @@ const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
 const MIN_CAMERA_ANIMATION_DURATION_MS = 90;
 const MAX_CAMERA_ANIMATION_DURATION_MS = 280;
+const PAN_CAMERA_SMOOTHNESS_SCALE = 5;
 
 function readView(): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
@@ -260,6 +261,10 @@ interface UsePanZoomArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
 
+interface QueueViewOptions {
+  readonly smoothnessScale?: number;
+}
+
 interface PanZoomResult {
   readonly viewRef: MutableRefObject<View>;
   readonly worldVP: () => ViewportWorld | null;
@@ -339,6 +344,7 @@ function usePanZoom({
   const renderedViewRef = useRef<View>(view);
   renderedViewRef.current = view;
   const pendingViewRef = useRef<View | null>(null);
+  const pendingViewSmoothnessScaleRef = useRef(1);
   const frameRef = useRef<number | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const animationStartRef = useRef<View>(view);
@@ -390,9 +396,13 @@ function usePanZoom({
   );
 
   const animateView = useCallback(
-    (target: View): void => {
+    (target: View, smoothnessScale = 1): void => {
+      const effectiveSmoothness = Math.min(
+        100,
+        Math.max(0, cameraSmoothness * smoothnessScale),
+      );
       if (
-        cameraSmoothness <= 0 ||
+        effectiveSmoothness <= 0 ||
         prefersReducedCameraMotion() ||
         typeof window.requestAnimationFrame !== "function" ||
         typeof window.cancelAnimationFrame !== "function"
@@ -408,7 +418,7 @@ function usePanZoom({
       const durationMs =
         MIN_CAMERA_ANIMATION_DURATION_MS +
         ((MAX_CAMERA_ANIMATION_DURATION_MS - MIN_CAMERA_ANIMATION_DURATION_MS) *
-          Math.min(100, Math.max(0, cameraSmoothness))) /
+          effectiveSmoothness) /
           100;
       const now =
         typeof performance !== "undefined" && typeof performance.now === "function"
@@ -460,11 +470,13 @@ function usePanZoom({
   }, [setView]);
 
   const queueView = useCallback(
-    (next: View | ((current: View) => View)): void => {
+    (next: View | ((current: View) => View), options: QueueViewOptions = {}): void => {
       const base = pendingViewRef.current ?? viewRef.current;
       const resolved = typeof next === "function" ? next(base) : next;
+      const smoothnessScale = options.smoothnessScale ?? 1;
       viewRef.current = resolved;
       pendingViewRef.current = resolved;
+      pendingViewSmoothnessScaleRef.current = smoothnessScale;
       scheduleViewPersist();
 
       if (
@@ -480,8 +492,10 @@ function usePanZoom({
       frameRef.current = window.requestAnimationFrame(() => {
         frameRef.current = null;
         const pending = pendingViewRef.current;
+        const pendingSmoothnessScale = pendingViewSmoothnessScaleRef.current;
         pendingViewRef.current = null;
-        if (pending !== null) animateView(pending);
+        pendingViewSmoothnessScaleRef.current = 1;
+        if (pending !== null) animateView(pending, pendingSmoothnessScale);
       });
     },
     [animateView, scheduleViewPersist, setView],
@@ -522,7 +536,9 @@ function usePanZoom({
       }
       e.preventDefault();
       const delta = normalizeWheelDelta(e);
-      queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }));
+      queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }), {
+        smoothnessScale: PAN_CAMERA_SMOOTHNESS_SCALE,
+      });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
@@ -565,7 +581,10 @@ function usePanZoom({
 
   const resetView = useCallback((): void => queueView({ zoom: 1, x: 0, y: 0 }), [queueView]);
   const panBy = useCallback(
-    (dx: number, dy: number): void => queueView((v) => ({ ...v, x: v.x + dx, y: v.y + dy })),
+    (dx: number, dy: number): void =>
+      queueView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }), {
+        smoothnessScale: PAN_CAMERA_SMOOTHNESS_SCALE,
+      }),
     [queueView],
   );
 

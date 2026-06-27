@@ -228,6 +228,57 @@ describe("useWorkspace wheel zoom routing", () => {
     });
   });
 
+  it("maps 20 percent smoothness to the maximum free-workspace pan easing", async () => {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        callbacks.push(callback);
+        return callbacks.length;
+      },
+    );
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      () =>
+        ({
+          matches: false,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList,
+    );
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness cameraSmoothness={20} />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("view-x")).toHaveTextContent("0"));
+
+    fireEvent.wheel(screen.getByTestId("workspace"), {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 20,
+      deltaY: 40,
+    });
+
+    callbacks[0]?.(0);
+    callbacks[1]?.(140);
+
+    await waitFor(() => {
+      const x = Number(screen.getByTestId("view-x").textContent);
+      const y = Number(screen.getByTestId("view-y").textContent);
+      expect(x).toBeLessThan(0);
+      expect(x).toBeGreaterThan(-20);
+      expect(y).toBeLessThan(0);
+      expect(y).toBeGreaterThan(-40);
+    });
+
+    callbacks[2]?.(280);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
+      expect(screen.getByTestId("view-y")).toHaveTextContent("-40");
+    });
+  });
+
   it("settles workspace camera animation before routing Ctrl wheel inside a window", async () => {
     const callbacks: FrameRequestCallback[] = [];
     vi.spyOn(performance, "now").mockReturnValue(0);
