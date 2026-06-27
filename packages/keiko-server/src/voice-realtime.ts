@@ -34,10 +34,12 @@ import {
   isVoiceReplayEligible,
   stripUnsafeFormatChars,
   validateVoiceControlMessage,
+  VOICE_PERSONAS,
   VOICE_PROFILE_NEGOTIATION_MODE,
   VOICE_PROTOCOL_VERSION,
   voiceMessageAllowedForProfile,
   type VoiceControlMessage,
+  type VoicePersona,
   type VoiceProfile,
   type VoiceProtocolErrorCode,
   type VoiceProviderLocality,
@@ -82,6 +84,10 @@ function isSafeIdentifier(value: unknown): value is string {
   );
 }
 
+function isVoicePersona(value: unknown): value is VoicePersona {
+  return typeof value === "string" && (VOICE_PERSONAS as readonly string[]).includes(value);
+}
+
 // The persistent per-session record. It outlives a single WebSocket so a reconnect (a new socket
 // presenting the same idempotency key) resumes the same session and replays the buffered events,
 // rather than creating a duplicate (protocol §7 idempotency + reconnect).
@@ -90,13 +96,20 @@ interface SessionState {
   readonly idempotencyKey: string;
   readonly profile: VoiceProfile;
   readonly providerLocality: VoiceProviderLocality | undefined;
+  // The client-selected product persona, validated at session.create. Drives the realtime voice id
+  // (resolved server-side). Undefined ⇒ the configured default voice.
+  readonly persona: VoicePersona | undefined;
   hostSeq: number;
   lastClientSeq: number;
   readonly replay: VoiceControlMessage[];
   detachedAt: number | undefined;
 }
 
-type NegotiateFn = (offerSdp: string, signal: AbortSignal) => Promise<RealtimeNegotiationOutcome>;
+type NegotiateFn = (
+  offerSdp: string,
+  persona: VoicePersona | undefined,
+  signal: AbortSignal,
+) => Promise<RealtimeNegotiationOutcome>;
 
 // The per-kind payload an `emit` carries: the kind plus its fields, minus the shared envelope that
 // `emit` fills in. A distributive Omit preserves the discriminated per-kind fields.
@@ -150,17 +163,26 @@ function realtimeInstructions(): string {
 
 // Resolves the realtime session voice from the provider's persona→voice mapping, guarded to a
 // realtime-valid id. Without an explicit voice the session would use the provider default; with a
-// TTS-only id (e.g. the operator-config `nova`) the realtime model rejects the session. The neutral
-// persona is the session default until per-user persona selection is plumbed through the control protocol.
-function resolveRealtimeVoiceId(provider: ModelProviderConfig): string {
+// TTS-only id (e.g. the operator-config `nova`) the realtime model rejects the session. The client's
+// selected persona wins when mapped; otherwise the neutral persona, then the first configured profile,
+// are the fallbacks — every result passes through `resolveRealtimeVoice` so it is always realtime-valid.
+function resolveRealtimeVoiceId(
+  provider: ModelProviderConfig,
+  persona: VoicePersona | undefined,
+): string {
   const profiles = provider.voiceProfiles ?? [];
+  const selected =
+    persona !== undefined
+      ? profiles.find((profile) => profile.persona === persona)?.voiceId
+      : undefined;
   const neutral = profiles.find((profile) => profile.persona === "neutral")?.voiceId;
-  return resolveRealtimeVoice(neutral ?? profiles[0]?.voiceId);
+  return resolveRealtimeVoice(selected ?? neutral ?? profiles[0]?.voiceId);
 }
 
 function buildNegotiationRequest(
   provider: ModelProviderConfig,
   offerSdp: string,
+  persona: VoicePersona | undefined,
   deps: UiHandlerDeps,
   signal: AbortSignal,
 ): RealtimeNegotiationRequest {
@@ -176,7 +198,7 @@ function buildNegotiationRequest(
       : {}),
     modelId: provider.modelId,
     instructions: realtimeInstructions(),
-    voiceId: resolveRealtimeVoiceId(provider),
+    voiceId: resolveRealtimeVoiceId(provider, persona),
     transcriptionModel: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
     offerSdp,
     signal,
@@ -346,7 +368,7 @@ export class VoiceControlConnection {
     this.negotiation = controller;
     let outcome: RealtimeNegotiationOutcome;
     try {
-      outcome = await this.negotiate(offerSdp, controller.signal);
+      outcome = await this.negotiate(offerSdp, this.session.persona, controller.signal);
     } catch {
       outcome = { ok: false, kind: "transport" };
     }
@@ -533,7 +555,11 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
   }
 
   private buildNegotiate(deps: UiHandlerDeps): NegotiateFn {
-    return async (offerSdp: string, signal: AbortSignal): Promise<RealtimeNegotiationOutcome> => {
+    return async (
+      offerSdp: string,
+      persona: VoicePersona | undefined,
+      signal: AbortSignal,
+    ): Promise<RealtimeNegotiationOutcome> => {
       const config = currentGatewayConfig(deps);
       if (config === undefined) {
         return { ok: false, kind: "unsupported-model" };
@@ -543,7 +569,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
         return { ok: false, kind: "unsupported-model" };
       }
       const negotiate = deps.voiceRealtimeNegotiationRequest ?? requestRealtimeNegotiation;
-      return negotiate(buildNegotiationRequest(provider, offerSdp, deps, signal));
+      return negotiate(buildNegotiationRequest(provider, offerSdp, persona, deps, signal));
     };
   }
 
@@ -584,7 +610,18 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
       ws.close(1008, "profile/negotiation mismatch");
       return undefined;
     }
-    return this.createOrResumeSession(ws, voice, sessionId, parsed.idempotencyKey, deps.redactor);
+    // Optional, content-free persona: validated against the closed VOICE_PERSONAS set. An absent or
+    // malformed value is treated as "no preference" (undefined) rather than rejected, so a stale client
+    // can never break session creation; the voice then falls back to the configured default.
+    const persona = isVoicePersona(parsed.persona) ? parsed.persona : undefined;
+    return this.createOrResumeSession(
+      ws,
+      voice,
+      sessionId,
+      parsed.idempotencyKey,
+      persona,
+      deps.redactor,
+    );
   }
 
   private createOrResumeSession(
@@ -592,6 +629,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
     voice: VoiceCapabilityResolution,
     sessionId: string,
     idempotencyKey: string,
+    persona: VoicePersona | undefined,
     redact: (value: unknown) => unknown,
   ): { state: SessionState; resume: boolean } | undefined {
     this.sweepExpired(Date.now());
@@ -610,6 +648,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
       idempotencyKey,
       profile: voice.profile,
       providerLocality: voice.providerLocality,
+      persona,
       hostSeq: 0,
       lastClientSeq: 0,
       replay: [],

@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { VoiceControlConnection, type VoiceControlSocket } from "./voice-realtime.js";
 import type { RealtimeNegotiationOutcome } from "@oscharko-dev/keiko-model-gateway";
-import type { VoiceControlMessage } from "@oscharko-dev/keiko-contracts";
+import type { VoiceControlMessage, VoicePersona } from "@oscharko-dev/keiko-contracts";
 
 const OFFER_SDP =
   "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
@@ -29,6 +29,7 @@ interface TestSession {
   idempotencyKey: string;
   profile: "full-realtime";
   providerLocality: "azure-foundry" | undefined;
+  persona: VoicePersona | undefined;
   hostSeq: number;
   lastClientSeq: number;
   replay: VoiceControlMessage[];
@@ -41,6 +42,7 @@ function makeSession(overrides: Partial<TestSession> = {}): TestSession {
     idempotencyKey: "idem-1",
     profile: "full-realtime",
     providerLocality: "azure-foundry",
+    persona: undefined,
     hostSeq: 0,
     lastClientSeq: 0,
     replay: [],
@@ -58,7 +60,11 @@ function okAsync(): Promise<RealtimeNegotiationOutcome> {
 }
 
 function connect(options?: {
-  negotiate?: (offerSdp: string, signal: AbortSignal) => Promise<RealtimeNegotiationOutcome>;
+  negotiate?: (
+    offerSdp: string,
+    persona: VoicePersona | undefined,
+    signal: AbortSignal,
+  ) => Promise<RealtimeNegotiationOutcome>;
   redact?: (value: unknown) => unknown;
   session?: TestSession;
 }): { socket: FakeSocket; session: TestSession; conn: VoiceControlConnection } {
@@ -135,14 +141,19 @@ describe("VoiceControlConnection.start", () => {
 describe("VoiceControlConnection proxied-SDP signaling", () => {
   it("negotiates an SDP offer and returns the answer with live media-track state", async () => {
     const negotiate = vi.fn(
-      (_offerSdp: string, _signal: AbortSignal): Promise<RealtimeNegotiationOutcome> => okAsync(),
+      (
+        _offerSdp: string,
+        _persona: VoicePersona | undefined,
+        _signal: AbortSignal,
+      ): Promise<RealtimeNegotiationOutcome> => okAsync(),
     );
     const { socket, session, conn } = connect({ negotiate });
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
     expect(negotiate).toHaveBeenCalledTimes(1);
-    expect(negotiate).toHaveBeenCalledWith(OFFER_SDP, expect.anything());
+    // offer + the session's (here undefined) persona + the abort signal.
+    expect(negotiate).toHaveBeenCalledWith(OFFER_SDP, undefined, expect.anything());
     expect(kinds(socket)).toEqual([
       "media.track.state",
       "signal.sdp.answer",
@@ -155,8 +166,25 @@ describe("VoiceControlConnection proxied-SDP signaling", () => {
     expect(session.replay.some((m) => m.kind === "signal.sdp.answer")).toBe(false);
   });
 
+  it("threads the session's selected persona to the negotiation seam (realtime honors the voice choice)", async () => {
+    const negotiate = vi.fn(
+      (
+        _offerSdp: string,
+        _persona: VoicePersona | undefined,
+        _signal: AbortSignal,
+      ): Promise<RealtimeNegotiationOutcome> => okAsync(),
+    );
+    const { conn } = connect({ negotiate, session: makeSession({ persona: "female" }) });
+    conn.start(false);
+    await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
+    expect(negotiate).toHaveBeenCalledWith(OFFER_SDP, "female", expect.anything());
+  });
+
   it("answers a negotiation failure with error negotiation-failed and an ended track", async () => {
-    const { socket, conn } = connect({ negotiate: (): Promise<RealtimeNegotiationOutcome> => Promise.resolve({ ok: false, kind: "transport" }) });
+    const { socket, conn } = connect({
+      negotiate: (): Promise<RealtimeNegotiationOutcome> =>
+        Promise.resolve({ ok: false, kind: "transport" }),
+    });
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));

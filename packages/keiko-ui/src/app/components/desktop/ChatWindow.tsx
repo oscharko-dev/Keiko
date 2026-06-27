@@ -1602,12 +1602,14 @@ function ComposerCore({
     [draft, setDraft],
   );
   const dictation = useDictation({ onInsert: insertTranscript });
-  const realtime = useRealtimeVoice({});
   // Issue #1559 — dialog-mode availability + persona selection. Offered ONLY when the deployment can
   // hold a realtime spoken dialogue AND advertises at least one voice persona, so a no-voice / STT-only
   // / speech-output-only deployment shows no dialogue switch and the composer stays clean (AC3). The
   // hook owns no transport: entering / leaving below starts / stops the existing realtime controller.
   const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
+  // The realtime session speaks in the user's selected persona; the host resolves it to a realtime-valid
+  // provider voice server-side (the browser never sees a voice id).
+  const realtime = useRealtimeVoice({ persona: voiceDialog.persona });
   // Issue #501 / #1558 — assistant speech-output binding with the live audio engine. The latest
   // COMPLETE assistant message in the transcript is the only text ever synthesized, so the spoken
   // answer cannot diverge from the visible text (AC2); a streaming or pending turn is excluded until it

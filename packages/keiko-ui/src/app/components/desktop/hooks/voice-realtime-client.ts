@@ -7,6 +7,7 @@
 import {
   VOICE_PROTOCOL_VERSION,
   type VoiceControlMessage,
+  type VoicePersona,
   isVoiceControlMessage,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -41,6 +42,7 @@ function buildWsUrl(): string {
 function buildSessionCreatePayload(
   sessionId: string,
   idempotencyKey: string,
+  persona?: VoicePersona,
 ): Record<string, unknown> {
   return {
     protocolVersion: VOICE_PROTOCOL_VERSION,
@@ -51,6 +53,8 @@ function buildSessionCreatePayload(
     idempotencyKey,
     requestedProfile: "full-realtime",
     negotiationMode: "proxied-sdp",
+    // Content-free persona enum so the host can resolve the realtime voice to the user's choice.
+    ...(persona !== undefined ? { persona } : {}),
   };
 }
 
@@ -69,6 +73,7 @@ function buildSdpOfferPayload(sessionId: string, sdp: string): Record<string, un
 // WebSocket so no real URL is opened unless the real browser client is used.
 export function createBrowserVoiceControlClient(
   socketFactory?: WebSocketFactory,
+  persona?: VoicePersona,
 ): VoiceControlClient {
   const factory = socketFactory ?? ((url: string) => new WebSocket(url));
   let ws: WebSocket | undefined;
@@ -113,7 +118,7 @@ export function createBrowserVoiceControlClient(
 
         ws.addEventListener("open", () => {
           opened = true;
-          ws?.send(JSON.stringify(buildSessionCreatePayload(sessionId, idempotencyKey)));
+          ws?.send(JSON.stringify(buildSessionCreatePayload(sessionId, idempotencyKey, persona)));
         });
 
         ws.addEventListener("message", (event: MessageEvent) => {
@@ -122,7 +127,10 @@ export function createBrowserVoiceControlClient(
             parsed = JSON.parse(typeof event.data === "string" ? event.data : String(event.data));
           } catch {
             reject(
-              new VoiceControlError("connection-failed", "Received an unparseable control message."),
+              new VoiceControlError(
+                "connection-failed",
+                "Received an unparseable control message.",
+              ),
             );
             return;
           }

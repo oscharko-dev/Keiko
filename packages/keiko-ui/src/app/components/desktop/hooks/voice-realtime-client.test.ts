@@ -62,10 +62,7 @@ function makeFactory(): { factory: (url: string) => WebSocket; latest: () => Fak
 }
 
 // Helper: build a valid server message envelope.
-function serverMsg(
-  kind: string,
-  extra: Record<string, unknown> = {},
-): Record<string, unknown> {
+function serverMsg(kind: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     protocolVersion: VOICE_PROTOCOL_VERSION,
     sessionId: "srv-session",
@@ -85,17 +82,21 @@ describe("createBrowserVoiceControlClient", () => {
     const ws = latest();
     // Simulate WS open + session.created + (optionally capability.offer) + signal.sdp.answer
     ws.fireOpen();
-    ws.fireMessage(serverMsg("session.created", {
-      profile: "full-realtime",
-      controlTransport: "loopback-websocket",
-      mediaTransport: "webrtc",
-      negotiationMode: "proxied-sdp",
-    }));
+    ws.fireMessage(
+      serverMsg("session.created", {
+        profile: "full-realtime",
+        controlTransport: "loopback-websocket",
+        mediaTransport: "webrtc",
+        negotiationMode: "proxied-sdp",
+      }),
+    );
     // capability.offer is ignored; media.track.state is ignored.
-    ws.fireMessage(serverMsg("capability.offer", {
-      profile: "full-realtime",
-      capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
-    }));
+    ws.fireMessage(
+      serverMsg("capability.offer", {
+        profile: "full-realtime",
+        capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+      }),
+    );
     ws.fireMessage(serverMsg("signal.sdp.answer", { sdp: "v=0\r\nanswer-sdp" }));
 
     const answerSdp = await negotiatePromise;
@@ -109,12 +110,14 @@ describe("createBrowserVoiceControlClient", () => {
 
     const ws = latest();
     ws.fireOpen();
-    ws.fireMessage(serverMsg("session.created", {
-      profile: "full-realtime",
-      controlTransport: "loopback-websocket",
-      mediaTransport: "webrtc",
-      negotiationMode: "proxied-sdp",
-    }));
+    ws.fireMessage(
+      serverMsg("session.created", {
+        profile: "full-realtime",
+        controlTransport: "loopback-websocket",
+        mediaTransport: "webrtc",
+        negotiationMode: "proxied-sdp",
+      }),
+    );
     ws.fireMessage(serverMsg("error", { code: "negotiation-failed" }));
 
     await expect(negotiatePromise).rejects.toMatchObject({ reason: "negotiation-failed" });
@@ -127,12 +130,14 @@ describe("createBrowserVoiceControlClient", () => {
 
     const ws = latest();
     ws.fireOpen();
-    ws.fireMessage(serverMsg("session.created", {
-      profile: "full-realtime",
-      controlTransport: "loopback-websocket",
-      mediaTransport: "webrtc",
-      negotiationMode: "proxied-sdp",
-    }));
+    ws.fireMessage(
+      serverMsg("session.created", {
+        profile: "full-realtime",
+        controlTransport: "loopback-websocket",
+        mediaTransport: "webrtc",
+        negotiationMode: "proxied-sdp",
+      }),
+    );
     ws.fireMessage(serverMsg("error", { code: "internal" }));
 
     await expect(negotiatePromise).rejects.toMatchObject({ reason: "connection-failed" });
@@ -203,6 +208,33 @@ describe("createBrowserVoiceControlClient", () => {
     expect(parsed.seq).toBe(0);
 
     // Clean up — fire close so the promise doesn't linger.
+    ws.fireClose();
+  });
+
+  it("includes the selected persona (content-free) in session.create when provided", async () => {
+    const { factory, latest } = makeFactory();
+    const sendSpy = vi.fn();
+    const client = createBrowserVoiceControlClient(factory, "female");
+    void client.negotiate("v=0\r\noffer").catch(() => {});
+    const ws = latest();
+    ws.send = sendSpy;
+    ws.fireOpen();
+    const parsed = JSON.parse(sendSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    expect(parsed.kind).toBe("session.create");
+    expect(parsed.persona).toBe("female");
+    ws.fireClose();
+  });
+
+  it("omits persona from session.create when none is selected (default voice)", async () => {
+    const { factory, latest } = makeFactory();
+    const sendSpy = vi.fn();
+    const client = createBrowserVoiceControlClient(factory);
+    void client.negotiate("v=0\r\noffer").catch(() => {});
+    const ws = latest();
+    ws.send = sendSpy;
+    ws.fireOpen();
+    const parsed = JSON.parse(sendSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    expect("persona" in parsed).toBe(false);
     ws.fireClose();
   });
 });

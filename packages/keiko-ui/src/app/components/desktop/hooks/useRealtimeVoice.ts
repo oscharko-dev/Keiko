@@ -9,7 +9,8 @@
 // Phases: idle → requesting (getUserMedia) → negotiating (WS handshake) → connected.
 // Every failure resolves to a non-blocking `error` phase that leaves the composer fully usable (AC4).
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import {
   createBrowserVoiceRtcTransport,
   VoiceRtcError,
@@ -117,6 +118,10 @@ function realtimeVoiceReducer(
 }
 
 export interface UseRealtimeVoiceOptions {
+  // The selected product voice persona ("male" | "female" | "neutral"). Forwarded content-free in the
+  // session.create control message so the host resolves the realtime voice to the user's choice; the
+  // browser never learns the provider voice id. Undefined keeps the host's configured default voice.
+  readonly persona?: VoicePersona | undefined;
   // Test seams: inject fake factories. Production uses the browser transport and the BFF client.
   readonly createTransport?: (() => VoiceRtcTransport) | undefined;
   readonly createControl?: (() => VoiceControlClient) | undefined;
@@ -153,7 +158,16 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   const [state, dispatch] = useReducer(realtimeVoiceReducer, INITIAL_STATE);
 
   const transportFactory = options.createTransport ?? createBrowserVoiceRtcTransport;
-  const controlFactory = options.createControl ?? createBrowserVoiceControlClient;
+  // Read the latest persona at start() time without churning the control factory identity (which is a
+  // dependency of the memoized start callback).
+  const personaRef = useRef(options.persona);
+  personaRef.current = options.persona;
+  const controlFactory = useMemo(
+    () =>
+      options.createControl ??
+      ((): VoiceControlClient => createBrowserVoiceControlClient(undefined, personaRef.current)),
+    [options.createControl],
+  );
   const audioSinkFactory = options.createAudioSink ?? createBrowserRealtimeAudioSink;
 
   const sessionRef = useRef<VoiceRtcSession | undefined>(undefined);
