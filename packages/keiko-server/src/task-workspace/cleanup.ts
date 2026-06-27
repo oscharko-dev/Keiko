@@ -442,15 +442,19 @@ function orphanLeavesFor(
 }
 
 // The repository-id set to sweep: the requested repository only, or — for a global sweep — every
-// repository with a persisted record plus every repository-id directory still on disk.
+// repository with a persisted record plus every repository-id directory still on disk. The
+// persisted-record ids are read from the already-built `knownByRepo` map (its keys ARE the distinct
+// persisted repository ids) rather than a second `store.listAll()`, so the global sweep scans the store
+// once instead of twice (#449 perf review — avoids re-running rowToInstance + validate over every row).
 function resolveOrphanRepositoryIds(
   ctx: CleanupCtx,
   request: WorkspaceOrphanCleanupRequest,
+  knownByRepo: ReadonlyMap<string, Set<string>>,
 ): ReadonlySet<string> {
   if (request.repositoryRoot !== undefined && request.repositoryRoot.length > 0) {
     return new Set([deriveRepositoryId(request.repositoryRoot)]);
   }
-  const ids = new Set(ctx.deps.store.listAll().map((instance) => instance.repositoryId));
+  const ids = new Set(knownByRepo.keys());
   for (const onDisk of managedRepoDirs(ctx)) ids.add(onDisk);
   return ids;
 }
@@ -484,7 +488,7 @@ async function cleanupOrphansImpl(
   const knownByRepo = buildKnownPathsByRepo(ctx);
   let removed = 0;
   const refused: WorkspaceOrphanRefusal[] = [];
-  for (const repositoryId of resolveOrphanRepositoryIds(ctx, request)) {
+  for (const repositoryId of resolveOrphanRepositoryIds(ctx, request, knownByRepo)) {
     const known = knownByRepo.get(repositoryId) ?? new Set<string>();
     for (const leaf of orphanLeavesFor(ctx, repositoryId, known)) {
       // Serialize each orphan removal under its derived `ws:` key (#449, ADR-0093 D1) so a sweep cannot
