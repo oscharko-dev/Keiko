@@ -1,14 +1,17 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  createFilesEntry,
+  deleteFilesEntry,
   fetchFilesPreview,
   fetchFilesTree,
   fetchGitDiff,
   fetchGitStatus,
   fetchProjects,
+  renameFilesEntry,
   updateChatConnectedScopes,
 } from "../../../../../lib/api";
 import type { Chat } from "../../../../../lib/types";
@@ -27,6 +30,9 @@ vi.mock("../../../../../lib/api", async () => {
     fetchFilesTree: vi.fn(),
     fetchGitStatus: vi.fn(),
     fetchGitDiff: vi.fn(),
+    createFilesEntry: vi.fn(),
+    renameFilesEntry: vi.fn(),
+    deleteFilesEntry: vi.fn(),
     updateChatConnectedScopes: vi.fn(),
   };
 });
@@ -976,5 +982,154 @@ describe("FilePreview", () => {
     expect(screen.queryByRole("button", { name: "Update connected scope" })).toBeNull();
     expect(updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(session.replaceChat).not.toHaveBeenCalled();
+  });
+});
+
+describe("FilesWidget file operations", () => {
+  beforeEach(() => {
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo",
+      state: "unavailable",
+      available: false,
+      reason: "not-a-repository",
+      detached: false,
+      clean: true,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [],
+      truncated: false,
+      maxChanges: 500,
+    });
+    // mockResolvedValue (not Once) so the post-mutation directory refresh re-resolves the tree.
+    vi.mocked(fetchFilesTree).mockResolvedValue({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "app.ts",
+          path: "app.ts",
+          kind: "file",
+          sizeBytes: 12,
+          extension: "ts",
+        },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("creates a new file from the toolbar and opens it", async () => {
+    vi.mocked(createFilesEntry).mockResolvedValue({ root: "/repo", path: "new.ts", kind: "file" });
+    const onOpenFile = vi.fn();
+    const onFilesMutated = vi.fn();
+    render(<FilesWidget root="/repo" onOpenFile={onOpenFile} onFilesMutated={onFilesMutated} />);
+    await screen.findByText("app.ts");
+
+    await userEvent.click(screen.getByRole("button", { name: "New file" }));
+    await userEvent.type(await screen.findByLabelText("New file name"), "new.ts{Enter}");
+
+    await waitFor(() =>
+      expect(createFilesEntry).toHaveBeenCalledWith({
+        root: "/repo",
+        path: "new.ts",
+        kind: "file",
+      }),
+    );
+    expect(onOpenFile).toHaveBeenCalledWith("/repo", "new.ts");
+    expect(onFilesMutated).toHaveBeenCalledWith({
+      op: "create",
+      mutation: { root: "/repo", path: "new.ts", kind: "file" },
+    });
+  });
+
+  it("creates a new folder from the toolbar", async () => {
+    vi.mocked(createFilesEntry).mockResolvedValue({
+      root: "/repo",
+      path: "lib",
+      kind: "directory",
+    });
+    render(<FilesWidget root="/repo" onOpenFile={vi.fn()} />);
+    await screen.findByText("app.ts");
+
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    await userEvent.type(await screen.findByLabelText("New folder name"), "lib{Enter}");
+
+    await waitFor(() =>
+      expect(createFilesEntry).toHaveBeenCalledWith({
+        root: "/repo",
+        path: "lib",
+        kind: "directory",
+      }),
+    );
+  });
+
+  it("renames a file from the right-click context menu", async () => {
+    vi.mocked(renameFilesEntry).mockResolvedValue({
+      root: "/repo",
+      path: "renamed.ts",
+      previousPath: "app.ts",
+      kind: "file",
+    });
+    const onFilesMutated = vi.fn();
+    render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
+    fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+    const input = await screen.findByLabelText("Rename app.ts");
+    await userEvent.clear(input);
+    await userEvent.type(input, "renamed.ts{Enter}");
+
+    await waitFor(() =>
+      expect(renameFilesEntry).toHaveBeenCalledWith({
+        root: "/repo",
+        path: "app.ts",
+        newPath: "renamed.ts",
+      }),
+    );
+    expect(onFilesMutated).toHaveBeenCalledWith({
+      op: "rename",
+      mutation: expect.objectContaining({ path: "renamed.ts", previousPath: "app.ts" }),
+    });
+  });
+
+  it("deletes a file from the context menu after confirmation", async () => {
+    vi.mocked(deleteFilesEntry).mockResolvedValue({ root: "/repo", path: "app.ts", kind: "file" });
+    const onFilesMutated = vi.fn();
+    render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
+    fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+    // The confirm dialog gates the destructive action.
+    await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(deleteFilesEntry).toHaveBeenCalledWith({ root: "/repo", path: "app.ts" }),
+    );
+    expect(onFilesMutated).toHaveBeenCalledWith({
+      op: "delete",
+      mutation: { root: "/repo", path: "app.ts", kind: "file" },
+    });
+  });
+
+  it("keeps the inline editor open and shows the error when a create fails", async () => {
+    vi.mocked(createFilesEntry).mockRejectedValue(
+      new Error("An entry with that name already exists."),
+    );
+    render(<FilesWidget root="/repo" onOpenFile={vi.fn()} />);
+    await screen.findByText("app.ts");
+
+    await userEvent.click(screen.getByRole("button", { name: "New file" }));
+    await userEvent.type(await screen.findByLabelText("New file name"), "app.ts{Enter}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("already exists");
+    expect(screen.getByLabelText("New file name")).toBeInTheDocument();
   });
 });

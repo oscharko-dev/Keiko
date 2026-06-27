@@ -1125,6 +1125,38 @@ export interface FilesWriteRequest {
   readonly baseVersion?: EditorDocumentVersion;
 }
 
+// File-tree mutation wire types (create / rename / delete). Each mutation is contained inside the
+// selected root, deny-checked on every affected path, and non-destructive by default (no overwrite).
+export interface FilesCreateRequest {
+  readonly root: string;
+  // Root-relative POSIX path of the new entry. Its parent must already exist inside the root.
+  readonly path: string;
+  readonly kind: "file" | "directory";
+}
+
+export interface FilesRenameRequest {
+  readonly root: string;
+  // Root-relative POSIX path of the existing entry to move.
+  readonly path: string;
+  // Root-relative POSIX destination path; its parent must exist and it must not already exist.
+  readonly newPath: string;
+}
+
+export interface FilesDeleteRequest {
+  readonly root: string;
+  // Root-relative POSIX path of the entry to delete. A directory is removed recursively.
+  readonly path: string;
+}
+
+// Shared response for create / rename / delete: the affected entry's canonical root-relative path
+// (the NEW path for create and rename), the prior path on a rename, and the entry kind.
+export interface FilesMutationResponse {
+  readonly root: string;
+  readonly path: string;
+  readonly previousPath?: string;
+  readonly kind: FilesEntryKind;
+}
+
 // Re-export the editor-session shapes that the file content/write wire types reference, so wire
 // consumers reach them on the same subpath (Issue #1197).
 export type {
