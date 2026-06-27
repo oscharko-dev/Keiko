@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { ReactElement } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
@@ -61,6 +61,7 @@ function mockWorkspaceRect(): void {
 
 describe("useWorkspace wheel zoom routing", () => {
   afterEach(() => {
+    cleanup();
     window.localStorage.clear();
     vi.restoreAllMocks();
   });

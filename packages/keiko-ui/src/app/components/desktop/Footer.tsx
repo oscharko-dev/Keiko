@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchHealth } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -28,7 +28,7 @@ interface FooterProps {
   readonly statusRef?: (node: HTMLElement | null) => void;
 }
 
-export function Footer({
+function FooterImpl({
   winCount,
   windows,
   windowPaletteOpen,
@@ -44,7 +44,7 @@ export function Footer({
     winCount === 1
       ? t("footer.windowSingular", { count: winCount })
       : t("footer.windowPlural", { count: winCount });
-  const sortedWindows = [...windows].sort((a, b) => b.z - a.z);
+  const sortedWindows = useMemo(() => [...windows].sort((a, b) => b.z - a.z), [windows]);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,3 +175,5 @@ export function Footer({
     </footer>
   );
 }
+
+export const Footer = memo(FooterImpl);
