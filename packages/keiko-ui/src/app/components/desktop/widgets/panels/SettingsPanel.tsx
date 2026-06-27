@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
-import { useI18n, type I18nTranslate } from "@/lib/i18n";
+import { LOCALE_LABELS, useI18n, type I18nTranslate } from "@/lib/i18n";
 import type {
   ConversationIneligibilityReason,
   GatewayReadinessProbeResult,
@@ -558,8 +558,8 @@ function GeneralPrefs(): ReactNode {
   const languageSections = [
     {
       options: [
-        { value: "en", label: "English" },
-        { value: "de", label: "German" },
+        { value: "en", label: LOCALE_LABELS.en },
+        { value: "de", label: LOCALE_LABELS.de },
       ],
     },
   ] as const;
@@ -578,13 +578,12 @@ function GeneralPrefs(): ReactNode {
             ariaLabel={t("settings.language.label")}
             ariaDescribedBy={languageHelpId}
             attached={false}
-            leadingVisual={<span aria-hidden="true" className="settings-language-flag" />}
-            menuMinWidth={148}
+            leadingVisual={<Icons.browser size={15} />}
+            menuMinWidth={172}
             onValueChange={(next) => {
               if (next === "en" || next === "de") setLocale(next);
             }}
             sections={languageSections}
-            showChevron={false}
             showMenuHeader={false}
             triggerClassName="settings-language-select"
             value={locale}
