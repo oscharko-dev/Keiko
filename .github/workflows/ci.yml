@@ -78,6 +78,7 @@ jobs:
           npm --workspace @oscharko-dev/keiko-editor test
       - run: npm run typecheck
       - run: npm run check:version-consistency
+      - run: npm run check:git-client-evidence
       - run: npm run lint
       - run: npm run arch:check
       - run: npm run arch:check:negative

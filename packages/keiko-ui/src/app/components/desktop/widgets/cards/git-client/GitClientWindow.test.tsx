@@ -794,8 +794,12 @@ describe("GitClientWindow — toolbar actions", () => {
 
     await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
     const panel = await screen.findByRole("region", { name: "Pull Request" });
-    await user.type(within(panel).getByLabelText("Pull Request title"), "fix: auth path");
-    await user.click(within(panel).getByRole("button", { name: "Create Pull Request" }));
+    const titleInput = within(panel).getByLabelText("Pull Request title");
+    fireEvent.change(titleInput, { target: { value: "fix: auth path" } });
+    await waitFor(() => expect(titleInput).toHaveValue("fix: auth path"));
+    const submit = within(panel).getByRole("button", { name: "Create Pull Request" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    await user.click(submit);
 
     await waitFor(() => expect(within(panel).getByTestId("gpr-outcome")).toBeInTheDocument());
     expect(within(panel).getByTestId("gpr-outcome")).toHaveTextContent("rejected: provider-auth");

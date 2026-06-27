@@ -17,7 +17,10 @@
     "/api/git-delivery/merge/preview",
     "/api/git-delivery/merge/execute"
   ],
-  "fixture": "temporary registered repository with deterministic route stubs",
+  "fixture": {
+    "kind": "temporary registered repository with deterministic route stubs",
+    "browserProjectPath": "keiko-git-pr-merge-1577"
+  },
   "statesVerified": [
     "Git-window right pane switches from Diff to Pull Request and back",
     "Git-window right pane switches from Diff to Merge",
@@ -29,6 +32,7 @@
     "prPreviewCalls": 1,
     "mergePreviewCalls": 1,
     "remoteUrlsRendered": false,
+    "localPathsRendered": false,
     "externalCredentialsUsed": false
   },
   "artifacts": [
