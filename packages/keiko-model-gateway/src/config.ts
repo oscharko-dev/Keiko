@@ -28,6 +28,8 @@ import type {
   ModelKind,
   ModelProviderConfig,
   OutboundHttpEgressConfig,
+  ProviderEndpointStyle,
+  RealtimeAuthMode,
   VoicePersona,
   VoicePersonaVoice,
   VoiceProviderLocality,
@@ -53,6 +55,12 @@ const BEARER_API_KEY_HEADER_NAME_SET = new Set<string>([
   DEFAULT_API_KEY_HEADER_NAME,
   "x-litellm-key",
 ]);
+const PROVIDER_ENDPOINT_STYLES: readonly ProviderEndpointStyle[] = [
+  "openai-compatible",
+  "azure-openai-deployment",
+];
+const REALTIME_AUTH_MODES: readonly RealtimeAuthMode[] = ["api-key", "ephemeral-session"];
+const API_VERSION_RE = /^\d{4}-\d{2}-\d{2}(?:-preview)?$/u;
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
 
@@ -431,6 +439,93 @@ function resolveApiKeyHeaderName(
     env.KEIKO_DEFAULT_API_KEY_HEADER_NAME,
     "KEIKO_DEFAULT_API_KEY_HEADER_NAME",
   );
+}
+
+function resolveProviderEndpointStyle(
+  rawValue: unknown,
+  path: string,
+  modelId: string,
+  env: EnvSource,
+): ProviderEndpointStyle | undefined {
+  const token = envModelToken(modelId);
+  const perModelName = `KEIKO_MODEL_${token}_ENDPOINT_STYLE`;
+  const perModel = env[perModelName];
+  const defaultValue = env.KEIKO_DEFAULT_ENDPOINT_STYLE;
+  const value =
+    perModel !== undefined && perModel.length > 0
+      ? perModel
+      : rawValue !== undefined
+        ? rawValue
+        : defaultValue;
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  return requireEnum<ProviderEndpointStyle>(value, path, PROVIDER_ENDPOINT_STYLES);
+}
+
+function resolveProviderApiVersion(
+  rawValue: unknown,
+  path: string,
+  modelId: string,
+  env: EnvSource,
+): string | undefined {
+  const token = envModelToken(modelId);
+  const perModelName = `KEIKO_MODEL_${token}_API_VERSION`;
+  const perModel = env[perModelName];
+  const defaultValue = env.KEIKO_DEFAULT_API_VERSION;
+  const value =
+    perModel !== undefined && perModel.length > 0
+      ? perModel
+      : rawValue !== undefined
+        ? rawValue
+        : defaultValue;
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  const apiVersion = requireNonEmptyString(value, path);
+  if (!API_VERSION_RE.test(apiVersion)) {
+    throw new ConfigInvalidError(`${path} must be YYYY-MM-DD or YYYY-MM-DD-preview`);
+  }
+  return apiVersion;
+}
+
+function assertProviderEndpointVersion(
+  endpointStyle: ProviderEndpointStyle | undefined,
+  apiVersion: string | undefined,
+  path: string,
+): void {
+  if (endpointStyle === "azure-openai-deployment" && apiVersion === undefined) {
+    throw new ConfigInvalidError(
+      `${path}.apiVersion is required when ${path}.endpointStyle is "azure-openai-deployment"`,
+    );
+  }
+  if (endpointStyle !== "azure-openai-deployment" && apiVersion !== undefined) {
+    throw new ConfigInvalidError(
+      `${path}.apiVersion requires ${path}.endpointStyle to be "azure-openai-deployment"`,
+    );
+  }
+}
+
+function resolveRealtimeAuthMode(
+  rawValue: unknown,
+  path: string,
+  modelId: string,
+  env: EnvSource,
+): RealtimeAuthMode | undefined {
+  const token = envModelToken(modelId);
+  const perModelName = `KEIKO_MODEL_${token}_REALTIME_AUTH_MODE`;
+  const perModel = env[perModelName];
+  const defaultValue = env.KEIKO_DEFAULT_REALTIME_AUTH_MODE;
+  const value =
+    perModel !== undefined && perModel.length > 0
+      ? perModel
+      : rawValue !== undefined
+        ? rawValue
+        : defaultValue;
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  return requireEnum<RealtimeAuthMode>(value, path, REALTIME_AUTH_MODES);
 }
 
 // Validates a resolved baseUrl for scheme and credential hygiene. Host/IP is
@@ -966,6 +1061,20 @@ function parseProviderConfig(
 ): ModelProviderConfig {
   const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env, options);
   const voiceProfiles = parseVoiceProfiles(raw.voiceProfiles, `${path}.voiceProfiles`);
+  const endpointStyle = resolveProviderEndpointStyle(
+    raw.endpointStyle,
+    `${path}.endpointStyle`,
+    modelId,
+    env,
+  );
+  const apiVersion = resolveProviderApiVersion(raw.apiVersion, `${path}.apiVersion`, modelId, env);
+  assertProviderEndpointVersion(endpointStyle, apiVersion, path);
+  const realtimeAuthMode = resolveRealtimeAuthMode(
+    raw.realtimeAuthMode,
+    `${path}.realtimeAuthMode`,
+    modelId,
+    env,
+  );
   return {
     modelId,
     baseUrl,
@@ -976,6 +1085,9 @@ function parseProviderConfig(
       modelId,
       env,
     ),
+    ...(endpointStyle === undefined ? {} : { endpointStyle }),
+    ...(apiVersion === undefined ? {} : { apiVersion }),
+    ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
     timeoutMs: requirePositiveInt(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(

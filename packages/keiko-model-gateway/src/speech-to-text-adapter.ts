@@ -19,11 +19,14 @@ import {
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
+import type { ProviderEndpointStyle } from "./types.js";
 
 export interface SpeechToTextRequest {
   readonly endpoint: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string;
+  readonly endpointStyle?: ProviderEndpointStyle;
+  readonly apiVersion?: string;
   readonly modelId: string;
   // Raw audio bytes (already decoded from the loopback request). Never persisted by this module.
   readonly audio: Uint8Array;
@@ -96,9 +99,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function joinUrl(endpoint: string): string {
+function joinOpenAiCompatibleUrl(endpoint: string): string {
   const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
   return `${trimmed}/audio/transcriptions`;
+}
+
+function joinAzureDeploymentUrl(endpoint: string, modelId: string, apiVersion: string): string {
+  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  return `${trimmed}/openai/deployments/${encodeURIComponent(
+    modelId,
+  )}/audio/transcriptions?api-version=${encodeURIComponent(apiVersion)}`;
+}
+
+function joinUrl(request: SpeechToTextRequest): string {
+  if (request.endpointStyle === "azure-openai-deployment") {
+    return joinAzureDeploymentUrl(request.endpoint, request.modelId, request.apiVersion ?? "");
+  }
+  return joinOpenAiCompatibleUrl(request.endpoint);
 }
 
 function headerName(name: string | undefined): string {
@@ -227,7 +244,7 @@ function buildRequest(request: SpeechToTextRequest): BuiltRequest {
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {
-    url: joinUrl(request.endpoint),
+    url: joinUrl(request),
     headers,
     body,
     signal,
