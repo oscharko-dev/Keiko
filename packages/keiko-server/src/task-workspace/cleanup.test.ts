@@ -48,6 +48,7 @@ const __twMutex = createWorkspaceMutexRegistry();
 let repoRoot: string;
 let managedRoot: string;
 let outsideDir: string;
+let extraRepos: string[];
 let db: DatabaseSync;
 let store: WorkspaceInstanceStore;
 let pointerStore: ActiveWorkspacePointerStore;
@@ -107,13 +108,35 @@ function cleanup(): WorkspaceCleanupService {
 }
 
 async function provisionTask(taskId: string): Promise<WorkspaceInstance> {
+  return provisionTaskInRepo(repoRoot, taskId);
+}
+
+async function provisionTaskInRepo(
+  repositoryRequestPath: string,
+  taskId: string,
+): Promise<WorkspaceInstance> {
   const result = await provisioning().provision({
-    repositoryRequestPath: repoRoot,
+    repositoryRequestPath,
     taskId,
     baseBranch: "main",
     requestedBy: "u",
   });
   return result.instance;
+}
+
+// A second disposable git repository so the global orphan sweep can be exercised across more than one
+// repository-id directory. Tracked in `extraRepos` and removed in afterEach.
+function makeRepo(prefix: string): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  extraRepos.push(root);
+  git(["init", "-q", "-b", "main"], root);
+  git(["config", "user.email", "test@keiko.example"], root);
+  git(["config", "user.name", "Keiko Test"], root);
+  git(["config", "commit.gpgsign", "false"], root);
+  writeFileSync(join(root, "README.md"), "# demo\n");
+  git(["add", "README.md"], root);
+  git(["commit", "-q", "-m", "initial"], root);
+  return root;
 }
 
 function setState(
@@ -131,6 +154,7 @@ beforeEach(() => {
     "task-workspaces",
   );
   outsideDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-clean-outside-")));
+  extraRepos = [];
   git(["init", "-q", "-b", "main"]);
   git(["config", "user.email", "test@keiko.example"]);
   git(["config", "user.name", "Keiko Test"]);
@@ -152,6 +176,7 @@ afterEach(() => {
   rmSync(repoRoot, { recursive: true, force: true });
   rmSync(managedRoot, { recursive: true, force: true });
   rmSync(outsideDir, { recursive: true, force: true });
+  for (const extra of extraRepos) rmSync(extra, { recursive: true, force: true });
 });
 
 describe("governed cleanup happy path (AC4)", () => {
@@ -436,6 +461,39 @@ describe("orphan cleanup", () => {
     expect(result.refused).toHaveLength(1);
     expect(result.refused[0]?.refusalReason).toBe("worktree-dirty");
     expect(existsSync(orphanPath)).toBe(true);
+  });
+
+  it("global sweep finds orphans across multiple repositories while sparing live worktrees", async () => {
+    // Two distinct repositories → two distinct repository-id directories under the managed root. Each
+    // keeps one live (persisted) worktree and contributes one orphan (record deleted, directory kept).
+    // The global sweep (no repositoryRoot) must visit BOTH repository-id directories and remove exactly
+    // the two orphans, leaving the two live worktrees and their records untouched.
+    const repoB = makeRepo("keiko-clean-repo-b-");
+
+    const orphanA = await provisionTask("t-multi-a-orphan");
+    const liveA = await provisionTask("t-multi-a-live");
+    const orphanB = await provisionTaskInRepo(repoB, "t-multi-b-orphan");
+    const liveB = await provisionTaskInRepo(repoB, "t-multi-b-live");
+
+    // Sanity: the two repositories land under different repository-id directories.
+    expect(orphanA.repositoryId).not.toBe(orphanB.repositoryId);
+
+    store.delete(orphanA.workspaceId);
+    store.delete(orphanB.workspaceId);
+    expect(existsSync(orphanA.managedWorktreePath)).toBe(true);
+    expect(existsSync(orphanB.managedWorktreePath)).toBe(true);
+
+    const result = await cleanup().cleanupOrphans({ requestedBy: "u", operatorApproved: true });
+
+    expect(result.removed).toBe(2);
+    expect(result.refused).toEqual([]);
+    expect(existsSync(orphanA.managedWorktreePath)).toBe(false);
+    expect(existsSync(orphanB.managedWorktreePath)).toBe(false);
+    // Live worktrees in both repositories survive, records intact.
+    expect(existsSync(liveA.managedWorktreePath)).toBe(true);
+    expect(existsSync(liveB.managedWorktreePath)).toBe(true);
+    expect(store.getById(liveA.workspaceId)).toBeDefined();
+    expect(store.getById(liveB.workspaceId)).toBeDefined();
   });
 
   it("does not treat a persisted instance's worktree as an orphan", async () => {
