@@ -2,10 +2,16 @@
 
 import { useId, useRef } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
-import type { GitChangedFile, GitRepositoryStatusResponse } from "@/lib/types";
+import type {
+  GitChangedFile,
+  GitHistoryEntry,
+  GitHistoryResponse,
+  GitRepositoryStatusResponse,
+} from "@/lib/types";
 import { Icons } from "../../../Icons";
 import type { GitMutationOutcome } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
+import { HistoryPane } from "./HistoryPane";
 import {
   badgeStyle,
   CHANGES_HEADER_STYLE,
@@ -79,6 +85,11 @@ interface ChangesPaneProps {
   readonly stagingBusy: boolean;
   readonly stagingOutcome: GitMutationOutcome | null;
   readonly stagingError: string | null;
+  readonly history: GitHistoryResponse | null;
+  readonly historyLoading: boolean;
+  readonly historyError: string | null;
+  readonly selectedCommitSha: string | null;
+  readonly onSelectCommit: (entry: GitHistoryEntry) => void;
   /** Commit composer, pinned beneath the changed-file list on the Changes tab. */
   readonly commitComposer: ReactNode;
 }
@@ -103,6 +114,11 @@ export function ChangesPane({
   stagingBusy,
   stagingOutcome,
   stagingError,
+  history,
+  historyLoading,
+  historyError,
+  selectedCommitSha,
+  onSelectCommit,
   commitComposer,
 }: ChangesPaneProps): ReactNode {
   const tablistRef = useRef<HTMLDivElement | null>(null);
@@ -196,10 +212,13 @@ export function ChangesPane({
           flex: 1,
         }}
       >
-        <div style={EMPTY_STATE_STYLE}>
-          <Icons.activity size={20} />
-          <p style={SUBTLE_TEXT_STYLE}>Commit history appears here once a commit is selected.</p>
-        </div>
+        <HistoryPane
+          history={history}
+          loading={historyLoading}
+          error={historyError}
+          selectedSha={selectedCommitSha}
+          onSelect={onSelectCommit}
+        />
       </div>
     </div>
   );
@@ -262,6 +281,16 @@ function ChangesList({
       </div>
     );
   }
+  if (status.detached) {
+    return (
+      <div style={EMPTY_STATE_STYLE} role="alert" aria-live="assertive">
+        <Icons.branch size={20} />
+        <p style={SUBTLE_TEXT_STYLE}>
+          Detached HEAD. Switch to an existing branch or create a branch before committing or syncing.
+        </p>
+      </div>
+    );
+  }
 
   const hasChanges = !status.clean && status.changes.length > 0;
   const bulkActionsBlocked = stagingBusy || status.truncated;
@@ -270,6 +299,24 @@ function ChangesList({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+      {status.conflictedCount > 0 ? (
+        <div
+          role="alert"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-3)",
+            padding: "var(--space-3) var(--space-4)",
+            borderBottom: "1px solid var(--border-subtle)",
+            color: "var(--feedback-danger)",
+            background: "color-mix(in oklch, var(--feedback-danger) 10%, var(--surface-primary))",
+            font: "var(--text-body-sm) var(--font-ui)",
+          }}
+        >
+          <Icons.info size={14} />
+          Resolve conflicted files before committing or syncing.
+        </div>
+      ) : null}
       {hasChanges ? (
         <div style={CHANGES_HEADER_STYLE}>
           <span style={{ ...SUBTLE_TEXT_STYLE, flex: 1, minWidth: 0 }}>

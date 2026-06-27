@@ -5,9 +5,10 @@ import type { GitBranchListEntry } from "@/lib/api";
 import type { GitRepositoryStatusResponse, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import KeikoSelect from "../../../KeikoSelect";
+import { BranchSelector } from "./BranchSelector";
+import { SyncControl, type GitSyncView } from "./SyncControl";
 import {
   SECONDARY_BTN,
-  STATUS_PILL_STYLE,
   TOOLBAR_STYLE,
   disabledStyle,
 } from "./git-client-styles";
@@ -19,20 +20,17 @@ interface RepositoryToolbarProps {
   readonly branchesLoading: boolean;
   readonly status: GitRepositoryStatusResponse | null;
   readonly statusLoading: boolean;
+  readonly branchBusy: boolean;
+  readonly syncView: GitSyncView;
+  readonly syncBusy: boolean;
+  readonly syncOutcome: string | null;
+  readonly syncError: string | null;
   readonly onSelectRepository: (path: string) => void;
+  readonly onSwitchBranch: (branchName: string) => void;
+  readonly onCreateBranch: () => void;
+  readonly onRunSync: () => void;
   readonly onOpenEditor?: ((root: string) => void) | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;
-}
-
-// The Sync control is a read-only status pill in the shell (#1574). Fetch/Pull/Push execution and
-// ahead/behind counts are reserved for #1576; the pill reflects the current repository's cleanliness.
-function syncLabel(status: GitRepositoryStatusResponse | null, statusLoading: boolean): string {
-  if (statusLoading && status === null) return "Sync: checking";
-  if (status === null) return "Sync";
-  if (!status.available) return "Sync unavailable";
-  if (status.clean) return "Sync: up to date";
-  const count = status.changes.length;
-  return `Sync: ${count.toString()} pending ${count === 1 ? "change" : "changes"}`;
 }
 
 function currentBranchName(
@@ -50,8 +48,15 @@ export function RepositoryToolbar({
   branches,
   branchesLoading,
   status,
-  statusLoading,
+  branchBusy,
+  syncView,
+  syncBusy,
+  syncOutcome,
+  syncError,
   onSelectRepository,
+  onSwitchBranch,
+  onCreateBranch,
+  onRunSync,
   onOpenEditor,
   onOpenFiles,
 }: RepositoryToolbarProps): ReactNode {
@@ -88,41 +93,23 @@ export function RepositoryToolbar({
         onValueChange={onSelectRepository}
       />
 
-      {/* Read-only display of the current branch in the #1574 shell. Branch switching (an
-          operable selector that calls branchSwitch) is reserved for #1576; rendering this
-          control as always-disabled keeps it honest — it shows the current branch but cannot
-          be operated, so a user is never offered a no-op interaction. */}
-      <KeikoSelect
-        value={branchValue}
-        ariaLabel="Branch"
-        menuTitle="Branch"
-        placeholder={branchesLoading ? "Loading branches" : "No branch"}
-        disabled
-        leadingVisual={<Icons.branch size={13} />}
-        mono
-        triggerStyle={{ minWidth: 160 }}
-        sections={[
-          {
-            options: branches.map((branch) => ({
-              value: branch.name,
-              label: branch.name,
-              ...(branch.current ? { badge: "current" } : {}),
-            })),
-          },
-        ]}
-        onValueChange={() => undefined}
+      <BranchSelector
+        branches={branches}
+        currentBranch={branchValue}
+        loading={branchesLoading}
+        disabled={!hasRepository || status?.available === false}
+        busy={branchBusy}
+        onSwitchBranch={onSwitchBranch}
+        onCreateBranch={onCreateBranch}
       />
 
-      <span
-        style={STATUS_PILL_STYLE}
-        aria-label={syncLabel(status, statusLoading)}
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        <Icons.reset size={11} />
-        {syncLabel(status, statusLoading)}
-      </span>
+      <SyncControl
+        view={syncView}
+        busy={syncBusy}
+        outcome={syncOutcome}
+        error={syncError}
+        onRun={onRunSync}
+      />
 
       <span style={{ flex: 1 }} />
 

@@ -10,12 +10,15 @@
 // Visible product text says "Git" only — never "Governed Git", "Governance", or "Delivery path"
 // (contract §7). Styling composes existing globals.css tokens via inline styles (ADR-0051); no new CSS.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
 import type {
   GitChangedFile,
   GitDiffScope,
+  GitHistoryEntry,
+  GitHistoryResponse,
+  GitRepositorySummary,
   GitRepositoryStatusResponse,
   ProjectWithAvailability,
 } from "@/lib/types";
@@ -29,6 +32,8 @@ import { ChangesPane } from "./ChangesPane";
 import type { ChangesTab } from "./ChangesPane";
 import { CommitComposer } from "./CommitComposer";
 import { DiffPane } from "./DiffPane";
+import { NewBranchDialog } from "./NewBranchDialog";
+import { deriveSyncView } from "./SyncControl";
 import { BODY_STYLE, SIDEBAR_STYLE, WORKSPACE_STYLE } from "./git-client-styles";
 
 export interface GitClientWindowProps {
@@ -74,6 +79,15 @@ export function GitClientWindow({
   );
   const [branches, setBranches] = useState<readonly GitBranchListEntry[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
+  const [summary, setSummary] = useState<GitRepositorySummary | null>(null);
+  const [summaryProjectKey, setSummaryProjectKey] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [history, setHistory] = useState<GitHistoryResponse | null>(null);
+  const [historyProjectKey, setHistoryProjectKey] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
   const [status, setStatus] = useState<GitRepositoryStatusResponse | null>(null);
   const [statusProjectKey, setStatusProjectKey] = useState<string | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -84,12 +98,19 @@ export function GitClientWindow({
   const [diffScope, setDiffScope] = useState<GitDiffScope>("worktree");
   const [commitNonce, setCommitNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [newBranchOpen, setNewBranchOpen] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncOutcome, setSyncOutcome] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const syncSeqRef = useRef(0);
 
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
   const projectKey = selectedPath ?? "";
+  const branchActions = useGitActions(client, projectKey);
   const staging = useGitActions(client, projectKey);
   const commit = useGitActions(client, projectKey);
+  const resetBranchActions = branchActions.reset;
   const resetStaging = staging.reset;
   const resetCommit = commit.reset;
 
@@ -117,20 +138,27 @@ export function GitClientWindow({
     if (projectId !== undefined && projectId !== "") setSelectedPath(projectId);
   }, [projectId]);
 
-  // Repository change: reset the per-repo view (branches, selection, diff scope) and invalidate any
-  // in-flight staging/commit mutation so a late response from the previous repository cannot surface
-  // its outcome under the newly selected one.
+  // Repository change: reset the per-repo view and invalidate any in-flight mutations so a late
+  // response from the previous repository cannot surface under the newly selected one.
   useEffect(() => {
     resetStaging();
     resetCommit();
+    resetBranchActions();
+    syncSeqRef.current += 1;
+    setSyncOutcome(null);
+    setSyncError(null);
+    setSyncBusy(false);
+    setSelectedChangePath(null);
+    setDiffScope("worktree");
+  }, [selectedPath, resetStaging, resetCommit, resetBranchActions]);
+
+  useEffect(() => {
     if (selectedPath === null) {
       setBranches([]);
       return;
     }
     let cancelled = false;
     setBranchesLoading(true);
-    setSelectedChangePath(null);
-    setDiffScope("worktree");
     void client.listBranches(selectedPath).then(
       (res) => {
         if (cancelled) return;
@@ -146,7 +174,76 @@ export function GitClientWindow({
     return () => {
       cancelled = true;
     };
-  }, [client, selectedPath, resetStaging, resetCommit]);
+  }, [client, selectedPath, statusRevision]);
+
+  // Repository summary carries upstream/ahead/behind/remotes for the #1576 sync control.
+  useEffect(() => {
+    if (selectedPath === null) {
+      setSummary(null);
+      setSummaryProjectKey(null);
+      setSummaryError(null);
+      return;
+    }
+    let cancelled = false;
+    setSummaryLoading(true);
+    setSummaryError(null);
+    void client.getSummary(selectedPath).then(
+      (res) => {
+        if (cancelled) return;
+        setSummary(res);
+        setSummaryProjectKey(selectedPath);
+        setSummaryLoading(false);
+      },
+      (err: unknown) => {
+        if (cancelled) return;
+        setSummary(null);
+        setSummaryProjectKey(null);
+        setSummaryLoading(false);
+        setSummaryError(formatGitError(err));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, selectedPath, statusRevision]);
+
+  // History loads independently from status; selecting the first commit gives the detail pane a
+  // deterministic populated state while preserving user selection when it still exists.
+  useEffect(() => {
+    if (selectedPath === null) {
+      setHistory(null);
+      setHistoryProjectKey(null);
+      setHistoryError(null);
+      setSelectedCommitSha(null);
+      return;
+    }
+    let cancelled = false;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    void client.getHistory({ root: selectedPath, limit: 50 }).then(
+      (res) => {
+        if (cancelled) return;
+        setHistory(res);
+        setHistoryProjectKey(selectedPath);
+        setHistoryLoading(false);
+        setSelectedCommitSha((current) => {
+          if (res.entries.length === 0) return null;
+          if (current !== null && res.entries.some((entry) => entry.sha === current)) return current;
+          return res.entries[0]?.sha ?? null;
+        });
+      },
+      (err: unknown) => {
+        if (cancelled) return;
+        setHistory(null);
+        setHistoryProjectKey(null);
+        setHistoryLoading(false);
+        setHistoryError(formatGitError(err));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, selectedPath, statusRevision]);
 
   // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
   // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
@@ -202,6 +299,14 @@ export function GitClientWindow({
     }
   }, [commitOutcome]);
 
+  const branchOutcome = branchActions.flow.outcome;
+  useEffect(() => {
+    if (branchOutcome?.status === "succeeded") {
+      setNewBranchOpen(false);
+      setStatusRevision((r) => r + 1);
+    }
+  }, [branchOutcome]);
+
   const selectRepository = useCallback(
     (path: string): void => {
       setSelectedPath(path);
@@ -219,6 +324,12 @@ export function GitClientWindow({
   );
 
   const activeStatus = selectedPath !== null && statusProjectKey === selectedPath ? status : null;
+  const activeSummary =
+    selectedPath !== null && summaryProjectKey === selectedPath ? summary : null;
+  const activeHistory =
+    selectedPath !== null && historyProjectKey === selectedPath ? history : null;
+  const selectedCommit: GitHistoryEntry | null =
+    activeHistory?.entries.find((entry) => entry.sha === selectedCommitSha) ?? null;
 
   const selectChange = useCallback(
     (path: string): void => {
@@ -278,6 +389,109 @@ export function GitClientWindow({
     [client, commit, selectedPath],
   );
 
+  const switchBranch = useCallback(
+    (branchName: string): void => {
+      if (selectedPath === null) return;
+      branchActions.runMutation(() => client.branchSwitch({ projectId: selectedPath, branchName }));
+    },
+    [branchActions, client, selectedPath],
+  );
+
+  const createBranch = useCallback(
+    ({ branchName, baseBranchName }: { readonly branchName: string; readonly baseBranchName: string }): void => {
+      if (selectedPath === null) return;
+      const baseBranch = branches.find((branch) => branch.name === baseBranchName);
+      if (baseBranch === undefined) return;
+      branchActions.runMutation(async () => {
+        const created = await client.branchCreate({
+          projectId: selectedPath,
+          branchName,
+          baseBranchName,
+          startPointRefHash: baseBranch.headRefHash,
+        });
+        if (created.status !== "succeeded") return created;
+        const switched = await client.branchSwitch({ projectId: selectedPath, branchName });
+        return switched.status === "succeeded" ? { ...switched, actionKind: "branch-create" } : switched;
+      });
+    },
+    [branchActions, branches, client, selectedPath],
+  );
+
+  const syncView = deriveSyncView(activeSummary, summaryLoading);
+
+  const runSync = useCallback((): void => {
+    if (selectedPath === null || syncView.disabled || syncView.action === "blocked") return;
+    const seq = syncSeqRef.current + 1;
+    syncSeqRef.current = seq;
+    setSyncBusy(true);
+    setSyncOutcome(null);
+    setSyncError(null);
+    const done = (message: string): void => {
+      if (syncSeqRef.current !== seq) return;
+      setSyncBusy(false);
+      setSyncOutcome(message);
+      setStatusRevision((r) => r + 1);
+    };
+    const fail = (err: unknown): void => {
+      if (syncSeqRef.current !== seq) return;
+      setSyncBusy(false);
+      setSyncError(formatGitError(err));
+    };
+    if (syncView.action === "fetch" || syncView.action === "pull") {
+      const operation = syncView.action;
+      void client
+        .syncPreview({
+          operation,
+          projectId: selectedPath,
+          remote: syncView.remoteAlias,
+        })
+        .then((preview) => {
+          if (!preview.executable) {
+            done(`Blocked: ${preview.blockReason ?? "sync unavailable"}`);
+            return undefined;
+          }
+          return client.syncExecute({
+            operation,
+            projectId: selectedPath,
+            remote: syncView.remoteAlias,
+          });
+        })
+        .then((res) => {
+          if (res === undefined) return;
+          done(`${operation === "fetch" ? "Fetch" : "Pull"}: ${res.status}`);
+        }, fail);
+      return;
+    }
+    if (
+      (syncView.action === "push" || syncView.action === "publish-upstream") &&
+      syncView.remoteAlias !== undefined &&
+      syncView.remoteBranchName !== undefined &&
+      syncView.sourceBranchName !== undefined
+    ) {
+      const input = {
+        projectId: selectedPath,
+        remoteAlias: syncView.remoteAlias,
+        remoteBranchName: syncView.remoteBranchName,
+        sourceBranchName: syncView.sourceBranchName,
+        forcePush: false,
+        setUpstreamTracking: syncView.setUpstreamTracking ?? false,
+      };
+      void client
+        .pushPreview(input)
+        .then((preview) => {
+          if (preview.policyOutcome !== "allowed" || preview.preflightBlockingCodes.length > 0) {
+            done(`Blocked: ${preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", ")}`);
+            return undefined;
+          }
+          return client.pushExecute(input);
+        })
+        .then((res) => {
+          if (res === undefined) return;
+          done(`${syncView.action === "push" ? "Push" : "Publish upstream"}: ${res.status}`);
+        }, fail);
+    }
+  }, [client, selectedPath, syncView]);
+
   const openGovernedWindow = (key: string): void => {
     if (selectedPath === null) return;
     openWindow?.(key, { projectPath: selectedPath });
@@ -294,7 +508,24 @@ export function GitClientWindow({
         branchesLoading={branchesLoading}
         status={activeStatus}
         statusLoading={statusLoading}
+        branchBusy={branchActions.flow.busy}
+        syncView={
+          summaryError === null
+            ? syncView
+            : {
+                action: "blocked",
+                label: "Sync unavailable",
+                description: summaryError,
+                disabled: true,
+              }
+        }
+        syncBusy={syncBusy}
+        syncOutcome={syncOutcome}
+        syncError={syncError}
         onSelectRepository={selectRepository}
+        onSwitchBranch={switchBranch}
+        onCreateBranch={() => setNewBranchOpen(true)}
+        onRunSync={runSync}
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
       />
@@ -323,6 +554,11 @@ export function GitClientWindow({
             stagingBusy={staging.flow.busy}
             stagingOutcome={visibleStagingOutcome}
             stagingError={staging.flow.error}
+            history={activeHistory}
+            historyLoading={historyLoading}
+            historyError={historyError}
+            selectedCommitSha={selectedCommitSha}
+            onSelectCommit={(entry) => setSelectedCommitSha(entry.sha)}
             commitComposer={
               <CommitComposer
                 key={`${selectedPath ?? "none"}:${commitNonce.toString()}`}
@@ -344,6 +580,7 @@ export function GitClientWindow({
           client={client}
           repositoryRoot={selectedPath}
           selectedChangePath={selectedChangePath}
+          selectedCommit={tab === "history" ? selectedCommit : null}
           scope={diffScope}
           onScopeChange={setDiffScope}
           revision={statusRevision}
@@ -356,6 +593,16 @@ export function GitClientWindow({
           client={client}
           onAdded={onRepositoryAdded}
           onClose={() => setDialogOpen(false)}
+        />
+      ) : null}
+      {newBranchOpen ? (
+        <NewBranchDialog
+          branches={branches}
+          currentBranch={activeStatus?.branch ?? branches.find((branch) => branch.current)?.name ?? ""}
+          busy={branchActions.flow.busy}
+          error={branchActions.flow.error}
+          onCreate={createBranch}
+          onClose={() => setNewBranchOpen(false)}
         />
       ) : null}
     </div>
