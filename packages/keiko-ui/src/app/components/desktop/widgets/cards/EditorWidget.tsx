@@ -39,7 +39,7 @@ import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirt
 import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
-import { FilesWidget } from "./FilesWidget";
+import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
 
 const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
   () => import("./EditorRuntimeWidget"),
@@ -514,6 +514,35 @@ export function EditorWidget({
     [commitLayout, layout, workspaceRoot],
   );
 
+  // A file mutation from the sidebar tree: re-home (rename) or close (delete) any open tabs so they do
+  // not go stale and 404. A create needs no layout change — the new file is opened directly by the
+  // FilesWidget. The renamed tab reloads from disk (a clean buffer), so the stale dirty marker is
+  // pruned by `reconcileEditorDirtyByPane` inside `commitLayout`; the old hot-exit snapshot is dropped
+  // so discarded edits cannot resurface under the deleted/renamed path.
+  const handleFilesMutated = useCallback(
+    (event: FilesMutationEvent): void => {
+      const { op, mutation } = event;
+      if (
+        op === "rename" &&
+        mutation.previousPath !== undefined &&
+        mutation.previousPath !== mutation.path
+      ) {
+        commitLayout(
+          editorLayoutReducer(layout, {
+            type: "rename-file",
+            from: mutation.previousPath,
+            to: mutation.path,
+          }),
+        );
+        void deleteEditorHotExitSnapshot(workspaceRoot, mutation.previousPath);
+      } else if (op === "delete") {
+        commitLayout(editorLayoutReducer(layout, { type: "remove-file", file: mutation.path }));
+        void deleteEditorHotExitSnapshot(workspaceRoot, mutation.path);
+      }
+    },
+    [commitLayout, layout, workspaceRoot],
+  );
+
   const closeOpenFile = useCallback(
     async (paneId: string, path: string): Promise<boolean> =>
       requestDirtyClose({
@@ -948,6 +977,7 @@ export function EditorWidget({
               openFilesDirectly
               onRootChange={openRoot}
               onOpenFile={openFile}
+              onFilesMutated={handleFilesMutated}
             />
           </aside>
           <button

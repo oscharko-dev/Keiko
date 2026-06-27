@@ -10,7 +10,7 @@
  * every BFF call and the file/save lifecycle; this surface adds no I/O of its own (Engineering Note:
  * workspace API clients stay in the host, never in the editor tier).
  */
-import { type ReactElement } from "react";
+import { memo, type ReactElement } from "react";
 import {
   KeikoCodeEditor,
   type EditorBuffer,
@@ -95,7 +95,7 @@ export interface EditorSurfaceProps {
   readonly showStatusFooter?: boolean | undefined;
 }
 
-export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
+function EditorSurface(props: EditorSurfaceProps): ReactElement {
   // Idempotent and cheap after the first call; computing it in render means the very first paint
   // already reflects an unsupported runtime instead of flashing an editor that cannot mount.
   const runtime = ensureMonacoRuntime();
@@ -135,3 +135,12 @@ export default function EditorSurface(props: EditorSurfaceProps): ReactElement {
     />
   );
 }
+
+/**
+ * Memoized so frequent host re-renders that leave the editor-relevant props untouched do not
+ * re-reconcile the Monaco surface. The host re-renders on every cursor/selection move and on each
+ * diagnostic-count update, but `buffer` is memoized and the resolver callbacks are `useCallback`-stable,
+ * so on those renders every prop here is referentially equal and `React.memo` skips the surface.
+ * `React.memo` only bails on shallow-equal props, so it can never paint stale content.
+ */
+export default memo(EditorSurface);

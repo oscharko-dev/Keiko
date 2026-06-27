@@ -536,10 +536,7 @@ export default function EditorRuntimeWidget({
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer<
     Reducer<TestGenerationFlowState, TestGenerationFlowAction>
-  >(
-    testGenerationReducer,
-    IDLE_TEST_GENERATION_STATE,
-  );
+  >(testGenerationReducer, IDLE_TEST_GENERATION_STATE);
   const testGenSeqRef = useRef(0);
   const testGenAbortRef = useRef<AbortController | null>(null);
   const [currentSelection, setCurrentSelection] = useState<EditorRange | null>(null);
@@ -1989,6 +1986,14 @@ export default function EditorRuntimeWidget({
                     onDragEnd={tabHandle?.onDragEnd}
                     onKeyDown={tabHandle?.onKeyDown}
                     onClick={() => handleSelectTab(path)}
+                    onAuxClick={(event) => {
+                      // Middle-click closes the tab (VS Code parity), routed through the same
+                      // dirty-close guard as the × button.
+                      if (event.button === 1 && onCloseOpenFile !== undefined) {
+                        event.preventDefault();
+                        void handleCloseTab(path);
+                      }
+                    }}
                   >
                     <FileIcon name={path} />
                     <span className="ed-tab-label">{path}</span>

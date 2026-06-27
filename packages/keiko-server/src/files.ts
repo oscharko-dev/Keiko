@@ -5,7 +5,18 @@
 import type { IncomingMessage } from "node:http";
 import type { Dirent, Stats } from "node:fs";
 import { createHash } from "node:crypto";
-import { lstat, opendir, open, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  opendir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import {
   basename,
   dirname,
@@ -1503,6 +1514,271 @@ export async function writeFilesContent(args: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Filesystem mutations (create / rename / delete) for the Files widget.
+//
+// Every mutation reuses the SAME containment model as the read surface: the root is realpath-resolved,
+// the target (or, for a create, its parent) is resolved through symlinks and re-checked for
+// containment and against the deny-list, and metadata is redaction-checked. Mutations are
+// non-destructive by default — a create never overwrites (atomic O_EXCL), a rename refuses an
+// existing destination, and symlinks are rejected rather than silently dereferenced. The deny-list
+// (.git, node_modules, secrets, build output) is enforced on both source and destination, so a
+// mutation can never reach an excluded path even though it is otherwise inside the root.
+// ---------------------------------------------------------------------------
+
+export interface FilesMutationResponse {
+  // Echo of the root identity the request used (registered project path or arbitrary absolute root).
+  readonly root: string;
+  // Canonical root-relative POSIX path of the affected entry (the NEW path for create and rename).
+  readonly path: string;
+  // For a rename, the prior root-relative path, so the client can re-home open editor tabs.
+  readonly previousPath?: string;
+  readonly kind: FilesEntryKind;
+}
+
+function isErrnoException(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as NodeJS.ErrnoException).code === code
+  );
+}
+
+// Translate a Node fs errno into a FilesError without ever echoing the absolute path or the raw OS
+// message back to the client — mirroring the non-probeable DENIED_MESSAGE discipline. A FilesError is
+// passed through unchanged; an unrecognised error becomes a generic 500 so an internal detail (e.g.
+// a path embedded in the OS message) cannot leak through the response body.
+function mapNodeFsError(error: unknown): FilesError {
+  if (error instanceof FilesError) return error;
+  if (isErrnoException(error, "EEXIST") || isErrnoException(error, "ENOTEMPTY")) {
+    return new FilesError(409, "ALREADY_EXISTS", "An entry with that name already exists.");
+  }
+  if (isErrnoException(error, "ENOENT")) {
+    return new FilesError(404, "NOT_FOUND", "The requested path was not found.");
+  }
+  if (isErrnoException(error, "EACCES") || isErrnoException(error, "EPERM")) {
+    return new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  if (isErrnoException(error, "EXDEV")) {
+    return new FilesError(
+      400,
+      "CROSS_DEVICE",
+      "This move crosses filesystems and is not supported here.",
+    );
+  }
+  if (isErrnoException(error, "ENOTDIR")) {
+    return new FilesError(400, "NOT_DIRECTORY", "Part of the path is not a folder.");
+  }
+  if (isErrnoException(error, "EISDIR")) {
+    return new FilesError(400, "IS_DIRECTORY", "The target is a folder.");
+  }
+  return new FilesError(500, "IO_ERROR", "The file operation could not be completed.");
+}
+
+interface ResolvedCreationTarget {
+  readonly root: string;
+  readonly realRoot: string;
+  readonly relativePath: string;
+  readonly path: string;
+}
+
+// Resolve a path that should NOT exist yet (a create destination, or a rename target). The PARENT
+// directory must already exist; it is resolved through symlinks and re-checked for containment and
+// deny so a link in the parent chain cannot redirect the new entry outside the root. The final name
+// is validated as a single, safe path segment.
+// The final segment of a new entry must be a single, safe name (the parent path was already split
+// off and validated). normalizeRelativePath has already rejected NUL/absolute/`..`-escape inputs.
+function assertSafeLeafName(name: string): void {
+  if (name.length === 0 || name === "." || name === "..") {
+    throw new FilesError(400, "BAD_PATH", "The new entry name is not valid.");
+  }
+}
+
+// Resolve the directory a new entry will be created in: it must already exist, be a directory,
+// resolve (through symlinks) to a path inside the root, and not be deny-listed.
+async function resolveContainedParentDir(
+  realRoot: string,
+  parentRelative: string,
+): Promise<string> {
+  const parentNative = nativePath(realRoot, parentRelative === "." ? "" : parentRelative);
+  let realParent: string;
+  try {
+    realParent = await realpath(parentNative);
+  } catch {
+    throw new FilesError(404, "PARENT_NOT_FOUND", "The destination folder does not exist.");
+  }
+  if (!(await stat(realParent)).isDirectory()) {
+    throw new FilesError(400, "NOT_DIRECTORY", "The destination is not a folder.");
+  }
+  if (!isContained(realRoot, realParent)) {
+    throw new FilesError(403, "PATH_ESCAPE", "The destination is outside the selected root.");
+  }
+  const parentRelReal = rootRelativePosixPath(realRoot, realParent);
+  if (parentRelReal.length > 0 && pathIsDenied(parentRelReal)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  return realParent;
+}
+
+async function resolveCreationTarget(
+  store: UiStore,
+  rootInput: string | null,
+  pathInput: string | null,
+  redactor: FilesMetadataRedactor,
+): Promise<ResolvedCreationTarget> {
+  const root = await resolveRoot(store, rootInput, redactor);
+  const relativePath = normalizeRelativePath(pathInput);
+  if (relativePath.length === 0) {
+    throw new FilesError(400, "BAD_PATH", "A new entry needs a name inside the selected root.");
+  }
+  assertMetadataSafe(relativePath, redactor);
+  // Deny check runs before any existence probe so a denied path is never distinguishable by status.
+  if (pathIsDenied(relativePath)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  const name = pathPosix.basename(relativePath);
+  assertSafeLeafName(name);
+  const realParent = await resolveContainedParentDir(
+    root.realRoot,
+    pathPosix.dirname(relativePath),
+  );
+  const targetNative = join(realParent, name);
+  if (!isContained(root.realRoot, targetNative)) {
+    throw new FilesError(403, "PATH_ESCAPE", "The destination is outside the selected root.");
+  }
+  const targetRel = rootRelativePosixPath(root.realRoot, targetNative);
+  assertMetadataSafe(targetRel, redactor);
+  if (pathIsDenied(targetRel)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  return { root: root.root, realRoot: root.realRoot, relativePath: targetRel, path: targetNative };
+}
+
+export async function createFilesEntry(args: {
+  readonly store: UiStore;
+  readonly rootInput: string | null;
+  readonly pathInput: string | null;
+  readonly kind: FilesEntryKind;
+  readonly redactor?: FilesMetadataRedactor | undefined;
+}): Promise<FilesMutationResponse> {
+  if (args.kind !== "file" && args.kind !== "directory") {
+    throw new FilesError(400, "BAD_REQUEST", "A new entry must be a file or a directory.");
+  }
+  const target = await resolveCreationTarget(
+    args.store,
+    args.rootInput,
+    args.pathInput,
+    args.redactor ?? staticFilesMetadataRedactor,
+  );
+  try {
+    if (args.kind === "directory") {
+      // Non-recursive: the parent was already verified, and EEXIST surfaces as a clean 409.
+      await mkdir(target.path);
+    } else {
+      // `wx` = O_CREAT | O_EXCL: atomically refuse to overwrite an existing entry AND refuse to
+      // follow a final symlink, closing the create-time TOCTOU/symlink window.
+      await writeFile(target.path, "", { flag: "wx" });
+    }
+  } catch (error) {
+    throw mapNodeFsError(error);
+  }
+  return { root: target.root, path: target.relativePath, kind: args.kind };
+}
+
+// No-clobber guard for a rename. Refuses any pre-existing destination (lstat so a symlink there is
+// detected too), with ONE exception: a pure case-only rename on a case-insensitive filesystem
+// (macOS/Windows), where `lstat(newPath)` resolves to the SAME inode as the source — legitimate
+// because it only changes the on-disk case. The exception is gated by realpath identity, never a raw
+// string compare. rename() has no atomic no-overwrite flag in Node; containment + deny bound the
+// residual TOCTOU window.
+async function assertRenameDestinationFree(targetPath: string, sourcePath: string): Promise<void> {
+  try {
+    await lstat(targetPath);
+  } catch {
+    return; // destination does not exist — free to use
+  }
+  let resolved: string | null;
+  try {
+    resolved = await realpath(targetPath);
+  } catch {
+    resolved = null;
+  }
+  if (resolved !== sourcePath) {
+    throw new FilesError(409, "ALREADY_EXISTS", "An entry with that name already exists.");
+  }
+}
+
+export async function renameFilesEntry(args: {
+  readonly store: UiStore;
+  readonly rootInput: string | null;
+  readonly pathInput: string | null;
+  readonly newPathInput: string | null;
+  readonly redactor?: FilesMetadataRedactor | undefined;
+}): Promise<FilesMutationResponse> {
+  const redactor = args.redactor ?? staticFilesMetadataRedactor;
+  const source = await resolveInsideRoot(args.store, args.rootInput, args.pathInput, redactor);
+  if (source.relativePath.length === 0) {
+    throw new FilesError(400, "BAD_PATH", "The root folder cannot be renamed.");
+  }
+  if (source.symlink) {
+    throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be renamed here.");
+  }
+  const kind: FilesEntryKind = source.stats.isDirectory() ? "directory" : "file";
+  const target = await resolveCreationTarget(
+    args.store,
+    args.rootInput,
+    args.newPathInput,
+    redactor,
+  );
+  if (target.relativePath === source.relativePath) {
+    throw new FilesError(409, "ALREADY_EXISTS", "The new name matches the current name.");
+  }
+  // A folder cannot be moved into itself or one of its own descendants (it would orphan the subtree).
+  if (target.relativePath.startsWith(`${source.relativePath}/`)) {
+    throw new FilesError(400, "BAD_PATH", "A folder cannot be moved into itself.");
+  }
+  await assertRenameDestinationFree(target.path, source.path);
+  try {
+    await rename(source.path, target.path);
+  } catch (error) {
+    throw mapNodeFsError(error);
+  }
+  return {
+    root: target.root,
+    path: target.relativePath,
+    previousPath: source.relativePath,
+    kind,
+  };
+}
+
+export async function deleteFilesEntry(args: {
+  readonly store: UiStore;
+  readonly rootInput: string | null;
+  readonly pathInput: string | null;
+  readonly redactor?: FilesMetadataRedactor | undefined;
+}): Promise<FilesMutationResponse> {
+  const target = await resolveInsideRoot(
+    args.store,
+    args.rootInput,
+    args.pathInput,
+    args.redactor ?? staticFilesMetadataRedactor,
+  );
+  if (target.relativePath.length === 0) {
+    throw new FilesError(400, "BAD_PATH", "The root folder cannot be deleted.");
+  }
+  if (target.symlink) {
+    throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be deleted here.");
+  }
+  const kind: FilesEntryKind = target.stats.isDirectory() ? "directory" : "file";
+  // `recursive` removes a non-empty folder, matching editor expectations. Containment + the deny-list
+  // bound the blast radius to inside the selected root and away from .git/node_modules/secrets, and
+  // symlinks are rejected above so `rm` never recurses THROUGH a link out of the root.
+  try {
+    await rm(target.path, { recursive: kind === "directory", force: false });
+  } catch (error) {
+    throw mapNodeFsError(error);
+  }
+  return { root: target.root, path: target.relativePath, kind };
+}
+
 export async function readFilesPreview(
   store: UiStore,
   rootInput: string | null,
@@ -1656,4 +1932,95 @@ export async function handleFilesContent(
       ? readFilesContentRoute(ctx, deps)
       : writeFilesContentRoute(ctx, deps),
   );
+}
+
+// Bounded body for a mutation request: a path plus a few short fields, never file content.
+const MAX_FILES_MUTATION_BODY_BYTES = 16_384;
+
+export async function handleFilesCreate(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => {
+    const body = await readJsonObject(ctx.req, MAX_FILES_MUTATION_BODY_BYTES);
+    if (isRouteResult(body)) return body;
+    const rootInput = typeof body.root === "string" ? body.root : null;
+    const pathInput = typeof body.path === "string" ? body.path : null;
+    const kind = body.kind === "directory" ? "directory" : body.kind === "file" ? "file" : null;
+    if (rootInput === null || pathInput === null || kind === null) {
+      return {
+        status: 400,
+        body: errorBody(
+          "BAD_REQUEST",
+          "root, path, and kind ('file' or 'directory') are required to create an entry.",
+        ),
+      };
+    }
+    return {
+      status: 201,
+      body: await createFilesEntry({
+        store: deps.store,
+        rootInput,
+        pathInput,
+        kind,
+        redactor: deps.redactor,
+      }),
+    };
+  });
+}
+
+export async function handleFilesRename(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => {
+    const body = await readJsonObject(ctx.req, MAX_FILES_MUTATION_BODY_BYTES);
+    if (isRouteResult(body)) return body;
+    const rootInput = typeof body.root === "string" ? body.root : null;
+    const pathInput = typeof body.path === "string" ? body.path : null;
+    const newPathInput = typeof body.newPath === "string" ? body.newPath : null;
+    if (rootInput === null || pathInput === null || newPathInput === null) {
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "root, path, and newPath are required to rename an entry."),
+      };
+    }
+    return {
+      status: 200,
+      body: await renameFilesEntry({
+        store: deps.store,
+        rootInput,
+        pathInput,
+        newPathInput,
+        redactor: deps.redactor,
+      }),
+    };
+  });
+}
+
+export async function handleFilesDelete(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => {
+    const body = await readJsonObject(ctx.req, MAX_FILES_MUTATION_BODY_BYTES);
+    if (isRouteResult(body)) return body;
+    const rootInput = typeof body.root === "string" ? body.root : null;
+    const pathInput = typeof body.path === "string" ? body.path : null;
+    if (rootInput === null || pathInput === null) {
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "root and path are required to delete an entry."),
+      };
+    }
+    return {
+      status: 200,
+      body: await deleteFilesEntry({
+        store: deps.store,
+        rootInput,
+        pathInput,
+        redactor: deps.redactor,
+      }),
+    };
+  });
 }

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,12 +8,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EDITOR_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import {
   buildRedactor,
+  createFilesEntry,
   createInMemoryUiStore,
+  deleteFilesEntry,
   handleFilesContent,
   listFilesDirectories,
   readFilesContent,
   readFilesPreview,
   readFilesTree,
+  renameFilesEntry,
   searchFiles,
   writeFilesContent,
 } from "./index.js";
@@ -1079,5 +1082,175 @@ describe("desktop files browser", () => {
     const names = listing.entries.map((entry) => entry.name);
 
     expect(names).toContain("ordinary.txt");
+  });
+});
+
+describe("desktop files mutations (create / rename / delete)", () => {
+  let root: string;
+  let store: UiStore;
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-mut-")));
+    await mkdir(join(root, "src"));
+    await writeFile(join(root, "src", "app.ts"), "export const a = 1;\n");
+    store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+  });
+
+  afterEach(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("creates a file and a directory inside the root", async () => {
+    const file = await createFilesEntry({
+      store,
+      rootInput: root,
+      pathInput: "src/new.ts",
+      kind: "file",
+    });
+    expect(file).toMatchObject({ path: "src/new.ts", kind: "file" });
+    const content = await readFile(join(root, "src", "new.ts"), "utf8");
+    expect(content).toBe("");
+
+    const dir = await createFilesEntry({
+      store,
+      rootInput: root,
+      pathInput: "lib",
+      kind: "directory",
+    });
+    expect(dir).toMatchObject({ path: "lib", kind: "directory" });
+    expect((await stat(join(root, "lib"))).isDirectory()).toBe(true);
+  });
+
+  it("never overwrites an existing entry on create (atomic O_EXCL)", async () => {
+    await expect(
+      createFilesEntry({ store, rootInput: root, pathInput: "src/app.ts", kind: "file" }),
+    ).rejects.toMatchObject({ status: 409, code: "ALREADY_EXISTS" });
+  });
+
+  it("rejects creating outside the root, inside the deny list, or with a missing parent", async () => {
+    await expect(
+      createFilesEntry({ store, rootInput: root, pathInput: "../escape.ts", kind: "file" }),
+    ).rejects.toMatchObject({ status: 400, code: "PATH_ESCAPE" });
+    await expect(
+      createFilesEntry({ store, rootInput: root, pathInput: ".git/hooks/evil", kind: "file" }),
+    ).rejects.toMatchObject({ status: 403, code: "DENIED" });
+    await expect(
+      createFilesEntry({ store, rootInput: root, pathInput: "node_modules/x.ts", kind: "file" }),
+    ).rejects.toMatchObject({ status: 403, code: "DENIED" });
+    await expect(
+      createFilesEntry({ store, rootInput: root, pathInput: "missing/deep/file.ts", kind: "file" }),
+    ).rejects.toMatchObject({ status: 404, code: "PARENT_NOT_FOUND" });
+    await expect(
+      createFilesEntry({ store, rootInput: root, pathInput: "", kind: "file" }),
+    ).rejects.toMatchObject({ status: 400, code: "BAD_PATH" });
+  });
+
+  it("renames a file and reports the previous path", async () => {
+    const result = await renameFilesEntry({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      newPathInput: "src/renamed.ts",
+    });
+    expect(result).toMatchObject({
+      path: "src/renamed.ts",
+      previousPath: "src/app.ts",
+      kind: "file",
+    });
+    await expect(stat(join(root, "src", "app.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(root, "src", "renamed.ts"), "utf8")).toBe("export const a = 1;\n");
+  });
+
+  it("renames a folder and carries its contents", async () => {
+    const result = await renameFilesEntry({
+      store,
+      rootInput: root,
+      pathInput: "src",
+      newPathInput: "lib",
+    });
+    expect(result).toMatchObject({ path: "lib", previousPath: "src", kind: "directory" });
+    expect(await readFile(join(root, "lib", "app.ts"), "utf8")).toBe("export const a = 1;\n");
+  });
+
+  it("refuses to clobber an existing destination on rename", async () => {
+    await writeFile(join(root, "src", "other.ts"), "x\n");
+    await expect(
+      renameFilesEntry({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        newPathInput: "src/other.ts",
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "ALREADY_EXISTS" });
+  });
+
+  it("deny-checks both ends of a rename and refuses moving a folder into itself", async () => {
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "config"), "[core]\n");
+    // Source inside the deny list is invisible: it 403s before any move is attempted.
+    await expect(
+      renameFilesEntry({
+        store,
+        rootInput: root,
+        pathInput: ".git/config",
+        newPathInput: "src/config",
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "DENIED" });
+    // Destination inside the deny list is rejected too.
+    await expect(
+      renameFilesEntry({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        newPathInput: "node_modules/app.ts",
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "DENIED" });
+    // A folder cannot be moved into its own subtree.
+    await expect(
+      renameFilesEntry({ store, rootInput: root, pathInput: "src", newPathInput: "src/inner" }),
+    ).rejects.toMatchObject({ status: 400, code: "BAD_PATH" });
+  });
+
+  it("refuses to rename a symbolic link", async () => {
+    await symlink(join(root, "src"), join(root, "link"), "dir");
+    await expect(
+      renameFilesEntry({ store, rootInput: root, pathInput: "link", newPathInput: "renamed-link" }),
+    ).rejects.toMatchObject({ status: 400, code: "UNSUPPORTED" });
+  });
+
+  it("deletes a file and a non-empty directory", async () => {
+    const file = await deleteFilesEntry({ store, rootInput: root, pathInput: "src/app.ts" });
+    expect(file).toMatchObject({ path: "src/app.ts", kind: "file" });
+    await expect(stat(join(root, "src", "app.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    await mkdir(join(root, "pkg"));
+    await writeFile(join(root, "pkg", "index.ts"), "x\n");
+    const dir = await deleteFilesEntry({ store, rootInput: root, pathInput: "pkg" });
+    expect(dir).toMatchObject({ path: "pkg", kind: "directory" });
+    await expect(stat(join(root, "pkg"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses to delete the root, denied paths, or symlinks", async () => {
+    await expect(deleteFilesEntry({ store, rootInput: root, pathInput: "" })).rejects.toMatchObject(
+      { status: 400, code: "BAD_PATH" },
+    );
+    await mkdir(join(root, ".git"));
+    await expect(
+      deleteFilesEntry({ store, rootInput: root, pathInput: ".git" }),
+    ).rejects.toMatchObject({ status: 403, code: "DENIED" });
+    await symlink(join(root, "src"), join(root, "link"), "dir");
+    await expect(
+      deleteFilesEntry({ store, rootInput: root, pathInput: "link" }),
+    ).rejects.toMatchObject({ status: 400, code: "UNSUPPORTED" });
+    // The link's target survives a rejected delete.
+    expect((await stat(join(root, "src"))).isDirectory()).toBe(true);
+  });
+
+  it("returns 404 when deleting a missing entry", async () => {
+    await expect(
+      deleteFilesEntry({ store, rootInput: root, pathInput: "src/ghost.ts" }),
+    ).rejects.toMatchObject({ status: 404, code: "NOT_FOUND" });
   });
 });

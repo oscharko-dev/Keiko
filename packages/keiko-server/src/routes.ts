@@ -114,8 +114,11 @@ import {
 } from "./runtime/containerRoutes.js";
 import {
   handleFilesContent,
+  handleFilesCreate,
+  handleFilesDelete,
   handleFilesDirectories,
   handleFilesPreview,
+  handleFilesRename,
   handleFilesSearch,
   handleFilesTree,
 } from "./files.js";
@@ -482,6 +485,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
   { method: "GET", pattern: "/api/files/content", handler: handleFilesContent },
   { method: "PATCH", pattern: "/api/files/content", handler: handleFilesContent },
+  // File-tree mutations (create / rename / delete). State-changing methods inherit the server CSRF +
+  // JSON gate; each handler re-resolves containment + deny inside the selected root and is
+  // non-destructive by default (atomic no-overwrite create, no-clobber rename, symlinks rejected).
+  { method: "POST", pattern: "/api/files/create", handler: handleFilesCreate },
+  { method: "POST", pattern: "/api/files/rename", handler: handleFilesRename },
+  { method: "POST", pattern: "/api/files/delete", handler: handleFilesDelete },
   // Issue #1198 — deterministic, model-free language intelligence (completion, diagnostics, hover,
   // symbols) over an editor overlay (ADR-0042 D4). Capabilities advertises the registered providers.
   {
