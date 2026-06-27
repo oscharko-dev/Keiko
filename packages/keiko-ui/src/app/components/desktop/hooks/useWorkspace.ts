@@ -53,7 +53,7 @@ const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
 const MIN_CAMERA_ANIMATION_DURATION_MS = 90;
 const MAX_CAMERA_ANIMATION_DURATION_MS = 280;
-const PAN_CAMERA_SMOOTHNESS_SCALE = 1;
+const PAN_CAMERA_SMOOTHNESS_SCALE = 0.65;
 
 function readView(): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
