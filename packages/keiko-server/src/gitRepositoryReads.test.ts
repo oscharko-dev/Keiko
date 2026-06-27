@@ -674,8 +674,11 @@ describe("git process env factories", () => {
       expect(env[sentinelKey]).toBe("inherited-value");
       expect(env.HOME).toBe("/home/keiko-test-user");
       expect(env.HOME).not.toBe("/nonexistent");
-      // SSH runs in BatchMode so an authenticated remote fails closed instead of hanging on a prompt.
+      // SSH runs in BatchMode and requires known host keys, so it fails closed instead of prompting
+      // or silently trusting a first-use host.
       expect(env.GIT_SSH_COMMAND).toContain("BatchMode=yes");
+      expect(env.GIT_SSH_COMMAND).toContain("StrictHostKeyChecking=yes");
+      expect(env.GIT_SSH_COMMAND).not.toContain("accept-new");
       // The network env does NOT isolate the user's global git config (that would hide credentials).
       expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
     } finally {
