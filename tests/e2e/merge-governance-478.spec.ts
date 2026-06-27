@@ -191,7 +191,7 @@ async function openGovernedMergeWindow(page: Page, ledger: RouteLedger): Promise
 }
 
 async function fillTarget(page: Page, pr: string): Promise<void> {
-  await page.getByLabel("Repository owner and name").fill("oscharko-dev/Keiko");
+  await page.getByLabel("Repository (owner/repo)").fill("oscharko-dev/Keiko");
   await page.getByLabel("Pull request number").fill(pr);
   await page.getByLabel("Base branch").fill("main");
 }

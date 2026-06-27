@@ -171,10 +171,11 @@ async function openGovernedWindow(page: Page, ledger: RouteLedger): Promise<void
   await seedGovernedGitWindow(page);
   await page.goto("/");
   await expect(page.locator("body")).toBeVisible();
-  // The window mounted from the real registry: its labelled heading is present, and the card left its
-  // empty state (i.e. it received a non-empty projectId) only if the commit composer is present.
-  await expect(page.getByRole("heading", { name: /Governed Git/u })).toBeVisible();
+  // The window mounted from the real registry: the current host heading is present, and the card left
+  // its empty state (i.e. it received a non-empty projectId) only if the commit composer is present.
+  await expect(page.getByRole("heading", { name: "Repository Manager" })).toBeVisible();
   await expect(page.getByTestId("ggit-empty")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Commit" })).toBeVisible();
   await expect(page.getByLabel("Commit message")).toBeVisible();
 }
 
@@ -183,7 +184,7 @@ async function openGovernedWindow(page: Page, ledger: RouteLedger): Promise<void
 async function assertNonConventionalIsBlocked(page: Page, ledger: RouteLedger): Promise<void> {
   await page.getByLabel("Commit message").fill(NON_CONVENTIONAL_MESSAGE);
 
-  const preview = page.getByRole("button", { name: "Preview" });
+  const preview = page.getByRole("button", { name: "Preview", exact: true });
   await preview.scrollIntoViewIfNeeded();
   await preview.click();
   const violations = page.getByTestId("ggit-violations");
