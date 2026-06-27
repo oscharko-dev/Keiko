@@ -912,7 +912,8 @@ function WindowFrameImpl({
       width: ew,
       height: eh,
       zIndex: win.z,
-      zoom,
+      transform: `scale(${String(zoom)})`,
+      transformOrigin: "0 0",
     }),
     [win.x, win.y, ew, eh, win.z, zoom],
   );
