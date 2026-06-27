@@ -4,7 +4,9 @@
 //
 // Composition:
 //   - its OWN `useDictation` instance whose committed-transcript insert sends through the EXISTING chat
-//     lifecycle (`setDraft` + `await sendMessage`) — the only seam to chat (AC2, D11);
+//     lifecycle (`sendMessage({ text })`, Issue #1561) — the only seam to chat (AC2, D11); the committed
+//     transcript is handed in directly so the spoken turn carries the same context (attachments,
+//     grounding scope, local knowledge, memory) a typed turn does, and never strands on a stale draft;
 //   - `useAssistantSpeech` given the live `turnManager`, so assistant-speech / interrupt signals reach
 //     the same instance automatically (it forwards them via the playback binding);
 //   - the pure `voice-dialogue-session` core for the fallback matrix, the user-side event→signal
@@ -51,8 +53,11 @@ import {
 export interface DialogueChatSession {
   readonly sendStatus: string;
   readonly sending: boolean;
-  readonly setDraft: (value: string) => void;
-  readonly sendMessage: () => Promise<void>;
+  // Issue #1561 — the committed spoken transcript is sent through the chat path via `text` so the spoken
+  // turn carries the identical context (attachments → documentContext, repository / local-knowledge
+  // grounding scope, memory) a typed turn would. `setDraft` is intentionally NOT part of this seam: a
+  // setDraft(text)+sendMessage() pair in one tick sends a stale (empty) draft, dropping the spoken turn.
+  readonly sendMessage: (options?: { readonly text?: string }) => Promise<void>;
   readonly cancelSend: () => void;
 }
 
@@ -187,8 +192,11 @@ export function useVoiceDialogueSession(
     if (trimmed.length === 0) {
       return;
     }
-    sessionRef.current.setDraft(trimmed);
-    void sessionRef.current.sendMessage();
+    // Issue #1561 — hand the committed transcript directly to the chat send so it flows through the same
+    // context-bearing path as a typed message (attachments, grounding scope, local knowledge, memory).
+    // Passing `text` avoids the stale-draft race a setDraft(text)+sendMessage() pair would hit (the send
+    // would read an empty draft from its closure and drop the turn).
+    void sessionRef.current.sendMessage({ text: trimmed });
   }, []);
 
   const dictation = useDictation({

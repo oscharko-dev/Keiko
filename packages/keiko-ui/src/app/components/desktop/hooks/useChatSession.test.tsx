@@ -8,6 +8,7 @@ import {
   fetchChats,
   fetchModels,
   fetchProjects,
+  sendDesktopChat,
 } from "@/lib/api";
 import {
   GROUNDED_ATTACHMENT_NOTICE,
@@ -402,6 +403,71 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(result.current.error).toBe(GROUNDED_ATTACHMENT_NOTICE);
     expect(askGrounded).not.toHaveBeenCalled();
     // The optimistic user message must NOT have been appended.
+    expect(result.current.messages).toHaveLength(0);
+  });
+});
+
+describe("useChatSession sendMessage — explicit text option (Issue #1561)", () => {
+  // The voice dialogue session hands a committed spoken transcript to sendMessage via `options.text`.
+  // It must send that text through the same context-bearing path as a typed draft, and must not depend
+  // on the async draft state (which a setDraft+sendMessage pair in one tick would read stale).
+  async function setupUngroundedSession(): Promise<
+    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
+  > {
+    vi.mocked(fetchModels).mockResolvedValue({
+      // Non-streaming → buffered sendDesktopChat path (deterministic to assert).
+      models: [model({ id: "chat-a", streaming: false })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ selectedModel: "chat-a" })] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockResolvedValue({
+      chat: chat({ selectedModel: "chat-a" }),
+      messages: [],
+      memory: undefined,
+    } as never);
+
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  it("sends the explicit text even when the composer draft is empty", async () => {
+    const { result } = await setupUngroundedSession();
+    expect(result.current.draft).toBe("");
+
+    await act(async () => {
+      await result.current.sendMessage({ text: "what changed in the build?" });
+    });
+
+    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe(
+      "what changed in the build?",
+    );
+  });
+
+  it("prefers the explicit text over the current draft and clears the draft afterward", async () => {
+    const { result } = await setupUngroundedSession();
+    act(() => {
+      result.current.setDraft("stale draft");
+    });
+
+    await act(async () => {
+      await result.current.sendMessage({ text: "spoken question wins" });
+    });
+
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("spoken question wins");
+    expect(result.current.draft).toBe("");
+  });
+
+  it("ignores a whitespace-only explicit text (committed-only invariant)", async () => {
+    const { result } = await setupUngroundedSession();
+
+    await act(async () => {
+      await result.current.sendMessage({ text: "   " });
+    });
+
+    expect(sendDesktopChat).not.toHaveBeenCalled();
     expect(result.current.messages).toHaveLength(0);
   });
 });
