@@ -209,6 +209,10 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       status: "succeeded",
       actionKind: "push",
     })),
+    prPreview: vi.fn<GitClientSeam["prPreview"]>(),
+    prExecute: vi.fn<GitClientSeam["prExecute"]>(),
+    mergePreview: vi.fn<GitClientSeam["mergePreview"]>(),
+    mergeExecute: vi.fn<GitClientSeam["mergeExecute"]>(),
     ...overrides,
   };
 }
