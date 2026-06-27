@@ -273,6 +273,60 @@ describe("pre-write rejections (AC2)", () => {
     );
   });
 
+  // #449/#1587 follow-up: a control/zero-width/bidi code point in a free-form identity field is
+  // rejected at the validation boundary (before any worktree/instance row), so it can never reach the
+  // advisory lock owner, the persisted instance, or the lifecycle evidence.
+  it("rejects a bidi-override taskId before touching git (INVALID_REQUEST)", async () => {
+    const service = makeService();
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: `t${String.fromCodePoint(0x202e)}1`,
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "INVALID_REQUEST",
+    );
+    // Nothing was persisted — the unsafe input never produced a workspace row.
+    expect(store.listByRepository(deriveRepositoryId(repoRoot))).toHaveLength(0);
+  });
+
+  it("rejects a control-character requestedBy before touching git (INVALID_REQUEST)", async () => {
+    const service = makeService();
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t1",
+          baseBranch: "main",
+          requestedBy: `actor${String.fromCodePoint(0x00)}`,
+        }),
+      "INVALID_REQUEST",
+    );
+    expect(store.listByRepository(deriveRepositoryId(repoRoot))).toHaveLength(0);
+  });
+
+  it("rejects a zero-width requestedBy on activate (INVALID_REQUEST)", async () => {
+    const service = makeService();
+    const created = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t1",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId: created.instance.workspaceId,
+          taskId: "t1",
+          requestedBy: `u${String.fromCodePoint(0x200b)}`,
+          acquireLock: true,
+        }),
+      "INVALID_REQUEST",
+    );
+  });
+
   it("returns the terminal-state instance idempotently without re-provisioning", async () => {
     store.upsert(validInstance("archived", { lifecycleState: "archived", health: "healthy" }));
     const service = makeService();

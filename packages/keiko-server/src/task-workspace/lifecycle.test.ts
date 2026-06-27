@@ -188,6 +188,22 @@ describe("setActive (atomic switch)", () => {
       "WORKSPACE_NOT_FOUND",
     );
   });
+
+  // #449/#1587 follow-up: requestedBy is persisted as the active-pointer setBy, so a control/bidi
+  // code point is rejected before the pointer is ever bound.
+  it("rejects a bidi-override requestedBy and leaves the pointer unbound", async () => {
+    const inst = store.upsert(instance("a", { lifecycleState: "paused" }));
+    await rejectsWithCode(
+      () =>
+        service.setActive({
+          workspaceId: inst.workspaceId,
+          requestedBy: `op${String.fromCodePoint(0x202e)}`,
+          acquireLock: false,
+        }),
+      "INVALID_REQUEST",
+    );
+    expect(pointerStore.get()).toBeUndefined();
+  });
 });
 
 describe("pause", () => {

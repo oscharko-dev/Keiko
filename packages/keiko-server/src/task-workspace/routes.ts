@@ -22,6 +22,7 @@ import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { FilesError, resolveRoot } from "../files.js";
 import { TaskWorkspaceError } from "./errors.js";
+import { assertSafeFieldValue } from "./field-safety.js";
 import type {
   WorkspaceActivateRequest,
   WorkspaceCleanupMode,
@@ -144,6 +145,29 @@ function boundedString(value: unknown): string | undefined {
     : undefined;
 }
 
+// Extract a REQUIRED free-form identity field (requestedBy / taskId): length-bounded AND free of
+// control / zero-width / bidirectional-override code points (#449 PR #1587 follow-up). These values
+// flow into the advisory lock owner, the active-pointer setBy, and operator-visible evidence, so the
+// route boundary rejects rather than strips them (see field-safety.ts). Missing/empty/oversized fields
+// keep the existing "missing or invalid field" message; a present-but-unsafe value throws a distinct
+// "forbidden characters" reason.
+function requireSafeField(value: unknown, field: string): string {
+  const bounded = boundedString(value);
+  if (bounded === undefined) {
+    throw new TaskWorkspaceError("INVALID_REQUEST", `missing or invalid field: ${field}`);
+  }
+  assertSafeFieldValue(bounded, field);
+  return bounded;
+}
+
+// As requireSafeField, but for an OPTIONAL field: absent → undefined, present → must be safe.
+function optionalSafeField(value: unknown, field: string): string | undefined {
+  const bounded = boundedString(value);
+  if (bounded === undefined) return undefined;
+  assertSafeFieldValue(bounded, field);
+  return bounded;
+}
+
 function mapError(error: unknown): RouteResult | undefined {
   if (error instanceof WorkspaceBodyTooLargeError) {
     return {
@@ -214,6 +238,9 @@ function parseProvisionBody(body: Record<string, unknown>): {
       `missing or invalid fields: ${missing.join(", ")}`,
     );
   }
+  // The free-form identity fields additionally reject control / zero-width / bidi code points.
+  assertSafeFieldValue(taskId, "taskId");
+  assertSafeFieldValue(requestedBy, "requestedBy");
   return { root, taskId, baseBranch, requestedBy };
 }
 
@@ -276,14 +303,11 @@ export async function handleActivateTaskWorkspace(
   return runHandler(deps, async () => {
     const workspaceId = ctx.params.workspaceId ?? "";
     const body = await readJsonObject(ctx.req);
-    const requestedBy = boundedString(body.requestedBy);
-    if (requestedBy === undefined) {
-      throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: requestedBy");
-    }
+    const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
     const expectedLifecycleState = parseExpectedState(body.expectedLifecycleState);
     const request: WorkspaceActivateRequest = {
       workspaceId,
-      taskId: boundedString(body.taskId) ?? "",
+      taskId: optionalSafeField(body.taskId, "taskId") ?? "",
       requestedBy,
       acquireLock: body.acquireLock === true,
       ...(expectedLifecycleState !== undefined ? { expectedLifecycleState } : {}),
@@ -305,10 +329,7 @@ function parseLifecycleActionBody(
   workspaceId: string,
   body: Record<string, unknown>,
 ): WorkspaceLifecycleActionRequest {
-  const requestedBy = boundedString(body.requestedBy);
-  if (requestedBy === undefined) {
-    throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: requestedBy");
-  }
+  const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
   return { workspaceId, requestedBy };
 }
 
@@ -351,6 +372,8 @@ export async function handleSetActiveTaskWorkspace(
         "missing or invalid fields: workspaceId, requestedBy",
       );
     }
+    // requestedBy is persisted as the active-pointer setBy — reject control/zero-width/bidi chars.
+    assertSafeFieldValue(requestedBy, "requestedBy");
     const result = await guard.setActive({
       workspaceId,
       requestedBy,
@@ -482,10 +505,7 @@ export async function handleRepairTaskWorkspace(
   return runHandler(deps, async () => {
     const workspaceId = ctx.params.workspaceId ?? "";
     const body = await readJsonObject(ctx.req);
-    const requestedBy = boundedString(body.requestedBy);
-    if (requestedBy === undefined) {
-      throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: requestedBy");
-    }
+    const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
     const result = await guard.repair({
       workspaceId,
       requestedBy,
@@ -547,10 +567,7 @@ export async function handleCleanupTaskWorkspace(
   return runHandler(deps, async () => {
     const workspaceId = ctx.params.workspaceId ?? "";
     const body = await readJsonObject(ctx.req);
-    const requestedBy = boundedString(body.requestedBy);
-    if (requestedBy === undefined) {
-      throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: requestedBy");
-    }
+    const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
     const result = await guard.cleanup({
       workspaceId,
       requestedBy,
@@ -579,10 +596,7 @@ export async function handleCleanupOrphanTaskWorkspaces(
   if (isRouteResult(guard)) return guard;
   return runHandler(deps, async () => {
     const body = await readJsonObject(ctx.req);
-    const requestedBy = boundedString(body.requestedBy);
-    if (requestedBy === undefined) {
-      throw new TaskWorkspaceError("INVALID_REQUEST", "missing or invalid field: requestedBy");
-    }
+    const requestedBy = requireSafeField(body.requestedBy, "requestedBy");
     const root = await resolveOptionalRoot(deps, boundedString(body.root));
     const result = await guard.cleanupOrphans({
       ...(root !== undefined ? { repositoryRoot: root } : {}),

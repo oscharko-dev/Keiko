@@ -30,6 +30,7 @@ import {
   type WorkspaceLock,
 } from "@oscharko-dev/keiko-contracts";
 import { buildBinding } from "./binding.js";
+import { assertSafeFieldValue, containsUnsafeFieldChars } from "./field-safety.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { provisionKey, workspaceKey } from "./mutex.js";
 import {
@@ -193,7 +194,12 @@ function validateProvisionRequest(request: WorkspaceProvisionRequest): void {
   const reasons: string[] = [];
   if (!isBoundedNonEmpty(request.repositoryRequestPath)) reasons.push("repository path required");
   if (!isBoundedNonEmpty(request.taskId)) reasons.push("taskId required");
+  else if (containsUnsafeFieldChars(request.taskId))
+    reasons.push("taskId contains forbidden characters");
   if (!isBoundedNonEmpty(request.requestedBy)) reasons.push("requestedBy required");
+  else if (containsUnsafeFieldChars(request.requestedBy)) {
+    reasons.push("requestedBy contains forbidden characters");
+  }
   if (!isBoundedNonEmpty(request.baseBranch) || !isSafeGitRefName(request.baseBranch)) {
     reasons.push("baseBranch must be a safe git ref name");
   }
@@ -704,6 +710,10 @@ function activateImpl(
   if (!isBoundedNonEmpty(request.workspaceId) || !isBoundedNonEmpty(request.requestedBy)) {
     throw new TaskWorkspaceError("INVALID_REQUEST", "invalid activation request");
   }
+  // requestedBy becomes the activation advisory-lock owner; a provided taskId is the cross-check key.
+  // Both flow into operator-visible state, so reject control/zero-width/bidi code points here too.
+  assertSafeFieldValue(request.requestedBy, "requestedBy");
+  if (isBoundedNonEmpty(request.taskId)) assertSafeFieldValue(request.taskId, "taskId");
   return ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
     activateLocked(ctx, request),
   );

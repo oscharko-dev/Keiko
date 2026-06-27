@@ -35,6 +35,7 @@ import {
   isManagedTargetContained,
 } from "./managed-root.js";
 import { deriveOrphanId } from "./health.js";
+import { assertSafeFieldValue } from "./field-safety.js";
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
@@ -180,6 +181,7 @@ function requestCleanupImpl(
   if (!isBoundedNonEmpty(request.requestedBy)) {
     throw new TaskWorkspaceError("INVALID_REQUEST", "requestedBy is required");
   }
+  assertSafeFieldValue(request.requestedBy, "requestedBy");
   if (!isCleanupEligibleLifecycleState(instance.lifecycleState)) {
     throw new TaskWorkspaceError(
       "CLEANUP_NOT_ELIGIBLE",
@@ -378,6 +380,7 @@ async function completeCleanupImpl(
   if (!isBoundedNonEmpty(request.requestedBy)) {
     throw new TaskWorkspaceError("INVALID_REQUEST", "requestedBy is required");
   }
+  assertSafeFieldValue(request.requestedBy, "requestedBy");
   const instance = loadInstance(ctx, request.workspaceId);
   const nowMs = ctx.deps.now();
   assertCompleteCleanupAllowed(ctx, request, instance, nowMs);
@@ -474,6 +477,7 @@ async function cleanupOrphansImpl(
   if (!isBoundedNonEmpty(request.requestedBy)) {
     throw new TaskWorkspaceError("INVALID_REQUEST", "requestedBy is required");
   }
+  assertSafeFieldValue(request.requestedBy, "requestedBy");
   if (!request.operatorApproved) {
     throw new TaskWorkspaceError(
       "OPERATOR_APPROVAL_REQUIRED",

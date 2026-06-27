@@ -200,6 +200,31 @@ describe("POST /api/task-workspaces", () => {
     expect(body.error.code).toBe("INVALID_BASE_BRANCH");
   });
 
+  // #449/#1587 follow-up: the route boundary rejects control/zero-width/bidi code points in the
+  // free-form identity fields before they can reach the lock owner / pointer / evidence.
+  it("rejects a taskId carrying a bidi-override character (400 INVALID_REQUEST)", async () => {
+    const res = await provision(`t${String.fromCodePoint(0x202e)}1`);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("INVALID_REQUEST");
+  });
+
+  it("rejects a requestedBy carrying a zero-width character (400 INVALID_REQUEST)", async () => {
+    const res = await fetch(`${baseUrl()}/api/task-workspaces`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({
+        root: repoRoot,
+        taskId: "t1",
+        baseBranch: "main",
+        requestedBy: `u${String.fromCodePoint(0x200b)}`,
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("INVALID_REQUEST");
+  });
+
   it("returns 503 when provisioning is not configured", async () => {
     await rebuild({ workspaceProvisioning: undefined });
     const res = await provision("t1");
