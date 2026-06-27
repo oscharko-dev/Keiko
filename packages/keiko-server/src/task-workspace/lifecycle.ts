@@ -27,6 +27,7 @@ import {
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import { buildBinding } from "./binding.js";
+import { assertSafeFieldValue } from "./field-safety.js";
 import { deriveRepositoryId } from "./naming.js";
 import { managedTargetExists } from "./managed-root.js";
 import { lockIsLive, resolveLockTtl } from "./locks.js";
@@ -153,6 +154,7 @@ function runDirectTransition(
   if (!isBoundedNonEmpty(request.requestedBy)) {
     throw new TaskWorkspaceError("INVALID_REQUEST", "requestedBy is required");
   }
+  assertSafeFieldValue(request.requestedBy, "requestedBy");
   const instance = loadInstance(ctx, request.workspaceId);
   const nowMs = ctx.deps.now();
   const context = resolveTransitionContext(ctx, instance, request.requestedBy, nowMs);
@@ -199,6 +201,9 @@ async function setActiveImpl(
   if (!isBoundedNonEmpty(request.requestedBy)) {
     throw new TaskWorkspaceError("INVALID_REQUEST", "requestedBy is required");
   }
+  // requestedBy is persisted as the active-pointer `setBy`; reject control/zero-width/bidi here so the
+  // operator-visible pointer can never carry a spoofed actor name.
+  assertSafeFieldValue(request.requestedBy, "requestedBy");
   // Delegate the lifecycle walk (paused/active → active, drift + lock checks, persistence, evidence)
   // to the #445 service. That call already serializes on the target's `ws:` key (#449, ADR-0093 D1), so
   // we must NOT re-acquire `ws:` here — the in-process mutex is not reentrant. Only on success do we

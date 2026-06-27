@@ -33,6 +33,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { buildBinding } from "./binding.js";
 import { TaskWorkspaceError } from "./errors.js";
+import { assertSafeFieldValue } from "./field-safety.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
 import { reconcileSingleInstance } from "./reconciliation.js";
@@ -277,6 +278,8 @@ function validateRequest(request: WorkspaceRepairRequest): WorkspaceRecoveryStra
   if (!isBoundedNonEmpty(request.workspaceId) || !isBoundedNonEmpty(request.requestedBy)) {
     throw new TaskWorkspaceError("INVALID_REQUEST", "invalid repair request");
   }
+  // requestedBy becomes the repair advisory-lock owner; reject control/zero-width/bidi code points.
+  assertSafeFieldValue(request.requestedBy, "requestedBy");
   if (!isWorkspaceRecoveryStrategy(request.strategy)) {
     throw new TaskWorkspaceError("INVALID_REQUEST", "unknown recovery strategy");
   }
