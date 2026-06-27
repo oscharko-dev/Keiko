@@ -32,6 +32,8 @@ export type {
   CompletionModelSelection,
   ModelKind,
   ModelProviderConfig,
+  ProviderEndpointStyle,
+  RealtimeAuthMode,
   NormalizedResponse,
   NormalizedToolCall,
   OutboundHttpEgressConfig,

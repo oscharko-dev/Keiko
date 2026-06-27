@@ -63,11 +63,17 @@ export interface VoicePersonaVoice {
   readonly voiceId: string;
 }
 
+export type ProviderEndpointStyle = "openai-compatible" | "azure-openai-deployment";
+export type RealtimeAuthMode = "api-key" | "ephemeral-session";
+
 export interface ModelProviderConfig {
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string | undefined;
+  readonly endpointStyle?: ProviderEndpointStyle | undefined;
+  readonly apiVersion?: string | undefined;
+  readonly realtimeAuthMode?: RealtimeAuthMode | undefined;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;

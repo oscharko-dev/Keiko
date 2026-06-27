@@ -343,6 +343,8 @@ function buildSttRequest(
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
+    ...(provider.endpointStyle !== undefined ? { endpointStyle: provider.endpointStyle } : {}),
+    ...(provider.apiVersion !== undefined ? { apiVersion: provider.apiVersion } : {}),
     modelId: provider.modelId,
     audio: validated.audio,
     mimeType: validated.mimeType,
@@ -570,6 +572,8 @@ function buildTtsRequest(
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
+    ...(provider.endpointStyle !== undefined ? { endpointStyle: provider.endpointStyle } : {}),
+    ...(provider.apiVersion !== undefined ? { apiVersion: provider.apiVersion } : {}),
     modelId: provider.modelId,
     input: validated.text,
     ...(target.voiceId !== undefined ? { voice: target.voiceId } : {}),

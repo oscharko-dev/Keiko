@@ -97,6 +97,38 @@ describe("requestSpeechToText", () => {
     expect(body).toContain("\r\n\r\nde\r\n");
   });
 
+  it("supports Azure OpenAI deployment endpoints with a separate api-version", async () => {
+    let seenUrl = "";
+    let seenHeader: string | null = null;
+    let seenBody = "";
+    const fetchImpl = mockFetch((url, init) => {
+      seenUrl = url;
+      seenHeader = (init.headers as Record<string, string>)["api-key"] ?? null;
+      seenBody = bodyToText(init);
+      return ok({ text: "azure transcript" });
+    });
+
+    const outcome = await requestSpeechToText({
+      endpoint: "https://voice.example.cognitiveservices.azure.com/",
+      endpointStyle: "azure-openai-deployment",
+      apiVersion: "2025-03-01-preview",
+      apiKey: SECRET_API_KEY,
+      apiKeyHeaderName: "api-key",
+      modelId: "keiko-stt",
+      audio: AUDIO,
+      mimeType: "audio/wav",
+      fetchImpl,
+    });
+
+    expect(outcome).toEqual({ ok: true, value: { transcript: "azure transcript" } });
+    expect(seenUrl).toBe(
+      "https://voice.example.cognitiveservices.azure.com/openai/deployments/keiko-stt/audio/transcriptions?api-version=2025-03-01-preview",
+    );
+    expect(seenHeader).toBe(SECRET_API_KEY);
+    expect(seenBody).toContain('name="model"');
+    expect(seenBody).toContain("keiko-stt");
+  });
+
   it("preserves an empty transcript (silence) as a success", async () => {
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
