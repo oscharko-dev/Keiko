@@ -37,6 +37,7 @@ interface CommitComposerProps {
   readonly outcome: GitMutationOutcome | null;
   readonly error: string | null;
   readonly preview: GitDeliveryCommitPreviewResponse | null;
+  readonly previewDraft: string | null;
   readonly previewError: string | null;
   readonly onPreview: (messageDraft: string) => void;
   readonly onCommit: (message: string) => void;
@@ -56,6 +57,7 @@ export function CommitComposer({
   outcome,
   error,
   preview,
+  previewDraft,
   previewError,
   onPreview,
   onCommit,
@@ -65,6 +67,8 @@ export function CommitComposer({
   const baseId = useId();
   const summaryId = `${baseId}-summary`;
   const bodyId = `${baseId}-body`;
+  const hintId = `${baseId}-hint`;
+  const previewId = `${baseId}-preview`;
   const onPreviewRef = useRef(onPreview);
   onPreviewRef.current = onPreview;
 
@@ -80,14 +84,20 @@ export function CommitComposer({
     return () => clearTimeout(handle);
   }, [hasRepository, hasStaged, message, stagedFileCount]);
 
+  const visiblePreview = preview !== null && previewDraft === message ? preview : null;
   // The single hard gate. Warnings never disable; an unmet policy (validation.ok === false) does.
-  const policyBlocked = preview !== null && !preview.messageValidation.ok;
-  const commitDisabled = busy || !hasRepository || !hasStaged || subjectEmpty || policyBlocked;
+  // A matching successful preview is required before execute so a stale or missing preview cannot
+  // drive the commit button for the wrong draft.
+  const policyBlocked = visiblePreview !== null && !visiblePreview.messageValidation.ok;
+  const missingFreshPreview = !subjectEmpty && visiblePreview === null;
+  const commitDisabled =
+    busy || !hasRepository || !hasStaged || subjectEmpty || missingFreshPreview || policyBlocked;
 
   let hint: string;
   if (!hasRepository) hint = "Select a repository to commit.";
   else if (!hasStaged) hint = "Stage changes to commit them to the current branch.";
   else if (subjectEmpty) hint = "Enter a commit summary.";
+  else if (missingFreshPreview) hint = "Wait for commit policy preview.";
   else if (policyBlocked) hint = "Resolve the commit-policy issues below to commit.";
   else hint = "Commits the staged changes to the current branch.";
 
@@ -100,6 +110,8 @@ export function CommitComposer({
           style={INPUT_STYLE}
           value={summary}
           disabled={!hasRepository}
+          aria-invalid={policyBlocked ? "true" : undefined}
+          aria-describedby={policyBlocked ? previewId : hintId}
           onChange={(e) => setSummary(e.target.value)}
           placeholder="Concise summary of the change"
         />
@@ -115,11 +127,19 @@ export function CommitComposer({
         />
       </FieldLabel>
       <div style={ACTION_ROW_STYLE}>
-        <p style={{ ...SUBTLE_TEXT_STYLE, flex: 1, minWidth: 0 }}>{hint}</p>
+        <p
+          id={hintId}
+          role="status"
+          aria-live="polite"
+          style={{ ...SUBTLE_TEXT_STYLE, flex: 1, minWidth: 0 }}
+        >
+          {hint}
+        </p>
         <button
           type="button"
           style={{ ...PRIMARY_BTN, ...disabledStyle(commitDisabled) }}
           disabled={commitDisabled}
+          aria-describedby={hintId}
           onClick={() => onCommit(message)}
         >
           <Icons.check size={12} /> Commit
@@ -134,7 +154,9 @@ export function CommitComposer({
           <p style={SUBTLE_TEXT_STYLE}>{previewError}</p>
         </div>
       ) : null}
-      {preview !== null ? <CommitPolicyPreview preview={preview} /> : null}
+      {visiblePreview !== null ? (
+        <CommitPolicyPreview id={previewId} preview={visiblePreview} />
+      ) : null}
       <MutationOutcome outcome={outcome} error={error} testid="git-commit-outcome" />
     </section>
   );
@@ -144,15 +166,23 @@ export function CommitComposer({
 // warnings, hard message-policy violations, and preflight findings — present but subordinate to
 // the commit flow. All inputs are content-free typed codes/counts.
 function CommitPolicyPreview({
+  id,
   preview,
 }: {
+  readonly id: string;
   readonly preview: GitDeliveryCommitPreviewResponse;
 }): ReactNode {
   const violations = preview.messageValidation.ok ? [] : preview.messageValidation.violations;
   const blocked = !preview.messageValidation.ok;
   const { summary, intent } = preview;
   return (
-    <div data-testid="git-commit-preview" style={PREVIEW_STYLE}>
+    <div
+      id={id}
+      data-testid="git-commit-preview"
+      role={blocked ? "alert" : "status"}
+      aria-live={blocked ? undefined : "polite"}
+      style={PREVIEW_STYLE}
+    >
       <div
         style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}
       >

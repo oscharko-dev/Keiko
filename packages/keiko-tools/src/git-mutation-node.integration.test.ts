@@ -127,6 +127,20 @@ describe("node git mutation adapter — successful local mutations", () => {
     expect(unstaged.outcome).toBe("succeeded");
     expect(git(["diff", "--cached", "--name-only"]).trim()).toBe("");
   });
+
+  it("treats pathspec-magic-looking filenames as literal files (#1575)", async () => {
+    writeFileSync(join(root, "base.txt"), "base\n", "utf8");
+    git(["add", "base.txt"]);
+    git(["commit", "-m", "base"]);
+    writeFileSync(join(root, ":(top)*"), "magic-looking name\n", "utf8");
+    writeFileSync(join(root, "another.txt"), "must stay unstaged\n", "utf8");
+
+    const staged = await adapter().stage({ pathspecs: [":(top)*"] });
+
+    expect(staged.outcome).toBe("succeeded");
+    expect(git(["diff", "--cached", "--name-only"]).trim()).toBe(":(top)*");
+    expect(git(["status", "--short"])).toContain("?? another.txt");
+  });
 });
 
 describe("node git mutation adapter — structured failure classification", () => {

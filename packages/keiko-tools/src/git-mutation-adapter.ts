@@ -12,8 +12,9 @@
 //      and it permits only the governed mutation subcommands.
 //   3. The pure argv builders — each maps validated, typed operands to a fixed argument vector whose
 //      first token is always one of the allowed subcommands. Operands are validated (no NUL, no
-//      flag-injection via a leading "-" on refs) and file pathspecs are placed after a "--" sentinel
-//      so a path can never be reinterpreted as an option.
+//      flag-injection via a leading "-" on refs) and file operands are literalized before they are
+//      placed after a "--" sentinel so a repository-controlled filename cannot be reinterpreted as an
+//      option or Git pathspec magic.
 //
 // Pure module: types, frozen tables, and total pure functions. No IO, no spawn, no child_process —
 // the actual execution adapter is git-mutation-node.ts on the `./internal/git-mutation` subpath.
@@ -173,8 +174,13 @@ function assertMessage(value: string): string {
   return value;
 }
 
-// File pathspecs placed after the "--" sentinel. May start with "-" (the sentinel disarms option
-// parsing), but must be non-empty and NUL-free, and the list must be non-empty.
+function literalPathspec(value: string): string {
+  return `:(literal)${value}`;
+}
+
+// File operands placed after the "--" sentinel. May start with "-" (the sentinel disarms option
+// parsing), but must be non-empty and NUL-free, and the list must be non-empty. Returned argv tokens
+// are literal pathspecs so names such as ":(top)*" cannot expand beyond the selected file.
 function assertPathspecs(values: readonly string[]): readonly string[] {
   if (values.length === 0) {
     throw new GitMutationArgvError("at least one pathspec is required");
@@ -187,7 +193,7 @@ function assertPathspecs(values: readonly string[]): readonly string[] {
       throw new GitMutationArgvError("pathspec must not contain a NUL byte");
     }
   }
-  return values;
+  return values.map(literalPathspec);
 }
 
 // ─── Pure argv builders ───────────────────────────────────────────────────────────────────

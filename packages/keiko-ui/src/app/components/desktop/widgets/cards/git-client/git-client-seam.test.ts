@@ -25,6 +25,7 @@ import {
   fetchGitStatus,
   fetchProjects,
 } from "@/lib/api";
+import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import {
   DEFAULT_GIT_CLIENT,
   STATUS_LABEL,
@@ -295,6 +296,21 @@ describe("useGitActions", () => {
     };
   }
 
+  function makePreview(
+    stagedFileCount: number,
+    overrides: Partial<GitDeliveryCommitPreviewResponse> = {},
+  ): GitDeliveryCommitPreviewResponse {
+    return {
+      schemaVersion: "1",
+      summary: { stagedFileCount, areaCount: 1, areas: ["src"], touchesTests: false },
+      intent: { warnings: [], mixedScope: false, isWip: false },
+      messageValidation: { ok: true },
+      preflightFindingCodes: [],
+      policyOutcome: "allowed",
+      ...overrides,
+    };
+  }
+
   it("initial flow state is not busy, no outcome, no error", () => {
     const client = makeSeamClient();
     const { result } = renderHook(() => useGitActions(client, "/repo"));
@@ -384,6 +400,56 @@ describe("useGitActions", () => {
 
     // The second outcome must win; the first stale outcome must NOT replace it
     expect(result.current.flow.outcome?.actionKind).toBe("second");
+  });
+
+  it("stale-guard: superseded preview result is discarded (only latest draft wins)", async () => {
+    let resolveFirst!: (value: GitDeliveryCommitPreviewResponse) => void;
+    const firstPreview = new Promise<GitDeliveryCommitPreviewResponse>((res) => {
+      resolveFirst = res;
+    });
+    const client = makeSeamClient({
+      commitPreview: vi
+        .fn<GitClientSeam["commitPreview"]>()
+        .mockImplementationOnce(() => firstPreview)
+        .mockResolvedValueOnce(makePreview(2)),
+    });
+    const { result } = renderHook(() => useGitActions(client, "/repo"));
+
+    act(() => result.current.runPreview("feat: old"));
+    act(() => result.current.runPreview("feat: new"));
+
+    await waitFor(() => expect(result.current.previewDraft).toBe("feat: new"));
+    expect(result.current.preview?.summary.stagedFileCount).toBe(2);
+
+    await act(async () => {
+      resolveFirst(makePreview(1));
+      await new Promise((res) => setTimeout(res, 20));
+    });
+
+    expect(result.current.previewDraft).toBe("feat: new");
+    expect(result.current.preview?.summary.stagedFileCount).toBe(2);
+  });
+
+  it("reset invalidates an in-flight preview", async () => {
+    let resolvePreview!: (value: GitDeliveryCommitPreviewResponse) => void;
+    const pendingPreview = new Promise<GitDeliveryCommitPreviewResponse>((res) => {
+      resolvePreview = res;
+    });
+    const client = makeSeamClient({
+      commitPreview: vi.fn<GitClientSeam["commitPreview"]>(() => pendingPreview),
+    });
+    const { result } = renderHook(() => useGitActions(client, "/repo"));
+
+    act(() => result.current.runPreview("feat: old"));
+    act(() => result.current.reset());
+
+    await act(async () => {
+      resolvePreview(makePreview(1));
+      await new Promise((res) => setTimeout(res, 20));
+    });
+
+    expect(result.current.preview).toBeNull();
+    expect(result.current.previewDraft).toBeNull();
   });
 
   it("formatGitError is used when the op rejects with an ApiError", async () => {

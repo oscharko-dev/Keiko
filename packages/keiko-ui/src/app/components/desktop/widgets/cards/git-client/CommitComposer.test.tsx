@@ -34,6 +34,7 @@ function renderComposer(props: Partial<Parameters<typeof CommitComposer>[0]> = {
       outcome={null}
       error={null}
       preview={null}
+      previewDraft={null}
       previewError={null}
       onPreview={onPreview}
       onCommit={onCommit}
@@ -60,7 +61,7 @@ describe("composeCommitMessage", () => {
 describe("CommitComposer — commit gate", () => {
   it("disables Commit until a summary is entered", async () => {
     const user = userEvent.setup();
-    renderComposer({ preview: makePreview() });
+    renderComposer({ preview: makePreview(), previewDraft: "feat: do the thing" });
     const button = screen.getByRole("button", { name: /^Commit/ });
     expect(button).toBeDisabled();
 
@@ -71,6 +72,7 @@ describe("CommitComposer — commit gate", () => {
   it("blocks Commit when message validation reports a violation", async () => {
     const user = userEvent.setup();
     renderComposer({
+      previewDraft: "feat: a very long subject",
       preview: makePreview({
         messageValidation: { ok: false, violations: ["subject-too-long"] },
       }),
@@ -86,6 +88,7 @@ describe("CommitComposer — commit gate", () => {
   it("keeps Commit enabled for soft quality warnings", async () => {
     const user = userEvent.setup();
     renderComposer({
+      previewDraft: "wip: still cooking",
       preview: makePreview({
         intent: { warnings: ["wip-marker"], mixedScope: false, isWip: true },
       }),
@@ -105,8 +108,18 @@ describe("CommitComposer — commit gate", () => {
   });
 
   it("disables Commit while a commit is in flight", () => {
-    renderComposer({ busy: true, preview: makePreview() });
+    renderComposer({ busy: true, preview: makePreview(), previewDraft: "" });
     expect(screen.getByRole("button", { name: /^Commit/ })).toBeDisabled();
+  });
+
+  it("keeps Commit disabled until the policy preview matches the current draft", async () => {
+    const user = userEvent.setup();
+    renderComposer({ preview: makePreview(), previewDraft: "feat: old" });
+
+    await user.type(screen.getByLabelText("Summary"), "feat: new");
+
+    expect(screen.getByRole("button", { name: /^Commit/ })).toBeDisabled();
+    expect(screen.getByText("Wait for commit policy preview.")).toBeInTheDocument();
   });
 });
 
@@ -128,6 +141,7 @@ describe("CommitComposer — preview and outcomes", () => {
 
   it("renders the change summary in the policy preview", () => {
     renderComposer({
+      previewDraft: "",
       preview: makePreview({
         summary: { stagedFileCount: 3, areaCount: 2, areas: ["src", "docs"], touchesTests: true },
       }),
@@ -153,7 +167,10 @@ describe("CommitComposer — preview and outcomes", () => {
 describe("CommitComposer — commit action", () => {
   it("commits the composed summary and body", async () => {
     const user = userEvent.setup();
-    const { onCommit } = renderComposer({ preview: makePreview() });
+    const { onCommit } = renderComposer({
+      preview: makePreview(),
+      previewDraft: "feat: subject\n\nBody.",
+    });
     await user.type(screen.getByLabelText("Summary"), "feat: subject");
     await user.type(screen.getByLabelText("Description"), "Body.");
     await user.click(screen.getByRole("button", { name: /^Commit/ }));
@@ -165,7 +182,7 @@ describe("CommitComposer — commit action", () => {
 describe("CommitComposer — keyboard", () => {
   it("reaches the summary, description, and Commit button by Tab", async () => {
     const user = userEvent.setup();
-    renderComposer({ preview: makePreview() });
+    renderComposer({ preview: makePreview(), previewDraft: "feat: x" });
 
     await user.click(screen.getByLabelText("Summary"));
     await user.keyboard("feat: x");
