@@ -6,7 +6,7 @@
 //   * AC4 — a governed commit records evidence; outcomes are content-free.
 //   * AC5 — commit execution cannot bypass the kernel: a policy/preflight block executes nothing.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -18,6 +18,7 @@ import {
   GIT_DELIVERY_SCHEMA_VERSION,
   type GitDeliveryExecutionResult,
   type GitDeliveryRepoPolicyPack,
+  type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitLocalMutationAdapter, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -32,6 +33,12 @@ import {
   type GitDeliveryCommitPreviewBody,
 } from "./commitRoutes.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
+import {
+  deriveManagedWorktreePath,
+  deriveRepositoryId,
+  deriveTaskBranchName,
+  deriveWorkspaceId,
+} from "../task-workspace/naming.js";
 
 const PREVIEW = "/api/git-delivery/commit/preview";
 const EXECUTE = "/api/git-delivery/commit/execute";
@@ -136,6 +143,53 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     modelPortFactory: () => undefined,
     store,
     ...overrides,
+  };
+}
+
+function managedWorkspaceDeps(taskId = "task-443"): {
+  readonly instance: WorkspaceInstance;
+  readonly override: Partial<UiHandlerDeps>;
+  readonly cleanup: () => void;
+} {
+  const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-commit-managed-")));
+  const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-commit-repo-")));
+  const repositoryId = deriveRepositoryId(repoRoot);
+  const workspaceId = deriveWorkspaceId({ repositoryId, taskId });
+  const managedWorktreePath = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  mkdirSync(managedWorktreePath, { recursive: true });
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId,
+    taskId,
+    repositoryId,
+    repositoryRoot: repoRoot,
+    baseBranch: "main",
+    taskBranch: deriveTaskBranchName({ taskId }),
+    managedWorktreePath,
+    gitdirIdentity: "gitdir-hash",
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: "2026-06-26T00:00:00.000Z",
+    updatedAt: "2026-06-26T00:00:00.000Z",
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: workspaceId,
+  };
+  return {
+    instance,
+    override: {
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning: {
+        getInstance: (id: string) => (id === workspaceId ? instance : undefined),
+        provision: () => Promise.reject(new Error("not used")),
+        activate: () => Promise.reject(new Error("not used")),
+      },
+    },
+    cleanup: (): void => {
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(managedRoot, { recursive: true, force: true });
+    },
   };
 }
 
@@ -254,6 +308,25 @@ describe("commit routes — central enforcement (real dispatch)", () => {
 });
 
 describe("commit preview — read-only verification context (AC3)", () => {
+  it("accepts a persisted managed task workspace root as projectId", async () => {
+    const managed = managedWorkspaceDeps();
+    const handler = createHandleCommitPreview({ execution: seams() });
+    try {
+      const res = await handler(
+        ctxFor(PREVIEW, {
+          schemaVersion: "1",
+          projectId: managed.instance.managedWorktreePath,
+          messageDraft: "feat(ui): add governed flow",
+        }),
+        deps(managed.override),
+      );
+      expect(res.status).toBe(200);
+      expect((res.body as GitDeliveryCommitPreviewBody).policyOutcome).toBe("constrained");
+    } finally {
+      managed.cleanup();
+    }
+  });
+
   it("surfaces mixed-scope and WIP commit-intent warnings + message-policy violations", async () => {
     const handler = createHandleCommitPreview({ execution: seams() });
     const res = await handler(

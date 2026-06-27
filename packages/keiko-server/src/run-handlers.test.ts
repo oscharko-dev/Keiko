@@ -5,7 +5,7 @@
 // default, SSE replay+ready+live framing+terminal close, cancel, GET projection, the apply gate
 // (409 when not appliable), and that NO secret-shaped string appears in ANY response body.
 
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -33,6 +33,13 @@ import {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import {
+  deriveManagedWorktreePath,
+  deriveRepositoryId,
+  deriveTaskBranchName,
+  deriveWorkspaceId,
+} from "./task-workspace/naming.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(here, "..", "..", "..", "tests", "fixtures", "unit-tests", "target-project");
@@ -73,6 +80,8 @@ let evidenceStore: EvidenceStore;
 interface HandlerDepsOptions {
   readonly registerWorkspace?: boolean;
   readonly modelPortFactory?: () => ModelPort | undefined;
+  readonly managedTaskWorkspaceRoot?: string | undefined;
+  readonly managedWorkspaceInstance?: WorkspaceInstance | undefined;
 }
 
 function handlerDeps(model: ModelPort, options: HandlerDepsOptions = {}): UiHandlerDeps {
@@ -89,6 +98,21 @@ function handlerDeps(model: ModelPort, options: HandlerDepsOptions = {}): UiHand
     registry,
     modelPortFactory: options.modelPortFactory ?? ((): ModelPort => model),
     store,
+    ...(options.managedTaskWorkspaceRoot === undefined
+      ? {}
+      : { managedTaskWorkspaceRoot: options.managedTaskWorkspaceRoot }),
+    ...(options.managedWorkspaceInstance === undefined
+      ? {}
+      : {
+          workspaceProvisioning: {
+            getInstance: (id: string): WorkspaceInstance | undefined =>
+              id === options.managedWorkspaceInstance?.workspaceId
+                ? options.managedWorkspaceInstance
+                : undefined,
+            provision: () => Promise.reject(new Error("not used")),
+            activate: () => Promise.reject(new Error("not used")),
+          },
+        }),
   };
 }
 
@@ -656,6 +680,56 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
     expect(res.status).toBe(202);
   });
 
+  it("returns 202 for verify with a persisted managed task workspace root", async () => {
+    const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-run-managed-")));
+    const repositoryId = deriveRepositoryId(workspace);
+    const workspaceId = deriveWorkspaceId({ repositoryId, taskId: "task-443" });
+    const managedWorktreePath = deriveManagedWorktreePath({
+      managedRoot,
+      repositoryId,
+      workspaceId,
+    });
+    mkdirSync(managedWorktreePath, { recursive: true });
+    const instance: WorkspaceInstance = {
+      schemaVersion: "1",
+      workspaceId,
+      taskId: "task-443",
+      repositoryId,
+      repositoryRoot: workspace,
+      baseBranch: "main",
+      taskBranch: deriveTaskBranchName({ taskId: "task-443" }),
+      managedWorktreePath,
+      gitdirIdentity: "gitdir-hash",
+      lifecycleState: "active",
+      health: "healthy",
+      lock: null,
+      createdAt: "2026-06-26T00:00:00.000Z",
+      updatedAt: "2026-06-26T00:00:00.000Z",
+      driftMarkers: [],
+      recoveryHints: [],
+      auditCorrelationId: workspaceId,
+    };
+    try {
+      await start(fakeModel("noop"), {
+        registerWorkspace: false,
+        managedTaskWorkspaceRoot: managedRoot,
+        managedWorkspaceInstance: instance,
+      });
+      const res = await fetch(`${base()}/api/runs`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({
+          taskType: "verify",
+          input: { workspaceRoot: managedWorktreePath },
+          modelId: "m",
+        }),
+      });
+      expect(res.status).toBe(202);
+    } finally {
+      rmSync(managedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("returns 202 for verify with a registered workspaceRoot even when no model provider is configured", async () => {
     await start(fakeModel("noop"), { modelPortFactory: () => undefined });
     const res = await fetch(`${base()}/api/runs`, {
@@ -868,5 +942,4 @@ describe("GAP-E — workspace detection failure returns 400 not 500 (run launch 
     // The absolute path must NOT appear in the response body.
     expect(JSON.stringify(json)).not.toContain(noMarkerWorkspace);
   });
-
 });

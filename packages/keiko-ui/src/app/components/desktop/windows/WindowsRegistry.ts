@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
+  WorkspaceBinding,
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import type { IconName } from "../Icons";
@@ -116,6 +117,14 @@ export interface WindowRenderContext {
     | undefined;
   /** Image-only sources connected to Quality Intelligence. */
   readonly linkedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
+  /**
+   * Issue #446 (ADR-0090) — the active task-workspace root, or null in unbound mode. The SINGLE
+   * retarget choke point: when a workspace is active this OVERRIDES a bound surface's per-window cfg
+   * root, so a switch re-renders every window onto the new root atomically (no stale context).
+   */
+  readonly activeRoot: string | null;
+  /** Issue #446 — the derived active binding (taskId/boundSurfaces/activeRoot), or null when unbound. */
+  readonly activeBinding: WorkspaceBinding | null;
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   /**
    * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result

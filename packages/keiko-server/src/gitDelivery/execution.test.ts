@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -14,6 +14,7 @@ import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   GIT_DELIVERY_SCHEMA_VERSION,
   type GitDeliveryRepoPolicyPack,
+  type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
 import { buildRedactor } from "../index.js";
@@ -26,6 +27,12 @@ import {
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
 } from "./execution.js";
+import {
+  deriveManagedWorktreePath,
+  deriveRepositoryId,
+  deriveTaskBranchName,
+  deriveWorkspaceId,
+} from "../task-workspace/naming.js";
 
 let root: string;
 
@@ -304,6 +311,59 @@ describe("resolveProjectWorkspace", () => {
     } finally {
       store.close();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a persisted managed task workspace root without legacy project registration", () => {
+    const store = createInMemoryUiStore();
+    const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-managed-root-")));
+    const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-managed-repo-")));
+    const repositoryId = deriveRepositoryId(repoRoot);
+    const workspaceId = deriveWorkspaceId({ repositoryId, taskId: "task-443" });
+    const managedWorktreePath = deriveManagedWorktreePath({
+      managedRoot,
+      repositoryId,
+      workspaceId,
+    });
+    mkdirSync(managedWorktreePath, { recursive: true });
+    const instance: WorkspaceInstance = {
+      schemaVersion: "1",
+      workspaceId,
+      taskId: "task-443",
+      repositoryId,
+      repositoryRoot: repoRoot,
+      baseBranch: "main",
+      taskBranch: deriveTaskBranchName({ taskId: "task-443" }),
+      managedWorktreePath,
+      gitdirIdentity: "gitdir-hash",
+      lifecycleState: "active",
+      health: "healthy",
+      lock: null,
+      createdAt: "2026-06-26T00:00:00.000Z",
+      updatedAt: "2026-06-26T00:00:00.000Z",
+      driftMarkers: [],
+      recoveryHints: [],
+      auditCorrelationId: workspaceId,
+    };
+    try {
+      expect(
+        resolveProjectWorkspace(
+          {
+            store,
+            managedTaskWorkspaceRoot: managedRoot,
+            workspaceProvisioning: {
+              getInstance: (id: string) => (id === workspaceId ? instance : undefined),
+              provision: () => Promise.reject(new Error("not used")),
+              activate: () => Promise.reject(new Error("not used")),
+            },
+          },
+          managedWorktreePath,
+        )?.root,
+      ).toBe(managedWorktreePath);
+    } finally {
+      store.close();
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(managedRoot, { recursive: true, force: true });
     }
   });
 });
