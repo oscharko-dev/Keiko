@@ -63,6 +63,80 @@ describe("parseGatewayConfig", () => {
     expect(config.circuitBreaker.failureThreshold).toBe(5);
   });
 
+  it("parses an explicit Azure OpenAI deployment endpoint style and API version", () => {
+    const config = parseGatewayConfig(
+      rawWithProvider((p) => ({
+        ...p,
+        baseUrl: "https://voice.example.cognitiveservices.azure.com",
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-03-01-preview",
+      })),
+    );
+    expect(config.providers[0]?.endpointStyle).toBe("azure-openai-deployment");
+    expect(config.providers[0]?.apiVersion).toBe("2025-03-01-preview");
+  });
+
+  it("accepts per-model environment overrides for endpoint style and API version", () => {
+    const config = parseGatewayConfig(validRaw(), {
+      KEIKO_MODEL_EXAMPLE_CHAT_MODEL_ENDPOINT_STYLE: "azure-openai-deployment",
+      KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_VERSION: "2025-03-01-preview",
+    });
+    expect(config.providers[0]?.endpointStyle).toBe("azure-openai-deployment");
+    expect(config.providers[0]?.apiVersion).toBe("2025-03-01-preview");
+  });
+
+  it("parses realtime auth mode from config and per-model environment", () => {
+    const fromConfig = parseGatewayConfig(
+      rawWithProvider((p) => ({ ...p, realtimeAuthMode: "ephemeral-session" })),
+    );
+    expect(fromConfig.providers[0]?.realtimeAuthMode).toBe("ephemeral-session");
+
+    const fromEnv = parseGatewayConfig(validRaw(), {
+      KEIKO_MODEL_EXAMPLE_CHAT_MODEL_REALTIME_AUTH_MODE: "ephemeral-session",
+    });
+    expect(fromEnv.providers[0]?.realtimeAuthMode).toBe("ephemeral-session");
+  });
+
+  it("rejects an unknown realtime auth mode", () => {
+    expect(() =>
+      parseGatewayConfig(rawWithProvider((p) => ({ ...p, realtimeAuthMode: "magic-token" }))),
+    ).toThrow(/realtimeAuthMode must be one of/u);
+  });
+
+  it("rejects endpoint API version without the Azure deployment endpoint style", () => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({
+          ...p,
+          apiVersion: "2025-03-01-preview",
+        })),
+      ),
+    ).toThrow(/apiVersion requires providers\[0\]\.endpointStyle/u);
+  });
+
+  it("rejects Azure deployment endpoint style without an API version", () => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({
+          ...p,
+          endpointStyle: "azure-openai-deployment",
+        })),
+      ),
+    ).toThrow(/apiVersion is required/u);
+  });
+
+  it("rejects malformed provider API versions", () => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({
+          ...p,
+          endpointStyle: "azure-openai-deployment",
+          apiVersion: "latest",
+        })),
+      ),
+    ).toThrow(/apiVersion must be YYYY-MM-DD/u);
+  });
+
   it("parses an optional Figma access token from local config", () => {
     const config = parseGatewayConfig({
       ...(validRaw() as Record<string, unknown>),
@@ -713,13 +787,23 @@ describe("parseGatewayConfig", () => {
 
 describe("toSafeObject", () => {
   it("omits credential and endpoint fields entirely", () => {
-    const config = parseGatewayConfig(validRaw());
+    const config = parseGatewayConfig(
+      rawWithProvider((p) => ({
+        ...p,
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-03-01-preview",
+        realtimeAuthMode: "ephemeral-session",
+      })),
+    );
     const safe = toSafeObject(config);
     const serialised = JSON.stringify(safe);
     expect(serialised).not.toContain("example-test-token-1234567890");
     expect(serialised).not.toContain("apiKey");
     expect(serialised).not.toContain("https://host.example/v1");
     expect(serialised).not.toContain("baseUrl");
+    expect(serialised).not.toContain("azure-openai-deployment");
+    expect(serialised).not.toContain("2025-03-01-preview");
+    expect(serialised).not.toContain("ephemeral-session");
   });
 
   it("omits enterprise egress proxy and CA topology", () => {

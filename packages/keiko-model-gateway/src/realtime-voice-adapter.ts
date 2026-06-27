@@ -18,8 +18,14 @@
 // (voice-protocol.ts redaction class): they are never logged or persisted here.
 
 import { apiKeyHeaderValue } from "./config.js";
-import { gatewayFetch, OutboundHttpEgressError, type OutboundHttpEgressErrorCode } from "./http.js";
+import {
+  gatewayFetch,
+  OutboundHttpEgressError,
+  readJsonCapped,
+  type OutboundHttpEgressErrorCode,
+} from "./http.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
+import type { RealtimeAuthMode } from "./types.js";
 
 // SDP offers/answers are small (a single audio m-line plus ICE/DTLS metadata is typically a few KB);
 // cap the negotiated answer well below the 10 MB gateway default so a hostile or misconfigured
@@ -30,6 +36,7 @@ export interface RealtimeNegotiationRequest {
   readonly endpoint: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string;
+  readonly realtimeAuthMode?: RealtimeAuthMode;
   readonly modelId: string;
   // The browser's opaque SDP offer (already validated for length by the caller). Never persisted or
   // logged by this module; forwarded verbatim to the provider's realtime SDP-exchange endpoint.
@@ -89,6 +96,15 @@ function joinUrl(endpoint: string, modelId: string): string {
   return `${trimmed}/realtime/calls?model=${encodeURIComponent(modelId)}`;
 }
 
+function joinClientSecretsUrl(endpoint: string): string {
+  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  return `${trimmed}/realtime/client_secrets`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function classifyStatus(status: number): RealtimeNegotiationErrorKind | null {
   if (status === 401 || status === 403) return "wrong-header";
   if (status === 429) return "rate-limited";
@@ -117,6 +133,7 @@ function classifyDispatchError(
 
 interface BuiltRequest {
   readonly url: string;
+  readonly clientSecretsUrl: string;
   readonly headers: Record<string, string>;
   readonly body: string;
   readonly signal: AbortSignal;
@@ -138,6 +155,7 @@ function buildRequest(request: RealtimeNegotiationRequest): BuiltRequest {
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {
     url: joinUrl(request.endpoint, request.modelId),
+    clientSecretsUrl: joinClientSecretsUrl(request.endpoint),
     headers,
     body: request.offerSdp,
     signal,
@@ -201,6 +219,94 @@ async function dispatch(
   }
 }
 
+function buildClientSecretBody(modelId: string): string {
+  return JSON.stringify({
+    session: {
+      type: "realtime",
+      model: modelId,
+      output_modalities: ["audio"],
+    },
+  });
+}
+
+function extractEphemeralToken(parsed: unknown): string | undefined {
+  if (isRecord(parsed) && typeof parsed.value === "string" && parsed.value.length > 0) {
+    return parsed.value;
+  }
+  if (
+    isRecord(parsed) &&
+    isRecord(parsed.client_secret) &&
+    typeof parsed.client_secret.value === "string" &&
+    parsed.client_secret.value.length > 0
+  ) {
+    return parsed.client_secret.value;
+  }
+  return undefined;
+}
+
+async function requestEphemeralToken(
+  built: BuiltRequest,
+  request: RealtimeNegotiationRequest,
+): Promise<
+  | { readonly ok: true; readonly token: string }
+  | { readonly ok: false; readonly kind: RealtimeNegotiationErrorKind }
+> {
+  const name = headerName(request.apiKeyHeaderName);
+  try {
+    const response = await gatewayFetch(built.clientSecretsUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [name]: apiKeyHeaderValue(name, request.apiKey),
+      },
+      body: buildClientSecretBody(request.modelId),
+      signal: built.signal,
+      maxResponseBytes: MAX_SDP_BYTES,
+      ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),
+      ...(request.egress !== undefined ? { egress: request.egress } : {}),
+    });
+    if (!response.ok) {
+      const kind = classifyStatus(response.status) ?? "transport";
+      await discardBody(response);
+      return { ok: false, kind };
+    }
+    const token = extractEphemeralToken(await readJsonCapped(response, MAX_SDP_BYTES));
+    return token === undefined ? { ok: false, kind: "invalid-response" } : { ok: true, token };
+  } catch (error) {
+    return {
+      ok: false,
+      kind: classifyDispatchError(error, built.timeoutSignal, built.callerSignal),
+    };
+  }
+}
+
+async function dispatchWithEphemeralToken(
+  built: BuiltRequest,
+  request: RealtimeNegotiationRequest,
+): Promise<Response | RealtimeNegotiationErrorKind> {
+  const tokenResult = await requestEphemeralToken(built, request);
+  if (!tokenResult.ok) {
+    return tokenResult.kind;
+  }
+  try {
+    return await gatewayFetch(built.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/sdp",
+        "content-length": String(Buffer.byteLength(built.body, "utf8")),
+        authorization: `Bearer ${tokenResult.token}`,
+      },
+      body: built.body,
+      signal: built.signal,
+      maxResponseBytes: MAX_SDP_BYTES,
+      ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),
+      ...(request.egress !== undefined ? { egress: request.egress } : {}),
+    });
+  } catch (error) {
+    return classifyDispatchError(error, built.timeoutSignal, built.callerSignal);
+  }
+}
+
 async function decodeSuccess(response: Response): Promise<RealtimeNegotiationOutcome> {
   let answerSdp: string | null;
   try {
@@ -223,7 +329,10 @@ export async function requestRealtimeNegotiation(
   request: RealtimeNegotiationRequest,
 ): Promise<RealtimeNegotiationOutcome> {
   const built = buildRequest(request);
-  const dispatched = await dispatch(built, request.fetchImpl, request.egress);
+  const dispatched =
+    request.realtimeAuthMode === "ephemeral-session"
+      ? await dispatchWithEphemeralToken(built, request)
+      : await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
     return { ok: false, kind: dispatched };
   }

@@ -140,6 +140,17 @@ function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActi
   };
 }
 
+async function chooseConnectSource(
+  user: ReturnType<typeof userEvent.setup>,
+  sourceLabel: "Folder" | "Repository" | "Files",
+): Promise<void> {
+  await user.click(screen.getByRole("combobox", { name: /connect source/i }));
+  const options = await screen.findAllByRole("option");
+  const option = options.find((entry) => entry.textContent?.includes(sourceLabel));
+  if (option === undefined) throw new Error(`Missing source option ${sourceLabel}`);
+  await user.click(option);
+}
+
 // ---------------------------------------------------------------------------
 // Connect source
 // ---------------------------------------------------------------------------
@@ -169,7 +180,7 @@ describe("CapsuleActions — connect source", () => {
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    await user.selectOptions(screen.getByLabelText(/connect source/i), "repository");
+    await chooseConnectSource(user, "Repository");
     await user.type(screen.getByLabelText(/absolute repository path to connect/i), "/repo/app");
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
@@ -186,7 +197,7 @@ describe("CapsuleActions — connect source", () => {
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    await user.selectOptions(screen.getByLabelText(/connect source/i), "files");
+    await chooseConnectSource(user, "Files");
     const connectButton = screen.getByRole("button", { name: /^connect$/i });
     expect(connectButton).toBeDisabled();
 
@@ -311,7 +322,7 @@ describe("CapsuleActions — connect source", () => {
 
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    await user.selectOptions(screen.getByLabelText(/connect source/i), "files");
+    await chooseConnectSource(user, "Files");
     await user.click(screen.getByRole("button", { name: /^browse$/i }));
     const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
     await user.click(within(dialog).getByRole("button", { name: "Repo" }));
@@ -387,7 +398,7 @@ describe("CapsuleActions — connect source", () => {
 
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    expect(screen.getByLabelText(/connect source/i)).toHaveValue("folder");
+    expect(screen.getByRole("combobox", { name: /connect source/i })).toHaveTextContent("Folder");
     await user.click(screen.getByRole("button", { name: /^browse$/i }));
     const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
     await user.click(within(dialog).getByRole("button", { name: "Home" }));
@@ -400,7 +411,7 @@ describe("CapsuleActions — connect source", () => {
     await user.click(fileCheckbox);
     await user.click(within(dialog).getByRole("button", { name: /use selection/i }));
 
-    expect(screen.getByLabelText(/connect source/i)).toHaveValue("files");
+    expect(screen.getByRole("combobox", { name: /connect source/i })).toHaveTextContent("Files");
     expect(screen.getByLabelText(/absolute root path for the selected files/i)).toHaveValue(
       "/home/user",
     );
@@ -453,7 +464,7 @@ describe("CapsuleActions — connect source", () => {
     render(<CapsuleActions {...defaultProps()} />);
 
     expect(screen.getByText(/Maximum single file size: 1.0 GB/i)).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText(/connect source/i), "files");
+    await chooseConnectSource(user, "Files");
     await user.click(screen.getByRole("button", { name: /^browse$/i }));
     const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
     await user.click(within(dialog).getByRole("button", { name: "Home" }));

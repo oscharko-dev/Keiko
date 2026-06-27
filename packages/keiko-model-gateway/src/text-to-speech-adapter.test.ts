@@ -129,6 +129,35 @@ describe("requestTextToSpeech", () => {
     expect(payload.speed).toBe(1.25);
   });
 
+  it("supports Azure OpenAI deployment endpoints with a separate api-version", async () => {
+    let seenUrl = "";
+    let header: string | null = null;
+    let seenBody = "";
+    const outcome = await requestTextToSpeech({
+      endpoint: "https://voice.example.cognitiveservices.azure.com/",
+      endpointStyle: "azure-openai-deployment",
+      apiVersion: "2025-03-01-preview",
+      apiKey: SECRET_API_KEY,
+      apiKeyHeaderName: "api-key",
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "alloy",
+      fetchImpl: mockFetch((url, init) => {
+        seenUrl = url;
+        header = (init.headers as Record<string, string>)["api-key"] ?? null;
+        seenBody = bodyText(init);
+        return audioResponse(AUDIO_BYTES);
+      }),
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(seenUrl).toBe(
+      "https://voice.example.cognitiveservices.azure.com/openai/deployments/keiko-tts/audio/speech?api-version=2025-03-01-preview",
+    );
+    expect(header).toBe(SECRET_API_KEY);
+    expect(JSON.parse(seenBody)).toMatchObject({ model: "keiko-tts", voice: "alloy" });
+  });
+
   it("derives the mimeType from the requested format when the provider omits content-type", async () => {
     const outcome = await requestTextToSpeech({
       endpoint: ENDPOINT,

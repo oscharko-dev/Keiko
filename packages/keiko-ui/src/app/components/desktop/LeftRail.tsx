@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { memo } from "react";
 import { useI18n } from "@/lib/i18n";
 import { Icons, type IconName } from "./Icons";
 import type { Theme } from "./hooks/useTheme";
@@ -11,9 +12,7 @@ interface RailTool {
   readonly img?: string;
 }
 
-const PRIMARY: readonly RailTool[] = [
-  { id: "chatHistory", icon: "archive" },
-];
+const PRIMARY: readonly RailTool[] = [{ id: "chatHistory", icon: "archive" }];
 
 function RailButton({
   tool,
@@ -48,7 +47,7 @@ function RailButton({
   );
 }
 
-export function LeftRail({
+function LeftRailImpl({
   openTools,
   onTool,
   onNewChat,
@@ -195,3 +194,5 @@ export function LeftRail({
     </nav>
   );
 }
+
+export const LeftRail = memo(LeftRailImpl);
