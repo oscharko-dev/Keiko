@@ -1,12 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { ApiError, fetchPdfCitationPreviewDocument } from "@/lib/api";
 import { Icons } from "../../Icons";
+import type { WorkspaceApi } from "../../hooks/useWorkspace.types";
 import type { AppWindow } from "../../windows/types";
 import {
+  activatePdfCitationPreviewBackToChat,
+  activatePdfCitationPreviewContext,
+  getPdfCitationPreviewBackToChatAvailability,
   getPdfCitationPreviewSession,
+  subscribePdfCitationPreviewRegistry,
   type PdfCitationPreviewSafeWindowCfg,
   type PdfCitationPreviewZoomMode,
 } from "./pdf-citation-preview-session";
@@ -31,10 +44,13 @@ interface PreviewFailure {
 
 interface PdfDocumentLoadingTask {
   readonly destroy: () => Promise<void> | void;
-  readonly promise: Promise<PDFDocumentProxy>;
+  readonly promise: Promise<PdfDocumentProxy>;
 }
 
 type PdfJsModule = typeof import("pdfjs-dist");
+type PdfDocumentProxy = PDFDocumentProxy & {
+  readonly destroy?: () => Promise<void> | void;
+};
 
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
 
@@ -89,12 +105,41 @@ function rotatedSize(size: PageSize, rotation: number): PageSize {
 function anchorQualityLabel(value: PdfCitationPreviewSafeWindowCfg["anchorQuality"]): string {
   switch (value) {
     case "approximate":
-      return "Approximate anchor";
+      return "Near cited passage";
     case "unavailable":
-      return "Anchor unavailable";
+      return "Verified page unavailable";
     default:
-      return "Page anchor";
+      return "Verified page only";
   }
+}
+
+function anchorQualityDescription(value: PdfCitationPreviewSafeWindowCfg["anchorQuality"]): string {
+  switch (value) {
+    case "approximate":
+      return "Keiko opened the verified source page near the cited passage. Exact PDF highlights are not part of this viewer.";
+    case "unavailable":
+      return "Keiko verified this PDF source, but no trustworthy page anchor is available for this citation. The viewer stays on its current page.";
+    default:
+      return "Keiko opened the verified source page for this citation. No passage-level highlight is available in this viewer.";
+  }
+}
+
+function citationContextLabel(args: {
+  readonly label: string;
+  readonly marker: string;
+  readonly source?: string | undefined;
+}): string {
+  return args.source === undefined
+    ? `${args.marker} ${args.label}`
+    : `${args.marker} ${args.source} · ${args.label}`;
+}
+
+function citationContextPageLabel(
+  display: Pick<PdfCitationPreviewSafeWindowCfg, "anchorQuality" | "pageLabel" | "pageNumber">,
+): string {
+  if (display.pageLabel !== undefined) return display.pageLabel;
+  if (display.pageNumber !== undefined) return `Page ${String(display.pageNumber)}`;
+  return display.anchorQuality === "unavailable" ? "No verified page" : "Verified PDF";
 }
 
 function previewFailure(error: unknown): PreviewFailure {
@@ -209,6 +254,7 @@ function PdfCanvasPage({
         canvas.style.height = `${String(Math.floor(viewport.height))}px`;
 
         const renderTask = page.render({
+          canvas: canvas,
           canvasContext: context,
           transform:
             deviceScale === 1 ? undefined : [deviceScale, 0, 0, deviceScale, 0, 0],
@@ -241,14 +287,27 @@ function PdfCanvasPage({
 
 export function PdfCitationPreviewWindow({
   cfg,
+  focusWindow,
+  restoreWindow,
   updateCfg,
   windowId,
 }: {
   readonly cfg: Record<string, unknown>;
+  readonly focusWindow: WorkspaceApi["focus"];
+  readonly restoreWindow?: WorkspaceApi["restore"] | undefined;
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   readonly windowId: string;
 }): ReactNode {
-  const sessionEntry = getPdfCitationPreviewSession(windowId);
+  const sessionEntry = useSyncExternalStore(
+    subscribePdfCitationPreviewRegistry,
+    () => getPdfCitationPreviewSession(windowId),
+    () => getPdfCitationPreviewSession(windowId),
+  );
+  const backToChatReason = useSyncExternalStore(
+    subscribePdfCitationPreviewRegistry,
+    () => getPdfCitationPreviewBackToChatAvailability(windowId).reason ?? "",
+    () => getPdfCitationPreviewBackToChatAvailability(windowId).reason ?? "",
+  );
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [defaultPageSize, setDefaultPageSize] = useState<PageSize | null>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
@@ -260,8 +319,18 @@ export function PdfCitationPreviewWindow({
   const [showSlowLoad, setShowSlowLoad] = useState(false);
   const currentPageRef = useRef(1);
   const didInitialScrollRef = useRef(false);
-  const pageRefs = useRef(new Map<number, HTMLDivElement>());
+  const backToChatDescriptionId = useId();
+  const pageRefs = useRef(new Map<number, HTMLElement>());
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const citationContext = sessionEntry?.context;
+  const backToChat =
+    backToChatReason.length === 0
+      ? { enabled: true as const }
+      : { enabled: false as const, reason: backToChatReason };
+  const activeCitation =
+    citationContext?.citations.find(
+      (citation) => citation.citation.stableId === citationContext.activeStableId,
+    ) ?? citationContext?.citations[0];
 
   const display = useMemo(
     (): Pick<
@@ -277,13 +346,20 @@ export function PdfCitationPreviewWindow({
           readOptionalString(cfg.documentLabel) ??
           sessionEntry?.display.documentLabel ??
           "PDF Preview",
-        anchorQuality: sessionEntry?.display.anchorQuality ?? "page-only",
+        anchorQuality: activeCitation?.display.anchorQuality ?? sessionEntry?.display.anchorQuality ?? "page-only",
         ...(sourceLabel === undefined ? {} : { sourceLabel }),
         ...(pageNumber === undefined ? {} : { pageNumber }),
         ...(pageLabel === undefined ? {} : { pageLabel }),
       };
     },
-    [cfg.documentLabel, cfg.pageLabel, cfg.pageNumber, cfg.sourceLabel, sessionEntry],
+    [
+      activeCitation?.display.anchorQuality,
+      cfg.documentLabel,
+      cfg.pageLabel,
+      cfg.pageNumber,
+      cfg.sourceLabel,
+      sessionEntry,
+    ],
   );
 
   const zoomMode = readZoomMode(cfg.zoomMode);
@@ -485,6 +561,36 @@ export function PdfCitationPreviewWindow({
     pageRefs.current.get(next)?.scrollIntoView({ block: "start" });
   };
 
+  const activateContextCitation = (stableId: string): void => {
+    const nextCitation = activatePdfCitationPreviewContext(windowId, stableId);
+    if (nextCitation === undefined) {
+      return;
+    }
+    updateCfg({
+      ...(nextCitation.display.pageLabel === undefined
+        ? { pageLabel: undefined }
+        : { pageLabel: nextCitation.display.pageLabel }),
+      ...(nextCitation.display.pageNumber === undefined
+        ? { pageNumber: undefined }
+        : { pageNumber: nextCitation.display.pageNumber }),
+      ...(nextCitation.display.sourceLabel === undefined
+        ? { sourceLabel: undefined }
+        : { sourceLabel: nextCitation.display.sourceLabel }),
+      currentPage:
+        nextCitation.display.pageNumber === undefined
+          ? currentPageRef.current
+          : nextCitation.display.pageNumber,
+      documentLabel: nextCitation.display.documentLabel,
+    });
+    if (nextCitation.display.pageNumber !== undefined) {
+      requestAnimationFrame(() => {
+        pageRefs.current.get(nextCitation.display.pageNumber ?? currentPageRef.current)?.scrollIntoView({
+          block: "start",
+        });
+      });
+    }
+  };
+
   return (
     <div className="pdfv-shell">
       <div className="pdfv-header">
@@ -502,6 +608,82 @@ export function PdfCitationPreviewWindow({
         </div>
         <span className="pdfv-chip">{anchorQualityLabel(display.anchorQuality)}</span>
       </div>
+
+      {activeCitation !== undefined ? (
+        <section className="pdfv-context" aria-label="Citation context">
+          <div className="pdfv-context-head">
+            <div className="pdfv-context-copy">
+              <p className="pdfv-context-eyebrow">Answer-local citation context</p>
+              <h3 className="pdfv-context-title">
+                {citationContextLabel({
+                  label: activeCitation.citation.label,
+                  marker: activeCitation.citation.marker,
+                  source: activeCitation.citation.source,
+                })}
+              </h3>
+              <p className="pdfv-context-message">
+                {anchorQualityDescription(activeCitation.display.anchorQuality)}
+              </p>
+            </div>
+            <div className="pdfv-context-actions">
+              <button
+                type="button"
+                className="tm-action pdfv-back-to-chat"
+                aria-describedby={backToChat.reason === undefined ? undefined : backToChatDescriptionId}
+                aria-disabled={backToChat.enabled ? undefined : "true"}
+                data-tip={backToChat.reason ?? "Restore the originating chat and highlight this citation"}
+                onClick={() => {
+                  if (!backToChat.enabled) return;
+                  activatePdfCitationPreviewBackToChat(windowId, { focusWindow, restoreWindow });
+                }}
+              >
+                <Icons.back size={14} />
+                <span>Back to chat</span>
+              </button>
+              {backToChat.reason === undefined ? null : (
+                <span id={backToChatDescriptionId} className="pdfv-back-to-chat-hint">
+                  {backToChat.reason}
+                </span>
+              )}
+            </div>
+          </div>
+          {citationContext !== undefined && citationContext.citations.length > 1 ? (
+            <div className="pdfv-context-rail">
+              <span className="grounded-citations-label">Same answer citations</span>
+              <ul className="grounded-citations pdfv-context-list" aria-label="Same answer citations">
+                {citationContext.citations.map((citation) => {
+                  const active = citation.citation.stableId === citationContext.activeStableId;
+                  return (
+                    <li key={citation.citation.stableId} className="grounded-citations-item">
+                      <button
+                        type="button"
+                        className="grounded-citation grounded-citation-action pdfv-context-citation"
+                        aria-pressed={active}
+                        data-active={active ? "true" : "false"}
+                        onClick={() => {
+                          if (active) return;
+                          activateContextCitation(citation.citation.stableId);
+                        }}
+                      >
+                        <span className="grounded-citation-range">
+                          {citationContextLabel({
+                            label: citation.citation.label,
+                            marker: citation.citation.marker,
+                            source: citation.citation.source,
+                          })}
+                        </span>
+                        <span className="grounded-citation-action-label">
+                          {active ? "Active" : citationContextPageLabel(citation.display)}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <div className="pdfv-toolbar" role="group" aria-label="PDF preview controls">
         <div className="pdfv-group">

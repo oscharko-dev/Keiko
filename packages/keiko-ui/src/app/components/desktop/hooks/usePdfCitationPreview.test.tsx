@@ -19,6 +19,7 @@ function citation(
   marker: string,
   stableId: string,
   label = "policy.pdf",
+  documentId = "doc-1",
 ): LocalKnowledgeEvidenceCitation {
   return {
     stableId,
@@ -28,7 +29,7 @@ function citation(
     lineage: {
       capsuleId: "cap-1" as LocalKnowledgeEvidenceCitation["lineage"]["capsuleId"],
       sourceId: "src-1" as LocalKnowledgeEvidenceCitation["lineage"]["sourceId"],
-      documentId: "doc-1" as LocalKnowledgeEvidenceCitation["lineage"]["documentId"],
+      documentId: documentId as LocalKnowledgeEvidenceCitation["lineage"]["documentId"],
       chunkId: "chunk-1" as LocalKnowledgeEvidenceCitation["lineage"]["chunkId"],
     },
   };
@@ -215,9 +216,123 @@ describe("usePdfCitationPreviewController", () => {
 
     expect(await first!).toBe("pdf-window-1");
     expect(await second!).toBe("pdf-window-1");
-    expect(showPdfCitationPreviewResult).toHaveBeenCalledWith(windows, activeResponse(), {
-      currentPage: 3,
-    });
+    expect(showPdfCitationPreviewResult).toHaveBeenCalledWith(
+      windows,
+      activeResponse(),
+      expect.objectContaining({
+        currentPage: 3,
+        context: expect.objectContaining({
+          activeStableId: "stable-1",
+        }),
+      }),
+    );
     expect(result.current?.isOpening(citations[0]!)).toBe(false);
+  });
+
+  it("passes answer-local same-document context and source-chat provenance to the viewer result", async () => {
+    const citations = [
+      citation("[1]", "stable-1", "policy.pdf", "doc-shared"),
+      citation("[2]", "stable-2", "policy appendix.pdf", "doc-shared"),
+      citation("[3]", "stable-3", "other.pdf", "doc-other"),
+    ];
+    const groundedAnswer = answer(citations);
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "stable-1",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "available",
+          display: { documentLabel: "policy.pdf", pageNumber: 3, anchorQuality: "page-only" },
+        },
+        {
+          stableId: "stable-2",
+          marker: "[2]",
+          markerIndex: 2,
+          state: "available",
+          display: {
+            documentLabel: "policy.pdf",
+            pageNumber: 8,
+            pageLabel: "Page 8",
+            anchorQuality: "approximate",
+          },
+        },
+        {
+          stableId: "stable-3",
+          marker: "[3]",
+          markerIndex: 3,
+          state: "available",
+          display: { documentLabel: "other.pdf", pageNumber: 11, anchorQuality: "page-only" },
+        },
+      ],
+    });
+    vi.mocked(openPdfCitationPreviewSession).mockResolvedValue(activeResponse());
+
+    const windows = {
+      add: vi.fn(),
+      focus: vi.fn(),
+      update: vi.fn(),
+    };
+    const { result } = renderHook(() =>
+      usePdfCitationPreviewController({
+        answer: groundedAnswer,
+        chatId: "chat-1",
+        windowId: "chat-window-1",
+        windows,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current?.forMarker("[1]")?.state).toBe("available");
+    });
+
+    await act(async () => {
+      await result.current!.openCitation(citations[0]!, "inline-marker");
+    });
+
+    expect(showPdfCitationPreviewResult).toHaveBeenCalledWith(
+      windows,
+      activeResponse(),
+      expect.objectContaining({
+        currentPage: 3,
+        context: {
+          activeStableId: "stable-1",
+          citations: [
+            {
+              citation: {
+                stableId: "stable-1",
+                marker: "[1]",
+                label: "policy.pdf",
+              },
+              display: {
+                documentLabel: "policy.pdf",
+                pageNumber: 3,
+                anchorQuality: "page-only",
+              },
+            },
+            {
+              citation: {
+                stableId: "stable-2",
+                marker: "[2]",
+                label: "policy appendix.pdf",
+              },
+              display: {
+                documentLabel: "policy.pdf",
+                pageNumber: 8,
+                pageLabel: "Page 8",
+                anchorQuality: "approximate",
+              },
+            },
+          ],
+          origin: {
+            assistantMessageId: "msg-a",
+            chatId: "chat-1",
+            chatWindowId: "chat-window-1",
+            marker: "[1]",
+            representation: "inline-marker",
+          },
+        },
+      }),
+    );
   });
 });

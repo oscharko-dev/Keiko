@@ -66,6 +66,7 @@ import {
   usePdfCitationPreviewController,
   type PdfCitationPreviewWindowApi,
 } from "./hooks/usePdfCitationPreview";
+import { registerPdfCitationPreviewMessageTarget } from "./widgets/cards/pdf-citation-preview-session";
 import {
   deriveVoiceDialogState,
   playbackPhaseToTurnState,
@@ -106,6 +107,7 @@ import type {
 } from "@/lib/types";
 
 interface ChatWindowProps {
+  readonly windowId?: string;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
   readonly compact?: boolean;
@@ -310,6 +312,7 @@ function ChatBubbleImpl({
   repositoryRoots,
   openRepositoryReference,
   previewWindows,
+  windowId,
   streaming = false,
   layout = "stack",
 }: {
@@ -318,6 +321,7 @@ function ChatBubbleImpl({
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
+  readonly windowId?: string | undefined;
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
   // so the DS 0.4.0 streaming caret blinks at the growing edge of the text.
   readonly streaming?: boolean;
@@ -326,15 +330,35 @@ function ChatBubbleImpl({
   const { t } = useI18n();
   const { activeChat } = useChatSessionContext();
   const contentId = useId();
+  const bubbleRef = useRef<HTMLElement | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const isRunSummary = isRunSummaryMessage(message);
   const isUser = message.role === "user";
   const citationPreview = usePdfCitationPreviewController({
     answer: message.groundedAnswer,
     chatId: activeChat?.id,
+    windowId,
     windows: previewWindows,
   });
   const canCollapse = !isUser && !isRunSummary && isCollapsibleAssistantAnswer(message.content);
+
+  useEffect(() => {
+    const assistantMessageId = message.groundedAnswer?.assistantMessageId ?? message.id;
+    if (
+      message.role !== "assistant" ||
+      activeChat?.id === undefined ||
+      windowId === undefined ||
+      bubbleRef.current === null
+    ) {
+      return;
+    }
+    return registerPdfCitationPreviewMessageTarget({
+      assistantMessageId,
+      chatId: activeChat.id,
+      chatWindowId: windowId,
+      element: bubbleRef.current,
+    });
+  }, [activeChat?.id, message.groundedAnswer?.assistantMessageId, message.id, message.role, windowId]);
 
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
   // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat
@@ -344,7 +368,13 @@ function ChatBubbleImpl({
     return <RunSummaryCard message={message} onOpenResult={onOpenRunResult} />;
   }
   return (
-    <article className="chat-msg" data-role={message.role} data-layout={layout}>
+    <article
+      ref={bubbleRef}
+      className="chat-msg"
+      data-role={message.role}
+      data-layout={layout}
+      tabIndex={isUser ? undefined : -1}
+    >
       <div className="chat-msg-bubble">
         {isUser ? <div className="chat-msg-role">{t("chat.role.user")}</div> : <KeikoMessageMark />}
         <div
@@ -461,6 +491,7 @@ interface ConversationThreadProps {
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
+  readonly windowId?: string | undefined;
   readonly sending: boolean;
   readonly sendStatus: SendStatus;
   readonly activeChat: Chat | undefined;
@@ -473,6 +504,7 @@ function ConversationThreadImpl({
   repositoryRoots,
   openRepositoryReference,
   previewWindows,
+  windowId,
   sending,
   sendStatus,
   activeChat,
@@ -492,6 +524,7 @@ function ConversationThreadImpl({
                 repositoryRoots={repositoryRoots}
                 openRepositoryReference={openRepositoryReference}
                 previewWindows={previewWindows}
+                windowId={windowId}
                 layout="turn"
               />
             ) : null}
@@ -505,6 +538,7 @@ function ConversationThreadImpl({
                 repositoryRoots={repositoryRoots}
                 openRepositoryReference={openRepositoryReference}
                 previewWindows={previewWindows}
+                windowId={windowId}
                 layout="turn"
                 streaming={
                   sendStatus === "streaming" &&
@@ -2958,6 +2992,7 @@ function MemoryPanel({
 }
 
 export function ChatWindow({
+  windowId,
   mini = false,
   minimalChat = false,
   compact = false,
@@ -3092,6 +3127,7 @@ export function ChatWindow({
               repositoryRoots={repositoryRoots}
               openRepositoryReference={openRepositoryReference}
               previewWindows={previewWindows}
+              windowId={windowId}
               sending={sending}
               sendStatus={sendStatus}
               activeChat={activeChat}

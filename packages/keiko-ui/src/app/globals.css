@@ -8666,6 +8666,84 @@ select.dlg-input {
   font-weight: 600;
   white-space: nowrap;
 }
+.pdfv-context {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in oklch, var(--surface-primary) 76%, var(--surface-inset));
+}
+.pdfv-context-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.pdfv-context-copy {
+  min-width: 0;
+}
+.pdfv-context-eyebrow {
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.pdfv-context-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13.5px;
+  line-height: 1.45;
+  font-weight: 650;
+}
+.pdfv-context-message {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pdfv-context-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 180px;
+}
+.pdfv-back-to-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pdfv-back-to-chat[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.pdfv-back-to-chat-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: right;
+}
+.pdfv-context-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pdfv-context-list {
+  gap: 8px;
+}
+.pdfv-context-citation {
+  gap: 6px;
+  max-width: min(100%, 34ch);
+}
+.pdfv-context-citation[data-active="true"] {
+  border-color: var(--border-accent);
+  background: color-mix(in oklch, var(--surface-accent-subtle) 72%, var(--surface-primary));
+}
+.pdfv-context-citation[data-active="true"] .grounded-citation-action-label {
+  color: var(--accent-bright);
+}
 .pdfv-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -8777,6 +8855,7 @@ select.dlg-input {
 }
 @media (max-width: 720px) {
   .pdfv-header,
+  .pdfv-context,
   .pdfv-toolbar,
   .pdfv-scroll {
     padding-left: 12px;
@@ -8788,6 +8867,16 @@ select.dlg-input {
   }
   .pdfv-chip {
     min-height: 26px;
+  }
+  .pdfv-context-head {
+    flex-direction: column;
+  }
+  .pdfv-context-actions {
+    align-items: flex-start;
+    min-width: 0;
+  }
+  .pdfv-back-to-chat-hint {
+    text-align: left;
   }
   .pdfv-page-frame {
     width: 100%;
@@ -18789,6 +18878,12 @@ button.figma-view-preview {
   outline-offset: 2px;
   border-radius: 4px;
 }
+.citation-inline-marker[data-back-to-chat-highlighted="true"],
+.grounded-citation-action[data-back-to-chat-highlighted="true"] {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--surface-accent-subtle) 78%, transparent);
+}
 .citation-inline-marker--recoverable {
   border-bottom-style: dashed;
 }
@@ -18799,6 +18894,23 @@ button.figma-view-preview {
 }
 .citation-inline-marker[aria-disabled="true"]:hover {
   color: inherit;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .citation-inline-marker[data-back-to-chat-highlighted="true"],
+  .grounded-citation-action[data-back-to-chat-highlighted="true"] {
+    animation: citation-back-to-chat-pulse 1.8s ease;
+  }
+}
+@keyframes citation-back-to-chat-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--surface-accent-subtle) 90%, transparent);
+  }
+  45% {
+    box-shadow: 0 0 0 6px color-mix(in oklch, var(--surface-accent-subtle) 62%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--surface-accent-subtle) 0%, transparent);
+  }
 }
 /* C165 — HybridContextPackSummary nests two .grounded-context-pack sections inside
    an outer one: collapse the doubled padding / stacked border-tops into a border-left

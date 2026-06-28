@@ -1,0 +1,68 @@
+{
+  "issue": 1636,
+  "verdict": "PASS",
+  "cssSha256": "dacd703e6c886f20b3bed61f19da7d93fcee7cfe0b5a76c21846e814144d30c2",
+  "componentFamilies": [
+    {
+      "family": "PDF viewer context panel",
+      "selectors": [
+        ".pdfv-context",
+        ".pdfv-context-head",
+        ".pdfv-context-citation[data-active=\"true\"]"
+      ],
+      "states": [
+        "default",
+        "active sibling",
+        "approximate anchor",
+        "page unavailable"
+      ],
+      "tokens": [
+        "--surface-primary",
+        "--surface-inset",
+        "--surface-accent-subtle",
+        "--border-subtle",
+        "--border-accent",
+        "--text-primary",
+        "--text-secondary",
+        "--accent-bright"
+      ],
+      "result": "PASS"
+    },
+    {
+      "family": "Back to chat affordance",
+      "selectors": [
+        ".pdfv-back-to-chat",
+        ".pdfv-back-to-chat-hint"
+      ],
+      "states": [
+        "enabled",
+        "disabled: source chat missing",
+        "disabled: source message missing",
+        "focus-visible"
+      ],
+      "tokens": [
+        "--focus-ring",
+        "--text-secondary"
+      ],
+      "result": "PASS"
+    },
+    {
+      "family": "Return highlight treatment",
+      "selectors": [
+        ".citation-inline-marker[data-back-to-chat-highlighted=\"true\"]",
+        ".grounded-citation-action[data-back-to-chat-highlighted=\"true\"]"
+      ],
+      "states": [
+        "transient highlighted",
+        "reduced motion fallback",
+        "cleanup"
+      ],
+      "tokens": [
+        "--focus-ring",
+        "--surface-accent-subtle"
+      ],
+      "result": "PASS"
+    }
+  ],
+  "summary": "Issue #1636 extends the governed PDF viewer with answer-local citation context, honest anchor-quality copy, and return-to-chat affordances while reusing the existing viewer shell and grounded citation language from issues #1634 and #1635."
+}
