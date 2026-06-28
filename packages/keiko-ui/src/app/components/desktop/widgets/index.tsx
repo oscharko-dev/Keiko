@@ -215,6 +215,7 @@ function ChatWindowSessionHost({
         <div className="lk-loading">Opening chat...</div>
       ) : (
         <ChatWindow
+          windowId={ctx.windowId}
           mini={ctx.mini === true}
           minimalChat={ctx.minimalChat === true}
           compact={ctx.compact === true}
@@ -264,7 +265,13 @@ registerWindowRender("keiko", () => <KeikoTwinPanel />);
 registerWindowRender("settings", () => <SettingsPanel />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
-  <PdfCitationPreviewWindow cfg={cfg} updateCfg={ctx.updateCfg} windowId={ctx.windowId} />
+  <PdfCitationPreviewWindow
+    cfg={cfg}
+    focusWindow={ctx.focusWindow}
+    restoreWindow={ctx.restoreWindow}
+    updateCfg={ctx.updateCfg}
+    windowId={ctx.windowId}
+  />
 ));
 
 // Epic #270 — Quality Intelligence. The hub is a singleton tool window; selecting/finishing a run

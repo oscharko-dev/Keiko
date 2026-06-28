@@ -10,7 +10,11 @@ import type {
 import { fetchPdfCitationPreviewStatus, openPdfCitationPreviewSession } from "@/lib/api";
 import type { GroundedAnswer, LocalKnowledgeEvidenceCitation } from "@/lib/types";
 import type { WorkspaceApi } from "./useWorkspace.types";
-import { showPdfCitationPreviewResult } from "../widgets/cards/pdf-citation-preview-session";
+import {
+  showPdfCitationPreviewResult,
+  type PdfCitationPreviewAnswerContext,
+  type PdfCitationPreviewContextCitation,
+} from "../widgets/cards/pdf-citation-preview-session";
 
 export interface PdfCitationPreviewWindowApi {
   readonly add: WorkspaceApi["add"];
@@ -112,13 +116,49 @@ function buildAffordanceMap(
   return affordances;
 }
 
+function citationContextItem(
+  citation: LocalKnowledgeEvidenceCitation,
+  affordance: CitationPreviewAffordance,
+): PdfCitationPreviewContextCitation | undefined {
+  if (affordance.state !== "available" || affordance.display === undefined) return undefined;
+  return {
+    citation: {
+      stableId: citation.stableId,
+      marker: citation.marker,
+      label: citation.label,
+      ...(citation.source === undefined ? {} : { source: citation.source }),
+    },
+    display: affordance.display,
+  };
+}
+
+function answerLocalPreviewContext(
+  activeCitation: LocalKnowledgeEvidenceCitation,
+  citations: readonly LocalKnowledgeEvidenceCitation[],
+  affordances: Record<string, CitationPreviewAffordance>,
+): readonly PdfCitationPreviewContextCitation[] {
+  return citations.flatMap((citation) => {
+    if (citation.lineage.documentId !== activeCitation.lineage.documentId) {
+      return [];
+    }
+    const affordance = affordances[citation.stableId];
+    if (affordance === undefined) {
+      return [];
+    }
+    const contextItem = citationContextItem(citation, affordance);
+    return contextItem === undefined ? [] : [contextItem];
+  });
+}
+
 export function usePdfCitationPreviewController({
   answer,
   chatId,
+  windowId,
   windows,
 }: {
   readonly answer: GroundedAnswer | undefined;
   readonly chatId: string | undefined;
+  readonly windowId?: string | undefined;
   readonly windows: PdfCitationPreviewWindowApi | undefined;
 }): CitationPreviewController | undefined {
   const citations = useMemo(() => knowledgeCitationsForAnswer(answer), [answer]);
@@ -204,11 +244,27 @@ export function usePdfCitationPreviewController({
         stableId: citation.stableId,
         origin,
       })
-        .then((response) =>
-          showPdfCitationPreviewResult(windows, response, {
+        .then((response) => {
+          const sameDocumentCitations = answerLocalPreviewContext(citation, citations, affordances);
+          const context: PdfCitationPreviewAnswerContext | undefined =
+            sameDocumentCitations.length === 0
+              ? undefined
+              : {
+                  activeStableId: citation.stableId,
+                  citations: sameDocumentCitations,
+                  origin: {
+                    assistantMessageId: answer.assistantMessageId,
+                    chatId,
+                    ...(windowId === undefined ? {} : { chatWindowId: windowId }),
+                    marker: citation.marker,
+                    representation: origin,
+                  },
+                };
+          return showPdfCitationPreviewResult(windows, response, {
+            ...(context === undefined ? {} : { context }),
             currentPage: response.display?.pageNumber,
-          }),
-        )
+          });
+        })
         .finally(() => {
           pendingOpensRef.current.delete(key);
           setOpeningKeys((current) => nextOpeningKeys(current, key, false));
@@ -217,7 +273,7 @@ export function usePdfCitationPreviewController({
       pendingOpensRef.current.set(key, request);
       return request;
     },
-    [answer, chatId, windows],
+    [affordances, answer, chatId, citations, windowId, windows],
   );
 
   if (chatId === undefined || answer === undefined || citations.length === 0 || windows === undefined) {

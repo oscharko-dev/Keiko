@@ -1,0 +1,85 @@
+{
+  "issue": 1636,
+  "verdict": "PASS",
+  "cssSha256": "93baaa524d245b1e05a7b5bb7fc78ba3ee5ed68bb37acd969fd8cba1265083dd",
+  "captures": [
+    {
+      "file": "01-context-dark.png",
+      "theme": "dark",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "context",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
+    },
+    {
+      "file": "02-context-light.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "context",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
+    },
+    {
+      "file": "03-sibling-active.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "siblings",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
+    },
+    {
+      "file": "04-back-disabled.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "disabled",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
+    },
+    {
+      "file": "05-chat-highlight.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "highlight",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
+    },
+    {
+      "file": "06-responsive.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "context",
+      "viewport": {
+        "width": 430,
+        "height": 900
+      }
+    },
+    {
+      "file": "07-forced-colors.png",
+      "theme": "dark",
+      "hc": false,
+      "forcedColors": "active",
+      "state": "context",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
+    }
+  ],
+  "summary": "Browser-rendered visual evidence for answer-local PDF citation context, sibling citation navigation, Back to chat disabled state, transient chat highlight, responsive layout, and forced-colors coverage."
+}

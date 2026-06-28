@@ -135,6 +135,7 @@ function selectBody(
   updateCfg: (patch: AppWindow["cfg"]) => void,
   openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null,
   focusWindow: (id: string) => void,
+  restoreWindow: ((id: string) => void) | undefined,
   updateWindow: (id: string, patch: Partial<AppWindow>) => void,
   openEditorFile: WorkspaceApi["openEditorFile"],
 ): BodySelection {
@@ -170,6 +171,7 @@ function selectBody(
         updateCfg,
         openWindow,
         focusWindow,
+        restoreWindow,
         updateWindow,
         openEditorFile,
       }),
@@ -195,6 +197,7 @@ function selectBody(
       updateCfg,
       openWindow,
       focusWindow,
+      restoreWindow,
       updateWindow,
       openEditorFile,
     }),
@@ -558,6 +561,7 @@ function WindowFrameImpl({
     [api],
   );
   const focusWindow = useCallback((id: string): void => api.focus(id), [api]);
+  const restoreWindow = useCallback((id: string): void => api.restore(id), [api]);
   const updateWindow = useCallback(
     (id: string, patch: Partial<AppWindow>): void => api.update(id, patch),
     [api],
@@ -587,6 +591,7 @@ function WindowFrameImpl({
         updateCfg,
         openWindow,
         focusWindow,
+        restoreWindow,
         updateWindow,
         openEditorFile,
       ),
@@ -602,6 +607,7 @@ function WindowFrameImpl({
       updateCfg,
       openWindow,
       focusWindow,
+      restoreWindow,
       updateWindow,
       openEditorFile,
     ],
