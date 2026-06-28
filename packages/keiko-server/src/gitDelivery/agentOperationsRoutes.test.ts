@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitRepositoryAgentOperationRequest } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitRepositoryAgentOperationRequest,
+  GitRepositoryAgentOperationResponse,
+} from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import type { GitProcessRunner } from "../gitRoutes.js";
 import { matchRoute, type RouteContext } from "../routes.js";
@@ -12,6 +15,7 @@ import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import {
   handleGitAgentOperation,
   handleGitAgentOperationWithDelegate,
+  IdempotencyCache,
 } from "./agentOperationsRoutes.js";
 
 let store: UiStore;
@@ -114,17 +118,12 @@ describe("POST /api/git/agent/operations", () => {
   });
 
   it("rejects extra top-level fields and credential-shaped strings", async () => {
-    expect(
-      await handleGitAgentOperation(ctx(request({ extra: true })), deps()),
-    ).toMatchObject({
+    expect(await handleGitAgentOperation(ctx(request({ extra: true })), deps())).toMatchObject({
       status: 400,
       body: { status: "denied", denialReason: "bad-request" },
     });
     expect(
-      await handleGitAgentOperation(
-        ctx(request({ payload: { remote: "api_keyleak" } })),
-        deps(),
-      ),
+      await handleGitAgentOperation(ctx(request({ payload: { remote: "api_keyleak" } })), deps()),
     ).toMatchObject({
       status: 400,
       body: { error: { code: "GIT_AGENT_OPERATION_FORBIDDEN_PAYLOAD" } },
@@ -229,5 +228,132 @@ describe("POST /api/git/agent/operations", () => {
       operation: "branch-switch",
       replay: true,
     });
+  });
+});
+
+type CacheEntry = Parameters<IdempotencyCache["set"]>[1];
+
+describe("IdempotencyCache eviction", () => {
+  const response = { schemaVersion: "1" } as unknown as GitRepositoryAgentOperationResponse;
+  const settledEntry = (fingerprint: string): CacheEntry => ({ fingerprint, result: response });
+  const pendingEntry = (fingerprint: string): CacheEntry => ({
+    fingerprint,
+    pending: Promise.resolve(response),
+  });
+
+  it("evicts the least-recently-used settled entry once over the size cap", () => {
+    const cache = new IdempotencyCache({ maxEntries: 2, ttlMs: 1_000_000, now: (): number => 0 });
+    cache.set("a", settledEntry("fa"));
+    cache.set("b", settledEntry("fb"));
+    // Touch "a" so "b" becomes the least-recently-used entry.
+    expect(cache.get("a")?.fingerprint).toBe("fa");
+
+    cache.set("c", settledEntry("fc"));
+
+    expect(cache.size).toBe(2);
+    expect(cache.get("b")).toBeUndefined();
+    expect(cache.get("a")?.fingerprint).toBe("fa");
+    expect(cache.get("c")?.fingerprint).toBe("fc");
+  });
+
+  it("expires a settled entry once its TTL has elapsed", () => {
+    let clockMs = 0;
+    const cache = new IdempotencyCache({ maxEntries: 16, ttlMs: 1000, now: (): number => clockMs });
+    cache.set("k", settledEntry("fk"));
+
+    clockMs = 999;
+    expect(cache.get("k")?.fingerprint).toBe("fk");
+
+    clockMs = 1000;
+    expect(cache.get("k")).toBeUndefined();
+    expect(cache.size).toBe(0);
+  });
+
+  it("prunes expired settled entries when a new key is inserted", () => {
+    let clockMs = 0;
+    const cache = new IdempotencyCache({ maxEntries: 16, ttlMs: 1000, now: (): number => clockMs });
+    cache.set("old", settledEntry("fold"));
+
+    clockMs = 5000; // well past the TTL
+    cache.set("new", settledEntry("fnew")); // insertion triggers a prune sweep
+
+    expect(cache.size).toBe(1);
+    expect(cache.get("new")?.fingerprint).toBe("fnew");
+  });
+
+  it("never evicts an in-flight reservation to make room for a settled entry", () => {
+    const cache = new IdempotencyCache({ maxEntries: 1, ttlMs: 1_000_000, now: (): number => 0 });
+    cache.set("pending", pendingEntry("fp"));
+    cache.set("settled", settledEntry("fs"));
+
+    expect(cache.size).toBe(1);
+    expect(cache.get("pending")?.fingerprint).toBe("fp");
+    expect(cache.get("settled")).toBeUndefined();
+  });
+
+  it("retains concurrent in-flight reservations even beyond the cap", () => {
+    const cache = new IdempotencyCache({ maxEntries: 1, ttlMs: 1_000_000, now: (): number => 0 });
+    cache.set("p1", pendingEntry("f1"));
+    cache.set("p2", pendingEntry("f2"));
+
+    expect(cache.size).toBe(2);
+    expect(cache.get("p1")?.fingerprint).toBe("f1");
+    expect(cache.get("p2")?.fingerprint).toBe("f2");
+  });
+});
+
+describe("agent idempotency cache lifecycle through the handler", () => {
+  const execute = (idempotencyKey: string): GitRepositoryAgentOperationRequest =>
+    request({
+      operation: "branch-switch",
+      mode: "execute",
+      idempotencyKey,
+      payload: { branchName: "main" },
+    }) as unknown as GitRepositoryAgentOperationRequest;
+
+  it("replays a completed operation for a repeated key without re-delegating", async () => {
+    const cache = new IdempotencyCache({ maxEntries: 8, ttlMs: 1_000_000 });
+    const delegated = vi.fn(() => Promise.resolve({ status: 200, body: { ok: true } }));
+    const body = execute("replay-1");
+
+    const first = await handleGitAgentOperationWithDelegate(body, "fp", delegated, cache);
+    const second = await handleGitAgentOperationWithDelegate(body, "fp", delegated, cache);
+
+    expect(delegated).toHaveBeenCalledTimes(1);
+    expect(first.body).toMatchObject({ status: "delegated" });
+    expect(first.body).not.toMatchObject({ replay: true });
+    expect(second.body).toMatchObject({ status: "delegated", replay: true });
+  });
+
+  it("bounds the cache when many distinct keys are delegated", async () => {
+    const cache = new IdempotencyCache({ maxEntries: 3, ttlMs: 1_000_000 });
+    const delegated = vi.fn(() => Promise.resolve({ status: 200, body: { ok: true } }));
+
+    for (let i = 0; i < 10; i += 1) {
+      await handleGitAgentOperationWithDelegate(
+        execute(`bound-${String(i)}`),
+        `fp-${String(i)}`,
+        delegated,
+        cache,
+      );
+    }
+
+    expect(delegated).toHaveBeenCalledTimes(10);
+    expect(cache.size).toBe(3);
+  });
+
+  it("re-delegates once the replay entry has expired from the cache", async () => {
+    let clockMs = 0;
+    const cache = new IdempotencyCache({ maxEntries: 8, ttlMs: 1000, now: (): number => clockMs });
+    const delegated = vi.fn(() => Promise.resolve({ status: 200, body: { ok: true } }));
+    const body = execute("ttl-1");
+
+    await handleGitAgentOperationWithDelegate(body, "fp", delegated, cache);
+    clockMs = 5000; // past the replay window
+    const after = await handleGitAgentOperationWithDelegate(body, "fp", delegated, cache);
+
+    expect(delegated).toHaveBeenCalledTimes(2);
+    expect(after.body).toMatchObject({ status: "delegated" });
+    expect(after.body).not.toMatchObject({ replay: true });
   });
 });
