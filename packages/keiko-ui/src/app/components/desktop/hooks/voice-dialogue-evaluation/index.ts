@@ -37,9 +37,9 @@ function outcomeOf(passed: boolean): DialogueEvalOutcome {
 }
 
 // ─── AC1: capability-profile coverage ─────────────────────────────────────────────────
-// The five deployment profiles the issue scope names. `stt-tts` is the STT+TTS fallback (full-realtime
-// capability WITHOUT browser WebRTC media, ADR-0096 D3); `realtime-capable` is the same capability WITH
-// WebRTC media. Both must offer dialogue; the three partial / absent profiles must not.
+// The five deployment profiles the issue scope names. `stt-tts` is the deprecated STT+TTS fallback
+// shape (full-realtime capability WITHOUT browser WebRTC media); `realtime-capable` is the only shape
+// that may offer Voice Dialogue.
 export type DialogueProfileKey =
   | "no-voice"
   | "stt-only"
@@ -59,14 +59,14 @@ export const DIALOGUE_PROFILE_KEYS: readonly DialogueProfileKey[] = [
 // wrongly offers dialogue for a no-voice deployment) is provable against a stub without touching prod.
 export type DialogueGate = (
   resolution: VoiceCapabilityResolution | undefined,
-  browserCaptureSupported: boolean,
+  browserRealtimeSupported: boolean,
 ) => VoiceDialogueMode;
 
 export interface DialogueProfileFixture {
   readonly key: DialogueProfileKey;
   readonly label: string;
   readonly resolution: VoiceCapabilityResolution;
-  readonly browserCaptureSupported: boolean;
+  readonly browserRealtimeSupported: boolean;
   // Oracle: whether a correct deployment MUST offer the spoken-dialogue controls for this profile.
   readonly expectedDialogueOffered: boolean;
 }
@@ -87,7 +87,7 @@ export const DIALOGUE_PROFILE_FIXTURES: readonly DialogueProfileFixture[] = [
       availableVoicePersonas: [],
       reason: "no-voice-provider",
     },
-    browserCaptureSupported: true,
+    browserRealtimeSupported: true,
     expectedDialogueOffered: false,
   },
   {
@@ -101,7 +101,7 @@ export const DIALOGUE_PROFILE_FIXTURES: readonly DialogueProfileFixture[] = [
       availableVoicePersonas: [...ALL_PERSONAS],
       providerLocality: "azure-foundry",
     },
-    browserCaptureSupported: true,
+    browserRealtimeSupported: true,
     expectedDialogueOffered: false,
   },
   {
@@ -115,12 +115,12 @@ export const DIALOGUE_PROFILE_FIXTURES: readonly DialogueProfileFixture[] = [
       availableVoicePersonas: [...ALL_PERSONAS],
       providerLocality: "azure-foundry",
     },
-    browserCaptureSupported: true,
+    browserRealtimeSupported: true,
     expectedDialogueOffered: false,
   },
   {
     key: "stt-tts",
-    label: "STT+TTS fallback deployment (full-realtime capability without browser WebRTC media)",
+    label: "Deprecated STT+TTS fallback deployment (full-realtime without browser WebRTC media)",
     resolution: {
       available: true,
       profile: "full-realtime",
@@ -129,8 +129,8 @@ export const DIALOGUE_PROFILE_FIXTURES: readonly DialogueProfileFixture[] = [
       availableVoicePersonas: [...ALL_PERSONAS],
       providerLocality: "azure-foundry",
     },
-    browserCaptureSupported: true,
-    expectedDialogueOffered: true,
+    browserRealtimeSupported: true,
+    expectedDialogueOffered: false,
   },
   {
     key: "realtime-capable",
@@ -143,7 +143,7 @@ export const DIALOGUE_PROFILE_FIXTURES: readonly DialogueProfileFixture[] = [
       availableVoicePersonas: [...ALL_PERSONAS],
       providerLocality: "azure-foundry",
     },
-    browserCaptureSupported: true,
+    browserRealtimeSupported: true,
     expectedDialogueOffered: true,
   },
 ];
@@ -165,7 +165,7 @@ export function evaluateDialogueProfiles(
   gate: DialogueGate = voiceDialogueModeForResolution,
 ): readonly DialogueProfileResult[] {
   return fixtures.map((fixture) => {
-    const mode = gate(fixture.resolution, fixture.browserCaptureSupported);
+    const mode = gate(fixture.resolution, fixture.browserRealtimeSupported);
     return {
       key: fixture.key,
       expectedOffered: fixture.expectedDialogueOffered,

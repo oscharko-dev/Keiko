@@ -183,7 +183,7 @@ export function isValidGroundedPack(pack: ConnectedContextPack): boolean {
   }
 }
 
-interface AskInput {
+export interface AskInput {
   readonly chatId: string;
   readonly content: string;
   readonly modelId: string | undefined;
@@ -1190,15 +1190,13 @@ async function dispatchHybridAsk(
 
 // ─── Public handler ───────────────────────────────────────────────────────────
 
-export async function handleGroundedAsk(
-  ctx: RouteContext,
+async function dispatchPreparedGroundedAsk(
+  prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
   runner?: GroundedRunner,
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
-  const prepared = await prepareGroundedAsk(ctx, deps);
-  if ("status" in prepared) return prepared;
   const { chat } = prepared;
   // Epic #189 — count-based dispatch over BOTH source kinds. 0+0 → no scope. Connector-free chats
   // keep the EXISTING folder path (#532, byte-identical). A lone connector with no folders keeps the
@@ -1234,4 +1232,37 @@ export async function handleGroundedAsk(
     return handleLocalKnowledgeGroundedAsk(chat, prepared.input, deps, prepared.signal);
   }
   return dispatchHybridAsk(preparedWithCanonicalFolders, deps, skippedFolders, hybrid);
+}
+
+export async function runGroundedAskInput(
+  input: AskInput,
+  deps: UiHandlerDeps,
+  options: {
+    readonly signal?: AbortSignal | undefined;
+    readonly runner?: GroundedRunner | undefined;
+    readonly multiSource?: MultiSourceSeam | undefined;
+    readonly hybrid?: HybridSeam | undefined;
+  } = {},
+): Promise<RouteResult> {
+  const chat = findChatById(deps, input.chatId);
+  if (chat === undefined) return notFound("Chat not found.");
+  return dispatchPreparedGroundedAsk(
+    { chat, input, signal: options.signal ?? new AbortController().signal },
+    deps,
+    options.runner,
+    options.multiSource,
+    options.hybrid,
+  );
+}
+
+export async function handleGroundedAsk(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runner?: GroundedRunner,
+  multiSource?: MultiSourceSeam,
+  hybrid?: HybridSeam,
+): Promise<RouteResult> {
+  const prepared = await prepareGroundedAsk(ctx, deps);
+  if ("status" in prepared) return prepared;
+  return dispatchPreparedGroundedAsk(prepared, deps, runner, multiSource, hybrid);
 }

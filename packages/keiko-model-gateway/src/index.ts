@@ -148,9 +148,12 @@ export {
   requestRealtimeNegotiation,
   type RealtimeVoice,
   type RealtimeNegotiationErrorKind,
+  type RealtimeFunctionTool,
   type RealtimeNegotiationOutcome,
   type RealtimeNegotiationRequest,
   type RealtimeNegotiationSuccess,
+  type RealtimeSessionTool,
+  type RealtimeSessionToolChoice,
 } from "./realtime-voice-adapter.js";
 
 export {

@@ -38,6 +38,7 @@ export class VoiceRtcError extends Error {
 export interface VoiceRtcSession {
   readonly offerSdp: string;
   applyAnswer(sdp: string): Promise<void>;
+  setInputMuted?(muted: boolean): void;
   onRemoteTrack(cb: (stream: MediaStream) => void): void;
   onConnectionStateChange(cb: (state: RTCPeerConnectionState) => void): void;
   onDataChannelEvent?(cb: (event: unknown) => void): void;
@@ -196,6 +197,13 @@ function buildSession(
     offerSdp,
     async applyAnswer(sdp: string): Promise<void> {
       await pc.setRemoteDescription({ type: "answer", sdp });
+    },
+    setInputMuted(muted: boolean): void {
+      const tracks =
+        typeof stream.getAudioTracks === "function" ? stream.getAudioTracks() : stream.getTracks();
+      for (const track of tracks) {
+        track.enabled = !muted;
+      }
     },
     onRemoteTrack(cb: (stream: MediaStream) => void): void {
       remoteTrackCb = cb;

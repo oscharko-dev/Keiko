@@ -36,6 +36,22 @@ export type ParsedRealtimeVoiceEvent =
       readonly itemId?: string | undefined;
     }
   | {
+      readonly kind: "function-call-arguments-delta";
+      readonly callId: string;
+      readonly name?: string | undefined;
+      readonly delta: string;
+      readonly responseId?: string | undefined;
+      readonly itemId?: string | undefined;
+    }
+  | {
+      readonly kind: "function-call-committed";
+      readonly callId: string;
+      readonly name: string;
+      readonly argumentsText: string;
+      readonly responseId?: string | undefined;
+      readonly itemId?: string | undefined;
+    }
+  | {
       readonly kind: "response-done";
       readonly responseId?: string | undefined;
       readonly status?: "completed" | "cancelled" | "failed" | "incomplete" | undefined;
@@ -60,7 +76,21 @@ function responseId(record: Record<string, unknown>): string | undefined {
 }
 
 function itemId(record: Record<string, unknown>): string | undefined {
-  return stringField(record, "item_id");
+  const direct = stringField(record, "item_id");
+  if (direct !== undefined) return direct;
+  const item = record.item;
+  return isRecord(item) ? stringField(item, "id") : undefined;
+}
+
+function callId(record: Record<string, unknown>): string | undefined {
+  const direct = stringField(record, "call_id");
+  if (direct !== undefined) return direct;
+  const item = record.item;
+  if (isRecord(item)) {
+    const fromItem = stringField(item, "call_id");
+    if (fromItem !== undefined) return fromItem;
+  }
+  return itemId(record);
 }
 
 function responseStatus(
@@ -99,6 +129,77 @@ function transcriptFromOutputItem(record: Record<string, unknown>): string | und
   }
   const joined = parts.join("").trim();
   return joined.length > 0 ? joined : undefined;
+}
+
+function argumentsText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "";
+  }
+}
+
+function functionCallFromItem(
+  item: unknown,
+  fallback: Record<string, unknown>,
+):
+  | {
+      readonly callId: string;
+      readonly name: string;
+      readonly argumentsText: string;
+      readonly itemId?: string | undefined;
+    }
+  | undefined {
+  if (!isRecord(item) || item.type !== "function_call") {
+    return undefined;
+  }
+  const id = stringField(item, "call_id") ?? callId(fallback);
+  const name = stringField(item, "name");
+  if (id === undefined || name === undefined) {
+    return undefined;
+  }
+  return {
+    callId: id,
+    name,
+    argumentsText: argumentsText(item.arguments),
+    itemId: stringField(item, "id") ?? itemId(fallback),
+  };
+}
+
+function functionCallFromOutputItem(
+  record: Record<string, unknown>,
+):
+  | {
+      readonly callId: string;
+      readonly name: string;
+      readonly argumentsText: string;
+      readonly itemId?: string | undefined;
+    }
+  | undefined {
+  return functionCallFromItem(record.item, record);
+}
+
+function functionCallFromResponseDone(
+  record: Record<string, unknown>,
+):
+  | {
+      readonly callId: string;
+      readonly name: string;
+      readonly argumentsText: string;
+      readonly itemId?: string | undefined;
+    }
+  | undefined {
+  const response = record.response;
+  if (!isRecord(response) || !Array.isArray(response.output)) {
+    return undefined;
+  }
+  for (const item of response.output) {
+    const call = functionCallFromItem(item, record);
+    if (call !== undefined) return call;
+  }
+  return undefined;
 }
 
 export function parseRealtimeVoiceEvent(raw: unknown): ParsedRealtimeVoiceEvent | undefined {
@@ -143,7 +244,32 @@ export function parseRealtimeVoiceEvent(raw: unknown): ParsedRealtimeVoiceEvent 
             itemId: itemId(raw),
           };
     }
+    case "response.function_call_arguments.delta": {
+      const id = callId(raw);
+      const delta = stringField(raw, "delta");
+      return id === undefined || delta === undefined
+        ? undefined
+        : {
+            kind: "function-call-arguments-delta",
+            callId: id,
+            name: stringField(raw, "name"),
+            delta,
+            responseId: responseId(raw),
+            itemId: itemId(raw),
+          };
+    }
     case "response.output_item.done": {
+      const call = functionCallFromOutputItem(raw);
+      if (call !== undefined) {
+        return {
+          kind: "function-call-committed",
+          callId: call.callId,
+          name: call.name,
+          argumentsText: call.argumentsText,
+          responseId: responseId(raw),
+          itemId: call.itemId,
+        };
+      }
       const text = transcriptFromOutputItem(raw);
       return text === undefined
         ? undefined
@@ -162,8 +288,20 @@ export function parseRealtimeVoiceEvent(raw: unknown): ParsedRealtimeVoiceEvent 
       return { kind: "assistant-output-stop", responseId: responseId(raw), itemId: itemId(raw) };
     case "response.cancelled":
       return { kind: "response-cancelled", responseId: responseId(raw) };
-    case "response.done":
+    case "response.done": {
+      const call = functionCallFromResponseDone(raw);
+      if (call !== undefined) {
+        return {
+          kind: "function-call-committed",
+          callId: call.callId,
+          name: call.name,
+          argumentsText: call.argumentsText,
+          responseId: responseId(raw),
+          itemId: call.itemId,
+        };
+      }
       return { kind: "response-done", responseId: responseId(raw), status: responseStatus(raw) };
+    }
     case "error":
       return { kind: "error", message: errorMessage(raw) };
     default:

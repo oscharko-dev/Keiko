@@ -19,11 +19,8 @@ export * as PromptEnhancerEval from "./promptEnhancer/index.js";
 // Discussion Intelligence evaluation suite (Epic #491, Issue #502; ADR-0065). Exposed as a single
 // auditable namespace, mirroring the `PromptEnhancerEval` convention above.
 export * as DiscussionEval from "./discussion/index.js";
-// Voice Session Recap evaluation suite (Epic #491, Issue #504; ADR-0067). Exposed as a single auditable
-// namespace, mirroring the `DiscussionEval` convention above.
-export * as VoiceRecapEval from "./voice-recap/index.js";
 // Voice Digital Twin evaluation suite (Epic #491, Issue #505 — the capstone; ADR-0068). Exposed as a
-// single auditable namespace, mirroring the `VoiceRecapEval` convention above.
+// single auditable namespace, mirroring the `DiscussionEval` convention above.
 export * as VoiceTwinEval from "./voice-twin/index.js";
 export {
   ALL_FIXTURES,

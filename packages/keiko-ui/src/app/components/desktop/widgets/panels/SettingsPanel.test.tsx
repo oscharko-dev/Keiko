@@ -490,6 +490,36 @@ describe("SettingsPanel workspace wallpaper controls", () => {
     );
   });
 
+  it("persists the selected assistant voice from General settings", async () => {
+    primeFetches([
+      voiceCapability("keiko-tts", {
+        supportsSpeechOutput: true,
+        supportsRealtimeVoice: true,
+        supportedVoicePersonas: ["male", "female"],
+      }),
+    ]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    const voiceSelect = await screen.findByRole("combobox", { name: "Voice" });
+    vi.spyOn(voiceSelect, "getBoundingClientRect").mockReturnValue({
+      bottom: 142,
+      height: 42,
+      left: 64,
+      right: 304,
+      top: 100,
+      width: 240,
+      x: 64,
+      y: 100,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.click(voiceSelect);
+    fireEvent.click(screen.getByRole("option", { name: "Female voice" }));
+
+    expect(window.localStorage.getItem("keiko.voice.dialog.persona")).toBe("female");
+  });
+
   it("defaults the liquid wallpaper off and enables opacity only after opt-in", async () => {
     primeFetches([]);
     render(<SettingsPanel />);

@@ -23,7 +23,6 @@ import {
   handleVoiceSpeakStream,
   handleVoiceTranscribe,
 } from "./voice-handlers.js";
-import { handleVoiceRecapBuild } from "./voice-recap.js";
 import {
   handleCreateRun,
   handleRunEvents,
@@ -79,6 +78,7 @@ import {
 } from "./memory-consolidation-handlers.js";
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
+import { handleRealtimeGroundedVoiceTool } from "./voice-realtime-grounded-tool.js";
 import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import {
@@ -291,11 +291,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // as base64; answers VOICE_UNAVAILABLE when no speech-output capability is configured/enabled.
   { method: "POST", pattern: "/api/voice/speak", handler: handleVoiceSpeak },
   { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
-  // Issue #504 (Epic #491, ADR-0067) — optional, capability-gated, user-triggered voice session recap.
-  // POST the committed transcript text (content-free counts alongside) and derive memory candidates via
-  // the EXISTING governed capture path; candidates surface in the existing review queue as "proposed".
-  // Answers VOICE_UNAVAILABLE when the deployment is not voice-recap-capable (AC1).
-  { method: "POST", pattern: "/api/voice/recap/build", handler: handleVoiceRecapBuild },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
@@ -331,6 +326,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
   // Issue #185 — grounded repository-aware Q&A. Composes #179-#183 behind the chat-scope binding.
   { method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },
+  {
+    method: "POST",
+    pattern: "/api/voice/realtime/grounded-tool",
+    handler: handleRealtimeGroundedVoiceTool,
+  },
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },

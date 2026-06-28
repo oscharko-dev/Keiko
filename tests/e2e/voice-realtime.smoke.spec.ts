@@ -187,7 +187,10 @@ async function realtimeConnectFlow(page: Page): Promise<void> {
 
   // The proxied-SDP handshake completes via the injected fakes and the link comes up.
   await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
   await page.screenshot({ path: "docs/voice/evidence/497-realtime-connected.png", fullPage: true });
 
   // The composer remains fully text-capable while a voice session is live.

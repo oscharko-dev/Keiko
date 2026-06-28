@@ -56,16 +56,16 @@ describe("evaluateDialogueProfiles (AC1 — capability profile coverage)", () =>
     expect(results.every((r) => r.outcome === "pass")).toBe(true);
   });
 
-  it("offers dialogue ONLY for the two full-realtime profiles (STT+TTS fallback and realtime-capable)", () => {
+  it("offers dialogue ONLY for the WebRTC-capable full-realtime profile", () => {
     const offered = evaluateDialogueProfiles()
       .filter((r) => r.actualOffered)
       .map((r) => r.key);
-    expect(offered).toEqual(["stt-tts", "realtime-capable"]);
+    expect(offered).toEqual(["realtime-capable"]);
   });
 
-  it("does not offer dialogue for the no-voice, STT-only, or speech-output-only deployments", () => {
+  it("does not offer dialogue for no-voice, STT-only, speech-output-only, or STT+TTS fallback deployments", () => {
     const results = evaluateDialogueProfiles();
-    for (const key of ["no-voice", "stt-only", "speech-output-only"] as const) {
+    for (const key of ["no-voice", "stt-only", "speech-output-only", "stt-tts"] as const) {
       const row = results.find((r) => r.key === key);
       expect(row?.actualOffered).toBe(false);
       expect(row?.outcome).toBe("pass");
@@ -76,7 +76,7 @@ describe("evaluateDialogueProfiles (AC1 — capability profile coverage)", () =>
     // A broken gate that offers spoken dialogue for every deployment, including no-voice.
     const brokenGate: DialogueGate = () => ({
       offered: true,
-      capture: "dictation",
+      capture: "webrtc",
       speaks: true,
       canInterrupt: true,
     });
@@ -96,8 +96,8 @@ describe("evaluateDialogueProfiles (AC1 — capability profile coverage)", () =>
   });
 
   it("fixtures advertise no persona-free or capture-incapable full-realtime cell silently passing", () => {
-    // Every fixture declares a capture-capable browser; the gate decision is the only variable.
-    expect(DIALOGUE_PROFILE_FIXTURES.every((f) => f.browserCaptureSupported)).toBe(true);
+    // Every fixture declares a WebRTC-capable browser; the deployment posture is the variable.
+    expect(DIALOGUE_PROFILE_FIXTURES.every((f) => f.browserRealtimeSupported)).toBe(true);
     // The two offered profiles must carry personas (the gate requires personaCount > 0).
     const offeredFixtures = DIALOGUE_PROFILE_FIXTURES.filter((f) => f.expectedDialogueOffered);
     expect(offeredFixtures.every((f) => f.resolution.availableVoicePersonas.length > 0)).toBe(true);

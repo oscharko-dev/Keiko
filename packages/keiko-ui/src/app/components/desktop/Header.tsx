@@ -15,9 +15,10 @@ interface HeaderProps {
   readonly onTileAll: () => void;
   readonly onSplitFront: () => void;
   readonly onCascade: () => void;
+  readonly contextControl?: ReactNode;
 }
 
-function HeaderImpl({ onTileAll, onSplitFront, onCascade }: HeaderProps): ReactNode {
+function HeaderImpl({ onTileAll, onSplitFront, onCascade, contextControl }: HeaderProps): ReactNode {
   const { t } = useI18n();
 
   return (
@@ -30,6 +31,8 @@ function HeaderImpl({ onTileAll, onSplitFront, onCascade }: HeaderProps): ReactN
         <img className="hd-logo" src="/assets/keiko-logo.svg" alt="" />
         <span className="hd-wordmark">Keiko</span>
       </div>
+
+      {contextControl !== undefined ? <div className="hd-context">{contextControl}</div> : null}
 
       <span className="spacer" />
 

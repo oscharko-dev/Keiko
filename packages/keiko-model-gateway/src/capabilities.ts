@@ -386,6 +386,9 @@ export function resolveVoiceCapabilityFromCapabilities(
   const speechToText = reachable.some(modelSupportsSpeechInput);
   const speechOutput = reachable.some(modelSupportsSpeechOutput);
   const realtimeVoice = reachable.some(modelSupportsRealtimeVoice);
+  const realtimeToolCalling = reachable.some(
+    (capability) => modelSupportsRealtimeVoice(capability) && capability.toolCalling,
+  );
   const profile = voiceProfileFor(speechToText, speechOutput, realtimeVoice);
   if (profile === "none") {
     // Defensive: a voice capability advertises ≥1 sub-capability by config invariant, so this is
@@ -396,7 +399,12 @@ export function resolveVoiceCapabilityFromCapabilities(
   return {
     available: true,
     profile,
-    capabilities: { speechToText, speechOutput, realtimeVoice },
+    capabilities: {
+      speechToText,
+      speechOutput,
+      realtimeVoice,
+      ...(realtimeToolCalling ? { realtimeToolCalling: true } : {}),
+    },
     transport: { websocketControl: true, webrtcMedia: profile === "full-realtime" },
     availableVoicePersonas: availablePersonasFor(reachable),
     ...(locality !== undefined ? { providerLocality: locality } : {}),
