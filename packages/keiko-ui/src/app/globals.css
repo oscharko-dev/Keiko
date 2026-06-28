@@ -8607,6 +8607,193 @@ select.dlg-input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pdfv-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset)),
+      var(--surface-primary)
+    );
+  color: var(--text-primary);
+}
+.pdfv-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in oklch, var(--surface-primary) 78%, var(--surface-inset));
+}
+.pdfv-heading {
+  min-width: 0;
+}
+.pdfv-eyebrow {
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.pdfv-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 650;
+}
+.pdfv-meta {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pdfv-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--button-secondary-border);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--surface-inset) 76%, transparent);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pdfv-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in oklch, var(--surface-primary) 68%, var(--surface-inset));
+}
+.pdfv-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.pdfv-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.pdfv-page-field {
+  display: inline-flex;
+  align-items: center;
+}
+.pdfv-page-input {
+  width: 72px;
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  background: var(--input-surface);
+  color: var(--input-text);
+  font-size: 12.5px;
+  font-weight: 550;
+  text-align: right;
+}
+.pdfv-page-input:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+  border-color: var(--input-border-focus);
+}
+.pdfv-page-input:disabled {
+  opacity: 0.55;
+}
+.pdfv-page-count,
+.pdfv-zoom {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.pdfv-status {
+  margin: 20px;
+}
+.pdfv-retry {
+  margin-top: 8px;
+}
+.pdfv-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 18px 24px;
+  background:
+    radial-gradient(
+      circle at top,
+      color-mix(in oklch, var(--surface-inset) 72%, transparent),
+      transparent 52%
+    ),
+    var(--surface-inset);
+}
+.pdfv-page {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  margin: 0 auto 18px;
+}
+.pdfv-page-frame {
+  width: fit-content;
+  max-width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius-lg) + 2px);
+  background: color-mix(in oklch, var(--surface-primary) 88%, var(--surface-elevated));
+  box-shadow: var(--shadow-card);
+}
+.pdfv-page-meta {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.pdfv-page-canvas,
+.pdfv-page-skeleton {
+  display: block;
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  background: var(--surface-primary);
+}
+.pdfv-page-skeleton {
+  width: min(100%, 680px);
+  min-height: 460px;
+  border: 1px dashed var(--border-subtle);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in oklch, var(--surface-primary) 82%, var(--surface-elevated)),
+      color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset))
+    );
+}
+@media (max-width: 720px) {
+  .pdfv-header,
+  .pdfv-toolbar,
+  .pdfv-scroll {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .pdfv-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .pdfv-chip {
+    min-height: 26px;
+  }
+  .pdfv-page-frame {
+    width: 100%;
+    padding: 10px;
+  }
+}
 
 /* placeholder stripes */
 .ph-stripes {

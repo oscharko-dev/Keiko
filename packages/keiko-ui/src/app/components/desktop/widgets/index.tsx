@@ -31,6 +31,7 @@ import { IntegrationsWidget } from "./cards/IntegrationsWidget";
 import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
+import { PdfCitationPreviewWindow } from "./cards/PdfCitationPreviewWindow";
 import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
 import { FigmaJsonSourceWindow } from "./figma/FigmaJsonSourceWindow";
 import { FigmaImageSourceWindow } from "./figma/FigmaImageSourceWindow";
@@ -257,6 +258,9 @@ registerWindowRender("activity", () => <TimelinePanel />);
 registerWindowRender("keiko", () => <KeikoTwinPanel />);
 registerWindowRender("settings", () => <SettingsPanel />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
+registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
+  <PdfCitationPreviewWindow cfg={cfg} updateCfg={ctx.updateCfg} windowId={ctx.windowId} />
+));
 
 // Epic #270 — Quality Intelligence. The hub is a singleton tool window; selecting/finishing a run
 // opens a `qiRun` result card on the canvas (one per run, keyed by cfg.runId).
