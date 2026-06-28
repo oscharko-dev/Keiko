@@ -321,12 +321,12 @@ async function seedDuplicatePreviewFixture(): Promise<{
     {
       marker: "[1]",
       sourceLabel: "Preview Capsule / Source src-preview",
-      reference: references[0],
+      reference: must(references[0]),
     },
     {
       marker: "[1]",
       sourceLabel: "Preview Capsule / Source src-preview",
-      reference: references[1],
+      reference: must(references[1]),
     },
   ]);
   knowledgeStore.close();

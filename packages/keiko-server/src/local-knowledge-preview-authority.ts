@@ -31,7 +31,7 @@ export function normalizePreviewMarkerIndex(value: string | number): number | un
     return Number.isInteger(value) && value > 0 ? value : undefined;
   }
   const trimmed = value.trim();
-  const match = /^[\[［【]?(\d+)[\]］】]?$/u.exec(trimmed);
+  const match = /^[[［【]?(\d+)[\]］】]?$/u.exec(trimmed);
   if (match?.[1] === undefined) return undefined;
   const parsed = Number.parseInt(match[1], 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
