@@ -336,6 +336,50 @@ describe("desktop chat routes", () => {
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
   });
 
+  it("appends realtime voice turns without calling the chat model", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string; title: string } };
+
+    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        messages: [
+          { role: "user", content: "open the deploy log" },
+          { role: "assistant", content: "The deploy log is open." },
+        ],
+      }),
+    });
+
+    expect(appendRes.status).toBe(200);
+    const body = (await appendRes.json()) as {
+      chat: { id: string; title: string };
+      messages: { role: string; content: string; runId?: string }[];
+    };
+    expect(seenRequests).toHaveLength(0);
+    expect(body.chat).toMatchObject({
+      id: created.chat.id,
+      title: "open the deploy log",
+    });
+    expect(body.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "open the deploy log"],
+      ["assistant", "The deploy log is open."],
+    ]);
+    expect(body.messages.some((message) => message.runId !== undefined)).toBe(false);
+
+    const persisted = store.listMessages(created.chat.id);
+    expect(persisted.map((message) => [message.role, message.content])).toEqual([
+      ["user", "open the deploy log"],
+      ["assistant", "The deploy log is open."],
+    ]);
+  });
+
   it("rejects an empty model response without persisting a fake assistant message", async () => {
     await restartWithDeps(deps(fakeModel("")));
     const createRes = await fetch(`${base()}/api/desktop/chats`, {

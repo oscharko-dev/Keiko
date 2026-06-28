@@ -40,6 +40,9 @@ export interface VoiceRtcSession {
   applyAnswer(sdp: string): Promise<void>;
   onRemoteTrack(cb: (stream: MediaStream) => void): void;
   onConnectionStateChange(cb: (state: RTCPeerConnectionState) => void): void;
+  onDataChannelEvent?(cb: (event: unknown) => void): void;
+  onDataChannelStateChange?(cb: (state: RTCDataChannelState) => void): void;
+  sendDataChannelEvent?(event: unknown): boolean;
   close(): void;
 }
 
@@ -152,6 +155,8 @@ function buildSession(
 
   let remoteTrackCb: ((stream: MediaStream) => void) | undefined;
   let connectionStateCb: ((state: RTCPeerConnectionState) => void) | undefined;
+  let dataChannelEventCb: ((event: unknown) => void) | undefined;
+  let dataChannelStateCb: ((state: RTCDataChannelState) => void) | undefined;
 
   pc.ontrack = (event) => {
     const firstStream = event.streams[0];
@@ -166,6 +171,27 @@ function buildSession(
     }
   };
 
+  const emitDataChannelState = (): void => {
+    if (dataChannelStateCb !== undefined) {
+      dataChannelStateCb(dataChannel.readyState);
+    }
+  };
+  dataChannel.addEventListener("open", emitDataChannelState);
+  dataChannel.addEventListener("closing", emitDataChannelState);
+  dataChannel.addEventListener("close", emitDataChannelState);
+  dataChannel.addEventListener("error", emitDataChannelState);
+  dataChannel.addEventListener("message", (event: MessageEvent) => {
+    if (dataChannelEventCb === undefined) {
+      return;
+    }
+    const raw = typeof event.data === "string" ? event.data : String(event.data);
+    try {
+      dataChannelEventCb(JSON.parse(raw));
+    } catch {
+      dataChannelEventCb(raw);
+    }
+  });
+
   return {
     offerSdp,
     async applyAnswer(sdp: string): Promise<void> {
@@ -176,6 +202,19 @@ function buildSession(
     },
     onConnectionStateChange(cb: (state: RTCPeerConnectionState) => void): void {
       connectionStateCb = cb;
+    },
+    onDataChannelEvent(cb: (event: unknown) => void): void {
+      dataChannelEventCb = cb;
+    },
+    onDataChannelStateChange(cb: (state: RTCDataChannelState) => void): void {
+      dataChannelStateCb = cb;
+    },
+    sendDataChannelEvent(event: unknown): boolean {
+      if (dataChannel.readyState !== "open") {
+        return false;
+      }
+      dataChannel.send(JSON.stringify(event));
+      return true;
     },
     close(): void {
       // Stop all sender tracks so the OS-level "recording" indicator clears immediately.
@@ -216,8 +255,9 @@ export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
         for (const track of stream.getTracks()) {
           pc.addTrack(track, stream);
         }
-        // Optional low-latency RTCDataChannel as specified by the protocol (ADR-0058).
-        dataChannel = pc.createDataChannel("keiko-voice");
+        // OpenAI-compatible Realtime sideband channel. Provider lifecycle and transcript events arrive
+        // here; raw audio remains exclusively on the WebRTC media tracks.
+        dataChannel = pc.createDataChannel("oai-events");
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await waitForIceGathering(pc);

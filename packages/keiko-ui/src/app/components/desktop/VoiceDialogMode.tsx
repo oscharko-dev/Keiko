@@ -181,6 +181,8 @@ interface VoiceDialogControlsProps {
   readonly state: VoiceDialogState;
   readonly muted: boolean;
   readonly onToggleMute: () => void;
+  readonly canInterrupt?: boolean | undefined;
+  readonly onInterrupt?: (() => void) | undefined;
   readonly onStop: () => void;
   readonly onLeave: () => void;
   readonly personas: readonly VoicePersona[];
@@ -194,6 +196,8 @@ export function VoiceDialogControls({
   state,
   muted,
   onToggleMute,
+  canInterrupt = false,
+  onInterrupt,
   onStop,
   onLeave,
   personas,
@@ -226,6 +230,17 @@ export function VoiceDialogControls({
         buttonRef={muteButtonRef}
         compact={compact}
       />
+      {onInterrupt !== undefined ? (
+        <button
+          type="button"
+          className="cmp-voice-btn"
+          aria-label="Interrupt the assistant"
+          disabled={!canInterrupt}
+          onClick={onInterrupt}
+        >
+          Interrupt
+        </button>
+      ) : null}
       <button
         type="button"
         className="cmp-voice-btn"

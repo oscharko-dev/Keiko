@@ -53,9 +53,6 @@ const FULL_REALTIME: VoiceCapabilityResolution = {
   availableVoicePersonas: PERSONAS,
 };
 
-// Issue #1560 (ADR-0096 D3) — the STT+TTS fallback: a full-realtime deployment in a browser WITHOUT
-// WebRTC media. Dialogue must STILL be offered (it runs over the STT+TTS turn loop). This is the defect
-// the generalized availability gate fixes.
 const FULL_REALTIME_NO_WEBRTC: VoiceCapabilityResolution = {
   ...FULL_REALTIME,
   transport: { websocketControl: true, webrtcMedia: false },
@@ -65,9 +62,7 @@ const STORAGE_KEY = "keiko.voice.dialog.persona";
 
 beforeEach(() => {
   localStorage.clear();
-  // The generalized availability gate (D3) requires a capture-capable browser; jsdom lacks both, so
-  // stub them. The fallback availability is then a pure function of the resolution.
-  vi.stubGlobal("MediaRecorder", class {});
+  vi.stubGlobal("RTCPeerConnection", class {});
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
     value: { getUserMedia: vi.fn() },
@@ -117,14 +112,14 @@ describe("useVoiceDialogMode — availability gating", () => {
     expect(result.current.availablePersonas).toEqual(PERSONAS);
   });
 
-  it("is STILL available for full-realtime WITHOUT WebRTC media (the STT+TTS fallback fix, D3)", () => {
+  it("is unavailable for full-realtime WITHOUT WebRTC media", () => {
     const { result } = renderHook(() =>
       useVoiceDialogMode({ capability: FULL_REALTIME_NO_WEBRTC }),
     );
-    expect(result.current.available).toBe(true);
+    expect(result.current.available).toBe(false);
   });
 
-  it("is unavailable when the browser cannot capture audio, even for full-realtime", () => {
+  it("is unavailable when the browser cannot open WebRTC media, even for full-realtime", () => {
     vi.unstubAllGlobals();
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
     const { result } = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
