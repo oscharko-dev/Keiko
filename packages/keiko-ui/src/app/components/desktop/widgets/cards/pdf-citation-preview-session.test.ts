@@ -310,10 +310,44 @@ describe("pdf-citation-preview-session", () => {
       expect.objectContaining({
         documentLabel: "Policy wording.pdf",
         failureTitle: "Preview changed",
-        failureRetryable: true,
+        failureRetryable: false,
       }),
     );
     expect(windows.focus).not.toHaveBeenCalled();
+  });
+
+  it("does not expose retry for open-time recovery shells without a retained open request", () => {
+    const expectations = [
+      ["document-not-ready", false],
+      ["preview-source-unreadable", false],
+      ["preview-metadata-missing", false],
+      ["document-content-mismatch", false],
+      ["page-provenance-missing", false],
+      ["preview-source-missing", false],
+      ["preview-source-oversized", false],
+    ] as const;
+
+    for (const [reason, retryable] of expectations) {
+      const windows = {
+        add: vi.fn<WorkspaceApi["add"]>(() => "pdf-preview-recovery"),
+        focus: vi.fn<WorkspaceApi["focus"]>(),
+        update: vi.fn<WorkspaceApi["update"]>(),
+      };
+
+      showPdfCitationPreviewResult(windows, {
+        outcome: "rejected",
+        state: "recoverable",
+        reason,
+        display: PREVIEW.display,
+      });
+
+      expect(windows.add).toHaveBeenCalledWith(
+        "pdfCitationPreview",
+        expect.objectContaining({
+          failureRetryable: retryable,
+        }),
+      );
+    }
   });
 
   it("restores the source chat, falls back from a missing inline marker to the citation chip, and clears the transient highlight", async () => {
@@ -557,7 +591,10 @@ describe("pdf-citation-preview-session", () => {
       },
     });
 
-    syncPdfCitationPreviewWindowRegistry([chatWindow("chat-window-1", "chat-1", true), previewWindow()]);
+    syncPdfCitationPreviewWindowRegistry([
+      chatWindow("chat-window-1", "chat-1", true),
+      previewWindow(),
+    ]);
 
     expect(getPdfCitationPreviewBackToChatAvailability("pdf-preview-1")).toEqual({
       enabled: true,

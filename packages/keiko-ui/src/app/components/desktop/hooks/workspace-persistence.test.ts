@@ -22,18 +22,41 @@ function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWin
 }
 
 describe("workspace-persistence", () => {
-  it("does not persist transient window types into the durable local snapshot", () => {
+  it("drops transient windows and preserves PDF preview as a safe shell only", () => {
     const persisted = sanitizePersistedWindows([
       win({ id: "browser-1", type: "browser", cfg: { url: "https://example.test" } }),
       win({
         id: "pdf-preview-1",
         type: "pdfCitationPreview",
-        cfg: { documentLabel: "Policy wording.pdf", currentPage: 7 },
+        cfg: {
+          documentLabel: "Policy wording.pdf",
+          currentPage: 7,
+          pageNumber: 7,
+          anchorQuality: "page-only",
+          zoomMode: "manual",
+          zoomValue: 1.44,
+          rotation: 91,
+          sessionHandle: "preview-session-must-not-persist",
+          sourcePath: "/Users/alice/customer/policy.pdf",
+          pdfBytes: "JVBERi0xLjQK",
+        },
       }),
       win({ id: "review-1", type: "review", cfg: { runId: "run-123" } }),
     ]);
 
-    expect(persisted.map((entry) => entry.id)).toEqual(["review-1"]);
+    expect(persisted.map((entry) => entry.id)).toEqual(["pdf-preview-1", "review-1"]);
+    expect(persisted[0]?.cfg).toEqual({
+      documentLabel: "Policy wording.pdf",
+      currentPage: 7,
+      pageNumber: 7,
+      anchorQuality: "page-only",
+      zoomMode: "manual",
+      zoomValue: 1.4,
+      rotation: 90,
+    });
+    expect(JSON.stringify(persisted)).not.toContain("preview-session-must-not-persist");
+    expect(JSON.stringify(persisted)).not.toContain("/Users/alice");
+    expect(JSON.stringify(persisted)).not.toContain("JVBERi0xLjQK");
   });
 
   it("persists evidence-reference windows as declared references only", () => {
