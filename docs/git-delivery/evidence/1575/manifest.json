@@ -1,0 +1,50 @@
+{
+  "issue": "#1575",
+  "epic": "#1571",
+  "harness": "tests/e2e/config/playwright.issue-1575-git-changes.config.ts",
+  "appPath": "packaged-cli-ui",
+  "route": "/",
+  "evidencePath": "docs/git-delivery/evidence/1575",
+  "fixture": {
+    "kind": "local-git-repository",
+    "worktree": "temporary-local-worktree",
+    "browserProjectPath": "keiko-git-changes-1575"
+  },
+  "routesIntercepted": [
+    "/api/git/status",
+    "/api/git/branches",
+    "/api/git/summary",
+    "/api/git/history",
+    "/api/git/remotes",
+    "/api/git/diff",
+    "/api/projects",
+    "/api/git-delivery/staging/stage",
+    "/api/git-delivery/staging/unstage",
+    "/api/git-delivery/commit/preview"
+  ],
+  "windowRegistration": {
+    "kind": "gitClient",
+    "windowType": "governedGit",
+    "seededVia": "keiko.workspace.v4",
+    "renderedBy": "GitClientWindow",
+    "cfgPersistence": "fs-reference"
+  },
+  "gitFixtureStates": {
+    "modified": "src/app.ts — tracked, committed, then edited in worktree (worktreeStatus=M)",
+    "added": "src/new-feature.ts — new file staged but never committed (indexStatus=A)",
+    "deleted": "src/legacy.ts — committed then staged for removal (indexStatus=D)",
+    "renamed": "docs/README.md → docs/OVERVIEW.md — staged rename (indexStatus=R)",
+    "untracked": "notes.txt — written but never staged (untracked=true)",
+    "conflicted": "src/shared.ts — unresolved merge conflict between main and feature branches"
+  },
+  "notes": [
+    "Real governedGit window rendered through the real WindowsRegistry + GitClientWindow.",
+    "Read surface (status/diff) intercepted with deterministic fixture carrying all six states.",
+    "Staging mutation routes intercepted for determinism; commit is not exercised (no staged files).",
+    "The real git fixture is built in a temp dir (execFileSync git init/add/commit/mv/rm/merge)."
+  ],
+  "artifacts": [
+    "manifest.json",
+    "git-changes-view.png"
+  ]
+}

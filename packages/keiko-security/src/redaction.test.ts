@@ -161,6 +161,48 @@ describe("redact", () => {
     expect(result).toContain("@db.internal:5432/app");
   });
 
+  // #1573 security follow-up — a token-as-username remote URL carries the secret in the userinfo
+  // with NO ':' (https://<pat>@host), so the colon-bearing pattern misses it. The colon-less
+  // userinfo form must be masked for credential-carrying schemes too. `git remote -v` output from
+  // /api/git/summary and /api/git/remotes can otherwise surface an opaque PAT to the browser.
+  it("strips a colon-less token-as-username from an HTTPS remote URL", () => {
+    // Short suffix so it does NOT match the gh[pousr]_ token SHAPE — proves the URL userinfo
+    // pattern (not GITHUB_TOKEN_PATTERN) does the redaction.
+    const url = "https://ghp_xxx@github.com/o/r.git";
+    const result = redact(`origin\t${url} (fetch)`);
+    expect(result).not.toContain("ghp_xxx@");
+    expect(result).toContain("https://[REDACTED]@github.com/o/r.git");
+  });
+
+  it("strips an opaque (unknown-shape) token used as the userinfo of a URL", () => {
+    const url = "https://opaque-token@host/r";
+    const result = redact(url);
+    expect(result).not.toContain("opaque-token@");
+    expect(result).toContain("https://[REDACTED]@host/r");
+  });
+
+  it("preserves a bare SSH userinfo (a login name, not a credential)", () => {
+    // SSH authenticates with keys, not userinfo; `git@`/`user@` is a non-secret login name.
+    expect(redact("ssh://user@host/repo.git")).toBe("ssh://user@host/repo.git");
+    expect(redact("ssh://git@github.com/o/r.git")).toBe("ssh://git@github.com/o/r.git");
+  });
+
+  it("still strips userinfo credentials from an SSH URL that carries a password", () => {
+    const result = redact("ssh://user:s3cr3tPassw0rd@host/repo.git");
+    expect(result).not.toContain("s3cr3tPassw0rd");
+    expect(result).toContain("ssh://[REDACTED]@host/repo.git");
+  });
+
+  it("does not over-match general '@' text with no scheme authority", () => {
+    const prose = "ping me at user@example.com or see path/to@file";
+    expect(redact(prose)).toBe(prose);
+  });
+
+  it("does not treat an '@' inside a URL path as userinfo", () => {
+    const url = "https://example.com/users/@handle/profile";
+    expect(redact(url)).toBe(url);
+  });
+
   it("does not redact a benign 'password reset' sentence with no assignment", () => {
     const prose = "Follow the password reset link to continue.";
     expect(redact(prose)).toBe(prose);
@@ -348,5 +390,29 @@ describe("deepRedactStrings", () => {
     const original = { a: "Bearer " + "z".repeat(20) };
     deepRedactStrings(original, redactor);
     expect(original.a).toContain("z".repeat(20));
+  });
+
+  // #1573/#1606 — `/api/git/summary` and `/api/git/remotes` serialize `git remote -v` URLs as the
+  // fetchUrl/pushUrl string leaves of a GitRemoteSummary[] and return the payload through
+  // deepRedactStrings(body, createAuditRedactor(...)). This locks in that a colon-less
+  // token-as-username URL is scrubbed at that exact (object-leaf) call shape, not just on a bare string.
+  it("scrubs a colon-less token URL nested in a git remote-summary payload", () => {
+    const redactor = createAuditRedactor({}, {});
+    const body = {
+      branch: "main",
+      remotes: [
+        {
+          name: "origin",
+          fetchUrl: "https://opaque-pat-value@github.com/o/r.git",
+          pushUrl: undefined,
+        },
+        { name: "ssh", fetchUrl: "ssh://git@github.com/o/r.git", pushUrl: undefined },
+      ],
+    };
+    const result = deepRedactStrings(body, redactor) as typeof body;
+    expect(result.remotes[0]?.fetchUrl).toBe("https://[REDACTED]@github.com/o/r.git");
+    expect(result.remotes[0]?.fetchUrl).not.toContain("opaque-pat-value");
+    // SSH login name preserved (not a credential), matching the redactor's existing intent.
+    expect(result.remotes[1]?.fetchUrl).toBe("ssh://git@github.com/o/r.git");
   });
 });
