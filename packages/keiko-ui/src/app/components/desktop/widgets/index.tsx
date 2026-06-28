@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { registerWindowRender } from "../windows/WindowsRegistry";
-import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import type { WindowRenderContext, WindowType } from "../windows/WindowsRegistry";
 import { ChatWindow } from "../ChatWindow";
 import { ChatSessionProvider } from "../context/ChatSessionContext";
 import { useChatSession } from "../hooks/useChatSession";
@@ -21,7 +21,7 @@ import { BrowserWidget } from "./cards/BrowserWidget";
 import { TerminalWidget } from "./cards/TerminalWidget";
 import { CommandsWidget } from "./cards/CommandsWidget";
 import { RuntimeHubWidget } from "./cards/RuntimeHubWidget";
-import { GovernedGitFlowCard } from "./cards/GovernedGitFlowCard";
+import { GitClientWindow } from "./cards/git-client/GitClientWindow";
 import { GovernedPullRequestCard } from "./cards/GovernedPullRequestCard";
 import { GovernedMergeCard } from "./cards/GovernedMergeCard";
 import { ContainerStatusWidget } from "./cards/ContainerStatusWidget";
@@ -455,19 +455,23 @@ registerWindowRender("runtime", (cfg, ctx) => {
     />
   );
 });
-// Epic #470, Issue #475 — Governed local Git flow surface. The active project root acts as the
-// projectId. Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a
-// linked Files/Editor window root; an empty state renders when none is available.
+// Epic #1571, Issue #1574 — Git client window shell. The active project root acts as the projectId.
+// Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a linked
+// Files/Editor window root; an empty state renders when none is available. The shell persists the
+// selected repository via ctx.updateCfg (so resolveBoundRoot re-targets) and opens the reused
+// governed Pull Request / Merge windows via ctx.openWindow.
 registerWindowRender("governedGit", (cfg, ctx) => {
-  // Issue #446 (AC3 / SC2) — the active workspace root is the projectId, so #470's governed
-  // preview/policy/approval/evidence flow runs scoped to the active worktree and can never execute
-  // against the previous workspace after a switch. #470's route + governance are consumed unchanged.
+  // Issue #446 (AC3 / SC2) — the active workspace root is the projectId, so the read surface and the
+  // governed PR/merge windows run scoped to the active worktree and can never execute against the
+  // previous workspace after a switch.
   const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
   return (
-    <GovernedGitFlowCard
+    <GitClientWindow
       projectId={projectId}
       onOpenFiles={(root) => ctx.openWindow("files", { root })}
       onOpenEditor={(root) => ctx.openWindow("editor", { root })}
+      openWindow={(key, windowCfg) => ctx.openWindow(key as WindowType, windowCfg)}
+      updateCfg={(patch) => ctx.updateCfg(patch)}
     />
   );
 });

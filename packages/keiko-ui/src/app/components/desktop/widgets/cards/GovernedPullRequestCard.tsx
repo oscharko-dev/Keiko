@@ -112,12 +112,20 @@ interface PrForm {
   readonly draftTransition: "none" | "to-ready" | "to-draft";
 }
 
-function initialForm(headBranchName: string | undefined): PrForm {
+function initialForm({
+  headBranchName,
+  ownerAndRepo,
+  baseBranchName,
+}: {
+  readonly headBranchName?: string | undefined;
+  readonly ownerAndRepo?: string | undefined;
+  readonly baseBranchName?: string | undefined;
+}): PrForm {
   return {
     kind: "pr-create",
-    ownerAndRepo: "",
+    ownerAndRepo: ownerAndRepo ?? "",
     headBranchName: headBranchName ?? "",
-    baseBranchName: "",
+    baseBranchName: baseBranchName ?? "",
     title: "",
     body: "",
     isDraft: false,
@@ -252,10 +260,72 @@ function PrTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
 
 function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
   return (
-    <section style={SECTION_STYLE} aria-label="Pull request metadata">
+    <section style={SECTION_STYLE} aria-label="Pull Request metadata">
       <h3 style={HEADING_STYLE}>
         <Icons.git size={12} /> Metadata
       </h3>
+      <fieldset
+        style={{
+          border: "1px solid var(--border-default)",
+          borderRadius: "var(--radius-control)",
+          padding: "var(--space-2)",
+        }}
+      >
+        <legend style={KV_LABEL}>Action</legend>
+        <div style={ROW_STYLE}>
+          <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+            <input
+              type="radio"
+              name="pull-request-action"
+              checked={form.kind === "pr-create"}
+              disabled={busy}
+              onChange={() => onChange("kind", "pr-create")}
+            />
+            Create
+          </label>
+          <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+            <input
+              type="radio"
+              name="pull-request-action"
+              checked={form.kind === "pr-update"}
+              disabled={busy}
+              onChange={() => onChange("kind", "pr-update")}
+            />
+            Update
+          </label>
+        </div>
+      </fieldset>
+      {form.kind === "pr-update" ? (
+        <div style={ROW_STYLE}>
+          <label style={{ ...LABEL_STYLE, flex: 1 }}>
+            Pull Request number
+            <input
+              style={FIELD_STYLE}
+              inputMode="numeric"
+              value={form.prExternalId}
+              disabled={busy}
+              onChange={(e) => onChange("prExternalId", e.target.value)}
+              aria-label="Pull Request number"
+            />
+          </label>
+          <label style={{ ...LABEL_STYLE, flex: 1 }}>
+            Draft state
+            <select
+              style={FIELD_STYLE}
+              value={form.draftTransition}
+              disabled={busy}
+              onChange={(e) =>
+                onChange("draftTransition", e.target.value as PrForm["draftTransition"])
+              }
+              aria-label="Draft state"
+            >
+              <option value="none">No change</option>
+              <option value="to-ready">Mark ready</option>
+              <option value="to-draft">Convert to draft</option>
+            </select>
+          </label>
+        </div>
+      ) : null}
       <label style={LABEL_STYLE}>
         Head branch
         <input
@@ -274,7 +344,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
           value={form.title}
           disabled={busy}
           onChange={(e) => onChange("title", e.target.value)}
-          aria-label="Pull request title"
+          aria-label="Pull Request title"
         />
       </label>
       <label style={LABEL_STYLE}>
@@ -284,7 +354,7 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
           value={form.body}
           disabled={busy}
           onChange={(e) => onChange("body", e.target.value)}
-          aria-label="Pull request body"
+          aria-label="Pull Request body"
         />
       </label>
       <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
@@ -409,6 +479,7 @@ function PrOutcome({
 // ─── Card body ─────────────────────────────────────────────────────────────────────────────────────
 
 function liveTextFor(async: PrAsync): string {
+  if (async.busy) return "Pull request action running.";
   if (async.error !== null) return `Pull request action failed: ${async.error}`;
   if (async.outcome !== null) return `Pull request ${async.outcome.status}.`;
   if (async.preview !== null)
@@ -420,16 +491,22 @@ function GovernedPullRequestBody({
   client,
   projectId,
   headBranchName,
+  ownerAndRepo,
+  baseBranchName,
   titleId,
   liveId,
 }: {
   readonly client: GovernedPullRequestClient;
   readonly projectId: string;
   readonly headBranchName: string | undefined;
+  readonly ownerAndRepo?: string | undefined;
+  readonly baseBranchName?: string | undefined;
   readonly titleId: string;
   readonly liveId: string;
 }): ReactNode {
-  const [form, setForm] = useState<PrForm>(() => initialForm(headBranchName));
+  const [form, setForm] = useState<PrForm>(() =>
+    initialForm({ headBranchName, ownerAndRepo, baseBranchName }),
+  );
   const async = useGovernedPrActions(client);
   const onChange = useCallback(<K extends keyof PrForm>(key: K, value: PrForm[K]): void => {
     setForm((f) => ({ ...f, [key]: value }));
@@ -453,7 +530,10 @@ function GovernedPullRequestBody({
 
   // Preview only needs the targets (it SYNTHESIZES a title/body suggestion); execute also needs a title.
   const canPreview =
-    form.ownerAndRepo !== "" && form.headBranchName !== "" && form.baseBranchName !== "";
+    form.ownerAndRepo !== "" &&
+    form.headBranchName !== "" &&
+    form.baseBranchName !== "" &&
+    (form.kind === "pr-create" || form.prExternalId !== "");
   const canExecute = canPreview && form.title !== "";
   return (
     <div
@@ -468,7 +548,7 @@ function GovernedPullRequestBody({
       aria-labelledby={titleId}
     >
       <h2 id={titleId} style={{ ...HEADING_STYLE, font: "var(--text-title)" }}>
-        <Icons.git size={14} /> Pull request command center
+        <Icons.git size={14} /> Pull Request
       </h2>
       <p
         id={liveId}
@@ -503,7 +583,7 @@ function GovernedPullRequestBody({
           onClick={onExecute}
           data-testid="gpr-submit"
         >
-          {form.kind === "pr-create" ? "Open pull request" : "Update pull request"}
+          {form.kind === "pr-create" ? "Create Pull Request" : "Update Pull Request"}
         </button>
       </div>
       <PrOutcome outcome={async.outcome} error={async.error} />
@@ -516,6 +596,10 @@ export interface GovernedPullRequestCardProps {
   readonly projectId?: string | undefined;
   /** The published head branch, passed from the governed Git flow Publish section. */
   readonly headBranchName?: string | undefined;
+  /** Optional safe GitHub owner/repo inferred from configured remotes. */
+  readonly ownerAndRepo?: string | undefined;
+  /** Optional base branch inferred from upstream/current branch metadata. */
+  readonly baseBranchName?: string | undefined;
   /** DI seam; defaults to the real BFF client. */
   readonly client?: GovernedPullRequestClient;
 }
@@ -523,6 +607,8 @@ export interface GovernedPullRequestCardProps {
 export function GovernedPullRequestCard({
   projectId,
   headBranchName,
+  ownerAndRepo,
+  baseBranchName,
   client = DEFAULT_CLIENT,
 }: GovernedPullRequestCardProps): ReactNode {
   const titleId = useId();
@@ -534,7 +620,7 @@ export function GovernedPullRequestCard({
         style={{ padding: "var(--space-4)", color: "var(--fg-muted)", font: "var(--text-body-sm)" }}
       >
         <p>
-          <Icons.git size={13} /> Select a project to open a governed pull request.
+          <Icons.git size={13} /> Select a project to open a pull request.
         </p>
       </div>
     );
@@ -544,6 +630,8 @@ export function GovernedPullRequestCard({
       client={client}
       projectId={projectId}
       headBranchName={headBranchName}
+      ownerAndRepo={ownerAndRepo}
+      baseBranchName={baseBranchName}
       titleId={titleId}
       liveId={liveId}
     />

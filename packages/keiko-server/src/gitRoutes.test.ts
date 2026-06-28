@@ -180,7 +180,9 @@ describe("GET /api/git/status", () => {
         },
       ],
     });
-    expect(runner.mock.calls[1]?.[0]).toEqual(expect.arrayContaining(["--", "workspace"]));
+    expect(runner.mock.calls[1]?.[0]).toEqual(
+      expect.arrayContaining(["--", ":(literal)workspace"]),
+    );
   });
 
   it("marks process-truncated status output as truncated even when change count is below cap", async () => {
@@ -428,6 +430,27 @@ describe("GET /api/git/diff", () => {
     );
     expect(diffArgs).not.toContain("--ext-diff");
     expect(diffArgs).not.toContain("--textconv");
+  });
+
+  it("literalizes selected diff paths so Git pathspec magic cannot expand", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok("diff --git a/:(top)* b/:(top)*\n+literal\n"));
+
+    const result = await handleGitDiff(
+      ctx(
+        `/api/git/diff?root=${encodeURIComponent(root)}&path=${encodeURIComponent(
+          ":(top)*",
+        )}&scope=worktree`,
+      ),
+      deps(runner),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ path: ":(top)*", scope: "worktree" });
+    const diffArgs = runner.mock.calls[1]?.[0] ?? [];
+    expect(diffArgs.slice(-2)).toEqual(["--", ":(literal):(top)*"]);
   });
 
   it("returns staged diffs with cached Git args and no path when only a nested root is selected", async () => {

@@ -27,6 +27,7 @@ Architecture background:
 - [Governed remote publish](governed-remote-publish.md)
 - [Governed GitHub pull request command center](governed-github-pull-request.md)
 - [Governed merge](governed-merge.md)
+- [Git client repository state, history, remotes, and sync API](git-client-repository-api.md)
 
 Executable closure check:
 

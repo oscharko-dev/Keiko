@@ -3,33 +3,34 @@ import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
-const here = dirname(fileURLToPath(import.meta.url));
+const uiRoot = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(uiRoot, "..", "..");
 
 export default defineConfig({
-  root: here,
   plugins: [react()],
   resolve: {
     alias: {
-      "@": resolve(here, "src"),
+      "@": resolve(uiRoot, "src"),
     },
   },
   test: {
     environment: "jsdom",
     globals: true,
-    setupFiles: ["./vitest.setup.ts"],
+    setupFiles: ["./packages/keiko-ui/vitest.setup.ts"],
     include: [
-      "src/app/**/*.test.ts",
-      "src/app/**/*.test.tsx",
-      "src/components/**/*.test.tsx",
-      "src/lib/**/*.test.ts",
-      "src/lib/**/*.test.tsx",
-      "__tests__/**/*.test.ts",
+      "packages/keiko-ui/src/app/**/*.test.ts",
+      "packages/keiko-ui/src/app/**/*.test.tsx",
+      "packages/keiko-ui/src/components/**/*.test.tsx",
+      "packages/keiko-ui/src/lib/**/*.test.ts",
+      "packages/keiko-ui/src/lib/**/*.test.tsx",
+      "packages/keiko-ui/__tests__/**/*.test.ts",
     ],
-    exclude: ["node_modules/**", "out/**", ".next/**"],
+    exclude: ["node_modules/**", "packages/keiko-ui/out/**", "packages/keiko-ui/.next/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "json-summary"],
-      include: ["src/**/*.{ts,tsx}"],
+      reportsDirectory: resolve(repoRoot, "packages", "keiko-ui", "coverage"),
+      include: ["packages/keiko-ui/src/**/*.{ts,tsx}"],
       exclude: [
         "**/*.test.*",
         "**/__tests__/**",
@@ -37,8 +38,8 @@ export default defineConfig({
         "**/test-support.ts",
         "**/test-fixtures.ts",
         "**/testing.ts",
-        ".next/**",
-        "out/**",
+        "packages/keiko-ui/.next/**",
+        "packages/keiko-ui/out/**",
       ],
     },
   },
