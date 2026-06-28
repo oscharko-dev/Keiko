@@ -120,7 +120,7 @@ function citationContextItem(
   citation: LocalKnowledgeEvidenceCitation,
   affordance: CitationPreviewAffordance,
 ): PdfCitationPreviewContextCitation | undefined {
-  if (affordance.display === undefined) return undefined;
+  if (affordance.state !== "available" || affordance.display === undefined) return undefined;
   return {
     citation: {
       stableId: citation.stableId,

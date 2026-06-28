@@ -1,68 +1,85 @@
 {
   "issue": 1636,
   "verdict": "PASS",
-  "cssSha256": "dacd703e6c886f20b3bed61f19da7d93fcee7cfe0b5a76c21846e814144d30c2",
-  "componentFamilies": [
+  "cssSha256": "93baaa524d245b1e05a7b5bb7fc78ba3ee5ed68bb37acd969fd8cba1265083dd",
+  "captures": [
     {
-      "family": "PDF viewer context panel",
-      "selectors": [
-        ".pdfv-context",
-        ".pdfv-context-head",
-        ".pdfv-context-citation[data-active=\"true\"]"
-      ],
-      "states": [
-        "default",
-        "active sibling",
-        "approximate anchor",
-        "page unavailable"
-      ],
-      "tokens": [
-        "--surface-primary",
-        "--surface-inset",
-        "--surface-accent-subtle",
-        "--border-subtle",
-        "--border-accent",
-        "--text-primary",
-        "--text-secondary",
-        "--accent-bright"
-      ],
-      "result": "PASS"
+      "file": "01-context-dark.png",
+      "theme": "dark",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "context",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
     },
     {
-      "family": "Back to chat affordance",
-      "selectors": [
-        ".pdfv-back-to-chat",
-        ".pdfv-back-to-chat-hint"
-      ],
-      "states": [
-        "enabled",
-        "disabled: source chat missing",
-        "disabled: source message missing",
-        "focus-visible"
-      ],
-      "tokens": [
-        "--focus-ring",
-        "--text-secondary"
-      ],
-      "result": "PASS"
+      "file": "02-context-light.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "context",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
     },
     {
-      "family": "Return highlight treatment",
-      "selectors": [
-        ".citation-inline-marker[data-back-to-chat-highlighted=\"true\"]",
-        ".grounded-citation-action[data-back-to-chat-highlighted=\"true\"]"
-      ],
-      "states": [
-        "transient highlighted",
-        "reduced motion fallback",
-        "cleanup"
-      ],
-      "tokens": [
-        "--focus-ring",
-        "--surface-accent-subtle"
-      ],
-      "result": "PASS"
+      "file": "03-sibling-active.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "siblings",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
+    },
+    {
+      "file": "04-back-disabled.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "disabled",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
+    },
+    {
+      "file": "05-chat-highlight.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "highlight",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
+    },
+    {
+      "file": "06-responsive.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "context",
+      "viewport": {
+        "width": 430,
+        "height": 900
+      }
+    },
+    {
+      "file": "07-forced-colors.png",
+      "theme": "dark",
+      "hc": false,
+      "forcedColors": "active",
+      "state": "context",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      }
     }
   ],
-  "summary": "Issue #1636 extends the governed PDF viewer with answer-local citation context, honest anchor-quality copy, and return-to-chat affordances while reusing the existing viewer shell and grounded citation language from issues #1634 and #1635."
+  "summary": "Browser-rendered visual evidence for answer-local PDF citation context, sibling citation navigation, Back to chat disabled state, transient chat highlight, responsive layout, and forced-colors coverage."
 }

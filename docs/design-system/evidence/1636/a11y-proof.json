@@ -1,34 +1,36 @@
 {
   "issue": 1636,
   "verdict": "PASS",
-  "cssSha256": "dacd703e6c886f20b3bed61f19da7d93fcee7cfe0b5a76c21846e814144d30c2",
-  "scope": "Answer-local citation context, sibling citation navigation, and Back to chat return flow inside the verified PDF citation viewer.",
-  "checks": [
+  "cssSha256": "93baaa524d245b1e05a7b5bb7fc78ba3ee5ed68bb37acd969fd8cba1265083dd",
+  "captures": [
     {
-      "surface": "context-panel-copy",
-      "result": "PASS",
-      "evidence": "The viewer announces 'Answer-local citation context' and explicit anchor-quality text such as 'Near cited passage' instead of relying on visual position or color alone."
+      "file": "01-context-dark.png",
+      "violations": []
     },
     {
-      "surface": "sibling-citation-navigation",
-      "result": "PASS",
-      "evidence": "Sibling citations remain native buttons through the grounded citation affordance, stay keyboard reachable, and update the verified page/context without triggering a new authorization flow."
+      "file": "02-context-light.png",
+      "violations": []
     },
     {
-      "surface": "back-to-chat-enabled",
-      "result": "PASS",
-      "evidence": "Back to chat is a keyboard-operable button that restores the source chat window, focuses the originating assistant message, scrolls it into view, and applies a transient visible highlight."
+      "file": "03-sibling-active.png",
+      "violations": []
     },
     {
-      "surface": "back-to-chat-disabled",
-      "result": "PASS",
-      "evidence": "When the source chat window or rendered assistant message is unavailable, the control is marked aria-disabled and paired with explanatory text describing why return navigation is unavailable."
+      "file": "04-back-disabled.png",
+      "violations": []
     },
     {
-      "surface": "highlight-cleanup",
-      "result": "PASS",
-      "evidence": "Return highlights use the governed focus ring plus optional reduced-motion-safe pulse and are removed automatically after the transient cleanup window so stale emphasis does not persist."
+      "file": "05-chat-highlight.png",
+      "violations": []
+    },
+    {
+      "file": "06-responsive.png",
+      "violations": []
+    },
+    {
+      "file": "07-forced-colors.png",
+      "violations": []
     }
   ],
-  "gate": "Keyboard reachability, visible focus, non-color-only status messaging, disabled-state explanation, and transient highlight cleanup are covered by focused unit tests on the real viewer/session registry path."
+  "gate": "zero serious/critical axe violations across captured citation-context and Back to chat states"
 }

@@ -8669,8 +8669,8 @@ select.dlg-input {
 .pdfv-context {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 16px;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
   border-bottom: 1px solid var(--border-subtle);
   background: color-mix(in oklch, var(--surface-primary) 76%, var(--surface-inset));
 }
@@ -8678,63 +8678,63 @@ select.dlg-input {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 14px;
+  gap: var(--space-6);
 }
 .pdfv-context-copy {
   min-width: 0;
 }
 .pdfv-context-eyebrow {
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-2);
   color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 700;
+  font-size: var(--text-caption);
+  font-weight: var(--weight-strong);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 .pdfv-context-title {
   margin: 0;
   color: var(--text-primary);
-  font-size: 13.5px;
-  line-height: 1.45;
-  font-weight: 650;
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
+  font-weight: var(--weight-strong);
 }
 .pdfv-context-message {
-  margin: 6px 0 0;
+  margin: var(--space-3) 0 0;
   color: var(--text-secondary);
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-normal);
 }
 .pdfv-context-actions {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 6px;
-  min-width: 180px;
+  gap: var(--space-3);
+  min-width: calc(var(--space-10) * 4);
 }
 .pdfv-back-to-chat {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
 }
 .pdfv-back-to-chat[aria-disabled="true"] {
   cursor: not-allowed;
 }
 .pdfv-back-to-chat-hint {
   color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
   text-align: right;
 }
 .pdfv-context-rail {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-3);
 }
 .pdfv-context-list {
-  gap: 8px;
+  gap: var(--space-4);
 }
 .pdfv-context-citation {
-  gap: 6px;
+  gap: var(--space-3);
   max-width: min(100%, 34ch);
 }
 .pdfv-context-citation[data-active="true"] {
@@ -8742,7 +8742,7 @@ select.dlg-input {
   background: color-mix(in oklch, var(--surface-accent-subtle) 72%, var(--surface-primary));
 }
 .pdfv-context-citation[data-active="true"] .grounded-citation-action-label {
-  color: var(--accent-bright);
+  color: var(--text-accent);
 }
 .pdfv-toolbar {
   display: flex;
@@ -18861,17 +18861,17 @@ button.figma-view-preview {
   align-items: center;
   padding: 0;
   border: 0;
-  border-bottom: 1px solid var(--accent-bright);
+  border-bottom: 1px solid var(--text-accent);
   background: transparent;
-  color: var(--accent-bright);
+  color: var(--text-accent);
   font: inherit;
   line-height: inherit;
   cursor: pointer;
   text-decoration: none;
 }
 .citation-inline-marker:hover:not([aria-disabled="true"]) {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+  color: var(--accent-on-tint);
+  border-bottom-color: var(--accent-on-tint);
 }
 .citation-inline-marker:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
@@ -18881,8 +18881,8 @@ button.figma-view-preview {
 .citation-inline-marker[data-back-to-chat-highlighted="true"],
 .grounded-citation-action[data-back-to-chat-highlighted="true"] {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px color-mix(in oklch, var(--surface-accent-subtle) 78%, transparent);
+  outline-offset: var(--space-1);
+  box-shadow: 0 0 0 var(--space-2) color-mix(in oklch, var(--surface-accent-subtle) 78%, transparent);
 }
 .citation-inline-marker--recoverable {
   border-bottom-style: dashed;
@@ -18898,7 +18898,7 @@ button.figma-view-preview {
 @media (prefers-reduced-motion: no-preference) {
   .citation-inline-marker[data-back-to-chat-highlighted="true"],
   .grounded-citation-action[data-back-to-chat-highlighted="true"] {
-    animation: citation-back-to-chat-pulse 1.8s ease;
+    animation: citation-back-to-chat-pulse var(--dur-flow) var(--ease-standard);
   }
 }
 @keyframes citation-back-to-chat-pulse {

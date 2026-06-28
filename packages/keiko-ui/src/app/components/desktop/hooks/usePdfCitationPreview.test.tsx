@@ -335,4 +335,77 @@ describe("usePdfCitationPreviewController", () => {
       }),
     );
   });
+
+  it("omits blocked same-document citations from the local sibling context", async () => {
+    const citations = [
+      citation("[1]", "stable-1", "policy.pdf", "doc-shared"),
+      citation("[2]", "stable-2", "blocked policy.pdf", "doc-shared"),
+    ];
+    const groundedAnswer = answer(citations);
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "stable-1",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "available",
+          display: { documentLabel: "policy.pdf", pageNumber: 3, anchorQuality: "page-only" },
+        },
+        {
+          stableId: "stable-2",
+          marker: "[2]",
+          markerIndex: 2,
+          state: "blocked",
+          reason: "lineage-missing",
+          display: { documentLabel: "policy.pdf", pageNumber: 8, anchorQuality: "page-only" },
+        },
+      ],
+    });
+    vi.mocked(openPdfCitationPreviewSession).mockResolvedValue(activeResponse());
+
+    const windows = {
+      add: vi.fn(),
+      focus: vi.fn(),
+      update: vi.fn(),
+    };
+    const { result } = renderHook(() =>
+      usePdfCitationPreviewController({
+        answer: groundedAnswer,
+        chatId: "chat-1",
+        windowId: "chat-window-1",
+        windows,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current?.forMarker("[1]")?.state).toBe("available");
+    });
+
+    await act(async () => {
+      await result.current!.openCitation(citations[0]!, "inline-marker");
+    });
+
+    expect(showPdfCitationPreviewResult).toHaveBeenCalledWith(
+      windows,
+      activeResponse(),
+      expect.objectContaining({
+        context: expect.objectContaining({
+          citations: [
+            {
+              citation: {
+                stableId: "stable-1",
+                marker: "[1]",
+                label: "policy.pdf",
+              },
+              display: {
+                documentLabel: "policy.pdf",
+                pageNumber: 3,
+                anchorQuality: "page-only",
+              },
+            },
+          ],
+        }),
+      }),
+    );
+  });
 });

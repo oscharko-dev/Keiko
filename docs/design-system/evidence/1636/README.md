@@ -22,7 +22,7 @@ Back to chat affordance added to the verified Local Knowledge PDF viewer in issu
 - All new styling lives in `globals.css` and consumes semantic/component tokens:
   `--surface-primary`, `--surface-inset`, `--surface-accent-subtle`,
   `--border-subtle`, `--border-accent`, `--text-primary`, `--text-secondary`,
-  `--accent-bright`, and `--focus-ring`.
+  `--text-accent`, and `--focus-ring`.
 - The active sibling citation is differentiated through tokenized border/background
   treatment plus explicit context placement, not color alone.
 - Disabled Back to chat stays discoverable via visible explanatory copy instead of
@@ -38,15 +38,20 @@ Focused issue #1636 verification: `PASS`.
 - Targeted eslint on the changed citation-viewer/chat files: PASS, with only the
   existing Next.js pages-directory warning and the expected ignored `globals.css`
   warning for direct CLI invocation.
-- Focused Vitest slice: PASS, 3 files / 15 tests.
+- Focused Vitest slice: PASS, 3 files / 17 tests.
+- Screenshot and axe harness:
+  `node docs/design-system/evidence/1636/equivalence-harness.mjs`.
+- Captured visual states:
+  `01-context-dark.png`, `02-context-light.png`, `03-sibling-active.png`,
+  `04-back-disabled.png`, `05-chat-highlight.png`, `06-responsive.png`, and
+  `07-forced-colors.png`.
 - `docs/design-system/evidence/1636/a11y-proof.json`: PASS.
 - `docs/design-system/evidence/1636/citation-context-back-to-chat-fidelity-proof.json`:
   PASS.
 
-The broader viewer window chrome, responsive shell, and theme screenshots remain
-covered by `docs/design-system/evidence/1634/`. Issue #1636 changes the governed
-viewer's contextual content and return-navigation states, so this issue records a
-lightweight JSON proof rather than duplicating the full screenshot harness.
+The broader viewer window chrome remains covered by
+`docs/design-system/evidence/1634/`. Issue #1636 captures its changed contextual
+content and return-navigation states with issue-local PNGs plus JSON proof.
 
 ## Test Coverage Map
 
