@@ -23,15 +23,6 @@ import {
   fetchFilesContent,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
-  saveFilesContent,
-  reportEditorInlineCompletionTelemetry,
-  requestEditorCompletion,
-  requestEditorInlineCompletion,
-  requestEditorDiagnostics,
-  requestEditorHover,
-  requestEditorSymbols,
-  requestEditorFormatting,
-  requestEditorTestGeneration,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";

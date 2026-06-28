@@ -273,7 +273,6 @@ type ProcessOutcome = "continue" | "budget-clipped";
 function recordBudgetClip(
   plan: BuildPlan,
   candidate: CandidateFile,
-  atomsForPath: readonly EvidenceAtom[],
   nowMs: number,
 ): void {
   plan.uncertainty.push({
@@ -356,7 +355,7 @@ function processCandidate(
     currentUsage: plan.usage,
   };
   if (!nextAtomFitsBudget(checkpoint, totalBytes).fits) {
-    recordBudgetClip(plan, candidate, atomsForPath, ctx.nowMs);
+    recordBudgetClip(plan, candidate, ctx.nowMs);
     return "budget-clipped";
   }
   plan.files.push({

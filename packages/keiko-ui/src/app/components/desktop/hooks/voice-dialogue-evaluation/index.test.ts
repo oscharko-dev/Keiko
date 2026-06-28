@@ -4,8 +4,6 @@
 // feed real observations into these same scorers.
 
 import { describe, expect, it } from "vitest";
-import type { VoiceCapabilityResolution } from "@/lib/types";
-import type { VoiceDialogueMode } from "../voice-dialogue-session";
 import {
   DIALOGUE_A11Y_CHECKS,
   DIALOGUE_EVAL_SCHEMA_VERSION,
