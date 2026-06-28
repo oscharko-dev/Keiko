@@ -111,6 +111,7 @@ import {
   enforceQiRetentionAtStartup,
   type QiRetentionAuditSink,
 } from "./qualityIntelligence/retentionEnforcement.js";
+import type { PdfCitationPreviewSessionManager } from "./local-knowledge-preview-session-manager.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -265,6 +266,9 @@ export interface UiHandlerDeps {
   // Optional so legacy tests that build deps manually keep their plaintext fixtures unchanged;
   // buildUiHandlerDeps creates one so production stores encrypt by default.
   readonly localKnowledgeKeyProvider?: KnowledgeStoreKeyProvider | undefined;
+  // Issue #1633 (Epic #1631) — ephemeral, non-durable PDF preview session registry. Optional so tests
+  // can inject a deterministic clock/TTL; production falls back to a per-BFF in-memory registry.
+  readonly pdfCitationPreviewSessions?: PdfCitationPreviewSessionManager | undefined;
   // ADR-0055 D5 (PR4-W1) — deterministic context-engineering profile. buildUiHandlerDeps
   // provisions DEFAULT_CONTEXT_PROFILE so the grounded diagnostics observer is active by default
   // (non-mutating, additive `diagnostics.contextBudget?`). Optional + test seam: injecting

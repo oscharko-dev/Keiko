@@ -22,7 +22,10 @@ export type PdfCitationPreviewReasonCode =
   | "document-not-pdf"
   | "document-not-ready"
   | "document-content-mismatch"
-  | "page-provenance-missing";
+  | "page-provenance-missing"
+  | "preview-source-missing"
+  | "preview-source-unreadable"
+  | "preview-source-oversized";
 
 export const PDF_CITATION_PREVIEW_REASON_CODES = [
   "assistant-message-not-found",
@@ -38,6 +41,9 @@ export const PDF_CITATION_PREVIEW_REASON_CODES = [
   "document-not-ready",
   "document-content-mismatch",
   "page-provenance-missing",
+  "preview-source-missing",
+  "preview-source-unreadable",
+  "preview-source-oversized",
 ] as const;
 
 export type PdfCitationPreviewFailureState = "not-applicable" | "recoverable" | "blocked";
@@ -140,6 +146,24 @@ export interface PdfCitationPreviewStatusResponse {
   readonly matchedCitationCount: number;
 }
 
+export interface PdfCitationPreviewSessionMetadata {
+  readonly handle: string;
+  readonly expiresAt: string;
+  readonly reused: boolean;
+  readonly byteLength: number;
+  readonly contentType: "application/pdf";
+}
+
+export interface PdfCitationPreviewOpenAuthorized {
+  readonly outcome: "authorized";
+  readonly display: PdfCitationPreviewDisplay;
+  readonly session: PdfCitationPreviewSessionMetadata;
+}
+
+export type PdfCitationPreviewOpenResponse =
+  | PdfCitationPreviewOpenAuthorized
+  | PdfCitationPreviewRejected;
+
 export function pdfCitationPreviewFailureState(
   reason: PdfCitationPreviewReasonCode,
 ): PdfCitationPreviewFailureState {
@@ -147,7 +171,10 @@ export function pdfCitationPreviewFailureState(
     reason === "preview-metadata-missing" ||
     reason === "document-not-ready" ||
     reason === "document-content-mismatch" ||
-    reason === "page-provenance-missing"
+    reason === "page-provenance-missing" ||
+    reason === "preview-source-missing" ||
+    reason === "preview-source-unreadable" ||
+    reason === "preview-source-oversized"
   ) {
     return "recoverable";
   }
