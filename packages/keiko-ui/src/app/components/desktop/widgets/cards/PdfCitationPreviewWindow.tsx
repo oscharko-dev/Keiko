@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy } from "pdfjs-dist";
 import { ApiError, fetchPdfCitationPreviewDocument } from "@/lib/api";
 import { Icons } from "../../Icons";
 import type { AppWindow } from "../../windows/types";
@@ -10,8 +10,6 @@ import {
   type PdfCitationPreviewSafeWindowCfg,
   type PdfCitationPreviewZoomMode,
 } from "./pdf-citation-preview-session";
-
-GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
 
 const MAX_SCALE = 2;
 const MIN_SCALE = 0.5;
@@ -34,6 +32,21 @@ interface PreviewFailure {
 interface PdfDocumentLoadingTask {
   readonly destroy: () => Promise<void> | void;
   readonly promise: Promise<PDFDocumentProxy>;
+}
+
+type PdfJsModule = typeof import("pdfjs-dist");
+
+let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
+
+function loadPdfJs(): Promise<PdfJsModule> {
+  pdfJsModulePromise ??= import("pdfjs-dist").then((pdfjs) => {
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+      "pdfjs-dist/build/pdf.worker.mjs",
+      import.meta.url,
+    ).toString();
+    return pdfjs;
+  });
+  return pdfJsModulePromise;
 }
 
 function clampPage(page: number, totalPages: number): number {
@@ -364,9 +377,11 @@ export function PdfCitationPreviewWindow({
     const slowTimer = window.setTimeout(() => setShowSlowLoad(true), SLOW_LOAD_MS);
 
     void fetchPdfCitationPreviewDocument(sessionHandle, controller.signal)
-      .then((bytes) => {
+      .then(async (bytes) => {
         if (disposed) return null;
-        loadingTask = getDocument({ data: bytes }) as PdfDocumentLoadingTask;
+        const pdfjs = await loadPdfJs();
+        if (disposed) return null;
+        loadingTask = pdfjs.getDocument({ data: bytes }) as PdfDocumentLoadingTask;
         return loadingTask.promise;
       })
       .then(async (pdf) => {

@@ -32,13 +32,14 @@ Focused issue #1635 verification: `PASS`.
   existing environment warning, with zero lint findings after cleanup.
 - `packages/keiko-server/src/local-knowledge-preview-handlers.test.ts`: PASS, 8 tests.
 - UI focused Vitest slice: PASS, 7 files / 118 tests.
+- `tests/scripts/dev-runner-readiness.test.ts`: PASS; the PDF viewer now defers `pdfjs-dist` runtime
+  loading until a browser-only verified preview session exists, so Next SSR no longer evaluates pdf.js
+  before `DOMMatrix` is available.
 - `docs/design-system/evidence/1635/a11y-proof.json`: PASS.
 - `docs/design-system/evidence/1635/citation-entrypoints-fidelity-proof.json`: PASS.
 
-Full `.keiko-scripts/verify.sh` was rerun on 2026-06-28 and remains blocked by the existing
-`tests/scripts/dev-runner-readiness.test.ts` readiness probe, which never observed a `200` from the
-public dev-runner port. The failure is outside this issue's touched contract/server/UI surface and is
-called out in the PR verification notes.
+Full `.keiko-scripts/verify.sh` was rerun on 2026-06-28: PASS, 849 test files, 14,550 tests passed,
+and 2 skipped.
 
 ## Test Coverage Map
 
