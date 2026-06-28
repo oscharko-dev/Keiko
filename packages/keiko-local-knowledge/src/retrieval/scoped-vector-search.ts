@@ -853,7 +853,7 @@ export async function searchVectorsForScope(
   const candidates = mergeCandidates(state.candidates, lexicalCandidates);
   const selection = selectTopCandidates(state, options, profile, candidates);
   if (!selection.ok) return { references: [], noEvidenceReason: selection.reason };
-  const refs = buildReferences(store, selection.top, query, options.topK, profile);
+  const refs = buildReferences(store, selection.top, options.topK, profile);
   return state.embeddingFailed
     ? { references: refs, embeddingDegraded: true }
     : { references: refs };
@@ -883,7 +883,6 @@ function loadCapsules(
 function buildReferences(
   store: KnowledgeStore,
   candidates: readonly ScoredCandidate[],
-  query: string,
   limit: number,
   profile: QueryProfile,
 ): readonly RetrievalReference[] {

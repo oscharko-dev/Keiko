@@ -59,7 +59,7 @@ function builtLayoutAt(root: string): PreferredInstallLayout | undefined {
   };
 }
 
-export function builtCheckoutLayout(cwd: string): PreferredInstallLayout | undefined {
+function builtCheckoutLayout(cwd: string): PreferredInstallLayout | undefined {
   if (readRootPackageName(cwd) !== ROOT_PACKAGE_NAME) return undefined;
   return builtLayoutAt(cwd);
 }

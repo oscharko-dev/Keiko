@@ -106,7 +106,7 @@ type RealtimeVoiceAction =
   | { readonly type: "reset" };
 
 function realtimeVoiceReducer(
-  state: RealtimeVoiceState,
+  _state: RealtimeVoiceState,
   action: RealtimeVoiceAction,
 ): RealtimeVoiceState {
   switch (action.type) {

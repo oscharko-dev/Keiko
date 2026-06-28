@@ -659,7 +659,6 @@ function renderField(
 
 interface AgentLauncherProps {
   readonly filesContext: FilesWindowContext | null;
-  readonly firstRef: (node: HTMLElement | null) => void;
   readonly directoryField: string | null;
   readonly setDirectoryField: (key: string | null) => void;
   readonly setDialogError: (message: string | null) => void;
@@ -669,7 +668,6 @@ interface AgentLauncherProps {
 
 function AgentLauncher({
   filesContext,
-  firstRef,
   directoryField,
   setDirectoryField,
   setDialogError,
@@ -1246,9 +1244,6 @@ export function NewWindowDialog({
           {type === "agents" ? (
             <AgentLauncher
               filesContext={filesContext}
-              firstRef={(node) => {
-                firstFieldRef.current = node;
-              }}
               directoryField={directoryField}
               setDirectoryField={setDirectoryField}
               setDialogError={setDialogError}
