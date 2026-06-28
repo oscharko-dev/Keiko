@@ -538,6 +538,26 @@ describe("SettingsPanel workspace wallpaper controls", () => {
     );
   });
 
+  it("persists workspace camera smoothness and emits the runtime event", async () => {
+    const listener = vi.fn();
+    window.addEventListener("keiko:workspace-camera-smoothness", listener);
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Workspace camera smoothness" }), {
+      target: { value: "72" },
+    });
+
+    expect(window.localStorage.getItem("keiko.workspace.camera.smoothness")).toBe("72");
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ detail: 72 }),
+    );
+    expect(screen.getByRole("slider", { name: "Workspace camera smoothness" })).toHaveValue("72");
+
+    window.removeEventListener("keiko:workspace-camera-smoothness", listener);
+  });
+
   it("persists workspace border strength and applies the CSS variable", async () => {
     primeFetches([]);
     render(<SettingsPanel />);
