@@ -129,10 +129,13 @@ export {
 export {
   MAX_SPEECH_AUDIO_BYTES,
   requestTextToSpeech,
+  requestTextToSpeechStream,
   type SpeechResponseFormat,
   type TextToSpeechErrorKind,
   type TextToSpeechOutcome,
   type TextToSpeechRequest,
+  type TextToSpeechStreamOutcome,
+  type TextToSpeechStreamSuccess,
   type TextToSpeechSuccess,
 } from "./text-to-speech-adapter.js";
 

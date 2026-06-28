@@ -280,6 +280,39 @@ export async function synthesizeAssistantSpeech(
   });
 }
 
+// Streaming synthesis: returns the raw Response so the caller can read `response.body` as PCM chunks
+// (AudioWorklet playback). The same CSRF + JSON-request envelope applies; a non-2xx is parsed into an
+// ApiError exactly like fetchJson so the caller can fall back to the buffered route. Abortable — on a
+// stop / mute / barge-in the fetch throws and the caller treats it as a silent cancel.
+export async function streamAssistantSpeech(
+  input: VoiceSpeechRequest,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const res = await fetch("/api/voice/speak/stream", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Keiko-CSRF": "1",
+      Accept: "audio/pcm",
+    },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (!res.ok) {
+    let code = "INTERNAL";
+    let message = `HTTP ${res.status.toString()}`;
+    try {
+      const envelope = (await res.json()) as BffError;
+      code = envelope.error.code;
+      message = envelope.error.message;
+    } catch {
+      // parse failure — keep generic message, never log body
+    }
+    throw new ApiError(code, message, res.status);
+  }
+  return res;
+}
+
 export interface GatewaySetupInput {
   readonly baseUrl?: string | undefined;
   readonly apiKey?: string | undefined;

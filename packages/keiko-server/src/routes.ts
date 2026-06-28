@@ -18,7 +18,11 @@ import {
   handleEvidenceDetail,
 } from "./read-handlers.js";
 import { handleGetWorkspaceState, handlePutWorkspaceState } from "./workspace-state-handlers.js";
-import { handleVoiceSpeak, handleVoiceTranscribe } from "./voice-handlers.js";
+import {
+  handleVoiceSpeak,
+  handleVoiceSpeakStream,
+  handleVoiceTranscribe,
+} from "./voice-handlers.js";
 import { handleVoiceRecapBuild } from "./voice-recap.js";
 import {
   handleCreateRun,
@@ -279,6 +283,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // the visible assistant answer text (inside the JSON + CSRF envelope) and receive synthesized audio
   // as base64; answers VOICE_UNAVAILABLE when no speech-output capability is configured/enabled.
   { method: "POST", pattern: "/api/voice/speak", handler: handleVoiceSpeak },
+  { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
   // Issue #504 (Epic #491, ADR-0067) — optional, capability-gated, user-triggered voice session recap.
   // POST the committed transcript text (content-free counts alongside) and derive memory candidates via
   // the EXISTING governed capture path; candidates surface in the existing review queue as "proposed".
