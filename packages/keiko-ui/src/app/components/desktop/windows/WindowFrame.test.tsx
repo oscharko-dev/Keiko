@@ -346,8 +346,12 @@ describe("WindowFrame content zoom controls", () => {
     expect(Number.parseFloat(windowSection?.style.width ?? "")).toBeCloseTo(500, 5);
     expect(windowSection).toHaveStyle({
       height: "300px",
-      zoom: "1.4",
+      left: "40px",
+      top: "40px",
+      transform: "scale(1.4)",
+      transformOrigin: "0 0",
     });
+    expect(windowSection?.style.zoom).toBe("");
     expect(body?.style.zoom).toBe("");
     expect(screen.getByRole("button", { name: "Zoom Agents content out" }).closest(".window")).toBe(
       windowSection,
