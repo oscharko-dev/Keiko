@@ -17,6 +17,7 @@
 // still resolves the import to a `packages/...` path that stays inside the scan.
 
 import { spawnSync } from "node:child_process";
+import { join } from "node:path";
 
 import {
   checkArchitectureImportPolicy,
@@ -78,14 +79,12 @@ const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "adr-0019-trust-9-local-knowledge-no-egress": 1,
 };
 
-// `npx --no-install` keeps CI hermetic by refusing to fetch from the registry when the
-// local devDependency is missing. dependency-cruiser is a root devDependency, so npm
-// resolution must already provide the local binary.
+// Calling the dependency-cruiser bin through Node keeps the gate hermetic without
+// going through platform-specific npm/npx shell shims.
 const result = spawnSync(
-  "npx",
+  process.execPath,
   [
-    "--no-install",
-    "depcruise",
+    join(process.cwd(), "node_modules", "dependency-cruiser", "bin", "dependency-cruise.mjs"),
     "--validate",
     RULES_FILE,
     "--include-only",

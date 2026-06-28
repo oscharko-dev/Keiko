@@ -6,7 +6,12 @@ import { CAPABILITY_DATA } from "./capabilities.data.js";
 import {
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
+  isVoiceCapability,
   modelSupportsInfilling,
+  modelSupportsRealtimeVoice,
+  modelSupportsSpeechInput,
+  modelSupportsSpeechOutput,
+  VOICE_PERSONAS,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CompletionDegradeReason,
@@ -14,6 +19,11 @@ import type {
   CostClass,
   ModelCapability,
   ModelKind,
+  VoiceCapabilityResolution,
+  VoicePersona,
+  VoiceProfile,
+  VoiceProviderLocality,
+  VoiceUnavailableReason,
 } from "./types.js";
 
 // Issue #144 / Epic #142: conversation eligibility helpers and reason type.
@@ -43,6 +53,31 @@ export type {
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
+} from "@oscharko-dev/keiko-contracts";
+
+// Issue #493 / ADR-0058: voice-capability predicates and the content-free resolution result. The
+// pure predicates live in `@oscharko-dev/keiko-contracts` (browser-importable, single source of
+// truth) and are re-exported here for server-tier consumers that already depend on the
+// model-gateway barrel, mirroring the conversation-eligibility and infilling helpers.
+export {
+  isVoiceCapability,
+  modelSupportsSpeechInput,
+  modelSupportsSpeechOutput,
+  modelSupportsRealtimeVoice,
+  isConfiguredVoiceProvider,
+  describeVoiceProviderAvailability,
+  listVoicePersonas,
+  VOICE_PROVIDER_LOCALITIES,
+  VOICE_PERSONAS,
+} from "@oscharko-dev/keiko-contracts";
+export type {
+  VoiceProviderLocality,
+  VoicePersona,
+  VoiceProfile,
+  VoiceUnavailableReason,
+  VoiceTransportPosture,
+  VoiceCapabilityResolution,
+  VoiceProviderAvailability,
 } from "@oscharko-dev/keiko-contracts";
 
 export const CAPABILITY_REGISTRY: readonly ModelCapability[] = CAPABILITY_DATA;
@@ -247,4 +282,131 @@ export function selectCompletionModelFromCapabilities(
   }
 
   return { mode: "deterministic", degradeReason: degradeReasonFor(capabilities, ceiling) };
+}
+
+// ─── Voice capability resolution (Issue #493, ADR-0058 D1/D2/D3) ───────────────
+// Resolves the effective voice profile from a set of capabilities. Pure, deterministic, and
+// content-free: it performs NO network probe (capability probing must not call external endpoints
+// during ordinary startup — ADR-0058 out-of-scope for #493) and returns only enum literals and
+// booleans, so the result is safe to serialise to the browser and safe to log (AC4/AC5). This is
+// the pure core; `resolveVoiceCapability` (model-selection.ts) binds it to a GatewayConfig.
+
+export interface VoiceResolutionOptions {
+  // When true, voice is disabled by deployment policy (an operator kill-switch). The resolution is
+  // a clean `unavailable` with reason "policy-disabled" — Keiko never fails to start (AC1, D1).
+  readonly policyDisabled?: boolean | undefined;
+  // Provider/model ids currently known to be unreachable (e.g. an open circuit breaker). Voice
+  // providers in this set are excluded. Reachability is supplied by the caller; this layer performs
+  // no probe of its own, so a missing/unreachable provider degrades cleanly rather than crashing.
+  readonly unreachableProviderIds?: ReadonlySet<string> | undefined;
+}
+
+function unavailableVoice(reason: VoiceUnavailableReason): VoiceCapabilityResolution {
+  return {
+    available: false,
+    profile: "none",
+    capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
+    transport: { websocketControl: false, webrtcMedia: false },
+    // HAZARD-2: an unavailable resolution offers no personas. Empty is the honest value (the field
+    // is required on VoiceCapabilityResolution).
+    availableVoicePersonas: [],
+    reason,
+  };
+}
+
+// Aggregate union of the product voice personas across the reachable providers that advertise
+// speech output or realtime voice (Issue #1557, ADR-0094 D2 / HAZARD-2). Personas are OUTPUT voices,
+// so an STT-only provider contributes none. Sorted canonical (VOICE_PERSONAS) order, content-free.
+function availablePersonasFor(capabilities: readonly ModelCapability[]): readonly VoicePersona[] {
+  const present = new Set<VoicePersona>();
+  for (const capability of capabilities) {
+    if (!modelSupportsSpeechOutput(capability) && !modelSupportsRealtimeVoice(capability)) {
+      continue;
+    }
+    for (const persona of capability.supportedVoicePersonas ?? []) {
+      present.add(persona);
+    }
+  }
+  return VOICE_PERSONAS.filter((persona) => present.has(persona));
+}
+
+// The single effective locality when every elected voice provider agrees; undefined when none
+// declare one or they disagree (a mixed deployment), so the UI never claims a single locality
+// that is not in effect.
+function singleVoiceLocality(
+  capabilities: readonly ModelCapability[],
+): VoiceProviderLocality | undefined {
+  const localities = new Set<VoiceProviderLocality>();
+  for (const capability of capabilities) {
+    if (capability.voiceProviderLocality !== undefined) {
+      localities.add(capability.voiceProviderLocality);
+    }
+  }
+  return localities.size === 1 ? [...localities][0] : undefined;
+}
+
+// Maps the advertised sub-capabilities to a profile on the degradation ladder. Full realtime
+// conversation requires realtime speech OR both speech input AND speech output (AC3, ADR-0058 D2).
+function voiceProfileFor(
+  speechToText: boolean,
+  speechOutput: boolean,
+  realtimeVoice: boolean,
+): VoiceProfile {
+  if (realtimeVoice || (speechToText && speechOutput)) {
+    return "full-realtime";
+  }
+  if (speechToText) {
+    return "speech-to-text";
+  }
+  if (speechOutput) {
+    return "speech-output";
+  }
+  return "none";
+}
+
+export function resolveVoiceCapabilityFromCapabilities(
+  capabilities: readonly ModelCapability[],
+  options: VoiceResolutionOptions = {},
+): VoiceCapabilityResolution {
+  if (options.policyDisabled === true) {
+    return unavailableVoice("policy-disabled");
+  }
+  const voiceCapabilities = capabilities.filter(isVoiceCapability);
+  const unreachable = options.unreachableProviderIds;
+  const reachable =
+    unreachable === undefined
+      ? voiceCapabilities
+      : voiceCapabilities.filter((capability) => !unreachable.has(capability.id));
+  if (reachable.length === 0) {
+    // Configured but all unreachable is a distinct operator signal from "none configured".
+    return unavailableVoice(
+      voiceCapabilities.length > 0 ? "provider-unreachable" : "no-voice-provider",
+    );
+  }
+  const speechToText = reachable.some(modelSupportsSpeechInput);
+  const speechOutput = reachable.some(modelSupportsSpeechOutput);
+  const realtimeVoice = reachable.some(modelSupportsRealtimeVoice);
+  const realtimeToolCalling = reachable.some(
+    (capability) => modelSupportsRealtimeVoice(capability) && capability.toolCalling,
+  );
+  const profile = voiceProfileFor(speechToText, speechOutput, realtimeVoice);
+  if (profile === "none") {
+    // Defensive: a voice capability advertises ≥1 sub-capability by config invariant, so this is
+    // unreachable in practice — kept fail-closed rather than reporting a broken affordance.
+    return unavailableVoice("no-voice-provider");
+  }
+  const locality = singleVoiceLocality(reachable);
+  return {
+    available: true,
+    profile,
+    capabilities: {
+      speechToText,
+      speechOutput,
+      realtimeVoice,
+      ...(realtimeToolCalling ? { realtimeToolCalling: true } : {}),
+    },
+    transport: { websocketControl: true, webrtcMedia: profile === "full-realtime" },
+    availableVoicePersonas: availablePersonasFor(reachable),
+    ...(locality !== undefined ? { providerLocality: locality } : {}),
+  };
 }

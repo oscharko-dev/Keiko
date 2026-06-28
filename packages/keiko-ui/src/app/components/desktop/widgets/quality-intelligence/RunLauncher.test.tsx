@@ -177,25 +177,6 @@ async function chooseSourceType(
   await user.click(sourceTypeRadio(label));
 }
 
-async function pickFolderSource(
-  user: ReturnType<typeof userEvent.setup>,
-  label = "Folder",
-): Promise<void> {
-  await chooseSourceType(user, label);
-  await user.click(screen.getByRole("button", { name: /browse/i }));
-  await screen.findByRole("dialog", { name: /choose folder source/i });
-  await user.click(await screen.findByRole("button", { name: "docs" }));
-  await user.click(screen.getByRole("button", { name: /use selection/i }));
-}
-
-async function pickFileSource(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await chooseSourceType(user, "File");
-  await user.click(screen.getByRole("button", { name: /browse/i }));
-  await screen.findByRole("dialog", { name: /choose file source/i });
-  await user.click(await screen.findByRole("button", { name: "requirements.md" }));
-  await user.click(screen.getByRole("button", { name: /use selection/i }));
-}
-
 function pickerProps(
   root = "/repos/my-app",
 ): Pick<RunLauncherProps, "fetchProjectsImpl" | "fetchFilesTreeImpl"> {

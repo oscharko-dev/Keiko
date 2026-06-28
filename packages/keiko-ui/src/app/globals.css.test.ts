@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(resolve(here, "globals.css"), "utf8");
+const css = readFileSync(resolve(here, "globals.css"), "utf8").replace(/\r\n?/g, "\n");
 const currentCssSha256 = createHash("sha256").update(css).digest("hex");
 const evidenceHarness1297 = readFileSync(
   resolve(here, "../../../..", "docs/design-system/evidence/1297/equivalence-harness.mjs"),
@@ -77,6 +77,32 @@ function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}):
   expect(idx, `selector "${selector}" not found`).toBeGreaterThan(-1);
   return css.slice(idx, css.indexOf("}", idx) + 1);
 }
+
+describe("Issue #1429 — Agents launcher action row and picker scrollbars", () => {
+  it("keeps the Agents dialog actions sticky and unified inside the dialog flow", () => {
+    const block = cssBlock(".dlg-agent-actions {");
+    expect(block).toContain("justify-content: flex-end");
+    expect(block).toContain("position: sticky");
+    expect(block).toContain("bottom: 0");
+    expect(block).toContain("border-top: 1px solid var(--border-subtle)");
+    expect(block).toContain("background: var(--surface-overlay)");
+    expect(cssBlock(".dlg-agent-actions .dlg-note {")).toContain("margin-right: auto");
+  });
+
+  it("uses token-backed thin scrollbar styling for directory and file pickers", () => {
+    const dirList = cssBlock(".dir-list {");
+    expect(dirList).toContain("scrollbar-width: thin");
+    expect(dirList).toContain("scrollbar-color: var(--border-default) transparent");
+    expect(cssBlock(".file-picker-list {")).toContain("max-height: 260px");
+
+    const thumb = cssBlock(".dir-list::-webkit-scrollbar-thumb {");
+    expect(thumb).toContain("background: var(--border-default)");
+    expect(thumb).toContain("background-clip: padding-box");
+    expect(cssBlock(".dir-list::-webkit-scrollbar-thumb:hover {")).toContain(
+      "background: var(--border-strong)",
+    );
+  });
+});
 
 // ─── Fix 1: WCAG 2.4.7 — focus-visible ───────────────────────────────────────
 
@@ -648,6 +674,22 @@ describe("Fix 4 — dense desktop text clarity", () => {
     expect(bodyBlock).not.toContain("text-rendering: optimizeLegibility");
   });
 
+  it("keeps code and mono text free of programming-operator ligatures", () => {
+    const selectors = [
+      ".mono {",
+      ".sm-inline-code",
+      ".sm-pre",
+      ".sm-pre code",
+      ".sm-code-line-src",
+    ];
+    for (const selector of selectors) {
+      const block = cssBlock(selector);
+      expect(block).toContain("font-variant-ligatures: none");
+      expect(block).toContain('"liga" 0');
+      expect(block).toContain('"calt" 0');
+    }
+  });
+
   it("keeps Files root controls above the micro-text floor", () => {
     const inputBlock = cssBlock(".files-root-input");
     expect(inputBlock).toContain("height: 28px");
@@ -780,28 +822,23 @@ describe("Fix 5 — mobile root toolbar compression", () => {
   });
 });
 
-// ─── uiux-fix F010 — context-budget indicator + scope-pill focus ring ─────────
+// ─── uiux-fix F010 — scope pressure badges + focus ring ───────────────────────
 
-describe("uiux-fix F010 — cmp-budget styling and scope-pill focus visibility", () => {
-  it("defines the cmp-budget layout and badge rules (C044/C081 — classes were orphaned)", () => {
-    expect(css).toContain(".cmp-budget-row");
+describe("uiux-fix F010 — scope pressure badge styling and focus visibility", () => {
+  it("defines shared scope pressure badge rules without restoring composer history controls", () => {
     expect(css).toContain(".cmp-budget-badge-exceeded");
-    expect(css).toContain(".cmp-budget-clear:focus-visible");
-    expect(css).toContain(".cmp-budget-clear:disabled");
-    // The flex row is what un-merges the inline text run ("tokensLowiClear history").
-    const rowIdx = css.lastIndexOf(".cmp-budget-row");
-    const rowBlock = css.slice(rowIdx, css.indexOf("}", rowIdx) + 1);
-    expect(rowBlock).toContain("display: flex");
-    expect(rowBlock).toContain("gap: 8px");
+    expect(css).not.toContain(".cmp-history-clear");
+    expect(css).not.toContain(".cmp-history-row");
   });
 
   it("light theme overrides the low-badge text to ink-inverse (raw accent ≈1.97:1 on the tint)", () => {
     expect(css).toContain('[data-theme="light"] .cmp-budget-badge-low');
   });
 
-  it("reveals the cmp-budget-info data-tip on focus-visible as well as hover (C321)", () => {
-    expect(css).toContain(".cmp-budget-info[data-tip]:focus-visible::after");
-    expect(css).toContain(".cmp-budget-info[data-tip]:hover::after");
+  it("styles the MemoriaViva request settings moved out of the chat window", () => {
+    expect(css).toContain(".memoria-window .mv-settings");
+    expect(css).toContain(".memoria-window .mv-setting-budget");
+    expect(css).toContain(".memoria-window .mv-budget-control input");
   });
 
   it("styles the connector pill modifier distinctly from folder pills (C326)", () => {
@@ -1473,8 +1510,8 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
 describe("Issue #1205 — editor tab truncation", () => {
   it("keeps the tab strip shrinkable inside compact editor cards", () => {
     expect(cssBlock(".ed-tabs {")).toContain("min-width: 0");
-    expect(cssBlock(".ed-tablist {")).toContain("min-width: 0");
-    expect(cssBlock(".ed-tablist {")).toContain("overflow: hidden");
+    expect(cssBlock(".ed-tablist {")).toContain("min-width: min(160px, 100%)");
+    expect(cssBlock(".ed-tablist {")).toContain("overflow: visible");
   });
 
   it("truncates long editor tab labels instead of expanding the header", () => {
@@ -1485,6 +1522,118 @@ describe("Issue #1205 — editor tab truncation", () => {
       expect(block).toContain("white-space: nowrap");
       expect(block).toContain("text-overflow: ellipsis");
     }
+  });
+
+  it("lets the compact hidden-tab chooser escape clipped split panes while open", () => {
+    const overflowBlock = cssBlock(".editor-workspace:has(.ed-tab-summary-menu[open]) .ed-pane,");
+    expect(overflowBlock).toContain(".ed-pane .editor");
+    expect(overflowBlock).toContain("overflow: visible");
+
+    const stackingBlock = cssBlock(
+      ".editor-workspace:has(.ed-tab-summary-menu[open]) .ed-pane:has(.ed-tab-summary-menu[open])",
+    );
+    expect(stackingBlock).toContain("position: relative");
+    expect(stackingBlock).toContain("z-index: var(--z-overlay)");
+  });
+});
+
+describe("Issue #1424 — editor Monaco hover chrome", () => {
+  it("skins diagnostic hovers with Keiko popover tokens inside an editor container query", () => {
+    const hostBlock = cssBlock(".ed-host {");
+    expect(hostBlock).toContain("container-type: inline-size");
+    expect(hostBlock).toContain(
+      "--ed-hover-max-width: min(520px, calc(100vw - 24px), calc(100cqw - 24px))",
+    );
+
+    const compactViewportBlock = cssRuleFrom(css, "@media (max-width: 800px)");
+    expect(compactViewportBlock).toContain(
+      "--ed-hover-max-width: min(280px, calc(100vw - 128px), calc(100cqw - 24px))",
+    );
+
+    const hoverFrameBlock = cssBlock(".ed-host .monaco-editor .monaco-resizable-hover,");
+    expect(hoverFrameBlock).toContain("max-width: var(--ed-hover-max-width) !important");
+    expect(hoverFrameBlock).toContain("overflow: hidden");
+
+    const resizableHoverBlock = cssBlock(".ed-host .monaco-editor .monaco-resizable-hover {");
+    expect(resizableHoverBlock).toContain("border: 1px solid var(--popover-border) !important");
+    expect(resizableHoverBlock).toContain("border-radius: var(--radius-floating) !important");
+    expect(resizableHoverBlock).toContain("background: var(--surface-primary) !important");
+    expect(resizableHoverBlock).toContain("box-shadow: var(--popover-shadow)");
+
+    const monacoHoverBlock = cssBlock(".ed-host .monaco-editor .monaco-hover {", {
+      fromLast: true,
+    });
+    expect(monacoHoverBlock).toContain("color: var(--text-primary) !important");
+    expect(monacoHoverBlock).toContain("font-size: var(--text-body-sm)");
+    expect(monacoHoverBlock).toContain("line-height: var(--leading-normal)");
+  });
+
+  it("wraps Monaco hover content and action rows instead of letting browser-sized panels clip", () => {
+    const contentBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .monaco-hover-content,", {
+      fromLast: true,
+    });
+    expect(contentBlock).toContain("white-space: normal !important");
+    expect(contentBlock).toContain("overflow-wrap: anywhere");
+
+    const codeBlock = cssBlock(".ed-host .monaco-editor .monaco-hover code,");
+    expect(codeBlock).toContain("white-space: pre-wrap");
+    expect(codeBlock).toContain("overflow-wrap: anywhere");
+    expect(codeBlock).toContain("background: var(--surface-inset) !important");
+
+    const actionsBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .hover-row .actions {");
+    expect(actionsBlock).toContain("flex-wrap: wrap");
+    expect(actionsBlock).toContain("border-top: 1px solid var(--border-subtle)");
+    expect(actionsBlock).toContain("background: var(--surface-secondary) !important");
+  });
+
+  it("skins Monaco copy affordances and nested copy tooltips with Keiko feedback states", () => {
+    const copyButtonBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .hover-copy-button {");
+    expect(copyButtonBlock).toContain("border: 1px solid transparent");
+    expect(copyButtonBlock).toContain("border-radius: var(--radius-control)");
+    expect(copyButtonBlock).toContain("background: transparent");
+    expect(copyButtonBlock).toContain("color: var(--text-secondary)");
+    expect(copyButtonBlock).toContain("opacity: 1");
+    expect(copyButtonBlock).toContain("box-shadow: none");
+
+    const copyIconBlock = cssBlock(
+      ".ed-host .monaco-editor .monaco-hover .hover-copy-button.codicon,",
+    );
+    expect(copyIconBlock).toContain("color: currentColor !important");
+
+    const copyHoverBlock = cssBlock(
+      ".ed-host .monaco-editor .monaco-hover .hover-copy-button:hover {",
+    );
+    expect(copyHoverBlock).toContain(
+      "background: color-mix(in oklch, var(--text-primary) 10%, transparent) !important",
+    );
+    expect(copyHoverBlock).toContain("border-color: transparent");
+    expect(copyHoverBlock).toContain("color: var(--text-primary)");
+    expect(copyHoverBlock).toContain(
+      "box-shadow: 0 8px 18px -14px rgb(var(--shadow-ink-rgb) / 0.85)",
+    );
+    expect(copyHoverBlock).not.toContain("var(--border-accent)");
+    expect(copyHoverBlock).not.toContain("var(--text-accent)");
+
+    const copyActiveBlock = cssBlock(
+      ".ed-host .monaco-editor .monaco-hover .hover-copy-button:active {",
+    );
+    expect(copyActiveBlock).toContain("transform: translateY(1px) scale(0.98)");
+    expect(copyActiveBlock).toContain(
+      "background: var(--button-secondary-surface-hover) !important",
+    );
+
+    const workbenchHoverBlock = cssBlock(".monaco-hover.workbench-hover {");
+    expect(workbenchHoverBlock).toContain("max-width: min(220px, calc(100vw - 24px))");
+    expect(workbenchHoverBlock).toContain("border: 1px solid var(--popover-border) !important");
+    expect(workbenchHoverBlock).toContain("border-radius: var(--radius-control) !important");
+    expect(workbenchHoverBlock).toContain("background: var(--surface-primary) !important");
+    expect(workbenchHoverBlock).toContain("box-shadow: var(--popover-shadow) !important");
+
+    const workbenchPointerBlock = cssBlock(".workbench-hover-pointer:after {");
+    expect(workbenchPointerBlock).toContain("background-color: var(--surface-primary) !important");
+    expect(workbenchPointerBlock).toContain(
+      "border-right: 1px solid var(--popover-border) !important",
+    );
   });
 });
 
@@ -2267,6 +2416,48 @@ describe("Issue #1295 — high-traffic product-surface token migration", () => {
     expect(block).toContain("var(--border-subtle)");
     expect(block).toContain("color: var(--text-primary)");
     expect(block).not.toMatch(/var\(--card\)|var\(--line-soft\)|var\(--fg\)/u);
+  });
+
+  it("keeps the conversation log vertical-only and forces message content to wrap", () => {
+    const scroll = cssBlock("\n.chatw-scroll {");
+    expect(scroll).toContain("overflow-y: auto");
+    expect(scroll).toContain("overflow-x: hidden");
+
+    const message = cssBlock("\n.chat-msg {");
+    expect(message).toContain("min-width: 0");
+    expect(message).toContain("max-width: 100%");
+
+    const bubble = cssBlock("\n.chat-msg-bubble {");
+    expect(bubble).toContain("min-width: 0");
+    expect(bubble).toContain("box-sizing: border-box");
+    expect(bubble).toContain("overflow-wrap: anywhere");
+
+    const content = cssBlock("\n.chat-msg-content {");
+    expect(content).toContain("max-width: 100%");
+    expect(content).toContain("overflow-wrap: anywhere");
+
+    const markdownRoot = cssBlock("\n.sm-root {");
+    expect(markdownRoot).toContain("min-width: 0");
+    expect(markdownRoot).toContain("max-width: 100%");
+    expect(markdownRoot).toContain("overflow-wrap: anywhere");
+  });
+
+  it("keeps the question map wave to length-only marker changes", () => {
+    const mark = cssBlock("\n.chat-question-map-mark {");
+    expect(mark).toContain("width: var(--wave-width, 8px)");
+    expect(mark).toContain("height: 2px");
+    expect(mark).toContain("transition: width 0.12s ease");
+    expect(mark).not.toContain("color 0.16s");
+
+    const focusMark = cssBlock(
+      "\n.chat-question-map-button:focus-visible .chat-question-map-mark {",
+    );
+    expect(focusMark).toContain("width: 24px");
+
+    const peakCard = cssBlock(
+      '\n.chat-question-map-button[data-peak="true"] .chat-question-map-card,\n.chat-question-map-button:focus-visible .chat-question-map-card {',
+    );
+    expect(peakCard).toContain("opacity: 1");
   });
 
   it("routes Quality-Intelligence candidate cards through --surface-primary / --border-default", () => {
@@ -3799,6 +3990,8 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     ]);
     expect(browserManifest.viewports).toEqual(["desktop", "tablet", "mobile"]);
     const expectedScenarios = [
+      "git-window-constrained",
+      "git-window-desktop",
       "shell",
       "workspace-chat-quality",
       "workspace-files-editor",
@@ -3807,8 +4000,10 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     expect(browserManifest.scenarios.map((scenario) => scenario.id).sort()).toEqual(
       expectedScenarios,
     );
-    expect(browserManifest.shotCount).toBe(72);
-    expect(browserManifest.manifest.length).toBe(72);
+    // 3 viewports x 6 modes x 6 scenarios. Issue #1574 (EV3) added the git-window-desktop and
+    // git-window-constrained scenarios, lifting the matrix from 72 to 108 captured cells.
+    expect(browserManifest.shotCount).toBe(108);
+    expect(browserManifest.manifest.length).toBe(108);
     const expectedCells = new Set(
       browserManifest.viewports.flatMap((viewport) =>
         browserManifest.modes.flatMap((mode) =>
@@ -3847,10 +4042,19 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
         `${shot.viewport}/${shot.mode}/${shot.scenario} must render every required selector`,
       ).toEqual([]);
       if (shot.scenario !== "shell") {
+        // Every seeded window must mount. Count the distinct window-frame selectors the scenario
+        // declares (a bare `[data-window-id="…"]` with no descendant combinator) rather than all
+        // required selectors, so scenarios that additionally assert in-window IA (e.g. the Git client
+        // shell's toolbar/tablist/changed-files structure) are not mistaken for extra seeded windows.
+        const seededWindowSelectors = new Set(
+          shot.requiredSelectors.filter((selector) =>
+            /^\[data-window-id="[^"]+"\]$/u.test(selector.trim()),
+          ),
+        );
         expect(
           shot.windowCount,
-          `${shot.viewport}/${shot.mode} high-traffic shot must render seeded windows`,
-        ).toBeGreaterThanOrEqual(shot.requiredSelectors.length);
+          `${shot.viewport}/${shot.mode}/${shot.scenario} high-traffic shot must render seeded windows`,
+        ).toBeGreaterThanOrEqual(seededWindowSelectors.size);
       }
     }
     expect([...seenCells].sort()).toEqual([...expectedCells].sort());

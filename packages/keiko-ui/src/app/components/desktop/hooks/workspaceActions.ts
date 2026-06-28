@@ -10,6 +10,8 @@ import {
   createEditorLayoutStateV2,
   editorLayoutOpenFiles,
   editorLayoutReducer,
+  isRootRelativeFileIdentifier,
+  resolveWorkspaceFileIdentifier,
   serializeEditorLayoutStateV2,
 } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -66,8 +68,24 @@ function normalizeEditorOpenRoot(root: string): string {
   return root.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
 }
 
-function normalizeEditorOpenPath(path: string): string {
-  return path.trim().replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+// Root-relative file-identifier contract (Issue #1374): coerce a repository reference / persisted
+// cfg path into the root-relative identifier the BFF requires, keeping it UNDER `root`. Chat
+// repository references use a leading-slash "from the repo root" convention (e.g.
+// "/packages/x/y.ts" means "packages/x/y.ts" under the selected root) and are root-relative by
+// construction, so an absolute-looking candidate that does not live under `root` has its leading
+// slash stripped and is re-validated rather than reinterpreted as a different machine root. A path
+// that re-includes the root is reduced to the bare remainder. Anything still not a contained file
+// collapses to "" and is dropped by the callers, so a non-root-relative path can never be persisted
+// into the editor window cfg or sent to the BFF.
+function toRootRelativeOpenPath(root: string, value: unknown): string {
+  if (typeof value !== "string") return "";
+  const resolution = resolveWorkspaceFileIdentifier(root, value);
+  if (resolution.kind === "relative") return resolution.path;
+  if (resolution.kind === "outside-root") {
+    const coerced = resolution.candidate.replace(/^\/+/u, "");
+    return isRootRelativeFileIdentifier(coerced) ? coerced : "";
+  }
+  return "";
 }
 
 function editorCfgString(cfg: AppWindow["cfg"], key: string): string | undefined {
@@ -75,11 +93,14 @@ function editorCfgString(cfg: AppWindow["cfg"], key: string): string | undefined
   return typeof value === "string" ? value : undefined;
 }
 
-function mergeEditorCfgOpenFiles(cfg: AppWindow["cfg"], file: string): readonly string[] {
+function mergeEditorCfgOpenFiles(
+  cfg: AppWindow["cfg"],
+  root: string,
+  file: string,
+): readonly string[] {
   const out: string[] = [];
   const add = (value: unknown): void => {
-    if (typeof value !== "string") return;
-    const normalized = normalizeEditorOpenPath(value);
+    const normalized = toRootRelativeOpenPath(root, value);
     if (normalized.length === 0 || out.includes(normalized)) return;
     out.push(normalized);
   };
@@ -96,11 +117,11 @@ function editorOpenLayoutPatch(
   root: string,
   file: string,
 ): Pick<AppWindow["cfg"], "file" | "openFiles" | "layoutJson"> {
-  const currentFile = normalizeEditorOpenPath(editorCfgString(cfg, "file") ?? "");
+  const currentFile = toRootRelativeOpenPath(root, editorCfgString(cfg, "file") ?? "");
   const layout = createEditorLayoutStateV2({
     root,
     file: currentFile,
-    openFiles: mergeEditorCfgOpenFiles(cfg, file),
+    openFiles: mergeEditorCfgOpenFiles(cfg, root, file),
     layoutJson: editorCfgString(cfg, "layoutJson"),
     defaultSidebarWidth: EDITOR_DEFAULT_SIDEBAR_WIDTH,
     minSidebarWidth: EDITOR_MIN_SIDEBAR_WIDTH,
@@ -153,20 +174,36 @@ function makeUpdate(setWins: MutateArgs["setWins"]): WorkspaceApi["update"] {
 
 function makeFocus(setWins: MutateArgs["setWins"], zc: MutateArgs["zc"]): WorkspaceApi["focus"] {
   return (id) =>
-    setWins((ws) =>
-      ws === null ? ws : ws.map((w) => (w.id === id ? { ...w, z: ++zc.current } : w)),
-    );
+    setWins((ws) => {
+      if (ws === null) return ws;
+      const target = ws.find((w) => w.id === id);
+      if (target === undefined) return ws;
+      const maxZ = ws.reduce((best, w) => Math.max(best, w.z), Number.NEGATIVE_INFINITY);
+      if (target.minimized !== true && target.z >= maxZ) return ws;
+      zc.current = Math.max(zc.current + 1, maxZ + 1);
+      return ws.map((w) => (w.id === id ? { ...w, z: zc.current } : w));
+    });
 }
 
 function makeClose(setWins: MutateArgs["setWins"]): WorkspaceApi["close"] {
-  return (id) => setWins((ws) => (ws === null ? ws : ws.filter((w) => w.id !== id)));
+  return (id) =>
+    setWins((ws) =>
+      ws === null || !ws.some((w) => w.id === id) ? ws : ws.filter((w) => w.id !== id),
+    );
 }
 
 function makeMinimize(setWins: MutateArgs["setWins"]): WorkspaceApi["minimize"] {
   return (id) =>
-    setWins((ws) =>
-      ws === null ? ws : ws.map((w) => (w.id === id ? { ...w, minimized: true } : w)),
-    );
+    setWins((ws) => {
+      if (ws === null) return ws;
+      let changed = false;
+      const next = ws.map((w) => {
+        if (w.id !== id || w.minimized === true) return w;
+        changed = true;
+        return { ...w, minimized: true };
+      });
+      return changed ? next : ws;
+    });
 }
 
 function makeRestore(
@@ -174,11 +211,15 @@ function makeRestore(
   zc: MutateArgs["zc"],
 ): WorkspaceApi["restore"] {
   return (id) =>
-    setWins((ws) =>
-      ws === null
-        ? ws
-        : ws.map((w) => (w.id === id ? { ...w, minimized: false, z: ++zc.current } : w)),
-    );
+    setWins((ws) => {
+      if (ws === null) return ws;
+      const target = ws.find((w) => w.id === id);
+      if (target === undefined) return ws;
+      const maxZ = ws.reduce((best, w) => Math.max(best, w.z), Number.NEGATIVE_INFINITY);
+      if (target.minimized !== true && target.z >= maxZ) return ws;
+      zc.current = Math.max(zc.current + 1, maxZ + 1);
+      return ws.map((w) => (w.id === id ? { ...w, minimized: false, z: zc.current } : w));
+    });
 }
 
 function fallbackRestoreGeometry(type: WindowType, vp: ViewportWorld): SnapPrev {
@@ -253,7 +294,14 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
         if (existing !== undefined) {
           createdId = existing.id;
           return list.map((w) =>
-            w.id === existing.id ? { ...w, minimized: false, z: ++zc.current } : w,
+            w.id === existing.id
+              ? {
+                  ...w,
+                  cfg: cfg === undefined ? w.cfg : { ...w.cfg, ...cfg },
+                  minimized: false,
+                  z: ++zc.current,
+                }
+              : w,
           );
         }
       }
@@ -314,12 +362,15 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
 function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
   const { setWins, zc, worldVP, winsRef } = args;
   return ({ root, path, lineStart, lineEnd }) => {
+    // Root-relative file-identifier contract (Issue #1374): a chat repository reference is opened
+    // UNDER the selected root (it is root-relative by construction), so the root is kept and the
+    // path is coerced to a contained root-relative identifier rather than deriving a new root.
     const normalizedRoot = normalizeEditorOpenRoot(root);
-    const normalizedPath = normalizeEditorOpenPath(path);
     if (normalizedRoot.length === 0) {
       return { ok: false, message: "Select a repository source before opening file references." };
     }
-    if (normalizedPath.length === 0 || normalizedPath.includes("..")) {
+    const normalizedPath = toRootRelativeOpenPath(normalizedRoot, path);
+    if (normalizedPath.length === 0) {
       return { ok: false, message: "This repository reference is not a valid file path." };
     }
     const vp = worldVP();
@@ -598,6 +649,11 @@ interface ConnectArgs {
   readonly viewRef: MutableRefObject<View>;
   readonly winsRef: MutableRefObject<AppWindow[]>;
   readonly connsRef: MutableRefObject<Connection[]>;
+  readonly winsByIdRef?: MutableRefObject<ReadonlyMap<string, AppWindow>> | undefined;
+  readonly connsByIdRef?: MutableRefObject<ReadonlyMap<string, Connection>> | undefined;
+  readonly connsByEndpointRef?:
+    | MutableRefObject<ReadonlyMap<string, readonly Connection[]>>
+    | undefined;
   readonly connectingRef: MutableRefObject<ConnectingState | null>;
   readonly connectCleanupRef: MutableRefObject<(() => void) | null>;
   readonly focus: WorkspaceApi["focus"];
@@ -669,6 +725,9 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     viewRef,
     winsRef,
     connsRef,
+    winsByIdRef,
+    connsByIdRef,
+    connsByEndpointRef,
     connectingRef,
     connectCleanupRef,
     focus,
@@ -679,6 +738,13 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     onConnectorBind,
     onConnectorUnbind,
   } = args;
+
+  const winById = (id: string): AppWindow | undefined =>
+    winsByIdRef?.current.get(id) ?? winsRef.current.find((w) => w.id === id);
+  const connById = (id: string): Connection | undefined =>
+    connsByIdRef?.current.get(id) ?? connsRef.current.find((c) => c.id === id);
+  const connectionsFor = (id: string): readonly Connection[] =>
+    connsByEndpointRef?.current.get(id) ?? connsRef.current.filter((c) => c.a === id || c.b === id);
 
   const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
     if (connectCleanupRef.current !== null) {
@@ -694,9 +760,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     e.stopPropagation();
     const c = connectingRef.current;
     if (c === null) return;
-    const list = winsRef.current;
-    const from = list.find((w) => w.id === c.from);
-    const to = list.find((w) => w.id === toId);
+    const from = winById(c.from);
+    const to = winById(toId);
     if (from !== undefined && to !== undefined && canConnect(from.type, to.type)) {
       // Epic #532 — a Files↔Chat edge also binds the folder to the chat's connectedScopes so the
       // relationship gesture grounds the chat. Epic #189 Slice 3 M3 — a Connector↔Chat edge binds
@@ -724,9 +789,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       void Promise.resolve(accepted)
         .then((wasAccepted) => {
           if (!wasAccepted) return;
-          const stillLive =
-            winsRef.current.some((w) => w.id === c.from) &&
-            winsRef.current.some((w) => w.id === toId);
+          const stillLive = winById(c.from) !== undefined && winById(toId) !== undefined;
           if (!stillLive) return;
           // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown)
           // must use this snapshot: re-deriving from the window's current cfg unbinds the wrong
@@ -810,12 +873,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     // current cfg may have moved on (Files window navigated elsewhere, another capsule selected),
     // and re-deriving from it would unbind the WRONG source. Falls back to cfg-derivation for
     // edges persisted before the snapshot fields existed.
-    const conn = connsRef.current.find((c) => c.id === id);
+    const conn = connById(id);
     setConns((cs) => cs.filter((c) => c.id !== id));
     if (conn === undefined) return;
-    const list = winsRef.current;
-    const a = list.find((w) => w.id === conn.a);
-    const b = list.find((w) => w.id === conn.b);
+    const a = winById(conn.a);
+    const b = winById(conn.b);
     const bothLive = a !== undefined && b !== undefined;
     const chatWindowId = conn.boundChatWindowId ?? (bothLive ? chatWindowIdInPair(a, b) : null);
     const boundScope =
@@ -829,9 +891,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   };
 
   const connect: WorkspaceApi["connect"] = (a, b) => {
-    const list = winsRef.current;
-    const left = list.find((w) => w.id === a);
-    const right = list.find((w) => w.id === b);
+    const left = winById(a);
+    const right = winById(b);
     if (left === undefined || right === undefined || !canConnect(left.type, right.type)) return;
     setConns((cs) => (isDuplicate(cs, a, b) ? cs : [...cs, { id: `${a}~${b}`, a, b }]));
   };
@@ -864,10 +925,10 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     // stopping at the first one — a connector/figma edge that happens to precede the files edge in
     // connection order must NOT hide a Files window connected afterwards (Issue #714).
     const filesWindows: AppWindow[] = [];
-    for (const c of connsRef.current) {
+    for (const c of connectionsFor(id)) {
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
-      const w = winsRef.current.find((x) => x.id === otherId);
+      const w = winById(otherId);
       if (w === undefined || w.type !== "files") continue;
       filesWindows.push(w);
     }
@@ -891,11 +952,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const linkedAllFilesRoots: WorkspaceApi["linkedAllFilesRoots"] = (id) => {
     const seen = new Set<string>();
     const roots: string[] = [];
-    for (const c of connsRef.current) {
+    for (const c of connectionsFor(id)) {
       if (roots.length >= MAX_SCOPES) break;
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
-      const w = winsRef.current.find((x) => x.id === otherId);
+      const w = winById(otherId);
       if (w === undefined) continue;
       const root = resolvedFilesRoot(w);
       if (root === null || seen.has(root)) continue;
@@ -906,15 +967,20 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   };
 
   const currentFilesContext: WorkspaceApi["currentFilesContext"] = () => {
-    const files = winsRef.current
-      .map((w) => filesContextFor(w))
-      .filter((ctx): ctx is FilesWindowContext => ctx !== null);
-    if (files.length === 1) return files[0] ?? null;
-    const activeFiles = [...winsRef.current]
-      .filter((w) => w.type === "files")
-      .sort((a, b) => b.z - a.z);
-    const active = activeFiles[0];
-    return active === undefined ? null : filesContextFor(active);
+    let onlyContext: FilesWindowContext | null = null;
+    let contextCount = 0;
+    let topFilesWindow: AppWindow | null = null;
+    for (const w of winsRef.current) {
+      if (w.type !== "files") continue;
+      const ctx = filesContextFor(w);
+      if (ctx !== null) {
+        contextCount += 1;
+        onlyContext = ctx;
+      }
+      if (topFilesWindow === null || w.z > topFilesWindow.z) topFilesWindow = w;
+    }
+    if (contextCount === 1) return onlyContext;
+    return topFilesWindow === null ? null : filesContextFor(topFilesWindow);
   };
 
   // Epic #710 #718 — read the selected id of the given kind ("capsule" or "capsule-set") from
@@ -923,11 +989,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const linkedConnectorSelectionIds = (id: string, selectedKind: string): readonly string[] => {
     const seen = new Set<string>();
     const ids: string[] = [];
-    for (const c of connsRef.current) {
+    for (const c of connectionsFor(id)) {
       if (ids.length >= MAX_SCOPES) break;
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
-      const w = winsRef.current.find((x) => x.id === otherId);
+      const w = winById(otherId);
       if (w === undefined || w.type !== "connector") continue;
       if (w.cfg["selectedKind"] !== selectedKind) continue;
       const selectedId = w.cfg["selectedId"];
@@ -957,11 +1023,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const linkedFigmaSnapshotRunIds: WorkspaceApi["linkedFigmaSnapshotRunIds"] = (id) => {
     const seen = new Set<string>();
     const ids: string[] = [];
-    for (const c of connsRef.current) {
+    for (const c of connectionsFor(id)) {
       if (ids.length >= MAX_SCOPES) break;
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
-      const w = winsRef.current.find((x) => x.id === otherId);
+      const w = winById(otherId);
       if (w === undefined || w.type !== "figma") continue;
       const runId = w.cfg["snapshotRunId"];
       if (typeof runId !== "string" || runId.trim().length === 0) continue;
@@ -1001,11 +1067,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   ) => {
     const seen = new Set<string>();
     const sources: QualityIntelligenceFigmaSnapshotSource[] = [];
-    for (const c of connsRef.current) {
+    for (const c of connectionsFor(id)) {
       if (sources.length >= MAX_SCOPES) break;
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
-      const w = winsRef.current.find((x) => x.id === otherId);
+      const w = winById(otherId);
       if (
         w === undefined ||
         (w.type !== "figma" && w.type !== "figmaView" && w.type !== "figmaJson")
@@ -1051,11 +1117,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const linkedImageSources: NonNullable<WorkspaceApi["linkedImageSources"]> = (id) => {
     const seen = new Set<string>();
     const sources: QualityIntelligenceImageSource[] = [];
-    for (const c of connsRef.current) {
+    for (const c of connectionsFor(id)) {
       if (sources.length >= MAX_SCOPES) break;
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
-      const w = winsRef.current.find((x) => x.id === otherId);
+      const w = winById(otherId);
       if (w === undefined || w.type !== "figmaImage") continue;
       const runId = w.cfg["snapshotRunId"];
       const screenId = w.cfg["screenId"];

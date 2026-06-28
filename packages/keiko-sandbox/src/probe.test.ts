@@ -1,13 +1,41 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { chmodSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, parse } from "node:path";
 import {
   currentPlatform,
   executableExtensions,
   isExecutableOnPath,
   probeBackends,
 } from "./probe.js";
+
+function modeWritableByGroupOrOther(mode: number): boolean {
+  return (mode & 0o022) !== 0;
+}
+
+function isTrustedDirectoryPath(path: string): boolean {
+  const root = parse(path).root;
+  let current = path;
+  for (;;) {
+    const stat = statSync(current);
+    if (!stat.isDirectory() || modeWritableByGroupOrOther(stat.mode)) return false;
+    if (current === root) return true;
+    current = dirname(current);
+  }
+}
+
+function createTrustedFixtureDir(): string | undefined {
+  for (const candidate of [process.cwd(), homedir()]) {
+    try {
+      const parent = realpathSync(candidate);
+      if (!isTrustedDirectoryPath(parent)) continue;
+      return mkdtempSync(join(parent, ".tmp-keiko-sandbox-probe-"));
+    } catch {
+      // Candidate is unavailable, untrusted, or not writable; keep looking.
+    }
+  }
+  return undefined;
+}
 
 describe("executableExtensions", () => {
   it("returns a single empty suffix on POSIX", () => {
@@ -25,24 +53,30 @@ describe("executableExtensions", () => {
 });
 
 describe("isExecutableOnPath", () => {
-  let dir: string;
+  const trustedDir = createTrustedFixtureDir();
   const binary = "keiko-sandbox-probe-fixture";
 
   beforeAll(() => {
-    dir = mkdtempSync(join(process.cwd(), ".tmp-keiko-sandbox-probe-"));
-    chmodSync(dir, 0o755);
-    const file = join(dir, binary);
+    if (trustedDir === undefined) return;
+    chmodSync(trustedDir, 0o755);
+    const file = join(trustedDir, binary);
     writeFileSync(file, "#!/bin/sh\nexit 0\n");
     chmodSync(file, 0o755);
   });
 
   afterAll(() => {
-    rmSync(dir, { recursive: true, force: true });
+    if (trustedDir !== undefined) {
+      rmSync(trustedDir, { recursive: true, force: true });
+    }
   });
 
-  it("finds an executable present in a PATH entry (POSIX resolution)", () => {
-    expect(isExecutableOnPath(binary, { PATH: dir }, "linux")).toBe(true);
-  });
+  it.skipIf(trustedDir === undefined)(
+    "finds an executable present in a trusted PATH entry (POSIX resolution)",
+    () => {
+      if (trustedDir === undefined) throw new Error("trusted fixture directory was not created");
+      expect(isExecutableOnPath(binary, { PATH: trustedDir }, "linux")).toBe(true);
+    },
+  );
 
   it("resolves a Windows binary via PATHEXT", () => {
     const winDir = mkdtempSync(join(tmpdir(), "keiko-sandbox-win-"));
@@ -54,9 +88,13 @@ describe("isExecutableOnPath", () => {
   });
 
   it("returns false for a binary absent from PATH", () => {
-    expect(isExecutableOnPath("keiko-sandbox-definitely-absent", { PATH: dir }, "linux")).toBe(
-      false,
-    );
+    expect(
+      isExecutableOnPath(
+        "keiko-sandbox-definitely-absent",
+        { PATH: trustedDir ?? tmpdir() },
+        "linux",
+      ),
+    ).toBe(false);
   });
 
   it("rejects executables from writable PATH directories on POSIX", () => {

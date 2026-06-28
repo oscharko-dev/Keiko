@@ -60,6 +60,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     resetView: vi.fn(),
     panBy: vi.fn(),
     rect: vi.fn(() => null),
+    currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
     ...patch,
   };
 }
@@ -288,6 +289,7 @@ describe("Workspace shell accessibility", () => {
     await tabTo(screen.getByRole("button", { name: "MemoriaViva" }));
     await tabTo(screen.getByRole("button", { name: "Quality Intelligence" }));
     await tabTo(screen.getByRole("button", { name: "Prompt Enhancer" }));
+    await tabTo(screen.getByRole("button", { name: "Git" }));
     await tabTo(screen.getByRole("button", { name: "Local Knowledge" }));
     await tabTo(screen.getByRole("button", { name: "Figma Snapshot" }));
 

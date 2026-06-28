@@ -1,0 +1,130 @@
+{
+  "issue": 1559,
+  "verdict": "PASS",
+  "cssSha256": "4b788cbea42df61c561dc91095dd9e5b1d78848694acffe34018a19028ad7b6a",
+  "repoHeadSha": "d6953273b305d70c76cb55487ff69f1bc23ece99",
+  "statesCaptured": 16,
+  "seriousOrCriticalAxeViolations": 0,
+  "axeTags": [
+    "wcag2a",
+    "wcag2aa",
+    "wcag21a",
+    "wcag21aa",
+    "wcag22aa"
+  ],
+  "note": "Markup mirrors VoiceDialogMode.tsx / voice-dialog-state.ts and is contract-pinned by the keiko-ui unit tests. globals.css is unchanged by #1559.",
+  "results": [
+    {
+      "state": "01-idle",
+      "semanticState": "idle",
+      "theme": "dark",
+      "file": "01-idle-dark.png",
+      "axeViolations": []
+    },
+    {
+      "state": "02-connecting",
+      "semanticState": "connecting",
+      "theme": "dark",
+      "file": "02-connecting-dark.png",
+      "axeViolations": []
+    },
+    {
+      "state": "03-listening",
+      "semanticState": "listening",
+      "theme": "dark",
+      "file": "03-listening-dark.png",
+      "axeViolations": []
+    },
+    {
+      "state": "04-thinking",
+      "semanticState": "thinking",
+      "theme": "dark",
+      "file": "04-thinking-dark.png",
+      "axeViolations": []
+    },
+    {
+      "state": "05-speaking",
+      "semanticState": "speaking",
+      "theme": "dark",
+      "file": "05-speaking-dark.png",
+      "axeViolations": []
+    },
+    {
+      "state": "06-muted",
+      "semanticState": "muted",
+      "theme": "dark",
+      "file": "06-muted-dark.png",
+      "axeViolations": []
+    },
+    {
+      "state": "07-error",
+      "semanticState": "error",
+      "theme": "dark",
+      "file": "07-error-dark.png",
+      "axeViolations": []
+    },
+    {
+      "state": "08-unavailable",
+      "semanticState": "idle",
+      "theme": "dark",
+      "file": "08-unavailable-dark.png",
+      "axeViolations": []
+    },
+    {
+      "state": "01-idle",
+      "semanticState": "idle",
+      "theme": "light",
+      "file": "01-idle-light.png",
+      "axeViolations": []
+    },
+    {
+      "state": "02-connecting",
+      "semanticState": "connecting",
+      "theme": "light",
+      "file": "02-connecting-light.png",
+      "axeViolations": []
+    },
+    {
+      "state": "03-listening",
+      "semanticState": "listening",
+      "theme": "light",
+      "file": "03-listening-light.png",
+      "axeViolations": []
+    },
+    {
+      "state": "04-thinking",
+      "semanticState": "thinking",
+      "theme": "light",
+      "file": "04-thinking-light.png",
+      "axeViolations": []
+    },
+    {
+      "state": "05-speaking",
+      "semanticState": "speaking",
+      "theme": "light",
+      "file": "05-speaking-light.png",
+      "axeViolations": []
+    },
+    {
+      "state": "06-muted",
+      "semanticState": "muted",
+      "theme": "light",
+      "file": "06-muted-light.png",
+      "axeViolations": []
+    },
+    {
+      "state": "07-error",
+      "semanticState": "error",
+      "theme": "light",
+      "file": "07-error-light.png",
+      "axeViolations": []
+    },
+    {
+      "state": "08-unavailable",
+      "semanticState": "idle",
+      "theme": "light",
+      "file": "08-unavailable-light.png",
+      "axeViolations": []
+    }
+  ]
+}

@@ -98,10 +98,10 @@ The primary chat request carries:
   `@oscharko-dev/keiko-security`
   ([packages/keiko-security/src/redaction.ts](../packages/keiko-security/src/redaction.ts))
   before it reaches the prompt.
-- **Recent conversation history** within the context budget for the selected
-  model. The estimator
-  ([packages/keiko-contracts/src/conversation-budget.ts](../packages/keiko-contracts/src/conversation-budget.ts))
-  caps history bytes; you can use **Clear conversation history** to reset.
+- **Recent conversation history** selected by the chat route for the provider
+  request. Keiko no longer shows a browser-side approximate token estimate for
+  this composer state; provider-reported context overflow is surfaced as an
+  actionable error.
 
 That request goes directly to your configured provider endpoint. There is no
 Keiko-hosted relay, no telemetry beacon, no analytics ping.
@@ -144,19 +144,13 @@ model gateway for memory-specific processing:
 
 ## How to delete conversation data
 
-The Conversation Center exposes the following retention controls inline in the chat:
+The Conversation Center exposes the following retention control inline in the chat:
 
 1. **Remove pending attachment.** Each pending attachment chip in the
    composer strip carries an individual remove button. Clicking it removes
    that attachment before send. There is no bulk "clear all" affordance;
    each attachment must be removed individually. Does not touch chat history.
-2. **Clear conversation history.** The context-budget indicator in the
-   composer includes a "Clear history" button. Clicking it empties the
-   in-memory message list for the next prompt so no prior turns are replayed
-   to the model. The chat row is retained so you can keep the topic open.
-   This control is visible only when a model with a known context-window limit
-   is selected and the budget indicator is shown.
-3. **Delete conversation** _(API only — not yet surfaced in the UI)._
+2. **Delete conversation** _(API only — not yet surfaced in the UI)._
    The `deleteChat` API (`DELETE /api/chats?id=…`) exists and removes the
    entire chat row and every persisted message from `keiko-ui.db`. The
    corresponding evidence runs are intentionally kept — deletion of a chat

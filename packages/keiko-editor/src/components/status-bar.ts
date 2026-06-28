@@ -10,6 +10,8 @@
  * region over it would flood assistive tech. Only meaningful state — dirty/save outcome, diagnostics,
  * and run state — feeds {@link EditorStatusBarViewModel.liveSummary}, the single polite live region.
  */
+import type { EditorBuiltinFormattingSource } from "@oscharko-dev/keiko-contracts";
+
 import type { EditorLanguageId } from "../languages.js";
 import type { EditorSaveStatus } from "./types.js";
 
@@ -72,6 +74,14 @@ export interface EditorStatusBarInput {
   readonly largeFileMode?: "normal" | "degraded" | undefined;
   readonly diagnostics: EditorDiagnosticsSummary | null;
   readonly languageService?: EditorStatusLanguageService | undefined;
+  /**
+   * Browser document-formatting reachability for the current language (ADR-0068 D4). Fed the SAME
+   * registry-derived value that gates the Format command and its aria, so status and command can
+   * never disagree. Omitted when the host does not wire formatting state.
+   */
+  readonly formatting?:
+    | { readonly available: boolean; readonly source: EditorBuiltinFormattingSource }
+    | undefined;
   readonly run?: EditorStatusRun | undefined;
   readonly readOnly?: boolean | undefined;
 }
@@ -243,6 +253,33 @@ function languageServiceField(
   };
 }
 
+// Content-free per-operation formatting field (ADR-0068 D4). It mirrors the language-service field's
+// shape: non-live and non-assertive, so it is shown but never announced (a Format-availability change
+// is not a live event the user needs interrupted for). Omitted when the host wires no formatting
+// state. The `source` is part of the input contract for symmetry with the gate; the wording is
+// content-free and the same for either reachable source.
+function formattingField(formatting: EditorStatusBarInput["formatting"]): EditorStatusField | null {
+  if (formatting === undefined) return null;
+  if (!formatting.available) {
+    return {
+      id: "formatting",
+      label: "Format unavailable",
+      ariaLabel: "Document formatting is unavailable for this language",
+      tone: "warn",
+      live: false,
+      assertive: false,
+    };
+  }
+  return {
+    id: "formatting",
+    label: "Format ready",
+    ariaLabel: "Document formatting available",
+    tone: "default",
+    live: false,
+    assertive: false,
+  };
+}
+
 function selectionField(selectedLineCount: number | undefined): EditorStatusField | null {
   if (selectedLineCount === undefined || selectedLineCount <= 1) {
     return null;
@@ -299,7 +336,9 @@ function completionsField(enabled: boolean): EditorStatusField {
   return {
     id: "completions",
     label: enabled ? "Completions on" : "Completions off",
-    ariaLabel: enabled ? "Governed completions enabled" : "Governed completions unavailable for this file type",
+    ariaLabel: enabled
+      ? "Governed completions enabled"
+      : "Governed completions unavailable for this file type",
     tone: "default",
     live: false,
     assertive: false,
@@ -332,6 +371,7 @@ export function deriveEditorStatusBar(input: EditorStatusBarInput): EditorStatus
   pushOptional(fields, largeFileField(input.largeFileMode));
   pushOptional(fields, diagnosticsField(input.diagnostics));
   pushOptional(fields, languageServiceField(input.languageService));
+  pushOptional(fields, formattingField(input.formatting));
   pushOptional(fields, runField(input.run));
   fields.push(cursorField(input.cursor));
   pushOptional(fields, selectionField(input.selectedLineCount));
@@ -340,5 +380,9 @@ export function deriveEditorStatusBar(input: EditorStatusBarInput): EditorStatus
   // Polite summary: meaningful, non-critical live fields. Assertive summary: critical fields only.
   // Splitting them keeps the cursor out of every announcement and lets a save error/conflict
   // interrupt without mutating a single region's role.
-  return { fields, liveSummary: statusSummary(fields, false), alertSummary: statusSummary(fields, true) };
+  return {
+    fields,
+    liveSummary: statusSummary(fields, false),
+    alertSummary: statusSummary(fields, true),
+  };
 }

@@ -1,12 +1,18 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  copyFilesEntry,
+  createFilesEntry,
+  deleteFilesEntry,
   fetchFilesPreview,
   fetchFilesTree,
+  fetchGitDiff,
+  fetchGitStatus,
   fetchProjects,
+  renameFilesEntry,
   updateChatConnectedScopes,
 } from "../../../../../lib/api";
 import type { Chat } from "../../../../../lib/types";
@@ -23,6 +29,12 @@ vi.mock("../../../../../lib/api", async () => {
     fetchFilesPreview: vi.fn(),
     fetchProjects: vi.fn(),
     fetchFilesTree: vi.fn(),
+    fetchGitStatus: vi.fn(),
+    fetchGitDiff: vi.fn(),
+    createFilesEntry: vi.fn(),
+    renameFilesEntry: vi.fn(),
+    deleteFilesEntry: vi.fn(),
+    copyFilesEntry: vi.fn(),
     updateChatConnectedScopes: vi.fn(),
   };
 });
@@ -82,7 +94,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    budget: undefined,
     memoryEnabled: true,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
@@ -92,7 +103,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
-    clearHistory: vi.fn(),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -104,6 +114,25 @@ function renderWithSession(ui: ReactElement, session = makeSession()): ChatSessi
 }
 
 describe("FilesWidget", () => {
+  beforeEach(() => {
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo",
+      state: "unavailable",
+      available: false,
+      reason: "not-a-repository",
+      detached: false,
+      clean: true,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [],
+      truncated: false,
+      maxChanges: 500,
+    });
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -155,6 +184,78 @@ describe("FilesWidget", () => {
     );
     expect(onActiveFileChange).toHaveBeenCalledWith("package.json", "/repo space");
     expect(await screen.findByText('"keiko"')).toBeInTheDocument();
+  });
+
+  it("shows Git status badges and opens a bounded diff view", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo space",
+      repositoryRoot: "/repo space",
+      state: "available",
+      available: true,
+      branch: "main",
+      detached: false,
+      clean: false,
+      stagedCount: 0,
+      unstagedCount: 1,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [
+        {
+          path: "package.json",
+          indexStatus: " ",
+          worktreeStatus: "M",
+          staged: false,
+          unstaged: true,
+          untracked: false,
+          conflicted: false,
+        },
+      ],
+      truncated: false,
+      maxChanges: 500,
+    });
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo space",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "package.json",
+          path: "package.json",
+          kind: "file",
+          sizeBytes: 18,
+          extension: "json",
+        },
+      ],
+    });
+    vi.mocked(fetchGitDiff).mockResolvedValueOnce({
+      schemaVersion: "1",
+      root: "/repo space",
+      repositoryRoot: "/repo space",
+      state: "available",
+      available: true,
+      path: "package.json",
+      scope: "all",
+      diff: "diff --git a/package.json b/package.json\n-old\n+new\n",
+      truncated: false,
+      maxBytes: 131072,
+    });
+
+    const onOpenGitDelivery = vi.fn();
+    render(<FilesWidget root="/repo space" onOpenGitDelivery={onOpenGitDelivery} />);
+
+    expect(await screen.findByText(/Git main 1 changed file/i)).toBeInTheDocument();
+    expect(screen.getByText("M")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open Git" }));
+    expect(onOpenGitDelivery).toHaveBeenCalledWith("/repo space");
+
+    await userEvent.click(screen.getByRole("button", { name: "View Git diff for package.json" }));
+
+    expect(fetchGitDiff).toHaveBeenCalledWith({ root: "/repo space", path: "package.json" });
+    expect(await screen.findByRole("region", { name: "Git diff: package.json" })).toHaveTextContent(
+      "+new",
+    );
   });
 
   it("opens the previewed file in the editor on demand", async () => {
@@ -217,7 +318,12 @@ describe("FilesWidget", () => {
     const onOpenFile = vi.fn();
 
     render(
-      <FilesWidget root="/repo space" openFilesDirectly activeFilePath="" onOpenFile={onOpenFile} />,
+      <FilesWidget
+        root="/repo space"
+        openFilesDirectly
+        activeFilePath=""
+        onOpenFile={onOpenFile}
+      />,
     );
 
     await userEvent.click(await screen.findByRole("treeitem", { name: /package\.json/i }));
@@ -323,6 +429,59 @@ describe("FilesWidget", () => {
     expect(onActiveFileChange).toHaveBeenCalledWith(null, "/resolved-repo", "src");
     expect(updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(session.replaceChat).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the current folder without jumping back to the root", async () => {
+    vi.mocked(fetchFilesTree)
+      .mockResolvedValueOnce({
+        root: "/resolved-repo",
+        path: "",
+        truncated: false,
+        entries: [
+          { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+          { ...treeEntryBase, name: "package.json", path: "package.json", kind: "file" },
+        ],
+      })
+      .mockResolvedValueOnce({
+        root: "/resolved-repo",
+        path: "src",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "inside.ts", path: "src/inside.ts", kind: "file" }],
+      })
+      .mockResolvedValueOnce({
+        root: "/resolved-repo",
+        path: "src",
+        truncated: false,
+        entries: [
+          { ...treeEntryBase, name: "inside.ts", path: "src/inside.ts", kind: "file" },
+          { ...treeEntryBase, name: "new.ts", path: "src/new.ts", kind: "file" },
+        ],
+      });
+    const onActiveFileChange = vi.fn();
+    render(
+      <FilesWidget
+        root="/configured-repo"
+        onRootChange={() => undefined}
+        onActiveFileChange={onActiveFileChange}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^src$/i }));
+    expect(await screen.findByRole("treeitem", { name: /inside\.ts/i })).toBeInTheDocument();
+    expect(screen.queryByRole("treeitem", { name: /package\.json/i })).toBeNull();
+    onActiveFileChange.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh folder" }));
+
+    await waitFor(() => {
+      expect(fetchFilesTree).toHaveBeenLastCalledWith("/configured-repo", "src");
+    });
+    expect(await screen.findByRole("treeitem", { name: /new\.ts/i })).toBeInTheDocument();
+    expect(screen.queryByRole("treeitem", { name: /package\.json/i })).toBeNull();
+    expect(screen.getByLabelText("Folder path — open any folder on this machine")).toHaveValue(
+      "/resolved-repo/src",
+    );
+    expect(onActiveFileChange).not.toHaveBeenCalledWith(null, "/resolved-repo", null);
   });
 
   it("expands a folder from the caret without changing the chat-visible folder scope", async () => {
@@ -558,6 +717,50 @@ describe("FilePreview", () => {
     expect(screen.getAllByText("archive.bin").length).toBeGreaterThan(0);
   });
 
+  it("copies the opened file name and full path from the preview header", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "C:\\repo space",
+      path: "src/package.json",
+      name: "package.json",
+      sizeBytes: 18,
+      modifiedAt: 1,
+      extension: "json",
+      mime: "application/json",
+      symlink: false,
+      kind: "text",
+      content: '{"name":"keiko"}\n',
+      truncated: false,
+      maxBytes: 1_000_000,
+    });
+
+    render(
+      <FilePreview root={"C:\\repo space"} path="src/package.json" onClose={() => undefined} />,
+    );
+
+    await screen.findByRole("region", { name: "File preview: package.json" });
+    await userEvent.click(screen.getByRole("button", { name: "Copy file name" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("package.json"));
+    expect(screen.getByText("File name copied")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("C:\\repo space\\src\\package.json"),
+    );
+    expect(screen.getByText("File path copied")).toBeInTheDocument();
+
+    if (clipboardDescriptor === undefined) {
+      Reflect.deleteProperty(navigator, "clipboard");
+    } else {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
   it("explains that DOCX is searchable via bounded extraction with stated limits (Issue #1285)", async () => {
     vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
       root: "/repo",
@@ -779,5 +982,211 @@ describe("FilePreview", () => {
     expect(screen.queryByRole("button", { name: "Update connected scope" })).toBeNull();
     expect(updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(session.replaceChat).not.toHaveBeenCalled();
+  });
+});
+
+describe("FilesWidget file operations", () => {
+  beforeEach(() => {
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo",
+      state: "unavailable",
+      available: false,
+      reason: "not-a-repository",
+      detached: false,
+      clean: true,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [],
+      truncated: false,
+      maxChanges: 500,
+    });
+    // mockResolvedValue (not Once) so the post-mutation directory refresh re-resolves the tree.
+    vi.mocked(fetchFilesTree).mockResolvedValue({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "app.ts",
+          path: "app.ts",
+          kind: "file",
+          sizeBytes: 12,
+          extension: "ts",
+        },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("creates a new file from the toolbar and opens it", async () => {
+    vi.mocked(createFilesEntry).mockResolvedValue({ root: "/repo", path: "new.ts", kind: "file" });
+    const onOpenFile = vi.fn();
+    const onFilesMutated = vi.fn();
+    render(<FilesWidget root="/repo" onOpenFile={onOpenFile} onFilesMutated={onFilesMutated} />);
+    await screen.findByText("app.ts");
+
+    await userEvent.click(screen.getByRole("button", { name: "New file" }));
+    await userEvent.type(await screen.findByLabelText("New file name"), "new.ts{Enter}");
+
+    await waitFor(() =>
+      expect(createFilesEntry).toHaveBeenCalledWith({
+        root: "/repo",
+        path: "new.ts",
+        kind: "file",
+      }),
+    );
+    expect(onOpenFile).toHaveBeenCalledWith("/repo", "new.ts");
+    expect(onFilesMutated).toHaveBeenCalledWith({
+      op: "create",
+      mutation: { root: "/repo", path: "new.ts", kind: "file" },
+    });
+  });
+
+  it("creates a new folder from the toolbar", async () => {
+    vi.mocked(createFilesEntry).mockResolvedValue({
+      root: "/repo",
+      path: "lib",
+      kind: "directory",
+    });
+    render(<FilesWidget root="/repo" onOpenFile={vi.fn()} />);
+    await screen.findByText("app.ts");
+
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    await userEvent.type(await screen.findByLabelText("New folder name"), "lib{Enter}");
+
+    await waitFor(() =>
+      expect(createFilesEntry).toHaveBeenCalledWith({
+        root: "/repo",
+        path: "lib",
+        kind: "directory",
+      }),
+    );
+  });
+
+  it("renames a file from the right-click context menu", async () => {
+    vi.mocked(renameFilesEntry).mockResolvedValue({
+      root: "/repo",
+      path: "renamed.ts",
+      previousPath: "app.ts",
+      kind: "file",
+    });
+    const onFilesMutated = vi.fn();
+    render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
+    fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
+    const input = await screen.findByLabelText("Rename app.ts");
+    await userEvent.clear(input);
+    await userEvent.type(input, "renamed.ts{Enter}");
+
+    await waitFor(() =>
+      expect(renameFilesEntry).toHaveBeenCalledWith({
+        root: "/repo",
+        path: "app.ts",
+        newPath: "renamed.ts",
+      }),
+    );
+    expect(onFilesMutated).toHaveBeenCalledWith({
+      op: "rename",
+      mutation: expect.objectContaining({ path: "renamed.ts", previousPath: "app.ts" }),
+    });
+  });
+
+  it("deletes a file from the context menu after confirmation", async () => {
+    vi.mocked(deleteFilesEntry).mockResolvedValue({ root: "/repo", path: "app.ts", kind: "file" });
+    const onFilesMutated = vi.fn();
+    render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
+    fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+    // The confirm dialog gates the destructive action.
+    await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(deleteFilesEntry).toHaveBeenCalledWith({ root: "/repo", path: "app.ts" }),
+    );
+    expect(onFilesMutated).toHaveBeenCalledWith({
+      op: "delete",
+      mutation: { root: "/repo", path: "app.ts", kind: "file" },
+    });
+  });
+
+  it("keeps the inline editor open and shows the error when a create fails", async () => {
+    vi.mocked(createFilesEntry).mockRejectedValue(
+      new Error("An entry with that name already exists."),
+    );
+    render(<FilesWidget root="/repo" onOpenFile={vi.fn()} />);
+    await screen.findByText("app.ts");
+
+    await userEvent.click(screen.getByRole("button", { name: "New file" }));
+    await userEvent.type(await screen.findByLabelText("New file name"), "app.ts{Enter}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("already exists");
+    expect(screen.getByLabelText("New file name")).toBeInTheDocument();
+  });
+
+  it("duplicates a file from the context menu with a collision-free copy name", async () => {
+    vi.mocked(copyFilesEntry).mockResolvedValue({
+      root: "/repo",
+      path: "app copy.ts",
+      kind: "file",
+    });
+    const onFilesMutated = vi.fn();
+    render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
+    fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Duplicate" }));
+
+    await waitFor(() =>
+      expect(copyFilesEntry).toHaveBeenCalledWith({
+        root: "/repo",
+        sourcePath: "app.ts",
+        destPath: "app copy.ts",
+      }),
+    );
+    // A copy adds a new entry, so the host treats it like a create (no open tab to re-home).
+    expect(onFilesMutated).toHaveBeenCalledWith({
+      op: "create",
+      mutation: { root: "/repo", path: "app copy.ts", kind: "file" },
+    });
+  });
+
+  it("moves a file into a folder when dropped on its row (drag-move = rename)", async () => {
+    vi.mocked(renameFilesEntry).mockResolvedValue({
+      root: "/repo",
+      path: "src/app.ts",
+      previousPath: "app.ts",
+      kind: "file",
+    });
+    const onFilesMutated = vi.fn();
+    render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
+    await screen.findByText("app.ts");
+
+    const source = screen.getByRole("treeitem", { name: /app\.ts/ });
+    const target = screen.getByRole("treeitem", { name: /src/ });
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(), effectAllowed: "", dropEffect: "" };
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(target, { dataTransfer });
+    fireEvent.drop(target, { dataTransfer });
+
+    await waitFor(() =>
+      expect(renameFilesEntry).toHaveBeenCalledWith({
+        root: "/repo",
+        path: "app.ts",
+        newPath: "src/app.ts",
+      }),
+    );
+    expect(onFilesMutated).toHaveBeenCalledWith({
+      op: "rename",
+      mutation: expect.objectContaining({ path: "src/app.ts", previousPath: "app.ts" }),
+    });
   });
 });

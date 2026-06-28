@@ -5,10 +5,8 @@ import type { ReactNode } from "react";
 import { ApiError, applyRun, fetchEvidenceManifest, fetchRunReport } from "../../../../../lib/api";
 import { runStatusLabel } from "../../../../../lib/format";
 import type { ChangedFile, RunReport } from "../../../../../lib/types";
-import { langOf, highlightLines } from "./shared/syntaxHighlight";
-import type { Token } from "./shared/syntaxHighlight";
 import { parseUnifiedDiff } from "./shared/diffParser";
-import type { DiffFile, DiffHunk, DiffLine } from "./shared/diffParser";
+import { DiffFileSection } from "./shared/diffView";
 
 export interface ReviewWidgetProps {
   /** Run ID for the patch under review. When omitted, shows the empty state. */
@@ -65,16 +63,6 @@ function hasDiff(report: RunReport): boolean {
   return report.proposedDiff !== undefined && report.proposedDiff !== "";
 }
 
-function lineKindLabel(kind: DiffLine["kind"]): string {
-  const map: Record<DiffLine["kind"], string> = {
-    add: "Added line",
-    del: "Deleted line",
-    ctx: "Context line",
-    meta: "Diff metadata",
-  };
-  return map[kind];
-}
-
 function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): ReactNode {
   if (hasManifest) {
     return (
@@ -102,115 +90,6 @@ function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): Re
     <button type="button" className="rv-evidence-link rv-evidence-disabled" disabled>
       Evidence
     </button>
-  );
-}
-
-// --- diff rendering helpers -------------------------------------------------
-
-interface TokensProps {
-  readonly tokens: readonly Token[];
-}
-
-function TokenSpans({ tokens }: TokensProps): ReactNode {
-  return (
-    <>
-      {tokens.map((tok, idx) => (
-        <span key={idx} className={`hl-${tok[0]}`}>
-          {tok[1]}
-        </span>
-      ))}
-    </>
-  );
-}
-
-interface DiffLineViewProps {
-  readonly line: DiffLine;
-  readonly lang: string;
-}
-
-function DiffLineView({ line, lang }: DiffLineViewProps): ReactNode {
-  // gutter sign provides a non-color channel for add/del/ctx (WCAG 1.4.1)
-  const sign =
-    line.kind === "add" ? "+" : line.kind === "del" ? "−" : line.kind === "ctx" ? "·" : "";
-  const cls = line.kind === "ctx" ? "" : ` rv-${line.kind}`;
-
-  let content: ReactNode;
-  if (line.kind !== "meta" && lang !== "code") {
-    const tokenLines = highlightLines(line.text, langOf(lang));
-    const toks = tokenLines[0] ?? [];
-    content = <TokenSpans tokens={toks} />;
-  } else {
-    content = line.text;
-  }
-
-  return (
-    <div className={`rv-line${cls}`}>
-      <span className="rv-sr-only">{lineKindLabel(line.kind)}</span>
-      <span className="rv-num-old rv-num">{line.oldLine ?? ""}</span>
-      <span className="rv-num-new rv-num">{line.newLine ?? ""}</span>
-      <span className="rv-gutter" aria-hidden="true">
-        {sign}
-      </span>
-      <code className="rv-src">{content}</code>
-    </div>
-  );
-}
-
-interface DiffHunkViewProps {
-  readonly hunk: DiffHunk;
-  readonly lang: string;
-}
-
-function DiffHunkView({ hunk, lang }: DiffHunkViewProps): ReactNode {
-  return (
-    <>
-      <div className="rv-hunk mono" aria-label={`Hunk header ${hunk.header}`}>
-        <span className="rv-sr-only">Hunk header</span>
-        {hunk.header}
-      </div>
-      {hunk.lines.map((line, idx) => (
-        <DiffLineView key={idx} line={line} lang={lang} />
-      ))}
-    </>
-  );
-}
-
-interface DiffFileSectionProps {
-  readonly file: DiffFile;
-  readonly index: number;
-  readonly changedFiles: readonly ChangedFile[];
-  readonly sectionRef: (el: HTMLElement | null) => void;
-}
-
-function DiffFileSection({
-  file,
-  index,
-  changedFiles,
-  sectionRef,
-}: DiffFileSectionProps): ReactNode {
-  const cf = changedFiles.find((c) => c.path === file.path);
-  const ext = file.path.includes(".") ? (file.path.split(".").pop() ?? "code") : "code";
-
-  return (
-    <section id={`rv-file-${index}`} aria-labelledby={`rv-file-${index}-h`} ref={sectionRef}>
-      <h3 id={`rv-file-${index}-h`} className="rv-file mono">
-        <span className="rv-path">{file.path}</span>
-        {file.oldPath !== undefined && <span className="rv-oldpath"> (was {file.oldPath})</span>}
-        <span className="spacer" />
-        <span className="rv-stat add">+{file.addedLines}</span>
-        <span className="rv-stat del">−{file.removedLines}</span>
-        {cf?.elevatedReview === true && (
-          <span className="rv-elevated" aria-label="Elevated review">
-            !
-          </span>
-        )}
-      </h3>
-      <div className="rv-code mono">
-        {file.hunks.map((hunk, hi) => (
-          <DiffHunkView key={hi} hunk={hunk} lang={ext} />
-        ))}
-      </div>
-    </section>
   );
 }
 

@@ -6,13 +6,22 @@
 // is on.
 
 // Bumped to 2 by issue #143 (Epic #142 Conversation Center): ModelCapability now carries
-// supportsImageInput / supportsDocumentInput / workflowEligible. A future structural break
-// adds a new literal member rather than mutating this constant.
-export const CONVERSATION_CAPABILITY_CONTRACT_VERSION = 2 as const;
+// supportsImageInput / supportsDocumentInput / workflowEligible. Bumped to 3 by issue #493
+// (Epic #491 Voice Digital Twin): ModelKind gained the "voice" member — a STRUCTURAL change
+// that adds a new literal discriminant. A structural break adds a new literal member (and bumps
+// this constant); additive OPTIONAL flags (Epic #761 determinism, Issue #1210 infilling, the
+// #493 voice sub-capability flags) never bump it.
+export const CONVERSATION_CAPABILITY_CONTRACT_VERSION = 3 as const;
 
 // ─── Modality discriminant ────────────────────────────────────────────────────
 
-export type ModelKind = "chat" | "embedding" | "ocr-vision";
+// "voice" (Issue #493, ADR-0058 D5) is the modality discriminant for speech-to-text,
+// speech-output, and realtime-speech endpoints (the Voice Digital Twin). It is deliberately a
+// distinct kind, NOT a flag on "chat", so a transcription/realtime endpoint can never be elected
+// for chat completion, is never conversation-eligible, and is filtered out of the chat smoke-test
+// loop by construction. The voice sub-capabilities (speech input/output/realtime) are refined by
+// the additive optional flags below.
+export type ModelKind = "chat" | "embedding" | "ocr-vision" | "voice";
 
 export type CostClass = "low" | "medium" | "high";
 
@@ -37,6 +46,38 @@ export const INFILLING_ALIGNMENTS: readonly InfillingAlignment[] = [
   "instruct",
   "edit-tuned",
 ] as const;
+
+// ─── Voice provider locality (Issue #493, ADR-0058 D7) ─────────────────────────
+// Where a configured voice provider runs. Provider-neutral: the locality is declared explicitly
+// per capability, never inferred from an endpoint URL, environment name, or package availability
+// (the epic invariant). Azure Foundry is ONE valid provider, never a required destination.
+//   - "azure-foundry"   — an Azure AI Foundry / Azure OpenAI voice deployment (e.g. the existing
+//                         `keiko-stt` STT deployment, development / academic profiles).
+//   - "customer-hosted" — a customer-operated voice endpoint inside a controlled network, which
+//                         may be a private/RFC-1918 host (regulated bank/insurance professional
+//                         deployments). Private hosts are first-class.
+//   - "local-only"      — a voice endpoint that never leaves the Keiko host (loopback / on-device).
+export type VoiceProviderLocality = "azure-foundry" | "customer-hosted" | "local-only";
+
+export const VOICE_PROVIDER_LOCALITIES: readonly VoiceProviderLocality[] = [
+  "azure-foundry",
+  "customer-hosted",
+  "local-only",
+] as const;
+
+// ─── Product voice persona (Issue #1557, Epic #1556, ADR-0094 D1) ──────────────
+// A `VoicePersona` is a PRODUCT-level voice identity the operator offers to the end user — "what
+// the assistant sounds like." It is deliberately distinct from `VoiceProfile` (the capability
+// DEGRADATION ladder, "how much voice the deployment can do"): the two are orthogonal axes and must
+// never collide. Personas are OUTPUT voices, so an STT-only deployment offers none. The persona →
+// provider-voice-id MAPPING is provider-sensitive and lives on the credential tier
+// (`ModelProviderConfig.voiceProfiles` in keiko-model-gateway) — it never crosses to contracts; only
+// the content-free persona enum below does (ADR-0094 D2).
+export type VoicePersona = "male" | "female" | "neutral";
+
+// Canonical, ordered tuple of personas. Derivation of `supportedVoicePersonas` and aggregation of
+// `availableVoicePersonas` both sort against this order so the wire surface is deterministic.
+export const VOICE_PERSONAS: readonly VoicePersona[] = ["male", "female", "neutral"] as const;
 
 // ─── Capability registry entry ────────────────────────────────────────────────
 
@@ -77,6 +118,36 @@ export interface ModelCapability {
    * for governed completion because base-FIM re-opens a prompt-injection surface (ADR-0042 D5).
    */
   readonly infillingAlignment?: InfillingAlignment | undefined;
+  /**
+   * Whether the voice provider advertises speech-to-text / transcription, i.e. controlled
+   * composer dictation (audio in → text). Only meaningful for `kind: "voice"` (Issue #493).
+   */
+  readonly supportsSpeechInput?: boolean | undefined;
+  /**
+   * Whether the voice provider advertises speech output / synthesis (text → audio playback).
+   * Only meaningful for `kind: "voice"` (Issue #493).
+   */
+  readonly supportsSpeechOutput?: boolean | undefined;
+  /**
+   * Whether the voice provider advertises realtime, full-duplex speech (interruptible,
+   * colleague-like conversation / speech-in-speech-out). Only meaningful for `kind: "voice"`.
+   * Realtime is the gate for the full-conversation profile (Issue #493 AC3, ADR-0058 D2).
+   */
+  readonly supportsRealtimeVoice?: boolean | undefined;
+  /**
+   * Where a `kind: "voice"` provider runs (Issue #493, ADR-0058 D7). Declared explicitly, never
+   * inferred from the endpoint URL or environment name. Required when `kind === "voice"`.
+   */
+  readonly voiceProviderLocality?: VoiceProviderLocality | undefined;
+  /**
+   * The product voice personas this voice provider offers as OUTPUT voices (Issue #1557, ADR-0094
+   * D2). CONTENT-FREE: persona enums only, never a provider voice id — the sensitive persona →
+   * voice-id mapping lives on the credential-tier `ModelProviderConfig.voiceProfiles`. This field is
+   * DERIVED at config parse time from that mapping (sorted canonical `VOICE_PERSONAS` order); it is
+   * never an operator input key and is never persisted. Only meaningful for a `kind: "voice"`
+   * provider that advertises speech output or realtime voice.
+   */
+  readonly supportedVoicePersonas?: readonly VoicePersona[] | undefined;
 }
 
 // ─── Completion / infilling capability helpers (Issue #1210, ADR-0042 D5) ──────
@@ -146,6 +217,150 @@ export interface CompletionModelSelection {
   readonly latencyClass?: LatencyClass | undefined;
   // Present iff `mode === "deterministic"`.
   readonly degradeReason?: CompletionDegradeReason | undefined;
+}
+
+// ─── Voice capability predicates (Issue #493, ADR-0058 D2/D5) ──────────────────
+// Pure, total predicates over a capability. They live in contracts (not keiko-model-gateway) so
+// the browser-tier keiko-ui can value-import them without crossing ADR-0019 trust rule 3 (UI →
+// model-gateway/src forbidden at error), mirroring `modelSupportsInfilling`. Every predicate is
+// fail-closed: a non-voice kind, or an absent flag, is "no".
+
+// Whether the capability is the voice modality at all.
+export function isVoiceCapability(capability: ModelCapability): boolean {
+  return capability.kind === "voice";
+}
+
+// Whether the voice provider advertises speech-to-text (dictation). Total: only a voice-kind model
+// with the flag set qualifies.
+export function modelSupportsSpeechInput(capability: ModelCapability): boolean {
+  return capability.kind === "voice" && capability.supportsSpeechInput === true;
+}
+
+// Whether the voice provider advertises speech output (synthesis / playback).
+export function modelSupportsSpeechOutput(capability: ModelCapability): boolean {
+  return capability.kind === "voice" && capability.supportsSpeechOutput === true;
+}
+
+// Whether the voice provider advertises realtime full-duplex speech.
+export function modelSupportsRealtimeVoice(capability: ModelCapability): boolean {
+  return capability.kind === "voice" && capability.supportsRealtimeVoice === true;
+}
+
+// ─── Voice capability resolution result (content-free, serialisable) ───────────
+// The stable, content-free result the BFF voice-capability endpoint returns and the UI reads
+// before rendering any voice affordance. It carries only enum literals and booleans — never a
+// provider base URL, credential, model id, audio buffer, or transcript — so it is safe to
+// serialise across the host/server boundary and safe to log (Issue #493 AC4/AC5, by construction).
+
+// The effective voice profile, ordered by the graceful-degradation ladder (ADR-0058 D2/architecture
+// §5). `none` means no voice affordance is rendered at all.
+export type VoiceProfile = "none" | "speech-to-text" | "speech-output" | "full-realtime";
+
+// Why voice is unavailable (present only when `available` is false). Content-free.
+//   - "no-voice-provider"    — no configured provider advertises a voice capability.
+//   - "policy-disabled"      — voice is disabled by deployment policy (operator kill-switch).
+//   - "provider-unreachable" — voice providers are configured but currently unreachable.
+export type VoiceUnavailableReason =
+  | "no-voice-provider"
+  | "policy-disabled"
+  | "provider-unreachable";
+
+// Transport posture for the resolved profile (ADR-0058 D3). The control/signaling plane
+// ("WebSocket is authoritative") is realized today on the loopback HTTP + SSE seam, so
+// `websocketControl` reflects the control-plane role being active for any non-`none` profile.
+// `webrtcMedia` (the preferred media plane) is indicated only for the full-realtime profile.
+export interface VoiceTransportPosture {
+  readonly websocketControl: boolean;
+  readonly webrtcMedia: boolean;
+}
+
+export interface VoiceCapabilityResolution {
+  // AC1: false when no voice model is configured (or voice is disabled / unreachable).
+  readonly available: boolean;
+  readonly profile: VoiceProfile;
+  // Aggregate of the advertised voice sub-capabilities across reachable voice providers.
+  readonly capabilities: {
+    readonly speechToText: boolean;
+    readonly speechOutput: boolean;
+    readonly realtimeVoice: boolean;
+    // True only when the elected realtime voice provider can drive custom tool calls. Grounded
+    // Voice Dialogue requires this so Keiko never disguises STT/TTS or ungrounded realtime as
+    // repository/knowledge-aware speech.
+    readonly realtimeToolCalling?: boolean | undefined;
+  };
+  readonly transport: VoiceTransportPosture;
+  // Aggregate union of the product voice personas offered across reachable speech-output / realtime
+  // voice providers, sorted in canonical `VOICE_PERSONAS` order (Issue #1557, ADR-0094 D2/D7).
+  // CONTENT-FREE (persona enums only, never a voice id). REQUIRED: the empty array is the honest
+  // "no personas available" value, so an STT-only or no-voice deployment reports `[]` rather than an
+  // ambiguous absent field.
+  readonly availableVoicePersonas: readonly VoicePersona[];
+  // Locality of the elected voice provider(s); present only when a single locality is in effect.
+  readonly providerLocality?: VoiceProviderLocality | undefined;
+  // Present when `available` is false.
+  readonly reason?: VoiceUnavailableReason | undefined;
+}
+
+// ─── Kind-aware voice provider availability (Issue #1557, ADR-0094 D3) ─────────
+// Content-free descriptor that distinguishes a WORKING voice provider (advertises ≥1 usable voice
+// sub-capability) from a model that is merely non-chat. The UI branches on `isConfiguredVoiceProvider`
+// to render a positive "Voice provider" badge instead of the red chat-ineligibility warning (AC4),
+// without making voice conversation-eligible. Deterministic and probe-free (ADR-0094 D3): every field
+// is read from the already-parsed capability, never from a network call.
+
+export interface VoiceProviderAvailability {
+  // True when the capability is the voice modality AND advertises ≥1 voice sub-capability.
+  readonly available: boolean;
+  readonly speechToText: boolean;
+  readonly speechOutput: boolean;
+  readonly realtimeVoice: boolean;
+  // The product voice personas advertised (sorted canonical order). Empty for an STT-only provider.
+  readonly personas: readonly VoicePersona[];
+  // The provider locality when declared; absent otherwise.
+  readonly providerLocality?: VoiceProviderLocality | undefined;
+}
+
+// Whether the capability is a CONFIGURED, working voice provider: the voice modality advertising at
+// least one of speech input / speech output / realtime voice. Fail-closed: a non-voice kind, or a
+// voice kind with no advertised sub-capability, is false.
+export function isConfiguredVoiceProvider(capability: ModelCapability): boolean {
+  return (
+    isVoiceCapability(capability) &&
+    (modelSupportsSpeechInput(capability) ||
+      modelSupportsSpeechOutput(capability) ||
+      modelSupportsRealtimeVoice(capability))
+  );
+}
+
+// The product voice personas a single capability offers, sorted in canonical `VOICE_PERSONAS` order
+// and de-duplicated. Fail-closed: empty for a non-voice capability (even if a persona field is
+// present — defence in depth alongside the config parser, which prevents that at parse time) or one
+// that advertises none.
+export function listVoicePersonas(capability: ModelCapability): readonly VoicePersona[] {
+  if (!isVoiceCapability(capability)) {
+    return [];
+  }
+  const declared = capability.supportedVoicePersonas;
+  if (declared === undefined || declared.length === 0) {
+    return [];
+  }
+  const present = new Set<VoicePersona>(declared);
+  return VOICE_PERSONAS.filter((persona) => present.has(persona));
+}
+
+// Content-free availability descriptor for one capability (ADR-0094 D3). Total and probe-free.
+export function describeVoiceProviderAvailability(
+  capability: ModelCapability,
+): VoiceProviderAvailability {
+  const locality = capability.voiceProviderLocality;
+  return {
+    available: isConfiguredVoiceProvider(capability),
+    speechToText: modelSupportsSpeechInput(capability),
+    speechOutput: modelSupportsSpeechOutput(capability),
+    realtimeVoice: modelSupportsRealtimeVoice(capability),
+    personas: listVoicePersonas(capability),
+    ...(locality !== undefined ? { providerLocality: locality } : {}),
+  };
 }
 
 // ─── Request / response ───────────────────────────────────────────────────────
@@ -257,7 +472,11 @@ export type StreamEvent =
 // ADR-0019 trust rule 3 (UI → model-gateway/src is forbidden at error severity).
 // Pinned by keiko-model-gateway/src/capabilities.test.ts (re-exported there).
 
-export type ConversationIneligibilityReason = "embedding-only" | "ocr-vision-only" | "non-chat";
+export type ConversationIneligibilityReason =
+  | "embedding-only"
+  | "ocr-vision-only"
+  | "voice-only"
+  | "non-chat";
 
 // Why: see header — only `kind === "chat"` is conversation-eligible by
 // construction. Pure, total, no side effects.
@@ -278,6 +497,7 @@ const INELIGIBILITY_REASON_BY_KIND: Readonly<
 > = {
   embedding: "embedding-only",
   "ocr-vision": "ocr-vision-only",
+  voice: "voice-only",
 };
 
 export function explainConversationIneligibility(

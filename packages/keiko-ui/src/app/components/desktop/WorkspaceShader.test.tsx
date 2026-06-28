@@ -331,6 +331,53 @@ describe("WorkspaceShader", () => {
     expect(gl.deleteShader).toHaveBeenCalledTimes(2);
   });
 
+  it("throttles idle redraws and pauses while panning or a window is maximized (issue #1580)", () => {
+    window.localStorage.setItem("keiko.wallpaper.enabled", "true");
+    const gl = createGl();
+    const animation = stubAnimationFrame();
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      gl as unknown as RenderingContext,
+    );
+
+    const { container } = render(<WorkspaceShader />);
+    const canvas = container.querySelector("canvas") as HTMLCanvasElement;
+    const host = stubHostRect(canvas);
+    FakeResizeObserver.instances[0]?.callback([], FakeResizeObserver.instances[0]);
+
+    const drawAt = (now: number): void => {
+      vi.mocked(performance.now).mockReturnValue(now);
+      animation.callback?.(now);
+    };
+
+    // First idle frame draws.
+    drawAt(1_000);
+    expect(gl.drawArrays).toHaveBeenCalledTimes(1);
+
+    // Only 10ms later — below the ~33ms idle budget — the draw is throttled out.
+    drawAt(1_010);
+    expect(gl.drawArrays).toHaveBeenCalledTimes(1);
+
+    // 40ms after the last draw clears the idle budget — draws again.
+    drawAt(1_040);
+    expect(gl.drawArrays).toHaveBeenCalledTimes(2);
+
+    // A maximized window fully occludes the wallpaper: skip even when due.
+    host.dataset.windowMaxed = "true";
+    drawAt(1_100);
+    expect(gl.drawArrays).toHaveBeenCalledTimes(2);
+
+    // Clearing the occlusion resumes drawing immediately on the next frame.
+    host.removeAttribute("data-window-maxed");
+    drawAt(1_140);
+    expect(gl.drawArrays).toHaveBeenCalledTimes(3);
+
+    // An active canvas pan likewise yields the GPU to compositing.
+    host.dataset.panning = "true";
+    drawAt(1_200);
+    expect(gl.drawArrays).toHaveBeenCalledTimes(3);
+  });
+
   it("tears down opacity listeners when shader compilation fails", () => {
     window.localStorage.setItem("keiko.wallpaper.enabled", "true");
     const gl = createGl();

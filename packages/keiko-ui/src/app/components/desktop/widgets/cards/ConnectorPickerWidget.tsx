@@ -170,12 +170,10 @@ function connectorNodeStateLabel(state: string | undefined): string {
 }
 
 function KnowledgeConnectorNode({
-  selectedId,
   selectedLabel,
   selectedState,
   onManageConnectors,
 }: {
-  readonly selectedId: string;
   readonly selectedLabel: string | undefined;
   readonly selectedState: string | undefined;
   readonly onManageConnectors: () => void;
@@ -183,7 +181,7 @@ function KnowledgeConnectorNode({
   const label =
     selectedLabel !== undefined && selectedLabel.trim().length > 0
       ? selectedLabel.trim()
-      : `Capsule ${selectedId}`;
+      : "Knowledge capsule";
   return (
     <div className="connector-node" data-testid="knowledge-connector-node">
       <div className="connector-node-icon" aria-hidden="true">
@@ -194,8 +192,8 @@ function KnowledgeConnectorNode({
         <h2 className="connector-node-title" title={label}>
           {label}
         </h2>
-        <p className="connector-node-id mono" title={selectedId}>
-          {selectedId}
+        <p className="connector-node-meta">
+          Local Knowledge capsule
         </p>
       </div>
       <button type="button" className="connector-node-manage" onClick={onManageConnectors}>
@@ -269,7 +267,6 @@ export function ConnectorPickerWidget({
   if (isConnectorNode) {
     return (
       <KnowledgeConnectorNode
-        selectedId={selectedId}
         selectedLabel={selectedLabel}
         selectedState={selectedState}
         onManageConnectors={onManageConnectors}

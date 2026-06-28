@@ -1,6 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { memo } from "react";
+import { useI18n } from "@/lib/i18n";
 import { Icons } from "./Icons";
 
 export type HeaderStatusTone = "ok" | "warn" | "danger";
@@ -13,15 +15,12 @@ interface HeaderProps {
   readonly onTileAll: () => void;
   readonly onSplitFront: () => void;
   readonly onCascade: () => void;
+  readonly contextControl?: ReactNode;
 }
 
-export function Header({
-  openPalette,
-  openCommandPalette,
-  onTileAll,
-  onSplitFront,
-  onCascade,
-}: HeaderProps): ReactNode {
+function HeaderImpl({ onTileAll, onSplitFront, onCascade, contextControl }: HeaderProps): ReactNode {
+  const { t } = useI18n();
+
   return (
     <header className="header">
       <div className="hd-brand">
@@ -33,6 +32,8 @@ export function Header({
         <span className="hd-wordmark">Keiko</span>
       </div>
 
+      {contextControl !== undefined ? <div className="hd-context">{contextControl}</div> : null}
+
       <span className="spacer" />
 
       <div className="hd-tools">
@@ -40,8 +41,8 @@ export function Header({
           type="button"
           className="hd-tool ui-tip"
           onClick={onTileAll}
-          data-tip="Tile all windows"
-          aria-label="Tile all windows"
+          data-tip={t("header.tileAll")}
+          aria-label={t("header.tileAll")}
         >
           <Icons.tile size={16} />
         </button>
@@ -51,8 +52,8 @@ export function Header({
           type="button"
           className="hd-tool ui-tip"
           onClick={onSplitFront}
-          data-tip="Split front windows"
-          aria-label="Split front windows"
+          data-tip={t("header.splitFront")}
+          aria-label={t("header.splitFront")}
         >
           <Icons.split size={16} />
         </button>
@@ -60,13 +61,14 @@ export function Header({
           type="button"
           className="hd-tool ui-tip"
           onClick={onCascade}
-          data-tip="Cascade windows"
-          aria-label="Cascade windows"
+          data-tip={t("header.cascade")}
+          aria-label={t("header.cascade")}
         >
           <Icons.cascade size={16} />
         </button>
       </div>
-
     </header>
   );
 }
+
+export const Header = memo(HeaderImpl);

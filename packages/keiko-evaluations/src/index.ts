@@ -16,6 +16,12 @@ export { renderEvalSummary } from "./render.js";
 // Prompt Enhancer evaluation suite (Epic #1307, Issue #1315). Exposed as a single auditable namespace,
 // mirroring the gateway's `PromptEnhancer` and evidence's `PromptEnhancement` namespace convention.
 export * as PromptEnhancerEval from "./promptEnhancer/index.js";
+// Discussion Intelligence evaluation suite (Epic #491, Issue #502; ADR-0065). Exposed as a single
+// auditable namespace, mirroring the `PromptEnhancerEval` convention above.
+export * as DiscussionEval from "./discussion/index.js";
+// Voice Digital Twin evaluation suite (Epic #491, Issue #505 — the capstone; ADR-0068). Exposed as a
+// single auditable namespace, mirroring the `DiscussionEval` convention above.
+export * as VoiceTwinEval from "./voice-twin/index.js";
 export {
   ALL_FIXTURES,
   SUITE_NAMES,

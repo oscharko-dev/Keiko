@@ -17,6 +17,52 @@ export type {
   WorkflowDescriptor,
   WorkflowInputSpec,
   GroundingLimits,
+  GitRepositoryState,
+  GitUnavailableReason,
+  GitStatusCode,
+  GitChangedFile,
+  GitRepositoryStatusResponse,
+  GitDiffScope,
+  GitRepositoryDiffResponse,
+  GitRepositorySummary,
+  GitRepositorySummaryRemote,
+  GitRemoteSummary,
+  GitRemotesResponse,
+  GitHistoryEntry,
+  GitHistoryResponse,
+  GitSyncOperation,
+  GitSyncOutcome,
+  GitSyncPreview,
+  GitSyncExecuteResponse,
+  // Issue #1387 — controlled test/build/run command executor wire types.
+  CommandTaskKind,
+  CommandTaskSource,
+  CommandTask,
+  CommandTaskCatalog,
+  CommandFailureReason,
+  CommandTaskRunRequest,
+  CommandTaskRunResult,
+  CommandRunnerEventKind,
+  CommandRunnerEvent,
+  // Issue #1388 (ADR-0070) — container engine detection + governed execution wire types.
+  ContainerEngineId,
+  ContainerEngineState,
+  ContainerEngineUnavailableReason,
+  ContainerEngineStatus,
+  ContainerCapabilityResponse,
+  ContainerTaskKind,
+  ContainerTask,
+  ContainerTaskCatalog,
+  ContainerRunRequest,
+  ContainerFailureReason,
+  ContainerRunResult,
+  ContainerRunnerEventKind,
+  ContainerRunnerEvent,
+  VoiceProfile,
+  VoiceProviderLocality,
+  VoiceUnavailableReason,
+  VoiceTransportPosture,
+  VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-contracts";
 
 export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
@@ -103,6 +149,7 @@ export type {
   EditorAgentActionQueuedResponse,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
+  EditorAgentConflictCode,
   EditorAgentEvent,
   EditorAgentPaneSnapshot,
   EditorAgentSessionSnapshot,
@@ -111,7 +158,20 @@ export type {
   EditorAgentSnapshotResponse,
   EditorAgentSnapshotTextMode,
 } from "@oscharko-dev/keiko-contracts";
-export { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+export {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  isContainedAgentPath,
+  isEditorAgentEvent,
+} from "@oscharko-dev/keiko-contracts";
+
+// ─── Editor agent governance, policy, and audit (Issue #1395, ADR-0062) ─────────
+export type {
+  EditorAgentActionAuditRecord,
+  EditorAgentActionDisposition,
+  EditorAgentActionEffectClass,
+  EditorAgentAuditResponse,
+} from "@oscharko-dev/keiko-contracts";
+export { isEditorAgentActionAuditRecord } from "@oscharko-dev/keiko-contracts";
 
 // ─── Deterministic context-engineering layer (ADR-0052 / ADR-0057) ──────────────────
 // The context-status panel (ContextStatusPanel.tsx) needs the lane-id literal union and the
@@ -129,19 +189,15 @@ export {
   explainConversationIneligibility,
 } from "@oscharko-dev/keiko-contracts";
 
-// Issue #151 / Epic #142: pure conversation-budget estimator. The Conversation
-// Center context-pressure indicator and "clear history" affordance derive from
-// this on every render. Token counts are APPROXIMATE (bytes/4) by construction
-// — UI copy and tests must state this precisely.
-export type {
-  ConversationBudgetBreakdown,
-  ConversationBudgetDocumentContext,
-  ConversationBudgetEstimate,
-  ConversationBudgetInputs,
-  ConversationBudgetMessage,
-  ConversationBudgetPressure,
+// Issue #1557 / Epic #1556 (ADR-0094 D3/D5): pure, content-free voice-provider availability helpers
+// re-exported from keiko-contracts so the model list can present a correctly configured voice
+// provider as available (not as a chat-ineligibility warning) without importing keiko-model-gateway
+// (ADR-0019 trust-3).
+export {
+  isConfiguredVoiceProvider,
+  describeVoiceProviderAvailability,
 } from "@oscharko-dev/keiko-contracts";
-export { estimateConversationBudget } from "@oscharko-dev/keiko-contracts";
+export type { VoiceProviderAvailability, VoicePersona } from "@oscharko-dev/keiko-contracts";
 
 // ─── Workspace summary + context pack ──────────────────────────────────────────────
 export type {
@@ -261,6 +317,11 @@ export type {
   FilesPreviewResponse,
   FilesContentResponse,
   FilesWriteRequest,
+  FilesCreateRequest,
+  FilesRenameRequest,
+  FilesDeleteRequest,
+  FilesCopyRequest,
+  FilesMutationResponse,
   EditorDocumentSession,
   EditorDocumentVersion,
   EditorSessionErrorCode,

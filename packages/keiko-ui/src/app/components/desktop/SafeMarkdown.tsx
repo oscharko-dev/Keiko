@@ -338,7 +338,7 @@ function renderTableNode(
 
 function renderRepositoryText(text: string, key: string, options: RenderOptions): ReactNode {
   const sanitizedText = sanitizeRepositoryEvidenceText(text);
-  if (options.openRepositoryReference === undefined || options.repositoryRoots.length === 0) {
+  if (options.openRepositoryReference === undefined) {
     return <span key={key}>{sanitizedText}</span>;
   }
   const parts = repositoryReferenceTextParts(sanitizedText);
@@ -367,9 +367,7 @@ function renderRepositoryText(text: string, key: string, options: RenderOptions)
 function renderInlineCode(node: SafeMarkdownNode, key: string, options: RenderOptions): ReactNode {
   const text = node.text ?? "";
   const reference =
-    options.openRepositoryReference === undefined || options.repositoryRoots.length === 0
-      ? null
-      : parseExactRepositoryReference(text);
+    options.openRepositoryReference === undefined ? null : parseExactRepositoryReference(text);
   return (
     <code key={key} className="sm-inline-code">
       {reference === null ? (

@@ -9,12 +9,14 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -362,9 +364,77 @@ async function assertQiRouteReachable(baseUrl) {
   }
 }
 
+function seedNestedRepositoryPickerFixture(tmp) {
+  const repoRootPath = join(tmp, "Keiko");
+  mkdirSync(join(repoRootPath, ".git"), { recursive: true });
+  mkdirSync(join(repoRootPath, "packages", "keiko-editor", "src"), { recursive: true });
+  mkdirSync(join(tmp, "StorybookStatic", "assets"), { recursive: true });
+  writeFileSync(
+    join(repoRootPath, "packages", "keiko-editor", "src", "range.ts"),
+    "export const sourceRange = 1;\n",
+    "utf8",
+  );
+  writeFileSync(join(tmp, "StorybookStatic", "assets", "range.ts"), "generated\n", "utf8");
+  return realpathSync(repoRootPath);
+}
+
+function assertNestedRepositoryFirstSearchResult(first, expectedRepoRoot) {
+  if (!samePath(first?.root, expectedRepoRoot)) {
+    fail(
+      "repository picker search did not rebase the first nested repo result " +
+        `to ${expectedRepoRoot}: ${JSON.stringify(first).slice(0, 240)}`,
+    );
+  }
+  if (first.path !== "packages/keiko-editor/src/range.ts") {
+    fail(`repository picker search returned non-canonical first path: ${String(first.path)}`);
+  }
+  if (
+    first.fileRole !== "source" ||
+    first.matchQuality !== "exact" ||
+    first.rootKind !== "nested-git-root"
+  ) {
+    fail(
+      "repository picker search first result metadata was not source/exact/nested-git-root: " +
+        JSON.stringify(first).slice(0, 240),
+    );
+  }
+}
+
+function assertGeneratedRepositorySearchFixture(payload) {
+  const generated = payload.results?.find(
+    (entry) => entry.path === "StorybookStatic/assets/range.ts",
+  );
+  if (generated?.fileRole !== "generated" || generated.rootKind !== "selected-root") {
+    fail(
+      "repository picker search generated fixture metadata was not generated/selected-root: " +
+        JSON.stringify(generated).slice(0, 240),
+    );
+  }
+}
+
+async function assertRepositoryPickerSearchRebasesNestedRepo(baseUrl, tmp) {
+  const expectedRepoRoot = seedNestedRepositoryPickerFixture(tmp);
+  const res = await globalThis.fetch(
+    `${baseUrl}/api/files/search?root=${encodeURIComponent(tmp)}&query=range&limit=10`,
+  );
+  if (!res.ok) {
+    fail(
+      `keiko ui GET /api/files/search for repository picker exited with HTTP ${String(res.status)}`,
+    );
+  }
+  const payload = await res.json();
+  const first = payload.results?.[0];
+  assertNestedRepositoryFirstSearchResult(first, expectedRepoRoot);
+  assertGeneratedRepositorySearchFixture(payload);
+  if (payload.results?.some((entry) => entry.path === "Keiko/packages/keiko-editor/src/range.ts")) {
+    fail("repository picker search leaked the parent-folder label into a result path");
+  }
+}
+
 // Compare two absolute paths for equality. On Windows paths are case-insensitive and may differ in
-// separator (`\` vs `/`) or drive-letter case between `realpathSync` and the server's resolved path,
-// so normalise both before comparing there; POSIX comparison stays exact (case-sensitive).
+// separator (`\` vs `/`), drive-letter case, or 8.3 short-name expansion between `realpathSync`
+// and the server's resolved path, so compare every realpath variant we can resolve there; POSIX
+// comparison stays exact (case-sensitive).
 //
 // Test layering for the cross-platform path helpers (this `samePath` and the forward-slash
 // `probeFile` above): they are deliberately covered by the CI matrix itself rather than a unit test.
@@ -372,11 +442,31 @@ async function assertQiRouteReachable(baseUrl) {
 // the `win32` branches by `cross-platform-smoke (windows-latest)`, the POSIX branches by the
 // `(macos-latest)` leg and the gating Linux `build-scan-sbom-smoke` job. A unit test would mock the
 // platform/fs and assert against the harness, not the product, so it is intentionally not added.
+function comparableWindowsPath(value) {
+  return String(value)
+    .replace(/^\\\\\?\\/u, "")
+    .replace(/\\/gu, "/")
+    .toLowerCase();
+}
+
+function windowsPathVariants(value) {
+  const variants = new Set([comparableWindowsPath(value)]);
+  for (const resolvePath of [realpathSync, realpathSync.native]) {
+    try {
+      variants.add(comparableWindowsPath(resolvePath(value)));
+    } catch {
+      // Missing paths should still compare by their normalized literal form.
+    }
+  }
+  return variants;
+}
+
 function samePath(a, b) {
   if (a === undefined || b === undefined) return false;
   if (process.platform !== "win32") return a === b;
-  const norm = (p) => String(p).replace(/\\/gu, "/").toLowerCase();
-  return norm(a) === norm(b);
+  const left = windowsPathVariants(a);
+  const right = windowsPathVariants(b);
+  return [...left].some((candidate) => right.has(candidate));
 }
 
 async function assertUiLaunchProject(baseUrl, tmp) {
@@ -423,6 +513,7 @@ async function assertPackagedUi(tmp) {
     await waitForHealth(baseUrl, child, stdoutChunks, stderrChunks);
     await assertUiLaunchProject(baseUrl, tmp);
     await assertQiRouteReachable(baseUrl);
+    await assertRepositoryPickerSearchRebasesNestedRepo(baseUrl, tmp);
     const home = await globalThis.fetch(`${baseUrl}/`);
     if (!home.ok) {
       fail(`keiko ui GET / exited with HTTP ${String(home.status)}`);

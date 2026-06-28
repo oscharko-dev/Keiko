@@ -39,6 +39,28 @@ describe("SafeMarkdown — code block", () => {
     expect(document.querySelector(".sm-code-line-src")?.textContent).toContain("answer");
   });
 
+  it("keeps code operators literal for rendering and copy", async () => {
+    const source = "const f = (x) => x !== null ? x => x : x;";
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(<SafeMarkdown source={`\`\`\`typescript\n${source}\n\`\`\``} />);
+
+    expect(document.querySelector(".sm-code-line-src")?.textContent).toBe(source);
+    fireEvent.click(screen.getByRole("button", { name: "Copy code block" }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(source);
+    });
+
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
   it("marks long code blocks as internally scrollable", () => {
     const longCode = Array.from(
       { length: 32 },
@@ -243,10 +265,9 @@ describe("SafeMarkdown — repository references", () => {
     const reference = screen.getByRole("button", {
       name: "Open packages/keiko-harness/src/context.ts in editor",
     });
-    expect(reference).toHaveTextContent("packages/keiko-harness/src/context.ts");
-    expect(document.querySelector(".sm-p")?.textContent).toBe(
-      "Review packages/keiko-harness/src/context.ts.",
-    );
+    expect(reference).toHaveTextContent("context.ts");
+    expect(reference).toHaveAttribute("title", "packages/keiko-harness/src/context.ts");
+    expect(document.querySelector(".sm-p")?.textContent).toBe("Review context.ts.");
   });
 
   it("collapses grounded source metadata and duplicate repository references", () => {
@@ -265,12 +286,10 @@ describe("SafeMarkdown — repository references", () => {
     expect(references).toHaveLength(1);
     expect(document.body.textContent).not.toContain("source: api");
     expect(document.body.textContent).not.toContain("[packages/keiko-harness");
-    expect(document.body.textContent).toContain(
-      "Assertion packages/keiko-harness/src/context.ts:49-58.",
-    );
+    expect(document.body.textContent).toContain("Assertion context.ts:49-58.");
   });
 
-  it("renders repository-looking text as selectable text when no repository root is connected", () => {
+  it("renders repository-looking text as a health-checked reference when no repository root is connected", () => {
     const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
     render(
       <SafeMarkdown
@@ -279,8 +298,14 @@ describe("SafeMarkdown — repository references", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /Open packages\/keiko-harness/ })).toBeNull();
-    expect(screen.getByText(/packages\/keiko-harness\/src\/context\.ts:50/)).toBeInTheDocument();
+    const reference = screen.getByRole("button", {
+      name: "Open packages/keiko-harness/src/context.ts at line 50 in editor",
+    });
+    expect(reference).toHaveTextContent("context.ts:50");
+    fireEvent.click(reference);
+    expect(
+      screen.getByText("Connect a Files window to open repository references."),
+    ).toHaveAttribute("role", "alert");
     expect(openReference).not.toHaveBeenCalled();
   });
 

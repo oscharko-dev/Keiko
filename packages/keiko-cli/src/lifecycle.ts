@@ -7,7 +7,12 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type SpawnOptions,
+  type StdioOptions,
+} from "node:child_process";
 import { createServer as createNetServer } from "node:net";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -97,6 +102,12 @@ interface LifecycleRuntimeDeps {
 interface HealthProbeResult {
   readonly reachable: boolean;
   readonly version: string | undefined;
+}
+
+interface UiLogStdio {
+  readonly logPath: string;
+  readonly stdio: StdioOptions;
+  readonly close: () => void;
 }
 
 function staleProcessReason(health: HealthProbeResult): string {
@@ -373,15 +384,33 @@ function reportHealthyStart(
   return 0;
 }
 
+function openUiLogStdio(options: LifecycleOptions): UiLogStdio {
+  mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
+  const logPath = logFile(options);
+  const stdoutFd = openSync(logPath, "a", 0o600);
+  try {
+    const stderrLogFd = openSync(logPath, "a", 0o600);
+    return {
+      logPath,
+      stdio: ["ignore", stdoutFd, stderrLogFd],
+      close: (): void => {
+        closeSync(stdoutFd);
+        closeSync(stderrLogFd);
+      },
+    };
+  } catch (error) {
+    closeSync(stdoutFd);
+    throw error;
+  }
+}
+
 function spawnUiProcess(
   options: LifecycleOptions,
   env: EnvSource,
   deps: Pick<LifecycleRuntimeDeps, "spawnFn">,
   cwd: string,
 ): { readonly child: ChildProcess; readonly logPath: string } {
-  mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
-  const logPath = logFile(options);
-  const fd = openSync(logPath, "a", 0o600);
+  const logStdio = openUiLogStdio(options);
   const preferredLayout = resolvePreferredInstallLayout(cwd);
   const uiEnv = childEnv({
     ...env,
@@ -403,13 +432,13 @@ function spawnUiProcess(
           cwd,
           detached: true,
           env: uiEnv,
-          stdio: ["ignore", fd, fd],
+          stdio: logStdio.stdio,
         },
       ),
-      logPath,
+      logPath: logStdio.logPath,
     };
   } finally {
-    closeSync(fd);
+    logStdio.close();
   }
 }
 
@@ -467,7 +496,14 @@ async function cmdStart(
 
   if (!(await ensureStartPortAvailable(options, io, deps))) return 1;
 
-  const { child, logPath } = spawnUiProcess(options, env, deps, cwd);
+  let spawned: { readonly child: ChildProcess; readonly logPath: string };
+  try {
+    spawned = spawnUiProcess(options, env, deps, cwd);
+  } catch {
+    io.err("keiko start: failed to spawn the UI process.\n");
+    return 1;
+  }
+  const { child, logPath } = spawned;
 
   if (child.pid === undefined) {
     io.err("keiko start: failed to spawn the UI process.\n");

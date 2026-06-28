@@ -157,8 +157,9 @@ vi.mock("@monaco-editor/react", () => {
       focus: vi.fn(),
       setSelection: vi.fn(),
       revealRangeInCenterIfOutsideViewport: vi.fn(),
-      deltaDecorations: vi.fn((_oldDecorations: readonly string[], newDecorations: readonly unknown[]) =>
-        newDecorations.length > 0 ? ["reference-decoration"] : [],
+      deltaDecorations: vi.fn(
+        (_oldDecorations: readonly string[], newDecorations: readonly unknown[]) =>
+          newDecorations.length > 0 ? ["reference-decoration"] : [],
       ),
       mounted: false,
       fakeEditor: null as unknown as FakeEditorShape,
@@ -456,6 +457,25 @@ describe("KeikoCodeEditor — runtime errors", () => {
     expect(onRuntimeError).toHaveBeenCalled();
     expect(screen.getByLabelText("Editor: src/a.ts")).toBeInTheDocument();
   });
+
+  it("re-applies the theme on a theme-variant change without remounting (Issue 2.2)", async () => {
+    // A light/dark toggle must re-theme the SAME live editor (preserving the undo stack + view state),
+    // not remount it. The re-apply re-attempts theme registration; in jsdom that surfaces again
+    // through onRuntimeError — the observable that the re-theme path ran on the live instance.
+    const onRuntimeError = vi.fn();
+    const { rerender } = render(
+      <KeikoCodeEditor {...baseProps({ onRuntimeError, themeVariant: "dark" })} />,
+    );
+    await flushMount();
+    expect(onRuntimeError).toHaveBeenCalled();
+    onRuntimeError.mockClear();
+
+    rerender(<KeikoCodeEditor {...baseProps({ onRuntimeError, themeVariant: "light" })} />);
+    await flushMount();
+    expect(onRuntimeError).toHaveBeenCalled();
+    // Still the same mounted editor — no remount.
+    expect(screen.getByLabelText("Editor: src/a.ts")).toBeInTheDocument();
+  });
 });
 
 describe("KeikoCodeEditor — Monaco language", () => {
@@ -529,12 +549,15 @@ describe("KeikoCodeEditor — reference reveal", () => {
     expect(captured.editor?.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(
       expectedRange,
     );
-    expect(captured.editor?.deltaDecorations).toHaveBeenCalledWith([], [
-      {
-        range: expectedRange,
-        options: { isWholeLine: true, className: "keiko-editor-reference-target" },
-      },
-    ]);
+    expect(captured.editor?.deltaDecorations).toHaveBeenCalledWith(
+      [],
+      [
+        {
+          range: expectedRange,
+          options: { isWholeLine: true, className: "keiko-editor-reference-target" },
+        },
+      ],
+    );
   });
 
   it("replays the same range when the host sends a new reveal request id", async () => {
@@ -547,9 +570,7 @@ describe("KeikoCodeEditor — reference reveal", () => {
     const firstRevealCount = captured.editor?.setSelection.mock.calls.length ?? 0;
 
     rerender(
-      <KeikoCodeEditor
-        {...baseProps({ revealRequest: { ...revealRequest, id: "ref-2" } })}
-      />,
+      <KeikoCodeEditor {...baseProps({ revealRequest: { ...revealRequest, id: "ref-2" } })} />,
     );
 
     expect(captured.editor?.setSelection).toHaveBeenCalledTimes(firstRevealCount + 1);

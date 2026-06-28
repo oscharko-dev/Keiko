@@ -201,8 +201,6 @@ function createContainedReaders(
 // Resolves the compiler options for the overlay: the nearest tsconfig inside the root (following
 // `extends` through the contained reader, never enumerating files) merged over safe defaults.
 function resolveCompilerOptions(
-  fs: WorkspaceFs,
-  realRoot: string,
   overlayPath: string,
   readers: ContainedReaders,
 ): ts.CompilerOptions {
@@ -280,7 +278,7 @@ export function createContainedLanguageServiceHost(
     cancellation,
     limits,
   );
-  const compilerOptions = resolveCompilerOptions(fs, realRoot, overlayPath, readers);
+  const compilerOptions = resolveCompilerOptions(overlayPath, readers);
   const overlay = normalizeSlashes(overlayPath);
 
   return {

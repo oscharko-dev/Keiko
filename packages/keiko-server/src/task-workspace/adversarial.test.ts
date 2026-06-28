@@ -1,0 +1,251 @@
+// Adversarial / failure-classification coverage for the task-workspace services (Issue #449, ADR-0093).
+//
+// Covers the issue's negative matrix with the NEW #449 lens — every classified failure also carries the
+// caller-facing failure class (D3):
+//   AC2 — path traversal / out-of-root containment rejected deterministically.
+//   AC3 — partial failures leave a VISIBLE recoverable/blocked/terminal state, never ambiguous damage.
+//   AC4 — external Git/filesystem interference produces an explicit degraded/blocked state callers act on.
+//   EV2 — adversarial filesystem fixtures (managed-root spoof, unmanaged collision, duplicate branch).
+// Path-containment + ownership engines are reused from #445/#448; this asserts the rejections and their
+// classification, never re-implementing the engine.
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { runMigrations } from "../store/schema.js";
+import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
+import { createWorkspaceMutexRegistry, type WorkspaceMutexRegistry } from "./mutex.js";
+import { createWorkspaceProvisioningService } from "./provisioning.js";
+import {
+  deriveManagedWorktreePath,
+  deriveRepositoryId,
+  deriveTaskBranchName,
+  deriveWorkspaceId,
+} from "./naming.js";
+import { isManagedTargetContained } from "./managed-root.js";
+import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
+import type { WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceProvisioningService } from "./types.js";
+
+let repoRoot: string;
+let managedRoot: string;
+let db: DatabaseSync;
+let store: WorkspaceInstanceStore;
+let mutex: WorkspaceMutexRegistry;
+let provisioning: WorkspaceProvisioningService;
+let idCounter: number;
+
+function git(args: readonly string[]): void {
+  execFileSync("git", [...args], { cwd: repoRoot });
+}
+
+function noopEvidence(): EvidenceStore {
+  return {
+    put: (id: string): string => `/evidence/${id}.json`,
+    list: (): readonly string[] => [],
+    get: (): string | undefined => undefined,
+    delete: (): void => undefined,
+  };
+}
+
+function adapterFor(workspace: WorkspaceInfo): ReturnType<typeof createNodeGitWorktreeAdapter> {
+  return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
+}
+
+function buildService(): void {
+  store = buildWorkspaceInstanceStoreOverDatabase(db);
+  mutex = createWorkspaceMutexRegistry();
+  provisioning = createWorkspaceProvisioningService({
+    store,
+    evidenceStore: noopEvidence(),
+    managedRoot,
+    createAdapter: adapterFor,
+    redactString: (s: string): string => s,
+    now: (): number => Date.now(),
+    newId: (): string => `id-${String(idCounter++)}`,
+    mutex,
+  });
+}
+
+async function expectFailure(
+  thunk: () => Promise<unknown>,
+  code: TaskWorkspaceErrorCode,
+  failureClass: WorkspaceFailureClass,
+): Promise<void> {
+  let caught: unknown;
+  try {
+    await thunk();
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(TaskWorkspaceError);
+  const err = caught as TaskWorkspaceError;
+  expect(err.code).toBe(code);
+  // The classified failure carries the caller-facing class (#449, ADR-0093 D3).
+  expect(err.failureClass).toBe(failureClass);
+}
+
+function provisionRequest(taskId: string): {
+  repositoryRequestPath: string;
+  taskId: string;
+  baseBranch: string;
+  requestedBy: string;
+} {
+  return { repositoryRequestPath: repoRoot, taskId, baseBranch: "main", requestedBy: "actor" };
+}
+
+beforeEach(() => {
+  repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-adv-repo-")));
+  managedRoot = join(realpathSync(mkdtempSync(join(tmpdir(), "keiko-adv-mr-"))), "task-workspaces");
+  git(["init", "-q", "-b", "main"]);
+  git(["config", "user.email", "test@keiko.example"]);
+  git(["config", "user.name", "Keiko Test"]);
+  git(["config", "commit.gpgsign", "false"]);
+  writeFileSync(join(repoRoot, "README.md"), "# demo\n");
+  git(["add", "README.md"]);
+  git(["commit", "-q", "-m", "initial"]);
+  db = new DatabaseSync(":memory:");
+  runMigrations(db);
+  idCounter = 0;
+  buildService();
+});
+
+afterEach(() => {
+  db.close();
+  rmSync(repoRoot, { recursive: true, force: true });
+  rmSync(managedRoot, { recursive: true, force: true });
+});
+
+describe("path-safety containment (AC2)", () => {
+  it("rejects traversal, NUL-byte, and out-of-root absolute targets, but accepts a contained leaf", () => {
+    // managedRoot must be owned for containment to be evaluated against a real root; the helper creates
+    // it on first provision, so create it here directly by provisioning one workspace.
+    const repositoryId = deriveRepositoryId(repoRoot);
+    const contained = join(managedRoot, repositoryId, "leaf");
+    mkdirSync(dirname(contained), { recursive: true });
+
+    expect(isManagedTargetContained(managedRoot, join(managedRoot, "..", "escape"))).toBe(false);
+    // A genuine embedded NUL byte must be rejected (never truncated and silently accepted).
+    expect(isManagedTargetContained(managedRoot, `${managedRoot}\0/x`)).toBe(false);
+    expect(isManagedTargetContained(managedRoot, "/etc/passwd")).toBe(false);
+    expect(isManagedTargetContained(managedRoot, join(managedRoot, repositoryId, "a", ".."))).toBe(
+      true,
+    );
+    expect(isManagedTargetContained(managedRoot, contained)).toBe(true);
+  });
+  it("rejects provisioning end-to-end when a managed-root subdir is a symlink escaping the root (UNSAFE_PATH)", async () => {
+    // Integration-level proof (not just the unit containment helper): an adversary plants a symlink at
+    // the repository-id directory that escapes the managed root, so the derived worktree path realpath-
+    // resolves OUTSIDE it. provisionLocked's assertManagedTargetContained must reject before any worktree
+    // is materialized — never following the symlink out of the Keiko-owned tree.
+    const repositoryId = deriveRepositoryId(repoRoot);
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-adv-outside-")));
+    mkdirSync(managedRoot, { recursive: true });
+    symlinkSync(outside, join(managedRoot, repositoryId), "dir");
+    try {
+      await expectFailure(
+        () => provisioning.provision(provisionRequest("symlink")),
+        "UNSAFE_PATH",
+        "blocked",
+      );
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("external Git / filesystem interference (AC3, AC4)", () => {
+  it("classifies an externally-removed worktree as repairable drift on the next activate, not a crash", async () => {
+    const created = await provisioning.provision(provisionRequest("ext"));
+    const workspaceId = created.instance.workspaceId;
+    // Simulate external interference: a developer removes the managed worktree directory out-of-band.
+    rmSync(created.instance.managedWorktreePath, { recursive: true, force: true });
+
+    // The next activate must surface an explicit, classified, repairable state — never silently succeed.
+    await expectFailure(
+      () =>
+        provisioning.activate({
+          workspaceId,
+          taskId: "",
+          requestedBy: "actor",
+          acquireLock: false,
+        }),
+      "POINTER_DRIFT",
+      "repairable",
+    );
+    // AC4: the workspace stays VISIBLE in a recoverable state with the drift marker, not dropped.
+    const after = store.getById(workspaceId);
+    expect(after?.lifecycleState).toBe("recovery-required");
+    expect(after?.driftMarkers).toContain("worktree-missing");
+  });
+});
+
+describe("corrupted local metadata (AC3)", () => {
+  it("rejects a smuggled invalid lifecycle state at the durable layer (DB CHECK)", async () => {
+    const created = await provisioning.provision(provisionRequest("corrupt"));
+    // The schema's CHECK constraint refuses an out-of-contract lifecycle_state at write time, so the row
+    // cannot even be corrupted into an unknown state.
+    expect(() =>
+      db
+        .prepare("UPDATE task_workspace_instances SET lifecycle_state = ? WHERE workspace_id = ?")
+        .run("totally-bogus", created.instance.workspaceId),
+    ).toThrow(/CHECK constraint/iu);
+  });
+
+  it("fails closed when a DB-valid but contract-invalid drift marker is smuggled in (read re-validation)", async () => {
+    const created = await provisioning.provision(provisionRequest("corrupt2"));
+    // A JSON column has no DB-level allowlist, so a bogus drift marker writes fine — but the store's
+    // contract re-validation on read refuses to hand back a record that violates the closed allowlist.
+    db.prepare(
+      "UPDATE task_workspace_instances SET drift_markers_json = ? WHERE workspace_id = ?",
+    ).run(JSON.stringify(["not-a-real-marker"]), created.instance.workspaceId);
+    expect(() => store.getById(created.instance.workspaceId)).toThrow(/invalid/iu);
+  });
+});
+
+describe("adversarial provisioning collisions (EV2)", () => {
+  it("rejects a duplicate unmanaged task branch as blocked", async () => {
+    // Pre-create the exact branch name provisioning would derive for this task, outside Keiko's control.
+    const taskBranch = deriveTaskBranchName({ taskId: "dup" });
+    git(["branch", taskBranch]);
+    await expectFailure(
+      () => provisioning.provision(provisionRequest("dup")),
+      "BRANCH_CONFLICT",
+      "blocked",
+    );
+  });
+
+  it("rejects an existing unmanaged directory at the target worktree path as blocked", async () => {
+    const repositoryId = deriveRepositoryId(repoRoot);
+    const workspaceId = deriveWorkspaceId({ repositoryId, taskId: "collide" });
+    const target = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+    // A non-Keiko directory squats the target path before provisioning runs.
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "squatter.txt"), "not keiko\n");
+    await expectFailure(
+      () => provisioning.provision(provisionRequest("collide")),
+      "EXISTING_UNMANAGED_PATH",
+      "blocked",
+    );
+  });
+
+  it("rejects a base branch that does not resolve as blocked", async () => {
+    await expectFailure(
+      () =>
+        provisioning.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "nobranch",
+          baseBranch: "does-not-exist",
+          requestedBy: "actor",
+        }),
+      "INVALID_BASE_BRANCH",
+      "blocked",
+    );
+  });
+});
