@@ -962,7 +962,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(client.getHistory).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("tab", { name: "History" }));
-    await waitFor(() => expect(client.getHistory).toHaveBeenCalledWith({ root: REPO_A.path, limit: 50 }));
+    await waitFor(() =>
+      expect(client.getHistory).toHaveBeenCalledWith({ root: REPO_A.path, limit: 50 }),
+    );
 
     expect(screen.getByRole("listbox", { name: "Commit history" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /feat: add history/ })).toHaveAttribute(
@@ -1089,7 +1091,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       getStatus: vi.fn(async () => makeStatus({ detached: true, branch: undefined })),
       getSummary: vi.fn(async () => makeSummary({ detached: true, branch: undefined })),
     });
-    const { rerender } = render(<GitClientWindow projectId={REPO_A.path} client={detachedClient} />);
+    const { rerender } = render(
+      <GitClientWindow projectId={REPO_A.path} client={detachedClient} />,
+    );
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Detached HEAD");
     expect(await screen.findByRole("button", { name: "Run sync: Detached HEAD" })).toBeDisabled();
@@ -1231,6 +1235,39 @@ describe("GitClientWindow — empty / loading / error states", () => {
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     await waitFor(() => expect(screen.getByText("No changes")).toBeInTheDocument());
+  });
+
+  // AC (Issue #1576): "Empty repository and no-repository states guide users to clone or
+  // open a local repository." The no-repository state must surface guidance plus the
+  // add-repository affordance rather than an empty void.
+  it("shows the no-repository empty state guiding users to add a repository", async () => {
+    const client = makeClient({
+      listRepositories: vi.fn(async () => ({ projects: [] })),
+    });
+    render(<GitClientWindow client={client} />);
+
+    await waitFor(() => expect(client.listRepositories).toHaveBeenCalled());
+    expect(screen.getByText("No repositories yet. Add a repository to begin.")).toBeInTheDocument();
+    // The add-repository affordance stays reachable from the empty list.
+    expect(screen.getByRole("button", { name: "Add repository" })).toBeInTheDocument();
+  });
+
+  // AC (Issue #1576): the empty repository state (initialized repo with zero commits) must
+  // explain how to start history instead of rendering an empty commit listbox.
+  it("shows the no-commits history empty state for an initialized repository", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getHistory: vi.fn(async () => makeHistory({ entries: [] })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("tab", { name: "History" }));
+    await waitFor(() => expect(client.getHistory).toHaveBeenCalled());
+
+    expect(screen.getByText("No commits yet. Make a commit to start history.")).toBeInTheDocument();
+    // An empty history must not render the commit listbox.
+    expect(screen.queryByRole("listbox", { name: "Commit history" })).not.toBeInTheDocument();
   });
 });
 
@@ -1695,7 +1732,8 @@ describe("GitClientWindow — diff scope (Issue #1575)", () => {
       unstagedCount: 0,
       changes: [change("README.md", { indexStatus: "M", staged: true })],
     });
-    const getStatus = vi.fn<GitClientSeam["getStatus"]>()
+    const getStatus = vi
+      .fn<GitClientSeam["getStatus"]>()
       .mockResolvedValueOnce(before)
       .mockResolvedValueOnce(after);
     const client = makeClient({
