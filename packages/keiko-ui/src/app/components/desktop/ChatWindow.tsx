@@ -1123,7 +1123,6 @@ interface ComposerBarProps {
   readonly ready: boolean;
   readonly selectedModelCapability: ModelCapability | undefined;
   readonly onAttachFiles: (files: readonly File[]) => void;
-  readonly compact?: boolean;
   readonly controlsNarrow?: boolean;
   readonly barCompact?: boolean;
   // Issue #151 — when true, the budget for the next send exceeds the model's
@@ -1158,7 +1157,6 @@ function ComposerBar({
   ready,
   selectedModelCapability,
   onAttachFiles,
-  compact = false,
   controlsNarrow = false,
   barCompact = false,
   budgetExceeded,
@@ -1211,10 +1209,6 @@ function ComposerBar({
           ? SEND_HINT_ID
           : undefined;
 
-  // AC #2 / title for disabled model select.
-  const selectTitle = noEligibleModels
-    ? t("chat.model.noneConfiguredTitle")
-    : t("chat.model.title");
   const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
   const compactModelTip = loading
     ? t("chat.model.loading")
@@ -1956,7 +1950,6 @@ function ComposerCore({
           ready={ready}
           selectedModelCapability={selectedModelCapability}
           onAttachFiles={handleFiles}
-          compact={compact}
           controlsNarrow={controlsNarrow}
           barCompact={barCompact}
           budgetExceeded={budgetExceeded}
@@ -2018,108 +2011,6 @@ function NoChatState(): ReactNode {
       <p className="chatw-empty-no-chat-label">{t("chat.empty.noChat.title")}</p>
       <p className="chatw-empty-no-chat-hint">{t("chat.empty.noChat.hint")}</p>
     </div>
-  );
-}
-
-function ChatHero({
-  session,
-  ready,
-}: {
-  readonly session: ChatSessionApi;
-  readonly ready: boolean;
-}): ReactNode {
-  const { t } = useI18n();
-  const { loading, activeProject, sendMessage } = session;
-  return (
-    <form
-      className="composer composer-compact"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void sendMessage();
-      }}
-    >
-      <h1 className="composer-title">{t("chat.hero.title")}</h1>
-      <ComposerCore
-        session={session}
-        ready={ready}
-        placeholder={loading ? t("chat.hero.loadingWorkspace") : t("chat.hero.placeholder")}
-      />
-      <div className="cmp-context">
-        {activeProject !== undefined && (
-          <button type="button" className="chip">
-            <Icons.folder size={14} style={{ color: "var(--accent)" }} />
-            <span className="chip-label">{activeProject.name}</span>
-            <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
-          </button>
-        )}
-        <button type="button" className="chip">
-          <Icons.cube size={14} style={{ color: "var(--fg-dim)" }} />
-          <span className="chip-label">{t("chat.workLocally")}</span>
-          <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function MiniChat({
-  session,
-  ready,
-}: {
-  readonly session: ChatSessionApi;
-  readonly ready: boolean;
-}): ReactNode {
-  const { t } = useI18n();
-  const { draft, loading, sending, sendStatus, cancelSend, setDraft, sendMessage } = session;
-  return (
-    <form
-      className="composer composer-fill"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void sendMessage();
-      }}
-    >
-      <div className="cmp-box cmp-box-fill">
-        <textarea
-          className="cmp-input cmp-input-mini"
-          value={draft}
-          aria-label={t("chat.messageLabel")}
-          placeholder={loading ? t("chat.composer.loading") : t("chat.composer.placeholder")}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={onComposerKeyDown(sendMessage)}
-          // uiux-fix F041 (C205) — see ComposerCore: editable while sending so the
-          // next message can be pre-typed; re-submit is blocked by isInFlight.
-        />
-        {/* ST-F1 — match ComposerBar: while a send is in flight the primary
-            action flips to "Cancel response" (#152 AC#3) so the mini composer
-            offers the same cancel affordance as the full composer. */}
-        {sending ? (
-          <button
-            type="button"
-            className="cmp-send cmp-send-float cmp-send-cancel cmp-tip-end"
-            data-on
-            aria-label={t("chat.send.cancel")}
-            data-tip={t("chat.send.cancel")}
-            onClick={cancelSend}
-          >
-            <Icons.close size={16} />
-          </button>
-        ) : (
-          <button
-            type={ready ? "submit" : "button"}
-            className="cmp-send cmp-send-float cmp-tip-end"
-            data-on={ready}
-            data-tip={t("chat.send.label")}
-            aria-disabled={!ready}
-            aria-label={t("chat.send.label")}
-          >
-            <Icons.arrowUp size={16} />
-          </button>
-        )}
-      </div>
-      {/* ST-F1 — #152 AC#3 lifecycle status region for the mini composer. */}
-      <SendLifecycleStatus status={sendStatus} />
-    </form>
   );
 }
 
@@ -2915,7 +2806,6 @@ export function ChatWindow({
     sendStatus,
     error,
     noEligibleModels,
-    selectedModel,
     sendMessage,
     cancelGrounded,
     activeProject,

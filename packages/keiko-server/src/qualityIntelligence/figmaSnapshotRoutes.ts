@@ -1029,7 +1029,7 @@ export async function handleFigmaTriggerSnapshot(
 
 // ─── DELETE /api/figma/token — revoke the stored PAT (#758 rotation/revocation, #760 audit) ───
 
-export function handleFigmaRevokeToken(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleFigmaRevokeToken(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const evidenceDir = deps.evidenceDir;
   if (evidenceDir === undefined || evidenceDir.length === 0) {
     return { status: 503, body: figmaErrorBody("FIGMA_NO_EVIDENCE_DIR") };

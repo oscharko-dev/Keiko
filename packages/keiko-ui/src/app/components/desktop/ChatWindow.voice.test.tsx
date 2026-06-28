@@ -367,30 +367,6 @@ const FULL_REALTIME_WITH_PERSONAS: VoiceCapabilityResolution = {
   providerLocality: "azure-foundry",
 };
 
-// Stub an assistant message that has settled so the playback engine attempts synthesis (enables
-// persona-routing assertions without a server round-trip).
-function makeSessionWithAssistantMessage(
-  overrides: Partial<Parameters<typeof makeSession>[0]> = {},
-): ReturnType<typeof makeSession> {
-  return makeSession({
-    messages: [
-      {
-        id: "msg-1",
-        chatId: "chat-1",
-        role: "assistant",
-        content: "Hello, how can I help you today?",
-        timestamp: Date.now(),
-        runId: undefined,
-        workflowId: undefined,
-        workflowStatus: undefined,
-        shortResult: undefined,
-        taskType: undefined,
-      },
-    ],
-    ...overrides,
-  });
-}
-
 describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
   beforeEach(() => {
     clearVoiceCapabilityCacheForTests();

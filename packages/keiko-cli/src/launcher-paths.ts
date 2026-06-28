@@ -32,7 +32,7 @@ function realpathOrResolve(p: string): string {
 // paths consistently even when leaves don't exist (mkdir not yet called), without
 // silently following a symlinked ancestor: the realpath is taken of the FIRST existing
 // segment in the chain, so symlinks along the still-textual tail are not resolved.
-export function resolveWithExistingAncestor(p: string): string {
+function resolveWithExistingAncestor(p: string): string {
   const absolute = resolve(p);
   const tail: string[] = [];
   let current = absolute;
