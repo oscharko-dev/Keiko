@@ -14,6 +14,25 @@ const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const DEFAULT_STATIC_ROOT = join(repoRoot, "dist", "ui", "static");
 const PARSE_ECMASCRIPT_VERSION = 2020;
 const COMPATIBILITY_BASELINE = "ES2019-compatible syntax plus dynamic import";
+const SYNTAX_VIOLATION_CHECKS = [
+  {
+    matches: (node) => node.type === "ChainExpression",
+    message: "optional chaining is not allowed",
+  },
+  {
+    matches: (node) => node.type === "LogicalExpression" && node.operator === "??",
+    message: "nullish coalescing is not allowed",
+  },
+  {
+    matches: (node) => node.type === "AssignmentExpression" && node.operator === "??=",
+    message: "nullish assignment is not allowed",
+  },
+  {
+    matches: (node) =>
+      node.type === "MetaProperty" && node.meta?.name === "import" && node.property?.name === "meta",
+    message: "import.meta is not allowed",
+  },
+];
 
 async function collectJavaScriptFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -37,36 +56,33 @@ function nodeLocation(node) {
   return `:${String(line)}:${String(column + 1)}`;
 }
 
-function collectSyntaxViolations(node, violations) {
-  if (node === null || typeof node !== "object") return;
+function isAstNode(value) {
+  return value !== null && typeof value === "object" && typeof value.type === "string";
+}
 
-  switch (node.type) {
-    case "ChainExpression":
-      violations.push(`${nodeLocation(node)} optional chaining is not allowed`);
-      break;
-    case "LogicalExpression":
-      if (node.operator === "??") {
-        violations.push(`${nodeLocation(node)} nullish coalescing is not allowed`);
-      }
-      break;
-    case "AssignmentExpression":
-      if (node.operator === "??=") {
-        violations.push(`${nodeLocation(node)} nullish assignment is not allowed`);
-      }
-      break;
-    case "MetaProperty":
-      if (node.meta?.name === "import" && node.property?.name === "meta") {
-        violations.push(`${nodeLocation(node)} import.meta is not allowed`);
-      }
-      break;
-  }
-
+function* childAstNodes(node) {
   for (const value of Object.values(node)) {
     if (Array.isArray(value)) {
-      for (const child of value) collectSyntaxViolations(child, violations);
-    } else if (value !== null && typeof value === "object" && typeof value.type === "string") {
-      collectSyntaxViolations(value, violations);
+      yield* value.filter(isAstNode);
+      continue;
     }
+    if (isAstNode(value)) yield value;
+  }
+}
+
+function describeSyntaxViolation(node) {
+  const check = SYNTAX_VIOLATION_CHECKS.find((candidate) => candidate.matches(node));
+  return check === undefined ? undefined : `${nodeLocation(node)} ${check.message}`;
+}
+
+function collectSyntaxViolations(node, violations) {
+  if (!isAstNode(node)) return;
+
+  const violation = describeSyntaxViolation(node);
+  if (violation !== undefined) violations.push(violation);
+
+  for (const child of childAstNodes(node)) {
+    collectSyntaxViolations(child, violations);
   }
 }
 
