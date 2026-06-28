@@ -35,12 +35,12 @@ Keiko has **two context paths**, established by a full read-only mapping:
    compaction, tool-observation lanes, working-memory, history-summary, verification-evidence, and the true
    128k window live.
 
-**Token reality.** There is no tokenizer anywhere in the repository. Existing approximations diverge:
-`APPROX_BYTES_PER_TOKEN = 4` (`grounded-qa.ts`), `chars / 4` (editor), `word * 1.3`
-(`keiko-memory-retrieval/context.ts` `estimateTokens`), and `bytes / 4`
-(`packages/keiko-contracts/src/conversation-budget.ts:56` `estimateConversationBudget`). Mixing ratios across
-lanes corrupts a shared budget: a lane estimated at `word * 1.3` and a lane estimated at `bytes / 4` cannot be
-summed into one honest allocation. The milestone therefore needs **one** estimator.
+**Token reality.** There is no tokenizer anywhere in the repository. Historical approximations diverged:
+`APPROX_BYTES_PER_TOKEN = 4` (`grounded-qa.ts`), `chars / 4` (editor), and `word * 1.3`
+(`keiko-memory-retrieval/context.ts` `estimateTokens`). A former browser composer estimator also used
+`bytes / 4`, but that UI estimate was removed because it was not model-tokenizer-specific and confused users.
+Mixing ratios across lanes corrupts a shared budget: a lane estimated at `word * 1.3` and a lane estimated at
+`bytes / 4` cannot be summed into one honest allocation. The milestone therefore needs **one** estimator.
 
 ## Decision
 
@@ -61,17 +61,15 @@ every lane. Properties:
   the safe direction: it makes the allocator fit *fewer* tokens than the provider would, never *more*.
 - **Total / never throws**: empty string → a defined small constant (the structural overhead, never `NaN` or a
   divide-by-zero), huge input → a finite integer, non-ASCII / emoji / surrogate pairs → counted by UTF-8 bytes
-  using `TextEncoder` with a `string.length` fallback when `TextEncoder` is absent (matching the existing
-  `utf8ByteLength` fallback at `conversation-budget.ts:71`). It must **never fail a workflow** if exact provider
-  tokenization is unavailable — it is the only available token signal.
+  using `TextEncoder` with a `string.length` fallback when `TextEncoder` is absent. It must **never fail a
+  workflow** if exact provider tokenization is unavailable — it is the only available token signal.
 - **Test-covered**: empty, ASCII, multi-byte, surrogate-pair, and very large fixtures, plus a monotonicity
   property (appending text never lowers the estimate) and a conservatism property (estimate ≥ a known
   lower-bound ratio of the byte length).
 
-`conversation-budget.ts` keeps its `bytes / 4` UI estimator unchanged for backward compatibility, but is
-**extended additively** (optional lane fields on `ConversationBudgetBreakdown`) so the UI pressure indicator can
-disclose the new lanes. The 128k allocator is **not** a fork of `estimateConversationBudget`; the allocator
-consumes the lane model and the canonical `estimateTokens`.
+The browser composer no longer carries a separate `bytes / 4` UI pressure estimator. The 128k allocator consumes
+the lane model and the canonical `estimateTokens`; composer history controls are intentionally not a token-budget
+display.
 
 ### D2 — The model-agnostic ContextProfile and DEFAULT_CONTEXT_PROFILE
 
@@ -138,9 +136,6 @@ All of these are **optional** fields populated by conditional-spread at the prod
   additive `connectedContext?` / `governedHandoff?` precedent). The `EvidenceConnectedContextAudit`
   `rankedCandidates?` additive precedent (`evidence.ts:291`) and the `workspaceRootAuditId` hashing pattern apply;
   `AuditRedactionConfig` (`evidence.ts:335`) and `DEFAULT_RETENTION` are reused, not re-invented.
-- `conversation-budget.ts`: extend `ConversationBudgetBreakdown` (`conversation-budget.ts:35`) with optional
-  per-lane byte fields for the UI pressure indicator. Reference only — the 128k allocator does not fork the
-  estimator.
 - `coding-context.ts`: `CodingContextBudget` / `CODING_CONTEXT_BUDGETS` (`coding-context.ts:161`,`:167`) is the
   pattern reference for per-lane caps; not modified.
 
@@ -177,8 +172,8 @@ stay ≤ 400 LOC (split the validation module if needed). Validators return the 
 
 `ContextCompactionRecord` and `ContextRehydrationHandle` are **defined now** (so the surface is stable) but
 **implemented later**. Also deferred: tool-observation shaping (selection/summarization of `role:tool`
-messages), the evidence wiring of `contextAssembly?` / `compaction?`, and the UI wiring of the new
-`ConversationBudgetBreakdown` lane fields. PR1 implements: `ContextProfile`, `ContextBudget`, `ContextLane`,
+messages), the evidence wiring of `contextAssembly?` / `compaction?`, and grounded context-status UI wiring.
+PR1 implements: `ContextProfile`, `ContextBudget`, `ContextLane`,
 `ContextLaneId`, `ContextLaneDiagnostics`, `ContextAssemblyDiagnostics`, `estimateTokens`,
 `DEFAULT_CONTEXT_PROFILE`, the `ContextPackDiagnostics.contextBudget?` attach point, and the allocator.
 
@@ -206,8 +201,6 @@ messages), the evidence wiring of `contextAssembly?` / `compaction?`, and the UI
 
 ### Neutral
 
-- `conversation-budget.ts` and the new estimator coexist; the UI estimator stays `bytes / 4` while the canonical
-  allocator uses the new conservative estimator. They are intentionally different primitives at different layers.
 - The lost-in-the-middle layout is an allocator obligation and a gate, not a contract field.
 
 ## Acceptance gates (measurable)
@@ -242,12 +235,12 @@ messages), the evidence wiring of `contextAssembly?` / `compaction?`, and the UI
 - **Why rejected**: the allocator is pure policy; `keiko-server` is the wrong tier and would force duplication
   across the two paths. `keiko-workflows` already owns the comparable `governor` policy unit.
 
-### Alternative 2: Reuse / extend estimateConversationBudget as the 128k allocator
+### Alternative 2: Reuse a browser composer estimate as the 128k allocator
 
-- **Pros**: one fewer module; the UI estimator already sums lane-like byte buckets.
-- **Cons**: it is a `bytes / 4` UI pressure estimator, not a lane allocator with eviction order; forking it
-  would entangle the UI pressure indicator with workflow allocation and re-introduce the ratio it uses
-  (`bytes / 4`) as the budget currency.
+- **Pros**: one fewer module.
+- **Cons**: the removed browser estimate was a `bytes / 4` pressure hint, not a lane allocator with eviction
+  order; forking that style of estimate would entangle UI affordances with workflow allocation and re-introduce
+  `bytes / 4` as the budget currency.
 - **Why rejected**: the milestone explicitly forbids forking it; lane allocation with non-eviction and a fixed
   order is a different concern from a UI pressure read-out.
 
@@ -489,14 +482,6 @@ export interface EvidenceManifest {
   readonly compaction?: readonly ContextCompactionRecord[] | undefined; // [LATER]
 }
 
-// conversation-budget.ts:35  — extend ConversationBudgetBreakdown (UI ref) [LATER UI wiring]
-export interface ConversationBudgetBreakdown {
-  // ...existing six byte fields unchanged...
-  readonly toolObservationBytes?: number | undefined;
-  readonly workingMemoryBytes?: number | undefined;
-  readonly historySummaryBytes?: number | undefined;
-  readonly verificationEvidenceBytes?: number | undefined;
-}
 ```
 
 ### Default lane budget (illustrative, frozen constant in PR1)
@@ -517,7 +502,6 @@ re-tuned without a surface change.
 - `packages/keiko-contracts/src/connected-context.ts:108,118,282,301`,
   `packages/keiko-contracts/src/bff-wire.ts:603,683`,
   `packages/keiko-contracts/src/evidence.ts:271,291,313,335`,
-  `packages/keiko-contracts/src/conversation-budget.ts:35,56,71`,
   `packages/keiko-contracts/src/coding-context.ts:161,167`,
   `packages/keiko-contracts/src/memory-validation.ts:11,45`,
   `packages/keiko-workflows/src/planner/governor.ts:86,101`,

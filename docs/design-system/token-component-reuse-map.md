@@ -107,7 +107,7 @@ math endpoints, and documentation comments / issue refs.
 | Input / nav / breakpoint / density                                                | extend → new          | #1298         | Complete the input + navigation families; formalise a breakpoint + density system.                                                                                |
 | `globals.css.test.ts` (CSS/WCAG contract)                                         | extend                | #1292 / #1299 | Keep green; extend the required-token set (asserted at `:1205`) to cover the new tiers.                                                                           |
 | `*.a11y.test.tsx` (axe) + `axe-core`/`jest-axe`                                   | reuse                 | #1299         | Reuse as the a11y gate for migrated components; add coverage where missing.                                                                                       |
-| Playwright e2e (`tests/e2e/config/playwright.config.ts`, 5 specs, chromium)                        | extend                | #1300         | No pixel-diff exists (`0` `toHaveScreenshot`/`toMatchSnapshot`); add a visual-regression project on the existing chromium config — do not add a second framework. |
+| Playwright e2e (`tests/e2e/config/playwright.config.ts`, 5 specs, chromium)       | extend                | #1300         | No pixel-diff exists (`0` `toHaveScreenshot`/`toMatchSnapshot`); add a visual-regression project on the existing chromium config — do not add a second framework. |
 | Route shells (`launch`, `local-knowledge`, `memoriaviva`) + modals                | untouched / via owner | #1295         | Routes are thin (launch = 1-line re-export); styling lives in shared components/`globals.css`. Modals migrate with their owning surface.                          |
 
 ## 5. Exact files each child issue will edit (acceptance criterion C)
@@ -163,7 +163,8 @@ blocks in `globals.css`. Anchored by `WorkspaceShell.a11y.test.tsx`.
 
 ### #1295 — High-traffic product surfaces
 
-`components/desktop/ChatWindow.tsx`, `GroundedAnswer.tsx`, `WorkflowHandoff.tsx`, `ContextBudget.tsx`;
+`components/desktop/ChatWindow.tsx`, `GroundedAnswer.tsx`,
+`WorkflowHandoff.tsx`, `ContextStatusPanel.tsx`;
 QI `widgets/quality-intelligence/*.tsx`; `widgets/panels/PromptEnhancerPanel.tsx`;
 MemoriaViva `memoriaviva/components/*.tsx`; Relationships `relationships/RelationshipsView.tsx` +
 `widgets/panels/Relationship*.tsx`; Local Knowledge `local-knowledge/connector-graph.tsx` +
@@ -185,8 +186,8 @@ inline `borderRadius`/spacing literals in `MemoryConsolidation.tsx`, `Relationsh
 
 Current improvised patterns (to formalise as components consuming `--ai-*` tokens):
 `components/desktop/GroundedAnswer.tsx` (citations / uncertainty / coverage — 110 markers), `WorkflowHandoff.tsx`
-(launch + run summary + dialogs), `ChatWindow.tsx` (typing/streaming bubbles, stop/cancel), `ContextBudget.tsx`
-(confidence/budget), `widgets/cards/AgentRunWidget.tsx` + `AgentGateCard.tsx` (run status, permission/gate,
+(launch + run summary + dialogs), `ChatWindow.tsx` (typing/streaming bubbles, stop/cancel),
+`ContextStatusPanel.tsx` (grounded context status), `widgets/cards/AgentRunWidget.tsx` + `AgentGateCard.tsx` (run status, permission/gate,
 stop/regenerate), `widgets/cards/EditorRuntimeWidget.tsx`. Target tokens: `--ai-thinking-indicator`,
 `--ai-streaming-cursor`, `--ai-source-*`, `--ai-tool-*`, `--ai-confidence-*`, `--ai-permission-*`.
 
@@ -228,7 +229,7 @@ design-system four-level severity + microcopy). Extend `globals.css.test.ts` and
 | `packages/keiko-ui/src/app/globals.css.test.ts` (1,320-line CSS/WCAG string contract)                                                                                                                                           | Primary token/contrast gate; extend for the new tiers (#1292/#1299). |
 | 9× `*.a11y.test.tsx` (`GroundedAnswer`, `WorkflowHandoff`, `WorkspaceShell`, `PromptEnhancerPanel`, `QiRunCard`, `RunLauncher`, `CandidatesPane`, `KeikoCodeEditor`, `KeikoDiffEditor`) + `axe-core` 4.12.1 / `jest-axe` 10.0.0 | a11y regression for migrated surfaces (#1299).                       |
 | Near-1:1 component `*.test.tsx` (vitest + RTL, jsdom)                                                                                                                                                                           | Behavioural regression anchor for each migration.                    |
-| `tests/e2e/config/playwright.config.ts` + 5 specs (chromium, screenshots as evidence only — no pixel diff)                                                                                                                                       | Extend into the visual-regression harness (#1300).                   |
+| `tests/e2e/config/playwright.config.ts` + 5 specs (chromium, screenshots as evidence only — no pixel diff)                                                                                                                      | Extend into the visual-regression harness (#1300).                   |
 
 ## Acceptance criterion C — coverage statement
 

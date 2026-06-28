@@ -291,8 +291,7 @@ not cross-package imports.
 
 ### D9 — What PR5 does NOT do
 
-- **UI disclosure.** `ContextStatusPanel`, `ConversationBudgetBreakdown` lane fields, and any
-  browser-visible compaction summary are PR6.
+- **UI disclosure.** `ContextStatusPanel` and any browser-visible compaction summary are PR6.
 - **Live chat-turn evidence wiring.** `buildGatewayMessages` continues to discard `.compaction`.
   The `persistCompactionEvidence` helper exists but is not wired to any live request handler. The
   chat evidence wire is PR6 scope.

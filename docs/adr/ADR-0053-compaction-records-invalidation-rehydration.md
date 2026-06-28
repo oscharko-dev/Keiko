@@ -440,8 +440,7 @@ subsequent rehydration call. That is the `invalidated` flag's job, not an idempo
   harness loop and splicing history compaction is PR4.
 - **Tool-observation shaping** — `ContextRehydrationHandle` of kind `"tool-result"` is defined
   but not resolved in PR2. Resolution comes in PR3.
-- **UI disclosure** — `ConversationBudgetBreakdown` lane fields and the `ContextStatusPanel`
-  are PR6.
+- **UI disclosure** — `ContextStatusPanel` grounding disclosure is PR6.
 - **M5 semantic reranking / embeddings** — out of scope for this milestone.
 
 ## Consequences

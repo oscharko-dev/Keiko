@@ -60,7 +60,6 @@ conservative deterministic `estimateTokens` in keiko-contracts, used uniformly a
 - `ContextPackDiagnostics.contextBudget?` (connected-context.ts) — **PR1**.
 - `GroundedAnswerContextPackSummary.contextSummary?` (bff-wire.ts) — UI PR.
 - `EvidenceManifest.contextAssembly?` / `compaction?` (evidence.ts) — evidence PR.
-- `ConversationBudgetBreakdown` lane fields (conversation-budget.ts) — UI PR.
 - `ToolCallResult`/`ToolCallMetadata`/`CommandResult` shaped-observation + omittedByteCount — tool-shaping PR.
 - `summarizeCommand` (keiko-tools), `buildGatewayMessages`/`conversationForGateway` (keiko-server),
   `buildUiHandlerDeps` (deps.ts) — wiring PRs.

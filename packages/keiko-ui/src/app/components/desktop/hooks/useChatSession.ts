@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
@@ -33,14 +33,14 @@ import type {
   ConversationDocumentContextWire,
   ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
-  ConversationBudgetEstimate,
   GroundedAnswer as GroundedAnswerWire,
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
-import { estimateConversationBudget, isConversationEligibleModel } from "@/lib/types";
+import { isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { extractDocumentContext, type PendingDocument } from "./documentContext";
+import { useConversationMemorySettings } from "./memorySettings";
 
 // ─── Attachment types (Issue #147) ────────────────────────────────────────────
 //
@@ -128,7 +128,6 @@ function readDataUrl(file: File): Promise<string> {
 
 export const DEFAULT_CHAT_TITLE = "New chat";
 export const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
-export const DEFAULT_MEMORY_BUDGET_TOKENS = 1200;
 const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
 const CHAT_DELETE_EVENT = "keiko:chat-delete";
 const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
@@ -146,7 +145,13 @@ const RUN_SUMMARY_SYNC_MAX_ATTEMPTS = 120;
 // Engineering note: NO fake progress percentage. The status string is the
 // only progress signal — UI copy must reflect that.
 export type SendStatus =
-  "idle" | "queued" | "contacting" | "streaming" | "completed" | "failed" | "cancelled";
+  | "idle"
+  | "queued"
+  | "contacting"
+  | "streaming"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 const TERMINAL_SEND_STATUSES: readonly SendStatus[] = ["completed", "failed", "cancelled"] as const;
 
@@ -161,7 +166,7 @@ export function isInFlight(status: SendStatus): boolean {
 // conversation exceeded the model's context window. Exported so the test can
 // pin the exact string without duplicating it.
 export const CONTEXT_OVERSIZED_USER_MESSAGE =
-  "The conversation context exceeded the model's window. Clear history or pick a larger-context model.";
+  "The conversation context exceeded the model's window. Open a new chat or pick a larger-context model.";
 export const GROUNDED_ATTACHMENT_NOTICE =
   "Attachments are not supported for grounded chats. Remove the attachment or switch to a non-grounded chat.";
 export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
@@ -197,13 +202,6 @@ function isEmptyModelResponseError(error: unknown): boolean {
   const text = error instanceof Error ? error.message.toLowerCase() : "";
   if (text.length === 0) return false;
   return EMPTY_MODEL_RESPONSE_PHRASES.some((phrase) => text.includes(phrase));
-}
-
-// CB-F1 / CB-F3 — the single unknown-limits-safe "over budget" predicate. A
-// model with contextWindowTokens <= 0 (runtime-configured, unknown window) is
-// NEVER treated as exceeded, mirroring BudgetIndicator's own self-hide guard.
-export function isBudgetExceeded(budget: ConversationBudgetEstimate | undefined): boolean {
-  return budget !== undefined && budget.contextWindowTokens > 0 && budget.pressure === "exceeded";
 }
 
 function errorMessage(error: unknown): string {
@@ -378,10 +376,6 @@ export interface UseChatSessionResult {
   // Issue #148 — documents that contributed extracted text to the most recent send, for the
   // post-send disclosure note. Empty until a send includes at least one readable document.
   readonly lastSentDocuments: readonly SentDocumentDisclosure[];
-  // Issue #151 — approximate context-window pressure estimate for the active
-  // chat. undefined while the selected model is unresolved. Token counts are
-  // approximate; UI copy must say so.
-  readonly budget: ConversationBudgetEstimate | undefined;
   readonly memoryEnabled: boolean;
   readonly setMemoryEnabled: (next: boolean) => void;
   readonly memoryBudgetTokens: number;
@@ -391,12 +385,6 @@ export interface UseChatSessionResult {
   readonly acceptMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly rejectMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
-  // Issue #151 / AC#4 — reset the in-memory history for the next prompt
-  // WITHOUT deleting the conversation row. The chat row in `chats` is
-  // preserved; only `messages` is cleared. Downstream wiring for
-  // connected-context byte counts (#177 / #189 / #204) is a follow-up; the
-  // estimator already carries the fields end-to-end.
-  readonly clearHistory: () => void;
 }
 
 interface SessionState {
@@ -532,8 +520,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
   const [latestMemory, setLatestMemory] = useState<ConversationMemoryResultWire | undefined>();
-  const [memoryEnabled, setMemoryEnabled] = useState(true);
-  const [memoryBudgetTokens, setMemoryBudgetTokens] = useState(DEFAULT_MEMORY_BUDGET_TOKENS);
+  const { memoryEnabled, setMemoryEnabled, memoryBudgetTokens, setMemoryBudgetTokens } =
+    useConversationMemorySettings();
   const mountedRef = useRef(true);
   const activeChatIdRef = useRef<string | undefined>(undefined);
   const runSummarySyncingRef = useRef<Set<string>>(new Set());
@@ -1415,22 +1403,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         modelId === undefined
       )
         return;
-      // CB-F3: Enter / form-submit must honor the same exceeded-budget block the
-      // send button enforces — otherwise the keyboard path bypasses the gate. Uses
-      // the unknown-limits-safe guard (contextWindowTokens > 0) so a runtime
-      // chat model with contextWindow: 0 is never blocked.
-      const submitBudget = estimateConversationBudget({
-        modelContextWindow: state.models.find((m) => m.id === modelId)?.contextWindow ?? 0,
-        modelMaxOutputTokens: state.models.find((m) => m.id === modelId)?.maxOutputTokens ?? 0,
-        userDraftText: content,
-        conversationHistory: state.messages
-          .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({ role: m.role, content: m.content })),
-      });
-      if (isBudgetExceeded(submitBudget)) {
-        setError(CONTEXT_OVERSIZED_USER_MESSAGE);
-        return;
-      }
       // Issue #4 — block grounded sends that would silently discard attachments.
       // The grounded path derives context from the repo/local-knowledge scope and
       // ignores pendingAttachments entirely. Surface a notice and abort so the
@@ -1513,7 +1485,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.activeProject,
       state.selectedModel,
       state.models,
-      state.messages,
       pendingAttachments,
       sendGrounded,
       sendUngrounded,
@@ -1612,103 +1583,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       });
       return result.toolOutput;
     },
-    [
-      buildMemoryRequest,
-      state.activeChat,
-      state.activeProject,
-      state.models,
-      state.selectedModel,
-    ],
+    [buildMemoryRequest, state.activeChat, state.activeProject, state.models, state.selectedModel],
   );
-
-  // Issue #151 / AC#4 — clear the in-memory history for the next prompt
-  // without deleting the conversation row. The chat row stays in `chats`;
-  // only `messages` is reset so the next send carries no prior history.
-  // TODO(#151 follow-up): when the BFF gains a "history checkpoint" surface
-  // we'll also persist this reset so reloads don't re-fetch the cleared turns.
-  const clearHistory = useCallback(() => {
-    setLatestGrounded(undefined);
-    setLatestMemory(undefined);
-    setState((previous) => ({ ...previous, messages: [] }));
-  }, []);
-
-  // Issue #151 / AC#1 — reactive context-pressure estimate. Derives from the
-  // selected model's capability + current draft + visible history, plus
-  // best-effort byte estimates from the last grounded and memory responses.
-  //
-  // All three connected-context fields are APPROXIMATE and labelled as such in
-  // the UI. They use the LAST known values so the indicator updates reactively
-  // after each turn without requiring a round-trip before the next send.
-  //
-  // Sources (fields that genuinely exist on the wire types):
-  //   repoContextPackBytes   — GroundedAnswerContextPackSummary.usage.excerptBytes
-  //                            (connected-context and hybrid folder evidence)
-  //   knowledgeCapsuleBytes  — LocalKnowledgeGroundedAnswerContextSummary.referenceBudget × 4
-  //                            (token budget converted to bytes; no raw byte field on the wire)
-  //   memoryContextBytes     — ConversationMemoryContextWire.text.length
-  //                            (the injected memory block is UTF-16 encoded; byte length
-  //                            approximates closely enough for the pressure indicator)
-  const budget = useMemo<ConversationBudgetEstimate | undefined>(() => {
-    const capability = state.models.find((m) => m.id === state.selectedModel);
-    if (capability === undefined) return undefined;
-    const history: readonly { readonly role: string; readonly content: string }[] = state.messages
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({ role: m.role, content: m.content }));
-
-    // Derive best-effort bytes from the last grounded answer. The shape narrows
-    // by groundingKind so we only read fields that exist on each variant.
-    let repoContextPackBytes = 0;
-    let knowledgeCapsuleBytes = 0;
-    if (latestGrounded !== undefined) {
-      if (
-        latestGrounded.groundingKind === "connected-context" ||
-        latestGrounded.groundingKind === "hybrid"
-      ) {
-        const pack =
-          latestGrounded.groundingKind === "hybrid"
-            ? latestGrounded.contextPack.folder
-            : latestGrounded.contextPack;
-        repoContextPackBytes = pack.usage.excerptBytes;
-      }
-      if (
-        latestGrounded.groundingKind === "local-knowledge" ||
-        latestGrounded.groundingKind === "hybrid"
-      ) {
-        const lk =
-          latestGrounded.groundingKind === "hybrid"
-            ? latestGrounded.contextPack.knowledge
-            : latestGrounded.contextPack;
-        // The local-knowledge context summary carries a token budget, not a byte
-        // count. Multiply by 4 (chars/token) as a conservative byte estimate.
-        knowledgeCapsuleBytes = lk.referenceBudget * 4;
-      }
-    }
-
-    // Memory context bytes: only when memory is enabled and a non-empty context
-    // text was returned by the last ungrounded send.
-    const memoryContextBytes =
-      memoryEnabled && latestMemory !== undefined && latestMemory.context.enabled
-        ? latestMemory.context.text.length
-        : 0;
-
-    return estimateConversationBudget({
-      modelContextWindow: capability.contextWindow,
-      modelMaxOutputTokens: capability.maxOutputTokens,
-      userDraftText: draft,
-      conversationHistory: history,
-      repoContextPackBytes,
-      knowledgeCapsuleBytes,
-      memoryContextBytes,
-    });
-  }, [
-    state.models,
-    state.selectedModel,
-    state.messages,
-    draft,
-    latestGrounded,
-    latestMemory,
-    memoryEnabled,
-  ]);
 
   // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
   // mutation on the active Chat). Only the matched id is updated; the chat list keeps its
@@ -1760,7 +1636,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     removePendingAttachment,
     clearPendingAttachments,
     lastSentDocuments,
-    budget,
     memoryEnabled,
     setMemoryEnabled,
     memoryBudgetTokens,
@@ -1770,6 +1645,5 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     acceptMemoryCandidate,
     rejectMemoryCandidate,
     forgetMemoryAction,
-    clearHistory,
   };
 }

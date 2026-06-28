@@ -163,7 +163,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    budget: undefined,
     memoryEnabled: true,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
@@ -173,7 +172,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
-    clearHistory: vi.fn(),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -690,7 +688,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     ).toBeInTheDocument();
     expect(within(box).queryByRole("button", { name: "Mute assistant voice" })).toBeNull();
     expect(box.getAttribute("data-voice-aura-state")).toMatch(
-      /^(ready|listening|thinking|speaking|muted|interrupted|error|pressure)$/u,
+      /^(ready|listening|thinking|speaking|muted|interrupted|error)$/u,
     );
     expect(box.getAttribute("data-voice-aura-intensity")).toMatch(/^(low|medium|high)$/u);
     expect(box.querySelector('.sr-only[role="status"][aria-live="polite"]')).not.toBeNull();
