@@ -7,6 +7,7 @@ import type {
   PdfCitationPreviewStatusRequest,
   PdfCitationPreviewStatusResponse,
   StoredPdfCitationPreviewCitation,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import { pdfCitationPreviewFailureState } from "@oscharko-dev/keiko-contracts";
 import {
@@ -20,11 +21,16 @@ import { openStoreForDeps } from "./local-knowledge-grounded-qa.js";
 import { normalizePreviewMarkerIndex, previewDisplay } from "./local-knowledge-preview-authority.js";
 
 type PreviewOutcome =
-  | { readonly kind: "available"; readonly display: PdfCitationPreviewDisplay }
+  | {
+      readonly kind: "available";
+      readonly display: PdfCitationPreviewDisplay;
+      readonly authority: PdfCitationPreviewAuthority;
+    }
   | {
       readonly kind: "rejected";
       readonly reason: PdfCitationPreviewReasonCode;
       readonly display?: PdfCitationPreviewDisplay;
+      readonly citations?: readonly StoredPdfCitationPreviewCitation[];
     };
 
 type RejectedPreviewOutcome = Extract<PreviewOutcome, { readonly kind: "rejected" }>;
@@ -32,17 +38,30 @@ type SelectedPreviewCitations =
   | { readonly kind: "selected"; readonly citations: readonly StoredPdfCitationPreviewCitation[] }
   | RejectedPreviewOutcome;
 
+export interface PdfCitationPreviewAuthority {
+  readonly citation: StoredPdfCitationPreviewCitation;
+  readonly current?: CurrentPdfCitationPreviewSnapshot;
+}
+
+export type PdfCitationPreviewAuthorizationResult =
+  | {
+      readonly outcome: "authorized";
+      readonly display: PdfCitationPreviewDisplay;
+      readonly authority: PdfCitationPreviewAuthority;
+    }
+  | RejectedPreviewOutcome;
+
 function reject(
   reason: PdfCitationPreviewReasonCode,
   display?: PdfCitationPreviewDisplay,
+  citations?: readonly StoredPdfCitationPreviewCitation[],
 ): RejectedPreviewOutcome {
-  return { kind: "rejected", reason, ...(display !== undefined ? { display } : {}) };
-}
-
-function isRejected(
-  outcome: PreviewOutcome,
-): outcome is RejectedPreviewOutcome {
-  return outcome.kind === "rejected";
+  return {
+    kind: "rejected",
+    reason,
+    ...(display !== undefined ? { display } : {}),
+    ...(citations !== undefined ? { citations } : {}),
+  };
 }
 
 function citationDisplay(
@@ -114,10 +133,14 @@ function selectedCitations(
       return reject("citation-not-found");
     }
   }
-  if (stableId !== undefined) {
+  if (stableId !== undefined && selected.length === 1) {
     const stableMatches = selected.filter((citation) => citation.stableId === stableId);
     if (stableMatches.length === 0) {
-      return reject("stable-id-mismatch", selected[0] === undefined ? undefined : citationDisplay(selected[0]));
+      return reject(
+        "stable-id-mismatch",
+        selected[0] === undefined ? undefined : citationDisplay(selected[0]),
+        selected,
+      );
     }
     selected = stableMatches;
   }
@@ -189,20 +212,23 @@ function evaluateStoredCitation(
   const display = citationDisplay(stored, current);
   const currentFailure = currentSnapshotPrecheck(stored, current, display);
   if (currentFailure !== undefined) return currentFailure;
-  return { kind: "available", display };
+  return { kind: "available", display, authority: { citation: stored, current } };
 }
 
 function emitPreviewAudit(
   store: ReturnType<typeof openStoreForDeps>["store"],
-  citation: StoredPdfCitationPreviewCitation,
+  citations: readonly StoredPdfCitationPreviewCitation[],
   outcome: PreviewOutcome,
 ): void {
+  if (citations.length === 0) return;
   const sink = createSqliteAuditSink(store);
+  const firstCitation = citations[0];
+  if (firstCitation === undefined) return;
   const base = {
-    capsuleId: citation.lineage.capsuleId,
-    sourceIds: [citation.lineage.sourceId] as const,
-    chunkIds: [String(citation.lineage.chunkId)] as const,
-    targetQuality: citationDisplay(citation).anchorQuality,
+    capsuleId: firstCitation.lineage.capsuleId,
+    sourceIds: citations.map((citation) => citation.lineage.sourceId) as readonly KnowledgeSourceId[],
+    chunkIds: citations.map((citation) => String(citation.lineage.chunkId)) as readonly string[],
+    targetQuality: citationDisplay(firstCitation).anchorQuality,
     occurredAt: Date.now(),
   };
   if (outcome.kind === "available") {
@@ -257,22 +283,15 @@ function aggregateStatus(
   results: readonly PreviewOutcome[],
   matchedCitationCount: number,
 ): PdfCitationPreviewStatusResponse {
-  const available = availableStatus(results, matchedCitationCount);
-  if (available !== undefined) return available;
+  for (const result of results) {
+    if (result.kind === "available") {
+      return { state: "available", display: result.display, matchedCitationCount };
+    }
+  }
   const recoverable = firstRejectedByState(results, "recoverable");
   return recoverable !== undefined
     ? rejectedStatus("recoverable", recoverable, matchedCitationCount)
     : rejectedStatus("blocked", firstRejectedByState(results, "blocked"), matchedCitationCount);
-}
-
-function availableStatus(
-  results: readonly PreviewOutcome[],
-  matchedCitationCount: number,
-): PdfCitationPreviewStatusResponse | undefined {
-  const available = results.find((result) => result.kind === "available");
-  return available?.kind === "available"
-    ? { state: "available", display: available.display, matchedCitationCount }
-    : undefined;
 }
 
 function rejectedStatus(
@@ -319,10 +338,15 @@ export function getPdfCitationPreviewStatus(
   }
   const session = openStoreForDeps(deps);
   try {
-    return aggregateStatus(
-      selected.citations.map((citation) => evaluateStoredCitation(session.store, citation)),
-      selected.citations.length,
-    );
+    const results: PreviewOutcome[] = [];
+    for (const citation of selected.citations) {
+      const outcome = evaluateStoredCitation(session.store, citation);
+      results.push(outcome);
+      if (outcome.kind === "available") {
+        return { state: "available", display: outcome.display, matchedCitationCount: selected.citations.length };
+      }
+    }
+    return aggregateStatus(results, selected.citations.length);
   } finally {
     session.close();
   }
@@ -339,49 +363,69 @@ function rejectedAuthorizationResponse(
   };
 }
 
+function emitAuthorizationAuditIfPossible(
+  deps: UiHandlerDeps,
+  citations: readonly StoredPdfCitationPreviewCitation[],
+  outcome: PreviewOutcome | RejectedPreviewOutcome,
+): void {
+  if (citations.length === 0) return;
+  const session = openStoreForDeps(deps);
+  try {
+    emitPreviewAudit(session.store, citations, outcome);
+  } finally {
+    session.close();
+  }
+}
+
 export function authorizePdfCitationPreview(
   deps: UiHandlerDeps,
   input: PdfCitationPreviewSelection,
-): PdfCitationPreviewAuthorizationResponse {
+): PdfCitationPreviewAuthorizationResult {
   const loaded = loadMessageContext(deps, input.chatId, input.assistantMessageId);
   if ("kind" in loaded) {
-    return rejectedAuthorizationResponse(loaded);
+    return loaded;
   }
   if (loaded.citations === undefined) {
-    return {
-      outcome: "rejected",
-      state: "recoverable",
-      reason: "preview-metadata-missing",
-    };
+    return reject("preview-metadata-missing");
   }
   const selected = selectedCitations(loaded.citations, input.marker, input.stableId);
   if (selected.kind !== "selected") {
-    return rejectedAuthorizationResponse(selected);
+    if (selected.citations !== undefined && selected.citations.length > 0) {
+      emitAuthorizationAuditIfPossible(deps, selected.citations, selected);
+    }
+    return selected;
   }
   if (selected.citations.length !== 1) {
-    return rejectedAuthorizationResponse(
-      reject(
-        "citation-not-found",
-        selected.citations[0] === undefined ? undefined : citationDisplay(selected.citations[0]),
-      ),
+    const failure = reject(
+      "citation-not-found",
+      selected.citations[0] === undefined ? undefined : citationDisplay(selected.citations[0]),
+      selected.citations,
     );
+    emitAuthorizationAuditIfPossible(deps, selected.citations, failure);
+    return failure;
   }
   const citation = selected.citations[0];
   if (citation === undefined) {
-    return rejectedAuthorizationResponse(reject("citation-not-found"));
+    const failure = reject("citation-not-found");
+    return failure;
   }
   const session = openStoreForDeps(deps);
   try {
     const outcome = evaluateStoredCitation(session.store, citation);
-    emitPreviewAudit(session.store, citation, outcome);
-    if (outcome.kind === "available") {
-      return { outcome: "authorized", display: outcome.display };
-    }
-    if (!isRejected(outcome)) {
-      throw new Error("Preview authorization returned a non-rejected failure outcome.");
-    }
-    return rejectedAuthorizationResponse(outcome);
+    emitPreviewAudit(session.store, [citation], outcome);
+    return outcome.kind === "available"
+      ? { outcome: "authorized", display: outcome.display, authority: outcome.authority }
+      : outcome;
   } finally {
     session.close();
   }
+}
+
+export function projectPdfCitationPreviewAuthorizationResponse(
+  result: PdfCitationPreviewAuthorizationResult,
+): PdfCitationPreviewAuthorizationResponse {
+  if ("kind" in result) {
+    return rejectedAuthorizationResponse(result);
+  }
+  return { outcome: "authorized", display: result.display };
 }

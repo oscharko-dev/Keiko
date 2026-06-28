@@ -31,7 +31,7 @@ export function normalizePreviewMarkerIndex(value: string | number): number | un
     return Number.isInteger(value) && value > 0 ? value : undefined;
   }
   const trimmed = value.trim();
-  const match = /^\[?(\d+)\]?$/u.exec(trimmed);
+  const match = /^[\[［【]?(\d+)[\]］】]?$/u.exec(trimmed);
   if (match?.[1] === undefined) return undefined;
   const parsed = Number.parseInt(match[1], 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
@@ -63,22 +63,28 @@ export function buildStoredPreviewCitations(
   store: KnowledgeStore,
   inputs: readonly PreviewAuthorityInput[],
 ): readonly StoredPdfCitationPreviewCitation[] {
-  const byMarker = new Map<number, StoredPdfCitationPreviewCitation>();
+  const snapshotCache = new Map<string, ReturnType<typeof lookupCitationPreviewSnapshot>>();
+  const citations: StoredPdfCitationPreviewCitation[] = [];
   for (const input of inputs) {
-    const citation = buildStoredPreviewCitation(store, input);
-    if (citation === undefined || byMarker.has(citation.markerIndex)) continue;
-    byMarker.set(citation.markerIndex, citation);
+    const citation = buildStoredPreviewCitation(store, input, snapshotCache);
+    if (citation === undefined) continue;
+    citations.push(citation);
   }
-  return [...byMarker.values()];
+  return citations;
 }
 
 function buildStoredPreviewCitation(
   store: KnowledgeStore,
   input: PreviewAuthorityInput,
+  snapshotCache: Map<string, ReturnType<typeof lookupCitationPreviewSnapshot>>,
 ): StoredPdfCitationPreviewCitation | undefined {
   const markerIndex = normalizePreviewMarkerIndex(input.marker);
   if (markerIndex === undefined) return undefined;
-  const snapshot = lookupCitationPreviewSnapshot(store, input.reference.capsuleId, input.reference.chunkId);
+  const cacheKey = `${String(input.reference.capsuleId)}|${String(input.reference.chunkId)}`;
+  const snapshot =
+    snapshotCache.get(cacheKey) ??
+    lookupCitationPreviewSnapshot(store, input.reference.capsuleId, input.reference.chunkId);
+  snapshotCache.set(cacheKey, snapshot);
   if (snapshot.kind !== "ok") return undefined;
   const documentLabel = normalizeLabel(snapshot.snapshot.documentLabel) ?? "document";
   const sourceLabel = normalizeLabel(input.sourceLabel);

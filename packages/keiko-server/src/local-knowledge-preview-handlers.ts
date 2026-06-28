@@ -11,6 +11,7 @@ import { errorBody } from "./routes.js";
 import {
   authorizePdfCitationPreview,
   getPdfCitationPreviewStatus,
+  projectPdfCitationPreviewAuthorizationResponse,
 } from "./local-knowledge-preview-service.js";
 import { normalizePreviewMarkerIndex } from "./local-knowledge-preview-authority.js";
 
@@ -130,7 +131,12 @@ export async function handleAuthorizePdfCitationPreview(
     const base = parseBaseBody(body);
     const marker = parseMarker(body, true);
     const input: PdfCitationPreviewSelection = { ...base, marker: marker ?? "[1]" };
-    return { status: 200, body: authorizePdfCitationPreview(deps, input) };
+    return {
+      status: 200,
+      body: projectPdfCitationPreviewAuthorizationResponse(
+        authorizePdfCitationPreview(deps, input),
+      ),
+    };
   } catch (error) {
     if (error instanceof InvalidRequest) {
       return invalidRequestResult(error.message);
