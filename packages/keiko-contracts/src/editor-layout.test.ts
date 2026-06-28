@@ -156,9 +156,9 @@ describe("EditorLayoutStateV2 contracts", () => {
     expect(editorLayoutReducer(selected, { type: "set-active-pane", paneId: "missing" })).toBe(
       selected,
     );
-    expect(editorLayoutReducer(selected, { type: "close-tab", paneId: "pane-1", file: "none" })).toBe(
-      selected,
-    );
+    expect(
+      editorLayoutReducer(selected, { type: "close-tab", paneId: "pane-1", file: "none" }),
+    ).toBe(selected);
   });
 
   it("splits, moves, drops, resizes, and collapses recursive panes", () => {
@@ -233,9 +233,9 @@ describe("EditorLayoutStateV2 contracts", () => {
       tabOrder: [],
     });
     expect(editorLayoutPanes(empty)).toEqual([empty.panes["pane-1"]]);
-    expect(editorLayoutReducer(empty, { type: "split-pane", paneId: "pane-1", direction: "row" })).toBe(
-      empty,
-    );
+    expect(
+      editorLayoutReducer(empty, { type: "split-pane", paneId: "pane-1", direction: "row" }),
+    ).toBe(empty);
     expect(editorLayoutReducer(empty, { type: "close-pane", paneId: "pane-1" })).toBe(empty);
 
     const base = layout();
@@ -252,9 +252,9 @@ describe("EditorLayoutStateV2 contracts", () => {
         activePaneId: "pane-1",
       }),
     );
-    expect(editorLayoutReducer(base, { type: "split-pane", paneId: "missing", direction: "row" })).toBe(
-      base,
-    );
+    expect(
+      editorLayoutReducer(base, { type: "split-pane", paneId: "missing", direction: "row" }),
+    ).toBe(base);
     expect(
       editorLayoutReducer(base, {
         type: "set-sidebar",
@@ -270,5 +270,163 @@ describe("EditorLayoutStateV2 contracts", () => {
         sidebarCollapsed: false,
       }),
     );
+  });
+
+  it("preserves tab order, structure, and active state across a serialize-reload round trip", () => {
+    const reordered = editorLayoutReducer(
+      layout({ openFiles: ["src/a.ts", "src/b.ts", "src/c.ts"] }),
+      {
+        type: "reorder-tab",
+        paneId: "pane-1",
+        file: "src/a.ts",
+        targetIndex: 2,
+      },
+    );
+    const split = editorLayoutReducer(reordered, {
+      type: "split-pane",
+      paneId: "pane-1",
+      direction: "row",
+      file: "src/c.ts",
+    });
+    const moved = editorLayoutReducer(split, {
+      type: "move-tab",
+      fromPaneId: "pane-1",
+      toPaneId: "pane-2",
+      file: "src/b.ts",
+      targetIndex: 0,
+    });
+    const session = editorLayoutReducer(moved, {
+      type: "resize-split",
+      splitId: "split-1",
+      ratio: 65,
+    });
+
+    const json = serializeEditorLayoutStateV2(session);
+    const reloaded = createEditorLayoutStateV2({ ...DEFAULT_INPUT, layoutJson: json });
+
+    for (const paneId of editorLayoutPaneIds(session)) {
+      expect(reloaded.panes[paneId]?.tabOrder).toEqual(session.panes[paneId]?.tabOrder);
+      expect(reloaded.panes[paneId]?.openFiles).toEqual(session.panes[paneId]?.openFiles);
+      expect(reloaded.panes[paneId]?.activeFile).toBe(session.panes[paneId]?.activeFile);
+    }
+    expect(reloaded.tree).toEqual(session.tree);
+    expect(reloaded.activePaneId).toBe(session.activePaneId);
+    // The reload is a fixed point: re-serializing yields the same persisted state.
+    expect(JSON.parse(serializeEditorLayoutStateV2(reloaded))).toEqual(JSON.parse(json));
+  });
+
+  it("rehomes a renamed file across every pane and keeps the active tab", () => {
+    const split = editorLayoutReducer(
+      layout({ openFiles: ["src/a.ts", "src/b.ts"], file: "src/a.ts" }),
+      { type: "split-pane", paneId: "pane-1", direction: "row", file: "src/b.ts" },
+    );
+    // Open the file in the second pane too, so the rename must touch both panes.
+    const both = editorLayoutReducer(split, {
+      type: "open-file",
+      paneId: "pane-2",
+      file: "src/a.ts",
+    });
+
+    const renamed = editorLayoutReducer(both, {
+      type: "rename-file",
+      from: "src/a.ts",
+      to: "src/renamed.ts",
+    });
+
+    for (const pane of editorLayoutPanes(renamed)) {
+      expect(pane.openFiles).not.toContain("src/a.ts");
+      expect(pane.tabOrder).not.toContain("src/a.ts");
+    }
+    expect(renamed.panes["pane-1"]?.openFiles).toContain("src/renamed.ts");
+    expect(renamed.panes["pane-2"]?.openFiles).toContain("src/renamed.ts");
+    // The pane that had it active follows the rename instead of going blank.
+    expect(renamed.panes["pane-2"]?.activeFile).toBe("src/renamed.ts");
+    expect(editorLayoutOpenFiles(renamed)).toContain("src/renamed.ts");
+  });
+
+  it("carries open descendants when a folder is renamed (prefix rename)", () => {
+    const base = layout({
+      openFiles: ["src/app.ts", "src/util/log.ts", "docs/readme.md"],
+      file: "src/util/log.ts",
+    });
+
+    const renamed = editorLayoutReducer(base, { type: "rename-file", from: "src", to: "lib" });
+
+    const pane = activeEditorPane(renamed);
+    expect(pane.openFiles).toEqual(
+      expect.arrayContaining(["lib/app.ts", "lib/util/log.ts", "docs/readme.md"]),
+    );
+    expect(pane.activeFile).toBe("lib/util/log.ts");
+    // A sibling whose name merely shares the prefix is untouched (folder boundary is the slash).
+    const withSibling = editorLayoutReducer(
+      layout({ openFiles: ["src/a.ts", "srcgen/b.ts"], file: "src/a.ts" }),
+      { type: "rename-file", from: "src", to: "lib" },
+    );
+    expect(activeEditorPane(withSibling).openFiles).toEqual(
+      expect.arrayContaining(["lib/a.ts", "srcgen/b.ts"]),
+    );
+  });
+
+  it("merges tabs when a rename collides with an already-open path", () => {
+    const base = layout({ openFiles: ["src/a.ts", "src/b.ts"], file: "src/a.ts" });
+    const renamed = editorLayoutReducer(base, {
+      type: "rename-file",
+      from: "src/a.ts",
+      to: "src/b.ts",
+    });
+    const pane = activeEditorPane(renamed);
+    expect(pane.openFiles).toEqual(["src/b.ts"]);
+    expect(pane.activeFile).toBe("src/b.ts");
+  });
+
+  it("is a no-op when the renamed path is not open or when from === to", () => {
+    const base = layout({ openFiles: ["src/a.ts", "src/b.ts"], file: "src/a.ts" });
+    expect(
+      editorLayoutReducer(base, { type: "rename-file", from: "src/x.ts", to: "src/y.ts" }),
+    ).toBe(base);
+    expect(
+      editorLayoutReducer(base, { type: "rename-file", from: "src/a.ts", to: "src/a.ts" }),
+    ).toBe(base);
+  });
+
+  it("closes a deleted file — and open descendants — across every pane", () => {
+    const split = editorLayoutReducer(
+      layout({ openFiles: ["src/a.ts", "src/b.ts"], file: "src/a.ts" }),
+      { type: "split-pane", paneId: "pane-1", direction: "row", file: "src/b.ts" },
+    );
+    const both = editorLayoutReducer(split, {
+      type: "open-file",
+      paneId: "pane-2",
+      file: "src/a.ts",
+    });
+
+    const removed = editorLayoutReducer(both, { type: "remove-file", file: "src/a.ts" });
+
+    for (const pane of editorLayoutPanes(removed)) {
+      expect(pane.openFiles).not.toContain("src/a.ts");
+    }
+    expect(editorLayoutOpenFiles(removed)).not.toContain("src/a.ts");
+
+    // Deleting a folder closes every open file beneath it.
+    const tree = layout({
+      openFiles: ["src/app.ts", "src/util/log.ts", "docs/readme.md"],
+      file: "docs/readme.md",
+    });
+    const folderRemoved = editorLayoutReducer(tree, { type: "remove-file", file: "src" });
+    expect(editorLayoutOpenFiles(folderRemoved)).toEqual(["docs/readme.md"]);
+  });
+
+  it("collapses a pane whose only tab is deleted", () => {
+    const split = editorLayoutReducer(layout({ openFiles: ["src/a.ts"], file: "src/a.ts" }), {
+      type: "split-pane",
+      paneId: "pane-1",
+      direction: "row",
+      file: "src/a.ts",
+    });
+    expect(editorLayoutPaneIds(split)).toHaveLength(2);
+    // pane-2 holds only src/a.ts; deleting it everywhere also empties pane-1, leaving one pane.
+    const removed = editorLayoutReducer(split, { type: "remove-file", file: "src/a.ts" });
+    expect(editorLayoutPaneIds(removed)).toHaveLength(1);
+    expect(editorLayoutOpenFiles(removed)).toEqual([]);
   });
 });

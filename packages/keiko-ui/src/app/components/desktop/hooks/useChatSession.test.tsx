@@ -2,17 +2,19 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
 import {
+  ApiError,
   askGrounded,
   createDesktopChat,
   fetchChatMessages,
   fetchChats,
   fetchModels,
   fetchProjects,
+  sendDesktopChat,
 } from "@/lib/api";
 import {
+  CONTEXT_OVERSIZED_USER_MESSAGE,
   GROUNDED_ATTACHMENT_NOTICE,
   MAX_ATTACHMENT_BYTES,
-  isBudgetExceeded,
   isInFlight,
   notifyChatDeleted,
   notifyChatUpsert,
@@ -115,7 +117,7 @@ function message(patch: Partial<ChatMessage> = {}): ChatMessage {
 }
 
 describe("useChatSession pure guards", () => {
-  it("resolves request state, model eligibility, and budget pressure deterministically", () => {
+  it("resolves request state and model eligibility deterministically", () => {
     const eligible = model({ id: "chat-live" });
     const ineligible = model({ id: "embed", kind: "embedding" });
 
@@ -124,25 +126,6 @@ describe("useChatSession pure guards", () => {
     expect(pickChatModelId([ineligible, eligible])).toBe("chat-live");
     expect(resolveSelectedModelId("missing", [ineligible, eligible])).toBe("chat-live");
     expect(resolveSelectedModelId("chat-live", [eligible])).toBe("chat-live");
-    expect(
-      isBudgetExceeded({
-        approximateBytes: 640,
-        approximateTokens: 160,
-        contextWindowTokens: 100,
-        reservedOutputTokens: 40,
-        availableInputTokens: 60,
-        pressure: "exceeded",
-        breakdown: {
-          draftBytes: 120,
-          historyBytes: 0,
-          documentBytes: 0,
-          repoContextBytes: 0,
-          knowledgeBytes: 0,
-          memoryBytes: 0,
-        },
-      }),
-    ).toBe(true);
-    expect(isBudgetExceeded(undefined)).toBe(false);
   });
 });
 
@@ -403,5 +386,99 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(askGrounded).not.toHaveBeenCalled();
     // The optimistic user message must NOT have been appended.
     expect(result.current.messages).toHaveLength(0);
+  });
+});
+
+describe("useChatSession sendMessage — explicit text option (Issue #1561)", () => {
+  // The voice dialogue session hands a committed spoken transcript to sendMessage via `options.text`.
+  // It must send that text through the same context-bearing path as a typed draft, and must not depend
+  // on the async draft state (which a setDraft+sendMessage pair in one tick would read stale).
+  async function setupUngroundedSession(): Promise<
+    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
+  > {
+    vi.mocked(fetchModels).mockResolvedValue({
+      // Non-streaming → buffered sendDesktopChat path (deterministic to assert).
+      models: [model({ id: "chat-a", streaming: false })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ selectedModel: "chat-a" })] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockResolvedValue({
+      chat: chat({ selectedModel: "chat-a" }),
+      messages: [],
+      memory: undefined,
+    } as never);
+
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  it("sends the explicit text even when the composer draft is empty", async () => {
+    const { result } = await setupUngroundedSession();
+    expect(result.current.draft).toBe("");
+
+    await act(async () => {
+      await result.current.sendMessage({ text: "what changed in the build?" });
+    });
+
+    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe(
+      "what changed in the build?",
+    );
+  });
+
+  it("maps real provider context overflow errors to the actionable context message", async () => {
+    vi.mocked(sendDesktopChat).mockRejectedValueOnce(
+      new ApiError("GATEWAY_CONTEXT_OVERFLOW", "provider reported context length exceeded", 413),
+    );
+    const { result } = await setupUngroundedSession();
+
+    await act(async () => {
+      await result.current.sendMessage({ text: "summarise the retained conversation" });
+    });
+
+    expect(result.current.error).toBe(CONTEXT_OVERSIZED_USER_MESSAGE);
+  });
+
+  it("prefers the explicit text over the current draft and clears the draft afterward", async () => {
+    const { result } = await setupUngroundedSession();
+    act(() => {
+      result.current.setDraft("stale draft");
+    });
+
+    await act(async () => {
+      await result.current.sendMessage({ text: "spoken question wins" });
+    });
+
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("spoken question wins");
+    expect(result.current.draft).toBe("");
+  });
+
+  it("ignores a whitespace-only explicit text (committed-only invariant)", async () => {
+    const { result } = await setupUngroundedSession();
+
+    await act(async () => {
+      await result.current.sendMessage({ text: "   " });
+    });
+
+    expect(sendDesktopChat).not.toHaveBeenCalled();
+    expect(result.current.messages).toHaveLength(0);
+  });
+
+  it("is idempotent for the explicit-text path — a same-tick double send fires once", async () => {
+    // The in-flight guard reads sendStatusRef synchronously before the content source, so a barge of
+    // two explicit-text sends in one tick (which the voice loop must never double-submit) collapses to
+    // a single request, exactly like the draft path's Issue #152 guard.
+    const { result } = await setupUngroundedSession();
+
+    await act(async () => {
+      const first = result.current.sendMessage({ text: "first" });
+      const second = result.current.sendMessage({ text: "second" });
+      await Promise.all([first, second]);
+    });
+
+    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("first");
   });
 });

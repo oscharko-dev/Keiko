@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,6 +20,12 @@ import {
 } from "./theme.js";
 
 const require = createRequire(import.meta.url);
+
+const MONACO_COLOR_REGISTRY_SOURCES = [
+  "esm/vs/platform/theme/common/colors",
+  "esm/vs/editor/common/core/editorColorRegistry.js",
+  "esm/vs/editor/contrib/suggest/browser/suggestWidget.js",
+] as const;
 
 /** Build a fixture where every token has a unique, deterministic hex so mapping is verifiable. */
 function fakeResolvedTokens(): Record<string, string> {
@@ -106,6 +112,20 @@ describe("theme token contract", () => {
     const monacoRoot = dirname(require.resolve("monaco-editor/package.json"));
     const registered = new Set<string>();
     const scan = (dir: string): void => {
+      const stat = statSync(dir);
+      if (stat.isFile()) {
+        if (!dir.endsWith(".js")) {
+          return;
+        }
+        const source = readFileSync(dir, "utf8");
+        for (const match of source.matchAll(/registerColor\(\s*["']([^"']+)["']/g)) {
+          const id = match[1];
+          if (id !== undefined) {
+            registered.add(id);
+          }
+        }
+        return;
+      }
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const path = join(dir, entry.name);
         if (entry.isDirectory()) {
@@ -124,7 +144,9 @@ describe("theme token contract", () => {
         }
       }
     };
-    scan(resolve(monacoRoot, "esm/vs"));
+    for (const source of MONACO_COLOR_REGISTRY_SOURCES) {
+      scan(resolve(monacoRoot, source));
+    }
 
     for (const colorId of Object.values(CHROME_TOKEN_COLOR_IDS).flat()) {
       expect(registered.has(colorId), `${colorId} must be registered by monaco-editor`).toBe(true);

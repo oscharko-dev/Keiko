@@ -207,7 +207,6 @@ interface Harness {
 }
 
 function register(
-  model: FakeModel,
   editor: FakeEditor,
   overrides: Partial<Parameters<typeof registerKeikoDiagnostics>[0]> = {},
 ): Harness {
@@ -291,7 +290,7 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
   it("runs an initial pass on bind and writes the resolved markers", async () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
-    const { markers, resolver } = register(model, editor);
+    const { markers, resolver } = register(editor);
     expect(resolver.calls).toHaveLength(1);
     // AC1: the resolver is handed the live buffer text and the governed language id.
     expect(resolver.calls[0]?.documentText).toBe("const x = 1;\n");
@@ -307,7 +306,7 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
     const onSummary = vi.fn();
-    const { resolver } = register(model, editor, { onSummary });
+    const { resolver } = register(editor, { onSummary });
     resolver.calls[0]?.settle([
       diagnostic(),
       diagnostic({ severity: "warning" }),
@@ -321,7 +320,7 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
     const onSummary = vi.fn();
-    const { resolver } = register(model, editor, { onSummary });
+    const { resolver } = register(editor, { onSummary });
     // The buffer version moves on while the initial request is in flight, so its response is stale.
     model.bumpVersion();
     resolver.calls[0]?.settle([diagnostic()]);
@@ -332,7 +331,7 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
   it("rewrites markers to empty when diagnostics clear (a fixed error removes its squiggle)", async () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
-    const { markers, resolver, scheduler } = register(model, editor);
+    const { markers, resolver, scheduler } = register(editor);
     resolver.calls[0]?.settle([diagnostic()]);
     await tick();
     model.edit("const x: number = 1;\n");
@@ -345,7 +344,7 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
   it("debounces rapid content changes into a single re-analysis", () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
-    const { resolver, scheduler } = register(model, editor);
+    const { resolver, scheduler } = register(editor);
     // Initial pass already ran (call 0). Two rapid edits collapse to one scheduled run.
     model.edit("a");
     model.edit("ab");
@@ -359,7 +358,7 @@ describe("registerKeikoDiagnostics — stale-diagnostics safety", () => {
   it("discards a response whose buffer changed while the request was in flight", async () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
-    const { markers, resolver } = register(model, editor);
+    const { markers, resolver } = register(editor);
     // The buffer version moves on while the initial request is in flight.
     model.bumpVersion();
     resolver.calls[0]?.settle([diagnostic()]);
@@ -370,7 +369,7 @@ describe("registerKeikoDiagnostics — stale-diagnostics safety", () => {
   it("discards a superseded response and applies the newer one", async () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
-    const { markers, resolver, scheduler } = register(model, editor);
+    const { markers, resolver, scheduler } = register(editor);
     // A newer run supersedes the initial one.
     model.edit("changed");
     scheduler.flush();
@@ -389,7 +388,7 @@ describe("registerKeikoDiagnostics — stale-diagnostics safety", () => {
   it("aborts the in-flight request when a newer run starts", () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
-    const { resolver, scheduler } = register(model, editor);
+    const { resolver, scheduler } = register(editor);
     expect(resolver.calls[0]?.signal.aborted).toBe(false);
     model.edit("changed");
     scheduler.flush();
@@ -399,7 +398,7 @@ describe("registerKeikoDiagnostics — stale-diagnostics safety", () => {
   it("leaves existing markers untouched when a re-analysis fails", async () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
-    const { markers, resolver, scheduler } = register(model, editor);
+    const { markers, resolver, scheduler } = register(editor);
     resolver.calls[0]?.settle([diagnostic()]);
     await tick();
     expect(markers.calls).toHaveLength(1);
@@ -416,7 +415,7 @@ describe("registerKeikoDiagnostics — degradation and lifecycle", () => {
   it("never analyses an unsupported language and clears any markers", () => {
     const model = buildModel({ language: "plaintext" });
     const editor = buildEditor(model.model);
-    const { markers, resolver } = register(model, editor);
+    const { markers, resolver } = register(editor);
     expect(resolver.calls).toHaveLength(0);
     expect(model.hasContentListener()).toBe(false);
     expect(markers.calls).toEqual([{ model: model.model, owner: "test-owner", markers: [] }]);
@@ -424,8 +423,7 @@ describe("registerKeikoDiagnostics — degradation and lifecycle", () => {
 
   it("does nothing when the editor has no model", () => {
     const editor = buildEditor(null);
-    const dummy = buildModel();
-    const { markers, resolver } = register(dummy, editor);
+    const { markers, resolver } = register(editor);
     expect(resolver.calls).toHaveLength(0);
     expect(markers.calls).toHaveLength(0);
   });
@@ -434,7 +432,7 @@ describe("registerKeikoDiagnostics — degradation and lifecycle", () => {
     const first = buildModel({ uri: "inmemory://model/first" });
     const second = buildModel({ uri: "inmemory://model/second" });
     const editor = buildEditor(first.model);
-    const { markers, resolver } = register(first, editor);
+    const { markers, resolver } = register(editor);
     resolver.calls[0]?.settle([diagnostic()]);
     await tick();
     expect(markers.calls).toHaveLength(1);
@@ -455,7 +453,7 @@ describe("registerKeikoDiagnostics — degradation and lifecycle", () => {
   it("clears markers, the content subscription, the timer, and the model subscription on dispose", () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
-    const harness = register(model, editor);
+    const harness = register(editor);
     model.edit("pending");
     expect(harness.scheduler.hasPending()).toBe(true);
     harness.dispose();

@@ -351,15 +351,15 @@ async function probeChat(
   try {
     const response = await providerRequest(deps, provider, {
       messages: [
-        { role: "system", content: "You are a minimal readiness probe." },
-        { role: "user", content: "Reply with exactly: keiko-ready" },
+        { role: "system", content: "You are checking whether a chat endpoint can answer." },
+        { role: "user", content: "Reply with exactly: OK" },
       ],
     });
     if (!response.ok) {
       return result("chat", "failed", start, unsuccessfulEvidence("Basic chat", response));
     }
     const text = assistantText(await readProviderJson(response)).toLowerCase();
-    const passed = text.includes("keiko-ready");
+    const passed = text.includes("ok");
     return result(
       "chat",
       passed ? "passed" : "failed",

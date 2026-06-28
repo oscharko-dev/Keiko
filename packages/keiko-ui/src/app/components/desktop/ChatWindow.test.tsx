@@ -73,9 +73,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    // Issue #151 — budget + clear-history fields default to "no known limits"
-    // so the existing cancel-button tests keep their previous semantics.
-    budget: undefined,
     memoryEnabled: true,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
@@ -85,7 +82,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
-    clearHistory: vi.fn(),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -419,7 +415,7 @@ describe("ChatWindow cancel button", () => {
 });
 
 describe("ChatWindow memory disclosure", () => {
-  it("exposes expanded state and disclosure linkage on the memory chip", async () => {
+  it("exposes expanded state and disclosure linkage on the memory brain button", async () => {
     const user = userEvent.setup();
     renderWindow(
       makeSession({
@@ -450,6 +446,11 @@ describe("ChatWindow memory disclosure", () => {
     );
 
     const disclosureButton = screen.getByRole("button", { name: /1 memories included/i });
+    expect(disclosureButton).toHaveClass("chat-memory-disclosure-toggle");
+    expect(document.querySelector(".chat-scope-header")).toContainElement(disclosureButton);
+    expect(document.querySelector(".chat-memory-panel-head")).toBeNull();
+    expect(disclosureButton).toHaveAttribute("data-empty", "false");
+    expect(disclosureButton.querySelector(".chat-memory-count")).toHaveTextContent("1");
     expect(disclosureButton).toHaveAttribute("aria-expanded", "false");
     expect(disclosureButton.getAttribute("aria-controls")).toContain("chat-memory-disclosure");
     await user.click(disclosureButton);
@@ -461,6 +462,17 @@ describe("ChatWindow memory disclosure", () => {
     expect(screen.getByText("explicit-user-instruction")).toBeInTheDocument();
     expect(screen.getByText("user asked Keiko to remember this")).toBeInTheDocument();
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
+  });
+
+  it("renders the memory brain as visually disabled when no memories were included", () => {
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    const disclosureButton = screen.getByRole("button", { name: /no memories included/i });
+    expect(disclosureButton).toHaveAttribute("data-empty", "true");
+    expect(document.querySelector(".chat-scope-header")).toContainElement(disclosureButton);
+    expect(disclosureButton.querySelector(".chat-memory-count")).toBeNull();
+    expect(disclosureButton.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByText("No memories included")).toBeNull();
   });
 
   it("uses unique disclosure ids for multiple chat windows", () => {
@@ -511,6 +523,21 @@ describe("ChatWindow repository file focus picker", () => {
           extension: "ts",
           sizeBytes: 42,
           modifiedAt: 123,
+          fileRole: "source",
+          matchQuality: "exact",
+          rootKind: "nested-git-root",
+        },
+        {
+          root: "/repo",
+          path: "dist/coding-context.js",
+          name: "coding-context.js",
+          directory: "dist",
+          extension: "js",
+          sizeBytes: 84,
+          modifiedAt: 456,
+          fileRole: "generated",
+          matchQuality: "strong",
+          rootKind: "selected-root",
         },
       ],
       truncated: false,
@@ -537,10 +564,22 @@ describe("ChatWindow repository file focus picker", () => {
     const result = await screen.findByRole("option", {
       name: "Reference src/context/coding-context.ts",
     });
+    expect(result).toHaveTextContent("Source");
+    expect(result).toHaveTextContent("Nested repo");
+    const generatedResult = screen.getByRole("option", {
+      name: "Reference dist/coding-context.js",
+    });
+    expect(generatedResult).toHaveTextContent("Generated");
+    expect(generatedResult).toHaveClass("repo-focus-result-secondary");
     await user.click(result);
 
     await waitFor(() => {
-      expect(fetchFilesSearchMock).toHaveBeenCalledWith("/repo", "coding", 24);
+      expect(fetchFilesSearchMock).toHaveBeenCalledWith(
+        "/repo",
+        "coding",
+        24,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
         connectedScopes: [
           expect.objectContaining({
@@ -553,6 +592,237 @@ describe("ChatWindow repository file focus picker", () => {
     });
     expect(replaceChat).toHaveBeenCalledWith(updated);
     expect(setDraft).toHaveBeenCalledWith("Explain this @src/context/coding-context.ts ");
+    expect(screen.getByRole("list", { name: "Referenced repository files" })).toHaveTextContent(
+      "coding-context.ts",
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Remove repository reference src/context/coding-context.ts",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("debounces repository searches and aborts stale in-flight requests", async () => {
+    const signals: AbortSignal[] = [];
+    fetchFilesSearchMock.mockImplementation((_root, query, _limit, init) => {
+      if (init?.signal !== undefined && init.signal !== null) signals.push(init.signal);
+      if (query === "ra") {
+        return new Promise<never>(() => undefined);
+      }
+      return Promise.resolve({
+        root: "/repo",
+        query,
+        results: [
+          {
+            root: "/repo",
+            path: "src/range.ts",
+            name: "range.ts",
+            directory: "src",
+            extension: "ts",
+            sizeBytes: 42,
+            modifiedAt: 123,
+            fileRole: "source",
+            matchQuality: "exact",
+            rootKind: "selected-root",
+          },
+        ],
+        truncated: false,
+        scannedFileCount: 10,
+      });
+    });
+
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [
+            {
+              kind: "workspace-root",
+              root: "/repo",
+              relativePaths: [],
+              connectedAtMs: 1,
+            },
+          ],
+        }),
+        draft: "",
+      }),
+    );
+
+    const input = screen.getByRole("textbox", { name: "Chat message" });
+    fireEvent.change(input, {
+      target: { value: "@ra", selectionStart: "@ra".length },
+    });
+
+    await waitFor(() => {
+      expect(fetchFilesSearchMock).toHaveBeenCalledWith(
+        "/repo",
+        "ra",
+        24,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+    expect(signals[0]?.aborted).toBe(false);
+
+    fireEvent.change(input, {
+      target: { value: "@range", selectionStart: "@range".length },
+    });
+
+    await waitFor(() => expect(signals[0]?.aborted).toBe(true));
+    await screen.findByRole("option", { name: "Reference src/range.ts" });
+    expect(fetchFilesSearchMock).toHaveBeenCalledWith(
+      "/repo",
+      "range",
+      24,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("removes typed repository references from the chip strip and draft", async () => {
+    const user = userEvent.setup();
+    const setDraft = vi.fn();
+    const existingScope = {
+      kind: "files" as const,
+      root: "/repo",
+      relativePaths: ["src/context/coding-context.ts"],
+      connectedAtMs: 1,
+    };
+    fetchFilesSearchMock.mockResolvedValue({
+      root: "/repo",
+      query: "coding",
+      results: [
+        {
+          root: "/repo",
+          path: "src/context/coding-context.ts",
+          name: "coding-context.ts",
+          directory: "src/context",
+          extension: "ts",
+          sizeBytes: 42,
+          modifiedAt: 123,
+        },
+      ],
+      truncated: false,
+      scannedFileCount: 10,
+    });
+
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [existingScope],
+          connectedScope: existingScope,
+        }),
+        draft: "",
+        setDraft,
+      }),
+    );
+
+    const input = screen.getByRole("textbox", { name: "Chat message" });
+    await user.type(input, "Explain this @coding");
+    await user.click(
+      await screen.findByRole("option", {
+        name: "Reference src/context/coding-context.ts",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Remove repository reference src/context/coding-context.ts",
+      }),
+    );
+
+    expect(screen.queryByRole("list", { name: "Referenced repository files" })).toBeNull();
+    expect(setDraft).toHaveBeenLastCalledWith("Explain this ");
+  });
+
+  it("clears the draft when removing the only typed repository reference", async () => {
+    const user = userEvent.setup();
+    const setDraft = vi.fn();
+    const existingScope = {
+      kind: "files" as const,
+      root: "/repo",
+      relativePaths: ["src/range.ts"],
+      connectedAtMs: 1,
+    };
+    fetchFilesSearchMock.mockResolvedValue({
+      root: "/repo",
+      query: "range",
+      results: [
+        {
+          root: "/repo",
+          path: "src/range.ts",
+          name: "range.ts",
+          directory: "src",
+          extension: "ts",
+          sizeBytes: 42,
+          modifiedAt: 123,
+        },
+      ],
+      truncated: false,
+      scannedFileCount: 10,
+    });
+
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [existingScope],
+          connectedScope: existingScope,
+        }),
+        draft: "",
+        setDraft,
+      }),
+    );
+
+    const input = screen.getByRole("textbox", { name: "Chat message" });
+    await user.type(input, "@range");
+    await user.click(
+      await screen.findByRole("option", {
+        name: "Reference src/range.ts",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Remove repository reference src/range.ts",
+      }),
+    );
+
+    expect(screen.queryByRole("list", { name: "Referenced repository files" })).toBeNull();
+    expect(setDraft).toHaveBeenLastCalledWith("");
+  });
+
+  it("reconstructs unverified repository chips from an existing draft", async () => {
+    const user = userEvent.setup();
+    const setDraft = vi.fn();
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [
+            {
+              kind: "workspace-root",
+              root: "/repo",
+              relativePaths: [],
+              connectedAtMs: 1,
+            },
+          ],
+        }),
+        draft: "Explain @packages/keiko-editor/src/range.ts",
+        setDraft,
+      }),
+    );
+
+    const list = await screen.findByRole("list", { name: "Referenced repository files" });
+    expect(list).toHaveTextContent("range.ts");
+    expect(list).toHaveTextContent("Unverified");
+    expect(list).toHaveAccessibleName("Referenced repository files");
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Remove repository reference packages/keiko-editor/src/range.ts",
+      }),
+    );
+
+    expect(screen.queryByRole("list", { name: "Referenced repository files" })).toBeNull();
+    expect(setDraft).toHaveBeenLastCalledWith("Explain ");
   });
 
   it("creates a focused Files scope when only the repository root is connected", async () => {
@@ -1106,6 +1376,42 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     expect(container.querySelector(".cmp-model")).toHaveClass("cmp-model-compact");
   });
 
+  it("keeps attach and model controls left while action buttons stay right", () => {
+    const model = {
+      ...chatModelCapability("test-chat-1"),
+      supportsDocumentInput: true,
+      supportsImageInput: true,
+    };
+    const { container } = render(
+      <ChatSessionProvider
+        value={makeSession({
+          models: [model],
+          selectedModel: model.id,
+          activeChat: makeChat({ selectedModel: model.id }),
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    const leftGroup = container.querySelector(".cmp-bar-model");
+    const rightGroup = container.querySelector(".cmp-bar-main:not(.cmp-bar-main-voice-dialog)");
+    const attachButton = screen.getByRole("button", { name: "Attach file" });
+    const modelTrigger = screen.getByRole("combobox", { name: "Models" });
+    const sendButton = screen.getByRole("button", { name: "Send message" });
+
+    expect(leftGroup).toContainElement(attachButton);
+    expect(leftGroup).toContainElement(modelTrigger);
+    expect(rightGroup).not.toContainElement(attachButton);
+    expect(rightGroup).toContainElement(sendButton);
+    expect(
+      Boolean(
+        attachButton.compareDocumentPosition(modelTrigger) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+    expect(attachButton.querySelector('path[d="M12 5v14M5 12h14"]')).not.toBeNull();
+  });
+
   it("opens the compact model picker with the same menu width as the compact full model button", async () => {
     const user = userEvent.setup();
     const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
@@ -1139,27 +1445,11 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     expect(document.querySelector(".cmp-model-menu")).toHaveStyle({ width: "118px" });
   });
 
-  it("uses the compact no-memory disclosure icon and hides budget in minimal mode", () => {
+  it("uses the memory brain disclosure icon and hides history controls in minimal mode", () => {
     const { container } = render(
       <ChatSessionProvider
         value={makeSession({
           activeChat: makeChat(),
-          budget: {
-            approximateBytes: 2_000,
-            approximateTokens: 500,
-            contextWindowTokens: 10_000,
-            reservedOutputTokens: 2_000,
-            availableInputTokens: 8_000,
-            pressure: "low",
-            breakdown: {
-              draftBytes: 100,
-              historyBytes: 1_900,
-              documentBytes: 0,
-              repoContextBytes: 0,
-              knowledgeBytes: 0,
-              memoryBytes: 0,
-            },
-          },
         })}
       >
         <ChatWindow minimalChat compact />
@@ -1169,40 +1459,28 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     expect(container.querySelector(".chatw")).toHaveClass("chatw-minimal");
     const disclosure = screen.getByRole("button", { name: "No memories included" });
     expect(disclosure).toHaveClass("chat-memory-disclosure-toggle");
+    expect(disclosure).toHaveAttribute("data-empty", "true");
     expect(disclosure).toHaveAttribute("data-tip", "No memories included");
+    expect(disclosure.querySelector("svg")).not.toBeNull();
     expect(screen.queryByText(/Approximate context:/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /clear history/i })).toBeNull();
   });
 });
 
 describe("ChatWindow memory controls", () => {
-  it("lets users disable MemoriaViva for the next request and adjust the context budget", () => {
-    const setMemoryEnabled = vi.fn();
-    const setMemoryBudgetTokens = vi.fn();
+  it("keeps MemoriaViva configuration out of the chat window while preserving disclosure", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
-        memoryEnabled: true,
-        memoryBudgetTokens: 1200,
-        setMemoryEnabled,
-        setMemoryBudgetTokens,
       }),
     );
 
-    const toggle = screen.getByRole("switch", {
-      name: "Enable MemoriaViva for the next request",
-    });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(toggle);
-    expect(setMemoryEnabled).toHaveBeenCalledWith(false);
-
-    fireEvent.change(screen.getByLabelText("Budget (tokens)"), { target: { value: "800" } });
-    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(800);
-
-    fireEvent.click(screen.getByRole("button", { name: "Increase memory budget" }));
-    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(1300);
-
-    fireEvent.click(screen.getByRole("button", { name: "Decrease memory budget" }));
-    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(1100);
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(document.querySelector(".chat-memory-budget")).toBeNull();
+    expect(document.querySelector(".chat-memory-toggle")).toBeNull();
+    expect(screen.getByRole("button", { name: /no memories included/i })).toHaveClass(
+      "chat-memory-disclosure-toggle",
+    );
   });
 
   it("discloses disabled no-memory responses without deleting stored memories", async () => {
@@ -1223,7 +1501,6 @@ describe("ChatWindow memory controls", () => {
       }),
     );
 
-    expect(screen.getByText("MemoriaViva off")).toBeInTheDocument();
     const disclosureButton = screen.getByRole("button", { name: /no memories included/i });
     await user.click(disclosureButton);
     expect(screen.getByText(/MemoriaViva was disabled for the last request/i)).toBeInTheDocument();
@@ -1537,6 +1814,85 @@ describe("ChatWindow message copy", () => {
     expect(turn?.querySelector('[role="separator"]')).toBeNull();
   });
 
+  it("renders a left-side question map and jumps to the selected prompt", () => {
+    const scrollSpy = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m1",
+            chatId: "chat-1",
+            role: "user",
+            content: "First question with a short body.",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "First answer.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "m3",
+            chatId: "chat-1",
+            role: "user",
+            content:
+              "Second question has enough words to show a useful hover preview in the compact navigation rail.",
+            timestamp: 3,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "m4",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Second answer.",
+            timestamp: 4,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    const map = screen.getByRole("navigation", { name: "Conversation questions" });
+    const buttons = screen.getAllByRole("button", { name: /Jump to question/u });
+    expect(buttons).toHaveLength(2);
+    const secondButton = buttons[1];
+    if (secondButton === undefined) throw new Error("second question map marker missing");
+    expect(map.querySelectorAll(".chat-question-map-mark")).toHaveLength(2);
+    expect(map.querySelectorAll(".chat-question-map-card")).toHaveLength(2);
+    expect(map.querySelector(".chat-question-map-card-title")).toHaveTextContent("First question");
+    expect(secondButton).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Second question has enough words"),
+    );
+    expect(secondButton).not.toHaveAttribute("title");
+    expect(document.querySelector('[data-chat-question-id="m3"]')).not.toBeNull();
+
+    fireEvent.click(secondButton);
+    expect(scrollSpy).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
+    scrollSpy.mockRestore();
+  });
+
   it("renders assistant identity as the Keiko logo without the visible wordmark", () => {
     renderWindow(
       makeSession({
@@ -1618,7 +1974,15 @@ describe("ChatWindow message copy", () => {
 
     // Exactly one copy button — the assistant bubble's. User bubbles carry none.
     expect(screen.getAllByRole("button", { name: "Copy answer" })).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+    const copyButton = screen.getByRole("button", { name: "Copy answer" });
+    expect(copyButton).toHaveTextContent("");
+    expect(copyButton).not.toHaveClass("ui-tip");
+    expect(copyButton).not.toHaveAttribute("data-tip");
+    const copyIcon = copyButton.querySelector("svg");
+    expect(copyIcon).not.toBeNull();
+    expect(copyIcon).toHaveAttribute("width", "20");
+    expect(copyIcon).toHaveAttribute("height", "20");
+    fireEvent.click(copyButton);
     await waitFor(() => {
       // Citation markers (ASCII + CJK/fullwidth glyphs) and their leading
       // whitespace are stripped from the copied plaintext.
@@ -1763,11 +2127,14 @@ describe("ChatWindow message copy", () => {
       { linkedRoot: "/repo", openEditorFile },
     );
 
-    await user.click(
-      screen.getByRole("button", {
-        name: "Open packages/keiko-harness/src/context.ts at lines 50-57 in editor",
-      }),
-    );
+    const referenceButton = screen.getByRole("button", {
+      name: "Open packages/keiko-harness/src/context.ts at lines 50-57 in editor",
+    });
+    expect(referenceButton).toHaveTextContent("context.ts:50-57");
+    expect(referenceButton).not.toHaveTextContent("packages/keiko-harness");
+    expect(referenceButton).toHaveAttribute("title", "packages/keiko-harness/src/context.ts:50-57");
+
+    await user.click(referenceButton);
 
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/repo",
@@ -1778,6 +2145,201 @@ describe("ChatWindow message copy", () => {
     expect(
       screen.getByText("Opened packages/keiko-harness/src/context.ts in editor."),
     ).toHaveAttribute("role", "status");
+  });
+
+  it("surfaces a clear status when repository references have no connected root", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [],
+          connectedScope: undefined,
+        }),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Check src/context.ts:50 before this change.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+      { linkedRoot: null, openEditorFile },
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Open src/context.ts at line 50 in editor" }),
+    );
+
+    expect(openEditorFile).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("Connect a Files window to open repository references."),
+    ).toHaveAttribute("role", "alert");
+  });
+
+  it("opens assistant repository references from chat connected scope roots", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/Users/dev/Projects/Keiko",
+          connectedScopes: [
+            {
+              kind: "files",
+              root: "/Users/dev/Projects/Keiko",
+              relativePaths: ["packages/keiko-editor/src/range.ts"],
+              connectedAtMs: 1,
+            },
+          ],
+        }),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Use packages/keiko-editor/src/range.ts:10 for this behavior.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+      { openEditorFile },
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open packages/keiko-editor/src/range.ts at line 10 in editor",
+      }),
+    );
+
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/Users/dev/Projects/Keiko",
+      path: "packages/keiko-editor/src/range.ts",
+      lineStart: 10,
+      lineEnd: 10,
+    });
+  });
+
+  it("prefers nested chat repository roots over linked parent folder roots", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/Users/dev/Projects",
+          connectedScopes: [
+            {
+              kind: "workspace-root",
+              root: "/Users/dev/Projects",
+              relativePaths: [],
+              connectedAtMs: 1,
+            },
+            {
+              kind: "files",
+              root: "/Users/dev/Projects/Keiko",
+              relativePaths: ["packages/keiko-editor/src/range.ts"],
+              connectedAtMs: 2,
+            },
+          ],
+        }),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Use packages/keiko-editor/src/range.ts:10 for this behavior.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+      { linkedRoot: "/Users/dev/Projects", openEditorFile },
+    );
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open packages/keiko-editor/src/range.ts at line 10 in editor",
+      }),
+    );
+
+    expect(screen.queryByRole("dialog", { name: "Select repository source" })).toBeNull();
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/Users/dev/Projects/Keiko",
+      path: "packages/keiko-editor/src/range.ts",
+      lineStart: 10,
+      lineEnd: 10,
+    });
+  });
+
+  it("normalizes legacy parent-prefixed repository references against nested roots", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/Users/dev/Projects",
+          connectedScopes: [
+            {
+              kind: "workspace-root",
+              root: "/Users/dev/Projects",
+              relativePaths: [],
+              connectedAtMs: 1,
+            },
+            {
+              kind: "files",
+              root: "/Users/dev/Projects/Keiko",
+              relativePaths: ["packages/keiko-editor/src/range.ts"],
+              connectedAtMs: 2,
+            },
+          ],
+        }),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Use Keiko/packages/keiko-editor/src/range.ts:10 for legacy citations.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+      { linkedRoot: "/Users/dev/Projects", openEditorFile },
+    );
+
+    const referenceButton = screen.getByRole("button", {
+      name: "Open Keiko/packages/keiko-editor/src/range.ts at line 10 in editor",
+    });
+    expect(referenceButton).toHaveTextContent("range.ts:10");
+
+    await user.click(referenceButton);
+
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/Users/dev/Projects/Keiko",
+      path: "packages/keiko-editor/src/range.ts",
+      lineStart: 10,
+      lineEnd: 10,
+    });
   });
 
   it("requires a root choice for assistant repository references when multiple roots are connected", async () => {

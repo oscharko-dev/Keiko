@@ -75,6 +75,21 @@ describe("buildCspHeader", () => {
     expect(header).toContain("script-src 'self' 'sha256-abc' 'sha256-def'");
   });
 
+  it("allows generated assistant audio through same-origin/blob media only", () => {
+    const header = buildCspHeader([]);
+    const mediaDirective = header.split("; ").find((d) => d.startsWith("media-src "));
+    const connectDirective = header.split("; ").find((d) => d.startsWith("connect-src "));
+    const scriptDirective = header.split("; ").find((d) => d.startsWith("script-src "));
+
+    expect(mediaDirective).toBe("media-src 'self' blob:");
+    expect(mediaDirective).not.toContain("data:");
+    expect(mediaDirective).not.toContain("http:");
+    expect(mediaDirective).not.toContain("https:");
+    expect(mediaDirective).not.toContain("*");
+    expect(connectDirective).toBe("connect-src 'self'");
+    expect(scriptDirective).toBe("script-src 'self'");
+  });
+
   it("permits unsafe-inline only for style-src and locks the framing directives", () => {
     const header = buildCspHeader([]);
     expect(header).toContain("style-src 'self' 'unsafe-inline'");

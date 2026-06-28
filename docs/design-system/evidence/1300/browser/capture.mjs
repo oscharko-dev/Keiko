@@ -182,6 +182,34 @@ const WORKSPACE_WINDOWS = [
     cfg: { root: DEMO_ROOT, file: "src/App.tsx", openFiles: ["src/App.tsx", "README.md"] },
     max: false,
   },
+  // Issue #1574 (EV3) — Git client window shell at a generous desktop size. Wide enough for the full
+  // desktop IA (header toolbar with repository + branch selectors and Sync pill, the Changes/History
+  // sidebar, and the diff pane side by side).
+  {
+    id: "issue-1574-git-desktop",
+    type: "governedGit",
+    x: 40,
+    y: 44,
+    w: 760,
+    h: 620,
+    z: 30,
+    cfg: { projectPath: DEMO_ROOT },
+    max: false,
+  },
+  // Issue #1574 (EV3) — the same shell at a constrained window size. Above the governedGit tiny
+  // threshold (300x240) so the window renders the full shell rather than the too-small placeholder,
+  // proving the desktop IA stays coherent when the window is narrow.
+  {
+    id: "issue-1574-git-constrained",
+    type: "governedGit",
+    x: 40,
+    y: 44,
+    w: 360,
+    h: 460,
+    z: 31,
+    cfg: { projectPath: DEMO_ROOT },
+    max: false,
+  },
 ];
 const WINDOWS_BY_ID = Object.fromEntries(WORKSPACE_WINDOWS.map((win) => [win.id, win]));
 function scenarioWindows(ids) {
@@ -224,6 +252,45 @@ const SCENARIOS = [
     requiredSelectors: [
       '[data-window-id="issue-1300-files"]',
       '[data-window-id="issue-1300-editor"]',
+    ],
+  },
+  // Issue #1574 (EV3) — Git client window shell at a generous desktop size. The required selectors
+  // prove the composed desktop IA rendered: the window frame, the Git workspace root, the repository
+  // and branch combobox triggers and the Changes/History tablist in the sidebar, and the populated
+  // changed-files navigation. These target the real classes/roles the shell composes (no new CSS).
+  {
+    id: "git-window-desktop",
+    description: "Git client window shell at a generous desktop size",
+    windows: scenarioWindows(["issue-1574-git-desktop"]),
+    requiredSelectors: [
+      '[data-window-id="issue-1574-git-desktop"]',
+      '[data-window-id="issue-1574-git-desktop"] [aria-label="Git"]',
+      '[data-window-id="issue-1574-git-desktop"] [role="combobox"][aria-label="Repository"]',
+      '[data-window-id="issue-1574-git-desktop"] [role="combobox"][aria-label="Branch"]',
+      '[data-window-id="issue-1574-git-desktop"] [role="tablist"][aria-label="Changes and history"]',
+      '[data-window-id="issue-1574-git-desktop"] nav.rv-filelist[aria-label="Changed files"]',
+      // Issue #1575 — per-file staging checkboxes and the pinned commit composer.
+      '[data-window-id="issue-1574-git-desktop"] nav.rv-filelist[aria-label="Changed files"] input[type="checkbox"]',
+      '[data-window-id="issue-1574-git-desktop"] section[aria-label="Commit"]',
+    ],
+  },
+  // Issue #1574 (EV3) — the same shell at a constrained window size. The IA must stay coherent when the
+  // window is narrow: the same window frame, Git workspace root, repository/branch selectors, tablist,
+  // and changed-files list are still required (the shell reflows rather than dropping structure).
+  {
+    id: "git-window-constrained",
+    description: "Git client window shell at a constrained window size",
+    windows: scenarioWindows(["issue-1574-git-constrained"]),
+    requiredSelectors: [
+      '[data-window-id="issue-1574-git-constrained"]',
+      '[data-window-id="issue-1574-git-constrained"] [aria-label="Git"]',
+      '[data-window-id="issue-1574-git-constrained"] [role="combobox"][aria-label="Repository"]',
+      '[data-window-id="issue-1574-git-constrained"] [role="combobox"][aria-label="Branch"]',
+      '[data-window-id="issue-1574-git-constrained"] [role="tablist"][aria-label="Changes and history"]',
+      '[data-window-id="issue-1574-git-constrained"] nav.rv-filelist[aria-label="Changed files"]',
+      // Issue #1575 — staging checkboxes and the pinned commit composer must survive the reflow.
+      '[data-window-id="issue-1574-git-constrained"] nav.rv-filelist[aria-label="Changed files"] input[type="checkbox"]',
+      '[data-window-id="issue-1574-git-constrained"] section[aria-label="Commit"]',
     ],
   },
 ];
@@ -286,6 +353,25 @@ const ZERO_RELATIONSHIP_TOTALS = {
   blocked: 0,
   stale: 0,
 };
+const DEMO_MODELS = [
+  {
+    id: "static-evidence-chat",
+    kind: "chat",
+    contextWindow: 128000,
+    maxOutputTokens: 4096,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "standard",
+    preferredUseCases: ["static browser evidence"],
+    knownLimitations: [],
+  },
+];
 
 function apiBody(url) {
   const pathname = typeof url === "string" ? url : url.pathname;
@@ -298,7 +384,7 @@ function apiBody(url) {
       effectiveGroundingLimits: { maxConnectedSources: 16 },
     };
   }
-  if (pathname === "/api/models") return { models: [] };
+  if (pathname === "/api/models") return { models: DEMO_MODELS };
   if (pathname === "/api/workflows") return { workflows: [] };
   if (pathname === "/api/chats") return { chats: [] };
   if (pathname === "/api/projects") {
@@ -337,6 +423,93 @@ function apiBody(url) {
     };
   }
   if (pathname === "/api/editor/agent/sessions") return { sessions: [] };
+  // Issue #446 (Epic #443) — the globally mounted task-workspace switcher reads the inventory and the
+  // active binding on boot. Without these the malformed fallback leaves `instances` undefined and the
+  // switcher throws on every route, so the read surface must return an empty inventory and no active
+  // binding (the unbound studio default), keeping every scenario error-free.
+  if (pathname === "/api/task-workspaces") return { instances: [] };
+  if (pathname === "/api/task-workspaces/active") return { active: null };
+  // Issue #1574 — read surface for the Git client window shell (repository status / branches / diff).
+  // Fixtures keep the shell's desktop IA fully populated: a dirty repository (changed-file list), a
+  // current branch in the branch selector, and a Sync status pill, proving the shell renders at all
+  // viewport widths. No mutation endpoints are exercised (#1575/#1576/#1577 own those).
+  if (pathname === "/api/git/status") {
+    return {
+      schemaVersion: "1",
+      root: DEMO_ROOT,
+      repositoryRoot: DEMO_ROOT,
+      state: "available",
+      available: true,
+      branch: "main",
+      detached: false,
+      clean: false,
+      stagedCount: 1,
+      unstagedCount: 1,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [
+        {
+          path: "src/App.tsx",
+          indexStatus: "M",
+          worktreeStatus: " ",
+          staged: true,
+          unstaged: false,
+          untracked: false,
+          conflicted: false,
+        },
+        {
+          path: "README.md",
+          indexStatus: " ",
+          worktreeStatus: "M",
+          staged: false,
+          unstaged: true,
+          untracked: false,
+          conflicted: false,
+        },
+      ],
+      truncated: false,
+      maxChanges: 1000,
+    };
+  }
+  if (pathname === "/api/git/branches") {
+    return {
+      schemaVersion: "1",
+      root: DEMO_ROOT,
+      repositoryRoot: DEMO_ROOT,
+      available: true,
+      state: "available",
+      branches: [
+        { name: "main", headRefHash: "0".repeat(40), current: true },
+        { name: "feature/git-window-shell", headRefHash: "1".repeat(40), current: false },
+      ],
+      truncated: false,
+    };
+  }
+  if (pathname === "/api/git/diff") {
+    return {
+      schemaVersion: "1",
+      root: DEMO_ROOT,
+      repositoryRoot: DEMO_ROOT,
+      state: "available",
+      available: true,
+      scope: "all",
+      diff: "",
+      truncated: false,
+      maxBytes: 262144,
+    };
+  }
+  // Issue #1575 — the commit composer auto-previews policy for the staged set, so the live shell
+  // posts here on mount. Return a content-free, passing preview so the policy preview renders.
+  if (pathname === "/api/git-delivery/commit/preview") {
+    return {
+      schemaVersion: "1",
+      summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+      intent: { warnings: [], mixedScope: false, isWip: false },
+      messageValidation: { ok: true },
+      preflightFindingCodes: [],
+      policyOutcome: "allowed",
+    };
+  }
   if (pathname === "/api/quality-intelligence/runs") {
     return {
       runs: [

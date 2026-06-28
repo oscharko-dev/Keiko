@@ -24,8 +24,10 @@
  */
 import dynamic from "next/dynamic";
 import {
+  memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useId,
   useMemo,
   useReducer,
@@ -33,6 +35,7 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
+  type Reducer,
 } from "react";
 import {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
@@ -45,6 +48,7 @@ import {
   deriveEditorStatusBar,
   describeTestGenerationStatus,
   editorFileModelReducer,
+  editorLanguageLabel,
   EditorStatusBar,
   IDLE_TEST_GENERATION_STATE,
   inferMonacoLanguageId,
@@ -56,16 +60,21 @@ import {
   testGenerationReducer,
   type EditorBuffer,
   type EditorChangeOrigin,
+  type EditorCompletionQuery,
   type EditorCompletionResolver,
   type EditorContentDelta,
   type EditorDiagnosticsResolver,
+  type EditorDiagnosticsQuery,
   type EditorDiagnosticsSummary,
   type EditorDocumentIdentity,
   type EditorFileModel,
   type EditorHotExitSnapshotV1,
   type EditorFormattingResolver,
+  type EditorFormattingQuery,
   type EditorHoverResolver,
+  type EditorHoverQuery,
   type EditorInlineCompletionResolver,
+  type EditorInlineCompletionQuery,
   type EditorLanguageId,
   type EditorPosition,
   type EditorRange,
@@ -74,14 +83,18 @@ import {
   type EditorSaveStatus,
   type EditorStatusRun,
   type EditorSymbolsResolver,
+  type EditorSymbolsQuery,
   type InlineCompletionTelemetrySnapshot,
   type KeikoEditorLoadState,
+  type PatchPreviewModel,
+  type TestGenerationFlowAction,
+  type TestGenerationFlowState,
   type TestGenerationPreview,
 } from "@oscharko-dev/keiko-editor";
+import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
   fetchEditorLanguageCapabilities,
-  postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
   fetchFilesContent,
   reportEditorInlineCompletionTelemetry,
@@ -105,7 +118,6 @@ import {
 } from "../../../../../lib/editor-language";
 import type {
   EditorAgentAction,
-  EditorAgentActionResultRequest,
   EditorAgentPaneSnapshot,
   EditorCompletionContextSelectors,
   EditorDocumentVersion,
@@ -117,6 +129,13 @@ import { EDITOR_AGENT_SCHEMA_VERSION } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
 import { FileIcon } from "../shared/projectTree";
+import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
+import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
+import {
+  postEditorAgentResult,
+  useEditorAgentBridge,
+  type EditorAgentActionControllers,
+} from "./editorAgentBridge";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import {
@@ -124,6 +143,7 @@ import {
   readEditorHotExitSnapshot,
   writeEditorHotExitSnapshot,
 } from "./editorHotExitStore";
+import { LruSessionCache } from "./editorSessionCache";
 
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
   ssr: false,
@@ -141,6 +161,20 @@ const TEST_GENERATION_CONTEXT_BUDGET_BYTES = 65_536;
 // Content-free transport-failure message; the editor stays usable after a failed run.
 const TEST_GENERATION_FAILURE_MESSAGE =
   "Test generation could not be reached. The editor is still usable.";
+// Per-window session-cache cap (Issue 2.8). Open tabs + recently-visited files stay cached for instant
+// switching; the LRU evicts older clean/closed entries beyond this, never a saving/dirty/active one.
+const SESSION_CACHE_CAPACITY = 64;
+const COMPACT_TABS_ENTER_WIDTH_PX = 420;
+const COMPACT_TABS_EXIT_WIDTH_PX = 460;
+// Pre-GET bootstrap seed for `languageCapabilities` before the async `/api/editor/language/capabilities`
+// GET resolves. It seeds the TypeScript/JavaScript provider as available so the primary editing
+// surface registers its governed intelligence at the FIRST `onMount` and does not remount when the GET
+// resolves: Monaco language providers are registered once per editor mount (use-editor-handlers.ts),
+// and `editorSurfaceKey` includes the resolved provider id, so a bootstrap id that differs from the
+// server's would force a Monaco re-initialisation on load. Language *actions* are not TS/JS-gated —
+// `providerOperationEnabled` reads the now-exhaustive server registry (Issue #1379 AC1); this seed is
+// a transient, best-effort first-paint optimisation that the GET response immediately supersedes for
+// every language.
 const BOOTSTRAP_LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   schemaVersion: "1",
   providers: [
@@ -166,6 +200,8 @@ export interface EditorRuntimeWidgetProps {
   readonly revealRequestId?: string | undefined;
   readonly dirtyFiles?: readonly string[] | undefined;
   readonly onSelectOpenFile?: ((file: string) => void) | undefined;
+  readonly onSplitPane?: ((paneId: string, direction: "row" | "column") => void) | undefined;
+  readonly onMoveTab?: ((fromPaneId: string, file: string, toPaneId: string) => void) | undefined;
   readonly onCloseOpenFile?: ((file: string) => Promise<boolean> | boolean | void) | undefined;
   readonly onDirtyChange?: ((file: string, dirty: boolean) => void) | undefined;
   readonly externalSaveRequest?: EditorExternalSaveRequest | undefined;
@@ -205,7 +241,7 @@ function safeDomIdSegment(value: string): string {
   return safe.length > 0 ? safe : "editor";
 }
 
-/** Map a workspace path to a renderable editor language; intelligence remains TS/JS-gated below. */
+/** Map a workspace path to a renderable editor language; intelligence is registry/capability-gated below. */
 function inferEditorLanguage(path: string): EditorLanguageId {
   const language = inferMonacoLanguageId(path);
   return isSupportedEditorLanguage(language) ? language : "plaintext";
@@ -240,9 +276,7 @@ async function sha256Hex(text: string): Promise<string> {
   const cryptoLike = globalThis.crypto;
   if (cryptoLike?.subtle !== undefined) {
     const digest = await cryptoLike.subtle.digest("SHA-256", new TextEncoder().encode(text));
-    return [...new Uint8Array(digest)]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
   let hash = 0x811c9dc5;
   for (let index = 0; index < text.length; index += 1) {
@@ -252,9 +286,10 @@ async function sha256Hex(text: string): Promise<string> {
   return hash.toString(16).padStart(8, "0").repeat(8).slice(0, 64);
 }
 
-function rangeToAgentRange(range: EditorRange | null):
-  | { readonly start: { readonly line: number; readonly character: number }; readonly end: { readonly line: number; readonly character: number } }
-  | null {
+function rangeToAgentRange(range: EditorRange | null): {
+  readonly start: { readonly line: number; readonly character: number };
+  readonly end: { readonly line: number; readonly character: number };
+} | null {
   if (range === null) return null;
   return {
     start: { line: range.start.line, character: range.start.column },
@@ -335,9 +370,7 @@ function providerForLanguage(
   languageId: string | undefined,
 ): LanguageProviderDescriptor | null {
   if (capabilities === null || languageId === undefined) return null;
-  return (
-    capabilities.providers.find((provider) => provider.languages.includes(languageId)) ?? null
-  );
+  return capabilities.providers.find((provider) => provider.languages.includes(languageId)) ?? null;
 }
 
 function providerOperationEnabled(
@@ -351,7 +384,57 @@ function providerOperationEnabled(
   );
 }
 
-export default function EditorRuntimeWidget({
+function summarizePaths(paths: readonly string[]): string {
+  if (paths.length === 0) return "";
+  if (paths.length === 1) return paths[0] ?? "";
+  if (paths.length === 2) return `${paths[0] ?? ""}, ${paths[1] ?? ""}`;
+  return `${paths[0] ?? ""}, ${paths[1] ?? ""} +${String(paths.length - 2)} more`;
+}
+
+/**
+ * Build a minimal, synthetic {@link PatchPreviewModel} for an agent applyPatch pending review
+ * (Issue #1394, ADR-0058 D3). The model is not derived from a patch diff string; it is built
+ * directly from the pre-computed original and modified text so that the KeikoDiffEditor can render
+ * the diff without any browser-side patch parsing.
+ */
+function buildAgentPatchDiffModel(
+  original: string,
+  modified: string,
+  filePath: string | undefined,
+): PatchPreviewModel {
+  const uri = filePath ?? "agent-patch";
+  const language = inferMonacoLanguageId(filePath ?? "");
+  const hasChanges = original !== modified;
+  return {
+    patchId: "agent-patch-pending",
+    status: "previewed",
+    provenance: { origin: "applied-patch" },
+    files: [
+      {
+        uri,
+        displayPath: filePath ?? "Patch",
+        status: "modified",
+        diffable: true,
+        original,
+        modified,
+        language,
+        hasChanges,
+        truncated: false,
+      },
+    ],
+    fileCount: 1,
+    totalFileCount: 1,
+    omittedFileCount: 0,
+    createdCount: 0,
+    modifiedCount: 1,
+    deletedCount: 0,
+    binaryCount: 0,
+    unsupportedCount: 0,
+    truncated: false,
+  };
+}
+
+function EditorRuntimeWidget({
   windowId,
   paneId,
   activePaneId,
@@ -364,6 +447,8 @@ export default function EditorRuntimeWidget({
   openFiles,
   dirtyFiles,
   onSelectOpenFile,
+  onSplitPane,
+  onMoveTab,
   onCloseOpenFile,
   onDirtyChange,
   externalSaveRequest,
@@ -383,6 +468,7 @@ export default function EditorRuntimeWidget({
   );
   const tabId = `${editorDomIdPrefix}-active-tab`;
   const tabpanelId = `${editorDomIdPrefix}-tabpanel`;
+  const tablistRef = useRef<HTMLDivElement>(null);
   const documentTabs = useMemo(() => {
     const deduped: string[] = [];
     for (const path of openFiles ?? []) {
@@ -393,6 +479,52 @@ export default function EditorRuntimeWidget({
     }
     return deduped;
   }, [file, openFiles]);
+  const [tablistCompact, setTablistCompact] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = tablistRef.current;
+    if (el === null) return;
+    let frame: number | null = null;
+    const updateCompactState = (): void => {
+      frame = null;
+      const width = Math.round(el.getBoundingClientRect().width);
+      if (width <= 0) return;
+      setTablistCompact((current) => {
+        const next = current
+          ? width < COMPACT_TABS_EXIT_WIDTH_PX
+          : width < COMPACT_TABS_ENTER_WIDTH_PX;
+        return current === next ? current : next;
+      });
+    };
+    const scheduleUpdate = (): void => {
+      if (frame !== null) return;
+      frame =
+        typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame(updateCompactState)
+          : window.setTimeout(updateCompactState, 0);
+    };
+    scheduleUpdate();
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleUpdate);
+    ro?.observe(el);
+    return () => {
+      if (frame !== null) {
+        if (typeof window.cancelAnimationFrame === "function") {
+          window.cancelAnimationFrame(frame);
+        } else {
+          window.clearTimeout(frame);
+        }
+      }
+      ro?.disconnect();
+    };
+  }, [documentTabs.length]);
+  const compactTabs =
+    tablistCompact && file !== undefined && file.length > 0 && documentTabs.length > 2;
+  const summaryTabs = compactTabs ? documentTabs.filter((path) => path !== file) : [];
+  const visibleTabs = compactTabs ? documentTabs.filter((path) => path === file) : documentTabs;
+  const summaryTip = summarizePaths(summaryTabs);
+  const summaryMenuId = `${editorDomIdPrefix}-summary-menu`;
+  const summaryMenuRef = useRef<HTMLDetailsElement>(null);
+  const [summaryMenuOpen, setSummaryMenuOpen] = useState(false);
 
   const [content, setContent] = useState("");
   const [fileModel, setFileModel] = useState<EditorFileModel | null>(null);
@@ -407,10 +539,9 @@ export default function EditorRuntimeWidget({
   const [formatRequestNonce, setFormatRequestNonce] = useState(0);
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
-  const [testGenState, dispatchTestGen] = useReducer(
-    testGenerationReducer,
-    IDLE_TEST_GENERATION_STATE,
-  );
+  const [testGenState, dispatchTestGen] = useReducer<
+    Reducer<TestGenerationFlowState, TestGenerationFlowAction>
+  >(testGenerationReducer, IDLE_TEST_GENERATION_STATE);
   const testGenSeqRef = useRef(0);
   const testGenAbortRef = useRef<AbortController | null>(null);
   const [currentSelection, setCurrentSelection] = useState<EditorRange | null>(null);
@@ -419,14 +550,44 @@ export default function EditorRuntimeWidget({
   const [diagnosticsSummary, setDiagnosticsSummary] = useState<EditorDiagnosticsSummary | null>(
     null,
   );
-  const [languageCapabilities, setLanguageCapabilities] = useState<LanguageServiceCapabilities | null>(
-    BOOTSTRAP_LANGUAGE_CAPABILITIES,
-  );
+  const [languageCapabilities, setLanguageCapabilities] =
+    useState<LanguageServiceCapabilities | null>(BOOTSTRAP_LANGUAGE_CAPABILITIES);
   const [recoverySnapshot, setRecoverySnapshot] = useState<EditorHotExitSnapshotV1 | null>(null);
-  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  // The on-disk content captured at the moment recovery was offered, so the compare view diffs the
+  // recovered buffer against the disk file even if the live buffer is edited before Compare is opened.
+  const [recoveryDiskBaseline, setRecoveryDiskBaseline] = useState<string | null>(null);
+  const [reloadConfirm, setReloadConfirm] = useState(false);
+  const [recoveryCompare, setRecoveryCompare] = useState(false);
   const [activeContentHash, setActiveContentHash] = useState<string | null>(null);
-  const sessionCacheRef = useRef(new Map<string, EditorFileSessionSnapshot>());
+  // Issue #1394 (ADR-0058 D3/D4): conflict banner and applyPatch review state.
+  const [agentConflict, setAgentConflict] = useState<{
+    readonly code: AgentConflictCode;
+    readonly message: string;
+  } | null>(null);
+  const [agentPatchPending, setAgentPatchPending] = useState<{
+    readonly action: EditorAgentAction;
+    readonly original: string;
+    readonly modified: string;
+  } | null>(null);
+  // A11Y-2: focus the Accept button whenever a patch review appears.
+  const patchAcceptButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (agentPatchPending !== null) {
+      patchAcceptButtonRef.current?.focus();
+    }
+  }, [agentPatchPending]);
   const activeSessionKeyRef = useRef<string | null>(null);
+  // Bounded LRU (Issue 2.8): evict the least-recently-used snapshot on overflow, but never the active
+  // file, a mid-save, or a dirty buffer — those are the background-tab save-correctness invariants.
+  const sessionCacheRef = useRef(
+    new LruSessionCache<EditorFileSessionSnapshot>(
+      SESSION_CACHE_CAPACITY,
+      (key, snapshot) =>
+        key === activeSessionKeyRef.current ||
+        snapshot.saveStatus === "saving" ||
+        (snapshot.fileModel !== null && isDocumentDirty(snapshot.fileModel)),
+    ),
+  );
   activeSessionKeyRef.current =
     root !== undefined && file !== undefined && root.length > 0 && file.length > 0
       ? documentSessionKey(root, file)
@@ -448,7 +609,11 @@ export default function EditorRuntimeWidget({
     setCurrentSelection(null);
     setCursor(null);
     setDiagnosticsSummary(null);
-    setRecoveryNotice(null);
+    // Switching the active file leaves any per-file recovery-compare view or pending reload
+    // confirmation; both are scoped to the file that opened them.
+    setRecoveryCompare(false);
+    setReloadConfirm(false);
+    setRecoveryDiskBaseline(null);
   }, [file, root]);
 
   useEffect(() => {
@@ -463,7 +628,7 @@ export default function EditorRuntimeWidget({
 
   useEffect(() => {
     let cancelled = false;
-    void fetchEditorLanguageCapabilities()
+    void fetchEditorLanguageCapabilities(root)
       .then((capabilities) => {
         if (!cancelled) setLanguageCapabilities(capabilities);
       })
@@ -475,7 +640,7 @@ export default function EditorRuntimeWidget({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [root]);
 
   useEffect(
     () => () => {
@@ -493,8 +658,15 @@ export default function EditorRuntimeWidget({
   const dirty = fileModelMatchesTarget && isDocumentDirty(fileModel);
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
+  const lastDirtyNotificationRef = useRef<{
+    readonly file: string;
+    readonly dirty: boolean;
+  } | null>(null);
   useEffect(() => {
     if (file === undefined || file.length === 0) return;
+    const lastNotification = lastDirtyNotificationRef.current;
+    if (lastNotification?.file === file && lastNotification.dirty === dirty) return;
+    lastDirtyNotificationRef.current = { file, dirty };
     onDirtyChange?.(file, dirty);
   }, [dirty, file, onDirtyChange]);
   useEffect(() => {
@@ -632,14 +804,18 @@ export default function EditorRuntimeWidget({
           setVersion(response.session.version);
           setMaxBytes(response.maxBytes);
           setLoadState({ status: "ready" });
-          if (
-            snapshot !== null &&
-            snapshot.content !== response.content &&
-            snapshot.contentHash !== response.session.version.contentHash
-          ) {
+          // AC3: offer recovery whenever the snapshot's buffer differs from what is on disk now.
+          // The content comparison is the authoritative signal; an additional contentHash check is
+          // redundant against it (a content difference implies a hash difference) and can only ever
+          // suppress a legitimate recovery offer when the client buffer hash and the server-issued
+          // version hash are computed over different normalizations — a false negative. Gate solely
+          // on the content the user would lose.
+          if (snapshot !== null && snapshot.content !== response.content) {
             setRecoverySnapshot(snapshot);
+            setRecoveryDiskBaseline(response.content);
           } else {
             setRecoverySnapshot(null);
+            setRecoveryDiskBaseline(null);
           }
         })
         .catch((err: unknown) => {
@@ -663,6 +839,46 @@ export default function EditorRuntimeWidget({
     load(signal, { bypassCache: true });
   }, [load]);
 
+  // D1/AC1: reloading from disk over a dirty buffer is a destructive discard of unsaved edits, so it
+  // must route through the editor's explicit "reload-file" dirty-close policy — a modal acknowledgement
+  // that reuses the same dialog surface as the close flows — instead of overwriting the buffer outright.
+  // A clean buffer has nothing to lose and reloads immediately.
+  const requestReload = useCallback((): void => {
+    if (dirtyRef.current) {
+      setReloadConfirm(true);
+      return;
+    }
+    reload();
+  }, [reload]);
+
+  const confirmReloadDiscard = useCallback((): void => {
+    setReloadConfirm(false);
+    // The user chose to discard the unsaved buffer for the on-disk version, so the hot-exit snapshot
+    // holding those edits must go too — otherwise the reload would immediately re-offer them as a
+    // recovery. Serialized store mutations keep this delete ordered ahead of the reload's snapshot read.
+    if (root !== undefined && file !== undefined) {
+      void deleteEditorHotExitSnapshot(root, file);
+    }
+    reload();
+  }, [reload, root, file]);
+
+  const cancelReloadDiscard = useCallback((): void => {
+    setReloadConfirm(false);
+  }, []);
+
+  const reloadConfirmRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!reloadConfirm) return;
+    reloadConfirmRef.current?.focus();
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === "Escape") cancelReloadDiscard();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [reloadConfirm, cancelReloadDiscard]);
+
   const persist = useCallback(
     async (text: string): Promise<boolean> => {
       if (!hasTarget || savingRef.current) return false;
@@ -672,7 +888,7 @@ export default function EditorRuntimeWidget({
       if (textChangedBeforeReactCommitted) {
         contentRef.current = text;
         setContent(text);
-        setFileModel((model) =>
+        setFileModel((model: EditorFileModel | null) =>
           model === null
             ? model
             : editorFileModelReducer(model, { type: "edited", origin: "human" }),
@@ -723,7 +939,7 @@ export default function EditorRuntimeWidget({
         if (contentRef.current === text) {
           // No edits arrived during the save: adopt the persisted echo and mark the buffer clean.
           setContent(response.content);
-          setFileModel((model) =>
+          setFileModel((model: EditorFileModel | null) =>
             model === null ? model : editorFileModelReducer(model, { type: "saved" }),
           );
           setSaveStatus((status) => saveStatusReducer(status, { type: "succeeded" }));
@@ -775,7 +991,7 @@ export default function EditorRuntimeWidget({
   const onContentChange = useCallback(
     (next: EditorContentDelta, _origin: EditorChangeOrigin): void => {
       setContent(next.text);
-      setFileModel((model) =>
+      setFileModel((model: EditorFileModel | null) =>
         model === null ? model : editorFileModelReducer(model, { type: "edited", origin: "human" }),
       );
       setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
@@ -824,7 +1040,8 @@ export default function EditorRuntimeWidget({
     setFileModel(editorFileModelReducer(fileModel, { type: "edited", origin: "human" }));
     setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
     setRecoverySnapshot(null);
-    setRecoveryNotice(null);
+    setRecoveryDiskBaseline(null);
+    setRecoveryCompare(false);
   }, [fileModel, recoverySnapshot]);
 
   const discardRecovery = useCallback((): void => {
@@ -832,11 +1049,25 @@ export default function EditorRuntimeWidget({
       void deleteEditorHotExitSnapshot(root, file);
     }
     setRecoverySnapshot(null);
-    setRecoveryNotice(null);
+    setRecoveryDiskBaseline(null);
+    setRecoveryCompare(false);
   }, [file, root]);
 
+  // AC4: surface an actual side-by-side comparison of the recovered buffer against the on-disk file
+  // (reusing the editor's diff surface) rather than a prose notice, so the user can see exactly what
+  // "Keep local" would restore before choosing.
   const compareRecovery = useCallback((): void => {
-    setRecoveryNotice("Recovery content differs from disk. Keep local to restore it, or use disk.");
+    setRecoveryCompare(true);
+  }, []);
+
+  // Opening the compare view replaces the editor surface, so move focus to its primary action.
+  const recoveryCompareButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (recoveryCompare) recoveryCompareButtonRef.current?.focus();
+  }, [recoveryCompare]);
+
+  const closeRecoveryCompare = useCallback((): void => {
+    setRecoveryCompare(false);
   }, []);
 
   // Issue #1199: the governed completion resolver. The Monaco bridge calls this with the live buffer
@@ -844,7 +1075,7 @@ export default function EditorRuntimeWidget({
   // response. A completion failure rejects here and the editor bridge renders nothing (AC4) — it
   // never breaks editing.
   const provideCompletions = useCallback<EditorCompletionResolver>(
-    async (query, signal) => {
+    async (query: EditorCompletionQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return {
           request: query.request.request,
@@ -893,7 +1124,7 @@ export default function EditorRuntimeWidget({
   // bridge renders nothing (AC1) — it never breaks editing. The server is authoritative for the
   // policy/cost/rate gates and returns zero items when the feature is degraded or disabled.
   const provideInlineCompletions = useCallback<EditorInlineCompletionResolver>(
-    async (query, signal) => {
+    async (query: EditorInlineCompletionQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, items: [] };
       }
@@ -1058,7 +1289,7 @@ export default function EditorRuntimeWidget({
   // maps the wire result into the editor render contract. A failure rejects here and the editor bridge
   // degrades to nothing (no markers / no hover / no outline / no edits) — it never breaks editing.
   const provideDiagnostics = useCallback<EditorDiagnosticsResolver>(
-    async (query, signal) => {
+    async (query: EditorDiagnosticsQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, diagnostics: [] };
       }
@@ -1072,7 +1303,7 @@ export default function EditorRuntimeWidget({
   );
 
   const provideHover = useCallback<EditorHoverResolver>(
-    async (query, signal) => {
+    async (query: EditorHoverQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, hover: { contents: null } };
       }
@@ -1095,7 +1326,7 @@ export default function EditorRuntimeWidget({
   );
 
   const provideSymbols = useCallback<EditorSymbolsResolver>(
-    async (query, signal) => {
+    async (query: EditorSymbolsQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, symbols: [] };
       }
@@ -1109,7 +1340,7 @@ export default function EditorRuntimeWidget({
   );
 
   const provideFormatting = useCallback<EditorFormattingResolver>(
-    async (query, signal) => {
+    async (query: EditorFormattingQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
         return { request: query.request.request, edits: [] };
       }
@@ -1145,10 +1376,30 @@ export default function EditorRuntimeWidget({
   const diagnosticsEnabled =
     providerOperationEnabled(languageProvider, "diagnostics") && !largeFileDegraded;
   const hoverEnabled = providerOperationEnabled(languageProvider, "hover") && !largeFileDegraded;
-  const symbolsEnabled = providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
-  const formattingEnabled =
-    providerOperationEnabled(languageProvider, "formatting") && !largeFileDegraded;
-  const editorSurfaceKey = `${themeVariant ?? "dark"}:${languageProvider?.id ?? "none"}:${largeFileMode}`;
+  const symbolsEnabled =
+    providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
+  // ADR-0068 D3: formatting availability is browser-reachability truth from the editor-tier registry,
+  // NOT the server capability set. `monaco-builtin` languages (json/css/scss/less/html) are formatted
+  // by Monaco's bundled workers and need no server; `keiko-language-service` languages (ts/js) format
+  // through the Keiko bridge and additionally require the server provider to be up; `none` languages
+  // (yaml/markdown/…) have no in-browser formatter and are correctly unavailable (AC5).
+  const builtinFormatting = editorBuiltinDocumentFormatting(completionLanguage ?? "plaintext");
+  const formattingAvailable =
+    builtinFormatting === "monaco-builtin" ||
+    (builtinFormatting === "keiko-language-service" &&
+      providerOperationEnabled(languageProvider, "formatting"));
+  const formattingEnabled = formattingAvailable && !largeFileDegraded;
+  // Content-free, human-readable language name for the Format button's dynamic aria-label (ADR-0068
+  // D4). Reuses the editor-tier label table; falls back to a generic noun when no language is known.
+  const formattingLanguageLabel =
+    completionLanguage === undefined ? "this file" : editorLanguageLabel(completionLanguage);
+  // Issue 2.2: only the language-provider id keys the surface (a change there genuinely needs a
+  // remount to re-register providers, and it happens once on load before editing). The theme variant
+  // and large-file mode are NO LONGER part of the key — a theme toggle re-themes the live editor via
+  // `setTheme` (use-editor-handlers `useThemeReapply`), and crossing the large-file boundary flips the
+  // degraded options live via `editor.updateOptions` (the `options` prop), so neither discards the
+  // undo stack or scroll/fold/cursor view state.
+  const editorSurfaceKey = languageProvider?.id ?? "none";
 
   const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
   const saveUnavailable = !canSave;
@@ -1161,6 +1412,7 @@ export default function EditorRuntimeWidget({
   const canGenerateTests =
     hasTarget && completionEnabled && loadState.status === "ready" && !testGenBusy;
   const testGenStatusText = describeTestGenerationStatus(testGenState);
+  const testGenStatusLabel = testGenState.kind === "disabled" ? "Tests off" : testGenStatusText;
 
   const buffer: EditorBuffer | null = useMemo(
     () =>
@@ -1196,7 +1448,7 @@ export default function EditorRuntimeWidget({
       ? undefined
       : currentSelection.end.line - currentSelection.start.line + 1;
   const statusBarRun: EditorStatusRun | undefined =
-    testGenStatusText.length > 0 ? { label: testGenStatusText, busy: testGenBusy } : undefined;
+    testGenStatusLabel.length > 0 ? { label: testGenStatusLabel, busy: testGenBusy } : undefined;
   const statusBarViewModel =
     fileModel === null
       ? null
@@ -1209,15 +1461,26 @@ export default function EditorRuntimeWidget({
           completionsEnabled: completionEnabled,
           largeFileMode,
           diagnostics: diagnosticsEnabled ? diagnosticsSummary : null,
+          // Issue #1379 (ADR-0067 D4): after the exhaustive registry, providerForLanguage returns a
+          // descriptor for every KNOWN language; we read its id/availability/reason directly. The
+          // null guard is retained ONLY for the genuinely-unknown plaintext/unknown case (plaintext
+          // is intentionally not a registry language, ADR-0067 D5) so the status bar still renders.
           languageService:
             languageProvider === null
-              ? { providerId: null, available: false, unavailableReason: "No provider configured" }
+              ? { providerId: null, available: false }
               : {
-                  providerId: languageProvider.id,
+                  providerId: languageProvider.id === "none" ? null : languageProvider.id,
                   available: languageProvider.availability === "available",
-                  unavailableReason: languageProvider.unavailableReason,
+                  ...(languageProvider.unavailableReason === undefined
+                    ? {}
+                    : { unavailableReason: languageProvider.unavailableReason }),
                 },
           readOnly: largeFileDegraded,
+          // ADR-0068 D4: feed the SAME effective availability that gates the Format button
+          // (`formattingEnabled`, which folds in `!largeFileDegraded`) so the command and status can
+          // never disagree — in degraded mode both read unavailable, and the large-file field explains
+          // why.
+          formatting: { available: formattingEnabled, source: builtinFormatting },
           ...(statusBarRun === undefined ? {} : { run: statusBarRun }),
         });
 
@@ -1255,35 +1518,72 @@ export default function EditorRuntimeWidget({
     },
     [file, onCloseOpenFile, root, saveStatus],
   );
+  const handleChooseSummaryTab = useCallback(
+    (path: string): void => {
+      handleSelectTab(path);
+      setSummaryMenuOpen(false);
+      summaryMenuRef.current?.removeAttribute("open");
+    },
+    [handleSelectTab],
+  );
 
   const agentSessionId = useMemo(
     () => `${safeDomIdSegment(windowId ?? generatedId)}:${rootHash(root ?? "")}`,
     [generatedId, root, windowId],
   );
+  const agentDocumentVersion = useMemo(
+    () =>
+      version === null
+        ? null
+        : {
+            ...version,
+            modifiedAt: Math.max(0, Math.round(version.modifiedAt)),
+          },
+    [version],
+  );
 
-  useEffect(() => {
-    if (!hasTarget || root === undefined || file === undefined || activeContentHash === null) return;
+  // Issue #1392 — post the current pane snapshot to the BFF. Wrapped in `useCallback` so the bridge
+  // hook's register effect re-fires exactly when a snapshot dimension changes (its identity is the
+  // dependency). Registration is best-effort and must never affect editing.
+  const registerAgentSnapshot = useCallback((): void => {
+    if (!hasTarget || root === undefined || file === undefined || activeContentHash === null)
+      return;
     void postEditorAgentSessionSnapshot({
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       sessionId: agentSessionId,
       windowId: windowId ?? "editor",
       workspaceRoot: root,
       activePaneId: activePaneId ?? paneId ?? null,
-      panes:
-        layoutPanes ??
-        [
-          {
-            paneId: paneId ?? "pane-1",
-            activeFile: file,
-            openFiles: documentTabs,
-          },
-        ],
+      panes: layoutPanes ?? [
+        {
+          paneId: paneId ?? "pane-1",
+          activeFile: file,
+          openFiles: documentTabs,
+        },
+      ],
       dirtyFiles: effectiveDirtyFiles.size > 0 ? [...effectiveDirtyFiles] : [],
       activeFile: file,
       cursor: cursor === null ? null : { line: cursor.line, character: cursor.column },
       selection: rangeToAgentRange(currentSelection),
       diagnosticsSummary,
-      ...(version === null ? {} : { documentVersion: version }),
+      // Issue #1379 AC4 (ADR-0067 D6): content-free language-provider availability for the active
+      // file, derived from the descriptor we already computed. The synthetic id:"none" maps to
+      // providerId:null for honesty; null overall when there is no active language.
+      languageCapability:
+        completionLanguage === undefined
+          ? null
+          : {
+              languageId: completionLanguage,
+              providerId:
+                languageProvider !== null && languageProvider.id !== "none"
+                  ? languageProvider.id
+                  : null,
+              available: languageProvider?.availability === "available",
+              ...(languageProvider?.unavailableReason !== undefined
+                ? { unavailableReason: languageProvider.unavailableReason }
+                : {}),
+            },
+      ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
       activeFileContentHash: activeContentHash,
       textMode: "none",
       updatedAt: Date.now(),
@@ -1296,121 +1596,152 @@ export default function EditorRuntimeWidget({
     agentSessionId,
     currentSelection,
     cursor,
+    completionLanguage,
     diagnosticsSummary,
     documentTabs,
     effectiveDirtyFiles,
+    agentDocumentVersion,
     file,
     hasTarget,
+    languageProvider,
     layoutPanes,
     paneId,
     root,
-    version,
     windowId,
   ]);
 
-  const postAgentResult = useCallback(
-    (action: EditorAgentAction, status: "succeeded" | "failed" | "conflict", message?: string): void => {
-      const body: EditorAgentActionResultRequest = {
-        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-        kind: "result",
-        result: {
-          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-          actionId: action.actionId,
-          sessionId: action.sessionId,
-          status,
-          ...(message === undefined ? {} : { message }),
-        },
-      };
-      void postEditorAgentActionResult(body).catch(() => {
-        // Best-effort action reporting; the local UI action already happened or was rejected.
-      });
-    },
-    [],
-  );
-
-  const executeAgentAction = useCallback(
+  // Issue #1394 (ADR-0058 D3): apply text edits, guarded for read-only/large-file buffers (AC4 risk #5).
+  const applyAgentTextEditsAction = useCallback(
     (action: EditorAgentAction): void => {
-      if (action.sessionId !== agentSessionId) return;
+      if (action.textEdits === undefined) {
+        postEditorAgentResult(action, "failed", "Missing text edits.");
+        return;
+      }
+      if (largeFileDegraded) {
+        postEditorAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
+        return;
+      }
+      const mapped = action.textEdits.map((edit) => ({
+        range: {
+          start: { line: edit.range.start.line, column: edit.range.start.character },
+          end: { line: edit.range.end.line, column: edit.range.end.character },
+        },
+        newText: edit.newText,
+      }));
       try {
-        switch (action.type) {
-          case "openFile":
-          case "focusTab":
-            if (action.target?.file === undefined) {
-              postAgentResult(action, "failed", "Missing target file.");
-              return;
-            }
-            onSelectOpenFile?.(action.target.file);
-            postAgentResult(action, "succeeded");
-            return;
-          case "format":
-            if (!formattingEnabled) {
-              postAgentResult(action, "failed", "Formatting is unavailable for this language.");
-              return;
-            }
-            setFormatRequestNonce((value) => value + 1);
-            postAgentResult(action, "succeeded");
-            return;
-          case "save":
-            void persist(contentRef.current).then((ok) => {
-              postAgentResult(action, ok ? "succeeded" : "failed", ok ? undefined : "Save failed.");
-            });
-            return;
-          case "applyTextEdits":
-            if (action.textEdits === undefined) {
-              postAgentResult(action, "failed", "Missing text edits.");
-              return;
-            }
-            setContent((current) =>
-              applyTextEditsToText(
-                current,
-                action.textEdits?.map((edit) => ({
-                  range: {
-                    start: { line: edit.range.start.line, column: edit.range.start.character },
-                    end: { line: edit.range.end.line, column: edit.range.end.character },
-                  },
-                  newText: edit.newText,
-                })) ?? [],
-              ),
-            );
-            setFileModel((model) =>
-              model === null
-                ? model
-                : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
-            );
-            setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
-            postAgentResult(action, "succeeded");
-            return;
-          case "moveTab":
-          case "splitPane":
-          case "setSelection":
-          case "applyPatch":
-            postAgentResult(action, "failed", "Action must be executed by the editor layout controller.");
-            return;
-        }
+        // F2: compute BEFORE setContent so OverlappingPatchEditError is caught by this try/catch.
+        const next = applyTextEditsToText(contentRef.current, mapped);
+        setContent(next);
+        setFileModel((model) =>
+          model === null
+            ? model
+            : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
+        );
+        setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+        postEditorAgentResult(action, "succeeded");
       } catch (error) {
-        postAgentResult(action, "failed", error instanceof Error ? error.message : "Action failed.");
+        // OverlappingPatchEditError is not re-exported by @oscharko-dev/keiko-editor; identify by name.
+        const isOverlap = error instanceof Error && error.name === "OverlappingPatchEditError";
+        if (isOverlap) {
+          postEditorAgentResult(action, "conflict", error.message, "INVALID_EDITS");
+        } else {
+          postEditorAgentResult(
+            action,
+            "failed",
+            error instanceof Error ? error.message : "Action failed.",
+          );
+        }
       }
     },
-    [agentSessionId, formattingEnabled, onSelectOpenFile, persist, postAgentResult],
+    [largeFileDegraded],
   );
 
-  useEffect(() => {
-    if (typeof EventSource === "undefined") return;
-    const source = new EventSource("/api/editor/agent/events");
-    const onAction = (event: MessageEvent<string>): void => {
-      try {
-        const parsed = JSON.parse(event.data) as { readonly action?: EditorAgentAction };
-        if (parsed.action !== undefined) executeAgentAction(parsed.action);
-      } catch {
-        // Ignore malformed SSE frames; the server owns validation before enqueueing.
+  // Issue #1394 (ADR-0058 D3): applyPatch — server pre-validates and emits textEdits; the browser
+  // computes modified content and enters an explicit review state (AC user-review-before-destructive).
+  const applyAgentPatchAction = useCallback(
+    (action: EditorAgentAction): void => {
+      const targetFile = action.target?.file;
+      if (targetFile !== undefined && targetFile !== file) {
+        postEditorAgentResult(
+          action,
+          "conflict",
+          "Patch targets a file not open in this pane.",
+          "OUT_OF_SCOPE",
+        );
+        return;
       }
-    };
-    source.addEventListener("editor-agent:action", onAction);
-    return () => {
-      source.removeEventListener("editor-agent:action", onAction);
-      source.close();
-    };
-  }, [executeAgentAction]);
+      if (action.textEdits === undefined || action.textEdits.length === 0) {
+        postEditorAgentResult(action, "failed", "Patch could not be prepared for review.");
+        return;
+      }
+      if (largeFileDegraded) {
+        postEditorAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
+        return;
+      }
+      const mapped = action.textEdits.map((edit) => ({
+        range: {
+          start: { line: edit.range.start.line, column: edit.range.start.character },
+          end: { line: edit.range.end.line, column: edit.range.end.character },
+        },
+        newText: edit.newText,
+      }));
+      try {
+        const original = contentRef.current;
+        const modified = applyTextEditsToText(original, mapped);
+        setAgentPatchPending({ action, original, modified });
+      } catch (error) {
+        const isOverlap = error instanceof Error && error.name === "OverlappingPatchEditError";
+        postEditorAgentResult(
+          action,
+          isOverlap ? "conflict" : "failed",
+          error instanceof Error ? error.message : "Patch application failed.",
+          isOverlap ? "INVALID_EDITS" : undefined,
+        );
+      }
+    },
+    [file, largeFileDegraded],
+  );
+
+  // Issue #1393 (ADR-0061 D2): the controller bundle the pure dispatcher calls. The two layout
+  // controllers (onSplitPane/onMoveTab) are injected by EditorWidget; they are undefined when this
+  // pane is rendered standalone, and the dispatcher then answers a structured provider-unavailable
+  // failure. The setSelection controller is owned by the bridge hook (it drives hook state), so it is
+  // left undefined here and merged in by the hook.
+  const agentControllers = useMemo<EditorAgentActionControllers>(
+    () => ({
+      paneId,
+      onSelectOpenFile,
+      formattingEnabled,
+      formatRequest: { increment: () => setFormatRequestNonce((value) => value + 1) },
+      persist,
+      currentText: () => contentRef.current,
+      applyTextEdits: applyAgentTextEditsAction,
+      applyPatch: applyAgentPatchAction,
+      onSplitPane,
+      onMoveTab,
+      onRequestSelectionReveal: undefined,
+    }),
+    [
+      applyAgentPatchAction,
+      applyAgentTextEditsAction,
+      formattingEnabled,
+      onMoveTab,
+      onSelectOpenFile,
+      onSplitPane,
+      paneId,
+      persist,
+    ],
+  );
+
+  // Issue #1395 — bump on any agent activity so the recent-actions audit panel re-fetches its feed.
+  const [auditRefreshNonce, setAuditRefreshNonce] = useState(0);
+  const { agentSelectionRequest, consumeSelectionRequest } = useEditorAgentBridge({
+    agentSessionId,
+    controllers: agentControllers,
+    registerSnapshot: registerAgentSnapshot,
+    onConflict: setAgentConflict,
+    onAgentActivity: () => setAuditRefreshNonce((nonce) => nonce + 1),
+  });
 
   const recoveryDiskChanged =
     recoverySnapshot !== null &&
@@ -1418,8 +1749,163 @@ export default function EditorRuntimeWidget({
     version !== null &&
     recoverySnapshot.savedContentHash !== version.contentHash;
 
+  // Issue #1394 (ADR-0058 D3): handlers for the agent-patch review Accept/Reject buttons.
+  const handleAgentPatchAccept = useCallback((): void => {
+    if (agentPatchPending === null) return;
+    if (largeFileDegraded) {
+      postEditorAgentResult(
+        agentPatchPending.action,
+        "failed",
+        "Editor is read-only; cannot apply agent edits.",
+      );
+      setAgentPatchPending(null);
+      return;
+    }
+    setContent(agentPatchPending.modified);
+    setFileModel((model) =>
+      model === null
+        ? model
+        : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
+    );
+    setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+    postEditorAgentResult(agentPatchPending.action, "succeeded");
+    setAgentPatchPending(null);
+  }, [agentPatchPending, largeFileDegraded]);
+
+  const handleAgentPatchReject = useCallback((): void => {
+    if (agentPatchPending === null) return;
+    postEditorAgentResult(agentPatchPending.action, "failed", "Patch rejected by user.");
+    setAgentPatchPending(null);
+  }, [agentPatchPending]);
+
+  // Issue #1393 (ADR-0061 D3): merge an agent setSelection request into the editor surface
+  // revealRequest, mapping the contract LanguageRange (0-based, `character`) onto the editor's
+  // EditorRange (0-based, `column`). Agent selection takes precedence over the line-based reveal; it
+  // is consumed one-shot below so a stale agent selection never fights a later user-driven reveal.
+  const lineRevealRequest =
+    revealLineStart === undefined
+      ? undefined
+      : {
+          id:
+            revealRequestId ??
+            `${file ?? "file"}:${String(revealLineStart)}:${String(revealLineEnd ?? revealLineStart)}`,
+          range: {
+            start: { line: Math.max(0, Math.floor(revealLineStart) - 1), column: 0 },
+            end: {
+              line: Math.max(
+                Math.max(0, Math.floor(revealLineStart) - 1),
+                Math.floor(revealLineEnd ?? revealLineStart) - 1,
+              ),
+              column: 0,
+            },
+          },
+        };
+  const surfaceRevealRequest =
+    agentSelectionRequest === null
+      ? lineRevealRequest
+      : {
+          id: `agentAction:${agentSelectionRequest.actionId}`,
+          range: {
+            start: {
+              line: agentSelectionRequest.selection.start.line,
+              column: agentSelectionRequest.selection.start.character,
+            },
+            end: {
+              line: agentSelectionRequest.selection.end.line,
+              column: agentSelectionRequest.selection.end.character,
+            },
+          },
+        };
+  useEffect(() => {
+    if (agentSelectionRequest !== null) consumeSelectionRequest();
+  }, [agentSelectionRequest, consumeSelectionRequest]);
+
   let panel: ReactNode;
-  if (testGenerationPreview !== null) {
+  if (recoveryCompare && recoverySnapshot !== null) {
+    // AC4 "compare": a true side-by-side diff of the on-disk file (left) against the recovered
+    // unsaved buffer (right), reusing the same diff surface as agent-patch review. The disk side is
+    // the baseline captured when recovery was offered, not the live buffer, so it stays accurate
+    // even if the buffer was edited before Compare was opened.
+    const recoveryDiffModel = buildAgentPatchDiffModel(
+      recoveryDiskBaseline ?? content,
+      recoverySnapshot.content,
+      file,
+    );
+    panel = (
+      <>
+        <div role="group" aria-label={`Compare recovered changes for ${file ?? "this file"}`}>
+          <span className="sr-only">
+            Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep
+            local restores the recovered changes; use disk keeps the file on disk.
+          </span>
+          <EditorDiffSurface
+            model={recoveryDiffModel}
+            loadState={{ status: "ready" }}
+            themeVariant={themeVariant}
+          />
+        </div>
+        <div className="ed-toolbar-actions">
+          <button
+            ref={recoveryCompareButtonRef}
+            type="button"
+            className="ed-save"
+            onClick={restoreRecovery}
+          >
+            Keep local
+          </button>
+          <button type="button" className="ed-reload" onClick={discardRecovery}>
+            Use disk
+          </button>
+          <button type="button" className="ed-icon-action" onClick={closeRecoveryCompare}>
+            Close compare
+          </button>
+        </div>
+      </>
+    );
+  } else if (agentPatchPending !== null) {
+    const patchDiffModel = buildAgentPatchDiffModel(
+      agentPatchPending.original,
+      agentPatchPending.modified,
+      file,
+    );
+    panel = (
+      <>
+        {/* A11Y-3: label the diff review surface and provide an sr-only instruction */}
+        <div aria-label={`Agent patch review for ${file ?? "this file"}`}>
+          <span className="sr-only">
+            Agent generated a patch. Review the changes and accept to apply or reject to discard.
+          </span>
+          <EditorDiffSurface
+            model={patchDiffModel}
+            loadState={{ status: "ready" }}
+            themeVariant={themeVariant}
+          />
+        </div>
+        <div className="ed-toolbar-actions">
+          {/* A11Y-1: explicit aria-labels; A11Y-2: ref for focus management */}
+          <button
+            ref={patchAcceptButtonRef}
+            type="button"
+            className="ed-save"
+            data-testid="agent-patch-accept"
+            aria-label="Accept agent patch and apply changes"
+            onClick={handleAgentPatchAccept}
+          >
+            Accept
+          </button>
+          <button
+            type="button"
+            className="ed-reload"
+            data-testid="agent-patch-reject"
+            aria-label="Reject agent patch and discard changes"
+            onClick={handleAgentPatchReject}
+          >
+            Reject
+          </button>
+        </div>
+      </>
+    );
+  } else if (testGenerationPreview !== null) {
     panel = (
       <EditorDiffSurface
         model={testGenerationPreview.model}
@@ -1469,25 +1955,7 @@ export default function EditorRuntimeWidget({
         formatRequestNonce={formatRequestNonce}
         onSelectionChange={setCurrentSelection}
         onCursorChange={setCursor}
-        revealRequest={
-          revealLineStart === undefined
-            ? undefined
-            : {
-                id:
-                  revealRequestId ??
-                  `${file ?? "file"}:${String(revealLineStart)}:${String(revealLineEnd ?? revealLineStart)}`,
-                range: {
-                  start: { line: Math.max(0, Math.floor(revealLineStart) - 1), column: 0 },
-                  end: {
-                    line: Math.max(
-                      Math.max(0, Math.floor(revealLineStart) - 1),
-                      Math.floor(revealLineEnd ?? revealLineStart) - 1,
-                    ),
-                    column: 0,
-                  },
-                },
-              }
-        }
+        revealRequest={surfaceRevealRequest}
         onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
         onGenerateTests={completionEnabled ? runTestGeneration : undefined}
         showStatusFooter={false}
@@ -1510,9 +1978,9 @@ export default function EditorRuntimeWidget({
   return (
     <div className="editor">
       <div className="ed-tabs mono">
-        <div className="ed-tablist" role="tablist" aria-label="Open documents">
-          {documentTabs.length > 0 ? (
-            documentTabs.map((path) => {
+        <div className="ed-tablist" ref={tablistRef} role="tablist" aria-label="Open documents">
+          {visibleTabs.length > 0 ? (
+            visibleTabs.map((path) => {
               const active = path === file;
               const tabDomId = active
                 ? tabId
@@ -1527,23 +1995,31 @@ export default function EditorRuntimeWidget({
                 >
                   <button
                     type="button"
-                    className="ed-tab-hit"
+                    className="ed-tab-hit ui-tip"
                     draggable={tabHandle?.draggable}
                     role="tab"
                     id={tabDomId}
                     aria-selected={active ? "true" : "false"}
                     aria-controls={tabpanelId}
                     tabIndex={active ? 0 : -1}
-                    title={path}
+                    data-tip={path}
                     onDragStart={tabHandle?.onDragStart}
                     onDragEnd={tabHandle?.onDragEnd}
                     onKeyDown={tabHandle?.onKeyDown}
                     onClick={() => handleSelectTab(path)}
+                    onAuxClick={(event) => {
+                      // Middle-click closes the tab (VS Code parity), routed through the same
+                      // dirty-close guard as the × button.
+                      if (event.button === 1 && onCloseOpenFile !== undefined) {
+                        event.preventDefault();
+                        void handleCloseTab(path);
+                      }
+                    }}
                   >
                     <FileIcon name={path} />
                     <span className="ed-tab-label">{path}</span>
                     {tabDirty ? (
-                      <span className="ed-dirty" aria-hidden="true" title="Unsaved changes">
+                      <span className="ed-dirty" aria-hidden="true">
                         ●
                       </span>
                     ) : null}
@@ -1551,9 +2027,9 @@ export default function EditorRuntimeWidget({
                   {onCloseOpenFile !== undefined ? (
                     <button
                       type="button"
-                      className="ed-tab-close"
+                      className="ed-tab-close ui-tip"
                       aria-label={`Close ${path}`}
-                      title={`Close ${path}`}
+                      data-tip={`Close ${path}`}
                       onClick={() => void handleCloseTab(path)}
                     >
                       ×
@@ -1565,72 +2041,134 @@ export default function EditorRuntimeWidget({
           ) : (
             <span className="ed-tab active" data-dirty="false">
               <span
-                className="ed-tab-hit"
+                className="ed-tab-hit ui-tip"
                 role="tab"
                 id={tabId}
                 aria-selected="true"
                 aria-controls={tabpanelId}
                 tabIndex={0}
-                title="Editor"
+                data-tip="Editor"
               >
                 <Icons.editor size={12} />
                 <span className="ed-tab-label">Editor</span>
               </span>
             </span>
           )}
+          {compactTabs && summaryTabs.length > 0 ? (
+            <details
+              ref={summaryMenuRef}
+              className="ed-tab-summary-menu"
+              open={summaryMenuOpen}
+              onToggle={(event) => setSummaryMenuOpen(event.currentTarget.open)}
+            >
+              <summary
+                className="ed-tab-summary ui-tip"
+                aria-label={`${String(summaryTabs.length)} more open documents`}
+                aria-haspopup="menu"
+                aria-expanded={summaryMenuOpen ? "true" : "false"}
+                aria-controls={summaryMenuId}
+                data-tip={summaryTip}
+              >
+                +{summaryTabs.length}
+              </summary>
+              <div
+                className="ed-tab-summary-panel"
+                id={summaryMenuId}
+                aria-label="Hidden open documents"
+              >
+                {summaryTabs.map((path) => {
+                  const tabDirty = effectiveDirtyFiles.has(path);
+                  return (
+                    <button
+                      type="button"
+                      key={path}
+                      className="ed-tab-summary-item ui-tip"
+                      data-tip={path}
+                      onClick={() => handleChooseSummaryTab(path)}
+                    >
+                      <Icons.editor size={12} />
+                      <span className="ed-tab-summary-label">{path}</span>
+                      {tabDirty ? (
+                        <span className="ed-dirty" aria-hidden="true">
+                          ●
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </details>
+          ) : null}
         </div>
-        <span className="spacer" />
-        {toolbarExtras}
-        {hasTarget && completionEnabled ? (
-          <button
-            type="button"
-            className="ed-save"
-            onClick={() => {
-              if (canGenerateTests) runTestGeneration();
-            }}
-            aria-disabled={!canGenerateTests}
-            title="Generate unit tests for this file"
-          >
-            {testGenBusy ? "Generating…" : "Generate Tests"}
-          </button>
-        ) : null}
-        {testGenBusy ? (
-          <button type="button" className="ed-reload" onClick={cancelTestGeneration}>
-            Cancel
-          </button>
-        ) : null}
-        {hasTarget ? (
-          <button
-            type="button"
-            className="ed-save"
-            onClick={() => {
-              if (canFormat) setFormatRequestNonce((value) => value + 1);
-            }}
-            aria-disabled={canFormat ? "false" : "true"}
-            title="Format document"
-          >
-            Format
-          </button>
-        ) : null}
-        {hasTarget && saveStatus === "conflict" ? (
-          <button type="button" className="ed-reload" onClick={reload}>
-            Reload
-          </button>
-        ) : null}
-        {hasTarget ? (
-          <button
-            type="button"
-            className="ed-save"
-            onClick={() => {
-              if (canSave) void persist(content);
-            }}
-            aria-disabled={saveUnavailable}
-          >
-            {saveStatus === "saving" ? "Saving…" : "Save"}
-          </button>
-        ) : null}
+        <div className="ed-toolbar-actions">
+          {toolbarExtras}
+          {hasTarget && completionEnabled ? (
+            <button
+              type="button"
+              className="ed-save ui-tip"
+              onClick={() => {
+                if (canGenerateTests) runTestGeneration();
+              }}
+              aria-disabled={!canGenerateTests}
+              data-tip="Generate unit tests for this file"
+            >
+              {testGenBusy ? "Generating…" : "Generate Tests"}
+            </button>
+          ) : null}
+          {testGenBusy ? (
+            <button
+              type="button"
+              className="ed-reload ui-tip"
+              onClick={cancelTestGeneration}
+              data-tip="Cancel test generation"
+            >
+              Cancel
+            </button>
+          ) : null}
+          {hasTarget ? (
+            <button
+              type="button"
+              className="ed-save ui-tip"
+              onClick={() => {
+                if (canFormat) setFormatRequestNonce((value) => value + 1);
+              }}
+              aria-disabled={canFormat ? "false" : "true"}
+              aria-label={
+                canFormat
+                  ? "Format document"
+                  : `Formatting unavailable for ${formattingLanguageLabel}`
+              }
+              data-tip="Format document"
+            >
+              Format
+            </button>
+          ) : null}
+          {hasTarget && saveStatus === "conflict" ? (
+            <button
+              type="button"
+              className="ed-reload ui-tip"
+              onClick={requestReload}
+              data-tip="Reload from disk"
+            >
+              Reload
+            </button>
+          ) : null}
+          {hasTarget ? (
+            <button
+              type="button"
+              className="ed-save ui-tip"
+              onClick={() => {
+                if (canSave) void persist(content);
+              }}
+              aria-disabled={saveUnavailable}
+              data-tip={saveStatus === "saving" ? "Saving changes" : "Save changes"}
+            >
+              {saveStatus === "saving" ? "Saving…" : "Save"}
+            </button>
+          ) : null}
+        </div>
       </div>
-      {recoverySnapshot !== null ? (
+      {recoverySnapshot !== null && !recoveryCompare ? (
         <div className="ed-recovery" role="status">
           <span>
             {recoveryDiskChanged
@@ -1653,14 +2191,73 @@ export default function EditorRuntimeWidget({
             <button
               type="button"
               className="ed-icon-action"
-              onClick={() => setRecoverySnapshot(null)}
+              onClick={() => {
+                setRecoverySnapshot(null);
+                setRecoveryCompare(false);
+                setRecoveryDiskBaseline(null);
+              }}
             >
               Cancel
             </button>
           ) : null}
-          {recoveryNotice !== null ? <span>{recoveryNotice}</span> : null}
         </div>
       ) : null}
+      {reloadConfirm ? (
+        <div className="ed-dialog-backdrop" role="presentation">
+          <div
+            className="ed-dirty-dialog"
+            ref={reloadConfirmRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="editor-reload-confirm-title"
+            tabIndex={-1}
+          >
+            <h2 id="editor-reload-confirm-title">Discard unsaved changes?</h2>
+            <p>
+              {`Reloading from disk replaces this buffer with the saved file and discards your unsaved editor changes${
+                file !== undefined && file.length > 0 ? ` in ${file}` : ""
+              }.`}
+            </p>
+            <div className="ed-dialog-actions">
+              <button type="button" className="ed-reload" onClick={confirmReloadDiscard}>
+                Discard and reload
+              </button>
+              <button type="button" className="ed-icon-action" onClick={cancelReloadDiscard}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {agentConflict !== null ? (
+        <AgentConflictBanner
+          code={agentConflict.code}
+          message={agentConflict.message}
+          onSave={
+            agentConflict.code === "DIRTY"
+              ? () => {
+                  // F5: only dismiss the banner when persist succeeds (returns true).
+                  void persist(contentRef.current).then((ok) => {
+                    if (ok) setAgentConflict(null);
+                  });
+                }
+              : undefined
+          }
+          onReload={
+            agentConflict.code === "VERSION_MISMATCH" ||
+            agentConflict.code === "CONTENT_HASH_MISMATCH"
+              ? () => {
+                  reload();
+                  setAgentConflict(null);
+                }
+              : undefined
+          }
+          onDismiss={() => {
+            setAgentConflict(null);
+          }}
+        />
+      ) : null}
+      <EditorAgentActionsPanel agentSessionId={agentSessionId} refreshNonce={auditRefreshNonce} />
       <div className="ed-host" id={tabpanelId} role="tabpanel" aria-labelledby={tabId}>
         {panel}
       </div>
@@ -1670,3 +2267,12 @@ export default function EditorRuntimeWidget({
     </div>
   );
 }
+
+/**
+ * Memoized so a layout mutation in one pane (tab-select, split, or — most expensively — a split-resize
+ * drag) does not re-render the OTHER panes' editor hosts. The host (`EditorWidget`) feeds each pane a
+ * referentially-stable prop bundle for panes the mutation did not touch (stable callbacks via
+ * `layoutRef`, memoized snapshots/bindings), so `React.memo`'s shallow compare bails them out. It only
+ * skips on shallow-equal props, so it never shows stale content.
+ */
+export default memo(EditorRuntimeWidget);

@@ -1,0 +1,227 @@
+# Epic #443 Closeout Summary
+
+Issue #450 records the proof that governed isolated task workspaces are implemented, reviewable, and operable. It does not broaden product scope and does not introduce a second Git Delivery, editor runtime, or terminal-mutation subsystem.
+
+## Implementation proof
+
+The implementation landed through these merged pull requests targeting `feat/keiko-isolated-task-workspaces`:
+
+| PR    | Issue | Scope                                                                               | Squash mergeCommit |
+| ----- | ----- | ----------------------------------------------------------------------------------- | ------------------ |
+| #1555 | #444  | Define task-workspace domain contract on existing workspace and Git architecture    | `0f37aca8`         |
+| #1565 | #445  | Implement managed Git worktree provisioning and activation                          | `8826ec3d`         |
+| #1567 | #446  | Bind task workspaces across Studio, editor runtime, and Git Delivery surfaces       | `14cde552`         |
+| #1570 | #446  | Browser e2e for active-binding task switching                                       | `a954ddbd`         |
+| #1579 | #447  | Persist task-workspace state with startup reconciliation and repair semantics       | `c8d216ef`         |
+| #1581 | #447  | Address review findings on reconciliation and repair                                | `98e599c9`         |
+| #1585 | #448  | Add workspace health, drift detection, audit trail, and governed cleanup controls   | `2a2267fc`         |
+| #1587 | #449  | Harden task-workspace security, concurrency control, and failure recovery           | `9df0a638`         |
+| #1588 | #449  | Scan the store once in the global orphan sweep (perf follow-up)                     | `35e0bbfa`         |
+| #1589 | #449  | Reject control/zero-width/bidi chars in `requestedBy`/`taskId` (security follow-up) | `247826df`         |
+| #1591 | #450  | Verification matrix, operator runbook, and closure evidence (this capstone)         | `2854b086`         |
+| #1593 | #443  | Epic closeout/project-field completion and final branch verification                | `cef11bb6`         |
+
+**ADRs**: ADR-0088 through ADR-0093 (one per child issue #444–#449). Final `KEIKO_CONTRACTS_VERSION` on the branch: **0.12.0** (progressed 0.8.0 → 0.9.0 → 0.10.0 → 0.11.0 → 0.12.0 across #444, #447, #448, #449; the #1588/#1589 follow-ups did not change the contract surface).
+
+## Reuse, not duplication
+
+Governed isolated task workspaces is a narrow, composable feature built on proven authorities; it does not fragment Git Delivery, editor, or terminal governance.
+
+### Git Delivery remains owned by Epic #470
+
+When an operator switches to an active task workspace and executes a Git action (commit, push, branch, PR, merge), the mutation routes continue to flow through the single Git Delivery kernel ([#470 Epic Closeout](../git-delivery/epic-470-closeout.md)). Activation only retargets the governed root.
+
+Evidence:
+
+- **binding.ts:19–29**: `buildBinding()` derives `activeRoot`, `gitDeliveryRoot`, and `editorProjectRoot` from the single `WorkspaceInstance.managedWorktreePath` — all three values are identical (invariant).
+- **active-store.ts:1–20, 62–88**: `ActiveWorkspacePointer` stores ONLY: workspaceId, setBy, setAt, updatedAt. NO root, NO branch, NO path is persisted. This design prevents a second root derivation path.
+- **execution.ts:63–85**: Git Delivery routes call `resolveProjectWorkspace(deps, projectId)` with the `projectId` from the request body (sent by the browser's active context). The server never consults the active pointer to infer a root. No fallback path exists.
+- **lifecycle.ts:192**: After activation, the binding is returned fresh from `buildBinding(persisted)`, never cached or recomputed by a second authority.
+
+**Narrow new authority added by #443**: managed worktree provisioning (via `GitWorktreeAdapter`), active pointer storage and lifecycle (via `ActiveWorkspacePointer` / `active-store.ts`), and the six derived services (reconciliation, repair, health classification, cleanup, evidence, concurrency control). All six reuse the single instance store and active pointer; no second Git, editor, or terminal subsystem exists inside `packages/keiko-server/src/task-workspace/`.
+
+### Terminal Git restrictions remain intact
+
+The human-facing terminal allowlist for Git stays read-only. `packages/keiko-tools/src/terminal-policy.ts` blocks all mutation and network subcommands (add, commit, push, merge, fetch, pull, branch-create, etc.). The allowlist has zero overlap with Git Delivery action kinds.
+
+Evidence:
+
+- **terminal-policy.ts:52–88**: TERMINAL_COMMAND_RULES restricts git to ["status", "diff", "log", "show", "rev-parse", "ls-files", "describe", "blame", "cat-file", "branch", "remote"] — no mutation.
+- **terminal-policy.test.ts:428–486**: AC5 test exhaustively denies every Git Delivery mutation class (commit, push, merge, branch-create, stage, unstage). All assertions pass; no false negatives.
+
+### Editor and runtime binding stays deterministic
+
+All surfaces that read the active workspace root (editor, runtime, Files, terminal, Git status/diff, Git Delivery, PR, merge) consume it from a single `ActiveWorkspaceContext` and derive the binding fresh after each activation.
+
+Evidence:
+
+- **ActiveWorkspaceContext.tsx:15–75**: Single context holds `activeRoot` as "Convenience: activeBinding?.activeRoot ?? null". Components read it via hooks at render-time, not cached as a prop. A workspace switch updates context value; all subscribers re-render with the new root.
+- **api.ts patterns**: Browser sends `activeRoot` as `projectId` in Git Delivery request bodies. If the browser's context was stale, the stale projectId would be sent — but `resolveProjectWorkspace()` would correctly authorize/reject it (exact path match against store). No server-side fallback exists.
+- **No stale-root execution path**: Components never capture `root` as a prop at initialization time. Every NEW request uses the current active root from context.
+
+## Verification evidence
+
+Task-workspace implementation is verified across three evidence layers:
+
+### Unit and integration tests (~290 tests, 25 files)
+
+See [443-verification-matrix.md](./443-verification-matrix.md) for complete test-to-lifecycle mapping. Test files include:
+
+**keiko-server/task-workspace** (21 files): lifecycle, provisioning, reconciliation, repair, cleanup, concurrency, routes (provision/binding/health-cleanup/reconciliation), active-store, store, mutex, health, locks, errors, evidence, naming, managed-root, adversarial, scale.
+
+**keiko-contracts** (3 files): task-workspace (lifecycle states, transitions, validators), task-workspace-health (classification, refusal precedence), task-workspace-reconciliation (entry states, drift markers).
+
+**e2e** (1 file): task-workspace-binding-446.spec.ts (browser Files surface re-targets to active workspace root post-switch; no stale context survives).
+
+Coverage includes:
+
+- Provisioning, activation, switching, pause/resume, restart reconciliation, drift detection, repair, cleanup, concurrency/race control, failure-class taxonomy, performance bounds (N=200), evidence ledger (content-free).
+- All 12 HTTP routes with CSRF, CORS, and 503 unconfigured tests.
+- Failure-class taxonomy (5 classes: retryable, repairable, blocked, policy-denied, terminal) exhaustively mapped.
+
+### Epic-lifecycle consolidated fixture
+
+**File**: `packages/keiko-server/src/task-workspace/epic-443-lifecycle.test.ts` (4 passing tests)
+
+The fixture wires all six workspace services (provisioning, lifecycle, reconciliation, health, repair, cleanup) over one store, one active pointer, and one shared in-process mutex against disposable REAL git repositories:
+
+1. **Full walk**: provision → activate → switch → pause → resume → restart-reconcile → drift → repair → governed-cleanup (state + pointer correctness verified at each step).
+2. **Blocked mutation proof**: dirty cleanup refused, worktree survives (SC4 fail-closed), illegal transition typed rejection (BFF returns error body with `failureClass`).
+3. **Git Delivery + editor/runtime binding proof**: #470 and #1491 reuse verified — editor/runtime stay bound to the active managed worktree across a switch, never the project root.
+4. **Live fleet health classification**: healthy, dirty, archived, cleanup-ready states live-evaluated (10-class taxonomy exercised).
+
+### Browser e2e
+
+**File**: `tests/e2e/task-workspace-binding-446.spec.ts` (3 tests, Issue #446 acceptance)
+
+Real browser, real packaged app, real `resolveBoundRoot` choke point:
+
+- Files surface tracks active workspace root in URL and switches root post-activation.
+- No stale context survives the switch.
+- Deterministic mock intercepts task-workspace and files routes (no live git repos in e2e).
+
+### Architecture gates
+
+Required checks remain green:
+
+- **npm run ci** (required GitHub check on all PRs)
+- **npm run arch:check** (TS type contract validation across packages)
+- **npm run arch:check:negative** (forbidden patterns scan)
+- **npm run check:git-delivery-evidence** (Epic #470 governance proof gate, must stay green)
+
+## Security posture
+
+Task-workspace security hardening (Issue #449 / ADR-0093) is cross-layer:
+
+### Path and scope safety
+
+- Path traversal, symlink escape, managed-root spoofing, and out-of-root deletion attempts are rejected deterministically (managed-root.test.ts, adversarial.test.ts).
+- Owned paths checked before cleanup (safelyRemoveManagedPath choke point, cleanup.ts:fail-closed dirty probe SC4).
+- realpath containment enforced; NUL-byte and control-character path inputs rejected (adversarial.test.ts).
+
+### Concurrency and TOCTOU
+
+- In-process keyed async `WorkspaceMutexRegistry` serializes same-resource mutations across three scopes (provisioning, workspace, active), non-reentrant (mutex.ts).
+- Canonical ordering prevents deadlock across keys.
+- A persisted `WorkspaceLock` advisory record (TTL-based, re-checked deterministically inside the mutex) is the backstop for cross-process and across-restart safety.
+- Disjoint resources run in parallel; no global lock.
+
+### Failure taxonomy
+
+All mutations map to one of five deterministic failure classes — `classifyTaskWorkspaceError` is a total `Record<code, class>` and surfaces the class in the BFF response body for caller decision-making:
+
+- **Retryable**: `LOCK_CONTENTION` (a live lock held by another actor that will TTL-expire).
+- **Repairable**: `POINTER_DRIFT` (drift the #447 repair path resolves; a bare retry would re-hit the stale state).
+- **Blocked**: `ILLEGAL_TRANSITION`, `BRANCH_CONFLICT`, `INVALID_BASE_BRANCH`, `UNSAFE_PATH`, `EXISTING_UNMANAGED_PATH`, `MISSING_REPOSITORY`, `WORKSPACE_NOT_FOUND`, `INVALID_REQUEST`, `CLEANUP_NOT_ELIGIBLE`, `REPAIR_NOT_APPLICABLE` (a precondition/validation gate; change inputs, do not retry).
+- **Policy-denied**: `OPERATOR_APPROVAL_REQUIRED` (an approval gate; no mutation executed).
+- **Terminal**: `PROVISIONING_FAILED`, `REPAIR_FAILED`, `CLEANUP_FAILED` (a mutation errored after its gate authorized it; needs out-of-band intervention).
+
+### Evidence and audit
+
+Content-free lifecycle events (provision, activate, pause, resume, switch, repair, cleanup, block, fail) are emitted for every mutation attempt, with outcome (success, blocked, approval-required, rejected, failed, recovery-required). No paths, secrets, or source text persisted.
+
+### Cleanup fail-closed
+
+Cleanup operations refuse dirty, locked, unowned, or out-of-root workspaces, leaving them in explicit recoverable states for operator intervention (cleanup.ts, cleanup.test.ts:SC4 section).
+
+## Residual limitations and deferred follow-ups
+
+### In-scope limitations (non-blocking)
+
+1. **In-process mutex per-process only**: Cross-process safety via advisory lock (sqlite FK + transaction). For multi-process deployments, advisory lock TTL is the serialization backstop. No distributed mutex implemented.
+
+2. **Browser e2e is deterministic/route-intercepted**: Proves UI wiring and no-bypass behavior, not live provider git. Real Git Delivery policy and provider interaction proven by adjacent #470 suites.
+
+3. **Git Delivery execution inside active workspace proven by root-retargeting + #470 suites, not live end-to-end git push test**: The feature reuses #470; live mutation integration tested at Git Delivery layer (not repeated at workspace layer).
+
+4. **Performance bounds validated at N=200 paused workspaces** (scale.test.ts: listAll, reconciliation, health, switch latency all within documented bounds).
+
+### Two LOW-severity follow-ups from #449 — RESOLVED
+
+Both LOW-severity follow-ups flagged at #449 merge time have since been resolved on this branch (after the original #450 doc commit `2854b086`):
+
+1. **cleanupOrphans double listAll — RESOLVED** by PR #1588 (`35e0bbfa`). `cleanupOrphansImpl` now calls `store.listAll()` exactly once (`buildKnownPathsByRepo`, `cleanup.ts`), and `resolveOrphanRepositoryIds` reuses the resulting map keys instead of issuing a second store query. Behaviour is unchanged; the redundant scan is gone.
+
+2. **Control/bidi characters in requestedBy/taskId — RESOLVED** by PR #1589 (`247826df`). `field-safety.ts` `assertSafeFieldValue` now rejects (not strips) C0/C1/DEL, zero-width, and bidi code points, wired at both the route and service boundaries (`routes.ts`, `provisioning.ts`, `lifecycle.ts`, `repair.ts`, `cleanup.ts`). Covered by 10 dedicated `field-safety.test.ts` cases.
+
+Both fixes were verified green during Epic #443 closeout and do not change any contract or governance surface.
+
+### Post-closeout audit findings — RESOLVED
+
+The autonomous Epic #443 audit pass on 2026-06-27 found additional production-readiness gaps after
+the original closeout evidence was written. The audit fix PR targeting
+`feat/keiko-isolated-task-workspaces` resolves them without adding product scope:
+
+1. **Managed active roots rejected by legacy route authorization — RESOLVED.** `/api/runs` and
+   Git Delivery now authorize a task-bound `activeRoot` when it matches a persisted managed
+   `WorkspaceInstance`, the derived `<managedRoot>/<repositoryId>/<workspaceId>` path, realpath
+   containment, and on-disk presence. Legacy registered project authorization remains unchanged.
+
+2. **Persisted path trusted before active binding — RESOLVED.** Provisioning activation and
+   lifecycle `getActive()` now re-prove derived-path identity and managed-root containment before
+   returning `WorkspaceBinding`; invalid active pointers self-heal to unbound mode.
+
+3. **Cleanup race after clean probe — RESOLVED.** Governed cleanup now refuses if Git removal fails
+   while the path remains, re-probes before fallback deletion, unlocks the row on refusal, and
+   re-probes orphan candidates immediately before physical removal.
+
+4. **`handoff-ready -> active` contract mismatch — RESOLVED.** Backend activation and the switcher
+   now allow handoff-ready workspaces to reactivate, matching the #444 lifecycle contract.
+
+5. **Malformed optional route fields widened scope — RESOLVED.** Present-but-invalid optional
+   `taskId` and body `root` fields now return `INVALID_REQUEST` instead of being treated as absent.
+
+6. **Switcher accessibility defects — RESOLVED.** Status badges use readable text-on-surface
+   styling, the trigger exposes a descriptive context label associated with the live status region,
+   and create-submit is natively disabled while workspace mutations are in flight.
+
+Audit verification run:
+
+```bash
+npx vitest run --config vitest.coverage.packages.config.ts packages/keiko-server/src/task-workspace/
+npx vitest run --config vitest.coverage.packages.config.ts packages/keiko-contracts/src/task-workspace.test.ts packages/keiko-contracts/src/task-workspace-reconciliation.test.ts packages/keiko-contracts/src/task-workspace-health.test.ts packages/keiko-server/src/gitDelivery/ packages/keiko-server/src/run-handlers.test.ts packages/keiko-server/src/voice-action-governance.test.ts
+npx vitest run src/app/components/desktop/TaskWorkspaceSwitcher.test.tsx src/app/components/desktop/TaskWorkspaceSwitcher.a11y.test.tsx src/app/components/desktop/hooks/useActiveWorkspaceState.test.tsx src/app/components/desktop/widgets/index.test.tsx src/app/components/desktop/widgets/resolveBoundRoot.test.ts
+npm run typecheck
+npm run lint
+npm run arch:check
+npm run arch:check:negative
+npm run check:git-delivery-evidence
+npm run check:version-consistency
+npm run test:e2e:task-binding-446
+```
+
+## Project-state note
+
+All seven child issues (#444–#450) are CLOSED `completed` with `status: done`, and the #450 capstone (PR #1591) plus the #1588/#1589 follow-ups are merged into `feat/keiko-isolated-task-workspaces`. Epic #443 is being formally closed as `completed` by the closeout pass that produced this update. The epic's seven Definition-of-Done checkboxes are satisfied by this artifact set (closure evidence + verification matrix + operator runbook + consolidated fixture) and were re-verified against the merged branch during closeout:
+
+- [x] All child issues closed with acceptance criteria and verification evidence.
+- [x] Required GitHub checks green on implementation PRs.
+- [x] Final closure evidence records #470 and #1491 reuse and where narrow new workspace authority was added.
+- [x] Tests demonstrate provisioning, activation, switching, pause/resume, restart recovery, drift classification, blocked mutation, repair, cleanup, cross-surface binding.
+- [x] Evidence proves generic terminal Git restrictions intact.
+- [x] Evidence proves Git Delivery policy/approval/evidence semantics still govern branch, commit, publish, PR, merge inside active workspace.
+- [x] Known limitations and follow-ups documented.
+
+## Closure decision
+
+The Epic #443 closure artifact set — this summary, [443-verification-matrix.md](./443-verification-matrix.md), [443-operator-runbook.md](./443-operator-runbook.md), the consolidated epic-443-lifecycle.test.ts fixture, and the merged child-issue evidence (ADRs, contracts versions, PR squash commits) — is sufficient for maintainers to assess rollout and support readiness without rerunning ad hoc investigation. With all seven child issues closed and the implementation PRs green on the required `ci` check, Epic #443 is closed as completed.

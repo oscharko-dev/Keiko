@@ -10,16 +10,16 @@ import {
   writeEditorHotExitSnapshot,
 } from "./editorHotExitStore";
 
-type RequestHandler<T> = ((event?: Event) => void) | null;
+type RequestHandler = ((event?: Event) => void) | null;
 type FakeOpenRequest = FakeIdbRequest<FakeDatabase> & {
-  onupgradeneeded: RequestHandler<FakeDatabase>;
+  onupgradeneeded: RequestHandler;
 };
 
 class FakeIdbRequest<T = unknown> {
   result!: T;
   error: Error | null = null;
-  onsuccess: RequestHandler<T> = null;
-  onerror: RequestHandler<T> = null;
+  onsuccess: RequestHandler = null;
+  onerror: RequestHandler = null;
 }
 
 class FakeObjectStore {
@@ -58,9 +58,9 @@ class FakeObjectStore {
 }
 
 class FakeTransaction {
-  oncomplete: RequestHandler<void> = null;
-  onerror: RequestHandler<void> = null;
-  onabort: RequestHandler<void> = null;
+  oncomplete: RequestHandler = null;
+  onerror: RequestHandler = null;
+  onabort: RequestHandler = null;
   error: Error | null = null;
 
   constructor(private readonly records: Map<string, unknown>) {}
@@ -150,9 +150,9 @@ class RequestErrorObjectStore {
 }
 
 class RequestErrorTransaction {
-  oncomplete: RequestHandler<void> = null;
-  onerror: RequestHandler<void> = null;
-  onabort: RequestHandler<void> = null;
+  oncomplete: RequestHandler = null;
+  onerror: RequestHandler = null;
+  onabort: RequestHandler = null;
   error: Error | null = null;
 
   objectStore(): RequestErrorObjectStore {
@@ -189,9 +189,9 @@ class AbortObjectStore {
 }
 
 class AbortTransaction {
-  oncomplete: RequestHandler<void> = null;
-  onerror: RequestHandler<void> = null;
-  onabort: RequestHandler<void> = null;
+  oncomplete: RequestHandler = null;
+  onerror: RequestHandler = null;
+  onabort: RequestHandler = null;
   error: Error | null = null;
 
   objectStore(): AbortObjectStore {
@@ -251,6 +251,18 @@ function snapshot(overrides: Partial<EditorHotExitSnapshotV1> = {}): EditorHotEx
   };
 }
 
+async function expectRejectedMessage(promise: Promise<unknown>, message: string): Promise<void> {
+  await promise.then(
+    () => {
+      throw new Error(`Expected promise to reject with ${message}`);
+    },
+    (error: unknown) => {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(message);
+    },
+  );
+}
+
 beforeEach(() => {
   installIndexedDb();
 });
@@ -296,13 +308,15 @@ describe("editorHotExitStore", () => {
   it("surfaces IndexedDB request and transaction failures to callers", async () => {
     installIndexedDb(new StaticIndexedDb(new RequestErrorDatabase()));
 
-    await expect(readEditorHotExitSnapshot("/repo", "src/app.ts")).rejects.toThrow(
+    await expectRejectedMessage(
+      readEditorHotExitSnapshot("/repo", "src/app.ts"),
       "IndexedDB request failed.",
     );
-    await expect(writeEditorHotExitSnapshot(snapshot())).rejects.toThrow("request failed");
+    await expectRejectedMessage(writeEditorHotExitSnapshot(snapshot()), "request failed");
 
     installIndexedDb(new StaticIndexedDb(new AbortDatabase()));
-    await expect(writeEditorHotExitSnapshot(snapshot())).rejects.toThrow(
+    await expectRejectedMessage(
+      writeEditorHotExitSnapshot(snapshot()),
       "IndexedDB transaction aborted.",
     );
   });
@@ -324,7 +338,9 @@ describe("editorHotExitStore", () => {
     await writeEditorHotExitSnapshot(fresh);
 
     await expect(readEditorHotExitSnapshot("/repo", "src/old.ts", freshNow)).resolves.toBeNull();
-    await expect(readEditorHotExitSnapshot("/repo", "src/new.ts", freshNow)).resolves.toEqual(fresh);
+    await expect(readEditorHotExitSnapshot("/repo", "src/new.ts", freshNow)).resolves.toEqual(
+      fresh,
+    );
   });
 
   it("evicts the oldest fresh snapshots when total hot-exit storage exceeds the quota", async () => {
@@ -351,5 +367,45 @@ describe("editorHotExitStore", () => {
     await expect(readEditorHotExitSnapshot("/repo", "src/older.ts", 2_002)).resolves.toBeNull();
     await expect(readEditorHotExitSnapshot("/repo", "src/large.ts", 2_002)).resolves.toBeNull();
     await expect(readEditorHotExitSnapshot("/repo", "src/fresh.ts", 2_002)).resolves.toEqual(fresh);
+  });
+
+  it("counts the incoming snapshot against the quota so a fresh write cannot exceed the cap", async () => {
+    // ~5 MiB each: either fits alone under the 8 MiB cap, but the two together exceed it. A prune
+    // that ignored the snapshot being written would leave both in the store at ~10 MiB.
+    const half = "y".repeat(5 * 1024 * 1024);
+    const first = snapshot({ relativePath: "src/first.ts", content: half, updatedAt: 3_000 });
+    const second = snapshot({ relativePath: "src/second.ts", content: half, updatedAt: 3_001 });
+
+    await writeEditorHotExitSnapshot(first);
+    await writeEditorHotExitSnapshot(second);
+
+    await expect(readEditorHotExitSnapshot("/repo", "src/first.ts", 3_002)).resolves.toBeNull();
+    await expect(readEditorHotExitSnapshot("/repo", "src/second.ts", 3_002)).resolves.toEqual(
+      second,
+    );
+  });
+
+  it("excludes the overwritten predecessor's bytes so an unrelated snapshot is not over-evicted", async () => {
+    // other (2 MiB) + target (5 MiB) = 7 MiB, under the cap. Overwriting target with another 5 MiB
+    // snapshot must NOT evict the unrelated `other`: only the replacement's bytes are charged. Without
+    // the predecessor exclusion the stale 5 MiB target would be double-counted (12 MiB), and the
+    // oldest-first eviction would wrongly drop `other` before it freed enough room.
+    const twoMiB = "y".repeat(2 * 1024 * 1024);
+    const fiveMiB = "z".repeat(5 * 1024 * 1024);
+    const other = snapshot({ relativePath: "src/other.ts", content: twoMiB, updatedAt: 5_000 });
+    const target = snapshot({ relativePath: "src/target.ts", content: fiveMiB, updatedAt: 5_001 });
+    await writeEditorHotExitSnapshot(other);
+    await writeEditorHotExitSnapshot(target);
+    const replacement = snapshot({
+      relativePath: "src/target.ts",
+      content: fiveMiB,
+      updatedAt: 5_002,
+    });
+    await writeEditorHotExitSnapshot(replacement);
+
+    await expect(readEditorHotExitSnapshot("/repo", "src/other.ts", 5_003)).resolves.toEqual(other);
+    await expect(readEditorHotExitSnapshot("/repo", "src/target.ts", 5_003)).resolves.toEqual(
+      replacement,
+    );
   });
 });

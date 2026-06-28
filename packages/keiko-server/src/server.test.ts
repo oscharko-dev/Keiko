@@ -14,6 +14,7 @@ import {
 } from "./index.js";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
+import { resetWorkspaceStateForTests } from "./workspace-state-handlers.js";
 
 let server: Server;
 let staticRoot: string;
@@ -36,6 +37,11 @@ function baseUrl(): string {
 
 async function fetchRaw(path: string): Promise<RawResponse> {
   const response = await fetch(`${baseUrl()}${path}`);
+  return { status: response.status, headers: response.headers, text: await response.text() };
+}
+
+async function fetchRawWithInit(path: string, init: RequestInit): Promise<RawResponse> {
+  const response = await fetch(`${baseUrl()}${path}`, init);
   return { status: response.status, headers: response.headers, text: await response.text() };
 }
 
@@ -72,6 +78,7 @@ async function closeServer(): Promise<void> {
 }
 
 beforeEach(async () => {
+  resetWorkspaceStateForTests();
   staticRoot = await mkdtemp(join(tmpdir(), "keiko-ui-static-"));
   await writeFile(join(staticRoot, "index.html"), "<html><body>home</body></html>", "utf8");
   await writeFile(join(staticRoot, "launch.html"), "<html><body>launch</body></html>", "utf8");
@@ -89,6 +96,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await closeServer();
   await rm(staticRoot, { recursive: true, force: true });
+  resetWorkspaceStateForTests();
 });
 
 describe("GET /api/health", () => {
@@ -97,6 +105,42 @@ describe("GET /api/health", () => {
     expect(res.status).toBe(200);
     expect(JSON.parse(res.text)).toEqual({ status: "ok", version: SDK_VERSION });
     expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+});
+
+describe("GET/PUT /api/workspace/state", () => {
+  it("stores a bounded workspace snapshot for another browser to read", async () => {
+    const put = await fetchRawWithInit("/api/workspace/state", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      body: JSON.stringify({
+        windows: [
+          { id: "files-1", type: "files", x: 1, y: 2, w: 3, h: 4, z: 5, cfg: {}, max: false },
+        ],
+        connections: [{ id: "c-1", a: "files-1", b: "chat-1" }],
+      }),
+    });
+    expect(put.status).toBe(200);
+    expect(JSON.parse(put.text)).toMatchObject({ workspace: { revision: 1 } });
+
+    const get = await fetchRaw("/api/workspace/state");
+    expect(get.status).toBe(200);
+    const body = JSON.parse(get.text) as {
+      workspace: { revision: number; windows: unknown[]; connections: unknown[] };
+    };
+    expect(body.workspace.revision).toBe(1);
+    expect(body.workspace.windows).toHaveLength(1);
+    expect(body.workspace.connections).toEqual([{ id: "c-1", a: "files-1", b: "chat-1" }]);
+  });
+
+  it("rejects malformed workspace state payloads", async () => {
+    const res = await fetchRawWithInit("/api/workspace/state", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      body: JSON.stringify({ windows: {}, connections: [] }),
+    });
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.text)).toMatchObject({ error: { code: "invalid_request" } });
   });
 });
 
@@ -133,6 +177,90 @@ describe("security headers", () => {
     const header = after.headers.get("content-security-policy") ?? "";
     expect(header).toContain("'sha256-after'");
     expect(header).not.toContain("'sha256-before'");
+  });
+});
+
+describe("Permissions-Policy microphone scoping (Issue #495)", () => {
+  function voiceConfig(): UiHandlerDeps["config"] {
+    return {
+      providers: [
+        {
+          modelId: "keiko-stt",
+          baseUrl: "https://keiko-stt.invalid",
+          apiKey: "voice-secret-token-1234567890",
+          timeoutMs: 1000,
+          maxRetries: 2,
+          retryBaseDelayMs: 10,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 1000, halfOpenProbes: 1 },
+      capabilities: [
+        {
+          id: "keiko-stt",
+          kind: "voice",
+          contextWindow: 0,
+          maxOutputTokens: 0,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          supportsSpeechInput: true,
+          voiceProviderLocality: "azure-foundry",
+          workflowEligible: false,
+          costClass: "low",
+          latencyClass: "fast",
+          throughputHint: "stt fixture",
+          preferredUseCases: ["Dictation"],
+          knownLimitations: [],
+        },
+      ],
+    };
+  }
+
+  function depsWith(
+    config: UiHandlerDeps["config"],
+    env: Record<string, string> = {},
+  ): UiHandlerDeps {
+    return {
+      config,
+      configPresent: config !== undefined,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env,
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store: createInMemoryUiStore(),
+    };
+  }
+
+  async function permissionsPolicyFor(handlerDeps: UiHandlerDeps): Promise<string> {
+    await closeServer();
+    server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+    const response = await fetchRaw("/");
+    return response.headers.get("permissions-policy") ?? "";
+  }
+
+  it("emits microphone=(self) when a speech-to-text voice provider is configured", async () => {
+    expect(await permissionsPolicyFor(depsWith(voiceConfig()))).toContain("microphone=(self)");
+  });
+
+  it("keeps microphone=() when voice is disabled by policy, even with a provider", async () => {
+    const policy = await permissionsPolicyFor(
+      depsWith(voiceConfig(), { KEIKO_VOICE_DISABLED: "1" }),
+    );
+    expect(policy).toContain("microphone=()");
+    expect(policy).not.toContain("microphone=(self)");
+  });
+
+  it("keeps microphone=() in a no-voice deployment", async () => {
+    expect(await permissionsPolicyFor(depsWith(undefined))).toContain("microphone=()");
   });
 });
 

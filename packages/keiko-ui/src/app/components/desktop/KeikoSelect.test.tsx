@@ -39,6 +39,8 @@ describe("KeikoSelect menu geometry", () => {
 
     await user.click(trigger);
 
+    expect(screen.getByRole("listbox", { name: "Policy profile" })).toBeInTheDocument();
+
     const menu = document.querySelector(".ksel-menu");
     expect(menu).not.toBeNull();
     expect(menu).toHaveStyle({

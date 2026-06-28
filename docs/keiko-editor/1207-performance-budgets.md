@@ -174,7 +174,7 @@ per-keystroke long-task figures are browser-measured by #1209 (§10).
 ## 10. Release-evidence handoff (#1209)
 
 #1209 records measured evidence against this table using the packaged CLI serving the production
-static UI (`playwright.editor-performance.config.ts` + `tests/e2e/editor-performance.spec.ts`):
+static UI (`tests/e2e/config/playwright.editor-performance.config.ts` + `tests/e2e/editor-performance.spec.ts`):
 
 1. **Bundle (B1/B2/B3):** `npm run build:ui`, then from the static export measure (a) that the
    first-load/entry chunks contain no Monaco/editor code (B1), (b) the gzipped total of the lazy

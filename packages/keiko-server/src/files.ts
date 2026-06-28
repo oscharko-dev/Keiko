@@ -5,7 +5,19 @@
 import type { IncomingMessage } from "node:http";
 import type { Dirent, Stats } from "node:fs";
 import { createHash } from "node:crypto";
-import { lstat, opendir, open, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  mkdir,
+  opendir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import {
   basename,
   dirname,
@@ -87,6 +99,9 @@ export interface FilesSearchResult {
   readonly extension: string | null;
   readonly sizeBytes: number;
   readonly modifiedAt: number;
+  readonly fileRole: FilesSearchFileRole;
+  readonly matchQuality: FilesSearchMatchQuality;
+  readonly rootKind: FilesSearchRootKind;
 }
 
 export interface FilesSearchResponse {
@@ -96,6 +111,19 @@ export interface FilesSearchResponse {
   readonly truncated: boolean;
   readonly scannedFileCount: number;
 }
+
+export type FilesSearchFileRole =
+  | "source"
+  | "test"
+  | "config"
+  | "docs"
+  | "generated"
+  | "asset"
+  | "other";
+
+export type FilesSearchMatchQuality = "exact" | "strong" | "path" | "weak";
+
+export type FilesSearchRootKind = "selected-root" | "nested-git-root";
 
 interface FilesPreviewBase {
   readonly root: string;
@@ -608,6 +636,235 @@ function fileSearchScore(relativePath: string, query: string): number {
   return 1_000 + relativePath.length;
 }
 
+const GENERATED_FILE_SEARCH_SEGMENTS = new Set([
+  ".next",
+  ".turbo",
+  "build",
+  "coverage",
+  "dist",
+  "out",
+  "storybook-static",
+  "storybookstatic",
+  "target",
+]);
+
+const SOURCE_FILE_SEARCH_SEGMENTS = new Set([
+  "__tests__",
+  "app",
+  "components",
+  "lib",
+  "packages",
+  "scripts",
+  "src",
+  "test",
+  "tests",
+]);
+
+const SOURCE_FILE_SEARCH_EXTENSIONS = new Set([
+  "astro",
+  "c",
+  "cc",
+  "cjs",
+  "cpp",
+  "cs",
+  "css",
+  "go",
+  "h",
+  "hpp",
+  "html",
+  "java",
+  "js",
+  "jsx",
+  "kt",
+  "kts",
+  "mjs",
+  "mts",
+  "php",
+  "py",
+  "rb",
+  "rs",
+  "scala",
+  "scss",
+  "sh",
+  "svelte",
+  "swift",
+  "ts",
+  "tsx",
+  "vue",
+]);
+
+const TEST_FILE_SEARCH_SEGMENTS = new Set(["__tests__", "__test__", "spec", "test", "tests"]);
+
+const DOCS_FILE_SEARCH_SEGMENTS = new Set(["doc", "docs", "documentation"]);
+
+const DOCS_FILE_SEARCH_EXTENSIONS = new Set(["adoc", "md", "mdx", "rst", "txt"]);
+
+const CONFIG_FILE_SEARCH_NAMES = new Set([
+  ".babelrc",
+  ".editorconfig",
+  ".env.example",
+  ".eslintrc",
+  ".gitattributes",
+  ".gitignore",
+  ".npmrc",
+  ".prettierrc",
+  "dockerfile",
+  "package.json",
+  "tsconfig.json",
+  "vite.config.ts",
+  "vitest.config.ts",
+]);
+
+const CONFIG_FILE_SEARCH_EXTENSIONS = new Set([
+  "config",
+  "conf",
+  "ini",
+  "json",
+  "jsonc",
+  "lock",
+  "toml",
+  "yaml",
+  "yml",
+]);
+
+const ASSET_FILE_SEARCH_EXTENSIONS = new Set([
+  "avif",
+  "gif",
+  "ico",
+  "jpeg",
+  "jpg",
+  "map",
+  "png",
+  "svg",
+  "webp",
+  "woff",
+  "woff2",
+]);
+
+interface FileSearchPathParts {
+  readonly lowerSegments: readonly string[];
+  readonly lowerName: string;
+  readonly extension: string;
+}
+
+function fileSearchPathParts(relativePath: string): FileSearchPathParts {
+  const normalized = relativePath.replaceAll("\\", "/");
+  const lowerSegments = normalized
+    .toLocaleLowerCase()
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  const lowerName = basename(normalized).toLocaleLowerCase();
+  const extension = extensionOf(lowerName)?.toLocaleLowerCase() ?? "";
+  return { lowerSegments, lowerName, extension };
+}
+
+function fileSearchQualityScore(relativePath: string): number {
+  const normalized = relativePath.replaceAll("\\", "/");
+  const lowerSegments = normalized
+    .toLocaleLowerCase()
+    .split("/")
+    .filter((segment) => segment.length > 0);
+  const extension = extensionOf(basename(normalized))?.toLocaleLowerCase() ?? "";
+  let score = 0;
+
+  if (lowerSegments.some((segment) => GENERATED_FILE_SEARCH_SEGMENTS.has(segment))) {
+    score += 20_000;
+  }
+  if (lowerSegments.includes("assets") && /\b[a-f0-9]{7,}\b/u.test(basename(normalized))) {
+    score += 2_000;
+  }
+  if (lowerSegments.some((segment) => SOURCE_FILE_SEARCH_SEGMENTS.has(segment))) {
+    score -= 250;
+  }
+  if (SOURCE_FILE_SEARCH_EXTENSIONS.has(extension)) {
+    score -= 100;
+  }
+  if (lowerSegments.includes("src")) {
+    score -= 200;
+  }
+  return score;
+}
+
+function fileSearchPathHasSegment(
+  parts: FileSearchPathParts,
+  segments: ReadonlySet<string>,
+): boolean {
+  return parts.lowerSegments.some((segment) => segments.has(segment));
+}
+
+function fileSearchPathIsGenerated(parts: FileSearchPathParts): boolean {
+  return fileSearchPathHasSegment(parts, GENERATED_FILE_SEARCH_SEGMENTS);
+}
+
+function fileSearchPathIsAsset(parts: FileSearchPathParts): boolean {
+  return (
+    parts.lowerSegments.includes("assets") || ASSET_FILE_SEARCH_EXTENSIONS.has(parts.extension)
+  );
+}
+
+function fileSearchPathIsTest(parts: FileSearchPathParts): boolean {
+  return (
+    fileSearchPathHasSegment(parts, TEST_FILE_SEARCH_SEGMENTS) ||
+    /\.(?:spec|test)\.[^.]+$/u.test(parts.lowerName)
+  );
+}
+
+function fileSearchPathIsDocs(parts: FileSearchPathParts): boolean {
+  return (
+    fileSearchPathHasSegment(parts, DOCS_FILE_SEARCH_SEGMENTS) ||
+    DOCS_FILE_SEARCH_EXTENSIONS.has(parts.extension)
+  );
+}
+
+function fileSearchPathIsConfig(parts: FileSearchPathParts): boolean {
+  return (
+    CONFIG_FILE_SEARCH_NAMES.has(parts.lowerName) ||
+    CONFIG_FILE_SEARCH_EXTENSIONS.has(parts.extension)
+  );
+}
+
+function fileSearchPathIsSource(parts: FileSearchPathParts): boolean {
+  return (
+    fileSearchPathHasSegment(parts, SOURCE_FILE_SEARCH_SEGMENTS) ||
+    SOURCE_FILE_SEARCH_EXTENSIONS.has(parts.extension)
+  );
+}
+
+const FILE_SEARCH_ROLE_MATCHERS: readonly [
+  FilesSearchFileRole,
+  (parts: FileSearchPathParts) => boolean,
+][] = [
+  ["generated", fileSearchPathIsGenerated],
+  ["asset", fileSearchPathIsAsset],
+  ["test", fileSearchPathIsTest],
+  ["docs", fileSearchPathIsDocs],
+  ["config", fileSearchPathIsConfig],
+  ["source", fileSearchPathIsSource],
+];
+
+function fileSearchRole(relativePath: string): FilesSearchFileRole {
+  const parts = fileSearchPathParts(relativePath);
+  return FILE_SEARCH_ROLE_MATCHERS.find(([_role, matches]) => matches(parts))?.[0] ?? "other";
+}
+
+function fileSearchMatchQuality(relativePath: string, query: string): FilesSearchMatchQuality {
+  const lowerPath = relativePath.toLocaleLowerCase();
+  const lowerName = basename(relativePath).toLocaleLowerCase();
+  const lowerQuery = query.toLocaleLowerCase();
+  const nameStem = lowerName.replace(/\.[^.]+$/u, "");
+
+  if (lowerName === lowerQuery || lowerPath === lowerQuery || nameStem === lowerQuery) {
+    return "exact";
+  }
+  if (lowerName.startsWith(lowerQuery) || lowerName.includes(lowerQuery)) {
+    return "strong";
+  }
+  if (lowerPath.startsWith(lowerQuery) || lowerPath.includes(lowerQuery)) {
+    return "path";
+  }
+  return "weak";
+}
+
 function directoryOf(relativePath: string): string {
   const dir = pathPosix.dirname(relativePath);
   return dir === "." ? "" : dir;
@@ -626,8 +883,15 @@ interface FileSearchStackEntry {
 interface FileSearchState {
   candidates: FileSearchCandidate[];
   stack: FileSearchStackEntry[];
+  gitRootCache: Map<string, string | null>;
   scannedFileCount: number;
   scanTruncated: boolean;
+}
+
+interface FileSearchResolvedPath {
+  readonly root: string;
+  readonly relativePath: string;
+  readonly rootKind: FilesSearchRootKind;
 }
 
 function entryVisibleToFileSearch(
@@ -636,10 +900,92 @@ function entryVisibleToFileSearch(
   redactor: FilesMetadataRedactor,
 ): boolean {
   return (
-    metadataIsSafe(relativePath, redactor) &&
-    !pathIsDenied(relativePath) &&
-    !entry.isSymbolicLink()
+    metadataIsSafe(relativePath, redactor) && !pathIsDenied(relativePath) && !entry.isSymbolicLink()
   );
+}
+
+async function hasGitMarker(directory: string): Promise<boolean> {
+  try {
+    await lstat(join(directory, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function nearestGitRoot(
+  startDirectory: string,
+  cache: Map<string, string | null>,
+): Promise<string | null> {
+  let current = resolve(startDirectory);
+  const visited: string[] = [];
+  for (;;) {
+    const cached = cache.get(current);
+    if (cached !== undefined) {
+      for (const directory of visited) cache.set(directory, cached);
+      return cached;
+    }
+    visited.push(current);
+    if (await hasGitMarker(current)) {
+      for (const directory of visited) cache.set(directory, current);
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      for (const directory of visited) cache.set(directory, null);
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function canExposeFileSearchGitRoot(
+  selectedRoot: ResolvedProjectRoot,
+  gitRoot: string,
+  redactor: FilesMetadataRedactor,
+): boolean {
+  return (
+    gitRoot !== selectedRoot.realRoot &&
+    isContained(selectedRoot.realRoot, gitRoot) &&
+    !pathIsDenied(gitRoot) &&
+    metadataIsSafe(gitRoot, redactor)
+  );
+}
+
+function canExposeFileSearchRelativePath(
+  relativePath: string,
+  redactor: FilesMetadataRedactor,
+): boolean {
+  return (
+    relativePath.length > 0 &&
+    !relativePath.startsWith("../") &&
+    !pathPosix.isAbsolute(relativePath) &&
+    !pathIsDenied(relativePath) &&
+    metadataIsSafe(relativePath, redactor)
+  );
+}
+
+async function resolveFileSearchResultPath(args: {
+  readonly root: ResolvedProjectRoot;
+  readonly relativePath: string;
+  readonly nativePath: string;
+  readonly redactor: FilesMetadataRedactor;
+  readonly state: FileSearchState;
+}): Promise<FileSearchResolvedPath> {
+  const fallback: FileSearchResolvedPath = {
+    root: args.root.root,
+    relativePath: args.relativePath,
+    rootKind: "selected-root",
+  };
+  const gitRoot = await nearestGitRoot(dirname(args.nativePath), args.state.gitRootCache);
+  if (gitRoot === null || !canExposeFileSearchGitRoot(args.root, gitRoot, args.redactor)) {
+    return fallback;
+  }
+
+  const rebasedPath = rootRelativePosixPath(gitRoot, args.nativePath);
+  if (!canExposeFileSearchRelativePath(rebasedPath, args.redactor)) return fallback;
+
+  return { root: gitRoot, relativePath: rebasedPath, rootKind: "nested-git-root" };
 }
 
 async function addFileSearchCandidate(args: {
@@ -649,6 +995,7 @@ async function addFileSearchCandidate(args: {
   readonly nativePath: string;
   readonly entryName: string;
   readonly tokens: readonly string[];
+  readonly redactor: FilesMetadataRedactor;
   readonly state: FileSearchState;
 }): Promise<void> {
   if (!matchesSearch(args.relativePath, args.tokens)) return;
@@ -658,16 +1005,28 @@ async function addFileSearchCandidate(args: {
   } catch {
     return;
   }
+  const resolvedPath = await resolveFileSearchResultPath({
+    root: args.root,
+    relativePath: args.relativePath,
+    nativePath: args.nativePath,
+    redactor: args.redactor,
+    state: args.state,
+  });
   args.state.candidates.push({
-    score: fileSearchScore(args.relativePath, args.query),
+    score:
+      fileSearchScore(resolvedPath.relativePath, args.query) +
+      fileSearchQualityScore(resolvedPath.relativePath),
     result: {
-      root: args.root.root,
-      path: args.relativePath,
+      root: resolvedPath.root,
+      path: resolvedPath.relativePath,
       name: args.entryName,
-      directory: directoryOf(args.relativePath),
+      directory: directoryOf(resolvedPath.relativePath),
       extension: extensionOf(args.entryName),
       sizeBytes: info.size,
       modifiedAt: info.mtimeMs,
+      fileRole: fileSearchRole(resolvedPath.relativePath),
+      matchQuality: fileSearchMatchQuality(resolvedPath.relativePath, args.query),
+      rootKind: resolvedPath.rootKind,
     },
   });
 }
@@ -701,6 +1060,7 @@ async function collectFileSearchEntry(args: {
     nativePath,
     entryName: args.entry.name,
     tokens: args.tokens,
+    redactor: args.redactor,
     state: args.state,
   });
 }
@@ -743,6 +1103,7 @@ async function collectFileSearchResults(args: {
   const state: FileSearchState = {
     candidates: [],
     stack: [{ path: args.root.realRoot, relativePath: "" }],
+    gitRootCache: new Map(),
     scannedFileCount: 0,
     scanTruncated: false,
   };
@@ -1154,6 +1515,354 @@ export async function writeFilesContent(args: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Filesystem mutations (create / rename / delete) for the Files widget.
+//
+// Every mutation reuses the SAME containment model as the read surface: the root is realpath-resolved,
+// the target (or, for a create, its parent) is resolved through symlinks and re-checked for
+// containment and against the deny-list, and metadata is redaction-checked. Mutations are
+// non-destructive by default — a create never overwrites (atomic O_EXCL), a rename refuses an
+// existing destination, and symlinks are rejected rather than silently dereferenced. The deny-list
+// (.git, node_modules, secrets, build output) is enforced on both source and destination, so a
+// mutation can never reach an excluded path even though it is otherwise inside the root.
+// ---------------------------------------------------------------------------
+
+export interface FilesMutationResponse {
+  // Echo of the root identity the request used (registered project path or arbitrary absolute root).
+  readonly root: string;
+  // Canonical root-relative POSIX path of the affected entry (the NEW path for create and rename).
+  readonly path: string;
+  // For a rename, the prior root-relative path, so the client can re-home open editor tabs.
+  readonly previousPath?: string;
+  readonly kind: FilesEntryKind;
+}
+
+// errno → client-safe (status, code, message), one row per outcome. fs.cp reports collisions and
+// shape mismatches with bespoke ERR_FS_CP_* codes, so each row groups every code that should map to
+// the same response. A flat table keeps mapNodeFsError a single lookup (no branch-per-code) and well
+// under the complexity budget. None of these messages echoes a path or the raw OS string.
+const FS_ERRNO_TABLE: readonly (readonly [readonly string[], number, string, string])[] = [
+  // `fs.cp` reports a no-overwrite collision with its own code, not the bare EEXIST.
+  [
+    ["EEXIST", "ENOTEMPTY", "ERR_FS_CP_EEXIST"],
+    409,
+    "ALREADY_EXISTS",
+    "An entry with that name already exists.",
+  ],
+  [["ENOENT"], 404, "NOT_FOUND", "The requested path was not found."],
+  // `fs.cp` shape-mismatch / invalid-argument codes (e.g. copying a dir over a file) → bad request.
+  [
+    [
+      "ERR_FS_CP_DIR_TO_NON_DIR",
+      "ERR_FS_CP_NON_DIR_TO_DIR",
+      "ERR_FS_CP_EINVAL",
+      "ERR_FS_CP_FIFO_PIPE_OR_SOCKET",
+    ],
+    400,
+    "BAD_PATH",
+    "This entry cannot be copied here.",
+  ],
+  [["EACCES", "EPERM"], 403, "DENIED", DENIED_MESSAGE],
+  [["EXDEV"], 400, "CROSS_DEVICE", "This move crosses filesystems and is not supported here."],
+  [["ENOTDIR"], 400, "NOT_DIRECTORY", "Part of the path is not a folder."],
+  [["EISDIR"], 400, "IS_DIRECTORY", "The target is a folder."],
+];
+
+const FS_ERRNO_LOOKUP: ReadonlyMap<string, readonly [number, string, string]> = new Map(
+  FS_ERRNO_TABLE.flatMap(([codes, status, code, message]) =>
+    codes.map((errno) => [errno, [status, code, message] as const] as const),
+  ),
+);
+
+// Translate a Node fs errno into a FilesError without ever echoing the absolute path or the raw OS
+// message back to the client — mirroring the non-probeable DENIED_MESSAGE discipline. A FilesError is
+// passed through unchanged; an unrecognised error becomes a generic 500 so an internal detail (e.g.
+// a path embedded in the OS message) cannot leak through the response body.
+function mapNodeFsError(error: unknown): FilesError {
+  if (error instanceof FilesError) return error;
+  const code =
+    typeof error === "object" && error !== null ? (error as NodeJS.ErrnoException).code : undefined;
+  const mapped = code !== undefined ? FS_ERRNO_LOOKUP.get(code) : undefined;
+  if (mapped !== undefined) {
+    return new FilesError(mapped[0], mapped[1], mapped[2]);
+  }
+  return new FilesError(500, "IO_ERROR", "The file operation could not be completed.");
+}
+
+interface ResolvedCreationTarget {
+  readonly root: string;
+  readonly realRoot: string;
+  readonly relativePath: string;
+  readonly path: string;
+}
+
+// Resolve a path that should NOT exist yet (a create destination, or a rename target). The PARENT
+// directory must already exist; it is resolved through symlinks and re-checked for containment and
+// deny so a link in the parent chain cannot redirect the new entry outside the root. The final name
+// is validated as a single, safe path segment.
+// The final segment of a new entry must be a single, safe name (the parent path was already split
+// off and validated). normalizeRelativePath has already rejected NUL/absolute/`..`-escape inputs.
+function assertSafeLeafName(name: string): void {
+  if (name.length === 0 || name === "." || name === "..") {
+    throw new FilesError(400, "BAD_PATH", "The new entry name is not valid.");
+  }
+}
+
+// Resolve the directory a new entry will be created in: it must already exist, be a directory,
+// resolve (through symlinks) to a path inside the root, and not be deny-listed.
+async function resolveContainedParentDir(
+  realRoot: string,
+  parentRelative: string,
+): Promise<string> {
+  const parentNative = nativePath(realRoot, parentRelative === "." ? "" : parentRelative);
+  let realParent: string;
+  try {
+    realParent = await realpath(parentNative);
+  } catch {
+    throw new FilesError(404, "PARENT_NOT_FOUND", "The destination folder does not exist.");
+  }
+  if (!(await stat(realParent)).isDirectory()) {
+    throw new FilesError(400, "NOT_DIRECTORY", "The destination is not a folder.");
+  }
+  if (!isContained(realRoot, realParent)) {
+    throw new FilesError(403, "PATH_ESCAPE", "The destination is outside the selected root.");
+  }
+  const parentRelReal = rootRelativePosixPath(realRoot, realParent);
+  if (parentRelReal.length > 0 && pathIsDenied(parentRelReal)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  return realParent;
+}
+
+async function resolveCreationTarget(
+  store: UiStore,
+  rootInput: string | null,
+  pathInput: string | null,
+  redactor: FilesMetadataRedactor,
+): Promise<ResolvedCreationTarget> {
+  const root = await resolveRoot(store, rootInput, redactor);
+  const relativePath = normalizeRelativePath(pathInput);
+  if (relativePath.length === 0) {
+    throw new FilesError(400, "BAD_PATH", "A new entry needs a name inside the selected root.");
+  }
+  assertMetadataSafe(relativePath, redactor);
+  // Deny check runs before any existence probe so a denied path is never distinguishable by status.
+  if (pathIsDenied(relativePath)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  const name = pathPosix.basename(relativePath);
+  assertSafeLeafName(name);
+  const realParent = await resolveContainedParentDir(
+    root.realRoot,
+    pathPosix.dirname(relativePath),
+  );
+  const targetNative = join(realParent, name);
+  if (!isContained(root.realRoot, targetNative)) {
+    throw new FilesError(403, "PATH_ESCAPE", "The destination is outside the selected root.");
+  }
+  const targetRel = rootRelativePosixPath(root.realRoot, targetNative);
+  assertMetadataSafe(targetRel, redactor);
+  if (pathIsDenied(targetRel)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  return { root: root.root, realRoot: root.realRoot, relativePath: targetRel, path: targetNative };
+}
+
+export async function createFilesEntry(args: {
+  readonly store: UiStore;
+  readonly rootInput: string | null;
+  readonly pathInput: string | null;
+  readonly kind: FilesEntryKind;
+  readonly redactor?: FilesMetadataRedactor | undefined;
+}): Promise<FilesMutationResponse> {
+  if (args.kind !== "file" && args.kind !== "directory") {
+    throw new FilesError(400, "BAD_REQUEST", "A new entry must be a file or a directory.");
+  }
+  const target = await resolveCreationTarget(
+    args.store,
+    args.rootInput,
+    args.pathInput,
+    args.redactor ?? staticFilesMetadataRedactor,
+  );
+  try {
+    if (args.kind === "directory") {
+      // Non-recursive: the parent was already verified, and EEXIST surfaces as a clean 409.
+      await mkdir(target.path);
+    } else {
+      // `wx` = O_CREAT | O_EXCL: atomically refuse to overwrite an existing entry AND refuse to
+      // follow a final symlink, closing the create-time TOCTOU/symlink window.
+      await writeFile(target.path, "", { flag: "wx" });
+    }
+  } catch (error) {
+    throw mapNodeFsError(error);
+  }
+  return { root: target.root, path: target.relativePath, kind: args.kind };
+}
+
+// No-clobber guard for a rename. Refuses any pre-existing destination (lstat so a symlink there is
+// detected too), with ONE exception: a pure case-only rename on a case-insensitive filesystem
+// (macOS/Windows), where `lstat(newPath)` resolves to the SAME inode as the source — legitimate
+// because it only changes the on-disk case. The exception is gated by realpath identity, never a raw
+// string compare. rename() has no atomic no-overwrite flag in Node; containment + deny bound the
+// residual TOCTOU window.
+async function assertRenameDestinationFree(targetPath: string, sourcePath: string): Promise<void> {
+  try {
+    await lstat(targetPath);
+  } catch {
+    return; // destination does not exist — free to use
+  }
+  let resolved: string | null;
+  try {
+    resolved = await realpath(targetPath);
+  } catch {
+    resolved = null;
+  }
+  if (resolved !== sourcePath) {
+    throw new FilesError(409, "ALREADY_EXISTS", "An entry with that name already exists.");
+  }
+}
+
+export async function renameFilesEntry(args: {
+  readonly store: UiStore;
+  readonly rootInput: string | null;
+  readonly pathInput: string | null;
+  readonly newPathInput: string | null;
+  // Issue 2.6: optional version-aware precondition. When supplied (only the editor/agent that read the
+  // file holds it; the metadata-only tree does not), the rename is rejected with STALE_SESSION (409) if
+  // the on-disk file changed since that revision — so a move never races a concurrent edit.
+  readonly baseVersion?: EditorDocumentVersion | undefined;
+  readonly redactor?: FilesMetadataRedactor | undefined;
+}): Promise<FilesMutationResponse> {
+  const redactor = args.redactor ?? staticFilesMetadataRedactor;
+  const source = await resolveInsideRoot(args.store, args.rootInput, args.pathInput, redactor);
+  if (source.relativePath.length === 0) {
+    throw new FilesError(400, "BAD_PATH", "The root folder cannot be renamed.");
+  }
+  if (source.symlink) {
+    throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be renamed here.");
+  }
+  if (args.baseVersion !== undefined && source.stats.isFile()) {
+    await assertSessionNotStale(source, args.baseVersion);
+  }
+  const kind: FilesEntryKind = source.stats.isDirectory() ? "directory" : "file";
+  const target = await resolveCreationTarget(
+    args.store,
+    args.rootInput,
+    args.newPathInput,
+    redactor,
+  );
+  if (target.relativePath === source.relativePath) {
+    throw new FilesError(409, "ALREADY_EXISTS", "The new name matches the current name.");
+  }
+  // A folder cannot be moved into itself or one of its own descendants (it would orphan the subtree).
+  if (target.relativePath.startsWith(`${source.relativePath}/`)) {
+    throw new FilesError(400, "BAD_PATH", "A folder cannot be moved into itself.");
+  }
+  await assertRenameDestinationFree(target.path, source.path);
+  try {
+    await rename(source.path, target.path);
+  } catch (error) {
+    throw mapNodeFsError(error);
+  }
+  return {
+    root: target.root,
+    path: target.relativePath,
+    previousPath: source.relativePath,
+    kind,
+  };
+}
+
+export async function deleteFilesEntry(args: {
+  readonly store: UiStore;
+  readonly rootInput: string | null;
+  readonly pathInput: string | null;
+  // Issue 2.6: optional version-aware precondition (see renameFilesEntry) — rejects the delete with
+  // STALE_SESSION (409) if the on-disk file changed since this revision.
+  readonly baseVersion?: EditorDocumentVersion | undefined;
+  readonly redactor?: FilesMetadataRedactor | undefined;
+}): Promise<FilesMutationResponse> {
+  const target = await resolveInsideRoot(
+    args.store,
+    args.rootInput,
+    args.pathInput,
+    args.redactor ?? staticFilesMetadataRedactor,
+  );
+  if (target.relativePath.length === 0) {
+    throw new FilesError(400, "BAD_PATH", "The root folder cannot be deleted.");
+  }
+  if (target.symlink) {
+    throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be deleted here.");
+  }
+  if (args.baseVersion !== undefined && target.stats.isFile()) {
+    await assertSessionNotStale(target, args.baseVersion);
+  }
+  const kind: FilesEntryKind = target.stats.isDirectory() ? "directory" : "file";
+  // `recursive` removes a non-empty folder, matching editor expectations. Containment + the deny-list
+  // bound the blast radius to inside the selected root and away from .git/node_modules/secrets, and
+  // symlinks are rejected above so `rm` never recurses THROUGH a link out of the root.
+  try {
+    await rm(target.path, { recursive: kind === "directory", force: false });
+  } catch (error) {
+    throw mapNodeFsError(error);
+  }
+  return { root: target.root, path: target.relativePath, kind };
+}
+
+export async function copyFilesEntry(args: {
+  readonly store: UiStore;
+  readonly rootInput: string | null;
+  readonly sourcePathInput: string | null;
+  readonly destPathInput: string | null;
+  readonly redactor?: FilesMetadataRedactor | undefined;
+}): Promise<FilesMutationResponse> {
+  const redactor = args.redactor ?? staticFilesMetadataRedactor;
+  // Source must exist, be contained, and not be denied or a symlink (we never dereference one).
+  const source = await resolveInsideRoot(
+    args.store,
+    args.rootInput,
+    args.sourcePathInput,
+    redactor,
+  );
+  if (source.relativePath.length === 0) {
+    throw new FilesError(400, "BAD_PATH", "The root folder cannot be copied.");
+  }
+  if (source.symlink) {
+    throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be copied here.");
+  }
+  const kind: FilesEntryKind = source.stats.isDirectory() ? "directory" : "file";
+  // Destination resolves like a create target: parent must exist + be contained + non-denied.
+  const target = await resolveCreationTarget(
+    args.store,
+    args.rootInput,
+    args.destPathInput,
+    redactor,
+  );
+  if (
+    target.relativePath === source.relativePath ||
+    target.relativePath.startsWith(`${source.relativePath}/`)
+  ) {
+    throw new FilesError(400, "BAD_PATH", "A folder cannot be copied into itself.");
+  }
+  try {
+    // `force:false` + `errorOnExist` refuse to overwrite; `dereference:false` copies symlinks as
+    // links (never follows one out of the root). Contents stay inside the root throughout.
+    await cp(source.path, target.path, {
+      recursive: kind === "directory",
+      force: false,
+      errorOnExist: true,
+      dereference: false,
+    });
+  } catch (error) {
+    throw mapNodeFsError(error);
+  }
+  return {
+    root: target.root,
+    path: target.relativePath,
+    previousPath: source.relativePath,
+    kind,
+  };
+}
+
 export async function readFilesPreview(
   store: UiStore,
   rootInput: string | null,
@@ -1307,4 +2016,146 @@ export async function handleFilesContent(
       ? readFilesContentRoute(ctx, deps)
       : writeFilesContentRoute(ctx, deps),
   );
+}
+
+// Bounded body for a mutation request: a path plus a few short fields, never file content.
+const MAX_FILES_MUTATION_BODY_BYTES = 16_384;
+
+export async function handleFilesCreate(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => {
+    const body = await readJsonObject(ctx.req, MAX_FILES_MUTATION_BODY_BYTES);
+    if (isRouteResult(body)) return body;
+    const rootInput = typeof body.root === "string" ? body.root : null;
+    const pathInput = typeof body.path === "string" ? body.path : null;
+    const kind = body.kind === "directory" ? "directory" : body.kind === "file" ? "file" : null;
+    if (rootInput === null || pathInput === null || kind === null) {
+      return {
+        status: 400,
+        body: errorBody(
+          "BAD_REQUEST",
+          "root, path, and kind ('file' or 'directory') are required to create an entry.",
+        ),
+      };
+    }
+    return {
+      status: 201,
+      body: await createFilesEntry({
+        store: deps.store,
+        rootInput,
+        pathInput,
+        kind,
+        redactor: deps.redactor,
+      }),
+    };
+  });
+}
+
+// Parse an optional `baseVersion` from a mutation body: undefined when absent, the parsed version when
+// valid, or a 400 RouteResult when present-but-malformed (Issue 2.6).
+function parseOptionalBaseVersion(
+  body: Record<string, unknown>,
+): { readonly version: EditorDocumentVersion | undefined } | RouteResult {
+  if (body.baseVersion === undefined) return { version: undefined };
+  const parsed = parseEditorDocumentVersion(body.baseVersion);
+  if (!parsed.ok) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "baseVersion is not a valid version.") };
+  }
+  return { version: parsed.value };
+}
+
+export async function handleFilesRename(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => {
+    const body = await readJsonObject(ctx.req, MAX_FILES_MUTATION_BODY_BYTES);
+    if (isRouteResult(body)) return body;
+    const rootInput = typeof body.root === "string" ? body.root : null;
+    const pathInput = typeof body.path === "string" ? body.path : null;
+    const newPathInput = typeof body.newPath === "string" ? body.newPath : null;
+    if (rootInput === null || pathInput === null || newPathInput === null) {
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "root, path, and newPath are required to rename an entry."),
+      };
+    }
+    const baseVersion = parseOptionalBaseVersion(body);
+    if (isRouteResult(baseVersion)) return baseVersion;
+    return {
+      status: 200,
+      body: await renameFilesEntry({
+        store: deps.store,
+        rootInput,
+        pathInput,
+        newPathInput,
+        baseVersion: baseVersion.version,
+        redactor: deps.redactor,
+      }),
+    };
+  });
+}
+
+export async function handleFilesDelete(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => {
+    const body = await readJsonObject(ctx.req, MAX_FILES_MUTATION_BODY_BYTES);
+    if (isRouteResult(body)) return body;
+    const rootInput = typeof body.root === "string" ? body.root : null;
+    const pathInput = typeof body.path === "string" ? body.path : null;
+    if (rootInput === null || pathInput === null) {
+      return {
+        status: 400,
+        body: errorBody("BAD_REQUEST", "root and path are required to delete an entry."),
+      };
+    }
+    const baseVersion = parseOptionalBaseVersion(body);
+    if (isRouteResult(baseVersion)) return baseVersion;
+    return {
+      status: 200,
+      body: await deleteFilesEntry({
+        store: deps.store,
+        rootInput,
+        pathInput,
+        baseVersion: baseVersion.version,
+        redactor: deps.redactor,
+      }),
+    };
+  });
+}
+
+export async function handleFilesCopy(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runFilesHandler(async () => {
+    const body = await readJsonObject(ctx.req, MAX_FILES_MUTATION_BODY_BYTES);
+    if (isRouteResult(body)) return body;
+    const rootInput = typeof body.root === "string" ? body.root : null;
+    const sourcePathInput = typeof body.sourcePath === "string" ? body.sourcePath : null;
+    const destPathInput = typeof body.destPath === "string" ? body.destPath : null;
+    if (rootInput === null || sourcePathInput === null || destPathInput === null) {
+      return {
+        status: 400,
+        body: errorBody(
+          "BAD_REQUEST",
+          "root, sourcePath, and destPath are required to copy an entry.",
+        ),
+      };
+    }
+    return {
+      status: 201,
+      body: await copyFilesEntry({
+        store: deps.store,
+        rootInput,
+        sourcePathInput,
+        destPathInput,
+        redactor: deps.redactor,
+      }),
+    };
+  });
 }

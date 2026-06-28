@@ -12,7 +12,12 @@ import { useCallback, useEffect, useMemo, useRef, type MutableRefObject } from "
 import { buildSaveRequest } from "./save-state.js";
 import type { KeikoCodeEditorProps } from "./types.js";
 import { applyViewState, captureViewState } from "./view-state.js";
-import { wireEditorOnMount, type MountEditor, type MountMonaco } from "./on-mount.js";
+import {
+  reapplyEditorTheme,
+  wireEditorOnMount,
+  type MountEditor,
+  type MountMonaco,
+} from "./on-mount.js";
 import type {
   WireEditorCommands,
   WireEditorCompletion,
@@ -55,6 +60,8 @@ export interface EditorHandlers {
 
 interface EditorRefs {
   readonly editorRef: MutableRefObject<MountEditor | null>;
+  readonly monacoRef: MutableRefObject<MountMonaco | null>;
+  readonly containerRef: MutableRefObject<HTMLElement | null>;
   readonly viewStateRef: MutableRefObject<unknown>;
   readonly disposeRef: MutableRefObject<(() => void) | null>;
   readonly revealDecorationIdsRef: MutableRefObject<string[]>;
@@ -63,13 +70,31 @@ interface EditorRefs {
 
 function useEditorRefs(): EditorRefs {
   const editorRef = useRef<MountEditor | null>(null);
+  const monacoRef = useRef<MountMonaco | null>(null);
+  const containerRef = useRef<HTMLElement | null>(null);
   const viewStateRef = useRef<unknown>(null);
   const disposeRef = useRef<(() => void) | null>(null);
   const revealDecorationIdsRef = useRef<string[]>([]);
   const revealTimeoutRef = useRef<number | null>(null);
   return useMemo(
-    () => ({ editorRef, viewStateRef, disposeRef, revealDecorationIdsRef, revealTimeoutRef }),
-    [editorRef, viewStateRef, disposeRef, revealDecorationIdsRef, revealTimeoutRef],
+    () => ({
+      editorRef,
+      monacoRef,
+      containerRef,
+      viewStateRef,
+      disposeRef,
+      revealDecorationIdsRef,
+      revealTimeoutRef,
+    }),
+    [
+      editorRef,
+      monacoRef,
+      containerRef,
+      viewStateRef,
+      disposeRef,
+      revealDecorationIdsRef,
+      revealTimeoutRef,
+    ],
   );
 }
 
@@ -103,15 +128,18 @@ function applyRevealRequest(
   editor.focus();
   editor.setSelection(safeRange);
   editor.revealRangeInCenterIfOutsideViewport(safeRange);
-  refs.revealDecorationIdsRef.current = editor.deltaDecorations([], [
-    {
-      range: safeRange,
-      options: {
-        isWholeLine: true,
-        className: "keiko-editor-reference-target",
+  refs.revealDecorationIdsRef.current = editor.deltaDecorations(
+    [],
+    [
+      {
+        range: safeRange,
+        options: {
+          isWholeLine: true,
+          className: "keiko-editor-reference-target",
+        },
       },
-    },
-  ]);
+    ],
+  );
   refs.revealTimeoutRef.current = window.setTimeout(() => {
     clearRevealDecoration(refs);
   }, 2400);
@@ -349,6 +377,15 @@ function useMountStreams(latestProps: MutableRefObject<KeikoCodeEditorProps>): {
   return { streamId, inlineStreamId, telemetry };
 }
 
+// Capture the live editor + monaco + container into the lifecycle refs and restore any prior view
+// state. Split out so the mount callback stays under the function-length budget.
+function bindMountRefs(refs: EditorRefs, editor: MountEditor, monaco: MountMonaco): void {
+  refs.editorRef.current = editor;
+  refs.monacoRef.current = monaco;
+  refs.containerRef.current = editor.getContainerDomNode();
+  applyViewState(editor, refs.viewStateRef.current);
+}
+
 function useMountHandler(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
@@ -366,8 +403,7 @@ function useMountHandler(
       // typed-lint program cannot fully resolve (it surfaces as error-typed); narrow it at this
       // single seam to the minimal structural view the mount wiring consumes.
       const mountMonaco = monaco as unknown as MountMonaco;
-      refs.editorRef.current = mountEditor;
-      applyViewState(editor, refs.viewStateRef.current);
+      bindMountRefs(refs, mountEditor, mountMonaco);
       refs.disposeRef.current = wireEditorOnMount({
         editor: mountEditor,
         monaco: mountMonaco,
@@ -425,6 +461,30 @@ function useRevealRequest(props: KeikoCodeEditorProps, refs: EditorRefs): void {
   }, [props.revealRequest?.id, refs]);
 }
 
+// Re-theme the live editor when the app theme switches, instead of remounting (Issue 2.2). The mount
+// run is skipped (the mount wiring already registered the theme); every later `themeVariant` change
+// re-defines the variant from the now-current DOM tokens and applies it, so the undo stack and scroll/
+// fold/cursor view state survive a light/dark toggle.
+function useThemeReapply(props: KeikoCodeEditorProps, refs: EditorRefs): void {
+  const { themeVariant, onRuntimeError } = props;
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    const monaco = refs.monacoRef.current;
+    const container = refs.containerRef.current;
+    if (monaco === null || container === null) return;
+    reapplyEditorTheme({
+      monaco,
+      container,
+      themeVariant: themeVariant ?? "dark",
+      onThemeError: onRuntimeError,
+    });
+  }, [themeVariant, onRuntimeError, refs.monacoRef, refs.containerRef]);
+}
+
 /** Wire change/mount handlers and unmount disposal; returns the handlers for `<Editor>`. */
 export function useEditorHandlers(props: KeikoCodeEditorProps, readOnly: boolean): EditorHandlers {
   const refs = useEditorRefs();
@@ -438,5 +498,6 @@ export function useEditorHandlers(props: KeikoCodeEditorProps, readOnly: boolean
   }, [readOnly, refs.editorRef]);
   useUnmountDisposal(refs);
   useRevealRequest(props, refs);
+  useThemeReapply(props, refs);
   return { onChange, onMount, formatDocument };
 }

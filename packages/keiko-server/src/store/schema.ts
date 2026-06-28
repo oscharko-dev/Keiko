@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 8;
 
 interface Migration {
   readonly version: number;
@@ -204,6 +204,67 @@ const V6_SQL = `
 ALTER TABLE chat_messages ADD COLUMN grounded_answer_json TEXT;
 `;
 
+// V7 (issue #445, epic #443) — durable managed task-workspace instances. STRICT mode. One row per
+// provisioned/activated task workspace; the partial unique index on (repository_id, task_id) enforces
+// the idempotency invariant at the DB layer as a second barrier alongside the deterministic id
+// derivation (AC3). All columns are content-free per the #444 contract (ids/hashes, enums, ISO
+// timestamps, branch/path names); `lock_json`, `drift_markers_json`, and `recovery_hints_json` carry
+// the nested WorkspaceLock / drift-marker / recovery-hint shapes the contract validator gates.
+const V7_SQL = `
+CREATE TABLE task_workspace_instances (
+  workspace_id           TEXT NOT NULL PRIMARY KEY,
+  schema_version         TEXT NOT NULL,
+  task_id                TEXT NOT NULL,
+  repository_id          TEXT NOT NULL,
+  repository_root        TEXT NOT NULL,
+  base_branch            TEXT NOT NULL,
+  task_branch            TEXT NOT NULL,
+  managed_worktree_path  TEXT NOT NULL,
+  gitdir_identity        TEXT NOT NULL,
+  lifecycle_state        TEXT NOT NULL,
+  health                 TEXT NOT NULL,
+  lock_json              TEXT,
+  created_at             TEXT NOT NULL,
+  updated_at             TEXT NOT NULL,
+  last_verified_at       TEXT,
+  last_verified_head     TEXT,
+  drift_markers_json     TEXT NOT NULL,
+  recovery_hints_json    TEXT NOT NULL,
+  audit_correlation_id   TEXT NOT NULL,
+  CHECK (
+    schema_version IN ('1')
+    AND lifecycle_state IN (
+      'provisioning','active','paused','handoff-ready','archived','merged',
+      'abandoned','recovery-required','failed','cleanup-pending'
+    )
+    AND health IN ('healthy','degraded','drifted','locked-out','missing','unknown')
+  )
+) STRICT;
+
+CREATE UNIQUE INDEX uniq_task_workspace_repo_task
+  ON task_workspace_instances(repository_id, task_id);
+CREATE INDEX idx_task_workspace_repository
+  ON task_workspace_instances(repository_id, updated_at);
+`;
+
+// V8 (issue #446, epic #443) — singleton active task-workspace pointer. Studio binds exactly ONE
+// active task workspace at a time; this table holds at most one row (id pinned to the constant
+// 'active', enforced by CHECK). The WorkspaceBinding surfaces consume is DERIVED from the referenced
+// instance (binding.ts), never stored, so the active root has no second copy to drift. Content-free:
+// an opaque workspace id + an opaque actor id + ISO timestamps only. ON DELETE CASCADE clears the
+// pointer when the referenced instance is removed (the lifecycle service also clears it defensively).
+const V8_SQL = `
+CREATE TABLE task_workspace_active_pointer (
+  id            TEXT NOT NULL PRIMARY KEY DEFAULT 'active',
+  workspace_id  TEXT NOT NULL,
+  set_by        TEXT NOT NULL,
+  set_at        TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  CHECK (id = 'active'),
+  FOREIGN KEY (workspace_id) REFERENCES task_workspace_instances(workspace_id) ON DELETE CASCADE
+) STRICT;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -211,6 +272,8 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 4, sql: V4_SQL },
   { version: 5, sql: V5_SQL },
   { version: 6, sql: V6_SQL },
+  { version: 7, sql: V7_SQL },
+  { version: 8, sql: V8_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

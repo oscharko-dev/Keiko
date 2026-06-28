@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
@@ -14,10 +14,14 @@ import {
   fetchRunReport,
   fetchModels,
   fetchProjects,
+  appendDesktopChatVoiceTurn,
   patchChatMessage,
   sendDesktopChat,
   sendDesktopChatStream,
+  runRealtimeGroundedTool as postRealtimeGroundedTool,
   updateChat,
+  type AppendDesktopChatVoiceTurnMessage,
+  type RealtimeGroundedToolOutput,
 } from "@/lib/api";
 import type { SseDonePayload } from "@/lib/api";
 import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/memory-api";
@@ -29,14 +33,14 @@ import type {
   ConversationDocumentContextWire,
   ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
-  ConversationBudgetEstimate,
   GroundedAnswer as GroundedAnswerWire,
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
-import { estimateConversationBudget, isConversationEligibleModel } from "@/lib/types";
+import { isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { extractDocumentContext, type PendingDocument } from "./documentContext";
+import { useConversationMemorySettings } from "./memorySettings";
 
 // ─── Attachment types (Issue #147) ────────────────────────────────────────────
 //
@@ -124,7 +128,6 @@ function readDataUrl(file: File): Promise<string> {
 
 export const DEFAULT_CHAT_TITLE = "New chat";
 export const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
-export const DEFAULT_MEMORY_BUDGET_TOKENS = 1200;
 const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
 const CHAT_DELETE_EVENT = "keiko:chat-delete";
 const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
@@ -163,7 +166,7 @@ export function isInFlight(status: SendStatus): boolean {
 // conversation exceeded the model's context window. Exported so the test can
 // pin the exact string without duplicating it.
 export const CONTEXT_OVERSIZED_USER_MESSAGE =
-  "The conversation context exceeded the model's window. Clear history or pick a larger-context model.";
+  "The conversation context exceeded the model's window. Open a new chat or pick a larger-context model.";
 export const GROUNDED_ATTACHMENT_NOTICE =
   "Attachments are not supported for grounded chats. Remove the attachment or switch to a non-grounded chat.";
 export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
@@ -199,13 +202,6 @@ function isEmptyModelResponseError(error: unknown): boolean {
   const text = error instanceof Error ? error.message.toLowerCase() : "";
   if (text.length === 0) return false;
   return EMPTY_MODEL_RESPONSE_PHRASES.some((phrase) => text.includes(phrase));
-}
-
-// CB-F1 / CB-F3 — the single unknown-limits-safe "over budget" predicate. A
-// model with contextWindowTokens <= 0 (runtime-configured, unknown window) is
-// NEVER treated as exceeded, mirroring BudgetIndicator's own self-hide guard.
-export function isBudgetExceeded(budget: ConversationBudgetEstimate | undefined): boolean {
-  return budget !== undefined && budget.contextWindowTokens > 0 && budget.pressure === "exceeded";
 }
 
 function errorMessage(error: unknown): string {
@@ -287,6 +283,27 @@ function hasGroundingScope(chat: Chat): boolean {
 
 export type ChatSessionApi = UseChatSessionResult;
 
+// Issue #1561 — options for an explicit-text send. The voice dialogue session (Epic #1556) commits a
+// spoken transcript and must send it through THIS chat path so the spoken turn carries the identical
+// context (attachments → documentContext, repository/local-knowledge grounding scope, memory) a typed
+// turn would. It cannot rely on `setDraft(text)` + `sendMessage()` in the same tick: `sendMessage`
+// reads `draft` from React state captured in its closure, so the just-set draft is invisible until the
+// next render and the send would early-return on an empty draft. Passing the committed text directly
+// decouples the send from the async draft state. The field is content-only (the committed transcript,
+// already equal to what a typed message carries) — it adds NO audio and NO new wire field, preserving
+// exact context equivalence with the typed path.
+export interface SendMessageOptions {
+  // When present, this text is sent instead of the current draft. Trimmed and empty-guarded identically
+  // to the draft path. The draft is still cleared on a successful send so the composer returns to rest.
+  readonly text?: string;
+}
+
+export interface RealtimeGroundedToolCallInput {
+  readonly callId: string;
+  readonly query: string;
+  readonly userTranscript?: string | undefined;
+}
+
 export interface UseChatSessionResult {
   projects: ProjectWithAvailability[];
   chats: Chat[];
@@ -319,7 +336,19 @@ export interface UseChatSessionResult {
   openProject: (project: ProjectWithAvailability) => Promise<void>;
   openChat: (chat: Chat) => Promise<void>;
   addProject: (path: string) => Promise<void>;
-  sendMessage: () => Promise<void>;
+  // Issue #1561 — `options.text` sends an explicit committed transcript (the spoken-turn handoff) through
+  // the same context-bearing path as a typed send; absent, it sends the current draft as before.
+  sendMessage: (options?: SendMessageOptions) => Promise<void>;
+  // Realtime voice turns are already generated by the Realtime provider. Appending them must persist
+  // the committed transcript into the existing chat history without triggering a second chat model call.
+  appendVoiceTurn?: (messages: readonly AppendDesktopChatVoiceTurnMessage[]) => Promise<void>;
+  // Realtime voice grounding tool bridge. It persists the committed spoken user turn and grounded
+  // assistant answer through the same BFF grounding path as text chat, then returns the compact tool
+  // output that the Realtime provider should speak. It does not call the normal chat model twice.
+  runRealtimeGroundedTool?: (
+    input: RealtimeGroundedToolCallInput,
+    signal?: AbortSignal,
+  ) => Promise<RealtimeGroundedToolOutput>;
   // Issue #152 — cancel the in-flight send (grounded OR ungrounded). No-op
   // when sendStatus is terminal/idle. Sets sendStatus to "cancelled" and
   // preserves the user message so the user can retry without retyping.
@@ -347,10 +376,6 @@ export interface UseChatSessionResult {
   // Issue #148 — documents that contributed extracted text to the most recent send, for the
   // post-send disclosure note. Empty until a send includes at least one readable document.
   readonly lastSentDocuments: readonly SentDocumentDisclosure[];
-  // Issue #151 — approximate context-window pressure estimate for the active
-  // chat. undefined while the selected model is unresolved. Token counts are
-  // approximate; UI copy must say so.
-  readonly budget: ConversationBudgetEstimate | undefined;
   readonly memoryEnabled: boolean;
   readonly setMemoryEnabled: (next: boolean) => void;
   readonly memoryBudgetTokens: number;
@@ -360,12 +385,6 @@ export interface UseChatSessionResult {
   readonly acceptMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly rejectMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
-  // Issue #151 / AC#4 — reset the in-memory history for the next prompt
-  // WITHOUT deleting the conversation row. The chat row in `chats` is
-  // preserved; only `messages` is cleared. Downstream wiring for
-  // connected-context byte counts (#177 / #189 / #204) is a follow-up; the
-  // estimator already carries the fields end-to-end.
-  readonly clearHistory: () => void;
 }
 
 interface SessionState {
@@ -501,8 +520,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
   const [latestMemory, setLatestMemory] = useState<ConversationMemoryResultWire | undefined>();
-  const [memoryEnabled, setMemoryEnabled] = useState(true);
-  const [memoryBudgetTokens, setMemoryBudgetTokens] = useState(DEFAULT_MEMORY_BUDGET_TOKENS);
+  const { memoryEnabled, setMemoryEnabled, memoryBudgetTokens, setMemoryBudgetTokens } =
+    useConversationMemorySettings();
   const mountedRef = useRef(true);
   const activeChatIdRef = useRef<string | undefined>(undefined);
   const runSummarySyncingRef = useRef<Set<string>>(new Set());
@@ -613,7 +632,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, []);
 
   const buildMemoryRequest = useCallback(
-    (chat: Chat, project: ProjectWithAvailability): ConversationMemoryRequestWire => ({
+    (chat: Chat, project: { readonly path: string }): ConversationMemoryRequestWire => ({
       enabled: memoryEnabled,
       budgetTokens: memoryBudgetTokens,
       context: {
@@ -1292,7 +1311,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const sendGrounded = useCallback(
     async (
       chat: Chat,
-      project: ProjectWithAvailability,
+      _project: ProjectWithAvailability,
       content: string,
       optimisticId: string,
       modelId: string,
@@ -1360,218 +1379,212 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // should call cancelSend.
   const cancelGrounded = cancelSend;
 
-  const sendMessage = useCallback(async (): Promise<void> => {
-    // Issue #152 / AC#2 — idempotent send. Checking the ref (not the React
-    // state) defends against the same tick double-submit (Enter held, click
-    // burst, etc.). The terminal states are treated as "ready to send again"
-    // — only mid-flight states block.
-    if (isInFlight(sendStatusRef.current)) return;
-    const content = draft.trim();
-    const chat = state.activeChat;
-    const project = state.activeProject;
-    const modelId = resolveSelectedModelId(state.selectedModel, state.models);
-    // AC #1: block submission when no eligible model is configured.
-    if (
-      content.length === 0 ||
-      chat === undefined ||
-      project === undefined ||
-      modelId === undefined
-    )
-      return;
-    // CB-F3: Enter / form-submit must honor the same exceeded-budget block the
-    // send button enforces — otherwise the keyboard path bypasses the gate. Uses
-    // the unknown-limits-safe guard (contextWindowTokens > 0) so a runtime
-    // chat model with contextWindow: 0 is never blocked.
-    const submitBudget = estimateConversationBudget({
-      modelContextWindow: state.models.find((m) => m.id === modelId)?.contextWindow ?? 0,
-      modelMaxOutputTokens: state.models.find((m) => m.id === modelId)?.maxOutputTokens ?? 0,
-      userDraftText: content,
-      conversationHistory: state.messages
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({ role: m.role, content: m.content })),
-    });
-    if (isBudgetExceeded(submitBudget)) {
-      setError(CONTEXT_OVERSIZED_USER_MESSAGE);
-      return;
-    }
-    // Issue #4 — block grounded sends that would silently discard attachments.
-    // The grounded path derives context from the repo/local-knowledge scope and
-    // ignores pendingAttachments entirely. Surface a notice and abort so the
-    // user can remove the attachment before sending.
-    if (hasGroundingScope(chat) && pendingAttachments.length > 0) {
-      setError(GROUNDED_ATTACHMENT_NOTICE);
-      return;
-    }
-    const optimistic: ChatMessage = {
-      id: `local-${String(Date.now())}`,
-      chatId: chat.id,
-      role: "user",
-      content,
-      timestamp: Date.now(),
-      runId: undefined,
-      workflowId: undefined,
-      workflowStatus: undefined,
-      shortResult: undefined,
-      taskType: undefined,
-    };
-    // Synchronously commit to "queued" so a re-entrant call in the same tick
-    // hits the isInFlight guard above (AC#2).
-    updateSendStatus("queued");
-    setDraft("");
-    setError(undefined);
-    setState((previous) => ({ ...previous, messages: [...previous.messages, optimistic] }));
-    // Issue #152 — fresh controller per send. The previous controller (if
-    // any) was either already settled or already aborted via cancelSend.
-    const controller = new AbortController();
-    sendControllerRef.current = controller;
-    setLatestMemory(undefined);
-    try {
-      // Merge resolution (PR #355 + Epic #142): route through sendGrounded
-      // when EITHER a Files connected scope OR a local-knowledge scope is
-      // attached. The epic's sendGrounded signature (with modelId + signal +
-      // SendStatus return) is the canonical one; #355 expanded only the
-      // routing predicate, not the underlying send path.
-      const isGrounded = hasGroundingScope(chat);
-      // Issue #148 — extract bounded document text for the ungrounded path only. The grounded
-      // path derives its context from the repo/local-knowledge scope, not from attachments.
-      const { entries: documentContext, disclosures } = isGrounded
-        ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
-        : await buildDocumentContext();
-      const terminal = isGrounded
-        ? await sendGrounded(chat, project, content, optimistic.id, modelId, controller.signal)
-        : await sendUngrounded(
-            chat,
-            project,
-            content,
-            optimistic.id,
-            modelId,
-            controller.signal,
-            documentContext,
-          );
-      // If cancelSend already flipped the status to "cancelled", do not
-      // override it with a stale "completed" — cancellation wins.
-      if (sendStatusRef.current === "cancelled") {
-        // The send path may have written the assistant message between abort
-        // and the cancel registering. Remove the optimistic user-row's
-        // assistant counterpart by trusting the path-returned terminal — but
-        // for cancelled we already preserved the user row, and we did NOT
-        // persist assistant content (signal.aborted check + AbortError
-        // branch). Nothing to do here.
-      } else {
-        updateSendStatus(terminal);
-      }
-      if (terminal === "completed") {
-        // AC #3 (#147): clear pending attachments after a successful send.
-        clearPendingAttachments();
-        // Issue #148 — record which documents contributed context so the UI can disclose them.
-        setLastSentDocuments(disclosures);
-      }
-    } finally {
-      sendControllerRef.current = null;
-    }
-  }, [
-    draft,
-    state.activeChat,
-    state.activeProject,
-    state.selectedModel,
-    state.models,
-    state.messages,
-    pendingAttachments,
-    sendGrounded,
-    sendUngrounded,
-    buildDocumentContext,
-    clearPendingAttachments,
-    updateSendStatus,
-  ]);
-
-  // Issue #151 / AC#4 — clear the in-memory history for the next prompt
-  // without deleting the conversation row. The chat row stays in `chats`;
-  // only `messages` is reset so the next send carries no prior history.
-  // TODO(#151 follow-up): when the BFF gains a "history checkpoint" surface
-  // we'll also persist this reset so reloads don't re-fetch the cleared turns.
-  const clearHistory = useCallback(() => {
-    setLatestGrounded(undefined);
-    setLatestMemory(undefined);
-    setState((previous) => ({ ...previous, messages: [] }));
-  }, []);
-
-  // Issue #151 / AC#1 — reactive context-pressure estimate. Derives from the
-  // selected model's capability + current draft + visible history, plus
-  // best-effort byte estimates from the last grounded and memory responses.
-  //
-  // All three connected-context fields are APPROXIMATE and labelled as such in
-  // the UI. They use the LAST known values so the indicator updates reactively
-  // after each turn without requiring a round-trip before the next send.
-  //
-  // Sources (fields that genuinely exist on the wire types):
-  //   repoContextPackBytes   — GroundedAnswerContextPackSummary.usage.excerptBytes
-  //                            (connected-context and hybrid folder evidence)
-  //   knowledgeCapsuleBytes  — LocalKnowledgeGroundedAnswerContextSummary.referenceBudget × 4
-  //                            (token budget converted to bytes; no raw byte field on the wire)
-  //   memoryContextBytes     — ConversationMemoryContextWire.text.length
-  //                            (the injected memory block is UTF-16 encoded; byte length
-  //                            approximates closely enough for the pressure indicator)
-  const budget = useMemo<ConversationBudgetEstimate | undefined>(() => {
-    const capability = state.models.find((m) => m.id === state.selectedModel);
-    if (capability === undefined) return undefined;
-    const history: readonly { readonly role: string; readonly content: string }[] = state.messages
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({ role: m.role, content: m.content }));
-
-    // Derive best-effort bytes from the last grounded answer. The shape narrows
-    // by groundingKind so we only read fields that exist on each variant.
-    let repoContextPackBytes = 0;
-    let knowledgeCapsuleBytes = 0;
-    if (latestGrounded !== undefined) {
+  const sendMessage = useCallback(
+    async (options?: SendMessageOptions): Promise<void> => {
+      // Issue #152 / AC#2 — idempotent send. Checking the ref (not the React
+      // state) defends against the same tick double-submit (Enter held, click
+      // burst, etc.). The terminal states are treated as "ready to send again"
+      // — only mid-flight states block.
+      if (isInFlight(sendStatusRef.current)) return;
+      // Issue #1561 — an explicit `options.text` (the committed spoken transcript) is sent instead of the
+      // draft. The voice dialogue session cannot use the draft here: it would have to call setDraft(text)
+      // then sendMessage() in the same tick, but this callback closes over the React `draft` state, so the
+      // just-set value is invisible until the next render and the send would early-return on empty content.
+      // Reading the override directly makes the spoken turn flow through the identical context-bearing path.
+      const content = (options?.text ?? draft).trim();
+      const chat = state.activeChat;
+      const project = state.activeProject;
+      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
+      // AC #1: block submission when no eligible model is configured.
       if (
-        latestGrounded.groundingKind === "connected-context" ||
-        latestGrounded.groundingKind === "hybrid"
-      ) {
-        const pack =
-          latestGrounded.groundingKind === "hybrid"
-            ? latestGrounded.contextPack.folder
-            : latestGrounded.contextPack;
-        repoContextPackBytes = pack.usage.excerptBytes;
+        content.length === 0 ||
+        chat === undefined ||
+        project === undefined ||
+        modelId === undefined
+      )
+        return;
+      // Issue #4 — block grounded sends that would silently discard attachments.
+      // The grounded path derives context from the repo/local-knowledge scope and
+      // ignores pendingAttachments entirely. Surface a notice and abort so the
+      // user can remove the attachment before sending.
+      if (hasGroundingScope(chat) && pendingAttachments.length > 0) {
+        setError(GROUNDED_ATTACHMENT_NOTICE);
+        return;
       }
-      if (
-        latestGrounded.groundingKind === "local-knowledge" ||
-        latestGrounded.groundingKind === "hybrid"
-      ) {
-        const lk =
-          latestGrounded.groundingKind === "hybrid"
-            ? latestGrounded.contextPack.knowledge
-            : latestGrounded.contextPack;
-        // The local-knowledge context summary carries a token budget, not a byte
-        // count. Multiply by 4 (chars/token) as a conservative byte estimate.
-        knowledgeCapsuleBytes = lk.referenceBudget * 4;
+      const optimistic: ChatMessage = {
+        id: `local-${String(Date.now())}`,
+        chatId: chat.id,
+        role: "user",
+        content,
+        timestamp: Date.now(),
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      };
+      // Synchronously commit to "queued" so a re-entrant call in the same tick
+      // hits the isInFlight guard above (AC#2).
+      updateSendStatus("queued");
+      setDraft("");
+      setError(undefined);
+      setState((previous) => ({ ...previous, messages: [...previous.messages, optimistic] }));
+      // Issue #152 — fresh controller per send. The previous controller (if
+      // any) was either already settled or already aborted via cancelSend.
+      const controller = new AbortController();
+      sendControllerRef.current = controller;
+      setLatestMemory(undefined);
+      try {
+        // Merge resolution (PR #355 + Epic #142): route through sendGrounded
+        // when EITHER a Files connected scope OR a local-knowledge scope is
+        // attached. The epic's sendGrounded signature (with modelId + signal +
+        // SendStatus return) is the canonical one; #355 expanded only the
+        // routing predicate, not the underlying send path.
+        const isGrounded = hasGroundingScope(chat);
+        // Issue #148 — extract bounded document text for the ungrounded path only. The grounded
+        // path derives its context from the repo/local-knowledge scope, not from attachments.
+        const { entries: documentContext, disclosures } = isGrounded
+          ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
+          : await buildDocumentContext();
+        const terminal = isGrounded
+          ? await sendGrounded(chat, project, content, optimistic.id, modelId, controller.signal)
+          : await sendUngrounded(
+              chat,
+              project,
+              content,
+              optimistic.id,
+              modelId,
+              controller.signal,
+              documentContext,
+            );
+        // If cancelSend already flipped the status to "cancelled", do not
+        // override it with a stale "completed" — cancellation wins.
+        if (sendStatusRef.current === "cancelled") {
+          // The send path may have written the assistant message between abort
+          // and the cancel registering. Remove the optimistic user-row's
+          // assistant counterpart by trusting the path-returned terminal — but
+          // for cancelled we already preserved the user row, and we did NOT
+          // persist assistant content (signal.aborted check + AbortError
+          // branch). Nothing to do here.
+        } else {
+          updateSendStatus(terminal);
+        }
+        if (terminal === "completed") {
+          // AC #3 (#147): clear pending attachments after a successful send.
+          clearPendingAttachments();
+          // Issue #148 — record which documents contributed context so the UI can disclose them.
+          setLastSentDocuments(disclosures);
+        }
+      } finally {
+        sendControllerRef.current = null;
       }
-    }
+    },
+    [
+      draft,
+      state.activeChat,
+      state.activeProject,
+      state.selectedModel,
+      state.models,
+      pendingAttachments,
+      sendGrounded,
+      sendUngrounded,
+      buildDocumentContext,
+      clearPendingAttachments,
+      updateSendStatus,
+    ],
+  );
 
-    // Memory context bytes: only when memory is enabled and a non-empty context
-    // text was returned by the last ungrounded send.
-    const memoryContextBytes =
-      memoryEnabled && latestMemory !== undefined && latestMemory.context.enabled
-        ? latestMemory.context.text.length
-        : 0;
+  const appendVoiceTurn = useCallback(
+    async (messages: readonly AppendDesktopChatVoiceTurnMessage[]): Promise<void> => {
+      const chat = state.activeChat;
+      if (chat === undefined || messages.length === 0) {
+        return;
+      }
+      const projectPath = state.activeProject?.path ?? chat.projectPath;
+      try {
+        const result = await appendDesktopChatVoiceTurn({
+          chatId: chat.id,
+          projectPath,
+          messages,
+          memory: buildMemoryRequest(chat, state.activeProject ?? { path: projectPath }),
+        });
+        if (!mountedRef.current || activeChatIdRef.current !== chat.id) {
+          return;
+        }
+        notifyChatUpsert(result.chat);
+        if (result.memory !== undefined) setLatestMemory(result.memory);
+        setState((previous) => {
+          if (previous.activeChat?.id !== chat.id) {
+            return previous;
+          }
+          const existingIds = new Set(previous.messages.map((message) => message.id));
+          const appended = result.messages.filter((message) => !existingIds.has(message.id));
+          return {
+            ...previous,
+            activeChat: result.chat,
+            chats: sortChats([
+              result.chat,
+              ...previous.chats.filter((existing) => existing.id !== result.chat.id),
+            ]),
+            messages: [...previous.messages, ...appended],
+          };
+        });
+      } catch (caught) {
+        setError(errorMessage(caught));
+      }
+    },
+    [buildMemoryRequest, state.activeChat, state.activeProject],
+  );
 
-    return estimateConversationBudget({
-      modelContextWindow: capability.contextWindow,
-      modelMaxOutputTokens: capability.maxOutputTokens,
-      userDraftText: draft,
-      conversationHistory: history,
-      repoContextPackBytes,
-      knowledgeCapsuleBytes,
-      memoryContextBytes,
-    });
-  }, [
-    state.models,
-    state.selectedModel,
-    state.messages,
-    draft,
-    latestGrounded,
-    latestMemory,
-    memoryEnabled,
-  ]);
+  const runRealtimeGroundedTool = useCallback(
+    async (
+      input: RealtimeGroundedToolCallInput,
+      signal?: AbortSignal,
+    ): Promise<RealtimeGroundedToolOutput> => {
+      const chat = state.activeChat;
+      if (chat === undefined) {
+        throw new Error("No active chat is available for grounded voice.");
+      }
+      const project = state.activeProject ?? { path: chat.projectPath };
+      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
+      const result = await postRealtimeGroundedTool(
+        {
+          chatId: chat.id,
+          projectPath: project.path,
+          callId: input.callId,
+          query: input.query,
+          ...(input.userTranscript === undefined ? {} : { userTranscript: input.userTranscript }),
+          ...(modelId === undefined ? {} : { modelId }),
+          memory: buildMemoryRequest(chat, project),
+        },
+        signal,
+      );
+      if (!mountedRef.current || activeChatIdRef.current !== chat.id) {
+        return result.toolOutput;
+      }
+      notifyChatUpsert(result.chat);
+      setLatestGrounded(result.groundedAnswer);
+      if (result.memory !== undefined) setLatestMemory(result.memory);
+      setState((previous) => {
+        if (previous.activeChat?.id !== chat.id) {
+          return previous;
+        }
+        const existingIds = new Set(previous.messages.map((message) => message.id));
+        const appended = result.messages.filter((message) => !existingIds.has(message.id));
+        return {
+          ...previous,
+          activeChat: result.chat,
+          chats: sortChats([
+            result.chat,
+            ...previous.chats.filter((existing) => existing.id !== result.chat.id),
+          ]),
+          messages: [...previous.messages, ...appended],
+        };
+      });
+      return result.toolOutput;
+    },
+    [buildMemoryRequest, state.activeChat, state.activeProject, state.models, state.selectedModel],
+  );
 
   // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
   // mutation on the active Chat). Only the matched id is updated; the chat list keeps its
@@ -1612,6 +1625,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     openChat,
     addProject,
     sendMessage,
+    appendVoiceTurn,
+    runRealtimeGroundedTool,
     cancelSend,
     replaceChat,
     latestGrounded,
@@ -1621,7 +1636,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     removePendingAttachment,
     clearPendingAttachments,
     lastSentDocuments,
-    budget,
     memoryEnabled,
     setMemoryEnabled,
     memoryBudgetTokens,
@@ -1631,6 +1645,5 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     acceptMemoryCandidate,
     rejectMemoryCandidate,
     forgetMemoryAction,
-    clearHistory,
   };
 }

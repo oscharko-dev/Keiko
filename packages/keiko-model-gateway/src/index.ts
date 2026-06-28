@@ -32,6 +32,8 @@ export type {
   CompletionModelSelection,
   ModelKind,
   ModelProviderConfig,
+  ProviderEndpointStyle,
+  RealtimeAuthMode,
   NormalizedResponse,
   NormalizedToolCall,
   OutboundHttpEgressConfig,
@@ -41,6 +43,9 @@ export type {
   StreamEvent,
   ToolDefinition,
   UsageMetadata,
+  VoicePersona,
+  VoicePersonaVoice,
+  VoiceProviderAvailability,
 } from "./types.js";
 
 export {
@@ -51,15 +56,31 @@ export {
   INFILLING_ALIGNMENTS,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
+  isConfiguredVoiceProvider,
   isConversationEligibleModel,
+  isVoiceCapability,
+  describeVoiceProviderAvailability,
   listCapabilities,
+  listVoicePersonas,
   modelSupportsInfilling,
+  modelSupportsRealtimeVoice,
+  modelSupportsSpeechInput,
+  modelSupportsSpeechOutput,
   resolveCostClass,
+  resolveVoiceCapabilityFromCapabilities,
   selectCheapest,
   selectCompletionModelFromCapabilities,
+  VOICE_PERSONAS,
+  VOICE_PROVIDER_LOCALITIES,
   type CapabilityQuery,
   type CompletionSelectionOptions,
   type ConversationIneligibilityReason,
+  type VoiceCapabilityResolution,
+  type VoiceProfile,
+  type VoiceProviderLocality,
+  type VoiceResolutionOptions,
+  type VoiceTransportPosture,
+  type VoiceUnavailableReason,
 } from "./capabilities.js";
 
 export { CAPABILITY_DATA } from "./capabilities.data.js";
@@ -85,12 +106,55 @@ export {
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
+  resolveVoiceCapability,
   selectCompletionModel,
   selectConfiguredModel,
+  selectRealtimeVoiceModel,
+  selectSpeechOutputModel,
+  selectSpeechToTextModel,
+  selectVoicePersonaVoice,
   type ConfiguredCapabilityProvider,
   type ConfiguredCapabilitySource,
   type ModelSelectionQuery,
 } from "./model-selection.js";
+
+export {
+  requestSpeechToText,
+  type SpeechToTextErrorKind,
+  type SpeechToTextOutcome,
+  type SpeechToTextRequest,
+  type SpeechToTextSuccess,
+} from "./speech-to-text-adapter.js";
+
+export {
+  MAX_SPEECH_AUDIO_BYTES,
+  requestTextToSpeech,
+  requestTextToSpeechStream,
+  type SpeechResponseFormat,
+  type TextToSpeechErrorKind,
+  type TextToSpeechOutcome,
+  type TextToSpeechRequest,
+  type TextToSpeechStreamOutcome,
+  type TextToSpeechStreamSuccess,
+  type TextToSpeechSuccess,
+} from "./text-to-speech-adapter.js";
+
+export {
+  MAX_SDP_BYTES,
+  REALTIME_VOICES,
+  DEFAULT_REALTIME_VOICE,
+  isRealtimeVoice,
+  resolveRealtimeVoice,
+  requestRealtimeNegotiation,
+  type RealtimeVoice,
+  type RealtimeNegotiationErrorKind,
+  type RealtimeFunctionTool,
+  type RealtimeNegotiationOutcome,
+  type RealtimeNegotiationRequest,
+  type RealtimeNegotiationSuccess,
+  type RealtimeSessionTool,
+  type RealtimeSessionToolChoice,
+} from "./realtime-voice-adapter.js";
 
 export {
   assertCompatibleEmbeddingIdentity,

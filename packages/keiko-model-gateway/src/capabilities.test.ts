@@ -119,8 +119,11 @@ describe("findCapability over a registry seeded with a default chat capability",
 });
 
 describe("CONVERSATION_CAPABILITY_CONTRACT_VERSION", () => {
-  it("is pinned to 2 (bumped from the implicit v1 by Conversation Center fields)", () => {
-    expect(CONVERSATION_CAPABILITY_CONTRACT_VERSION).toBe(2);
+  it("is pinned to 3 (bumped by the #493 voice ModelKind structural addition)", () => {
+    // v1 implicit → v2 Conversation Center fields (#143) → v3 the "voice" ModelKind (#493), which
+    // is a structural change (a new literal discriminant member). Additive optional flags never
+    // bump it; only a new kind does.
+    expect(CONVERSATION_CAPABILITY_CONTRACT_VERSION).toBe(3);
   });
 });
 

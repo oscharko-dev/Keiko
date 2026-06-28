@@ -10,9 +10,12 @@ import { isAbsolute, resolve } from "node:path";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   parseLanguageServiceRequest,
+  type LanguageProviderDescriptor,
   type LanguageServiceErrorCode,
   type LanguageServiceLimits,
+  type LanguageServiceRequest,
 } from "@oscharko-dev/keiko-contracts";
+import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import { containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
@@ -21,6 +24,12 @@ import { FilesError, readJsonObject, resolveRoot, runFilesHandler } from "../fil
 import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
 import { describeLanguageCapabilities, runLanguageOperation } from "./languageService.js";
 import type { LanguageServiceOutcome } from "./languageService.js";
+import {
+  detectHostLanguageProviderDescriptors,
+  HOST_LANGUAGE_PROVIDER_SPECS,
+} from "./lsp/hostLanguageProviders.js";
+import { runHostLanguageOperation } from "./lsp/hostLanguageOperation.js";
+import type { LspSpawnFn } from "./lsp/lspNodeAdapter.js";
 
 // The overlay buffer may be up to the document-size cap; allow 64 KiB of JSON envelope on top.
 const MAX_LANGUAGE_BODY_BYTES = DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes + 64 * 1024;
@@ -30,6 +39,12 @@ export interface EditorLanguageRouteOptions {
   readonly limits?: LanguageServiceLimits | undefined;
   /** Test-only deterministic clock seam; production keeps the real clock. */
   readonly now?: (() => number) | undefined;
+  /** Test-only provider descriptor override seam for capabilities route coverage. */
+  readonly capabilityDescriptorOverrides?: readonly LanguageProviderDescriptor[] | undefined;
+  /** Test-only command-policy seam for host-provider detection. */
+  readonly hostLanguageCommandRules?: readonly CommandRule[] | undefined;
+  /** Test-only LSP spawn seam for host-provider operation coverage. */
+  readonly hostLanguageSpawn?: LspSpawnFn | undefined;
 }
 
 // Exported for reuse by the completion route (#1199), which maps the same deterministic
@@ -117,18 +132,102 @@ export async function handleEditorLanguage(
   return runFilesHandler(async () => {
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
     const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
-    const outcome = runLanguageOperation(request, {
-      fs: nodeWorkspaceFs,
-      realRoot: root.realRoot,
+    const outcome = await runEditorLanguageOperation(
+      request,
+      deps,
+      root.realRoot,
       overlayAbsolutePath,
-      signal: clientAbortSignal(ctx),
-      limits: options.limits,
-      now: options.now,
-    });
+      clientAbortSignal(ctx),
+      options,
+    );
     return outcomeToResult(outcome, deps);
   });
 }
 
 export function handleEditorLanguageCapabilities(): RouteResult {
   return { status: 200, body: describeLanguageCapabilities() };
+}
+
+function defaultHostLanguageCommandRules(): readonly CommandRule[] {
+  const names = new Set<string>();
+  for (const spec of HOST_LANGUAGE_PROVIDER_SPECS) {
+    names.add(spec.executableName);
+    for (const executable of spec.requiredExecutables) names.add(executable);
+  }
+  return [...names].sort().map((executable) => ({ executable }));
+}
+
+function workspaceForRoot(
+  realRoot: string,
+): Parameters<typeof detectHostLanguageProviderDescriptors>[0]["workspace"] {
+  return {
+    root: realRoot,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+export async function runEditorLanguageOperation(
+  request: LanguageServiceRequest,
+  deps: UiHandlerDeps,
+  realRoot: string,
+  overlayAbsolutePath: string,
+  signal: AbortSignal,
+  options: EditorLanguageRouteOptions = {},
+): Promise<LanguageServiceOutcome> {
+  const hostOutcome = await runHostLanguageOperation(request, {
+    workspace: workspaceForRoot(realRoot),
+    processEnv: deps.env,
+    commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
+    overlayAbsolutePath,
+    signal,
+    limits: options.limits,
+    now: options.now,
+    ...(options.hostLanguageSpawn !== undefined ? { spawn: options.hostLanguageSpawn } : {}),
+  });
+  if (hostOutcome !== undefined) {
+    return hostOutcome;
+  }
+  return runLanguageOperation(request, {
+    fs: nodeWorkspaceFs,
+    realRoot,
+    overlayAbsolutePath,
+    signal,
+    limits: options.limits,
+    now: options.now,
+  });
+}
+
+export async function handleEditorLanguageCapabilitiesForRoute(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  options: EditorLanguageRouteOptions = {},
+): Promise<RouteResult> {
+  const root = ctx.url.searchParams.get("root")?.trim() ?? "";
+  if (root.length === 0) {
+    return {
+      status: 200,
+      body: describeLanguageCapabilities(undefined, options.capabilityDescriptorOverrides),
+    };
+  }
+  return runFilesHandler(async () => {
+    const resolved = await resolveRoot(deps.store, root, deps.redactor);
+    const detected = detectHostLanguageProviderDescriptors({
+      workspace: workspaceForRoot(resolved.realRoot),
+      processEnv: deps.env,
+      commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
+    });
+    return {
+      status: 200,
+      body: describeLanguageCapabilities(undefined, [
+        ...detected,
+        ...(options.capabilityDescriptorOverrides ?? []),
+      ]),
+    };
+  });
 }

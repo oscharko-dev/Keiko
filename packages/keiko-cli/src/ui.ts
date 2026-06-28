@@ -303,7 +303,7 @@ function withDefaultLocalRuntimeStateEnv(
 const REQUEST_TIMEOUT_MS = 30_000;
 const HEADERS_TIMEOUT_MS = 10_000;
 
-export function applyServerTimeouts(server: Server): void {
+function applyServerTimeouts(server: Server): void {
   server.requestTimeout = REQUEST_TIMEOUT_MS;
   server.headersTimeout = HEADERS_TIMEOUT_MS;
 }
@@ -360,7 +360,7 @@ function alreadyFlagged(env: EnvSource, execArgv: readonly string[]): boolean {
 
 // Re-spawns the current process with --experimental-sqlite prepended, inheriting stdio. Returns
 // the exit code the child terminated with so the parent can propagate it.
-export async function reExecWithSqliteFlag(
+async function reExecWithSqliteFlag(
   _env: EnvSource,
   spawnFn: SpawnFn,
   cwd: string,

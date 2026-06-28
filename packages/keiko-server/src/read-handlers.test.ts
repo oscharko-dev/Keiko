@@ -5,10 +5,13 @@ import { join } from "node:path";
 import {
   handleConfig,
   handleModels,
+  handleVoiceCapability,
   handleWorkflows,
   handleWorkspace,
   handleEvidenceList,
   handleEvidenceDetail,
+  isVoiceDictationCapable,
+  isVoiceRealtimeCapable,
 } from "./read-handlers.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -211,6 +214,183 @@ describe("GET /api/models", () => {
     const result = handleModels(ctx("/api/models"), depsWith({}));
     const body = result.body as { models: unknown[] };
     expect(body.models).toEqual([]);
+  });
+});
+
+// A configured STT-only voice provider shaped like the existing keiko-stt deployment (Issue #493).
+const VOICE_STT_CONFIG: GatewayConfig = {
+  providers: [
+    {
+      modelId: "keiko-stt",
+      baseUrl: "https://keiko-stt.example.com",
+      apiKey: "voice-secret-token-1234567890",
+      timeoutMs: 1000,
+      maxRetries: 2,
+      retryBaseDelayMs: 10,
+    },
+  ],
+  circuitBreaker: { failureThreshold: 5, cooldownMs: 1000, halfOpenProbes: 1 },
+  capabilities: [
+    {
+      id: "keiko-stt",
+      kind: "voice",
+      contextWindow: 0,
+      maxOutputTokens: 0,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      supportsSpeechInput: true,
+      voiceProviderLocality: "azure-foundry",
+      workflowEligible: false,
+      costClass: "low",
+      latencyClass: "fast",
+      throughputHint: "azure foundry stt",
+      preferredUseCases: ["Dictation"],
+      knownLimitations: [],
+    },
+  ],
+};
+
+describe("GET /api/voice/capability", () => {
+  it("reports unavailable (no-voice-provider) when no config is resolved (AC1)", () => {
+    const result = handleVoiceCapability(ctx("/api/voice/capability"), depsWith({}));
+    expect(result.body).toEqual({
+      voice: {
+        available: false,
+        profile: "none",
+        capabilities: { speechToText: false, speechOutput: false, realtimeVoice: false },
+        transport: { websocketControl: false, webrtcMedia: false },
+        // Issue #1557, ADR-0094 D2: the resolution always carries availableVoicePersonas (empty when
+        // unavailable). The unavailable resolution offers no personas.
+        availableVoicePersonas: [],
+        reason: "no-voice-provider",
+      },
+    });
+  });
+
+  it("includes availableVoicePersonas (content-free) on every resolution (Issue #1557, AC3)", () => {
+    const result = handleVoiceCapability(
+      ctx("/api/voice/capability"),
+      depsWith({ config: VOICE_STT_CONFIG, configPresent: true }),
+    );
+    const body = result.body as { voice: { availableVoicePersonas: readonly string[] } };
+    // STT-only deployment: personas are OUTPUT voices, so none are available.
+    expect(body.voice.availableVoicePersonas).toEqual([]);
+  });
+
+  it("reports dictation (speech-to-text) when keiko-stt is configured (AC2/AC6)", () => {
+    const result = handleVoiceCapability(
+      ctx("/api/voice/capability"),
+      depsWith({ config: VOICE_STT_CONFIG, configPresent: true }),
+    );
+    const body = result.body as { voice: { available: boolean; profile: string } };
+    expect(body.voice.available).toBe(true);
+    expect(body.voice.profile).toBe("speech-to-text");
+  });
+
+  it("never returns the provider base URL, credential, or model id (AC4/AC5)", () => {
+    const result = handleVoiceCapability(
+      ctx("/api/voice/capability"),
+      depsWith({ config: VOICE_STT_CONFIG, configPresent: true }),
+    );
+    const json = JSON.stringify(result.body);
+    expect(json).not.toContain("voice-secret-token-1234567890");
+    expect(json).not.toContain("https://keiko-stt.example.com");
+    expect(json).not.toContain("keiko-stt");
+    expect(json).not.toContain("apiKey");
+    expect(json).not.toContain("baseUrl");
+  });
+
+  it("reports policy-disabled when KEIKO_VOICE_DISABLED is set, even with a provider", () => {
+    const result = handleVoiceCapability(
+      ctx("/api/voice/capability"),
+      depsWith({
+        config: VOICE_STT_CONFIG,
+        configPresent: true,
+        env: { KEIKO_VOICE_DISABLED: "1" },
+      }),
+    );
+    const body = result.body as { voice: { available: boolean; reason: string } };
+    expect(body.voice.available).toBe(false);
+    expect(body.voice.reason).toBe("policy-disabled");
+  });
+});
+
+describe("isVoiceDictationCapable (Issue #495 — Permissions-Policy microphone scoping)", () => {
+  it("is false when no config is resolved", () => {
+    expect(isVoiceDictationCapable(depsWith({}))).toBe(false);
+  });
+
+  it("is false when only a chat provider is configured (no speech-to-text)", () => {
+    expect(isVoiceDictationCapable(depsWith({ config: SAMPLE_CONFIG, configPresent: true }))).toBe(
+      false,
+    );
+  });
+
+  it("is true when a speech-to-text voice provider is configured", () => {
+    expect(
+      isVoiceDictationCapable(depsWith({ config: VOICE_STT_CONFIG, configPresent: true })),
+    ).toBe(true);
+  });
+
+  it("is false when voice is disabled by policy, even with a voice provider", () => {
+    expect(
+      isVoiceDictationCapable(
+        depsWith({
+          config: VOICE_STT_CONFIG,
+          configPresent: true,
+          env: { KEIKO_VOICE_DISABLED: "1" },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+// A full-realtime voice provider (advertises realtime voice), the only profile that may open the
+// WebSocket control plane (Issue #497).
+const VOICE_REALTIME_CONFIG: GatewayConfig = {
+  ...VOICE_STT_CONFIG,
+  capabilities: (VOICE_STT_CONFIG.capabilities ?? []).map((capability) => ({
+    ...capability,
+    supportsRealtimeVoice: true,
+  })),
+};
+
+describe("isVoiceRealtimeCapable (Issue #497 — WebSocket control-plane + microphone gate)", () => {
+  it("is false when no config is resolved", () => {
+    expect(isVoiceRealtimeCapable(depsWith({}))).toBe(false);
+  });
+
+  it("is false for a chat-only deployment", () => {
+    expect(isVoiceRealtimeCapable(depsWith({ config: SAMPLE_CONFIG, configPresent: true }))).toBe(
+      false,
+    );
+  });
+
+  it("is false for an STT-only deployment (dictation, not full realtime)", () => {
+    expect(
+      isVoiceRealtimeCapable(depsWith({ config: VOICE_STT_CONFIG, configPresent: true })),
+    ).toBe(false);
+  });
+
+  it("is true for a full-realtime voice deployment", () => {
+    expect(
+      isVoiceRealtimeCapable(depsWith({ config: VOICE_REALTIME_CONFIG, configPresent: true })),
+    ).toBe(true);
+  });
+
+  it("is false when voice is disabled by policy, even when realtime-capable", () => {
+    expect(
+      isVoiceRealtimeCapable(
+        depsWith({
+          config: VOICE_REALTIME_CONFIG,
+          configPresent: true,
+          env: { KEIKO_VOICE_DISABLED: "1" },
+        }),
+      ),
+    ).toBe(false);
   });
 });
 

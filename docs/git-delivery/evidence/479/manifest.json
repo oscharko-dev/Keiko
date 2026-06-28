@@ -1,0 +1,89 @@
+{
+  "issue": "#479",
+  "epic": "#470",
+  "generatedAt": "2026-06-26T00:00:00.000Z",
+  "sourceBranch": "codex/issue-479-governed-git-proof",
+  "baseBranch": "feat/keiko-establish-governed-end-to-end-git-delivery",
+  "deliverables": {
+    "verification-matrix": "complete",
+    "operator-runbook": "complete",
+    "policy-pack-guidance": "complete",
+    "closure-evidence": "complete",
+    "final-closeout-summary": "complete"
+  },
+  "acceptanceCriteria": {
+    "full-path-evidence": "satisfied",
+    "rollout-support-readiness": "satisfied",
+    "operator-guidance": "satisfied",
+    "residual-limitations": "satisfied",
+    "terminal-approval-audit-protected-branch-proof": "satisfied"
+  },
+  "verificationCommands": [
+    "npm run check:git-delivery-evidence",
+    "npm run typecheck",
+    "npm run lint",
+    "npm run arch:check",
+    "npm run arch:check:negative",
+    "npm test",
+    "npm run test:e2e:git-delivery-475",
+    "npm run test:e2e:git-publish-476",
+    "npm run test:e2e:pr-command-center-477",
+    "npm run test:e2e:merge-governance-478"
+  ],
+  "mergedImplementationPullRequests": [1503, 1506, 1509, 1513, 1517, 1523, 1525, 1527, 1531, 1534],
+  "evidenceSources": {
+    "documents": [
+      "docs/git-delivery/README.md",
+      "docs/git-delivery/verification-matrix.md",
+      "docs/git-delivery/operator-runbook.md",
+      "docs/git-delivery/policy-pack-guidance.md",
+      "docs/git-delivery/epic-470-closeout.md",
+      "docs/git-delivery/evidence/479/README.md"
+    ],
+    "implementationDocs": [
+      "docs/git-delivery/governed-git-contracts.md",
+      "docs/git-delivery/governed-git-execution-kernel.md",
+      "docs/git-delivery/governed-git-approval-surface.md",
+      "docs/git-delivery/governed-git-evidence-ledger.md",
+      "docs/git-delivery/governed-local-git-flows.md",
+      "docs/git-delivery/governed-remote-publish.md",
+      "docs/git-delivery/governed-github-pull-request.md",
+      "docs/git-delivery/governed-merge.md"
+    ],
+    "tests": [
+      "packages/keiko-tools/src/terminal-policy.test.ts",
+      "packages/keiko-tools/src/git-mutation-orchestrator.test.ts",
+      "packages/keiko-tools/src/git-mutation-adapter.test.ts",
+      "packages/keiko-tools/src/git-mutation-preflight.test.ts",
+      "packages/keiko-tools/src/git-mutation-evidence.test.ts",
+      "packages/keiko-tools/src/git-publish-gateway.test.ts",
+      "packages/keiko-tools/src/git-pr-gateway.test.ts",
+      "packages/keiko-tools/src/git-merge-gateway.test.ts",
+      "packages/keiko-server/src/gitDelivery/commitRoutes.test.ts",
+      "packages/keiko-server/src/gitDelivery/pushRoutes.test.ts",
+      "packages/keiko-server/src/gitDelivery/prRoutes.test.ts",
+      "packages/keiko-server/src/gitDelivery/mergeRoutes.test.ts",
+      "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedGitFlowCard.test.tsx",
+      "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedPullRequestCard.test.tsx",
+      "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedMergeCard.test.tsx"
+    ]
+  },
+  "browserEvidence": [
+    "docs/git-delivery/evidence/475/manifest.json",
+    "docs/git-delivery/evidence/476/manifest.json",
+    "docs/git-delivery/evidence/477/manifest.json",
+    "docs/git-delivery/evidence/478/manifest.json"
+  ],
+  "residualLimitations": [
+    "GitHub is the only implemented remote provider in this epic.",
+    "Browser evidence is deterministic coordinator evidence with intercepted governed routes, not live provider proof.",
+    "Force push remains blocked by default and has no governed feature path in this epic.",
+    "Commit message-policy rejection occurs before kernel evidence append because no mutation is attempted.",
+    "Evidence append is best-effort and must be monitored before regulated rollout.",
+    "gh installation and authentication are deployment prerequisites for GitHub PR and merge operations."
+  ],
+  "governanceNotes": [
+    "Issue #479 closure artifacts are complete once this manifest, the matrix, runbook, policy guidance, and closeout summary are merged and verified.",
+    "Epic #470 closure still requires reconciliation of any stale child issue/project checklist state before the epic itself is closed."
+  ]
+}

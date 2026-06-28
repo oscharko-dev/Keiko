@@ -63,6 +63,80 @@ describe("parseGatewayConfig", () => {
     expect(config.circuitBreaker.failureThreshold).toBe(5);
   });
 
+  it("parses an explicit Azure OpenAI deployment endpoint style and API version", () => {
+    const config = parseGatewayConfig(
+      rawWithProvider((p) => ({
+        ...p,
+        baseUrl: "https://voice.example.cognitiveservices.azure.com",
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-03-01-preview",
+      })),
+    );
+    expect(config.providers[0]?.endpointStyle).toBe("azure-openai-deployment");
+    expect(config.providers[0]?.apiVersion).toBe("2025-03-01-preview");
+  });
+
+  it("accepts per-model environment overrides for endpoint style and API version", () => {
+    const config = parseGatewayConfig(validRaw(), {
+      KEIKO_MODEL_EXAMPLE_CHAT_MODEL_ENDPOINT_STYLE: "azure-openai-deployment",
+      KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_VERSION: "2025-03-01-preview",
+    });
+    expect(config.providers[0]?.endpointStyle).toBe("azure-openai-deployment");
+    expect(config.providers[0]?.apiVersion).toBe("2025-03-01-preview");
+  });
+
+  it("parses realtime auth mode from config and per-model environment", () => {
+    const fromConfig = parseGatewayConfig(
+      rawWithProvider((p) => ({ ...p, realtimeAuthMode: "ephemeral-session" })),
+    );
+    expect(fromConfig.providers[0]?.realtimeAuthMode).toBe("ephemeral-session");
+
+    const fromEnv = parseGatewayConfig(validRaw(), {
+      KEIKO_MODEL_EXAMPLE_CHAT_MODEL_REALTIME_AUTH_MODE: "ephemeral-session",
+    });
+    expect(fromEnv.providers[0]?.realtimeAuthMode).toBe("ephemeral-session");
+  });
+
+  it("rejects an unknown realtime auth mode", () => {
+    expect(() =>
+      parseGatewayConfig(rawWithProvider((p) => ({ ...p, realtimeAuthMode: "magic-token" }))),
+    ).toThrow(/realtimeAuthMode must be one of/u);
+  });
+
+  it("rejects endpoint API version without the Azure deployment endpoint style", () => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({
+          ...p,
+          apiVersion: "2025-03-01-preview",
+        })),
+      ),
+    ).toThrow(/apiVersion requires providers\[0\]\.endpointStyle/u);
+  });
+
+  it("rejects Azure deployment endpoint style without an API version", () => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({
+          ...p,
+          endpointStyle: "azure-openai-deployment",
+        })),
+      ),
+    ).toThrow(/apiVersion is required/u);
+  });
+
+  it("rejects malformed provider API versions", () => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({
+          ...p,
+          endpointStyle: "azure-openai-deployment",
+          apiVersion: "latest",
+        })),
+      ),
+    ).toThrow(/apiVersion must be YYYY-MM-DD/u);
+  });
+
   it("parses an optional Figma access token from local config", () => {
     const config = parseGatewayConfig({
       ...(validRaw() as Record<string, unknown>),
@@ -713,13 +787,23 @@ describe("parseGatewayConfig", () => {
 
 describe("toSafeObject", () => {
   it("omits credential and endpoint fields entirely", () => {
-    const config = parseGatewayConfig(validRaw());
+    const config = parseGatewayConfig(
+      rawWithProvider((p) => ({
+        ...p,
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-03-01-preview",
+        realtimeAuthMode: "ephemeral-session",
+      })),
+    );
     const safe = toSafeObject(config);
     const serialised = JSON.stringify(safe);
     expect(serialised).not.toContain("example-test-token-1234567890");
     expect(serialised).not.toContain("apiKey");
     expect(serialised).not.toContain("https://host.example/v1");
     expect(serialised).not.toContain("baseUrl");
+    expect(serialised).not.toContain("azure-openai-deployment");
+    expect(serialised).not.toContain("2025-03-01-preview");
+    expect(serialised).not.toContain("ephemeral-session");
   });
 
   it("omits enterprise egress proxy and CA topology", () => {
@@ -780,6 +864,29 @@ describe("toSafeObject", () => {
     });
     expect(JSON.stringify(safe)).not.toContain("example-test-token-1234567890");
     expect(JSON.stringify(safe)).not.toContain("https://host.example/v1");
+  });
+
+  // Issue #1557, ADR-0094 D2: provider voice ids are provider-sensitive and live on the credential
+  // tier (`ModelProviderConfig.voiceProfiles`). They must never reach the browser-facing safe config,
+  // while the content-free persona enums (`supportedVoicePersonas`) must survive. This pins the
+  // structural leak-proofing (the allowlist drops voiceProfiles by omission).
+  it("drops the credential-tier voiceProfiles but preserves content-free persona enums", () => {
+    const config = parseGatewayConfig(
+      ttsProviderRaw("keiko-tts", [
+        { persona: "male", voiceId: "secret-provider-voice-male-001" },
+        { persona: "female", voiceId: "secret-provider-voice-female-001" },
+      ]),
+    );
+    const safe = toSafeObject(config);
+    const serialised = JSON.stringify(safe);
+    expect(serialised).not.toContain("secret-provider-voice-male-001");
+    expect(serialised).not.toContain("secret-provider-voice-female-001");
+    expect(serialised).not.toContain("voiceProfiles");
+    expect(serialised).not.toContain("voiceId");
+    expect(safe.capabilities?.find((c) => c.id === "keiko-tts")?.supportedVoicePersonas).toEqual([
+      "male",
+      "female",
+    ]);
   });
 });
 
@@ -1098,6 +1205,454 @@ describe("parseModelCapability", () => {
       expect(message).toContain("capability.apiKey");
       expect(message).not.toContain(credentialShaped);
     }
+  });
+});
+
+// ─── Voice capability parsing (Issue #493, ADR-0058 D5/D7) ───────────────────────
+// The voice ModelKind plus its additive sub-capability flags and provider locality, with the two
+// voice invariants enforced identically by the strict and inline parsers: voice fields require
+// kind "voice"; a voice capability must advertise ≥1 sub-capability and declare a locality.
+
+function validVoiceCapability(): Record<string, unknown> {
+  return {
+    id: "keiko-stt",
+    kind: "voice",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    supportsSpeechInput: true,
+    voiceProviderLocality: "azure-foundry",
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "runtime-configured voice endpoint",
+    preferredUseCases: ["Dictation"],
+    knownLimitations: ["Validate against the target endpoint"],
+  };
+}
+
+describe("parseModelCapability — voice capability", () => {
+  it("accepts and round-trips an STT-only voice capability (AC2/AC6)", () => {
+    const raw = validVoiceCapability();
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed).toEqual(raw);
+    expect(parsed.kind).toBe("voice");
+    expect(parsed.supportsSpeechInput).toBe(true);
+    expect(parsed.voiceProviderLocality).toBe("azure-foundry");
+  });
+
+  it("preserves only declared voice flags (round-trips exactly, no false-defaulting)", () => {
+    const raw = validVoiceCapability();
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.supportsSpeechOutput).toBeUndefined();
+    expect(parsed.supportsRealtimeVoice).toBeUndefined();
+  });
+
+  it("rejects a voice capability that advertises no sub-capability (fail-closed)", () => {
+    const raw = withoutKey(validVoiceCapability(), "supportsSpeechInput");
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+      /must advertise at least one of/,
+    );
+  });
+
+  it("rejects a voice capability missing voiceProviderLocality", () => {
+    const raw = withoutKey(validVoiceCapability(), "voiceProviderLocality");
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+      /must declare voiceProviderLocality/,
+    );
+  });
+
+  it("rejects an unknown voiceProviderLocality value", () => {
+    const raw = { ...validVoiceCapability(), voiceProviderLocality: "on-prem" };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/voiceProviderLocality/);
+  });
+
+  it("rejects voice fields on a non-voice kind (no Azure hardcode bleed into chat)", () => {
+    const raw = { ...validCapability(), supportsSpeechInput: true };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+      /voice capability fields require/,
+    );
+  });
+
+  it("rejects voiceProviderLocality on a non-voice kind", () => {
+    const raw = { ...validCapability(), voiceProviderLocality: "azure-foundry" };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+      /voice capability fields require/,
+    );
+  });
+
+  it("accepts a realtime voice capability with both speech directions", () => {
+    const raw = {
+      ...validVoiceCapability(),
+      id: "realtime-voice",
+      supportsSpeechInput: true,
+      supportsSpeechOutput: true,
+      supportsRealtimeVoice: true,
+      voiceProviderLocality: "customer-hosted",
+    };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.supportsRealtimeVoice).toBe(true);
+    expect(parsed.voiceProviderLocality).toBe("customer-hosted");
+  });
+});
+
+describe("parseGatewayConfig — inline voice provider (AC6, no Azure hardcode)", () => {
+  it("registers a keiko-stt provider with an inline STT-only voice capability", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "keiko-stt",
+      capability: {
+        kind: "voice",
+        supportsSpeechInput: true,
+        voiceProviderLocality: "azure-foundry",
+        costClass: "low",
+        latencyClass: "fast",
+        throughputHint: "azure foundry stt deployment",
+        preferredUseCases: ["Dictation"],
+        knownLimitations: ["Validate against the target endpoint"],
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "keiko-stt");
+    expect(cap?.kind).toBe("voice");
+    expect(cap?.supportsSpeechInput).toBe(true);
+    expect(cap?.voiceProviderLocality).toBe("azure-foundry");
+  });
+
+  it("rejects an inline voice capability with no advertised sub-capability", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "empty-voice",
+      capability: { kind: "voice", voiceProviderLocality: "local-only" },
+    }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/must advertise at least one of/);
+  });
+});
+
+// ─── Voice persona profiles (Issue #1557, Epic #1556, ADR-0094 D2) ───────────────
+// The credential-tier persona → voice-id mapping (`voiceProfiles`) and the derived content-free
+// `supportedVoicePersonas` on the matching capability. AC2 is proven by representing all five
+// deployment classes by modelId with no hard-coded deployment names.
+
+// An inline speech-output (TTS) voice capability body (no id — taken from the provider modelId).
+function ttsCapabilityBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    kind: "voice",
+    supportsSpeechOutput: true,
+    voiceProviderLocality: "customer-hosted",
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "runtime-configured tts deployment",
+    preferredUseCases: ["Speech output"],
+    knownLimitations: ["Validate against the target endpoint"],
+    ...overrides,
+  };
+}
+
+function ttsProviderRaw(
+  modelId: string,
+  voiceProfiles: readonly unknown[],
+  capabilityOverrides: Record<string, unknown> = {},
+): unknown {
+  return rawWithProvider((p) => ({
+    ...p,
+    modelId,
+    capability: ttsCapabilityBody(capabilityOverrides),
+    voiceProfiles,
+  }));
+}
+
+describe("parseGatewayConfig — voiceProfiles parsing (Issue #1557)", () => {
+  it("parses voiceProfiles and derives supportedVoicePersonas in canonical order", () => {
+    const config = parseGatewayConfig(
+      ttsProviderRaw("keiko-tts", [
+        { persona: "neutral", voiceId: "voice-neutral-01" },
+        { persona: "male", voiceId: "voice-male-01" },
+      ]),
+    );
+    const provider = config.providers.find((p) => p.modelId === "keiko-tts");
+    expect(provider?.voiceProfiles).toEqual([
+      { persona: "neutral", voiceId: "voice-neutral-01" },
+      { persona: "male", voiceId: "voice-male-01" },
+    ]);
+    const cap = config.capabilities?.find((c) => c.id === "keiko-tts");
+    expect(cap?.supportedVoicePersonas).toEqual(["male", "neutral"]);
+  });
+
+  it("trims voiceId whitespace and preserves the trimmed value", () => {
+    const config = parseGatewayConfig(
+      ttsProviderRaw("keiko-tts", [{ persona: "female", voiceId: "  voice-female-01  " }]),
+    );
+    const provider = config.providers.find((p) => p.modelId === "keiko-tts");
+    expect(provider?.voiceProfiles).toEqual([{ persona: "female", voiceId: "voice-female-01" }]);
+  });
+
+  it("omits voiceProfiles entirely when the key is absent (present-only round-trip)", () => {
+    const config = parseGatewayConfig(
+      rawWithProvider((p) => ({ ...p, modelId: "keiko-tts", capability: ttsCapabilityBody() })),
+    );
+    const provider = config.providers.find((p) => p.modelId === "keiko-tts");
+    expect(Object.hasOwn(provider ?? {}, "voiceProfiles")).toBe(false);
+    const cap = config.capabilities?.find((c) => c.id === "keiko-tts");
+    expect(cap?.supportedVoicePersonas).toBeUndefined();
+  });
+
+  it("rejects an unknown persona value", () => {
+    expect(() =>
+      parseGatewayConfig(ttsProviderRaw("keiko-tts", [{ persona: "robot", voiceId: "v1" }])),
+    ).toThrow(/persona must be one of/);
+  });
+
+  it("rejects an empty (or whitespace-only) voiceId", () => {
+    expect(() =>
+      parseGatewayConfig(ttsProviderRaw("keiko-tts", [{ persona: "male", voiceId: "" }])),
+    ).toThrow(/voiceId must be a non-empty string/);
+    expect(() =>
+      parseGatewayConfig(ttsProviderRaw("keiko-tts", [{ persona: "male", voiceId: "   " }])),
+    ).toThrow(/voiceId must be a non-empty string/);
+  });
+
+  it("rejects a non-object voiceProfiles entry", () => {
+    expect(() => parseGatewayConfig(ttsProviderRaw("keiko-tts", ["not-an-object"]))).toThrow(
+      /must be an object/,
+    );
+  });
+
+  it("rejects a non-array voiceProfiles", () => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({
+          ...p,
+          modelId: "keiko-tts",
+          capability: ttsCapabilityBody(),
+          voiceProfiles: { persona: "male", voiceId: "v1" },
+        })),
+      ),
+    ).toThrow(/voiceProfiles must be an array/);
+  });
+
+  it("rejects a duplicate persona", () => {
+    expect(() =>
+      parseGatewayConfig(
+        ttsProviderRaw("keiko-tts", [
+          { persona: "male", voiceId: "v1" },
+          { persona: "male", voiceId: "v2" },
+        ]),
+      ),
+    ).toThrow(/declares persona "male" more than once/);
+  });
+
+  it("rejects voiceProfiles on an STT-only provider (personas are output voices)", () => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({
+          ...p,
+          modelId: "keiko-stt",
+          capability: {
+            kind: "voice",
+            supportsSpeechInput: true,
+            voiceProviderLocality: "azure-foundry",
+          },
+          voiceProfiles: [{ persona: "male", voiceId: "v1" }],
+        })),
+      ),
+    ).toThrow(/voiceProfiles requires a kind:"voice" capability that advertises/);
+  });
+
+  it("rejects voiceProfiles on a non-voice (chat) provider", () => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({
+          ...p,
+          modelId: "chat-model",
+          capability: { kind: "chat", contextWindow: 8_192 },
+          voiceProfiles: [{ persona: "male", voiceId: "v1" }],
+        })),
+      ),
+    ).toThrow(/voiceProfiles requires a kind:"voice" capability that advertises/);
+  });
+
+  it("rejects voiceProfiles on a provider with NO declared capability", () => {
+    expect(() =>
+      parseGatewayConfig(
+        rawWithProvider((p) => ({
+          ...p,
+          modelId: "no-capability",
+          voiceProfiles: [{ persona: "male", voiceId: "v1" }],
+        })),
+      ),
+    ).toThrow(/voiceProfiles requires a kind:"voice" capability that advertises/);
+  });
+
+  it("accepts voiceProfiles on a realtime provider (realtime counts as output)", () => {
+    const config = parseGatewayConfig(
+      ttsProviderRaw("keiko-realtime", [{ persona: "neutral", voiceId: "voice-neutral-01" }], {
+        supportsSpeechOutput: false,
+        supportsSpeechInput: true,
+        supportsRealtimeVoice: true,
+      }),
+    );
+    const cap = config.capabilities?.find((c) => c.id === "keiko-realtime");
+    expect(cap?.supportedVoicePersonas).toEqual(["neutral"]);
+  });
+
+  // HAZARD-1: derivation must target the MERGED (effective) capability. A top-level `capabilities`
+  // entry overrides the inline one for the same modelId; personas attach to that override.
+  it("derives personas onto the inline capability when there is no override", () => {
+    const config = parseGatewayConfig(
+      ttsProviderRaw("keiko-tts", [{ persona: "male", voiceId: "v-male" }]),
+    );
+    const cap = config.capabilities?.find((c) => c.id === "keiko-tts");
+    expect(cap?.supportedVoicePersonas).toEqual(["male"]);
+    // The override path is exercised by the next test.
+  });
+
+  it("derives personas onto the TOP-LEVEL override capability (merged, not inline) [HAZARD-1]", () => {
+    const base = ttsProviderRaw("keiko-tts", [{ persona: "female", voiceId: "v-female" }]);
+    const raw = {
+      ...(base as Record<string, unknown>),
+      // A top-level capabilities entry for the SAME id overrides the inline one. It is the effective
+      // capability the personas must attach to. It still advertises speech output (else rejected).
+      capabilities: [
+        {
+          id: "keiko-tts",
+          kind: "voice",
+          contextWindow: 0,
+          maxOutputTokens: 0,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          supportsSpeechOutput: true,
+          voiceProviderLocality: "local-only",
+          workflowEligible: false,
+          costClass: "high",
+          latencyClass: "slow",
+          throughputHint: "override tts",
+          preferredUseCases: ["Speech output"],
+          knownLimitations: ["overridden"],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "keiko-tts");
+    // The override's distinctive fields prove it is the merged capability, and personas attached.
+    expect(cap?.voiceProviderLocality).toBe("local-only");
+    expect(cap?.costClass).toBe("high");
+    expect(cap?.supportedVoicePersonas).toEqual(["female"]);
+  });
+
+  it("rejects voiceProfiles when the TOP-LEVEL override drops speech output [HAZARD-1]", () => {
+    const base = ttsProviderRaw("keiko-tts", [{ persona: "female", voiceId: "v-female" }]);
+    const raw = {
+      ...(base as Record<string, unknown>),
+      // Override turns the voice capability into STT-only — the personas now have no output surface,
+      // so derivation against the MERGED capability must reject (proving it is not the inline one).
+      capabilities: [
+        {
+          id: "keiko-tts",
+          kind: "voice",
+          contextWindow: 0,
+          maxOutputTokens: 0,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          supportsSpeechInput: true,
+          voiceProviderLocality: "local-only",
+          workflowEligible: false,
+          costClass: "low",
+          latencyClass: "fast",
+          throughputHint: "override stt",
+          preferredUseCases: ["Dictation"],
+          knownLimitations: ["overridden"],
+        },
+      ],
+    };
+    expect(() => parseGatewayConfig(raw)).toThrow(
+      /voiceProfiles requires a kind:"voice" capability that advertises/,
+    );
+  });
+
+  // AC2: all five deployment classes representable by modelId + flags + voiceProfiles, no hard-coded
+  // deployment names anywhere in the parser.
+  it("represents all five deployment classes by modelId (AC2, no hard-coding)", () => {
+    const raw = {
+      providers: [
+        {
+          ...validProvider(),
+          modelId: "keiko-stt",
+          capability: {
+            kind: "voice",
+            supportsSpeechInput: true,
+            voiceProviderLocality: "azure-foundry",
+          },
+        },
+        {
+          ...validProvider(),
+          modelId: "keiko-tts",
+          capability: ttsCapabilityBody(),
+          voiceProfiles: [{ persona: "neutral", voiceId: "tts-neutral" }],
+        },
+        {
+          ...validProvider(),
+          modelId: "keiko-audio-output",
+          capability: ttsCapabilityBody({ voiceProviderLocality: "local-only" }),
+          voiceProfiles: [{ persona: "female", voiceId: "audio-female" }],
+        },
+        {
+          ...validProvider(),
+          modelId: "keiko-realtime",
+          capability: {
+            kind: "voice",
+            supportsRealtimeVoice: true,
+            voiceProviderLocality: "customer-hosted",
+          },
+          voiceProfiles: [{ persona: "male", voiceId: "rt-male" }],
+        },
+        {
+          ...validProvider(),
+          modelId: "keiko-realtime-stt",
+          capability: {
+            kind: "voice",
+            supportsSpeechInput: true,
+            supportsRealtimeVoice: true,
+            voiceProviderLocality: "customer-hosted",
+          },
+          voiceProfiles: [{ persona: "neutral", voiceId: "rtstt-neutral" }],
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+    };
+    const config = parseGatewayConfig(raw);
+    const personasOf = (id: string): readonly string[] | undefined =>
+      config.capabilities?.find((c) => c.id === id)?.supportedVoicePersonas;
+    expect(config.providers.map((p) => p.modelId)).toEqual([
+      "keiko-stt",
+      "keiko-tts",
+      "keiko-audio-output",
+      "keiko-realtime",
+      "keiko-realtime-stt",
+    ]);
+    // STT-only carries no personas; the four output-capable ones do.
+    expect(personasOf("keiko-stt")).toBeUndefined();
+    expect(personasOf("keiko-tts")).toEqual(["neutral"]);
+    expect(personasOf("keiko-audio-output")).toEqual(["female"]);
+    expect(personasOf("keiko-realtime")).toEqual(["male"]);
+    expect(personasOf("keiko-realtime-stt")).toEqual(["neutral"]);
+  });
+
+  it("rejects supportedVoicePersonas as a raw INPUT key on the strict capability parser", () => {
+    const raw = { ...validVoiceCapability(), supportedVoicePersonas: ["male"] };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+      /supportedVoicePersonas is not a recognised capability field/,
+    );
   });
 });
 

@@ -7,7 +7,7 @@ npm run test:e2e:editor-fidelity-1295
 ```
 
 The harness starts `dist/cli/index.js ui` through
-`playwright.issue-1295-editor-fidelity.config.ts`, opens a synthetic temp workspace in the real
+`tests/e2e/config/playwright.issue-1295-editor-fidelity.config.ts`, opens a synthetic temp workspace in the real
 desktop shell, and records live Monaco editor evidence under this fixed directory.
 
 Committed artifacts:
@@ -20,10 +20,12 @@ Committed artifacts:
 - `dark-find.png`, `light-find.png`, `high-contrast-find.png` — Monaco find widget with live match
   highlighting.
 - `dark-split-markdown.png`, `light-split-markdown.png`, `high-contrast-split-markdown.png` — split
-  pane with markdown source open through the embedded project tree.
+  pane with markdown source open through the embedded project tree, with the split-resize hover
+  affordance captured in the frame.
 - `dark-agent-ghost.png`, `light-agent-ghost.png`, `high-contrast-agent-ghost.png` — implemented
   agent-adjacent editor state via inline ghost text.
 - `dark-resize.png` — split-pane resize behavior.
+- `dark-compact-overflow.png` — compact hidden-tab chooser with all overflowed documents reachable.
 - `dark-large-buffer.png` — large-buffer degraded mode with completions disabled.
 - `reduced-motion-focus.png` — keyboard/focus evidence under reduced motion.
 

@@ -18,12 +18,6 @@ import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "
 import { Toggle } from "../../components/desktop/widgets/shared/Toggle";
 import { formatError } from "./format-error";
 import { MemoryFilters, type MemoryFilterState, SCOPE_LABELS, TYPE_LABELS } from "./MemoryFilters";
-import type {
-  MemoryScopeKind,
-  MemorySensitivity,
-  MemoryStatus,
-  MemoryType,
-} from "@oscharko-dev/keiko-contracts";
 import {
   MEMORY_SCOPE_KINDS,
   MEMORY_TYPES,
@@ -211,6 +205,7 @@ export interface MemoryListContentProps {
   readonly policyEnabled?: boolean | undefined;
   readonly onPolicyEnabledChange?: ((next: boolean) => void) | undefined;
   readonly showWorkspaceBackLink?: boolean;
+  readonly settingsSlot?: ReactNode;
 }
 
 export function MemoryListContent({
@@ -223,6 +218,7 @@ export function MemoryListContent({
   policyEnabled,
   onPolicyEnabledChange,
   showWorkspaceBackLink = true,
+  settingsSlot,
 }: MemoryListContentProps): ReactNode {
   const [memories, setMemories] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -278,7 +274,11 @@ export function MemoryListContent({
             </Link>
           ) : null}
           {onOpenConsolidation !== undefined ? (
-            <button type="button" className="lk-btn lk-btn-ghost lk-btn-lg" onClick={onOpenConsolidation}>
+            <button
+              type="button"
+              className="lk-btn lk-btn-ghost lk-btn-lg"
+              onClick={onOpenConsolidation}
+            >
               Consolidation
             </button>
           ) : (
@@ -304,6 +304,8 @@ export function MemoryListContent({
           )}
         </div>
       </header>
+
+      {settingsSlot}
 
       <MemoryFilters filters={filters} onChange={onFilterChange} />
 

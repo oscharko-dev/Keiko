@@ -26,6 +26,14 @@ import "monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js";
+// Register the language id + Monarch grammar for css/scss/less/html so they tokenize and Monaco's
+// bundled `language/{css,html}` workers can attach their document formatter on `onLanguage` (ADR-0068
+// D5). The rich-worker contributions below only call `onLanguage(...)`; without these basic-languages
+// contributions the language is never registered, so it neither tokenizes nor gets a formatter.
+import "monaco-editor/esm/vs/basic-languages/css/css.contribution.js";
+import "monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js";
+import "monaco-editor/esm/vs/basic-languages/less/less.contribution.js";
+import "monaco-editor/esm/vs/basic-languages/html/html.contribution.js";
 import "monaco-editor/esm/vs/language/css/monaco.contribution.js";
 import "monaco-editor/esm/vs/language/html/monaco.contribution.js";
 import "monaco-editor/esm/vs/language/json/monaco.contribution.js";

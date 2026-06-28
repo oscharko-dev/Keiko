@@ -43,15 +43,18 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { Gateway, selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { readJsonObject, resolveRoot, runFilesHandler } from "../files.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
-import { clientAbortSignal, resolveOverlayPath, STATUS_BY_CODE } from "./languageRoutes.js";
-import { runLanguageOperation } from "./languageService.js";
+import {
+  clientAbortSignal,
+  resolveOverlayPath,
+  runEditorLanguageOperation,
+  STATUS_BY_CODE,
+} from "./languageRoutes.js";
 import {
   buildModelCompletionPrompt,
   generateModelCompletions,
@@ -560,28 +563,32 @@ function buildWireResponse(
   };
 }
 
-function runDeterministicCompletion(input: {
+async function runDeterministicCompletion(input: {
   readonly request: EditorCompletionWireRequest;
+  readonly deps: UiHandlerDeps;
   readonly realRoot: string;
   readonly overlayAbsolutePath: string;
   readonly signal: AbortSignal;
   readonly limits?: LanguageServiceLimits | undefined;
   readonly now?: (() => number) | undefined;
-}): LanguageCompletionResult | RouteResult {
+}): Promise<LanguageCompletionResult | RouteResult> {
   const langRequest: LanguageServiceRequest = {
     operation: "completion",
     root: input.request.root,
     document: input.request.document,
     position: input.request.position,
   };
-  const outcome = runLanguageOperation(langRequest, {
-    fs: nodeWorkspaceFs,
-    realRoot: input.realRoot,
-    overlayAbsolutePath: input.overlayAbsolutePath,
-    signal: input.signal,
-    limits: input.limits ?? COMPLETION_LANGUAGE_SERVICE_LIMITS,
-    now: input.now,
-  });
+  const outcome = await runEditorLanguageOperation(
+    langRequest,
+    input.deps,
+    input.realRoot,
+    input.overlayAbsolutePath,
+    input.signal,
+    {
+      limits: input.limits ?? COMPLETION_LANGUAGE_SERVICE_LIMITS,
+      now: input.now,
+    },
+  );
   if (outcome.kind === "error") {
     return {
       status: STATUS_BY_CODE[outcome.code],
@@ -620,8 +627,9 @@ export async function handleEditorCompletion(
     const signal = clientAbortSignal(ctx);
 
     // Tier 1: deterministic language-service completion (always).
-    const deterministic = runDeterministicCompletion({
+    const deterministic = await runDeterministicCompletion({
       request: sanitizedRequest,
+      deps,
       realRoot: root.realRoot,
       overlayAbsolutePath,
       signal,

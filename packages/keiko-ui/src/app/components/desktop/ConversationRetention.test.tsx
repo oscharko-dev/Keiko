@@ -5,10 +5,9 @@
 // against the chat error region — even if a future server bug leaked a credential into
 // session.error, the UI must NOT render it verbatim alongside any other affordance.
 //
-// AC #3 of #154: the existing `clearHistory` and `clearPendingAttachments` callbacks from the
-// chat session (#147, #151) are wired through the composer surface so that user-initiated
-// deletion of pending data is reachable from inside the chat. These tests pin that those
-// callbacks fire when the user activates the corresponding controls.
+// AC #3 of #154: the existing pending-attachment retention controls remain reachable from inside
+// the chat. The former in-memory clear-history affordance was removed because it did not delete
+// persisted history and did not affect server-side prompt history assembly.
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -79,7 +78,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    budget: undefined,
     memoryEnabled: true,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
@@ -89,7 +87,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
-    clearHistory: vi.fn(),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -184,68 +181,15 @@ describe("conversation retention and audit-leak regression (#154)", () => {
     expect(alert.textContent ?? "").not.toContain("api.openai.com");
   });
 
-  it("exposes clearHistory and clearPendingAttachments callbacks on the session API for retention", () => {
-    // AC #3: the session API surface used by the composer carries the deletion callbacks the
-    // user controls. The actual button affordance lives in the composer (#151 BudgetIndicator
-    // already wires clearHistory; #147 AttachmentStrip already wires removePendingAttachment).
-    // This test pins that the callbacks are reachable through the session so a follow-up that
-    // adds an explicit "Clear conversation" button cannot regress the wiring.
-    const clearHistory = vi.fn();
+  it("exposes clearPendingAttachments on the session API for attachment retention", () => {
     const clearPendingAttachments = vi.fn();
     const session = makeSession({
       activeChat: makeChat(),
       messages: [makeUserMessage("hello")],
-      clearHistory,
       clearPendingAttachments,
     });
     renderWindow(session);
-    // Drive the callbacks directly via the session API the same way the future explicit
-    // controls will. The test guards the contract, not the specific button site, so the
-    // follow-up button work in ChatWindow does not need to touch this test.
-    session.clearHistory();
     session.clearPendingAttachments();
-    expect(clearHistory).toHaveBeenCalledOnce();
     expect(clearPendingAttachments).toHaveBeenCalledOnce();
-  });
-
-  it("invokes clearHistory when the existing BudgetIndicator clear-history control is activated", async () => {
-    // AC #3: the existing in-composer "Clear history" control (BudgetIndicator) from #151 stays
-    // the primary user-facing affordance for clearing the in-memory conversation log without
-    // deleting the chat row. Pinning the wiring here so a future composer refactor cannot
-    // silently break the retention contract.
-    const clearHistory = vi.fn();
-    const session = makeSession({
-      activeChat: makeChat(),
-      messages: [makeUserMessage("hello")],
-      clearHistory,
-      // Provide a budget so the BudgetIndicator renders its clear-history button.
-      budget: {
-        approximateBytes: 100,
-        approximateTokens: 25,
-        contextWindowTokens: 1000,
-        reservedOutputTokens: 100,
-        availableInputTokens: 900,
-        pressure: "low",
-        breakdown: {
-          draftBytes: 0,
-          historyBytes: 100,
-          documentBytes: 0,
-          repoContextBytes: 0,
-          knowledgeBytes: 0,
-          memoryBytes: 0,
-        },
-      },
-    });
-    renderWindow(session);
-    const button = screen.queryByRole("button", { name: /clear history/i });
-    if (button !== null) {
-      const user = userEvent.setup();
-      await user.click(button);
-      expect(clearHistory).toHaveBeenCalledOnce();
-    } else {
-      // If the BudgetIndicator does not surface its button at this pressure band, the contract
-      // test above still guards the callback wiring. Document the gap inline.
-      expect(typeof session.clearHistory).toBe("function");
-    }
   });
 });

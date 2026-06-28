@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -15,8 +17,10 @@ import {
 import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
+  WorkspaceBinding,
 } from "@oscharko-dev/keiko-contracts";
 import { Icons, type IconName } from "../Icons";
+import { useOptionalActiveWorkspace } from "../context/ActiveWorkspaceContext";
 import {
   acquireGrabbingBodyStyle,
   isInteractiveControlTarget,
@@ -49,9 +53,16 @@ interface WindowFrameProps {
   readonly win: AppWindow;
   readonly top: boolean;
   readonly connState: ConnState;
-  readonly view: View;
   readonly api: WorkspaceApi;
   readonly wsRef: RefObject<HTMLElement | null>;
+  /**
+   * Bumped by the parent whenever the cross-window link context changes (a
+   * connection added/removed or any window's cfg/type mutated) but NOT on pure
+   * geometry/z changes. Carried as a prop purely so React.memo re-renders this
+   * window when context it derives from OTHER windows changes — without it the
+   * memo would serve stale linked* context (issue #1580).
+   */
+  readonly linkRevision: number;
 }
 
 interface TooSmallProps {
@@ -119,6 +130,8 @@ function selectBody(
   linkedFigmaSnapshotRunIds: readonly string[],
   linkedFigmaSnapshotSources: readonly QualityIntelligenceFigmaSnapshotSource[] | undefined,
   linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined,
+  activeRoot: string | null,
+  activeBinding: WorkspaceBinding | null,
   updateCfg: (patch: AppWindow["cfg"]) => void,
   openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null,
   openEditorFile: WorkspaceApi["openEditorFile"],
@@ -150,6 +163,8 @@ function selectBody(
         linkedFigmaSnapshotRunIds,
         linkedFigmaSnapshotSources,
         linkedImageSources,
+        activeRoot,
+        activeBinding,
         updateCfg,
         openWindow,
         openEditorFile,
@@ -171,6 +186,8 @@ function selectBody(
       linkedFigmaSnapshotRunIds,
       linkedFigmaSnapshotSources,
       linkedImageSources,
+      activeRoot,
+      activeBinding,
       updateCfg,
       openWindow,
       openEditorFile,
@@ -184,6 +201,16 @@ function shouldAutoGrowWindow(type: WindowType, cfg: Record<string, unknown>): b
     typeof cfg["selectedScreenIdsJson"] === "string" &&
     cfg["selectedScreenIdsJson"].length > 0
   );
+}
+
+function autoGrowContentKey(type: WindowType, cfg: Record<string, unknown>): string | null {
+  if (!shouldAutoGrowWindow(type, cfg)) return null;
+  const snapshotRunId = typeof cfg["snapshotRunId"] === "string" ? cfg["snapshotRunId"] : "";
+  const selectedScreenIdsJson =
+    typeof cfg["selectedScreenIdsJson"] === "string" ? cfg["selectedScreenIdsJson"] : "";
+  const selectedScreenName =
+    typeof cfg["selectedScreenName"] === "string" ? cfg["selectedScreenName"] : "";
+  return `${snapshotRunId}\n${selectedScreenIdsJson}\n${selectedScreenName}`;
 }
 
 interface DragGeometry {
@@ -245,6 +272,51 @@ function attachDragListeners(
   onDragEnd?: (() => void) | undefined,
 ): void {
   const threshold = SNAP / geo.z;
+  // Issue #1580 — coalesce raw pointermove to one commit per animation frame,
+  // mirroring the resize path (scheduleResize/flushPendingResize). A raw move
+  // fired setSnap + setWins (and, transitively, the localStorage/server persist
+  // effects) on EVERY pointer event — up to 120-240 Hz on high-rate mice — which
+  // is the dominant cost behind the "slower when moving windows" report.
+  let pendingX = 0;
+  let pendingY = 0;
+  let pendingZone: ReturnType<typeof detectSnapZone> = null;
+  let hasPending = false;
+  let lastX: number | null = null;
+  let lastY: number | null = null;
+  // `undefined` (not null) so the very first flush always emits a zone, matching
+  // the old "setSnap on every move" baseline at gesture start.
+  let lastZone: ReturnType<typeof detectSnapZone> | undefined;
+  let frame: number | null = null;
+  const flush = (): void => {
+    frame = null;
+    if (!hasPending) return;
+    hasPending = false;
+    if (pendingZone !== lastZone) {
+      lastZone = pendingZone;
+      api.setSnap(pendingZone);
+    }
+    if (pendingX !== lastX || pendingY !== lastY) {
+      lastX = pendingX;
+      lastY = pendingY;
+      api.update(session.winId, { x: pendingX, y: pendingY });
+    }
+  };
+  const schedule = (): void => {
+    if (frame !== null) return;
+    frame =
+      typeof window.requestAnimationFrame === "function"
+        ? window.requestAnimationFrame(flush)
+        : window.setTimeout(flush, 0);
+  };
+  const cancelFrame = (): void => {
+    if (frame === null) return;
+    if (typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(frame);
+    } else {
+      window.clearTimeout(frame);
+    }
+    frame = null;
+  };
   const move = (ev: PointerEvent): void => {
     const px = geo.toWX(ev.clientX);
     const py = geo.toWY(ev.clientY);
@@ -252,13 +324,22 @@ function attachDragListeners(
     let ny = py - session.offY;
     nx = Math.max(geo.vpx0 - (session.W - 120), Math.min(geo.vpx0 + geo.vpw - 120, nx));
     ny = Math.max(geo.vpy0, Math.min(geo.vpy0 + geo.vph - 38, ny));
-    api.setSnap(detectSnapZone(px, py, geo, threshold));
-    api.update(session.winId, { x: nx, y: ny });
+    pendingX = nx;
+    pendingY = ny;
+    pendingZone = detectSnapZone(px, py, geo, threshold);
+    hasPending = true;
+    schedule();
   };
   const up = (): void => {
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
     window.removeEventListener("pointercancel", up);
+    // Flush the final position synchronously BEFORE commitSnap so a free drag's
+    // last coordinates are applied; commitSnap then overrides them only when a
+    // snap zone is armed (it is a no-op for free drags). Cancel the scheduled
+    // frame first so flush() cannot also run on the next tick.
+    cancelFrame();
+    flush();
     api.commitSnap(session.winId);
     releaseBodyStyle();
     onDragEnd?.();
@@ -323,54 +404,139 @@ function applyResizeDelta(
   return { x, y, w, h };
 }
 
-export function WindowFrame({
+// Frozen shared empty so a window with no linked context of a given kind always
+// yields the SAME array identity — required for the body useMemo below to hold
+// across re-renders (issue #1580).
+const EMPTY_STRINGS: readonly string[] = Object.freeze([]);
+
+interface LinkedContext {
+  readonly linkedRoot: string | null;
+  readonly linkedFilePath: string | undefined;
+  readonly linkedRoots: readonly string[];
+  readonly linkedCapsuleIds: readonly string[];
+  readonly linkedCapsuleSetIds: readonly string[];
+  readonly linkedFigmaSnapshotRunIds: readonly string[];
+  readonly linkedFigmaSnapshotSources:
+    | readonly QualityIntelligenceFigmaSnapshotSource[]
+    | undefined;
+  readonly linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined;
+}
+
+// Shared "no linked context" identity. A window with no connected sources resolves
+// to this exact object on every recompute, so a `linkRevision` bump elsewhere does
+// NOT churn its body memo — only windows that actually carry cross-window context
+// rebuild on a context change (issue #1580).
+const EMPTY_LINKED: LinkedContext = Object.freeze({
+  linkedRoot: null,
+  linkedFilePath: undefined,
+  linkedRoots: EMPTY_STRINGS,
+  linkedCapsuleIds: EMPTY_STRINGS,
+  linkedCapsuleSetIds: EMPTY_STRINGS,
+  linkedFigmaSnapshotRunIds: EMPTY_STRINGS,
+  linkedFigmaSnapshotSources: undefined,
+  linkedImageSources: undefined,
+});
+
+function isEmptyLinkedContext(c: LinkedContext): boolean {
+  return (
+    c.linkedRoot === null &&
+    c.linkedFilePath === undefined &&
+    c.linkedRoots.length === 0 &&
+    c.linkedCapsuleIds.length === 0 &&
+    c.linkedCapsuleSetIds.length === 0 &&
+    c.linkedFigmaSnapshotRunIds.length === 0 &&
+    (c.linkedFigmaSnapshotSources === undefined || c.linkedFigmaSnapshotSources.length === 0) &&
+    (c.linkedImageSources === undefined || c.linkedImageSources.length === 0)
+  );
+}
+
+// Resolve every cross-window linked* context a window of `type` reads. Pulled out
+// of the render body so it can be wrapped in a single useMemo keyed on the link
+// revision — the resolvers each scan conns+wins, so re-running them on every
+// geometry/pan/zoom frame was a per-window O(conns) tax (issue #1580).
+function computeLinkedContext(api: WorkspaceApi, type: WindowType, id: string): LinkedContext {
+  const receivesFilesContext =
+    type === "chat" ||
+    type === "agents" ||
+    type === "quality" ||
+    type === "editor" ||
+    type === "promptEnhancer";
+  const receivesFocusedFileContext =
+    type === "agents" || type === "quality" || type === "editor" || type === "promptEnhancer";
+  const receivesConnectorContext = type === "quality" || type === "editor";
+  const linkedRoot = receivesFilesContext ? api.linkedFilesRoot(id) : null;
+  const linkedFilePath = receivesFocusedFileContext
+    ? api.linkedFilesContext(id)?.activeFilePath
+    : undefined;
+  const linkedRoots =
+    type === "quality" || type === "promptEnhancer"
+      ? api.linkedAllFilesRoots(id)
+      : linkedRoot !== null
+        ? [linkedRoot]
+        : EMPTY_STRINGS;
+  const linkedCapsuleIds = receivesConnectorContext
+    ? api.linkedConnectorCapsuleIds(id)
+    : EMPTY_STRINGS;
+  const linkedCapsuleSetIds = receivesConnectorContext
+    ? api.linkedConnectorCapsuleSetIds(id)
+    : EMPTY_STRINGS;
+  const linkedFigmaSnapshotRunIds =
+    type === "quality" ? api.linkedFigmaSnapshotRunIds(id) : EMPTY_STRINGS;
+  const linkedFigmaSnapshotSources =
+    type === "quality" ? api.linkedFigmaSnapshotSources?.(id) : undefined;
+  const linkedImageSources = type === "quality" ? api.linkedImageSources?.(id) : undefined;
+  const resolved: LinkedContext = {
+    linkedRoot,
+    linkedFilePath,
+    linkedRoots,
+    linkedCapsuleIds,
+    linkedCapsuleSetIds,
+    linkedFigmaSnapshotRunIds,
+    linkedFigmaSnapshotSources,
+    linkedImageSources,
+  };
+  return isEmptyLinkedContext(resolved) ? EMPTY_LINKED : resolved;
+}
+
+// `linkRevision` only feeds the React.memo comparison and the linked-context
+// useMemo dependency below — it carries the "some other window's connection or
+// cfg changed" signal so this window refreshes its derived cross-window context
+// without re-rendering on every geometry/pan/zoom frame (issue #1580).
+function WindowFrameImpl({
   win,
   top,
   connState,
-  view,
   api,
   wsRef,
+  linkRevision,
 }: WindowFrameProps): ReactNode {
   const def = WIN_TYPES[win.type];
   const canStartConnection = hasConnectablePeer(win.type);
   const Icon = Icons[def.icon];
+  // Issue #446 — the active task-workspace binding (null when no provider is mounted or unbound). It
+  // is the single retarget choke point threaded into every window's render context below.
+  const activeWorkspace = useOptionalActiveWorkspace();
+  const activeRoot = activeWorkspace?.activeRoot ?? null;
+  const activeBinding = activeWorkspace?.activeBinding ?? null;
   const [draggingWindow, setDraggingWindow] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const autoGrowSuppressedKeyRef = useRef<string | null>(null);
   const zoom = win.zoom ?? 1;
-  const receivesFilesContext =
-    win.type === "chat" ||
-    win.type === "agents" ||
-    win.type === "quality" ||
-    win.type === "editor" ||
-    win.type === "promptEnhancer";
-  const receivesFocusedFileContext =
-    win.type === "agents" ||
-    win.type === "quality" ||
-    win.type === "editor" ||
-    win.type === "promptEnhancer";
-  const receivesConnectorContext = win.type === "quality" || win.type === "editor";
-  const linkedRoot = receivesFilesContext ? api.linkedFilesRoot(win.id) : null;
-  const linkedFilePath = receivesFocusedFileContext
-    ? api.linkedFilesContext(win.id)?.activeFilePath
-    : undefined;
-  const linkedRoots =
-    win.type === "quality" || win.type === "promptEnhancer"
-      ? api.linkedAllFilesRoots(win.id)
-      : linkedRoot !== null
-        ? [linkedRoot]
-        : [];
-  const linkedCapsuleIds = receivesConnectorContext ? api.linkedConnectorCapsuleIds(win.id) : [];
-  const linkedCapsuleSetIds = receivesConnectorContext
-    ? api.linkedConnectorCapsuleSetIds(win.id)
-    : [];
-  const linkedFigmaSnapshotRunIds =
-    win.type === "quality" ? api.linkedFigmaSnapshotRunIds(win.id) : [];
-  const linkedFigmaSnapshotSources =
-    win.type === "quality" ? api.linkedFigmaSnapshotSources?.(win.id) : undefined;
-  const linkedImageSources = win.type === "quality" ? api.linkedImageSources?.(win.id) : undefined;
-  const ew = win.w / zoom;
-  const eh = win.h / zoom;
+  const currentAutoGrowContentKey = autoGrowContentKey(win.type, win.cfg);
+  // Cross-window linked* context: recompute only when this window's identity/type
+  // changes or `linkRevision` signals a connection/cfg change elsewhere — NOT on a
+  // pan/zoom/drag frame (issue #1580). api is referentially stable.
+  const linked = useMemo<LinkedContext>(
+    () => computeLinkedContext(api, win.type, win.id),
+    // `linkRevision` is an intentional invalidation key, not a read value: the
+    // resolvers inside read conns+wins through the stable `api`, which eslint
+    // cannot see, so the revision is what tells this memo "recompute now".
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- linkRevision is the cross-window invalidation signal
+    [api, win.type, win.id, linkRevision],
+  );
+  const ew = Math.round((win.w / zoom) * 1000) / 1000;
+  const eh = Math.round((win.h / zoom) * 1000) / 1000;
   const updateCfg = useCallback(
     (patch: AppWindow["cfg"]): void => {
       api.update(win.id, { cfg: { ...win.cfg, ...patch } });
@@ -385,23 +551,45 @@ export function WindowFrame({
     (request) => api.openEditorFile(request),
     [api],
   );
-  const { mode: bodyMode, node: body } = selectBody(
-    win.id,
-    win.type,
-    ew,
-    eh,
-    win.cfg,
-    linkedRoot,
-    linkedFilePath,
-    linkedRoots,
-    linkedCapsuleIds,
-    linkedCapsuleSetIds,
-    linkedFigmaSnapshotRunIds,
-    linkedFigmaSnapshotSources,
-    linkedImageSources,
-    updateCfg,
-    openWindow,
-    openEditorFile,
+  // Build the body element tree only when an input that actually shapes it changes.
+  // `linked` is now a stable object, ew/eh drive the chat/tiny breakpoints, and
+  // win.cfg is the content source — so a drag (x/y only) no longer rebuilds the
+  // chat/Monaco subtree of the dragged window (issue #1580).
+  const { mode: bodyMode, node: body } = useMemo(
+    () =>
+      selectBody(
+        win.id,
+        win.type,
+        ew,
+        eh,
+        win.cfg,
+        linked.linkedRoot,
+        linked.linkedFilePath,
+        linked.linkedRoots,
+        linked.linkedCapsuleIds,
+        linked.linkedCapsuleSetIds,
+        linked.linkedFigmaSnapshotRunIds,
+        linked.linkedFigmaSnapshotSources,
+        linked.linkedImageSources,
+        activeRoot,
+        activeBinding,
+        updateCfg,
+        openWindow,
+        openEditorFile,
+      ),
+    [
+      win.id,
+      win.type,
+      win.cfg,
+      ew,
+      eh,
+      linked,
+      activeRoot,
+      activeBinding,
+      updateCfg,
+      openWindow,
+      openEditorFile,
+    ],
   );
 
   const setZoom = useCallback(
@@ -410,12 +598,26 @@ export function WindowFrame({
   );
 
   useEffect(() => {
+    if (autoGrowSuppressedKeyRef.current !== currentAutoGrowContentKey) {
+      autoGrowSuppressedKeyRef.current = null;
+    }
+  }, [currentAutoGrowContentKey]);
+
+  const suppressAutoGrowForManualResize = useCallback((): void => {
+    if (currentAutoGrowContentKey !== null) {
+      autoGrowSuppressedKeyRef.current = currentAutoGrowContentKey;
+    }
+  }, [currentAutoGrowContentKey]);
+
+  useEffect(() => {
     if (!shouldAutoGrowWindow(win.type, win.cfg) || win.max || bodyMode !== "full") return;
+    if (currentAutoGrowContentKey === null) return;
     const body = bodyRef.current;
     if (body === null) return;
     let frame: number | null = null;
     const measure = (): void => {
       frame = null;
+      if (autoGrowSuppressedKeyRef.current === currentAutoGrowContentKey) return;
       const overflow = body.scrollHeight - body.clientHeight;
       if (overflow <= AUTO_GROW_EPSILON_PX) return;
       const nextHeight = Math.ceil(win.h + overflow);
@@ -444,7 +646,7 @@ export function WindowFrame({
       }
       observer?.disconnect();
     };
-  }, [api, bodyMode, win.cfg, win.h, win.id, win.max, win.type]);
+  }, [api, bodyMode, currentAutoGrowContentKey, win.cfg, win.h, win.id, win.max, win.type]);
 
   useEffect(
     () => () => {
@@ -482,7 +684,10 @@ export function WindowFrame({
       const el = wsRef.current;
       if (el === null) return;
       const rect = el.getBoundingClientRect();
-      const geo = makeDragGeometry(rect, view);
+      // Issue #1580 — read the live view at gesture-start through the stable api
+      // accessor instead of a per-frame `view` prop; the value is byte-identical
+      // to what the prop held at this instant.
+      const geo = makeDragGeometry(rect, api.currentView());
       const wasMax = win.max;
       const restoredW = wasMax ? (win.prev?.w ?? 480) : win.w;
       const restoredH = wasMax ? (win.prev?.h ?? 360) : win.h;
@@ -503,7 +708,6 @@ export function WindowFrame({
       win.h,
       win.max,
       win.prev,
-      view,
       wsRef,
       connState,
       focusWindowForTarget,
@@ -523,34 +727,76 @@ export function WindowFrame({
         let last = start;
         const sx = e.clientX;
         const sy = e.clientY;
-        const z = view.zoom;
+        const z = api.currentView().zoom;
         const previousCursor = document.body.style.cursor;
         let active = true;
-        const cleanup = (): void => {
+        let pending: ResizeStart | null = null;
+        let frame: number | null = null;
+        const flushPendingResize = (): void => {
+          frame = null;
+          if (pending === null) return;
+          const next = pending;
+          pending = null;
+          if (sameResizeGeometry(last, next)) return;
+          last = next;
+          api.update(win.id, { ...next, max: false });
+        };
+        const cancelScheduledResize = (): void => {
+          if (frame === null) return;
+          if (typeof window.cancelAnimationFrame === "function") {
+            window.cancelAnimationFrame(frame);
+          } else {
+            window.clearTimeout(frame);
+          }
+          frame = null;
+        };
+        const scheduleResize = (next: ResizeStart): void => {
+          if (pending !== null && sameResizeGeometry(pending, next)) return;
+          if (pending === null && sameResizeGeometry(last, next)) return;
+          suppressAutoGrowForManualResize();
+          pending = next;
+          if (frame !== null) return;
+          frame =
+            typeof window.requestAnimationFrame === "function"
+              ? window.requestAnimationFrame(flushPendingResize)
+              : window.setTimeout(flushPendingResize, 0);
+        };
+        const schedulePendingFlush = (): void => {
+          if (pending === null || frame !== null) return;
+          frame =
+            typeof window.requestAnimationFrame === "function"
+              ? window.requestAnimationFrame(flushPendingResize)
+              : window.setTimeout(flushPendingResize, 0);
+        };
+        const cleanup = (flushPending = false): void => {
           if (!active) return;
           active = false;
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", end);
           window.removeEventListener("pointercancel", end);
           window.removeEventListener("blur", end);
+          if (flushPending) {
+            schedulePendingFlush();
+          } else {
+            cancelScheduledResize();
+            pending = null;
+          }
           document.body.style.cursor = previousCursor;
           if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
         };
         const end = (): void => {
-          cleanup();
+          cleanup(true);
         };
         const move = (ev: PointerEvent): void => {
           if (!active) return;
           if (ev.buttons === 0) {
-            cleanup();
+            cleanup(true);
             return;
           }
           const dx = (ev.clientX - sx) / z;
           const dy = (ev.clientY - sy) / z;
           const next = applyResizeDelta(start, dir, dx, dy, win.type);
-          if (sameResizeGeometry(last, next)) return;
-          last = next;
-          api.update(win.id, { ...next, max: false });
+          scheduleResize(next);
         };
         document.body.style.cursor = resizeCursor(dir);
         window.addEventListener("pointermove", move);
@@ -559,7 +805,7 @@ export function WindowFrame({
         window.addEventListener("blur", end);
         resizeCleanupRef.current = cleanup;
       },
-    [api, win.id, win.x, win.y, win.w, win.h, win.type, view.zoom],
+    [api, win.id, win.x, win.y, win.w, win.h, win.type, suppressAutoGrowForManualResize],
   );
 
   // Stop propagation BEFORE delegating, so the parent .window's onPointerDown
@@ -640,14 +886,44 @@ export function WindowFrame({
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
   const showHeaderZoom = bodyMode === "full" && ew >= HEADER_ZOOM_MIN_WIDTH_PX;
-  const bodyStyle: CSSProperties = bodyMode === "tiny" ? {} : { zoom };
-  const sectionStyle: CSSProperties = {
-    left: win.x,
-    top: win.y,
-    width: win.w,
-    height: win.h,
-    zIndex: win.z,
-  };
+  // Issue #1580 — bound per-window layout/style recalc (item 8: `contain`) so a
+  // scene-zoom relayout or an intra-window reflow does not cascade across all N
+  // windows, and skip layout/paint for windows panned off the viewport (item 10:
+  // `content-visibility`). The exact `contain-intrinsic-size` from the rendered
+  // window box prevents any placeholder jump when a window scrolls back into view.
+  // content-visibility is limited to full-mode windows (mini/tiny are already
+  // cheap) and skipped for the editor so an off-screen Monaco never mis-measures.
+  const enableContentVisibility = bodyMode === "full" && win.type !== "editor";
+  const bodyStyle = useMemo<CSSProperties>(
+    () =>
+      enableContentVisibility
+        ? {
+            contain: "layout style",
+            contentVisibility: "auto",
+            containIntrinsicSize: `${String(Math.round(ew))}px ${String(Math.round(eh))}px`,
+          }
+        : { contain: "layout style" },
+    [enableContentVisibility, ew, eh],
+  );
+  const sectionStyle = useMemo<CSSProperties>(
+    () => ({
+      left: win.x,
+      top: win.y,
+      width: win.w,
+      height: win.h,
+      zIndex: win.z,
+    }),
+    [win.x, win.y, win.w, win.h, win.z],
+  );
+  const contentZoomStyle = useMemo<CSSProperties>(
+    () => ({
+      width: ew,
+      height: eh,
+      transform: `scale(${String(zoom)})`,
+      transformOrigin: "0 0",
+    }),
+    [ew, eh, zoom],
+  );
 
   return (
     <section
@@ -677,123 +953,127 @@ export function WindowFrame({
         if (!top) window.setTimeout(() => api.focus(win.id), 0);
       }}
     >
-      {/* Header is a drag surface; keyboard equivalent is ⌘+Arrows handled by useKeyboardCtrls. */}
-      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
-      <header
-        className="win-head"
-        onPointerDown={onHeaderPointerDown}
-        onDoubleClick={(e) => {
-          if (shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
-        }}
-      >
-        <span
-          className="win-ico"
-          style={{ color: def.accent === true ? "var(--accent)" : "var(--fg-muted)" }}
+      <div className="win-content-zoom" style={contentZoomStyle}>
+        {/* Header is a drag surface; keyboard equivalent is ⌘+Arrows handled by useKeyboardCtrls. */}
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
+        <header
+          className="win-head"
+          onPointerDown={onHeaderPointerDown}
+          onDoubleClick={(e) => {
+            if (shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
+          }}
         >
-          <Icon size={14} />
-        </span>
-        <span className="win-title">{def.title}</span>
-        {/* Audit C159 — the badge ellipsizes at 150px; title= keeps the full
-            path/URL reachable for mouse users. */}
-        {sub !== null ? (
-          <span className="win-sub mono" title={sub}>
-            <span className="win-sub-text">{sub}</span>
+          <span
+            className="win-ico"
+            style={{ color: def.accent === true ? "var(--accent)" : "var(--fg-muted)" }}
+          >
+            <Icon size={14} />
           </span>
-        ) : null}
-        <span className="spacer" />
-        {/* Audit C297 — every window carried word-identical control labels; with
+          <span className="win-title">{def.title}</span>
+          {/* Audit C159 — the badge ellipsizes at 150px; title= keeps the full
+            path/URL reachable for mouse users. */}
+          {sub !== null ? (
+            <span className="win-sub mono" title={sub}>
+              <span className="win-sub-text">{sub}</span>
+            </span>
+          ) : null}
+          <span className="spacer" />
+          {/* Audit C297 — every window carried word-identical control labels; with
             several windows open, screen-reader and voice-control users could not
             tell WHICH window a Close/Zoom/Connect control acts on (WCAG 2.4.6).
             def.title scopes each label; the visible chrome is unchanged. */}
-        {showHeaderZoom ? (
-          <div className="win-zoom">
+          {showHeaderZoom ? (
+            <div className="win-zoom">
+              <button
+                type="button"
+                className="win-zbtn ui-tip"
+                data-tip="Zoom content out"
+                aria-label={`Zoom ${def.title} content out`}
+                disabled={zoom <= CONTENT_MIN_ZOOM}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                }}
+                onClick={() => setZoom(zoom - 0.1)}
+              >
+                <Icons.zoomOut size={13} />
+              </button>
+              <button
+                type="button"
+                className="win-zpct ui-tip"
+                data-tip="Reset content zoom to 100%"
+                aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                }}
+                onClick={() => api.update(win.id, { zoom: 1 })}
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                className="win-zbtn ui-tip"
+                data-tip="Zoom content in"
+                aria-label={`Zoom ${def.title} content in`}
+                disabled={zoom >= CONTENT_MAX_ZOOM}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                }}
+                onClick={() => setZoom(zoom + 0.1)}
+              >
+                <Icons.zoomIn size={13} />
+              </button>
+            </div>
+          ) : null}
+          <div className="win-traffic" role="group" aria-label={`${def.title} window controls`}>
             <button
               type="button"
-              className="win-zbtn ui-tip"
-              data-tip="Zoom content out"
-              aria-label={`Zoom ${def.title} content out`}
-              disabled={zoom <= CONTENT_MIN_ZOOM}
+              className="win-traffic-btn win-traffic-minimize ui-tip"
+              data-tip="Minimize"
+              aria-label={`Minimize ${def.title} window`}
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => {
                 e.stopPropagation();
               }}
-              onClick={() => setZoom(zoom - 0.1)}
+              onClick={minimizeWithFocusRestore}
             >
-              <Icons.zoomOut size={13} />
+              <Icons.minimize size={17} />
             </button>
             <button
               type="button"
-              className="win-zpct ui-tip"
-              data-tip="Reset content zoom to 100%"
-              aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
+              className="win-traffic-btn win-traffic-maximize ui-tip"
+              data-tip={win.max ? "Restore" : "Full screen"}
+              aria-label={
+                win.max ? `Restore ${def.title} window` : `Full screen ${def.title} window`
+              }
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => {
                 e.stopPropagation();
               }}
-              onClick={() => api.update(win.id, { zoom: 1 })}
+              onClick={() => api.maximize(win.id)}
             >
-              {Math.round(zoom * 100)}%
+              {win.max ? <Icons.restore size={17} /> : <Icons.maximize size={17} />}
             </button>
             <button
               type="button"
-              className="win-zbtn ui-tip"
-              data-tip="Zoom content in"
-              aria-label={`Zoom ${def.title} content in`}
-              disabled={zoom >= CONTENT_MAX_ZOOM}
+              className="win-traffic-btn win-traffic-close ui-tip"
+              data-tip="Close"
+              aria-label={`Close ${def.title} window`}
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => {
                 e.stopPropagation();
               }}
-              onClick={() => setZoom(zoom + 0.1)}
+              onClick={closeWithFocusRestore}
             >
-              <Icons.zoomIn size={13} />
+              <Icons.close size={17} />
             </button>
           </div>
-        ) : null}
-        <div className="win-traffic" role="group" aria-label={`${def.title} window controls`}>
-          <button
-            type="button"
-            className="win-traffic-btn win-traffic-minimize ui-tip"
-            data-tip="Minimize"
-            aria-label={`Minimize ${def.title} window`}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={minimizeWithFocusRestore}
-          >
-            <Icons.minimize size={17} />
-          </button>
-          <button
-            type="button"
-            className="win-traffic-btn win-traffic-maximize ui-tip"
-            data-tip={win.max ? "Restore" : "Full screen"}
-            aria-label={win.max ? `Restore ${def.title} window` : `Full screen ${def.title} window`}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={() => api.maximize(win.id)}
-          >
-            {win.max ? <Icons.restore size={17} /> : <Icons.maximize size={17} />}
-          </button>
-          <button
-            type="button"
-            className="win-traffic-btn win-traffic-close ui-tip"
-            data-tip="Close"
-            aria-label={`Close ${def.title} window`}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={closeWithFocusRestore}
-          >
-            <Icons.close size={17} />
-          </button>
+        </header>
+        <div ref={bodyRef} className="win-body" data-mode={bodyMode} style={bodyStyle}>
+          {body}
         </div>
-      </header>
-      <div ref={bodyRef} className="win-body" data-mode={bodyMode} style={bodyStyle}>
-        {body}
       </div>
       {!win.max
         ? HANDLES.map((d: Handle) => (
@@ -816,3 +1096,11 @@ export function WindowFrame({
     </section>
   );
 }
+
+// Issue #1580 — memoized so a pan/zoom/drag frame that does not change THIS
+// window's props skips re-rendering it (and its full content subtree). The props
+// are all referentially stable now: `win` keeps identity for unchanged windows
+// (makeUpdate returns the same object), `api` is useMemo'd, `wsRef` is a ref, and
+// `top`/`connState`/`linkRevision` are primitives. Default shallow comparison is
+// therefore sufficient and correct — `linkRevision` covers cross-window context.
+export const WindowFrame = memo(WindowFrameImpl);

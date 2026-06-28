@@ -196,6 +196,9 @@ interface SnapshotErrorNotice {
   readonly status?: string | undefined;
   readonly remediation?: string | undefined;
   readonly assertive?: boolean | undefined;
+  // Issue #1399: PAT/credential failures the operator can resolve by opening the Figma access-token
+  // settings. When true, the error card offers a click-through to that configuration.
+  readonly tokenConfig?: boolean | undefined;
 }
 
 interface DetachedBuild {
@@ -225,8 +228,32 @@ const FIGMA_NETWORK_ERRORS: ReadonlySet<string> = new Set([
   "FIGMA_EGRESS_FAILED",
 ]);
 
+// Issue #1399: PAT/credential failures the operator resolves by setting or rotating the Figma
+// access token in Settings. FIGMA_CONSENT_REQUIRED is excluded — it is answered by the in-form
+// read-only acknowledgement checkbox, not the token configuration.
+const FIGMA_PAT_ERRORS: ReadonlySet<string> = new Set([
+  "FIGMA_TOKEN_MISSING",
+  "FIGMA_TOKEN_INVALID",
+  "FIGMA_TOKEN_EXPIRED",
+  "FIGMA_TOKEN_REVOKED",
+  "FIGMA_INSUFFICIENT_SCOPE",
+]);
+
 function formatSnapshotError(err: unknown): SnapshotErrorNotice {
   if (err instanceof ApiError) {
+    // Issue #1399: surface PAT/credential problems as an actionable alert that links straight to
+    // the Figma access-token settings, so the operator does not have to hunt for the setting.
+    if (FIGMA_PAT_ERRORS.has(err.code)) {
+      return {
+        title: "Figma access token needs attention",
+        detail: `${err.code}: ${err.message}`,
+        status: `HTTP ${err.status.toString()}`,
+        remediation:
+          "Open the Figma access token settings to add or rotate the read-only token, then retry. No snapshot was stored.",
+        assertive: true,
+        tokenConfig: true,
+      };
+    }
     // Fix #4: FIGMA_UPSTREAM_UNAVAILABLE is a plain Figma outage — not a proxy/CA issue.
     if (err.code === "FIGMA_UPSTREAM_UNAVAILABLE") {
       return {
@@ -790,6 +817,13 @@ export interface FigmaSnapshotWindowProps {
       }) => void)
     | undefined;
   /**
+   * Issue #1399: opens the Figma access-token settings (Settings → gateway setup, Figma section)
+   * so the operator can resolve a PAT/credential error without searching for the setting. Wired by
+   * the workspace window host; absent (e.g. in tests) the PAT error simply renders without the
+   * click-through action.
+   */
+  readonly openTokenSettings?: (() => void) | undefined;
+  /**
    * Persists a patch into the window's cfg. Used to store snapshotRunId after a
    * successful snapshot-build so the relationship edge can propagate it to QI.
    */
@@ -824,6 +858,7 @@ export function FigmaSnapshotWindow({
   selectedScreenIds = EMPTY_SELECTED_SCREEN_IDS,
   selectedScreenName,
   openScreenSource,
+  openTokenSettings,
   updateCfg,
   triggerImpl = triggerFigmaSnapshot,
   loadImpl = loadFigmaSnapshotSummary,
@@ -898,7 +933,7 @@ export function FigmaSnapshotWindow({
   const [screenJsonError, setScreenJsonError] = useState<string | null>(null);
   const [screenJsonCopyStatus, setScreenJsonCopyStatus] = useState<string | null>(null);
 
-  // Fix #3: PAT revoke state — two-step inline confirm (mirrors ContextBudget pattern).
+  // Fix #3: PAT revoke state — two-step inline confirm.
   const [revokeConfirming, setRevokeConfirming] = useState(false);
   const [revokeStatus, setRevokeStatus] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
@@ -2057,6 +2092,21 @@ export function FigmaSnapshotWindow({
           {errorNotice.remediation !== undefined && (
             <p className="figma-snapshot-error-remediation">{errorNotice.remediation}</p>
           )}
+          {/* Issue #1399: PAT/credential errors get a direct click-through to the Figma access-token
+              settings so the operator does not have to search for the setting. Focus is deliberately
+              NOT moved here (unlike the consent/revoke flows, which point at a specific form control):
+              this is an async build result like the sibling egress alerts above, so role="alert"
+              announces the button text and the user reaches it as the next tab stop — stealing focus
+              on an async network outcome would be an unexpected context change (WCAG 3.2.5). */}
+          {errorNotice.tokenConfig === true && openTokenSettings !== undefined && (
+            <button
+              type="button"
+              className="figma-snapshot-error-action"
+              onClick={openTokenSettings}
+            >
+              Open Figma access token settings
+            </button>
+          )}
         </div>
       )}
 
@@ -2384,7 +2434,7 @@ export function FigmaSnapshotWindow({
               <code>FIGMA_ACCESS_TOKEN</code> environment variable. This window never holds or
               transmits the token.
             </p>
-            {/* Fix #3: two-step inline confirm for PAT revoke (mirrors ContextBudget pattern).
+            {/* Fix #3: two-step inline confirm for PAT revoke.
                 Revoke removes the stored encrypted PAT from the server vault (#758). */}
             <div className="figma-snapshot-revoke-row">
               {revokeConfirming ? (

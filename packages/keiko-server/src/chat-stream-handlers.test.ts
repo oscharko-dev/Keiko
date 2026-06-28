@@ -18,6 +18,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
+import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import type { RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -529,5 +530,56 @@ describe("desktop chat SSE streaming handler", () => {
     expect(lastRecordedContent(recorded)).toContain("Included memory context:");
     expect(lastRecordedContent(recorded)).toContain("Use pnpm instead of npm");
     memoryVault.close();
+  });
+
+  // Issue #502 — the streaming send path threads a selected discussion mode onto the latest user turn,
+  // exactly like the non-streaming path. Asserting the turn STARTS WITH the rendered block (not merely
+  // contains it) catches template rewording, truncation, or block misplacement.
+  it("prepends the discussion directive block onto the streamed prompt's latest user turn", async () => {
+    const chatId = seedChat();
+    const { model, recorded } = streamingModel("answer");
+    const res = captureRes();
+    await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "Should we ship this?",
+          discussionMode: "challenge",
+        }),
+        res.res,
+      ),
+      deps(model),
+    );
+
+    expect(lastRecordedRole(recorded)).toBe("user");
+    const content = lastRecordedContent(recorded);
+    expect(content.startsWith(composeDiscussionDirectiveBlock("challenge"))).toBe(true);
+    // The user draft still follows the additive block.
+    expect(content).toContain("Should we ship this?");
+  });
+
+  it("leaves the streamed prompt unchanged when no discussion mode is selected (backward-compatible)", async () => {
+    const chatId = seedChat();
+    const { model, recorded } = streamingModel("answer");
+    const res = captureRes();
+    await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "Should we ship this?",
+        }),
+        res.res,
+      ),
+      deps(model),
+    );
+
+    const content = lastRecordedContent(recorded);
+    expect(content).not.toContain("Discussion mode directives:");
+    // With no mode, docs, or memory the latest turn is the bare draft.
+    expect(content).toBe("Should we ship this?");
   });
 });

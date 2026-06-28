@@ -14,7 +14,12 @@ import {
   type ModelCapability,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import type { ConversationDocumentContextWire } from "@oscharko-dev/keiko-contracts";
+import {
+  isDiscussionMode,
+  stripUnsafeFormatChars,
+  type ConversationDocumentContextWire,
+  type DiscussionMode,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationMemoryActionWire,
   ConversationMemoryResultWire,
@@ -336,9 +341,13 @@ export interface SendDesktopChatRequest {
   // validator uses to enforce modality+mime+size before the gateway is called).
   readonly attachments: readonly ConversationAttachment[];
   readonly memory: ParsedConversationMemoryRequest | undefined;
+  // Issue #502 — optional colleague-discussion mode selected for THIS turn only. Turn-local: it
+  // shapes the additive directive block on the latest user turn and is NEVER replayed into
+  // compacted history. An unknown value is dropped to `undefined` (backward-compatible default).
+  readonly discussionMode: DiscussionMode | undefined;
 }
 
-interface ParsedConversationMemoryRequest {
+export interface ParsedConversationMemoryRequest {
   readonly enabled: boolean;
   readonly budgetTokens?: number;
   readonly context: Record<string, unknown>;
@@ -384,7 +393,7 @@ function parseMemoryBudget(raw: Record<string, unknown>): number | RouteResult |
   };
 }
 
-function parseMemoryRequest(
+export function parseMemoryRequest(
   value: unknown,
 ): ParsedConversationMemoryRequest | RouteResult | undefined {
   if (value === undefined) return undefined;
@@ -569,7 +578,15 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
     documentContext: parseDocumentContext(body.documentContext),
     attachments: parseAttachments(body.attachments),
     memory,
+    discussionMode: parseDiscussionMode(body.discussionMode),
   };
+}
+
+// Issue #502 — accepts a known DiscussionMode, otherwise drops to `undefined`. An unknown or
+// missing value is NOT a request error (the field is optional and turn-local); it simply leaves
+// the turn in the default no-mode behaviour.
+function parseDiscussionMode(value: unknown): DiscussionMode | undefined {
+  return isDiscussionMode(value) ? value : undefined;
 }
 
 function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResult | undefined {
@@ -628,13 +645,21 @@ function applyDocumentContextToLatestUserTurn(
   request: SendDesktopChatRequest,
   memoryText: string | undefined,
 ): GatewayConversationMessage[] {
+  // Issue #502 — a selected discussion mode also requires composing the latest user turn (to
+  // prepend the additive directive block), even with no documents or memory.
   if (
     request.documentContext.length === 0 &&
-    (memoryText === undefined || memoryText.length === 0)
+    (memoryText === undefined || memoryText.length === 0) &&
+    request.discussionMode === undefined
   ) {
     return Array.from(history);
   }
-  const composed = composeConversationPrompt(request.content, request.documentContext, memoryText);
+  const composed = composeConversationPrompt(
+    request.content,
+    request.documentContext,
+    memoryText,
+    request.discussionMode,
+  );
   // Replace ONLY the last user turn (the one we just persisted). System and assistant turns
   // are untouched. Walking from the end avoids rewriting a same-text earlier turn.
   const out: GatewayConversationMessage[] = Array.from(history);
@@ -1164,4 +1189,223 @@ export async function handleSendDesktopChat(
   if (isRouteResult(prepared)) return prepared;
   const { request, chat, modelId, memoryContext } = prepared;
   return persistModelChatTurn(deps, request, chat, modelId, memoryContext);
+}
+
+type VoiceTurnMessageRole = "user" | "assistant";
+
+interface VoiceTurnAppendMessage {
+  readonly role: VoiceTurnMessageRole;
+  readonly content: string;
+  readonly timestamp?: number | undefined;
+}
+
+export interface VoiceTurnAppendRequest {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly messages: readonly VoiceTurnAppendMessage[];
+  readonly memory: ParsedConversationMemoryRequest | undefined;
+}
+
+const MAX_VOICE_TURN_MESSAGES = 8;
+
+function parseVoiceTurnAppendMessage(value: unknown): VoiceTurnAppendMessage | undefined {
+  if (!isRecord(value)) return undefined;
+  const role = value.role;
+  if (role !== "user" && role !== "assistant") return undefined;
+  const content = typeof value.content === "string" ? value.content.trim() : "";
+  if (content.length === 0 || content.length > MAX_CHAT_INPUT_CHARS) return undefined;
+  const timestamp = value.timestamp;
+  if (timestamp !== undefined) {
+    if (!Number.isInteger(timestamp) || (timestamp as number) < 0) return undefined;
+    return { role, content, timestamp: timestamp as number };
+  }
+  return { role, content };
+}
+
+function voiceTurnAppendRequestFromBody(
+  body: Record<string, unknown>,
+): VoiceTurnAppendRequest | RouteResult {
+  const chatId = typeof body.chatId === "string" ? body.chatId : "";
+  const projectPath = typeof body.projectPath === "string" ? body.projectPath : "";
+  if (chatId.length === 0 || projectPath.length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "chatId and projectPath are required.") };
+  }
+  if (!Array.isArray(body.messages) || body.messages.length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "messages must be a non-empty array.") };
+  }
+  if (body.messages.length > MAX_VOICE_TURN_MESSAGES) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "messages contains too many entries.") };
+  }
+  const messages = body.messages.map(parseVoiceTurnAppendMessage);
+  if (messages.some((message) => message === undefined)) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "messages must contain committed user or assistant text."),
+    };
+  }
+  const memory = parseMemoryRequest(body.memory);
+  if (isRouteResult(memory)) return memory;
+  return {
+    chatId,
+    projectPath,
+    messages: messages as readonly VoiceTurnAppendMessage[],
+    memory,
+  };
+}
+
+function sanitizeVoiceTurnText(text: string, deps: UiHandlerDeps): string {
+  return deps.redactor(stripUnsafeFormatChars(text)) as string;
+}
+
+function voiceTurnCombinedText(messages: readonly VoiceTurnAppendMessage[]): string {
+  return messages.map((message) => message.content).join("\n").trim();
+}
+
+function voiceTurnAsSendRequest(request: VoiceTurnAppendRequest, content: string): SendDesktopChatRequest {
+  return {
+    chatId: request.chatId,
+    projectPath: request.projectPath,
+    content,
+    modelId: undefined,
+    documentContext: [],
+    attachments: [],
+    memory: request.memory,
+    discussionMode: undefined,
+  };
+}
+
+async function collectVoiceTurnMemoryActions(
+  deps: UiHandlerDeps,
+  request: VoiceTurnAppendRequest,
+  context: ConversationMemoryRuntimeContext | undefined,
+  modelId: string,
+): Promise<readonly ConversationMemoryActionWire[]> {
+  if (context === undefined || request.memory?.enabled !== true) {
+    return [];
+  }
+  if (deps.memoryVault === undefined) {
+    return [];
+  }
+  const actions: ConversationMemoryActionWire[] = [];
+  for (const message of request.messages) {
+    const outcomes = extractCandidatesFromUserText(message.content, buildCaptureContext(context), {
+      ...memoryCapturePolicyForDeps(deps, {
+        resolver: createMemoryTargetResolver(deps.memoryVault),
+      }),
+    });
+    for (const outcome of outcomes) {
+      const action = await captureActionFromOutcome(outcome, deps);
+      if (action !== null) actions.push(action);
+    }
+  }
+  const userText = request.messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content)
+    .join("\n")
+    .trim();
+  const assistantText = request.messages
+    .filter((message) => message.role === "assistant")
+    .map((message) => message.content)
+    .join("\n")
+    .trim();
+  const salientActions = await captureSalientFromTurn(
+    deps,
+    {
+      content: userText.length > 0 ? userText : voiceTurnCombinedText(request.messages),
+      memory: request.memory,
+    },
+    context,
+    modelId,
+    assistantText,
+  );
+  actions.push(...salientActions);
+  return actions;
+}
+
+export async function buildVoiceTurnMemoryResult(
+  deps: UiHandlerDeps,
+  request: VoiceTurnAppendRequest,
+  chat: Chat,
+  memoryContext: ConversationMemoryRuntimeContext | undefined,
+): Promise<ConversationMemoryResultWire | undefined> {
+  if (request.memory === undefined) {
+    return undefined;
+  }
+  if (memoryContext === undefined) {
+    return emptyMemoryResult(false);
+  }
+  const content = voiceTurnCombinedText(request.messages);
+  const memory = await buildMemoryResult(voiceTurnAsSendRequest(request, content), deps, memoryContext);
+  const actions = await collectVoiceTurnMemoryActions(deps, request, memoryContext, chat.selectedModel);
+  return { ...memory, actions };
+}
+
+function persistVoiceTurnMessages(
+  deps: UiHandlerDeps,
+  request: VoiceTurnAppendRequest,
+): readonly ChatMessage[] {
+  const baseNow = Date.now();
+  return deps.store.createMessages(
+    request.messages.map((message, index) => ({
+      chatId: request.chatId,
+      role: message.role,
+      content: sanitizeVoiceTurnText(message.content, deps),
+      timestamp: message.timestamp ?? baseNow + index,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    })),
+  );
+}
+
+function updateChatAfterVoiceTurn(
+  deps: UiHandlerDeps,
+  request: VoiceTurnAppendRequest,
+  chat: Chat,
+  created: readonly ChatMessage[],
+): Chat {
+  const firstUser = created.find((message) => message.role === "user");
+  const chatPatch =
+    chat.title === DEFAULT_CHAT_TITLE && firstUser !== undefined
+      ? { title: firstUser.content.slice(0, 60) }
+      : {};
+  return deps.store.updateChat(request.chatId, chatPatch);
+}
+
+export async function handleAppendDesktopVoiceTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const body = await readJsonObject(ctx.req);
+  if (isRouteResult(body)) return body;
+  const request = voiceTurnAppendRequestFromBody(body);
+  if (isRouteResult(request)) return request;
+  const normalizedProjectPath = normalizeDesktopProjectPath(request.projectPath, deps);
+  if (isRouteResult(normalizedProjectPath)) return normalizedProjectPath;
+  const chat = findChat(deps, normalizedProjectPath, request.chatId);
+  if (chat === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Chat not found.") };
+  }
+  const memoryContext =
+    request.memory === undefined
+      ? undefined
+      : resolveConversationMemoryContext(deps, normalizedProjectPath, request.chatId);
+  if (isRouteResult(memoryContext)) return memoryContext;
+  try {
+    const created = persistVoiceTurnMessages(deps, request);
+    const updatedChat = updateChatAfterVoiceTurn(deps, request, chat, created);
+    const memory = await buildVoiceTurnMemoryResult(deps, request, updatedChat, memoryContext);
+    return {
+      status: 200,
+      body: {
+        chat: updatedChat,
+        messages: created,
+        ...(memory === undefined ? {} : { memory }),
+      },
+    };
+  } catch (error) {
+    return desktopChatErrorResult(error, deps);
+  }
 }

@@ -261,7 +261,7 @@ describe("createKeikoInlineCompletionProvider", () => {
     const signals: AbortSignal[] = [];
     const result = deferred<EditorInlineCompletionResponse>();
     const provider = createKeikoInlineCompletionProvider(
-      providerDeps((query, signal) => {
+      providerDeps((_query, signal) => {
         signals.push(signal);
         return result.promise;
       }),

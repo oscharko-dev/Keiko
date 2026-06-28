@@ -3,7 +3,8 @@
 // controls, the tab strip no longer advertises a non-existent tab model,
 // and the project tab exposes its full name via title once truncated.
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import { Header } from "./Header";
 
 function renderHeader(overrides: Partial<Parameters<typeof Header>[0]> = {}) {
@@ -18,6 +19,10 @@ function renderHeader(overrides: Partial<Parameters<typeof Header>[0]> = {}) {
   render(<Header {...props} />);
   return props;
 }
+
+afterEach(() => {
+  window.localStorage.clear();
+});
 
 describe("Header window controls (C023)", () => {
   it("does not expose the Expand window control", () => {
@@ -43,6 +48,16 @@ describe("Header release controls", () => {
     expect(
       screen.queryByRole("button", { name: "Open the command palette (Ctrl/⌘K)" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("Header context control", () => {
+  it("mounts task context controls inside the header chrome", () => {
+    renderHeader({ contextControl: <button type="button">Task workspace</button> });
+
+    const slot = document.querySelector(".hd-context");
+    expect(slot).not.toBeNull();
+    expect(slot).toContainElement(screen.getByRole("button", { name: "Task workspace" }));
   });
 });
 
@@ -76,6 +91,26 @@ describe("Header split action wording (F039 C401)", () => {
     renderHeader();
     const btn = screen.getByRole("button", { name: "Split front windows" });
     expect(btn.getAttribute("data-tip")).toBe("Split front windows");
+  });
+
+  it("localizes header window-control labels when German is selected", () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <Header
+          openPalette={vi.fn()}
+          openCommandPalette={vi.fn()}
+          onTileAll={vi.fn()}
+          onSplitFront={vi.fn()}
+          onCascade={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Vordere Fenster teilen" })).toHaveAttribute(
+      "data-tip",
+      "Vordere Fenster teilen",
+    );
   });
 });
 

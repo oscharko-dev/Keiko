@@ -169,7 +169,13 @@ export function _resetWarnedCaBundlePaths(): void {
   warnedCaBundlePaths.clear();
 }
 
-function bodyToString(body: BodyInit | null | undefined): string | undefined {
+// Normalizes a request body for the Node-based egress fallbacks (proxy tunnels and the custom-CA
+// path). String and URLSearchParams bodies are serialized as before; a typed-array body
+// (`Uint8Array`/`Buffer`) is forwarded verbatim so a binary payload — e.g. the multipart
+// `audio/transcriptions` body of the voice STT seam (ADR-0058 D4) — survives a corporate proxy
+// without UTF-8 corruption. `ClientRequest.end()` accepts both string and `Uint8Array` chunks.
+// Other BodyInit shapes (Blob, FormData, streams) remain unsupported on the fallback paths.
+function bodyToWire(body: BodyInit | null | undefined): string | Uint8Array | undefined {
   if (body === undefined || body === null) {
     return undefined;
   }
@@ -179,7 +185,10 @@ function bodyToString(body: BodyInit | null | undefined): string | undefined {
   if (body instanceof URLSearchParams) {
     return body.toString();
   }
-  throw new TypeError("gateway HTTP fallback supports string request bodies only");
+  if (body instanceof Uint8Array) {
+    return body;
+  }
+  throw new TypeError("gateway HTTP fallback supports string and byte request bodies only");
 }
 
 // Converts a Node IncomingMessage into a streaming web Response, enforcing the
@@ -249,7 +258,7 @@ function fetchWithCaBundle(
   egress?: OutboundHttpEgressConfig,
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = bodyToString(init.body);
+  const body = bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
@@ -593,7 +602,7 @@ function fetchHttpViaProxy(
   ca: readonly string[],
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = bodyToString(init.body);
+  const body = bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
   if (hasForwardedCredentialHeader(headers)) {
     throw new OutboundHttpEgressError(
@@ -645,7 +654,7 @@ async function fetchHttpsViaProxy(
   ca: readonly string[],
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = bodyToString(init.body);
+  const body = bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
   if (!Object.prototype.hasOwnProperty.call(headers, "connection")) {
     headers.connection = "close";
@@ -778,6 +787,46 @@ export async function readJsonCapped(
   }
   parts.push(decoder.decode());
   return JSON.parse(parts.join("")) as unknown;
+}
+
+// Reads a binary response body into a single `ArrayBuffer`-backed `Uint8Array`, capping the
+// cumulative size exactly like `readJsonCapped`. Used by the text-to-speech adapter (Issue #1558) to
+// pull synthesized audio off the provider response without buffering an unbounded payload: a provider
+// that streams more than `maxBytes` is aborted and rejected rather than exhausting memory (the same
+// bounded-egress guarantee every other gateway call inherits, ADR-0038/ADR-0058 D4). The returned
+// array is `ArrayBuffer`-backed so it is a valid `BodyInit`/`BufferSource` for downstream consumers
+// without a type assertion.
+export async function readBytesCapped(
+  response: Response,
+  maxBytes: number = MAX_RESPONSE_BYTES,
+): Promise<Uint8Array<ArrayBuffer>> {
+  if (response.body === null) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxBytes) {
+      throw new Error("response body exceeded the size limit");
+    }
+    return new Uint8Array(buffer);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("response body exceeded the size limit");
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
 // Splits an SSE buffer on newlines, keeping the trailing partial line (no newline yet)

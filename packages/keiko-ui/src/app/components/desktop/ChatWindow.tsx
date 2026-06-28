@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import {
+  memo,
   useCallback,
   useEffect,
   useId,
@@ -9,20 +10,21 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type CSSProperties,
   type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
+  type Ref,
+  type RefObject,
   type SyntheticEvent,
-  type WheelEvent,
 } from "react";
+import type { VoiceSessionGroundingContext } from "@oscharko-dev/keiko-contracts";
 import { useChatSessionContext } from "./context/ChatSessionContext";
-import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
-import { NumberControlStepper } from "./NumberControlStepper";
 import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
   repositoryReferenceRoots,
@@ -38,11 +40,30 @@ import {
   SentDocumentsNote,
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, RunSummaryCard } from "./WorkflowHandoff";
-import { Toggle } from "./widgets/shared/Toggle";
-import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
+import { FileIcon } from "./widgets/shared/projectTree";
+import type { ChatSessionApi, SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
+import {
+  supportsDictation,
+  supportsSpeechOutput,
+  useVoiceCapability,
+} from "./hooks/useVoiceCapability";
+import { useDictation, type DictationController } from "./hooks/useDictation";
+import { dictationCaptureSupported } from "./hooks/dictation-recorder";
+import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./VoiceDictation";
+import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
+import { VoicePlaybackMuteButton } from "./VoicePlayback";
+import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
+import { useRealtimeVoice } from "./hooks/useRealtimeVoice";
+import {
+  deriveVoiceAuraState,
+  deriveVoiceDialogState,
+  voiceDialogStateHeadline,
+} from "./hooks/voice-dialog-state";
+import { VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import {
   fetchCapsules,
@@ -76,10 +97,6 @@ interface ChatWindowProps {
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
 }
 
-// AC #1 — voice is not yet implemented. Gate on a constant so that when the
-// capability flag arrives the removal is a one-line change, not a search.
-const VOICE_SUPPORTED = false;
-
 // Stable id for the no-model alert so aria-describedby chains can reference it.
 const NO_MODEL_ALERT_ID = "cmp-no-model-alert";
 
@@ -89,13 +106,6 @@ const SEND_HINT_ID = "cmp-send-hint";
 // Stable id for the loading status so blocked actions can reference it.
 const LOADING_STATUS_ID = "cmp-loading-status";
 
-// One canonical composer placeholder. The same field previously flickered between
-// long task-oriented prompts depending on whether the chat already had messages.
-const COMPOSER_PLACEHOLDER = "Ask Keiko...";
-
-// uiux-fix F042 (C308/C322) — keep the visible send tooltip short and
-// consistent; the keyboard hint remains in accessible descriptions.
-const SEND_TOOLTIP = "Send message";
 function timeLabel(timestamp: number): string {
   const date = new Date(timestamp);
   const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -174,14 +184,20 @@ function onComposerKeyDown(
 const CITATION_MARKER_PATTERN = /\s*[[【［]\d+[\]】］]/g;
 const COLLAPSIBLE_ANSWER_MIN_CHARS = 1800;
 const COLLAPSIBLE_ANSWER_MIN_LINES = 32;
+const QUESTION_MAP_PREVIEW_MAX = 76;
 
 export function copyableMessageText(content: string): string {
   return sanitizeRepositoryEvidenceText(content).replace(CITATION_MARKER_PATTERN, "");
 }
 
+function questionMapPreview(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= QUESTION_MAP_PREVIEW_MAX) return normalized;
+  return `${normalized.slice(0, QUESTION_MAP_PREVIEW_MAX - 3).trimEnd()}...`;
+}
+
 async function writeTextWithFallback(text: string): Promise<void> {
-  const writeText =
-    typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
+  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
   if (writeText !== undefined && navigator.clipboard !== undefined) {
     try {
       await writeText.call(navigator.clipboard, text);
@@ -226,8 +242,9 @@ function isCollapsibleAssistantAnswer(content: string): boolean {
 
 // uiux-fix F042 (C208) — quiet per-bubble copy affordance for assistant
 // responses. Mirrors SafeMarkdown's code-block CopyButton: clipboard guard for
-// non-secure contexts, announced status (WCAG 4.1.3), width-stable label swap.
+// non-secure contexts and announced status (WCAG 4.1.3).
 function MessageCopyButton({ content }: { readonly content: string }): ReactNode {
+  const { t } = useI18n();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [status, setStatus] = useState("");
 
@@ -235,7 +252,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
     void writeTextWithFallback(copyableMessageText(content)).then(
       () => {
         setCopyState("copied");
-        setStatus("Answer copied");
+        setStatus(t("chat.copy.copiedStatus"));
         setTimeout(() => {
           setCopyState("idle");
           setStatus("");
@@ -243,10 +260,10 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
       },
       () => {
         setCopyState("failed");
-        setStatus("Clipboard access failed. Select the answer manually and copy it.");
+        setStatus(t("chat.copy.failedStatus"));
       },
     );
-  }, [content]);
+  }, [content, t]);
 
   const copied = copyState === "copied";
   const failed = copyState === "failed";
@@ -255,15 +272,14 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
     <div className="chat-msg-copy-wrap">
       <button
         type="button"
-        className="chat-msg-copy ui-tip"
-        aria-label={copied ? "Copied" : "Copy answer"}
-        data-tip={copied ? "Copied" : "Copy answer"}
+        className="chat-msg-copy"
+        aria-label={copied ? t("chat.copy.copied") : t("chat.copy.message")}
+        title={copied ? t("chat.copy.copied") : t("chat.copy.message")}
         data-copied={copied ? "true" : "false"}
         data-failed={failed ? "true" : "false"}
         onClick={handleCopy}
       >
-        <Icons.copy size={13} aria-hidden="true" />
-        <span>{copied ? "Copied" : "Copy answer"}</span>
+        <Icons.copy size={20} aria-hidden="true" />
       </button>
       <span role="status" className="chat-msg-copy-status">
         {status}
@@ -272,7 +288,7 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
   );
 }
 
-function ChatBubble({
+function ChatBubbleImpl({
   message,
   onOpenRunResult,
   repositoryRoots,
@@ -289,6 +305,7 @@ function ChatBubble({
   readonly streaming?: boolean;
   readonly layout?: "stack" | "turn";
 }): ReactNode {
+  const { t } = useI18n();
   const contentId = useId();
   const [collapsed, setCollapsed] = useState(false);
   const isRunSummary = isRunSummaryMessage(message);
@@ -305,7 +322,7 @@ function ChatBubble({
   return (
     <article className="chat-msg" data-role={message.role} data-layout={layout}>
       <div className="chat-msg-bubble">
-        {isUser ? <div className="chat-msg-role">You</div> : <KeikoMessageMark />}
+        {isUser ? <div className="chat-msg-role">{t("chat.role.user")}</div> : <KeikoMessageMark />}
         <div
           id={isUser ? undefined : contentId}
           className="chat-msg-content"
@@ -350,7 +367,7 @@ function ChatBubble({
                   }}
                 >
                   <Icons.chevron size={12} aria-hidden="true" />
-                  <span>{collapsed ? "Expand answer" : "Collapse answer"}</span>
+                  <span>{collapsed ? t("chat.answer.expand") : t("chat.answer.collapse")}</span>
                 </button>
               ) : null}
             </div>
@@ -372,13 +389,21 @@ function ChatBubble({
   );
 }
 
+// Issue #1580 — memoized so appending a message (or a streaming token) re-renders
+// only the new/last bubble, not the whole transcript. The props are stable for
+// settled bubbles: `message` keeps its identity, repositoryRoots is useMemo'd,
+// openRepositoryReference === openEditorFile (a WindowFrame useCallback), and
+// `streaming` is false for every bubble except the live one.
+const ChatBubble = memo(ChatBubbleImpl);
+
 function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): ReactNode {
+  const { t } = useI18n();
   return (
     <div
       className="chat-msg-brand"
       data-pulsing={pulsing ? "true" : "false"}
       role="img"
-      aria-label="Keiko logo"
+      aria-label={t("chat.keikoLogo")}
     >
       <Image src="/assets/keiko-logo.svg" width={22} height={22} alt="" aria-hidden="true" />
     </div>
@@ -386,6 +411,7 @@ function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): 
 }
 
 function TypingBubble(): ReactNode {
+  const { t } = useI18n();
   return (
     <article className="chat-msg" data-role="assistant">
       <div className="chat-msg-bubble">
@@ -393,7 +419,7 @@ function TypingBubble(): ReactNode {
         {/* uiux-fix F042 (C319) — aria-label is prohibited on a generic span and
             ignored by AT; role="img" makes the label exposed. The lifecycle
             announcement itself comes from SendLifecycleStatus. */}
-        <span className="chat-typing" role="img" aria-label="Keiko is responding">
+        <span className="chat-typing" role="img" aria-label={t("chat.keikoResponding")}>
           <i />
           <i />
           <i />
@@ -412,9 +438,10 @@ interface ConversationThreadProps {
   readonly sendStatus: SendStatus;
   readonly activeChat: Chat | undefined;
   readonly onCancelGrounded: () => void;
+  readonly registerQuestionAnchor?: (messageId: string, node: HTMLDivElement | null) => void;
 }
 
-function ConversationThread({
+function ConversationThreadImpl({
   messages,
   onOpenRunResult,
   repositoryRoots,
@@ -423,43 +450,56 @@ function ConversationThread({
   sendStatus,
   activeChat,
   onCancelGrounded,
+  registerQuestionAnchor,
 }: ConversationThreadProps): ReactNode {
+  const { t } = useI18n();
   const turns = useMemo(() => conversationTurns(messages), [messages]);
   return (
     <div className="chatw-thread">
-      {turns.map((turn) => (
-        <div className="chat-turn" key={turn.id}>
-          <div className="chat-turn-cell chat-turn-prompt">
-            {turn.user !== null ? (
-              <ChatBubble
-                message={turn.user}
-                onOpenRunResult={onOpenRunResult}
-                repositoryRoots={repositoryRoots}
-                openRepositoryReference={openRepositoryReference}
-                layout="turn"
-              />
-            ) : null}
+      {turns.map((turn) => {
+        const userMessage = turn.user;
+        return (
+          <div className="chat-turn" key={turn.id}>
+            <div
+              className="chat-turn-cell chat-turn-prompt"
+              data-chat-question-id={userMessage?.id}
+              ref={
+                userMessage !== null && registerQuestionAnchor !== undefined
+                  ? (node) => registerQuestionAnchor(userMessage.id, node)
+                  : undefined
+              }
+            >
+              {userMessage !== null ? (
+                <ChatBubble
+                  message={userMessage}
+                  onOpenRunResult={onOpenRunResult}
+                  repositoryRoots={repositoryRoots}
+                  openRepositoryReference={openRepositoryReference}
+                  layout="turn"
+                />
+              ) : null}
+            </div>
+            <div className="chat-turn-cell chat-turn-answer">
+              {turn.responses.map((response, index) => (
+                <ChatBubble
+                  key={response.id}
+                  message={response}
+                  onOpenRunResult={onOpenRunResult}
+                  repositoryRoots={repositoryRoots}
+                  openRepositoryReference={openRepositoryReference}
+                  layout="turn"
+                  streaming={
+                    sendStatus === "streaming" &&
+                    response.role === "assistant" &&
+                    turn === turns[turns.length - 1] &&
+                    index === turn.responses.length - 1
+                  }
+                />
+              ))}
+            </div>
           </div>
-          <div className="chat-turn-cell chat-turn-answer">
-            {turn.responses.map((response, index) => (
-              <ChatBubble
-                key={response.id}
-                message={response}
-                onOpenRunResult={onOpenRunResult}
-                repositoryRoots={repositoryRoots}
-                openRepositoryReference={openRepositoryReference}
-                layout="turn"
-                streaming={
-                  sendStatus === "streaming" &&
-                  response.role === "assistant" &&
-                  turn === turns[turns.length - 1] &&
-                  index === turn.responses.length - 1
-                }
-              />
-            ))}
-          </div>
-        </div>
-      ))}
+        );
+      })}
       {sending && sendStatus !== "streaming" ? (
         <div className="chat-turn chat-turn-pending">
           <div className="chat-turn-cell chat-turn-prompt" />
@@ -470,10 +510,10 @@ function ConversationThread({
                 <button
                   type="button"
                   className="grounded-cancel-btn"
-                  aria-label="Cancel grounded request"
+                  aria-label={t("chat.grounded.cancel")}
                   onClick={onCancelGrounded}
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
               ) : null}
             </div>
@@ -484,12 +524,127 @@ function ConversationThread({
   );
 }
 
+interface ConversationQuestionMapItem {
+  readonly id: string;
+  readonly index: number;
+  readonly preview: string;
+  readonly time: string;
+}
+
+function setQuestionMapButtonWave(button: HTMLButtonElement, wave: number, peak: boolean): void {
+  const clamped = Math.max(0, Math.min(1, wave));
+  button.style.setProperty("--wave-width", `${(8 + clamped * 16).toFixed(1)}px`);
+  button.dataset.peak = peak ? "true" : "false";
+}
+
+function ConversationQuestionMap({
+  items,
+  onJump,
+}: {
+  readonly items: readonly ConversationQuestionMapItem[];
+  readonly onJump: (messageId: string) => void;
+}): ReactNode {
+  const { t } = useI18n();
+  const buttonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const setWaveFromPointer = useCallback((clientY: number): void => {
+    const buttons = Array.from(buttonRefs.current.values());
+    if (buttons.length === 0) return;
+    const sigmaPx = 23;
+    let nearest: HTMLButtonElement | undefined;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (const button of buttons) {
+      const rect = button.getBoundingClientRect();
+      const centerY = rect.top + rect.height / 2;
+      const distance = Math.abs(clientY - centerY);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = button;
+      }
+      const wave = Math.exp(-(distance * distance) / (2 * sigmaPx * sigmaPx));
+      setQuestionMapButtonWave(button, wave, false);
+    }
+    if (nearest !== undefined) setQuestionMapButtonWave(nearest, 1, true);
+  }, []);
+  const resetWave = useCallback((): void => {
+    for (const button of buttonRefs.current.values()) {
+      setQuestionMapButtonWave(button, 0, false);
+    }
+  }, []);
+  const registerButton = useCallback((messageId: string, node: HTMLButtonElement | null): void => {
+    if (node === null) {
+      buttonRefs.current.delete(messageId);
+      return;
+    }
+    buttonRefs.current.set(messageId, node);
+  }, []);
+  if (items.length < 2) return null;
+
+  return (
+    <nav
+      className="chat-question-map"
+      aria-label={t("chat.questionMap.label")}
+      onPointerMove={(event) => setWaveFromPointer(event.clientY)}
+      onPointerLeave={resetWave}
+    >
+      <ol className="chat-question-map-list">
+        {items.map((item) => (
+          <li key={item.id} className="chat-question-map-item">
+            <button
+              ref={(node) => registerButton(item.id, node)}
+              type="button"
+              className="chat-question-map-button"
+              data-peak="false"
+              style={
+                {
+                  "--wave-width": "8px",
+                } as CSSProperties
+              }
+              aria-label={t("chat.questionMap.jump", {
+                index: item.index,
+                preview: item.preview,
+              })}
+              onFocus={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setWaveFromPointer(rect.top + rect.height / 2);
+              }}
+              onBlur={resetWave}
+              onClick={() => onJump(item.id)}
+            >
+              <span className="chat-question-map-mark" aria-hidden="true" />
+              <span className="chat-question-map-card" aria-hidden="true">
+                <span className="chat-question-map-card-title">{item.preview}</span>
+                <span className="chat-question-map-card-time">{item.time}</span>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
+// Issue #1580 — memoized so a chat-window re-render that does not change the
+// transcript inputs (e.g. a resize, or unrelated composer state) skips reconciling
+// the whole thread; combined with the per-bubble memo above, a new message renders
+// just the new bubble.
+const ConversationThread = memo(ConversationThreadImpl);
+
 const REPOSITORY_FILE_SEARCH_LIMIT = 24;
 const MAX_REPOSITORY_FOCUS_PATHS = 50;
 
 interface RepositoryRootOption {
   readonly root: string;
   readonly label: string;
+}
+
+interface ComposerRepositoryReference {
+  readonly id: string;
+  readonly root: string;
+  readonly path: string;
+  readonly name: string;
+  readonly directory: string;
+  readonly verified: boolean;
+  readonly source: "picker" | "draft";
 }
 
 function effectiveConnectedScopes(chat: Chat): readonly ChatConnectedScope[] {
@@ -520,6 +675,48 @@ function connectedRepositoryRoots(
   return roots;
 }
 
+function normalizedRepositoryRoot(root: string): string {
+  return root.replace(/\\/gu, "/").replace(/\/+$/u, "");
+}
+
+function repositoryRootContains(parentRoot: string, childRoot: string): boolean {
+  const parent = normalizedRepositoryRoot(parentRoot);
+  const child = normalizedRepositoryRoot(childRoot);
+  return parent.length > 0 && child.length > parent.length && child.startsWith(`${parent}/`);
+}
+
+function omitAncestorRepositoryRoots(roots: readonly string[]): readonly string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const root of roots) {
+    const trimmed = root.trim();
+    if (trimmed.length === 0 || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    unique.push(trimmed);
+  }
+  return unique.filter(
+    (root) =>
+      !unique.some((candidate) => candidate !== root && repositoryRootContains(root, candidate)),
+  );
+}
+
+function repositoryReferenceRootPaths(args: {
+  readonly chat: Chat | undefined;
+  readonly activeProjectPath: string | undefined;
+  readonly linkedRoot: string | null;
+  readonly linkedRoots: readonly string[];
+}): readonly string[] {
+  const roots = connectedRepositoryRoots(args.chat, args.activeProjectPath).map(
+    (root) => root.root,
+  );
+  if (args.linkedRoots.length > 0) {
+    roots.push(...args.linkedRoots);
+  } else if (args.linkedRoot !== null) {
+    roots.push(args.linkedRoot);
+  }
+  return omitAncestorRepositoryRoots(roots);
+}
+
 function normalizedRepositoryPath(path: string): string {
   return path.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
 }
@@ -529,6 +726,107 @@ function appendRepositoryReference(draft: string, path: string): string {
   if (draft.split(/\s+/u).includes(mention)) return draft;
   const trimmed = draft.trimEnd();
   return trimmed.length === 0 ? mention : `${trimmed} ${mention}`;
+}
+
+function repositoryReferenceId(root: string, path: string): string {
+  return `${root}\u0001${path}`;
+}
+
+function repositoryReferenceFromResult(
+  result: FilesSearchResult,
+  source: ComposerRepositoryReference["source"] = "picker",
+): ComposerRepositoryReference {
+  return {
+    id: repositoryReferenceId(result.root, result.path),
+    root: result.root,
+    path: result.path,
+    name: result.name,
+    directory: result.directory,
+    verified: true,
+    source,
+  };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function repositoryReferenceMentionPattern(path: string): RegExp {
+  return new RegExp(`(^|\\s)@${escapeRegExp(path)}(?=$|\\s)`, "gu");
+}
+
+function removeRepositoryReferenceFromDraft(draft: string, path: string): string {
+  const next = draft
+    .replace(repositoryReferenceMentionPattern(path), "$1")
+    .replace(/[ \t]{2,}/gu, " ");
+  return next.trim().length === 0 ? "" : next;
+}
+
+const COMPOSER_REPOSITORY_REFERENCE_PATTERN =
+  /(^|\s)@((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9]{0,15})(?=$|\s)/gu;
+
+function repositoryReferenceMentionPaths(draft: string): readonly string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  COMPOSER_REPOSITORY_REFERENCE_PATTERN.lastIndex = 0;
+  for (;;) {
+    const match = COMPOSER_REPOSITORY_REFERENCE_PATTERN.exec(draft);
+    if (match === null) break;
+    const path = normalizedRepositoryPath(match[2] ?? "");
+    if (path.length === 0 || seen.has(path)) continue;
+    seen.add(path);
+    paths.push(path);
+  }
+  return paths;
+}
+
+function syntheticRepositoryReferenceFromPath(
+  path: string,
+  selectedRoot: string,
+  roots: readonly RepositoryRootOption[],
+): ComposerRepositoryReference | null {
+  const normalized = normalizedRepositoryPath(path);
+  if (normalized.length === 0 || normalized.includes("..")) return null;
+  const root = selectedRoot.length > 0 ? selectedRoot : (roots[0]?.root ?? "");
+  if (root.length === 0) return null;
+  const segments = normalized.split("/").filter((segment) => segment.length > 0);
+  const name = segments[segments.length - 1] ?? normalized;
+  const directory = segments.length > 1 ? segments.slice(0, -1).join("/") : "";
+  return {
+    id: repositoryReferenceId(root, normalized),
+    root,
+    path: normalized,
+    name,
+    directory,
+    verified: false,
+    source: "draft",
+  };
+}
+
+function mergeComposerRepositoryReference(
+  current: readonly ComposerRepositoryReference[],
+  reference: ComposerRepositoryReference,
+): readonly ComposerRepositoryReference[] {
+  if (current.some((item) => item.id === reference.id)) return current;
+  return [...current, reference];
+}
+
+function synchronizeComposerRepositoryReferences(args: {
+  readonly current: readonly ComposerRepositoryReference[];
+  readonly draft: string;
+  readonly selectedRoot: string;
+  readonly roots: readonly RepositoryRootOption[];
+  readonly searchResults: readonly FilesSearchResult[];
+}): readonly ComposerRepositoryReference[] {
+  return repositoryReferenceMentionPaths(args.draft)
+    .map((path) => {
+      const existing = args.current.find((reference) => reference.path === path);
+      if (existing?.verified === true) return existing;
+      const searchResult = args.searchResults.find((result) => result.path === path);
+      if (searchResult !== undefined) return repositoryReferenceFromResult(searchResult, "draft");
+      return existing ?? syntheticRepositoryReferenceFromPath(path, args.selectedRoot, args.roots);
+    })
+    .filter((reference): reference is ComposerRepositoryReference => reference !== null);
 }
 
 interface RepositoryMentionRange {
@@ -622,8 +920,59 @@ function resultDirectoryLabel(result: FilesSearchResult): string {
   return result.directory.length === 0 ? "Repository root" : result.directory;
 }
 
+function fileRoleLabel(role: FilesSearchResult["fileRole"] | undefined): string {
+  switch (role) {
+    case "source":
+      return "Source";
+    case "test":
+      return "Test";
+    case "config":
+      return "Config";
+    case "docs":
+      return "Docs";
+    case "generated":
+      return "Generated";
+    case "asset":
+      return "Asset";
+    case "other":
+    case undefined:
+      return "File";
+  }
+}
+
+function fileRoleClassName(role: FilesSearchResult["fileRole"] | undefined): string {
+  return `repo-focus-badge repo-focus-badge-${role ?? "other"}`;
+}
+
+function fileSearchResultClassName(result: FilesSearchResult): string {
+  const secondary = result.fileRole === "generated" || result.fileRole === "asset";
+  return `repo-focus-result${secondary ? " repo-focus-result-secondary" : ""}`;
+}
+
+function matchQualityLabel(quality: FilesSearchResult["matchQuality"] | undefined): string {
+  switch (quality) {
+    case "exact":
+      return "Exact match";
+    case "strong":
+      return "Strong match";
+    case "path":
+      return "Path match";
+    case "weak":
+    case undefined:
+      return "Weak match";
+  }
+}
+
 function formatRepositoryFocusError(error: unknown): string {
   return formatUserError(error, "Unable to reference repository file.");
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    error.name === "AbortError"
+  );
 }
 
 interface RepositoryFileSearchState {
@@ -659,34 +1008,41 @@ function useRepositoryFileSearch(
       return undefined;
     }
 
+    const controller = new AbortController();
     let cancelled = false;
     setSearching(true);
     setError(null);
     setMessage("Searching repository files...");
-    void fetchFilesSearch(selectedRoot, trimmed, REPOSITORY_FILE_SEARCH_LIMIT)
-      .then((response) => {
-        if (cancelled) return;
-        setResults(response.results);
-        if (response.results.length === 0) {
-          setMessage("No matching repository files.");
-        } else {
-          const count = response.results.length;
-          setMessage(
-            `${String(count)} ${count === 1 ? "file" : "files"} found${response.truncated ? "; refine the query for more." : "."}`,
-          );
-        }
+    const searchTimer = window.setTimeout(() => {
+      void fetchFilesSearch(selectedRoot, trimmed, REPOSITORY_FILE_SEARCH_LIMIT, {
+        signal: controller.signal,
       })
-      .catch((caught: unknown) => {
-        if (cancelled) return;
-        setResults([]);
-        setError(formatRepositoryFocusError(caught));
-        setMessage("Repository search failed.");
-      })
-      .finally(() => {
-        if (!cancelled) setSearching(false);
-      });
+        .then((response) => {
+          if (cancelled) return;
+          setResults(response.results);
+          if (response.results.length === 0) {
+            setMessage("No matching repository files.");
+          } else {
+            const count = response.results.length;
+            setMessage(
+              `${String(count)} ${count === 1 ? "file" : "files"} found${response.truncated ? "; refine query; search scanned limit reached." : "."}`,
+            );
+          }
+        })
+        .catch((caught: unknown) => {
+          if (cancelled || isAbortError(caught)) return;
+          setResults([]);
+          setError(formatRepositoryFocusError(caught));
+          setMessage("Repository search failed.");
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 120);
     return () => {
       cancelled = true;
+      window.clearTimeout(searchTimer);
+      controller.abort();
     };
   }, [open, query, selectedRoot]);
 
@@ -780,7 +1136,7 @@ function RepositoryFilePickerPanel({
             <button
               key={`${result.root}:${result.path}`}
               type="button"
-              className="repo-focus-result"
+              className={fileSearchResultClassName(result)}
               role="option"
               aria-selected={index === highlightedIndex ? "true" : "false"}
               data-highlighted={index === highlightedIndex ? "true" : "false"}
@@ -792,12 +1148,78 @@ function RepositoryFilePickerPanel({
                 if (event.detail === 0 && pickingPath === null) onPick(result);
               }}
             >
-              <span className="repo-focus-result-name">{result.name}</span>
+              <span className="repo-focus-result-main">
+                <span className="repo-focus-result-name">{result.name}</span>
+                <span className="repo-focus-result-badges" aria-hidden="true">
+                  <span className={fileRoleClassName(result.fileRole)}>
+                    {fileRoleLabel(result.fileRole)}
+                  </span>
+                  {result.rootKind === "nested-git-root" ? (
+                    <span className="repo-focus-badge repo-focus-badge-root">Nested repo</span>
+                  ) : null}
+                </span>
+              </span>
               <span className="repo-focus-result-path">{resultDirectoryLabel(result)}</span>
+              <span className="sr-only">
+                {`${fileRoleLabel(result.fileRole)}; ${matchQualityLabel(result.matchQuality)}${result.rootKind === "nested-git-root" ? "; nested repository root" : ""}.`}
+              </span>
             </button>
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+interface RepositoryReferenceStripProps {
+  readonly references: readonly ComposerRepositoryReference[];
+  readonly onRemove: (id: string) => void;
+}
+
+function RepositoryReferenceStrip({
+  references,
+  onRemove,
+}: RepositoryReferenceStripProps): ReactNode {
+  if (references.length === 0) return null;
+  return (
+    <div className="repo-token-strip" role="list" aria-label="Referenced repository files">
+      {references.map((reference) => (
+        <div
+          key={reference.id}
+          className={`repo-token${reference.verified ? "" : " repo-token-unverified"}`}
+          role="listitem"
+          title={
+            reference.verified
+              ? `${reference.path} — ${reference.root}`
+              : `Reference not verified yet — ${reference.path} — ${reference.root}`
+          }
+        >
+          <span className="repo-token-icon" aria-hidden="true">
+            <FileIcon name={reference.name} />
+          </span>
+          <span className="repo-token-main">
+            <span className="repo-token-name">{reference.name}</span>
+            <span className="repo-token-path">
+              {reference.directory.length === 0
+                ? rootDisplayName(reference.root)
+                : reference.directory}
+            </span>
+          </span>
+          {reference.verified ? null : (
+            <span className="repo-token-status" aria-label="Reference not verified yet">
+              Unverified
+            </span>
+          )}
+          <button
+            type="button"
+            className="repo-token-remove"
+            aria-label={`Remove repository reference ${reference.path}`}
+            onClick={() => onRemove(reference.id)}
+          >
+            <Icons.close size={12} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -807,12 +1229,104 @@ interface ComposerBarProps {
   readonly ready: boolean;
   readonly selectedModelCapability: ModelCapability | undefined;
   readonly onAttachFiles: (files: readonly File[]) => void;
-  readonly compact?: boolean;
   readonly controlsNarrow?: boolean;
   readonly barCompact?: boolean;
-  // Issue #151 — when true, the budget for the next send exceeds the model's
-  // window and the send button must be focusable but inert.
-  readonly budgetExceeded: boolean;
+  // Issue #495 — capability-gated dictation. The mic affordance renders only when
+  // `voiceDictationVisible` is true (STT advertised + browser can capture). `dictation` is the
+  // composer-local state machine and `micButtonRef` lets the preview return focus to the button.
+  readonly voiceDictationVisible: boolean;
+  readonly dictation: DictationController;
+  readonly micButtonRef: Ref<HTMLButtonElement>;
+  // Issue #501 — capability-gated assistant speech output. The mute toggle renders only when the
+  // deployment advertises speech output; a no-voice / STT-only deployment shows nothing (AC1).
+  readonly voiceSpeechOutputVisible: boolean;
+  readonly voiceMuted: boolean;
+  readonly onToggleVoiceMute: () => void;
+  readonly playbackButtonRef: Ref<HTMLButtonElement>;
+  // Issue #1559/#1560 — capability-gated voice dialogue switch. Rendered only when
+  // `voiceDialogAvailable` is true (speech capture + speech output + at least one persona).
+  // `voiceDialogActive` drives aria-checked.
+  readonly voiceDialogAvailable: boolean;
+  readonly voiceDialogActive: boolean;
+  readonly onToggleVoiceDialog: () => void;
+  readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
+}
+
+interface VoiceDialogComposerControlsProps {
+  readonly voiceMuted: boolean;
+  readonly onToggleVoiceMute: () => void;
+  readonly playbackButtonRef: Ref<HTMLButtonElement>;
+  readonly voiceDialogActive: boolean;
+  readonly onToggleVoiceDialog: () => void;
+  readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
+  readonly compact?: boolean | undefined;
+}
+
+interface VoiceDialogMicMuteButtonProps {
+  readonly muted: boolean;
+  readonly onToggle: () => void;
+  readonly buttonRef?: Ref<HTMLButtonElement> | undefined;
+  readonly compact?: boolean | undefined;
+}
+
+function VoiceDialogMicMuteButton({
+  muted,
+  onToggle,
+  buttonRef,
+  compact = false,
+}: VoiceDialogMicMuteButtonProps): ReactNode {
+  const hintId = useId();
+  const label = muted ? "Unmute voice dialogue microphone" : "Mute voice dialogue microphone";
+  return (
+    <button
+      type="button"
+      ref={buttonRef}
+      className={`cmp-icon cmp-voice cmp-voice-dialog-mute ui-tip${compact ? " cmp-mode-compact" : ""}`}
+      data-muted={muted ? "true" : "false"}
+      data-tip={label}
+      aria-label={label}
+      aria-pressed={muted}
+      aria-describedby={hintId}
+      onClick={onToggle}
+    >
+      <span className="cmp-voice-dialog-mic-glyph" aria-hidden="true">
+        <Icons.mic size={16} />
+        {muted ? <span className="cmp-voice-dialog-mic-slash" /> : null}
+      </span>
+      <span id={hintId} className="sr-only">
+        When muted, Keiko cannot hear your microphone until you unmute.
+      </span>
+    </button>
+  );
+}
+
+function VoiceDialogComposerControls({
+  voiceMuted,
+  onToggleVoiceMute,
+  playbackButtonRef,
+  voiceDialogActive,
+  onToggleVoiceDialog,
+  voiceDialogButtonRef,
+  compact = false,
+}: VoiceDialogComposerControlsProps): ReactNode {
+  return (
+    <div className="cmp-bar cmp-bar-voice-dialog">
+      <div className="cmp-bar-main cmp-bar-main-voice-dialog">
+        <VoiceDialogModeSwitch
+          active={voiceDialogActive}
+          onToggle={onToggleVoiceDialog}
+          buttonRef={voiceDialogButtonRef}
+          compact={compact}
+        />
+        <VoiceDialogMicMuteButton
+          muted={voiceMuted}
+          onToggle={onToggleVoiceMute}
+          buttonRef={playbackButtonRef}
+          compact={compact}
+        />
+      </div>
+    </div>
+  );
 }
 
 function ComposerBar({
@@ -820,11 +1334,21 @@ function ComposerBar({
   ready,
   selectedModelCapability,
   onAttachFiles,
-  compact = false,
   controlsNarrow = false,
   barCompact = false,
-  budgetExceeded,
+  voiceDictationVisible,
+  dictation,
+  micButtonRef,
+  voiceSpeechOutputVisible,
+  voiceMuted,
+  onToggleVoiceMute,
+  playbackButtonRef,
+  voiceDialogAvailable,
+  voiceDialogActive,
+  onToggleVoiceDialog,
+  voiceDialogButtonRef,
 }: ComposerBarProps): ReactNode {
+  const { t } = useI18n();
   const {
     models,
     selectedModel,
@@ -838,41 +1362,33 @@ function ComposerBar({
   // AC #1 / AC #4: when no eligible model is configured the send button must be
   // focusable (so screen-reader users discover the error) but must not submit.
   // Use aria-disabled rather than the HTML disabled attribute so focus is retained.
-  // Issue #151 — budget-exceeded also blocks send.
-  const sendBlocked = noEligibleModels || budgetExceeded || !ready;
+  const sendBlocked = noEligibleModels || !ready;
   const draftEmpty = draft.trim().length === 0;
 
   // AC #2: aria-describedby chains:
   // - model select → NO_MODEL_ALERT_ID when noEligibleModels
   // - send button  → NO_MODEL_ALERT_ID when noEligibleModels,
-  //                  BUDGET_EXCEEDED_ALERT_ID when context exceeded,
   //                  LOADING_STATUS_ID while bootstrapping,
   //                  else SEND_HINT_ID when only the draft is empty
   const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
   const sendDescribedBy = noEligibleModels
     ? NO_MODEL_ALERT_ID
-    : budgetExceeded
-      ? BUDGET_EXCEEDED_ALERT_ID
-      : loading
-        ? LOADING_STATUS_ID
-        : draftEmpty
-          ? SEND_HINT_ID
-          : undefined;
+    : loading
+      ? LOADING_STATUS_ID
+      : draftEmpty
+        ? SEND_HINT_ID
+        : undefined;
 
-  // AC #2 / title for disabled model select.
-  const selectTitle = noEligibleModels
-    ? "No conversation-eligible model is configured — connect a gateway in Settings"
-    : "Model";
   const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
   const compactModelTip = loading
-    ? "Loading models…"
+    ? t("chat.model.loading")
     : noEligibleModels
-      ? "No conversation-eligible model"
-      : "Change model";
+      ? t("chat.model.noEligible")
+      : t("chat.model.change");
 
   return (
     <div className={`cmp-bar${barCompact ? " cmp-bar-compact" : ""}`}>
-      <div className="cmp-bar-main">
+      <div className="cmp-bar-model">
         {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button.
             uiux-fix F040 C207 — tell the button whether ANY configured model can attach, so its
             sr-only hint does not suggest a model switch that cannot succeed. */}
@@ -891,29 +1407,29 @@ function ComposerBar({
           <KeikoSelect
             triggerClassName="cmp-model-select"
             value={selectValue}
-            ariaLabel="Models"
+            ariaLabel={t("chat.model.menuTitle")}
             ariaDescribedBy={selectDescribedBy}
             disabled={loading}
             placeholder={
               loading
-                ? "Loading models…"
+                ? t("chat.model.loading")
                 : noEligibleModels
-                  ? "No conversation-eligible model"
-                  : "Models"
+                  ? t("chat.model.noEligible")
+                  : t("chat.model.menuTitle")
             }
             leadingVisual={
               <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
             }
-            menuTitle="Models"
+            menuTitle={t("chat.model.menuTitle")}
             menuClassName="cmp-model-menu"
             menuMinWidth={controlsNarrow ? 118 : 280}
             mono
             sections={[
               {
                 options: loading
-                  ? [{ value: "", label: "Loading models…", disabled: true }]
+                  ? [{ value: "", label: t("chat.model.loading"), disabled: true }]
                   : noEligibleModels
-                    ? [{ value: "", label: "No conversation-eligible model", disabled: true }]
+                    ? [{ value: "", label: t("chat.model.noEligible"), disabled: true }]
                     : modelList(models).map((model) => ({
                         value: model.id,
                         label: model.id,
@@ -926,56 +1442,85 @@ function ComposerBar({
             }}
           />
         </div>
-        {/* AC #1: voice button omitted — VOICE_SUPPORTED is false.
-            When the capability flag arrives, render this block only when VOICE_SUPPORTED is true. */}
-        {VOICE_SUPPORTED ? (
-          <button type="button" className="cmp-icon ui-tip" aria-label="Voice" data-tip="Voice">
-            <Icons.mic size={16} />
-          </button>
+      </div>
+      <div className="cmp-bar-main">
+        {/* Issue #495 — capability-gated dictation. Rendered only when the deployment advertises
+            speech-to-text and the browser can capture audio; a no-voice deployment shows no mic at
+            all so the composer stays clean and fully text-capable (AC1). The button is STT dictation
+            only and never implies full voice conversation (AC5). */}
+        {voiceDictationVisible ? (
+          <VoiceDictationButton
+            phase={dictation.phase}
+            onStart={dictation.start}
+            onStop={dictation.stop}
+            buttonRef={micButtonRef}
+            compact={controlsNarrow}
+          />
         ) : null}
+        {/* Issue #1559/#1560 — capability-gated voice dialogue switch. Rendered only when the deployment
+            can capture speech, speak answers, and offers a voice persona; otherwise nothing new appears
+            and the composer stays clean and fully text-capable (AC3). The switch enters / leaves spoken
+            dialogue; the active-session status and controls render in the input stack above the bar. */}
+        {voiceDialogAvailable ? (
+          <VoiceDialogModeSwitch
+            active={voiceDialogActive}
+            onToggle={onToggleVoiceDialog}
+            buttonRef={voiceDialogButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : null}
+        {/* Issue #501 — capability-gated assistant speech-output mute toggle. Rendered only when the
+            deployment advertises speech output; a no-voice / STT-only deployment shows nothing new, so
+            the assistant answers in text with no playback control (AC1). */}
+        {voiceSpeechOutputVisible ? (
+          <VoicePlaybackMuteButton
+            muted={voiceMuted}
+            onToggle={onToggleVoiceMute}
+            buttonRef={playbackButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : null}
+        {/* Issue #152 — while a send is in flight the primary action button
+            flips to "Cancel response" (AC#1 + AC#3). Type="button" so it never
+            submits the surrounding form; onClick calls cancelSend which is a
+            safe no-op when the status is already terminal. */}
+        {sending ? (
+          <button
+            type="button"
+            className="cmp-send cmp-send-cancel cmp-tip-end"
+            data-on
+            aria-label={t("chat.send.cancel")}
+            data-tip={t("chat.send.cancel")}
+            onClick={cancelSend}
+          >
+            <Icons.close size={16} />
+          </button>
+        ) : (
+          <button
+            type={sendBlocked ? "button" : "submit"}
+            className="cmp-send cmp-tip-end"
+            data-on={!sendBlocked}
+            data-tip={
+              noEligibleModels
+                ? t("chat.send.noModel")
+                : loading
+                  ? t("chat.send.connecting")
+                  : t("chat.send.label")
+            }
+            aria-disabled={sendBlocked}
+            aria-describedby={sendDescribedBy}
+            aria-label={t("chat.send.label")}
+          >
+            <Icons.arrowUp size={16} />
+          </button>
+        )}
       </div>
       {/* AC #2: visually-hidden hint for screen readers when send is blocked by empty draft */}
       {sendDescribedBy === SEND_HINT_ID ? (
         <span id={SEND_HINT_ID} className="sr-only">
-          Type a message to send
+          {t("chat.send.hint")}
         </span>
       ) : null}
-      {/* Issue #152 — while a send is in flight the primary action button
-          flips to "Cancel response" (AC#1 + AC#3). Type="button" so it never
-          submits the surrounding form; onClick calls cancelSend which is a
-          safe no-op when the status is already terminal. */}
-      {sending ? (
-        <button
-          type="button"
-          className="cmp-send cmp-send-cancel cmp-tip-end"
-          data-on
-          aria-label="Cancel response"
-          data-tip="Cancel response"
-          onClick={cancelSend}
-        >
-          <Icons.close size={16} />
-        </button>
-      ) : (
-        <button
-          type={sendBlocked ? "button" : "submit"}
-          className="cmp-send cmp-tip-end"
-          data-on={!sendBlocked}
-          data-tip={
-            noEligibleModels
-              ? "No model available"
-              : budgetExceeded
-                ? "Context too large"
-                : loading
-                  ? "Connecting to gateway"
-                  : SEND_TOOLTIP
-          }
-          aria-disabled={sendBlocked}
-          aria-describedby={sendDescribedBy}
-          aria-label="Send message"
-        >
-          <Icons.arrowUp size={16} />
-        </button>
-      )}
     </div>
   );
 }
@@ -985,9 +1530,10 @@ function ComposerBar({
 // CSS class (var(--fg) text) for WCAG AA contrast compliance.
 // Stable id enables aria-describedby wiring from disabled controls (AC #2).
 function NoModelAlert(): ReactNode {
+  const { t } = useI18n();
   return (
     <div id={NO_MODEL_ALERT_ID} role="alert" className="gw-error cmp-no-model">
-      No conversation-eligible model is configured. Connect a gateway in Settings to enable chat.
+      {t("chat.noModelAlert")}
     </div>
   );
 }
@@ -996,10 +1542,11 @@ function NoModelAlert(): ReactNode {
 // screen-reader users hear the state without interruption. No fake progress
 // percentage — engineering note forbids it.
 function LoadingStatus(): ReactNode {
+  const { t } = useI18n();
   return (
     <div id={LOADING_STATUS_ID} role="status" className="cmp-loading-status">
       <span className="cmp-loading-dot" aria-hidden="true" />
-      Connecting to your gateway…
+      {t("chat.loadingGateway")}
     </div>
   );
 }
@@ -1032,7 +1579,17 @@ export function sendStatusLabel(status: SendStatus): string {
 // without interruption. Hidden when there is nothing to say (idle/completed/
 // failed — the error string carries its own role="alert").
 function SendLifecycleStatus({ status }: { readonly status: SendStatus }): ReactNode {
-  const label = sendStatusLabel(status);
+  const { t } = useI18n();
+  const label =
+    status === "queued"
+      ? t("chat.send.statusQueued")
+      : status === "contacting"
+        ? t("chat.send.statusContacting")
+        : status === "streaming"
+          ? t("chat.send.statusStreaming")
+          : status === "cancelled"
+            ? t("chat.send.statusCancelled")
+            : "";
   // uiux-fix F041 (C170, WCAG 4.1.3) — the live region stays permanently mounted
   // and only its CONTENT changes: a role="status" region inserted into the DOM
   // together with its first message is unreliably announced (VoiceOver/Safari,
@@ -1070,6 +1627,7 @@ function ComposerCore({
   controlsNarrow = false,
   barCompact = false,
 }: ComposerCoreProps): ReactNode {
+  const { t } = useI18n();
   const {
     draft,
     loading,
@@ -1082,20 +1640,12 @@ function ComposerCore({
     pendingAttachments,
     addPendingAttachment,
     removePendingAttachment,
-    budget,
-    clearHistory,
+    error,
+    messages,
     activeChat,
     activeProject,
     replaceChat,
   } = session;
-  // Issue #151 — budget can be undefined while bootstrapping; treat that as
-  // not-exceeded so the composer remains submittable. CB-F1: a runtime-configured
-  // model with contextWindow 0 reports pressure "exceeded" from the estimator but
-  // has no real window — it must NOT block send (and BudgetIndicator self-hides),
-  // so we gate on contextWindowTokens > 0 via the shared predicate. This also keeps
-  // aria-describedby from dangling at a BudgetIndicator that renders nothing.
-  const budgetExceeded = isBudgetExceeded(budget);
-
   // uiux-fix F009 C089 — auto-grow the composer with its content up to 220px
   // (~8-9 lines at 15px/1.5), then scroll. Clearing the draft after a send
   // collapses the textarea back to its rows={2} minimum. The mini composer
@@ -1137,6 +1687,151 @@ function ComposerCore({
     [addPendingAttachment],
   );
 
+  // Issue #495 — capability-gated composer dictation. The probe is non-blocking: the composer
+  // renders fully while `useVoiceCapability` resolves, and the mic affordance appears only once the
+  // deployment advertises speech-to-text AND the browser can capture audio. A no-voice / unsupported
+  // environment shows no voice control at all, so the composer stays clean and fully text-capable.
+  const voiceCapability = useVoiceCapability();
+  const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
+  // Issue #501 — assistant speech-output gate: reuse the already-fetched voiceCapability probe (no
+  // second fetch). Only true when the deployment advertises speech output; STT-only and no-voice
+  // deployments leave it false, so no playback control appears and Keiko answers in text (AC1).
+  const voiceSpeechOutputVisible = supportsSpeechOutput(voiceCapability);
+  const micButtonRef = useRef<HTMLButtonElement>(null);
+  const playbackButtonRef = useRef<HTMLButtonElement>(null);
+  const voiceDialogButtonRef = useRef<HTMLButtonElement>(null);
+  const motionMicButtonRef = useRef<HTMLButtonElement>(null);
+  const motionPlaybackButtonRef = useRef<HTMLButtonElement>(null);
+  const motionVoiceDialogButtonRef = useRef<HTMLButtonElement>(null);
+  // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
+  // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
+  const insertTranscript = useCallback(
+    (text: string): void => {
+      setDraft(draft.trim().length === 0 ? text : `${draft.replace(/\s+$/u, "")} ${text}`);
+      taRef.current?.focus();
+    },
+    [draft, setDraft],
+  );
+  const dictation = useDictation({ onInsert: insertTranscript });
+  // Issue #1559/#1560 — dialog-mode availability + persona selection. Voice Dialogue is true
+  // WebRTC realtime speech-to-speech; STT dictation remains a separate "speech to draft" feature.
+  const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
+  const playback = useAssistantSpeech({
+    profile: voiceCapability?.profile ?? "none",
+    // Voice output is owned by the explicit Voice Dialogue loop. A reload or normal text chat must not
+    // auto-speak the latest settled assistant answer just because speech output is available.
+    enabled: false,
+    text: undefined,
+    messageId: undefined,
+  });
+  const voiceGrounding = voiceSessionGroundingContext(activeChat);
+  const realtimeVoice = useRealtimeVoice({
+    persona: voiceDialog.persona,
+    chatContext:
+      activeChat === undefined
+        ? undefined
+        : {
+            chatId: activeChat.id,
+            memory: {
+              enabled: session.memoryEnabled,
+              budgetTokens: session.memoryBudgetTokens,
+            },
+            ...(voiceGrounding === undefined ? {} : { grounding: voiceGrounding }),
+          },
+    groundingActive: voiceGrounding?.enabled === true,
+    onGroundedToolCall: session.runRealtimeGroundedTool,
+    onUserTranscriptCommitted: (text) =>
+      session.appendVoiceTurn?.([{ role: "user", content: text }]),
+    onAssistantTranscriptCommitted: (text) =>
+      session.appendVoiceTurn?.([{ role: "assistant", content: text }]),
+  });
+  const voiceDialogAvailable = voiceDialog.available && activeChat !== undefined;
+  const voiceDialogState = deriveVoiceDialogState({
+    realtimePhase: realtimeVoice.phase,
+    turnState: realtimeVoice.turnSnapshot.state,
+    muted: realtimeVoice.muted,
+  });
+  const voiceAura = deriveVoiceAuraState({
+    voiceDialogActive: voiceDialog.active,
+    voiceDialogAvailable,
+    voiceDialogState,
+    listening: realtimeVoice.listening,
+    speaking: realtimeVoice.speaking,
+    sending,
+    sendStatus,
+    hasSessionError: error !== undefined || realtimeVoice.error !== undefined,
+  });
+  const enterVoiceDialog = useCallback(() => {
+    if (!voiceDialogAvailable) {
+      return;
+    }
+    voiceDialog.enter();
+    realtimeVoice.start();
+  }, [voiceDialog, voiceDialogAvailable, realtimeVoice]);
+  const leaveVoiceDialog = useCallback(() => {
+    realtimeVoice.stop();
+    voiceDialog.leave();
+  }, [realtimeVoice, voiceDialog]);
+  // Toggling the mode swaps the composer footer between ComposerBar and the voice-control
+  // cluster, so the clicked switch unmounts and focus would fall to <body>. Flag the user
+  // toggle so the post-swap effect can return focus to the freshly mounted switch (WCAG
+  // 2.4.3). Programmatic auto-leave (capability lost) goes through leaveVoiceDialog directly
+  // and never sets the flag, so it never steals focus from wherever the user is.
+  const restoreVoiceDialogFocusRef = useRef(false);
+  const toggleVoiceDialog = useCallback(() => {
+    restoreVoiceDialogFocusRef.current = true;
+    if (voiceDialog.active) {
+      leaveVoiceDialog();
+    } else {
+      enterVoiceDialog();
+    }
+  }, [voiceDialog.active, enterVoiceDialog, leaveVoiceDialog]);
+  useEffect(() => {
+    if (voiceDialog.active && !voiceDialogAvailable) {
+      leaveVoiceDialog();
+    }
+  }, [leaveVoiceDialog, voiceDialog.active, voiceDialogAvailable]);
+  useEffect(() => {
+    if (!voiceDialog.active && realtimeVoice.phase !== "idle") {
+      realtimeVoice.stop();
+    }
+  }, [voiceDialog.active, realtimeVoice]);
+  const voiceMuted = voiceDialog.active ? realtimeVoice.muted : playback.snapshot.muted;
+  const toggleVoiceMute = voiceDialog.active ? realtimeVoice.toggleMute : playback.toggleMute;
+  const [voiceComposerMotion, setVoiceComposerMotion] = useState<"idle" | "entering" | "leaving">(
+    "idle",
+  );
+  const previousVoiceDialogActiveRef = useRef(voiceDialog.active);
+  const voiceComposerMotionTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    if (previousVoiceDialogActiveRef.current === voiceDialog.active) {
+      return undefined;
+    }
+    previousVoiceDialogActiveRef.current = voiceDialog.active;
+    // The swap remounted the dialogue switch under a new parent; return focus to it so a
+    // keyboard user is not dropped onto <body>. Runs only for a user-driven toggle.
+    if (restoreVoiceDialogFocusRef.current) {
+      restoreVoiceDialogFocusRef.current = false;
+      voiceDialogButtonRef.current?.focus();
+    }
+    if (voiceComposerMotionTimerRef.current !== undefined) {
+      clearTimeout(voiceComposerMotionTimerRef.current);
+    }
+    setVoiceComposerMotion(voiceDialog.active ? "entering" : "leaving");
+    voiceComposerMotionTimerRef.current = setTimeout(() => {
+      voiceComposerMotionTimerRef.current = undefined;
+      setVoiceComposerMotion("idle");
+    }, 460);
+    return undefined;
+  }, [voiceDialog.active]);
+  useEffect(() => {
+    return () => {
+      if (voiceComposerMotionTimerRef.current !== undefined) {
+        clearTimeout(voiceComposerMotionTimerRef.current);
+      }
+    };
+  }, []);
+
   const repositoryRoots = useMemo(
     () => connectedRepositoryRoots(activeChat, activeProject?.path),
     [activeChat, activeProject?.path],
@@ -1149,6 +1844,9 @@ function ComposerCore({
   const [repositoryPickingPath, setRepositoryPickingPath] = useState<string | null>(null);
   const [repositoryPickError, setRepositoryPickError] = useState<string | null>(null);
   const [repositoryHighlightedIndex, setRepositoryHighlightedIndex] = useState(0);
+  const [repositoryReferences, setRepositoryReferences] = useState<
+    readonly ComposerRepositoryReference[]
+  >([]);
   const repositoryPickerOpen = repositoryMention !== null && repositoryRoots.length > 0;
   const repositorySearch = useRepositoryFileSearch(
     repositoryPickerOpen,
@@ -1170,6 +1868,18 @@ function ComposerCore({
   useEffect(() => {
     setRepositoryHighlightedIndex(0);
   }, [repositoryMention?.query, repositorySearch.results]);
+
+  useEffect(() => {
+    setRepositoryReferences((current) =>
+      synchronizeComposerRepositoryReferences({
+        current,
+        draft,
+        selectedRoot: selectedRepositoryRoot,
+        roots: repositoryRoots,
+        searchResults: repositorySearch.results,
+      }),
+    );
+  }, [draft, repositoryRootKey, repositoryRoots, repositorySearch.results, selectedRepositoryRoot]);
 
   const updateRepositoryMentionFromTextarea = useCallback(
     (value: string, cursor: number): void => {
@@ -1204,6 +1914,9 @@ function ComposerCore({
                 return { value, cursor: value.length };
               })()
             : replaceRepositoryMention(draft, mention, result.path);
+        setRepositoryReferences((current) =>
+          mergeComposerRepositoryReference(current, repositoryReferenceFromResult(result)),
+        );
         setDraft(next.value);
         setRepositoryMention(null);
         requestAnimationFrame(() => {
@@ -1217,6 +1930,19 @@ function ComposerCore({
       }
     },
     [activeChat, draft, replaceChat, repositoryMention, setDraft],
+  );
+
+  const removeRepositoryReference = useCallback(
+    (id: string): void => {
+      const reference = repositoryReferences.find((item) => item.id === id);
+      if (reference === undefined) return;
+      setRepositoryReferences((current) => current.filter((item) => item.id !== id));
+      setDraft(removeRepositoryReferenceFromDraft(draft, reference.path));
+      requestAnimationFrame(() => {
+        taRef.current?.focus();
+      });
+    },
+    [draft, repositoryReferences, setDraft],
   );
 
   const handleDraftChange = useCallback(
@@ -1279,17 +2005,36 @@ function ComposerCore({
     ],
   );
 
+  const composerBoxClassName = [
+    "cmp-box",
+    compact ? "cmp-box-compact" : "",
+    voiceDialog.active ? "cmp-box-voice-dialog" : "",
+    voiceComposerMotion === "entering" ? "cmp-box-voice-dialog-entering" : "",
+    voiceComposerMotion === "leaving" ? "cmp-box-voice-dialog-leaving" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className={`cmp-box${compact ? " cmp-box-compact" : ""}`}>
-      <div className="cmp-input-stack">
+    <div
+      className={composerBoxClassName}
+      data-voice-aura={voiceAura.active ? "on" : undefined}
+      data-voice-aura-state={voiceAura.active ? voiceAura.state : undefined}
+      data-voice-aura-intensity={voiceAura.active ? voiceAura.intensity : undefined}
+    >
+      <div
+        className={`cmp-input-stack${voiceDialog.active ? " cmp-input-stack-voice-dialog" : ""}`}
+      >
         {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
-        <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
+        {voiceDialog.active ? null : (
+          <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
+        )}
         <textarea
           className="cmp-input"
           ref={taRef}
           rows={2}
           value={draft}
-          aria-label="Chat message"
+          aria-label={t("chat.messageLabel")}
           placeholder={placeholder}
           onChange={handleDraftChange}
           onSelect={handleDraftSelect}
@@ -1299,7 +2044,7 @@ function ComposerCore({
           // pre-typed during streaming. Re-submit stays blocked by the isInFlight
           // guard in useChatSession, and the primary button is "Cancel" meanwhile.
         />
-        {repositoryPickerOpen ? (
+        {!voiceDialog.active && repositoryPickerOpen ? (
           <div className="repo-focus repo-focus-inline">
             <span className="sr-only" role="status" aria-live="polite">
               {repositoryPickError ?? repositorySearch.error ?? repositorySearch.message}
@@ -1322,35 +2067,117 @@ function ComposerCore({
             />
           </div>
         ) : null}
+        {voiceDialog.active ? null : (
+          <RepositoryReferenceStrip
+            references={repositoryReferences}
+            onRemove={removeRepositoryReference}
+          />
+        )}
         {/* Chip strip below the textarea, above the composer bar (AC #3) */}
-        <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
+        {voiceDialog.active ? null : (
+          <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
+        )}
         {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
-        <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+        {voiceDialog.active ? null : (
+          <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+        )}
         {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
             adjacent to the textarea so SR users hear the state without losing
             composer focus. Hidden when there is nothing to announce. */}
-        <SendLifecycleStatus status={sendStatus} />
+        {voiceDialog.active ? null : <SendLifecycleStatus status={sendStatus} />}
+        {voiceAura.active ? (
+          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {voiceDialogStateHeadline(voiceDialogState)}
+          </span>
+        ) : null}
+        {/* Issue #495 — dictation transcript review / transcribing status / error. Lives in the input
+            stack so it is contextually adjacent to the textarea and announced to assistive tech. It
+            renders nothing while idle or recording (the mic button carries those states). */}
+        {!voiceDialog.active && voiceDictationVisible ? (
+          <VoiceDictationPreviewFromController
+            controller={dictation}
+            onAfterDiscard={() => micButtonRef.current?.focus()}
+          />
+        ) : null}
       </div>
-      <div className="cmp-footer-row">
-        {/* Issue #151 — context-pressure indicator + clear-history affordance */}
-        {minimal ? null : (
-          <BudgetIndicator
-            budget={budget}
-            onClearHistory={clearHistory}
-            disabled={sending || loading}
-            compact={compact}
+      <div
+        className={`cmp-footer-row${voiceComposerMotion !== "idle" ? " cmp-footer-row-motion" : ""}`}
+      >
+        {voiceDialog.active && voiceComposerMotion === "entering" ? (
+          <div
+            className="cmp-composer-motion-layer cmp-composer-motion-layer-normal"
+            aria-hidden="true"
+            inert
+          >
+            <ComposerBar
+              session={session}
+              ready={ready}
+              selectedModelCapability={selectedModelCapability}
+              onAttachFiles={handleFiles}
+              controlsNarrow={controlsNarrow}
+              barCompact={barCompact}
+              voiceDictationVisible={voiceDictationVisible}
+              dictation={dictation}
+              micButtonRef={motionMicButtonRef}
+              voiceSpeechOutputVisible={voiceSpeechOutputVisible}
+              voiceMuted={playback.snapshot.muted}
+              onToggleVoiceMute={playback.toggleMute}
+              playbackButtonRef={motionPlaybackButtonRef}
+              voiceDialogAvailable={voiceDialogAvailable}
+              voiceDialogActive={false}
+              onToggleVoiceDialog={toggleVoiceDialog}
+              voiceDialogButtonRef={motionVoiceDialogButtonRef}
+            />
+          </div>
+        ) : null}
+        {voiceDialog.active ? (
+          <VoiceDialogComposerControls
+            voiceMuted={voiceMuted}
+            onToggleVoiceMute={toggleVoiceMute}
+            playbackButtonRef={playbackButtonRef}
+            voiceDialogActive={voiceDialog.active}
+            onToggleVoiceDialog={toggleVoiceDialog}
+            voiceDialogButtonRef={voiceDialogButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : (
+          <ComposerBar
+            session={session}
+            ready={ready}
+            selectedModelCapability={selectedModelCapability}
+            onAttachFiles={handleFiles}
+            controlsNarrow={controlsNarrow}
+            barCompact={barCompact}
+            voiceDictationVisible={voiceDictationVisible}
+            dictation={dictation}
+            micButtonRef={micButtonRef}
+            voiceSpeechOutputVisible={voiceSpeechOutputVisible}
+            voiceMuted={voiceMuted}
+            onToggleVoiceMute={toggleVoiceMute}
+            playbackButtonRef={playbackButtonRef}
+            voiceDialogAvailable={voiceDialogAvailable}
+            voiceDialogActive={voiceDialog.active}
+            onToggleVoiceDialog={toggleVoiceDialog}
+            voiceDialogButtonRef={voiceDialogButtonRef}
           />
         )}
-        <ComposerBar
-          session={session}
-          ready={ready}
-          selectedModelCapability={selectedModelCapability}
-          onAttachFiles={handleFiles}
-          compact={compact}
-          controlsNarrow={controlsNarrow}
-          barCompact={barCompact}
-          budgetExceeded={budgetExceeded}
-        />
+        {!voiceDialog.active && voiceComposerMotion === "leaving" ? (
+          <div
+            className="cmp-composer-motion-layer cmp-composer-motion-layer-voice"
+            aria-hidden="true"
+            inert
+          >
+            <VoiceDialogComposerControls
+              voiceMuted={realtimeVoice.muted}
+              onToggleVoiceMute={toggleVoiceMute}
+              playbackButtonRef={motionPlaybackButtonRef}
+              voiceDialogActive={true}
+              onToggleVoiceDialog={toggleVoiceDialog}
+              voiceDialogButtonRef={motionVoiceDialogButtonRef}
+              compact={controlsNarrow}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1364,16 +2191,21 @@ interface EmptyComposerStateProps {
 }
 
 function EmptyComposerState({ minimal = false }: EmptyComposerStateProps): ReactNode {
+  const { t } = useI18n();
   if (minimal) {
     return (
-      <div className="chatw-empty chatw-empty-minimal" role="note" aria-label="Conversation ready">
-        <h2 className="chatw-empty-headline">How can I help you today?</h2>
+      <div
+        className="chatw-empty chatw-empty-minimal"
+        role="note"
+        aria-label={t("chat.conversationReady")}
+      >
+        <h2 className="chatw-empty-headline">{t("chat.empty.headline")}</h2>
       </div>
     );
   }
   return (
     <div className="chatw-empty">
-      <h2 className="chatw-empty-headline">How can I help you today?</h2>
+      <h2 className="chatw-empty-headline">{t("chat.empty.headline")}</h2>
     </div>
   );
 }
@@ -1381,118 +2213,15 @@ function EmptyComposerState({ minimal = false }: EmptyComposerStateProps): React
 // Rendered when no chat has been selected yet (activeChat is undefined).
 // Instructs the user to pick or start a chat from the project sidebar.
 function NoChatState(): ReactNode {
+  const { t } = useI18n();
   return (
     <div className="chatw-empty-no-chat">
       <div className="chatw-empty-no-chat-icon" aria-hidden="true">
         <Icons.spark size={20} />
       </div>
-      <p className="chatw-empty-no-chat-label">Pick or start a chat</p>
-      <p className="chatw-empty-no-chat-hint">
-        Select a conversation from the project sidebar, or create a new one to get started.
-      </p>
+      <p className="chatw-empty-no-chat-label">{t("chat.empty.noChat.title")}</p>
+      <p className="chatw-empty-no-chat-hint">{t("chat.empty.noChat.hint")}</p>
     </div>
-  );
-}
-
-function ChatHero({
-  session,
-  ready,
-}: {
-  readonly session: ChatSessionApi;
-  readonly ready: boolean;
-}): ReactNode {
-  const { loading, activeProject, sendMessage } = session;
-  return (
-    <form
-      className="composer composer-compact"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void sendMessage();
-      }}
-    >
-      <h1 className="composer-title">What should we build?</h1>
-      <ComposerCore
-        session={session}
-        ready={ready}
-        placeholder={
-          loading ? "Loading local workspace…" : "Describe a task, paste a link, or ask anything…"
-        }
-      />
-      <div className="cmp-context">
-        {activeProject !== undefined && (
-          <button type="button" className="chip">
-            <Icons.folder size={14} style={{ color: "var(--accent)" }} />
-            <span className="chip-label">{activeProject.name}</span>
-            <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
-          </button>
-        )}
-        <button type="button" className="chip">
-          <Icons.cube size={14} style={{ color: "var(--fg-dim)" }} />
-          <span className="chip-label">Work locally</span>
-          <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function MiniChat({
-  session,
-  ready,
-}: {
-  readonly session: ChatSessionApi;
-  readonly ready: boolean;
-}): ReactNode {
-  const { draft, loading, sending, sendStatus, cancelSend, setDraft, sendMessage } = session;
-  return (
-    <form
-      className="composer composer-fill"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void sendMessage();
-      }}
-    >
-      <div className="cmp-box cmp-box-fill">
-        <textarea
-          className="cmp-input cmp-input-mini"
-          value={draft}
-          aria-label="Chat message"
-          placeholder={loading ? "Loading…" : COMPOSER_PLACEHOLDER}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={onComposerKeyDown(sendMessage)}
-          // uiux-fix F041 (C205) — see ComposerCore: editable while sending so the
-          // next message can be pre-typed; re-submit is blocked by isInFlight.
-        />
-        {/* ST-F1 — match ComposerBar: while a send is in flight the primary
-            action flips to "Cancel response" (#152 AC#3) so the mini composer
-            offers the same cancel affordance as the full composer. */}
-        {sending ? (
-          <button
-            type="button"
-            className="cmp-send cmp-send-float cmp-send-cancel cmp-tip-end"
-            data-on
-            aria-label="Cancel response"
-            data-tip="Cancel response"
-            onClick={cancelSend}
-          >
-            <Icons.close size={16} />
-          </button>
-        ) : (
-          <button
-            type={ready ? "submit" : "button"}
-            className="cmp-send cmp-send-float cmp-tip-end"
-            data-on={ready}
-            data-tip={SEND_TOOLTIP}
-            aria-disabled={!ready}
-            aria-label="Send message"
-          >
-            <Icons.arrowUp size={16} />
-          </button>
-        )}
-      </div>
-      {/* ST-F1 — #152 AC#3 lifecycle status region for the mini composer. */}
-      <SendLifecycleStatus status={sendStatus} />
-    </form>
   );
 }
 
@@ -1558,9 +2287,38 @@ function hasGroundingScope(chat: Chat | undefined): boolean {
   return hasFolderGroundingScope(chat) || hasConnectorGroundingScope(chat);
 }
 
-function formatScopeUpdateError(error: unknown): string {
+function voiceSessionGroundingContext(
+  chat: Chat | undefined,
+): VoiceSessionGroundingContext | undefined {
+  if (chat === undefined) return undefined;
+  const folderCount =
+    chat.connectedScopes !== undefined
+      ? chat.connectedScopes.length
+      : chat.connectedScope !== undefined
+        ? 1
+        : 0;
+  const connectorCount =
+    chat.localKnowledgeScopes !== undefined
+      ? chat.localKnowledgeScopes.length
+      : chat.localKnowledgeScope !== undefined
+        ? 1
+        : 0;
+  const sourceCount = folderCount + connectorCount;
+  if (sourceCount === 0) return undefined;
+  const kind: VoiceSessionGroundingContext["kind"] =
+    folderCount > 0 && connectorCount > 0
+      ? "hybrid"
+      : sourceCount > 1
+        ? "multi"
+        : folderCount > 0
+          ? "files"
+          : "knowledge";
+  return { enabled: true, sourceCount, kind };
+}
+
+function formatScopeUpdateError(error: unknown, t: ReturnType<typeof useI18n>["t"]): string {
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
-  return formatUserError(error, "Unable to update knowledge scope.");
+  return formatUserError(error, t("chat.error.scopeUpdate"));
 }
 
 interface ScopeOption {
@@ -1568,10 +2326,14 @@ interface ScopeOption {
   readonly label: string;
 }
 
-function capsuleOptions(chat: Chat, capsules: readonly CapsuleListEntry[]): readonly ScopeOption[] {
+function capsuleOptions(
+  chat: Chat,
+  capsules: readonly CapsuleListEntry[],
+  t: ReturnType<typeof useI18n>["t"],
+): readonly ScopeOption[] {
   const options = capsules.map((capsule) => ({
     value: `capsule:${capsule.id}`,
-    label: `Knowledge capsule: ${capsule.displayName}`,
+    label: t("chat.grounding.capsule", { name: capsule.displayName }),
   }));
   const selectedValue = groundedModeValue(chat);
   if (!selectedValue.startsWith("capsule:")) {
@@ -1587,7 +2349,9 @@ function capsuleOptions(chat: Chat, capsules: readonly CapsuleListEntry[]): read
       value: selectedValue,
       // uiux-fix F041 (C173) — "(unavailable)" matches the capsule-set degraded
       // suffix; two different words previously named the same state.
-      label: `Knowledge capsule: ${capsuleId} (unavailable)`,
+      label: t("chat.grounding.unavailable", {
+        label: t("chat.grounding.capsule", { name: capsuleId }),
+      }),
     },
   ];
 }
@@ -1595,10 +2359,11 @@ function capsuleOptions(chat: Chat, capsules: readonly CapsuleListEntry[]): read
 function capsuleSetOptions(
   chat: Chat,
   capsuleSets: readonly CapsuleSetListEntry[],
+  t: ReturnType<typeof useI18n>["t"],
 ): readonly ScopeOption[] {
   const options = capsuleSets.map((capsuleSet) => ({
     value: `capsule-set:${capsuleSet.id}`,
-    label: `Capsule set: ${capsuleSet.displayName}`,
+    label: t("chat.grounding.capsuleSet", { name: capsuleSet.displayName }),
   }));
   const selectedValue = groundedModeValue(chat);
   if (!selectedValue.startsWith("capsule-set:")) {
@@ -1612,7 +2377,9 @@ function capsuleSetOptions(
     ...options,
     {
       value: selectedValue,
-      label: `Capsule set: ${capsuleSetId} (unavailable)`,
+      label: t("chat.grounding.unavailable", {
+        label: t("chat.grounding.capsuleSet", { name: capsuleSetId }),
+      }),
     },
   ];
 }
@@ -1626,6 +2393,7 @@ interface KnowledgeCatalog {
 }
 
 function useKnowledgeCatalog(): KnowledgeCatalog {
+  const { t } = useI18n();
   const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
   const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1649,17 +2417,17 @@ function useKnowledgeCatalog(): KnowledgeCatalog {
           setCapsuleSets(capsuleSetResult.value.capsuleSets);
         } else {
           setCapsuleSets([]);
-          setLoadError(formatScopeUpdateError(capsuleSetResult.reason));
+          setLoadError(formatScopeUpdateError(capsuleSetResult.reason, t));
         }
       } catch (caught) {
-        if (!cancelled) setLoadError(formatScopeUpdateError(caught));
+        if (!cancelled) setLoadError(formatScopeUpdateError(caught, t));
       }
     }
     void load();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   return { capsules, capsuleSets, loadError };
 }
@@ -1675,6 +2443,7 @@ function LocalKnowledgeScopeControl({
   readonly catalog: KnowledgeCatalog;
   readonly connected: boolean;
 }): ReactNode {
+  const { t } = useI18n();
   const { capsules, capsuleSets, loadError } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1691,7 +2460,13 @@ function LocalKnowledgeScopeControl({
         const sourceCount = activeGroundingSourceCount(chat);
         if (sourceCount > 0) {
           const confirmed = window.confirm(
-            `This will disconnect ${String(sourceCount)} grounding ${sourceCount === 1 ? "source" : "sources"}. Continue?`,
+            t("chat.grounding.disconnectConfirm", {
+              count: sourceCount,
+              sourceLabel:
+                sourceCount === 1
+                  ? t("chat.grounding.sourceSingular")
+                  : t("chat.grounding.sourcePlural"),
+            }),
           );
           if (!confirmed) return;
         }
@@ -1748,39 +2523,39 @@ function LocalKnowledgeScopeControl({
         onChatChanged(response.chat);
       }
     } catch (caught) {
-      setError(formatScopeUpdateError(caught));
+      setError(formatScopeUpdateError(caught, t));
     } finally {
       setBusy(false);
     }
   }
 
   const value = groundedModeValue(chat);
-  const capsuleChoices = capsuleOptions(chat, capsules);
-  const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets);
+  const capsuleChoices = capsuleOptions(chat, capsules, t);
+  const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets, t);
   // C172 — a catalog load failure surfaces here too; an update error wins.
   const displayedError = error ?? loadError;
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
     <div className="scope-grounding" data-connected={connected ? "true" : "false"}>
-      <span className="scope-grounding-label mono">Grounding</span>
+      <span className="scope-grounding-label mono">{t("chat.grounding.label")}</span>
       <KeikoSelect
         triggerClassName="scope-grounding-select"
         value={value}
         disabled={busy}
-        ariaLabel="Grounding mode"
-        menuTitle="Strategy"
+        ariaLabel={t("chat.grounding.mode")}
+        menuTitle={t("chat.grounding.strategy")}
         sections={[
           {
             options: [
-              { value: "none", label: "Model only" },
+              { value: "none", label: t("chat.grounding.modelOnly") },
               {
                 value: "files",
-                label: "Live Files context",
+                label: t("chat.grounding.liveFiles"),
                 disabled: !hasFolderGroundingScope(chat),
               },
               ...(value === "multi"
-                ? [{ value: "multi", label: "Multiple sources", disabled: true }]
+                ? [{ value: "multi", label: t("chat.grounding.multiple"), disabled: true }]
                 : []),
               ...capsuleChoices.map((capsule) => ({
                 value: capsule.value,
@@ -1809,9 +2584,11 @@ function LocalKnowledgeScopeControl({
 function ChatScopeHeader({
   chat,
   onChatChanged,
+  memoryControl,
 }: {
   readonly chat: Chat;
   readonly onChatChanged: (chat: Chat) => void;
+  readonly memoryControl?: ReactNode;
 }): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
@@ -1827,6 +2604,9 @@ function ChatScopeHeader({
         catalog={catalog}
         connected={connected}
       />
+      {memoryControl !== undefined ? (
+        <div className="chat-scope-header-actions">{memoryControl}</div>
+      ) : null}
     </div>
   );
 }
@@ -1881,6 +2661,7 @@ function MemoryActionCard({
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
   readonly onActionSettled: (message: string) => void;
 }): ReactNode {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [confirmForget, setConfirmForget] = useState(false);
@@ -1905,7 +2686,11 @@ function MemoryActionCard({
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
           <strong>{action.scopeLabel}</strong>
-          <span>{action.requiresApproval ? "Approval required" : "Proposed memory"}</span>
+          <span>
+            {action.requiresApproval
+              ? t("chat.memory.approvalRequired")
+              : t("chat.memory.proposedMemory")}
+          </span>
         </div>
         <p>{action.body}</p>
         <div className="chat-memory-action-buttons">
@@ -1916,12 +2701,12 @@ function MemoryActionCard({
             onClick={() => {
               runAction(
                 () => acceptCandidate(action.proposalId),
-                "MemoriaViva proposal accepted.",
-                "Unable to accept memory.",
+                t("chat.memory.accepted"),
+                t("chat.memory.acceptError"),
               );
             }}
           >
-            Accept
+            {t("chat.memory.accept")}
           </button>
           <button
             type="button"
@@ -1930,18 +2715,18 @@ function MemoryActionCard({
             onClick={() => {
               runAction(
                 () => rejectCandidate(action.proposalId),
-                "MemoriaViva proposal rejected.",
-                "Unable to reject memory.",
+                t("chat.memory.rejected"),
+                t("chat.memory.rejectError"),
               );
             }}
           >
-            Reject
+            {t("chat.memory.reject")}
           </button>
         </div>
         {error !== undefined ? (
           <ErrorNoticeFromError
             error={error}
-            fallback="Unable to update memory."
+            fallback={t("chat.error.memoryUpdate")}
             onDismiss={() => setError(undefined)}
           />
         ) : null}
@@ -1952,13 +2737,13 @@ function MemoryActionCard({
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
-          <strong>MemoriaViva update detected</strong>
+          <strong>{t("chat.memory.updateDetected")}</strong>
           <span>{action.memoryId}</span>
         </div>
         <p>
           {action.bodyPatch !== undefined
-            ? `Suggested update: ${action.bodyPatch}`
-            : "Suggested update."}
+            ? t("chat.memory.suggestedUpdate", { body: action.bodyPatch })
+            : t("chat.memory.suggestedUpdateFallback")}
         </p>
       </article>
     );
@@ -1967,21 +2752,23 @@ function MemoryActionCard({
     const executeForget = (): void => {
       runAction(
         () => forgetMemoryAction(action.memoryId).then(() => setConfirmForget(false)),
-        "MemoriaViva forget action completed.",
-        "Unable to forget memory.",
+        t("chat.memory.forgetCompleted"),
+        t("chat.memory.forgetError"),
       );
     };
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
-          <strong>MemoriaViva forget detected</strong>
-          <span>{action.requiresConfirmation ? "Confirmation required" : action.memoryId}</span>
+          <strong>{t("chat.memory.forgetDetected")}</strong>
+          <span>
+            {action.requiresConfirmation ? t("chat.memory.confirmationRequired") : action.memoryId}
+          </span>
         </div>
-        <p>{`Matched memory ${action.memoryId} for a forget operation.`}</p>
+        <p>{t("chat.memory.forgetMatched", { id: action.memoryId })}</p>
         <div className="chat-memory-action-buttons">
           {!action.requiresConfirmation ? (
             <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
-              Forget
+              {t("chat.memory.forget")}
             </button>
           ) : !confirmForget ? (
             <button
@@ -1994,12 +2781,12 @@ function MemoryActionCard({
                 setConfirmForget(true);
               }}
             >
-              Review forget
+              {t("chat.memory.reviewForget")}
             </button>
           ) : (
             <>
               <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
-                Forget permanently
+                {t("chat.memory.forgetPermanently")}
               </button>
               <button
                 type="button"
@@ -2011,7 +2798,7 @@ function MemoryActionCard({
                   setConfirmForget(false);
                 }}
               >
-                Cancel
+                {t("common.cancel")}
               </button>
             </>
           )}
@@ -2019,7 +2806,7 @@ function MemoryActionCard({
         {error !== undefined ? (
           <ErrorNoticeFromError
             error={error}
-            fallback="Unable to update memory."
+            fallback={t("chat.error.memoryUpdate")}
             onDismiss={() => setError(undefined)}
           />
         ) : null}
@@ -2033,16 +2820,16 @@ function MemoryActionCard({
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
-          <strong>Memory proposal declined</strong>
+          <strong>{t("chat.memory.proposalDeclined")}</strong>
         </div>
-        <p>{action.reason !== "" ? action.reason : "No reason provided"}</p>
+        <p>{action.reason !== "" ? action.reason : t("chat.memory.noReason")}</p>
       </article>
     );
   }
   return (
     <article className="chat-memory-action">
       <div className="chat-memory-action-head">
-        <strong>MemoriaViva action not created</strong>
+        <strong>{t("chat.memory.actionNotCreated")}</strong>
       </div>
     </article>
   );
@@ -2052,27 +2839,22 @@ function formatMemoryCapturedAt(capturedAt: number): string {
   return new Date(capturedAt).toISOString().slice(0, 10);
 }
 
-function MemoryPanel({
-  memoryEnabled,
-  setMemoryEnabled,
-  memoryBudgetTokens,
-  setMemoryBudgetTokens,
-  latestMemory,
-  acceptCandidate,
-  rejectCandidate,
-  forgetMemoryAction,
-  compact = false,
-}: {
-  readonly memoryEnabled: boolean;
-  readonly setMemoryEnabled: (next: boolean) => void;
-  readonly memoryBudgetTokens: number;
-  readonly setMemoryBudgetTokens: (next: number) => void;
-  readonly latestMemory: ConversationMemoryResultWire | undefined;
-  readonly acceptCandidate: (proposalId: string) => Promise<void>;
-  readonly rejectCandidate: (proposalId: string) => Promise<void>;
-  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
-  readonly compact?: boolean;
-}): ReactNode {
+interface MemoryDisclosureState {
+  readonly open: boolean;
+  readonly actionStatus: string;
+  readonly disclosureId: string;
+  readonly disclosureButtonRef: RefObject<HTMLButtonElement>;
+  readonly memoryCount: number;
+  readonly memoryCountLabel: string;
+  readonly memoryDisclosureLabel: string;
+  readonly toggleDisclosure: () => void;
+  readonly handleActionSettled: (message: string) => void;
+}
+
+function useMemoryDisclosureState(
+  latestMemory: ConversationMemoryResultWire | undefined,
+): MemoryDisclosureState {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
   const generatedId = useId();
@@ -2082,137 +2864,142 @@ function MemoryPanel({
     setActionStatus(message);
     disclosureButtonRef.current?.focus();
   }, []);
+  const toggleDisclosure = useCallback((): void => {
+    setOpen((current) => !current);
+  }, []);
   const memoryCount = latestMemory?.context.memories.length ?? 0;
   const memoryDisclosureLabel =
-    memoryCount > 0 ? `${String(memoryCount)} memories included` : "No memories included";
-  const stepMemoryBudget = (delta: number): void => {
-    setMemoryBudgetTokens(Math.max(0, memoryBudgetTokens + delta));
+    memoryCount > 0
+      ? t("chat.memory.included", { count: memoryCount })
+      : t("chat.memory.noneIncluded");
+  const memoryCountLabel = memoryCount > 99 ? "99+" : String(memoryCount);
+
+  return {
+    open,
+    actionStatus,
+    disclosureId,
+    disclosureButtonRef,
+    memoryCount,
+    memoryCountLabel,
+    memoryDisclosureLabel,
+    toggleDisclosure,
+    handleActionSettled,
   };
-  const handleBudgetWheel = (event: WheelEvent<HTMLInputElement>): void => {
-    if (event.deltaY === 0) return;
-    event.preventDefault();
-    const direction = event.deltaY < 0 ? 1 : -1;
-    stepMemoryBudget(direction * 100);
-  };
-  const budgetControl = (
-    <label className="chat-memory-budget">
-      <span>Budget (tokens)</span>
-      <span className="number-control number-control-pill">
-        <input
-          type="number"
-          className="number-control-input"
-          min={0}
-          step={100}
-          value={memoryBudgetTokens}
-          onChange={(event) => setMemoryBudgetTokens(Math.max(0, Number(event.target.value) || 0))}
-          onWheel={handleBudgetWheel}
-        />
-        <NumberControlStepper
-          label="memory budget"
-          onStepUp={() => stepMemoryBudget(100)}
-          onStepDown={() => stepMemoryBudget(-100)}
-        />
-      </span>
-    </label>
+}
+
+function MemoryDisclosureButton({
+  disclosure,
+}: {
+  readonly disclosure: MemoryDisclosureState;
+}): ReactNode {
+  return (
+    <button
+      ref={disclosure.disclosureButtonRef}
+      type="button"
+      className="chat-memory-disclosure-toggle ui-tip cmp-tip-end"
+      aria-expanded={disclosure.open}
+      aria-controls={disclosure.disclosureId}
+      aria-label={disclosure.memoryDisclosureLabel}
+      data-empty={disclosure.memoryCount === 0 ? "true" : "false"}
+      data-tip={disclosure.memoryDisclosureLabel}
+      onClick={disclosure.toggleDisclosure}
+    >
+      <Icons.brain size={16} />
+      {disclosure.memoryCount > 0 ? (
+        <span className="chat-memory-count" aria-hidden="true">
+          {disclosure.memoryCountLabel}
+        </span>
+      ) : null}
+    </button>
   );
+}
+
+function MemoryPanel({
+  latestMemory,
+  acceptCandidate,
+  rejectCandidate,
+  forgetMemoryAction,
+  disclosure,
+}: {
+  readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly acceptCandidate: (proposalId: string) => Promise<void>;
+  readonly rejectCandidate: (proposalId: string) => Promise<void>;
+  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
+  readonly disclosure: MemoryDisclosureState;
+}): ReactNode {
+  const { t } = useI18n();
+  if (!disclosure.open) return null;
 
   return (
-    <section className="chat-memory-panel" aria-label="Conversation memory">
-      <div className="chat-memory-panel-head">
-        <div className="chat-memory-toggle">
-          {/* uiux-fix F042 (C323) — the panel mixed generic "memory" with the
-              product name: feature = MemoriaViva, items = memories. The budget
-              unit (tokens) was previously only discoverable from the disclosure
-              line after the next send. */}
-          <Toggle
-            on={memoryEnabled}
-            onChange={setMemoryEnabled}
-            label="Enable MemoriaViva for the next request"
-          />
-          <span>MemoriaViva {memoryEnabled ? "on" : "off"}</span>
-        </div>
-        {compact ? null : budgetControl}
-        <button
-          ref={disclosureButtonRef}
-          type="button"
-          className={`chip${compact ? " chip-icon chat-memory-disclosure-toggle ui-tip cmp-tip-end" : ""}`}
-          aria-expanded={open}
-          aria-controls={disclosureId}
-          aria-label={memoryDisclosureLabel}
-          data-tip={compact ? memoryDisclosureLabel : undefined}
-          onClick={() => setOpen((current) => !current)}
-        >
-          {compact ? (
-            <Icons.brainSlash size={16} style={{ color: "var(--accent)" }} />
-          ) : (
-            memoryDisclosureLabel
-          )}
-        </button>
-      </div>
-      {open ? (
-        <div id={disclosureId} className="chat-memory-disclosure">
-          <p className="chat-memory-summary">
-            {latestMemory === undefined
-              ? "MemoriaViva disclosure appears after the next response."
-              : latestMemory.context.enabled
-                ? `Used ${String(latestMemory.context.budget.used)} of ${String(latestMemory.context.budget.tokens)} MemoriaViva tokens.`
-                : "MemoriaViva was disabled for the last request."}
-          </p>
-          {latestMemory?.context.memories.map((memory) => (
-            <article key={memory.memoryId} className="chat-memory-item">
-              <div className="chat-memory-item-head">
-                <strong>{memory.memoryId}</strong>
-                <span>{memory.inclusionReason}</span>
+    <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
+      <div id={disclosure.disclosureId} className="chat-memory-disclosure">
+        <p className="chat-memory-summary">
+          {latestMemory === undefined
+            ? t("chat.memory.disclosurePending")
+            : latestMemory.context.enabled
+              ? t("chat.memory.usedTokens", {
+                  used: latestMemory.context.budget.used,
+                  tokens: latestMemory.context.budget.tokens,
+                })
+              : t("chat.memory.disabledLast")}
+        </p>
+        {latestMemory?.context.memories.map((memory) => (
+          <article key={memory.memoryId} className="chat-memory-item">
+            <div className="chat-memory-item-head">
+              <strong>{memory.memoryId}</strong>
+              <span>{memory.inclusionReason}</span>
+            </div>
+            <p>{memory.bodyExcerpt}</p>
+            <dl
+              className="chat-memory-meta"
+              aria-label={t("chat.memory.provenance", { id: memory.memoryId })}
+            >
+              <div>
+                <dt>{t("chat.memory.source")}</dt>
+                <dd>{memory.sourceKind}</dd>
               </div>
-              <p>{memory.bodyExcerpt}</p>
-              <dl className="chat-memory-meta" aria-label={`Provenance for ${memory.memoryId}`}>
-                <div>
-                  <dt>Source</dt>
-                  <dd>{memory.sourceKind}</dd>
-                </div>
-                <div>
-                  <dt>Sensitivity</dt>
-                  <dd>{memory.sensitivity}</dd>
-                </div>
-                <div>
-                  <dt>Status</dt>
-                  <dd>{memory.status}</dd>
-                </div>
-                <div>
-                  <dt>Confidence</dt>
-                  <dd>{`${String(Math.round(memory.confidence * 100))}%`}</dd>
-                </div>
-                <div>
-                  <dt>Captured</dt>
-                  <dd>{formatMemoryCapturedAt(memory.capturedAt)}</dd>
-                </div>
-              </dl>
-              {memory.captureRationale !== undefined ? (
-                <p className="chat-memory-rationale">{memory.captureRationale}</p>
-              ) : null}
-            </article>
-          ))}
-          {latestMemory?.actions.map((action) => (
-            <MemoryActionCard
-              key={
-                action.kind === "candidate"
-                  ? action.proposalId
-                  : action.kind === "rejected"
-                    ? action.reason
-                    : action.memoryId
-              }
-              action={action}
-              acceptCandidate={acceptCandidate}
-              rejectCandidate={rejectCandidate}
-              forgetMemoryAction={forgetMemoryAction}
-              onActionSettled={handleActionSettled}
-            />
-          ))}
-          <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-            {actionStatus}
-          </p>
-        </div>
-      ) : null}
+              <div>
+                <dt>{t("chat.memory.sensitivity")}</dt>
+                <dd>{memory.sensitivity}</dd>
+              </div>
+              <div>
+                <dt>{t("chat.memory.status")}</dt>
+                <dd>{memory.status}</dd>
+              </div>
+              <div>
+                <dt>{t("chat.memory.confidence")}</dt>
+                <dd>{`${String(Math.round(memory.confidence * 100))}%`}</dd>
+              </div>
+              <div>
+                <dt>{t("chat.memory.captured")}</dt>
+                <dd>{formatMemoryCapturedAt(memory.capturedAt)}</dd>
+              </div>
+            </dl>
+            {memory.captureRationale !== undefined ? (
+              <p className="chat-memory-rationale">{memory.captureRationale}</p>
+            ) : null}
+          </article>
+        ))}
+        {latestMemory?.actions.map((action) => (
+          <MemoryActionCard
+            key={
+              action.kind === "candidate"
+                ? action.proposalId
+                : action.kind === "rejected"
+                  ? action.reason
+                  : action.memoryId
+            }
+            action={action}
+            acceptCandidate={acceptCandidate}
+            rejectCandidate={rejectCandidate}
+            forgetMemoryAction={forgetMemoryAction}
+            onActionSettled={disclosure.handleActionSettled}
+          />
+        ))}
+        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {disclosure.actionStatus}
+        </p>
+      </div>
     </section>
   );
 }
@@ -2229,6 +3016,7 @@ export function ChatWindow({
   openEditorFile,
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
+  const { t } = useI18n();
   const session = useChatSessionContext();
   const {
     messages,
@@ -2238,17 +3026,13 @@ export function ChatWindow({
     sendStatus,
     error,
     noEligibleModels,
-    selectedModel,
     sendMessage,
     cancelGrounded,
+    activeProject,
     activeChat,
     replaceChat,
     latestMemory,
     lastSentDocuments,
-    memoryEnabled,
-    setMemoryEnabled,
-    memoryBudgetTokens,
-    setMemoryBudgetTokens,
     acceptMemoryCandidate,
     rejectMemoryCandidate,
     forgetMemoryAction,
@@ -2258,9 +3042,15 @@ export function ChatWindow({
   const visible = visibleOnly(messages);
   const scrollRef = useRef<HTMLDivElement>(null);
   const repositoryRoots = useMemo(() => {
-    const roots = linkedRoots.length > 0 ? linkedRoots : linkedRoot === null ? [] : [linkedRoot];
-    return repositoryReferenceRoots(roots);
-  }, [linkedRoot, linkedRoots]);
+    return repositoryReferenceRoots(
+      repositoryReferenceRootPaths({
+        chat: activeChat,
+        activeProjectPath: activeProject?.path,
+        linkedRoot,
+        linkedRoots,
+      }),
+    );
+  }, [activeChat, activeProject?.path, linkedRoot, linkedRoots]);
   const openRepositoryReference: OpenRepositoryReference | undefined = openEditorFile;
   // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND
   // streaming content growth (lastContent dependency), but only while the
@@ -2274,6 +3064,34 @@ export function ChatWindow({
   const effectiveCompact = compact || mini;
   const effectiveControlsNarrow = controlsNarrow || mini || effectiveMinimal || workflowCompact;
   const effectiveBarCompact = barCompact || effectiveMinimal;
+  const memoryDisclosure = useMemoryDisclosureState(latestMemory);
+  const questionAnchorsRef = useRef(new Map<string, HTMLDivElement>());
+  const questionMapItems = useMemo<readonly ConversationQuestionMapItem[]>(() => {
+    return visible
+      .filter((message) => message.role === "user")
+      .map((message, index) => ({
+        id: message.id,
+        index: index + 1,
+        preview: questionMapPreview(message.content),
+        time: timeLabel(message.timestamp),
+      }));
+  }, [visible]);
+  const registerQuestionAnchor = useCallback(
+    (messageId: string, node: HTMLDivElement | null): void => {
+      if (node === null) {
+        questionAnchorsRef.current.delete(messageId);
+        return;
+      }
+      questionAnchorsRef.current.set(messageId, node);
+    },
+    [],
+  );
+  const scrollToQuestion = useCallback((messageId: string): void => {
+    const node = questionAnchorsRef.current.get(messageId);
+    if (node === undefined) return;
+    stickRef.current = false;
+    node.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, []);
   useEffect(() => {
     if (sending && !prevSendingRef.current) stickRef.current = true;
     prevSendingRef.current = sending;
@@ -2286,19 +3104,19 @@ export function ChatWindow({
       className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
     >
       {activeChat !== undefined ? (
-        <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
+        <ChatScopeHeader
+          chat={activeChat}
+          onChatChanged={replaceChat}
+          memoryControl={<MemoryDisclosureButton disclosure={memoryDisclosure} />}
+        />
       ) : null}
       {activeChat !== undefined ? (
         <MemoryPanel
-          memoryEnabled={memoryEnabled}
-          setMemoryEnabled={setMemoryEnabled}
-          memoryBudgetTokens={memoryBudgetTokens}
-          setMemoryBudgetTokens={setMemoryBudgetTokens}
           latestMemory={latestMemory}
           acceptCandidate={acceptMemoryCandidate}
           rejectCandidate={rejectMemoryCandidate}
           forgetMemoryAction={forgetMemoryAction}
-          compact={effectiveCompact || effectiveMinimal}
+          disclosure={memoryDisclosure}
         />
       ) : null}
       {noEligibleModels ? (
@@ -2336,28 +3154,39 @@ export function ChatWindow({
             <NoChatState />
           )
         ) : (
-          <div className="chatw-log">
-            <ConversationThread
-              messages={visible}
-              onOpenRunResult={onOpenRunResult}
-              repositoryRoots={repositoryRoots}
-              openRepositoryReference={openRepositoryReference}
-              sending={sending}
-              sendStatus={sendStatus}
-              activeChat={activeChat}
-              onCancelGrounded={cancelGrounded}
-            />
-            <GroundedAnswerPanel
-              chat={activeChat}
-              busy={sending}
-            />
-            {/* Issue #148 — disclose which attached documents contributed extracted context. */}
-            <SentDocumentsNote documents={lastSentDocuments} />
+          <div className="chatw-log-shell">
+            <ConversationQuestionMap items={questionMapItems} onJump={scrollToQuestion} />
+            <div className="chatw-log">
+              <ConversationThread
+                messages={visible}
+                onOpenRunResult={onOpenRunResult}
+                repositoryRoots={repositoryRoots}
+                openRepositoryReference={openRepositoryReference}
+                sending={sending}
+                sendStatus={sendStatus}
+                activeChat={activeChat}
+                onCancelGrounded={cancelGrounded}
+                registerQuestionAnchor={registerQuestionAnchor}
+              />
+              <GroundedAnswerPanel chat={activeChat} busy={sending} />
+              {/* Issue #148 — disclose which attached documents contributed extracted context. */}
+              <SentDocumentsNote documents={lastSentDocuments} />
+            </div>
           </div>
         )}
       </div>
 
-      {visible.length > 0 ? (
+      {/* Issue #1560 — ONE composer render site across the empty→populated transition. The composer was
+          previously rendered in two separate conditional slots (one for visible.length === 0, one for
+          > 0). Because those are distinct positions in the child list, React unmounted the empty-state
+          ComposerCore and mounted a fresh one the instant the first message landed — resetting its local
+          voice-dialogue state (voiceDialog.active / persona, and the freshly-undefined useVoiceCapability
+          probe), which silently kicked the user out of an active spoken dialogue right after their first
+          committed turn. Rendering a single ComposerCore at one stable position preserves the instance —
+          and its live dialogue session — across the empty→populated transition. The condition is the
+          exact union of the two prior slots (a chat is open, or messages exist), and the placeholder
+          keeps the empty+loading "Connecting…" wording, so the rendered surface is unchanged. */}
+      {visible.length > 0 || activeChat !== undefined ? (
         <div className="chatw-foot">
           <form
             className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
@@ -2369,7 +3198,11 @@ export function ChatWindow({
             <ComposerCore
               session={session}
               ready={ready}
-              placeholder={COMPOSER_PLACEHOLDER}
+              placeholder={
+                visible.length === 0 && loading
+                  ? t("chat.loadingGateway")
+                  : t("chat.composer.placeholder")
+              }
               minimal={effectiveMinimal}
               compact={effectiveCompact}
               controlsNarrow={effectiveControlsNarrow}
@@ -2378,38 +3211,7 @@ export function ChatWindow({
             {error !== undefined ? (
               <ErrorNoticeFromError
                 error={error}
-                fallback="Could not send message."
-                onDismiss={session.clearError}
-              />
-            ) : null}
-          </form>
-        </div>
-      ) : null}
-
-      {/* Composer for empty state with active chat — the EmptyComposerState shows the
-          welcoming content above, and the form wraps the input below. */}
-      {visible.length === 0 && activeChat !== undefined ? (
-        <div className="chatw-foot">
-          <form
-            className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void sendMessage();
-            }}
-          >
-            <ComposerCore
-              session={session}
-              ready={ready}
-              placeholder={loading ? "Connecting to your gateway…" : COMPOSER_PLACEHOLDER}
-              minimal={effectiveMinimal}
-              compact={effectiveCompact}
-              controlsNarrow={effectiveControlsNarrow}
-              barCompact={effectiveBarCompact}
-            />
-            {error !== undefined ? (
-              <ErrorNoticeFromError
-                error={error}
-                fallback="Could not send message."
+                fallback={t("chat.error.send")}
                 onDismiss={session.clearError}
               />
             ) : null}

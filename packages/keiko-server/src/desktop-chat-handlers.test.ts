@@ -9,6 +9,7 @@ import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
+import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
@@ -70,6 +71,54 @@ function scriptedIdentityRecallModel(): ModelPort {
       } else if (latestUser.includes("What is my name?")) {
         content = latestUser.includes("The user's name is Paul.") ? "Paul" : "unbekannt";
       }
+      return Promise.resolve({
+        modelId: request.modelId,
+        content,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "desktop-chat-test",
+          promptTokens: 7,
+          completionTokens: 3,
+          latencyMs: 11,
+          costClass: "high",
+        },
+      });
+    },
+  };
+}
+
+function scriptedOliverProfileMemoryModel(): ModelPort {
+  return {
+    call(request): Promise<NormalizedResponse> {
+      seenRequests.push(request);
+      const system = request.messages[0]?.content ?? "";
+      const content = system.includes("You extract durable memories from a chat turn")
+        ? JSON.stringify([
+            {
+              body: "The user's name is Oliver.",
+              type: "semantic-fact",
+              confidence: 0.96,
+              scope: "user",
+              tags: ["identity", "name"],
+            },
+            {
+              body: "The user is 35 years old.",
+              type: "semantic-fact",
+              confidence: 0.9,
+              scope: "user",
+              tags: ["identity", "age"],
+            },
+            {
+              body: "The user is a software developer.",
+              type: "semantic-fact",
+              confidence: 0.9,
+              scope: "user",
+              tags: ["identity", "profession"],
+            },
+          ])
+        : "Understood.";
       return Promise.resolve({
         modelId: request.modelId,
         content,
@@ -333,6 +382,105 @@ describe("desktop chat routes", () => {
     const persistedRoles = store.listMessages(created.chat.id).map((message) => message.role);
     expect(persistedRoles).toHaveLength(2);
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
+  });
+
+  it("appends realtime voice turns without calling the chat model", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string; title: string } };
+
+    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        messages: [
+          { role: "user", content: "open the deploy log" },
+          { role: "assistant", content: "The deploy log is open." },
+        ],
+      }),
+    });
+
+    expect(appendRes.status).toBe(200);
+    const body = (await appendRes.json()) as {
+      chat: { id: string; title: string };
+      messages: { role: string; content: string; runId?: string }[];
+    };
+    expect(seenRequests).toHaveLength(0);
+    expect(body.chat).toMatchObject({
+      id: created.chat.id,
+      title: "open the deploy log",
+    });
+    expect(body.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "open the deploy log"],
+      ["assistant", "The deploy log is open."],
+    ]);
+    expect(body.messages.some((message) => message.runId !== undefined)).toBe(false);
+
+    const persisted = store.listMessages(created.chat.id);
+    expect(persisted.map((message) => [message.role, message.content])).toEqual([
+      ["user", "open the deploy log"],
+      ["assistant", "The deploy log is open."],
+    ]);
+  });
+
+  it("captures MemoriaViva proposals from realtime voice turns without generating a second chat answer", async () => {
+    const memoryDir = join(tmp, "voice-turn-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(
+      deps(fakeModel("unused"), {
+        memoryVault,
+        modelPortFactory: () => undefined,
+      }),
+    );
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string; title: string } };
+
+    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        messages: [
+          { role: "user", content: "remember that my preferred database is postgres" },
+          { role: "assistant", content: "I will remember that preference." },
+        ],
+        memory: {
+          enabled: true,
+          budgetTokens: 900,
+          context: {},
+        },
+      }),
+    });
+
+    expect(appendRes.status).toBe(200);
+    const body = (await appendRes.json()) as {
+      messages: { role: string; content: string; runId?: string }[];
+      memory?: { actions: { kind: string; proposalId?: string }[] };
+    };
+    expect(seenRequests).toHaveLength(0);
+    expect(body.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "remember that my preferred database is postgres"],
+      ["assistant", "I will remember that preference."],
+    ]);
+    expect(body.memory?.actions[0]?.kind).toBe("candidate");
+    const proposalId = body.memory?.actions[0]?.proposalId;
+    expect(proposalId).toBeDefined();
+    if (proposalId !== undefined) {
+      expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+    }
+    memoryVault.close();
   });
 
   it("rejects an empty model response without persisting a fake assistant message", async () => {
@@ -638,6 +786,61 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
+  it("captures a spoken-profile chat turn as proposed MemoriaViva candidates", async () => {
+    const memoryDir = join(tmp, "memory-vault-spoken-profile");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(deps(scriptedOliverProfileMemoryModel(), { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Ich heiße Oliver, bin 35 Jahre alt und bin Softwareentwickler.",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: {
+        context: { enabled: boolean; memories: unknown[] };
+        actions: { kind: string; proposalId?: string; body?: string }[];
+      };
+    };
+    const candidates = body.memory?.actions.filter((action) => action.kind === "candidate") ?? [];
+    const candidateBodies = candidates.map((action) => action.body);
+    expect(body.memory?.context.enabled).toBe(true);
+    expect(body.memory?.context.memories).toHaveLength(0);
+    expect(candidateBodies).toEqual(
+      expect.arrayContaining([
+        "The user's name is Oliver.",
+        "The user is 35 years old.",
+        "The user is a software developer.",
+      ]),
+    );
+    for (const action of candidates) {
+      expect(typeof action.proposalId).toBe("string");
+      if (action.proposalId !== undefined) {
+        expect(memoryVault.getMemory(action.proposalId as MemoryId)?.status).toBe("proposed");
+      }
+    }
+    expect(seenRequests.some((request) => request.messages.at(-1)?.content.includes("Oliver"))).toBe(
+      true,
+    );
+    memoryVault.close();
+  });
+
   it("returns empty memory result and omits prompt injection when memory.enabled is false", async () => {
     const memoryDir = join(tmp, "memory-vault-off");
     mkdirSync(memoryDir);
@@ -839,6 +1042,147 @@ describe("desktop chat routes", () => {
     expect(lastTurn?.content).toContain("Attached document context:");
     expect(lastTurn?.content).toContain("spec.md");
     expect(lastTurn?.content).toContain("Some document content.");
+  });
+
+  // Issue #502 — a selected discussion mode threads the additive directive block onto the latest
+  // user turn for the model call. The mode is turn-local (never persisted to chat history).
+  it("threads the discussion directive block onto the latest user turn for the model call", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Should we ship this?",
+        discussionMode: "challenge",
+      }),
+    });
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as { messages: { role: string; content: string }[] };
+    // The persisted user bubble keeps the raw draft (mode is not part of chat history).
+    expect(body.messages[0]).toMatchObject({ role: "user", content: "Should we ship this?" });
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.role).toBe("user");
+    // Assert the turn STARTS WITH the exact rendered block (not merely contains a snippet), so a
+    // template rewording or a truncated block is caught.
+    expect(lastTurn?.content.startsWith(composeDiscussionDirectiveBlock("challenge"))).toBe(true);
+    expect(lastTurn?.content).toContain("Should we ship this?");
+    // The directive block precedes the draft (additive block, system prompt untouched).
+    const headerIdx = lastTurn?.content.indexOf("Discussion mode directives:") ?? -1;
+    const draftIdx = lastTurn?.content.indexOf("Should we ship this?") ?? -1;
+    expect(headerIdx).toBeGreaterThanOrEqual(0);
+    expect(draftIdx).toBeGreaterThan(headerIdx);
+  });
+
+  it("ignores an unknown discussionMode value (no block, send still succeeds)", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "plain question",
+        discussionMode: "not-a-real-mode",
+      }),
+    });
+    expect(sendRes.status).toBe(200);
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.content).not.toContain("Discussion mode directives:");
+    // With no mode, no docs, and no memory the latest turn stays the bare draft (backward-compatible).
+    expect(lastTurn).toEqual({ role: "user", content: "plain question" });
+  });
+
+  it("sends no directive block when discussionMode is omitted (backward-compatible default)", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "no mode here",
+      }),
+    });
+    expect(sendRes.status).toBe(200);
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.content).not.toContain("Discussion mode directives:");
+  });
+
+  // Issue #502 — the directive block is turn-LOCAL: it is composed only onto the latest user turn for
+  // the current send. When an earlier history turn has the SAME text as the current draft, only the
+  // latest turn may carry the block; the identical earlier turn must stay the bare draft (so a naive
+  // text-match projection cannot leak the block onto a prior message).
+  it("composes the directive block only onto the latest same-text user turn, never an earlier one", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    // First send: same text, NO mode — becomes a verbatim history turn.
+    const first = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Should we ship this?",
+      }),
+    });
+    expect(first.status).toBe(200);
+
+    // Second send: SAME text, WITH a mode.
+    const second = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Should we ship this?",
+        discussionMode: "decide",
+      }),
+    });
+    expect(second.status).toBe(200);
+
+    // The gateway request for the SECOND send carries both user turns.
+    const secondRequest = seenRequests.at(-1);
+    const userTurns = (secondRequest?.messages ?? []).filter((message) => message.role === "user");
+    expect(userTurns.length).toBe(2);
+
+    const expectedBlock = composeDiscussionDirectiveBlock("decide");
+    // Exactly one user turn carries the block — the latest.
+    const turnsWithBlock = userTurns.filter((turn) => turn.content.includes(expectedBlock));
+    expect(turnsWithBlock.length).toBe(1);
+    expect(userTurns.at(-1)?.content.startsWith(expectedBlock)).toBe(true);
+    // The earlier same-text turn is the bare draft (no block, no header).
+    expect(userTurns[0]?.content).toBe("Should we ship this?");
+    expect(userTurns[0]?.content).not.toContain("Discussion mode directives:");
   });
 
   it("rejects a send with a truncationMarker exceeding 256 bytes", async () => {

@@ -24,7 +24,7 @@ import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
-import { canConnect, relLabel, subText } from "./windows/connectionUtils";
+import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
@@ -252,20 +252,76 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
   );
 }
 
-export function Workspace({
-  ws,
-  wsRef,
-  openPalette,
-  palette,
-}: WorkspaceProps): ReactNode {
+const EMPTY_CFGS: readonly object[] = [];
+
+// Issue #1580 — a monotonic revision that changes ONLY when the cross-window link
+// context can change: the connection set, the set/order/types of windows, or any
+// window's cfg object identity. Geometry/z/min/max/content-zoom changes (which fire
+// on every drag and pan/zoom rAF frame) deliberately do NOT bump it. This is what
+// lets memoized WindowFrames stay un-rendered during gestures while a folder switch
+// in a connected Files window or a newly drawn edge still propagates to every
+// dependent window's linked* context. Comparison is by reference only (no
+// stringify), so it stays cheap even for windows whose cfg holds large data URLs.
+function useLinkRevision(wins: readonly AppWindow[] | null, conns: readonly Connection[]): number {
+  const revRef = useRef(0);
+  const prevRef = useRef<{
+    readonly conns: readonly Connection[];
+    readonly keys: string;
+    readonly cfgs: readonly object[];
+  } | null>(null);
+  const keys = wins === null ? "" : wins.map((w) => `${w.id}:${w.type}`).join("|");
+  const cfgs = wins === null ? EMPTY_CFGS : wins.map((w) => w.cfg);
+  const prev = prevRef.current;
+  const changed =
+    prev === null ||
+    prev.conns !== conns ||
+    prev.keys !== keys ||
+    prev.cfgs.length !== cfgs.length ||
+    cfgs.some((cfg, i) => cfg !== prev.cfgs[i]);
+  if (changed) {
+    revRef.current += 1;
+    prevRef.current = { conns, keys, cfgs };
+  }
+  return revRef.current;
+}
+
+// Issue #1580 — true while a workspace zoom gesture is in flight. The scene is then
+// composited with transform:scale (no per-step relayout of all N windows); ~160ms
+// after the last zoom change it flips false so the scene re-renders with crisp CSS
+// `zoom` (#305 anti-blur). Pan-only changes (zoom unchanged) never set it.
+const ZOOM_SETTLE_MS = 160;
+
+function useZoomActive(zoom: number): boolean {
+  const [active, setActive] = useState(false);
+  const prevZoomRef = useRef(zoom);
+  const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (zoom === prevZoomRef.current) return;
+    prevZoomRef.current = zoom;
+    setActive(true);
+    if (idleRef.current !== null) clearTimeout(idleRef.current);
+    idleRef.current = setTimeout(() => setActive(false), ZOOM_SETTLE_MS);
+  }, [zoom]);
+  useEffect(
+    () => () => {
+      if (idleRef.current !== null) clearTimeout(idleRef.current);
+    },
+    [],
+  );
+  return active;
+}
+
+export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
   const [panning, setPanning] = useState(false);
   const [handTool, setHandTool] = useState(false);
   const handToolRef = useRef(false);
+  const zoomActive = useZoomActive(view.zoom);
   const visibleWins = useMemo(
     () => (wins === null ? null : wins.filter((w) => w.minimized !== true)),
     [wins],
   );
+  const linkRevision = useLinkRevision(wins, conns);
   const top = topWindow(visibleWins);
   const connFrom: AppWindow | null =
     connecting !== null && visibleWins !== null
@@ -352,22 +408,35 @@ export function Workspace({
     [view],
   );
 
-  // Scale the scene with the CSS `zoom` property instead of `transform: scale()`
-  // so children re-layout (and text/SVG re-rasterize) at the new pixel grid —
-  // otherwise the browser samples a once-rasterized bitmap of the scene at its
-  // natural size and upscales it, blurring widget content at zoom > 1 (#305).
-  // Chrome applies CSS `zoom` to the transform translation as well. Divide the
-  // stored outer-pixel pan by the zoom so the visual mapping stays:
-  // worldPt -> workspaceLeft + view.x + worldPt * view.zoom.
-  // Without this compensation, maximized windows at non-100% workspace zoom are
-  // placed outside the workspace because worldVP math and rendered geometry diverge.
+  // At rest, scale the scene with the CSS `zoom` property instead of `transform:
+  // scale()` so children re-layout (and text/SVG re-rasterize) at the new pixel
+  // grid — otherwise the browser samples a once-rasterized bitmap of the scene at
+  // its natural size and upscales it, blurring widget content at zoom > 1 (#305).
+  // Chrome applies CSS `zoom` to the transform translation as well, so the stored
+  // outer-pixel pan is divided by the zoom to keep the visual mapping:
+  //   worldPt -> workspaceLeft + view.x + worldPt * view.zoom.
+  //
+  // Issue #1580 — DURING an active zoom gesture, render the same mapping with
+  // `transform: translate(view.x, view.y) scale(view.zoom)` instead. Both forms
+  // place a child at world point p on screen at `view.x + p * view.zoom` (verified:
+  // CSS zoom folds into the translate, transform scale composes after layout), so
+  // ALL drag/resize/world math (which reads the committed view.zoom) stays exact —
+  // only the rasterization differs. transform:scale is a compositor-only operation,
+  // so a continuous wheel-zoom no longer relayouts every window each step; the crisp
+  // CSS `zoom` snaps back ~160ms after the gesture settles.
   const sceneStyle: CSSProperties = useMemo(
-    () => ({
-      transform: `translate(${String(view.x / view.zoom)}px, ${String(view.y / view.zoom)}px)`,
-      transformOrigin: "0 0",
-      zoom: view.zoom,
-    }),
-    [view],
+    () =>
+      zoomActive
+        ? {
+            transform: `translate(${String(view.x)}px, ${String(view.y)}px) scale(${String(view.zoom)})`,
+            transformOrigin: "0 0",
+          }
+        : {
+            transform: `translate(${String(view.x / view.zoom)}px, ${String(view.y / view.zoom)}px)`,
+            transformOrigin: "0 0",
+            zoom: view.zoom,
+          },
+    [view, zoomActive],
   );
 
   const onWorkspacePointerDownCapture = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -717,9 +786,9 @@ export function Workspace({
                 win={w}
                 top={top !== null && w.id === top.id}
                 connState={connStateFor(w)}
-                view={view}
                 api={api}
                 wsRef={wsRef}
+                linkRevision={linkRevision}
               />
             ))
           : null}

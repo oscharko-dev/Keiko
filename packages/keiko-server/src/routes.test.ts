@@ -56,6 +56,26 @@ describe("API route contract", () => {
     });
   });
 
+  it("includes the governed editor inline-completion routes (#1200)", () => {
+    const patterns = [
+      { method: "POST", pattern: "/api/editor/inline-completion" },
+      { method: "POST", pattern: "/api/editor/inline-completion/telemetry" },
+    ];
+    for (const { method, pattern } of patterns) {
+      expect(
+        API_ROUTES.find((r) => r.method === method && r.pattern === pattern),
+        `${method} ${pattern} must be registered`,
+      ).toBeDefined();
+    }
+    // The nested telemetry path must resolve to its own handler, not the completion route.
+    expect(matchRoute("POST", "/api/editor/inline-completion")).toMatchObject({
+      definition: { pattern: "/api/editor/inline-completion" },
+    });
+    expect(matchRoute("POST", "/api/editor/inline-completion/telemetry")).toMatchObject({
+      definition: { pattern: "/api/editor/inline-completion/telemetry" },
+    });
+  });
+
   it("includes the Quality Intelligence UI read routes (#280)", () => {
     const list = API_ROUTES.find(
       (r) => r.method === "GET" && r.pattern === "/api/quality-intelligence/runs",
@@ -204,6 +224,17 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the optional voice STT dictation route (#494)", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/voice/transcribe"),
+    ).toBeDefined();
+    expect(matchRoute("POST", "/api/voice/transcribe")).toMatchObject({
+      definition: { pattern: "/api/voice/transcribe" },
+    });
+    // It is a state-changing POST; a GET to the same path is method-not-allowed, not a match.
+    expect(matchRoute("GET", "/api/voice/transcribe")).toBe("method-not-allowed");
+  });
+
   it("includes the non-mutating gateway readiness route", () => {
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/gateway/readiness"),
@@ -232,6 +263,30 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the metadata-only runtime capability route (#1385)", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/runtime/capabilities"),
+    ).toBeDefined();
+    expect(matchRoute("GET", "/api/runtime/capabilities")).toMatchObject({
+      definition: { pattern: "/api/runtime/capabilities" },
+    });
+  });
+
+  it("includes the read-only Git repository routes (#1386)", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/status"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/diff"),
+    ).toBeDefined();
+    expect(matchRoute("GET", "/api/git/status")).toMatchObject({
+      definition: { pattern: "/api/git/status" },
+    });
+    expect(matchRoute("GET", "/api/git/diff")).toMatchObject({
+      definition: { pattern: "/api/git/diff" },
+    });
+  });
+
   it("includes the run-summary message routes (#66)", () => {
     const patchRoute = API_ROUTES.find(
       (r) => r.method === "PATCH" && r.pattern === "/api/chats/messages",
@@ -258,6 +313,9 @@ describe("API route contract", () => {
     // Issue #152 — additive SSE streaming surface alongside the buffered send route.
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/stream"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/voice-turn"),
     ).toBeDefined();
   });
 

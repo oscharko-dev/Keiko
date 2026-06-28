@@ -114,6 +114,9 @@ vi.mock("./FilesWidget", () => ({
       <button type="button" onClick={() => onOpenFile("", "package.json")}>
         Open file without root
       </button>
+      <button type="button" onClick={() => onOpenFile("/repo", "/other/project/main.py")}>
+        Open absolute file outside root
+      </button>
       <button type="button" onClick={() => onRootChange("/next")}>
         Open next root
       </button>
@@ -124,8 +127,22 @@ vi.mock("./FilesWidget", () => ({
   ),
 }));
 
+const hotExitState = vi.hoisted(() => ({ deletes: [] as Array<readonly [string, string]> }));
+
+vi.mock("./editorHotExitStore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./editorHotExitStore")>();
+  return {
+    ...actual,
+    deleteEditorHotExitSnapshot: vi.fn((root: string, path: string) => {
+      hotExitState.deletes.push([root, path]);
+      return Promise.resolve();
+    }),
+  };
+});
+
 afterEach(() => {
   probeState.runtimeProps = null;
+  hotExitState.deletes = [];
   vi.clearAllMocks();
 });
 
@@ -147,7 +164,7 @@ describe("EditorWidget workspace session", () => {
     const pane = screen.getByTestId("runtime-probe").closest(".ed-pane");
     expect(pane).not.toBeNull();
     expect(pane).toHaveAttribute("data-active", "true");
-    expect(screen.queryByRole("button", { name: "Resize editor split" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Resize editor split" })).toBeNull();
     expect(screen.getByTestId("runtime-probe").closest(".ed-panes")).toHaveClass("single");
   });
 
@@ -227,14 +244,17 @@ describe("EditorWidget workspace session", () => {
     const onWorkspaceChange = vi.fn();
     render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    const splitRight = screen.getByRole("button", { name: "Split src/a.ts right" });
+    expect(splitRight).toHaveAttribute("data-tip", "Split right");
+    expect(splitRight).not.toHaveAttribute("title");
+    fireEvent.click(splitRight);
 
     expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
     expect(screen.getAllByTestId("runtime-file").map((node) => node.textContent)).toEqual([
       "src/a.ts",
       "src/a.ts",
     ]);
-    expect(screen.getByRole("button", { name: "Resize editor split" })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "Resize editor split" })).toBeInTheDocument();
     const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
     expect(lastPatch).toEqual(
       expect.objectContaining({
@@ -323,6 +343,57 @@ describe("EditorWidget workspace session", () => {
         openFiles: ["src/a.ts"],
       }),
     );
+  });
+
+  it("drops an absolute file outside the root to a non-blocking empty selection (#1374 AC1)", () => {
+    // A persisted/aliased cfg.file that is absolute but does not live under the configured root
+    // must never reach the BFF as an absolute path (which would 400 BAD_PATH). It resolves to no
+    // active file so the editor renders its usable empty state instead of a failed load.
+    const onWorkspaceChange = vi.fn();
+    render(
+      <EditorWidget
+        root="/repo"
+        file="/elsewhere/x.ts"
+        openFiles={["/elsewhere/x.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("");
+    expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("");
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
+  });
+
+  it("anchors a single absolute file outside the root to a containing root via openFile (#1374 AC3)", () => {
+    // Exercises the editor's openFile single-file-target contract directly: handed an absolute file
+    // that does not live under the current root, it selects the file's containing directory as the
+    // root and opens the basename root-relative (AC3 "selects a containing root"). The pure
+    // resolution is also covered by editor-workspace-path.test.ts (selectWorkspaceFileTarget).
+    const onWorkspaceChange = vi.fn();
+    render(<EditorWidget root="/repo" onWorkspaceChange={onWorkspaceChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open absolute file outside root" }));
+
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project");
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("main.py");
+    expect(onWorkspaceChange).toHaveBeenCalledWith(
+      expect.objectContaining({ root: "/other/project", file: "main.py" }),
+    );
+  });
+
+  it("remains mounted with the embedded tree after switching to a new root (#1374 AC4)", () => {
+    const onWorkspaceChange = vi.fn();
+    render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
+
+    // A root change resets to an empty pane on the new root while keeping the embedded tree (its
+    // sidebar) mounted, so the editor stays interactive. The genuine failed-root-load recovery
+    // (error surfaced, app alive) lives in FilesWidget and is proven by the release-smoke e2e
+    // ("arbitrary folder opening …": an unavailable root renders role="alert").
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next");
+    expect(screen.getByTestId("files-probe")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open next root" })).toBeEnabled();
   });
 
   it("ignores empty root, file, and tab-selection intents from embedded controls", () => {
@@ -481,7 +552,40 @@ describe("EditorWidget workspace session", () => {
     await waitFor(() => {
       expect(screen.getAllByTestId("runtime-probe")).toHaveLength(1);
     });
-    expect(screen.queryByRole("button", { name: "Resize editor split" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Resize editor split" })).toBeNull();
+  });
+
+  it("deletes the hot-exit snapshot when a dirty tab close is discarded (AC5)", async () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close a" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    // An explicit Discard must remove the buffer's hot-exit snapshot from the EditorWidget side: the
+    // runtime widget that normally deletes it has already unmounted with the closed tab.
+    expect(hotExitState.deletes).toContainEqual(["/repo", "src/a.ts"]);
+  });
+
+  it("routes an in-app dirty close through the React dialog, never window.confirm (D4)", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close a" }));
+
+    expect(
+      await screen.findByRole("dialog", { name: "Unsaved editor changes" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
   it("supports keyboard tab reordering within a pane", () => {
@@ -666,6 +770,8 @@ describe("EditorWidget workspace session", () => {
         }) as DOMRect,
     );
     const sidebarResizer = screen.getByRole("button", { name: "Resize project tree" });
+    expect(sidebarResizer).toHaveAttribute("data-tip", "Resize project tree");
+    expect(sidebarResizer).not.toHaveAttribute("title");
     sidebarResizer.setPointerCapture = vi.fn();
     sidebarResizer.hasPointerCapture = vi.fn(() => true);
     sidebarResizer.releasePointerCapture = vi.fn();
@@ -695,7 +801,9 @@ describe("EditorWidget workspace session", () => {
           toJSON: () => ({}),
         }) as DOMRect,
     );
-    const splitResizer = screen.getByRole("button", { name: "Resize editor split" });
+    const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
+    expect(splitResizer).toHaveAttribute("data-tip", "Resize editor split");
+    expect(splitResizer).not.toHaveAttribute("title");
     splitResizer.setPointerCapture = vi.fn();
     splitResizer.hasPointerCapture = vi.fn(() => true);
     splitResizer.releasePointerCapture = vi.fn();
@@ -720,7 +828,10 @@ describe("EditorWidget workspace session", () => {
       <EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts down" }));
+    const splitDown = screen.getByRole("button", { name: "Split src/a.ts down" });
+    expect(splitDown).toHaveAttribute("data-tip", "Split down");
+    expect(splitDown).not.toHaveAttribute("title");
+    fireEvent.click(splitDown);
     const splitRoot = container.querySelector(".ed-panes.column") as HTMLElement;
     splitRoot.getBoundingClientRect = vi.fn(
       () =>
@@ -736,7 +847,8 @@ describe("EditorWidget workspace session", () => {
           toJSON: () => ({}),
         }) as DOMRect,
     );
-    const splitResizer = screen.getByRole("button", { name: "Resize editor split" });
+    const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
+    expect(splitResizer).toHaveAttribute("data-tip", "Resize editor split");
     splitResizer.setPointerCapture = vi.fn();
     splitResizer.hasPointerCapture = vi.fn(() => false);
     splitResizer.releasePointerCapture = vi.fn();
@@ -753,5 +865,198 @@ describe("EditorWidget workspace session", () => {
     const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
     expect(JSON.parse(String(lastPatch?.layoutJson)).tree.ratio).toBe(80);
     expect(splitResizer.releasePointerCapture).toHaveBeenCalledWith(3);
+  });
+
+  it("resizes the sidebar and editor split from keyboard arrows", () => {
+    const onWorkspaceChange = vi.fn();
+    const { container } = render(
+      <EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />,
+    );
+    const workspace = container.querySelector(".editor-workspace") as HTMLElement;
+    workspace.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          left: 0,
+          top: 0,
+          width: 900,
+          height: 600,
+          right: 900,
+          bottom: 600,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+
+    const sidebarResizer = screen.getByRole("button", { name: "Resize project tree" });
+    fireEvent.keyDown(sidebarResizer, { key: "ArrowRight" });
+    let lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    expect(JSON.parse(String(lastPatch?.layoutJson))).toEqual(
+      expect.objectContaining({ sidebarWidth: 272 }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
+    fireEvent.keyDown(splitResizer, { key: "ArrowRight" });
+    lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    expect(JSON.parse(String(lastPatch?.layoutJson)).tree.ratio).toBe(52);
+
+    fireEvent.keyDown(splitResizer, { key: "ArrowDown" });
+    expect(onWorkspaceChange.mock.calls.at(-1)?.[0]).toEqual(lastPatch);
+  });
+});
+
+describe("EditorWidget — Issue #1375 layout regression hardening", () => {
+  it("keeps tab order stable across a reload from persisted layout state (AC1)", () => {
+    const onWorkspaceChange = vi.fn();
+    const { unmount } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+
+    // Reorder a.ts to the end of the strip with two keyboard moves.
+    const reorder = (): void => {
+      fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" }), {
+        key: "ArrowRight",
+        altKey: true,
+      });
+    };
+    reorder();
+    reorder();
+
+    const persisted = String(onWorkspaceChange.mock.calls.at(-1)?.[0]?.layoutJson);
+    expect(JSON.parse(persisted).panes["pane-1"].tabOrder).toEqual([
+      "src/b.ts",
+      "src/c.ts",
+      "src/a.ts",
+    ]);
+    unmount();
+
+    // A reload re-creates the widget from the persisted layout JSON. The order must survive.
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        layoutJson={persisted}
+      />,
+    );
+    expect(screen.getByTestId("runtime-open-files")).toHaveTextContent(
+      "src/b.ts|src/c.ts|src/a.ts",
+    );
+  });
+
+  it("changes only layout, never dirty state, when a clean tab is dragged into a split (AC2)", () => {
+    const { container } = render(
+      <EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />,
+    );
+
+    fireEvent.dragStart(screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" }), {
+      dataTransfer: { effectAllowed: "", setData: vi.fn() },
+    });
+    const rightZone = container.querySelector(".ed-pane-drop-zone.right");
+    expect(rightZone).not.toBeNull();
+    fireEvent.drop(rightZone as Element, { dataTransfer: { effectAllowed: "", setData: vi.fn() } });
+
+    // The drag produced a split (layout change) but introduced no dirty marker.
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+    for (const node of screen.getAllByTestId("runtime-dirty-files")) {
+      expect(node).not.toHaveTextContent("src/");
+    }
+  });
+
+  it("re-homes the dirty marker and active selection when a dirty tab moves panes (AC3)", () => {
+    const onWorkspaceChange = vi.fn();
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    expect(screen.getByTestId("runtime-dirty-files")).toHaveTextContent("src/a.ts");
+
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" }), {
+      key: "ArrowRight",
+      altKey: true,
+      shiftKey: true,
+    });
+
+    // The dirty file now lives in pane-2, which becomes the active pane and selection.
+    expect(screen.getByRole("button", { name: "Tab handle pane-2 src/a.ts" })).toBeInTheDocument();
+    const movedPatch = JSON.parse(String(onWorkspaceChange.mock.calls.at(-1)?.[0]?.layoutJson));
+    expect(movedPatch.activePaneId).toBe("pane-2");
+    expect(movedPatch.panes["pane-2"].activeFile).toBe("src/a.ts");
+    for (const node of screen.getAllByTestId("runtime-dirty-files")) {
+      expect(node).toHaveTextContent("src/a.ts");
+    }
+
+    // Cleaning the file in its NEW pane clears the marker everywhere: no orphaned entry
+    // survives on the pane the tab left (the AC3 regression).
+    fireEvent.click(screen.getByRole("button", { name: "Mark clean pane-2" }));
+    for (const node of screen.getAllByTestId("runtime-dirty-files")) {
+      expect(node).not.toHaveTextContent("src/a.ts");
+    }
+  });
+
+  it("does not raise a false unsaved-changes prompt on the pane a dirty tab left (AC3)", () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" }), {
+      key: "ArrowRight",
+      altKey: true,
+      shiftKey: true,
+    });
+
+    // a.ts is dirty and now lives only in pane-2. Closing from the pane it LEFT (pane-1) must not
+    // consult an orphaned dirty flag and pop the unsaved-changes dialog. The first "Close a" button
+    // belongs to pane-1, which the layout renders before pane-2.
+    const closeFromPaneOne = screen.getAllByRole("button", { name: "Close a" })[0] as HTMLElement;
+    fireEvent.click(closeFromPaneOne);
+
+    expect(screen.queryByRole("dialog", { name: "Unsaved editor changes" })).toBeNull();
+  });
+
+  it("collapses an empty pane back to a single pane when its last tab closes (AC4)", async () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+
+    // pane-2 holds only a.ts; closing it leaves the pane empty and must collapse the split.
+    const closeButtons = screen.getAllByRole("button", { name: "Close a" });
+    fireEvent.click(closeButtons[closeButtons.length - 1] as HTMLElement);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("runtime-probe")).toHaveLength(1);
+    });
+    expect(screen.queryByRole("separator", { name: "Resize editor split" })).toBeNull();
+  });
+
+  it("exposes accessible split-resizer separator semantics that track the ratio (AC5)", () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    const resizer = screen.getByRole("separator", { name: "Resize editor split" });
+    expect(resizer).toHaveAttribute("aria-orientation", "vertical");
+    expect(resizer).toHaveAttribute("aria-valuemin", "15");
+    expect(resizer).toHaveAttribute("aria-valuemax", "85");
+    expect(resizer).toHaveAttribute("aria-valuenow", "50");
+
+    fireEvent.keyDown(resizer, { key: "ArrowRight" });
+    expect(screen.getByRole("separator", { name: "Resize editor split" })).toHaveAttribute(
+      "aria-valuenow",
+      "52",
+    );
   });
 });

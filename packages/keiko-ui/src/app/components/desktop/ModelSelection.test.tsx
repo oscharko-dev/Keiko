@@ -93,7 +93,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    budget: undefined,
     memoryEnabled: true,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
@@ -103,7 +102,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
-    clearHistory: vi.fn(),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -435,9 +433,7 @@ describe("ChatWindow mini composer (AC #2)", () => {
       true, // mini=true
     );
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Models" })).toHaveTextContent(
-      "inherited-model",
-    );
+    expect(screen.getByRole("combobox", { name: "Models" })).toHaveTextContent("inherited-model");
   });
 
   it("renders the no-model alert in mini mode when noEligibleModels is true", () => {
