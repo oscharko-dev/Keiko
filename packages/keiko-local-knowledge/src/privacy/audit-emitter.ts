@@ -31,6 +31,21 @@ interface RunStatement {
   readonly run: (params?: SqlParams) => unknown;
 }
 
+type SourceOnlyAuditEvent = Extract<
+  CapsuleAuditEvent,
+  { readonly kind: "indexing-job-started" | "indexing-job-completed" | "indexing-job-failed" | "retention-applied" }
+>;
+
+type PreviewAuditEvent = Extract<
+  CapsuleAuditEvent,
+  {
+    readonly kind:
+      | "citation-preview-authorized"
+      | "citation-preview-recoverable"
+      | "citation-preview-blocked";
+  }
+>;
+
 export function emitCapsuleAuditEvent(event: CapsuleAuditEvent, sink: AuditEventSink): void {
   sink.emit(event);
 }
@@ -75,33 +90,77 @@ function redactChunkIds(chunkIds: readonly string[]): readonly string[] {
   return chunkIds.map((chunkId) => createHash("sha256").update(chunkId).digest("hex").slice(0, 16));
 }
 
-function buildAuditDetails(event: CapsuleAuditEvent): Record<string, unknown> | null {
-  if (
+function sourceOnlyDetails(event: {
+  readonly sourceIds: readonly string[];
+}): Record<string, unknown> {
+  return { sourceIds: [...event.sourceIds] };
+}
+
+function retrievalDetails(
+  event: Extract<CapsuleAuditEvent, { readonly kind: "retrieval-performed" }>,
+): Record<string, unknown> {
+  return {
+    ...sourceOnlyDetails(event),
+    chunkIds: redactChunkIds(event.chunkIds),
+    referenceCount: event.referenceCount,
+    noEvidence: event.noEvidence,
+  };
+}
+
+function referenceDetails(
+  event:
+    | Extract<CapsuleAuditEvent, { readonly kind: "answer-context-assembled" }>
+    | Extract<CapsuleAuditEvent, { readonly kind: "model-context-sent" }>,
+): Record<string, unknown> {
+  return {
+    ...sourceOnlyDetails(event),
+    chunkIds: redactChunkIds(event.chunkIds),
+    referenceCount: event.referenceCount,
+    citationCount: event.citationCount,
+    ...("modelId" in event ? { modelId: event.modelId } : {}),
+  };
+}
+
+function previewDetails(
+  event: PreviewAuditEvent,
+): Record<string, unknown> {
+  return {
+    ...sourceOnlyDetails(event),
+    chunkIds: redactChunkIds(event.chunkIds),
+    targetQuality: event.targetQuality,
+    ...("reasonCode" in event ? { reasonCode: event.reasonCode } : {}),
+  };
+}
+
+function isSourceOnlyAuditEvent(event: CapsuleAuditEvent): event is SourceOnlyAuditEvent {
+  return (
     event.kind === "indexing-job-started" ||
     event.kind === "indexing-job-completed" ||
     event.kind === "indexing-job-failed" ||
     event.kind === "retention-applied"
-  ) {
-    return {
-      sourceIds: [...event.sourceIds],
-    };
+  );
+}
+
+function isPreviewAuditEvent(event: CapsuleAuditEvent): event is PreviewAuditEvent {
+  return (
+    event.kind === "citation-preview-authorized" ||
+    event.kind === "citation-preview-recoverable" ||
+    event.kind === "citation-preview-blocked"
+  );
+}
+
+function buildAuditDetails(event: CapsuleAuditEvent): Record<string, unknown> | null {
+  if (isSourceOnlyAuditEvent(event)) {
+    return sourceOnlyDetails(event);
   }
   if (event.kind === "retrieval-performed") {
-    return {
-      sourceIds: [...event.sourceIds],
-      chunkIds: redactChunkIds(event.chunkIds),
-      referenceCount: event.referenceCount,
-      noEvidence: event.noEvidence,
-    };
+    return retrievalDetails(event);
   }
   if (event.kind === "answer-context-assembled" || event.kind === "model-context-sent") {
-    return {
-      sourceIds: [...event.sourceIds],
-      chunkIds: redactChunkIds(event.chunkIds),
-      referenceCount: event.referenceCount,
-      citationCount: event.citationCount,
-      ...("modelId" in event ? { modelId: event.modelId } : {}),
-    };
+    return referenceDetails(event);
+  }
+  if (isPreviewAuditEvent(event)) {
+    return previewDetails(event);
   }
   return null;
 }

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync, statSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
 import {
   createInMemoryUiStore,
   createNodeUiStore,
@@ -240,7 +241,28 @@ describe("createNodeUiStore — on-disk file", () => {
         elapsedMs: 10,
       },
     };
-    s1.attachGroundedAnswer(assistantMsg.id, grounded);
+    const previewCitations: readonly StoredPdfCitationPreviewCitation[] = [
+      {
+        stableId: "preview-1",
+        marker: "[1]",
+        markerIndex: 1,
+        documentLabel: "policy.pdf",
+        sourceLabel: "Policy Capsule / Manual",
+        lineage: {
+          capsuleId: "cap-1" as never,
+          sourceId: "src-1" as never,
+          documentId: "doc-1" as never,
+          chunkId: "chunk-1" as never,
+        },
+        documentMediaType: "application/pdf",
+        documentContentHash: "hash-1",
+        pageNumber: 7,
+        pageLabel: "7",
+        characterStart: 0,
+        characterEnd: 32,
+      },
+    ];
+    s1.attachGroundedAnswer(assistantMsg.id, grounded, previewCitations);
 
     s1.close();
 
@@ -295,6 +317,7 @@ describe("createNodeUiStore — on-disk file", () => {
       assistantMessageId: assistantMsg.id,
       citations: [{ scopePath: "package-lock.json" }],
     });
+    expect(s2.findGroundedPreviewCitations(assistantMsg.id)).toEqual(previewCitations);
 
     s2.close();
   });

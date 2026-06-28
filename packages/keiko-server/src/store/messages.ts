@@ -10,6 +10,7 @@ import type {
   ChatRole,
   GroundedAnswer,
   NewChatMessage,
+  StoredPdfCitationPreviewCitation,
   UpdateChatMessagePatch,
   WorkflowStatus,
 } from "./types.js";
@@ -42,12 +43,24 @@ interface MessageRow {
   readonly short_result: string | null;
   readonly task_type: string | null;
   readonly grounded_answer_json: string | null;
+  readonly grounded_preview_citations_json: string | null;
 }
 
 function parseGroundedAnswer(raw: string | null): GroundedAnswer | undefined {
   if (raw === null) return undefined;
   try {
     return JSON.parse(raw) as GroundedAnswer;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseGroundedPreviewCitations(
+  raw: string | null,
+): readonly StoredPdfCitationPreviewCitation[] | undefined {
+  if (raw === null) return undefined;
+  try {
+    return JSON.parse(raw) as readonly StoredPdfCitationPreviewCitation[];
   } catch {
     return undefined;
   }
@@ -71,7 +84,7 @@ function rowToMessage(row: MessageRow): ChatMessage {
 }
 
 const COLUMNS =
-  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json";
+  "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json";
 
 const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, rowid ASC`;
 const SQL_LIST_LIMITED = `${SQL_LIST} LIMIT ?`;
@@ -79,8 +92,8 @@ const SQL_FIND_BY_ID = `SELECT ${COLUMNS} FROM chat_messages WHERE id = ? LIMIT 
 const SQL_CHAT_EXISTS = "SELECT 1 FROM chats WHERE id = ?";
 const SQL_INSERT = `
 INSERT INTO chat_messages
-  (id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  (id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING ${COLUMNS}
 `;
 
@@ -152,6 +165,19 @@ function processGroundedAnswer(
   return redacted;
 }
 
+function processGroundedPreviewCitations(
+  raw: readonly StoredPdfCitationPreviewCitation[] | undefined,
+): string | null {
+  if (raw === undefined) return null;
+  const json = JSON.stringify(raw);
+  try {
+    JSON.parse(json);
+  } catch {
+    throw invalidRequest("Grounded preview citation metadata is invalid.");
+  }
+  return json;
+}
+
 export function listMessages(db: DatabaseSync, chatId: string): readonly ChatMessage[] {
   return (db.prepare(SQL_LIST).all(chatId) as unknown as MessageRow[]).map(rowToMessage);
 }
@@ -185,6 +211,7 @@ export function insertMessage(
   if (!chatExists) throw notFound("Chat");
   const shortResult = processShortResult(msg.shortResult, redactString);
   const groundedAnswer = processGroundedAnswer(msg.groundedAnswer, redactString);
+  const groundedPreviewCitations = null;
   const row = db
     .prepare(SQL_INSERT)
     .get(
@@ -199,6 +226,7 @@ export function insertMessage(
       shortResult,
       msg.taskType ?? null,
       groundedAnswer,
+      groundedPreviewCitations,
     ) as unknown as MessageRow;
   return rowToMessage(row);
 }
@@ -207,21 +235,33 @@ export function attachGroundedAnswer(
   db: DatabaseSync,
   id: string,
   answer: GroundedAnswer,
+  previewCitations: readonly StoredPdfCitationPreviewCitation[] | undefined,
   redactString: (s: string) => string,
 ): ChatMessage {
   const groundedAnswer = processGroundedAnswer(answer, redactString);
+  const groundedPreviewCitations = processGroundedPreviewCitations(previewCitations);
   const row = db
     .prepare(
       `
         UPDATE chat_messages
-        SET grounded_answer_json = ?
+        SET grounded_answer_json = ?, grounded_preview_citations_json = ?
         WHERE id = ? AND role = 'assistant'
         RETURNING ${COLUMNS}
       `,
     )
-    .get(groundedAnswer, id) as unknown as MessageRow | undefined;
+    .get(groundedAnswer, groundedPreviewCitations, id) as unknown as MessageRow | undefined;
   if (row === undefined) throw notFound("Message");
   return rowToMessage(row);
+}
+
+export function findGroundedPreviewCitations(
+  db: DatabaseSync,
+  id: string,
+): readonly StoredPdfCitationPreviewCitation[] | undefined {
+  const row = db.prepare(SQL_FIND_BY_ID).get(id) as unknown as MessageRow | undefined;
+  return row === undefined
+    ? undefined
+    : parseGroundedPreviewCitations(row.grounded_preview_citations_json);
 }
 
 // Issue #66 — Partial PATCH on a system run-summary message. Builds a dynamic SET clause from the
