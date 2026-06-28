@@ -6,8 +6,8 @@
 //      present but NO realtime voice affordance (AC4 — STT-only exposes dictation, not full transport).
 //   3. Full-realtime deployment: capability advertises full-realtime AND fake getUserMedia +
 //      RTCPeerConnection + WebSocket are injected so the proxied-SDP handshake completes in the browser
-//      without touching hardware, a provider, or the real WS upgrade. The user opens a realtime voice
-//      session and the composer shows the connected state (AC1/AC2/AC6 — observable transport state).
+//      without touching hardware, a provider, or the real WS upgrade. The user enables Voice Dialogue,
+//      which opens the realtime session directly (AC1/AC2/AC6 — observable transport state).
 //   4. Permission denied: getUserMedia is denied → a non-blocking error appears and the composer stays
 //      fully usable (AC4).
 //
@@ -23,6 +23,7 @@ const FULL_REALTIME_CAPABILITY = {
     profile: "full-realtime",
     capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
     transport: { websocketControl: true, webrtcMedia: true },
+    availableVoicePersonas: ["male", "female", "neutral"],
     providerLocality: "azure-foundry",
   },
 };
@@ -57,6 +58,16 @@ const NO_VOICE_CAPABILITY = {
 const TRANSPORT_FAKES_SCRIPT = `
   const OFFER = "v=0\\r\\no=- 1 1 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
   const ANSWER = "v=0\\r\\no=- 2 2 IN IP4 0.0.0.0\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
+  class FakeDataChannel {
+    constructor() {
+      this.readyState = "open";
+      this._l = {};
+      this.sent = [];
+    }
+    addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
+    send(data) { this.sent.push(data); }
+    close() { this.readyState = "closed"; for (const cb of this._l["close"] || []) cb({}); }
+  }
   class FakeRTCPeerConnection {
     constructor() {
       this.iceGatheringState = "complete";
@@ -64,10 +75,11 @@ const TRANSPORT_FAKES_SCRIPT = `
       this.connectionState = "new";
       this.ontrack = null;
       this.onconnectionstatechange = null;
+      this._channel = null;
     }
     addEventListener() {}
     addTrack() {}
-    createDataChannel() { return { close() {} }; }
+    createDataChannel() { this._channel = new FakeDataChannel(); return this._channel; }
     async createOffer() { return { type: "offer", sdp: OFFER }; }
     async setLocalDescription(desc) { this.localDescription = { type: desc.type, sdp: desc.sdp }; }
     async setRemoteDescription() {
@@ -151,6 +163,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
   await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "Voice dialogue mode" })).toHaveCount(0);
 }
 
 async function sttOnlyFlow(page: Page): Promise<void> {
@@ -159,6 +172,7 @@ async function sttOnlyFlow(page: Page): Promise<void> {
   // Dictation is offered for an STT-only deployment, but never the full realtime transport (AC4).
   await expect(page.getByRole("button", { name: "Dictate a message" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "Voice dialogue mode" })).toHaveCount(0);
 }
 
 async function realtimeConnectFlow(page: Page): Promise<void> {
@@ -166,13 +180,14 @@ async function realtimeConnectFlow(page: Page): Promise<void> {
   await stubCapability(page, FULL_REALTIME_CAPABILITY);
   await openComposer(page);
 
-  const start = page.getByRole("button", { name: "Start realtime voice" });
-  await expect(start).toBeVisible();
-  await start.click();
+  await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
+  const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await expect(dialogSwitch).toBeVisible();
+  await dialogSwitch.click();
 
   // The proxied-SDP handshake completes via the injected fakes and the link comes up.
-  await expect(page.getByText("Realtime voice connected.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Stop realtime voice" })).toBeVisible();
+  await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toBeVisible();
   await page.screenshot({ path: "docs/voice/evidence/497-realtime-connected.png", fullPage: true });
 
   // The composer remains fully text-capable while a voice session is live.
@@ -186,8 +201,8 @@ async function deniedPermissionFlow(page: Page): Promise<void> {
   await stubCapability(page, FULL_REALTIME_CAPABILITY);
   await openComposer(page);
 
-  await page.getByRole("button", { name: "Start realtime voice" }).click();
-  await expect(page.getByText(/Microphone access was denied/u)).toBeVisible();
+  await page.getByRole("switch", { name: "Voice dialogue mode" }).click();
+  await expect(page.getByText(/Voice dialogue could not continue/u)).toBeVisible();
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("still typing fine");
   await expect(composer).toHaveValue("still typing fine");

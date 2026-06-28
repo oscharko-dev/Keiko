@@ -12,6 +12,25 @@ import {
 
 type Listener = (event: unknown) => void;
 
+class FakeDataChannel {
+  public readyState: RTCDataChannelState = "open";
+  public readonly close = vi.fn(() => {
+    this.readyState = "closed";
+  });
+  public readonly send = vi.fn();
+  private readonly listeners: Record<string, Listener[]> = {};
+
+  addEventListener(type: string, cb: Listener): void {
+    (this.listeners[type] ??= []).push(cb);
+  }
+
+  fireMessage(data: unknown): void {
+    for (const cb of this.listeners["message"] ?? []) {
+      cb({ data });
+    }
+  }
+}
+
 class FakePeerConnection {
   public iceGatheringState: RTCIceGatheringState = "complete";
   public connectionState: RTCPeerConnectionState = "new";
@@ -26,7 +45,7 @@ class FakePeerConnection {
 
   private readonly listeners: Record<string, Listener[]> = {};
   private readonly senders: RTCRtpSender[] = [];
-  private readonly channels: RTCDataChannel[] = [];
+  private readonly channels: FakeDataChannel[] = [];
 
   addTrack(_track: MediaStreamTrack, _stream: MediaStream): RTCRtpSender {
     const sender = { track: _track, stop: vi.fn() } as unknown as RTCRtpSender;
@@ -35,9 +54,9 @@ class FakePeerConnection {
   }
 
   createDataChannel(_label: string): RTCDataChannel {
-    const ch = { close: vi.fn() } as unknown as RTCDataChannel;
+    const ch = new FakeDataChannel();
     this.channels.push(ch);
-    return ch;
+    return ch as unknown as RTCDataChannel;
   }
 
   async createOffer(): Promise<RTCSessionDescriptionInit> {

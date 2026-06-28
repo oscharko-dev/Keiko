@@ -8,6 +8,8 @@ import type {
   BffError,
   ChatConnectedScope,
   ChatLocalKnowledgeScope,
+  Chat,
+  ChatMessage,
   ChatResponse,
   ChatsResponse,
   ConversationDocumentContextWire,
@@ -749,6 +751,32 @@ export interface SendDesktopChatInput {
   // Issue #148 — client-extracted, byte-bounded text from attached documents. The server
   // re-validates the caps before any of this reaches a model prompt.
   documentContext?: readonly ConversationDocumentContextWire[];
+}
+
+export interface AppendDesktopChatVoiceTurnMessage {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+  readonly timestamp?: number | undefined;
+}
+
+export interface AppendDesktopChatVoiceTurnInput {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly messages: readonly AppendDesktopChatVoiceTurnMessage[];
+}
+
+export interface AppendDesktopChatVoiceTurnResponse {
+  readonly chat: Chat;
+  readonly messages: readonly ChatMessage[];
+}
+
+export async function appendDesktopChatVoiceTurn(
+  input: AppendDesktopChatVoiceTurnInput,
+): Promise<AppendDesktopChatVoiceTurnResponse> {
+  return fetchJson<AppendDesktopChatVoiceTurnResponse>("/api/desktop/chat/voice-turn", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 // Issue #152 — accepts an optional AbortSignal so the Conversation Center can
@@ -1540,11 +1568,7 @@ export async function fetchGitDeliveryActionSheet(
 // block returns `{ status: "blocked", blockReason: "message-policy", messageViolations }`.
 
 export type GitDeliveryMutationStatus =
-  | "succeeded"
-  | "blocked"
-  | "approval-required"
-  | "failed"
-  | "recovery-required";
+  "succeeded" | "blocked" | "approval-required" | "failed" | "recovery-required";
 
 // Shared mutation response shape for branch + staging + commit execution. Optional fields appear only
 // for the matching outcome (block reason, preflight codes, required approvers, execution error code).

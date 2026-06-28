@@ -108,10 +108,12 @@ plus the personas. Using the Foundry development deployments:
 }
 ```
 
-With both providers reachable, the resolver reports `profile: "full-realtime"` and
-`availableVoicePersonas: ["male", "female", "neutral"]`, and the dialogue switch is offered. A realtime
-deployment (`keiko-realtime`, `supportsRealtimeVoice: true`) declares `voiceProfiles` identically; in a
-browser without WebRTC media the session transparently falls back to the STT+TTS turn loop (ADR-0096 D3).
+With both providers reachable, the resolver reports STT and speech-output helper capability: dictation
+and read-aloud are available, but **Voice dialogue mode is not offered** unless the deployment also
+advertises a realtime provider (`supportsRealtimeVoice: true`, `transport.webrtcMedia: true`) and at
+least one `voiceProfiles` persona. Voice Dialogue is the Realtime WebRTC product path; STT+TTS is not a
+fluid-dialogue fallback unless an operator explicitly enables a degraded compatibility mode outside the
+default UI.
 
 ## 4. Validating provider reachability without exposing secrets
 
@@ -154,15 +156,15 @@ keiko ui --port 1983   # or: node scripts/dev-runner.mjs
 
 Then walk the colleague-like conversation. Each step maps to an Epic #1556 acceptance criterion:
 
-1. **Ask** — open a chat, toggle **Voice dialogue mode** on, click **Start speaking**, and ask a
-   question (e.g. about an attached file). The status strip announces _Listening to you._ (AC1)
-2. **Listen** — click **Stop speaking and send**; the transcript is sent through the _same_ chat send
-   path a typed message uses, the assistant answer renders, and the assistant speaks the **exact**
-   visible answer text. Visible and spoken responses cannot diverge — both read one identical string
-   (AC2). (See [assistant-speech-synthesis.md](assistant-speech-synthesis.md).)
-3. **Ground in files / context** — attach a file (or reference earlier chat) and ask about it; the
-   spoken request carries the same `documentContext` and grounding as a typed turn, so the answer is
-   grounded identically (AC2).
+1. **Ask** — open a chat, toggle **Voice dialogue mode** on, and speak. The switch starts the Realtime
+   WebRTC session directly; there is no separate **Start realtime voice** or per-turn **Start speaking**
+   button. The provider data channel commits the user transcript into the existing chat history (AC1).
+2. **Listen** — the assistant answer arrives through the same Realtime session. Committed assistant
+   transcript text is appended to the existing chat history through `/api/desktop/chat/voice-turn`; raw
+   audio remains transient and is not stored (AC2).
+3. **Ground in files / context** — attach a file (or reference earlier chat) and ask about it; committed
+   Realtime turns are persisted in the same chat, so subsequent text and voice turns share the same
+   visible conversation history (AC2).
 4. **Switch voices** — open the **Voice profile** selector and choose **Male**, **Female**, then
    **Neutral**. The visible active-voice label updates; the next spoken turn uses the chosen persona.
    The selection persists across reload (stored content-free as the persona enum in `localStorage` key
@@ -174,9 +176,9 @@ Then walk the colleague-like conversation. Each step maps to an Epic #1556 accep
 7. **Leave / recover** — click **Leave voice dialogue**. The per-turn controls disappear, the switch
    flips off, the microphone tracks are released, and the composer stays fully text-capable. Re-enter
    and confirm a fresh session starts cleanly (AC1).
-8. **Fail-closed paths** — deny the microphone permission, or start with no voice provider / the
-   kill-switch (`KEIKO_VOICE_DISABLED=1`); the switch is absent or the session fails closed while text
-   chat stays fully usable.
+8. **Fail-closed paths** — deny the microphone permission, start with no voice provider, start with only
+   STT/TTS, use a browser without WebRTC media, or enable the kill-switch (`KEIKO_VOICE_DISABLED=1`); the
+   switch is absent or the session fails closed while text chat stays fully usable.
 
 ## 6. Automated verification matrix
 

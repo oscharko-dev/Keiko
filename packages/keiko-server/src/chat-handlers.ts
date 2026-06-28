@@ -16,6 +16,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   isDiscussionMode,
+  stripUnsafeFormatChars,
   type ConversationDocumentContextWire,
   type DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
@@ -1188,4 +1189,107 @@ export async function handleSendDesktopChat(
   if (isRouteResult(prepared)) return prepared;
   const { request, chat, modelId, memoryContext } = prepared;
   return persistModelChatTurn(deps, request, chat, modelId, memoryContext);
+}
+
+type VoiceTurnMessageRole = "user" | "assistant";
+
+interface VoiceTurnAppendMessage {
+  readonly role: VoiceTurnMessageRole;
+  readonly content: string;
+  readonly timestamp?: number | undefined;
+}
+
+interface VoiceTurnAppendRequest {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly messages: readonly VoiceTurnAppendMessage[];
+}
+
+const MAX_VOICE_TURN_MESSAGES = 8;
+
+function parseVoiceTurnAppendMessage(value: unknown): VoiceTurnAppendMessage | undefined {
+  if (!isRecord(value)) return undefined;
+  const role = value.role;
+  if (role !== "user" && role !== "assistant") return undefined;
+  const content = typeof value.content === "string" ? value.content.trim() : "";
+  if (content.length === 0 || content.length > MAX_CHAT_INPUT_CHARS) return undefined;
+  const timestamp = value.timestamp;
+  if (timestamp !== undefined) {
+    if (!Number.isInteger(timestamp) || (timestamp as number) < 0) return undefined;
+    return { role, content, timestamp: timestamp as number };
+  }
+  return { role, content };
+}
+
+function voiceTurnAppendRequestFromBody(
+  body: Record<string, unknown>,
+): VoiceTurnAppendRequest | RouteResult {
+  const chatId = typeof body.chatId === "string" ? body.chatId : "";
+  const projectPath = typeof body.projectPath === "string" ? body.projectPath : "";
+  if (chatId.length === 0 || projectPath.length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "chatId and projectPath are required.") };
+  }
+  if (!Array.isArray(body.messages) || body.messages.length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "messages must be a non-empty array.") };
+  }
+  if (body.messages.length > MAX_VOICE_TURN_MESSAGES) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "messages contains too many entries.") };
+  }
+  const messages = body.messages.map(parseVoiceTurnAppendMessage);
+  if (messages.some((message) => message === undefined)) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "messages must contain committed user or assistant text."),
+    };
+  }
+  return {
+    chatId,
+    projectPath,
+    messages: messages as readonly VoiceTurnAppendMessage[],
+  };
+}
+
+function sanitizeVoiceTurnText(text: string, deps: UiHandlerDeps): string {
+  return deps.redactor(stripUnsafeFormatChars(text)) as string;
+}
+
+export async function handleAppendDesktopVoiceTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const body = await readJsonObject(ctx.req);
+  if (isRouteResult(body)) return body;
+  const request = voiceTurnAppendRequestFromBody(body);
+  if (isRouteResult(request)) return request;
+  const normalizedProjectPath = normalizeDesktopProjectPath(request.projectPath, deps);
+  if (isRouteResult(normalizedProjectPath)) return normalizedProjectPath;
+  const chat = findChat(deps, normalizedProjectPath, request.chatId);
+  if (chat === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Chat not found.") };
+  }
+  try {
+    const baseNow = Date.now();
+    const created = deps.store.createMessages(
+      request.messages.map((message, index) => ({
+        chatId: request.chatId,
+        role: message.role,
+        content: sanitizeVoiceTurnText(message.content, deps),
+        timestamp: message.timestamp ?? baseNow + index,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      })),
+    );
+    const firstUser = created.find((message) => message.role === "user");
+    const chatPatch =
+      chat.title === DEFAULT_CHAT_TITLE && firstUser !== undefined
+        ? { title: firstUser.content.slice(0, 60) }
+        : {};
+    const updatedChat = deps.store.updateChat(request.chatId, chatPatch);
+    return { status: 200, body: { chat: updatedChat, messages: created } };
+  } catch (error) {
+    return desktopChatErrorResult(error, deps);
+  }
 }
