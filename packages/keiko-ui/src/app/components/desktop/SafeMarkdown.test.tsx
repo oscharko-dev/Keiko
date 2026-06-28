@@ -1,6 +1,37 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SafeMarkdown } from "./SafeMarkdown";
+import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
+import type { LocalKnowledgeEvidenceCitation } from "@/lib/types";
+
+const PDF_CITATION: LocalKnowledgeEvidenceCitation = {
+  stableId: "lk-1",
+  marker: "[1]",
+  label: "policy.pdf",
+  score: 0.91,
+  lineage: {
+    capsuleId: "cap-1" as LocalKnowledgeEvidenceCitation["lineage"]["capsuleId"],
+    sourceId: "src-1" as LocalKnowledgeEvidenceCitation["lineage"]["sourceId"],
+    documentId: "doc-1" as LocalKnowledgeEvidenceCitation["lineage"]["documentId"],
+    chunkId: "chunk-1" as LocalKnowledgeEvidenceCitation["lineage"]["chunkId"],
+  },
+};
+
+function citationPreviewController(
+  state: "available" | "recoverable" | "blocked" | undefined,
+): CitationPreviewController {
+  const openCitation = vi.fn<() => Promise<string | null>>().mockResolvedValue("pdf-window-1");
+  return {
+    forCitation: vi.fn(() =>
+      state === undefined ? undefined : { citation: PDF_CITATION, state },
+    ),
+    forMarker: vi.fn((marker) =>
+      marker === "[1]" && state !== undefined ? { citation: PDF_CITATION, state } : undefined,
+    ),
+    isOpening: vi.fn(() => false),
+    openCitation,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // 1. Heading renders demoted (h1 → h3) so model output stays out of the app's
@@ -448,6 +479,43 @@ describe("SafeMarkdown — table", () => {
     expect(document.querySelector("tbody")).not.toBeNull();
     expect(document.body.textContent).toContain("Alice");
     expect(document.body.textContent).toContain("30");
+  });
+});
+
+describe("SafeMarkdown — PDF citation markers", () => {
+  it("opens an inline marker only through a structured citation affordance", () => {
+    const citationPreview = citationPreviewController("available");
+    render(<SafeMarkdown source="See [1] and [2]." citationPreview={citationPreview} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open PDF preview for citation [1]" }));
+
+    expect(citationPreview.openCitation).toHaveBeenCalledWith(PDF_CITATION, "inline-marker");
+    expect(screen.queryByRole("button", { name: "Open PDF preview for citation [2]" })).toBeNull();
+    expect(document.body.textContent).toContain("[2]");
+  });
+
+  it("keeps rendered citation-looking text plain when structured metadata is absent", () => {
+    const citationPreview = citationPreviewController(undefined);
+    render(<SafeMarkdown source="A markdown answer mentions [1]." citationPreview={citationPreview} />);
+
+    expect(screen.queryByRole("button", { name: /PDF preview/ })).toBeNull();
+    expect(document.body.textContent).toContain("[1]");
+    expect(citationPreview.openCitation).not.toHaveBeenCalled();
+  });
+
+  it("renders blocked inline markers as non-activatable explained affordances", () => {
+    const citationPreview = citationPreviewController("blocked");
+    render(<SafeMarkdown source="See [1]." citationPreview={citationPreview} />);
+
+    const marker = screen.getByRole("button", {
+      name: "Citation [1]. PDF preview unavailable.",
+    });
+    expect(marker).toHaveAttribute("aria-disabled", "true");
+    expect(marker).toHaveAttribute("data-tip", "PDF preview unavailable");
+
+    fireEvent.click(marker);
+
+    expect(citationPreview.openCitation).not.toHaveBeenCalled();
   });
 });
 

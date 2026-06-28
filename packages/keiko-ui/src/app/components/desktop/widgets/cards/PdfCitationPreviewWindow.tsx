@@ -56,6 +56,10 @@ function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function readZoomMode(value: unknown): PdfCitationPreviewZoomMode {
   return value === "fit-page" || value === "manual" ? value : "fit-width";
 }
@@ -250,26 +254,22 @@ export function PdfCitationPreviewWindow({
     (): Pick<
       PdfCitationPreviewSafeWindowCfg,
       "anchorQuality" | "documentLabel" | "pageLabel" | "pageNumber" | "sourceLabel"
-    > => ({
-      documentLabel:
-        readOptionalString(cfg.documentLabel) ?? sessionEntry?.display.documentLabel ?? "PDF Preview",
-      anchorQuality: sessionEntry?.display.anchorQuality ?? "page-only",
-      ...(readOptionalString(cfg.sourceLabel) === undefined
-        ? sessionEntry?.display.sourceLabel === undefined
-          ? {}
-          : { sourceLabel: sessionEntry.display.sourceLabel }
-        : { sourceLabel: readOptionalString(cfg.sourceLabel) }),
-      ...(typeof cfg.pageNumber === "number"
-        ? { pageNumber: cfg.pageNumber }
-        : sessionEntry?.display.pageNumber === undefined
-          ? {}
-          : { pageNumber: sessionEntry.display.pageNumber }),
-      ...(readOptionalString(cfg.pageLabel) === undefined
-        ? sessionEntry?.display.pageLabel === undefined
-          ? {}
-          : { pageLabel: sessionEntry.display.pageLabel }
-        : { pageLabel: readOptionalString(cfg.pageLabel) }),
-    }),
+    > => {
+      const sourceLabel = readOptionalString(cfg.sourceLabel) ?? sessionEntry?.display.sourceLabel;
+      const pageNumber =
+        typeof cfg.pageNumber === "number" ? cfg.pageNumber : sessionEntry?.display.pageNumber;
+      const pageLabel = readOptionalString(cfg.pageLabel) ?? sessionEntry?.display.pageLabel;
+      return {
+        documentLabel:
+          readOptionalString(cfg.documentLabel) ??
+          sessionEntry?.display.documentLabel ??
+          "PDF Preview",
+        anchorQuality: sessionEntry?.display.anchorQuality ?? "page-only",
+        ...(sourceLabel === undefined ? {} : { sourceLabel }),
+        ...(pageNumber === undefined ? {} : { pageNumber }),
+        ...(pageLabel === undefined ? {} : { pageLabel }),
+      };
+    },
     [cfg.documentLabel, cfg.pageLabel, cfg.pageNumber, cfg.sourceLabel, sessionEntry],
   );
 
@@ -280,6 +280,16 @@ export function PdfCitationPreviewWindow({
     readNumber(cfg.currentPage, display.pageNumber ?? 1),
     numPages > 0 ? numPages : Number.MAX_SAFE_INTEGER,
   );
+  const failureOverride = useMemo((): PreviewFailure | null => {
+    const title = readOptionalString(cfg.failureTitle);
+    const message = readOptionalString(cfg.failureMessage);
+    if (title === undefined || message === undefined) return null;
+    return {
+      title,
+      message,
+      retryable: readOptionalBoolean(cfg.failureRetryable) ?? false,
+    };
+  }, [cfg.failureMessage, cfg.failureRetryable, cfg.failureTitle]);
   const currentPageSize = measuredSizes[currentPage] ?? defaultPageSize;
   const effectiveScale = useMemo((): number => {
     if (currentPageSize === null) return zoomValue;
@@ -325,12 +335,14 @@ export function PdfCitationPreviewWindow({
   useEffect(() => {
     const sessionHandle = sessionEntry?.session.handle;
     if (sessionHandle === undefined) {
-      setFailure({
-        title: "Preview unavailable",
-        message:
-          "Open this viewer from a verified citation preview session. Raw paths, URLs, and file handles are not accepted here.",
-        retryable: false,
-      });
+      setFailure(
+        failureOverride ?? {
+          title: "Preview unavailable",
+          message:
+            "Open this viewer from a verified citation preview session. Raw paths, URLs, and file handles are not accepted here.",
+          retryable: false,
+        },
+      );
       setDefaultPageSize(null);
       setDoc(null);
       setNumPages(0);
@@ -385,7 +397,7 @@ export function PdfCitationPreviewWindow({
       void loadingTask?.destroy();
       window.clearTimeout(slowTimer);
     };
-  }, [retryToken, sessionEntry]);
+  }, [failureOverride, retryToken, sessionEntry]);
 
   useEffect(() => {
     return () => {

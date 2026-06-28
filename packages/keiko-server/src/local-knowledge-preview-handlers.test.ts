@@ -394,9 +394,15 @@ describe("local-knowledge preview handlers", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
-      state: "available",
-      matchedCitationCount: 1,
-      display: { documentLabel: "policy.pdf", pageNumber: 7, anchorQuality: "approximate" },
+      citations: [
+        {
+          stableId: fixture.previewCitation.stableId,
+          marker: "[1]",
+          markerIndex: 1,
+          state: "available",
+          display: { documentLabel: "policy.pdf", pageNumber: 7, anchorQuality: "approximate" },
+        },
+      ],
     });
     expect(result.body).not.toHaveProperty("authority");
     expect(auditKinds(fixture.capsuleId)).toEqual([]);
