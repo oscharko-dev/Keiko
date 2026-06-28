@@ -51,6 +51,9 @@ export const MIN_ZOOM = 0.3;
 export const MAX_ZOOM = 2.5;
 const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
+const MIN_CAMERA_ANIMATION_DURATION_MS = 90;
+const MAX_CAMERA_ANIMATION_DURATION_MS = 280;
+const PAN_CAMERA_SMOOTHNESS_SCALE = 0.65;
 
 function readView(): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
@@ -252,9 +255,15 @@ function windowIdFromWheelTarget(target: EventTarget | null): string | null {
 interface UsePanZoomArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
+  readonly cameraSmoothness: number;
   readonly winsRef: MutableRefObject<AppWindow[]>;
   readonly setView: Dispatch<SetStateAction<View>>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+}
+
+interface QueueViewOptions {
+  readonly smoothnessScale?: number;
+  readonly minDurationMs?: number;
 }
 
 interface PanZoomResult {
@@ -306,11 +315,43 @@ export function fitWorkspaceViewToWindows(
   };
 }
 
-function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs): PanZoomResult {
+function prefersReducedCameraMotion(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function easeCamera(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function interpolateView(from: View, to: View, progress: number): View {
+  return {
+    zoom: from.zoom + (to.zoom - from.zoom) * progress,
+    x: from.x + (to.x - from.x) * progress,
+    y: from.y + (to.y - from.y) * progress,
+  };
+}
+
+function usePanZoom({
+  wsRef,
+  view,
+  cameraSmoothness,
+  winsRef,
+  setView,
+  setWins,
+}: UsePanZoomArgs): PanZoomResult {
   const viewRef = useRef<View>(view);
   viewRef.current = view;
+  const renderedViewRef = useRef<View>(view);
+  renderedViewRef.current = view;
   const pendingViewRef = useRef<View | null>(null);
+  const pendingViewSmoothnessScaleRef = useRef(1);
+  const pendingViewMinDurationRef = useRef(MIN_CAMERA_ANIMATION_DURATION_MS);
   const frameRef = useRef<number | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const animationStartRef = useRef<View>(view);
+  const animationTargetRef = useRef<View>(view);
+  const animationStartedAtRef = useRef<number>(0);
   const viewPersistDebounceRef = useRef<TrailingDebounce | null>(null);
   if (viewPersistDebounceRef.current === null)
     viewPersistDebounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
@@ -346,16 +387,98 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
       if (frameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
         window.cancelAnimationFrame(frameRef.current);
       }
+      if (
+        animationFrameRef.current !== null &&
+        typeof window.cancelAnimationFrame === "function"
+      ) {
+        window.cancelAnimationFrame(animationFrameRef.current);
+      }
     },
     [],
   );
 
+  const animateView = useCallback(
+    (target: View, smoothnessScale = 1, minDurationMs = MIN_CAMERA_ANIMATION_DURATION_MS): void => {
+      const effectiveSmoothness = Math.min(
+        100,
+        Math.max(0, cameraSmoothness * smoothnessScale),
+      );
+      if (
+        effectiveSmoothness <= 0 ||
+        prefersReducedCameraMotion() ||
+        typeof window.requestAnimationFrame !== "function" ||
+        typeof window.cancelAnimationFrame !== "function"
+      ) {
+        if (animationFrameRef.current !== null) {
+          window.cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
+        }
+        setView(target);
+        return;
+      }
+
+      const durationMs =
+        minDurationMs +
+        ((MAX_CAMERA_ANIMATION_DURATION_MS - minDurationMs) * effectiveSmoothness) / 100;
+      const now =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+      animationStartRef.current =
+        animationFrameRef.current === null
+          ? renderedViewRef.current
+          : interpolateView(
+              animationStartRef.current,
+              animationTargetRef.current,
+              easeCamera(
+                Math.min(1, (now - animationStartedAtRef.current) / durationMs),
+              ),
+            );
+      animationTargetRef.current = target;
+      animationStartedAtRef.current = now;
+
+      if (animationFrameRef.current !== null) return;
+      const step = (time: number): void => {
+        const progress = Math.min(
+          1,
+          Math.max(0, (time - animationStartedAtRef.current) / durationMs),
+        );
+        const eased = easeCamera(progress);
+        if (progress >= 1) {
+          animationFrameRef.current = null;
+          setView(animationTargetRef.current);
+          return;
+        }
+        setView(interpolateView(animationStartRef.current, animationTargetRef.current, eased));
+        animationFrameRef.current = window.requestAnimationFrame(step);
+      };
+      animationFrameRef.current = window.requestAnimationFrame(step);
+    },
+    [cameraSmoothness, setView],
+  );
+
+  const settleCameraAnimation = useCallback((): void => {
+    if (
+      animationFrameRef.current !== null &&
+      typeof window.cancelAnimationFrame === "function"
+    ) {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+      setView(animationTargetRef.current);
+      renderedViewRef.current = animationTargetRef.current;
+    }
+  }, [setView]);
+
   const queueView = useCallback(
-    (next: View | ((current: View) => View)): void => {
+    (next: View | ((current: View) => View), options: QueueViewOptions = {}): void => {
       const base = pendingViewRef.current ?? viewRef.current;
       const resolved = typeof next === "function" ? next(base) : next;
+      const smoothnessScale = options.smoothnessScale ?? 1;
+      const minDurationMs = options.minDurationMs ?? MIN_CAMERA_ANIMATION_DURATION_MS;
       viewRef.current = resolved;
       pendingViewRef.current = resolved;
+      pendingViewSmoothnessScaleRef.current = smoothnessScale;
+      pendingViewMinDurationRef.current = minDurationMs;
       scheduleViewPersist();
 
       if (
@@ -371,11 +494,15 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
       frameRef.current = window.requestAnimationFrame(() => {
         frameRef.current = null;
         const pending = pendingViewRef.current;
+        const pendingSmoothnessScale = pendingViewSmoothnessScaleRef.current;
+        const pendingMinDurationMs = pendingViewMinDurationRef.current;
         pendingViewRef.current = null;
-        if (pending !== null) setView(pending);
+        pendingViewSmoothnessScaleRef.current = 1;
+        pendingViewMinDurationRef.current = MIN_CAMERA_ANIMATION_DURATION_MS;
+        if (pending !== null) animateView(pending, pendingSmoothnessScale, pendingMinDurationMs);
       });
     },
-    [scheduleViewPersist, setView],
+    [animateView, scheduleViewPersist, setView],
   );
 
   useEffect(() => {
@@ -386,6 +513,7 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
         e.preventDefault();
         const windowId = windowIdFromWheelTarget(e.target);
         if (windowId !== null) {
+          settleCameraAnimation();
           setWins((ws) =>
             ws === null
               ? ws
@@ -412,13 +540,16 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
       }
       e.preventDefault();
       const delta = normalizeWheelDelta(e);
-      queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }));
+      queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }), {
+        minDurationMs: 0,
+        smoothnessScale: PAN_CAMERA_SMOOTHNESS_SCALE,
+      });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       el.removeEventListener("wheel", onWheel);
     };
-  }, [wsRef, setWins, queueView]);
+  }, [wsRef, setWins, queueView, settleCameraAnimation]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -455,7 +586,11 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
 
   const resetView = useCallback((): void => queueView({ zoom: 1, x: 0, y: 0 }), [queueView]);
   const panBy = useCallback(
-    (dx: number, dy: number): void => queueView((v) => ({ ...v, x: v.x + dx, y: v.y + dy })),
+    (dx: number, dy: number): void =>
+      queueView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }), {
+        minDurationMs: 0,
+        smoothnessScale: PAN_CAMERA_SMOOTHNESS_SCALE,
+      }),
     [queueView],
   );
 
@@ -924,6 +1059,7 @@ function useConnectionPrune(
 // Release 0.2.0 — bind callbacks return whether the bind was ACCEPTED; `false` (source limit
 // reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
+  readonly cameraSmoothness?: number | undefined;
   readonly onScopeBind?:
     ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>) | undefined;
   readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
@@ -948,7 +1084,13 @@ export function useWorkspace(
   // action factories below depend on their (stable) identities rather than on the
   // `opts` object, which defaults to a fresh `{}` every render and would otherwise
   // re-create the whole api each frame and defeat memoization.
-  const { onScopeBind, onScopeUnbind, onConnectorBind, onConnectorUnbind } = opts;
+  const {
+    cameraSmoothness = 0,
+    onScopeBind,
+    onScopeUnbind,
+    onConnectorBind,
+    onConnectorUnbind,
+  } = opts;
   const zc = useRef<number>(3);
   const snapZone = useRef<SnapZone | null>(null);
   const suppressNextServerPersistRef = useRef(false);
@@ -998,6 +1140,7 @@ export function useWorkspace(
   const { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect } = usePanZoom({
     wsRef,
     view,
+    cameraSmoothness,
     winsRef,
     setView,
     setWins,

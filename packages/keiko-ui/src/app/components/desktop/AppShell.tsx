@@ -13,6 +13,10 @@ import { Header, type HeaderStatusTone } from "./Header";
 import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
+import {
+  readWorkspaceCameraSmoothness,
+  WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
+} from "./workspace-appearance";
 import { CommandPalette, type Command } from "./modals/CommandPalette";
 import { GatewaySetupDialog } from "./modals/GatewaySetupDialog";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
@@ -537,7 +541,21 @@ function AppShellInner(): ReactNode {
     },
     [chatForWindow, session],
   );
+  const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
+
+  useEffect(() => {
+    const onCameraSmoothness = (event: Event): void => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      setCameraSmoothness(typeof detail === "number" ? detail : 0);
+    };
+    window.addEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
+    return () => {
+      window.removeEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
+    };
+  }, []);
+
   const ws = useWorkspace(wsRef, {
+    cameraSmoothness,
     onScopeBind: handleScopeBind,
     onScopeUnbind: handleScopeUnbind,
     onConnectorBind: handleConnectorBind,

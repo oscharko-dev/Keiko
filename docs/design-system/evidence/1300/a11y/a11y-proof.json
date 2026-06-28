@@ -2,7 +2,7 @@
   "issue": 1300,
   "epic": 1290,
   "tool": "axe-core 4.12.0",
-  "postCssSha256": "421998854817e25ede9edbcec09cdb0da2e994fe68d2bf693bfd0c5253bac538",
+  "postCssSha256": "e9dfdde86df78e8137ac47448986b1b3ffcc4006567d4f335be3a25b3aa00a7d",
   "run": {
     "generatedAt": "2026-06-27T16:18:23.566Z",
     "repoHeadSha": "29362c523bcbddd665a307dbd7fb91c5fc1a4507"
