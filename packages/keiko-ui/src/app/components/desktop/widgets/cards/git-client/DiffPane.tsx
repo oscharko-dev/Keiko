@@ -3,20 +3,19 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { GitDiffScope, GitHistoryEntry } from "@/lib/types";
-import { Icons } from "../../../Icons";
 import { parseUnifiedDiff } from "../shared/diffParser";
 import { DiffFileSection } from "../shared/diffView";
 import type { GitClientSeam } from "./git-client-seam";
 import { formatGitError } from "./git-client-seam";
-import { HistoryCommitDetail } from "./HistoryPane";
+import { CommitDetailMeta } from "./HistoryPane";
 import {
+  avatarStyle,
+  COMMIT_DETAIL_HEADER_STYLE,
   DIFF_HEADER_STYLE,
-  disabledStyle,
-  FOOTER_STYLE,
-  PANE_STYLE,
+  DIFF_PATH_STYLE,
+  HASH_CHIP_STYLE,
   scopeButtonStyle,
   SCOPE_TOGGLE_STYLE,
-  SECONDARY_BTN,
   SUBTLE_TEXT_STYLE,
 } from "./git-client-styles";
 
@@ -39,6 +38,23 @@ function isBinaryDiff(diff: string): boolean {
   return /^Binary files .+ differ$/m.test(diff) || diff.includes("GIT binary patch");
 }
 
+// Split a repo-relative path into its directory (with trailing slash) and the file name.
+function splitPath(path: string): { readonly dir: string; readonly name: string } {
+  const idx = path.lastIndexOf("/");
+  if (idx < 0) return { dir: "", name: path };
+  return { dir: path.slice(0, idx + 1), name: path.slice(idx + 1) };
+}
+
+function authorInitials(author: string): string {
+  return author.slice(0, 2).toUpperCase();
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
 interface DiffPaneProps {
   readonly client: GitClientSeam;
   readonly repositoryRoot: string | null;
@@ -48,8 +64,6 @@ interface DiffPaneProps {
   readonly onScopeChange: (scope: GitDiffScope) => void;
   /** Bumped after a staging/commit mutation so the visible diff reloads. */
   readonly revision: number;
-  readonly onCreatePullRequest?: (() => void) | undefined;
-  readonly onMerge?: (() => void) | undefined;
 }
 
 export function DiffPane({
@@ -60,8 +74,6 @@ export function DiffPane({
   scope,
   onScopeChange,
   revision,
-  onCreatePullRequest,
-  onMerge,
 }: DiffPaneProps): ReactNode {
   const [state, setState] = useState<DiffState>(EMPTY_DIFF);
 
@@ -96,21 +108,15 @@ export function DiffPane({
     () => (state.diff !== null && !binary ? parseUnifiedDiff(state.diff) : null),
     [state.diff, binary],
   );
-  const hasRepository = repositoryRoot !== null;
 
   return (
-    <div style={PANE_STYLE}>
+    <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, flex: 1 }}>
       {selectedCommit !== null ? (
-        <div style={DIFF_HEADER_STYLE}>
-          <span className="rv-filerow-path mono" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
-            {selectedCommit.shortSha}
-          </span>
-        </div>
+        <CommitDetailHeader entry={selectedCommit} />
       ) : selectedChangePath !== null ? (
         <div style={DIFF_HEADER_STYLE}>
-          <span className="rv-filerow-path mono" style={{ minWidth: 0, overflowWrap: "anywhere" }}>
-            {selectedChangePath}
-          </span>
+          <DiffPathLabel path={selectedChangePath} />
+          <span style={{ flex: 1 }} />
           <div role="group" aria-label="Diff scope" style={SCOPE_TOGGLE_STYLE}>
             {SCOPES.map((entry) => {
               const active = entry.id === scope;
@@ -145,24 +151,50 @@ export function DiffPane({
           files={parsed?.files ?? null}
         />
       </div>
-      <footer style={FOOTER_STYLE}>
-        <button
-          type="button"
-          style={{ ...SECONDARY_BTN, ...disabledStyle(!hasRepository) }}
-          disabled={!hasRepository}
-          onClick={onCreatePullRequest}
-        >
-          <Icons.git size={12} /> Create Pull Request
-        </button>
-        <button
-          type="button"
-          style={{ ...SECONDARY_BTN, ...disabledStyle(!hasRepository) }}
-          disabled={!hasRepository}
-          onClick={onMerge}
-        >
-          <Icons.branch size={12} /> Merge…
-        </button>
-      </footer>
+    </div>
+  );
+}
+
+function DiffPathLabel({ path }: { readonly path: string }): ReactNode {
+  const { dir, name } = splitPath(path);
+  return (
+    <span style={DIFF_PATH_STYLE} title={path}>
+      {dir}
+      <span style={{ color: "var(--fg)" }}>{name}</span>
+    </span>
+  );
+}
+
+// Commit-detail header (History view): subject as the pane heading + an author/hash/stats meta row.
+function CommitDetailHeader({ entry }: { readonly entry: GitHistoryEntry }): ReactNode {
+  return (
+    <div style={COMMIT_DETAIL_HEADER_STYLE}>
+      <h2 tabIndex={-1} style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--fg)" }}>
+        {entry.subject}
+      </h2>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 9,
+          flexWrap: "wrap",
+          fontSize: 11.5,
+          color: "var(--fg-muted)",
+        }}
+      >
+        <span aria-hidden="true" style={{ ...avatarStyle(22), fontSize: 9.5 }}>
+          {authorInitials(entry.author)}
+        </span>
+        <span style={{ color: "var(--fg)" }}>{entry.author}</span>
+        <span>committed</span>
+        <span style={HASH_CHIP_STYLE}>{entry.shortSha}</span>
+        <span>·</span>
+        <span>{formatDate(entry.date)}</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ color: "var(--fg-faint)" }}>
+          {entry.changedFileCount} {entry.changedFileCount === 1 ? "file changed" : "files changed"}
+        </span>
+      </div>
     </div>
   );
 }
@@ -180,7 +212,7 @@ function DiffBody({
   readonly binary: boolean;
   readonly files: ReturnType<typeof parseUnifiedDiff>["files"] | null;
 }): ReactNode {
-  if (selectedCommit !== null) return <HistoryCommitDetail entry={selectedCommit} />;
+  if (selectedCommit !== null) return <CommitDetailMeta entry={selectedCommit} />;
   if (selectedChangePath === null) {
     return (
       <div className="rv-empty" aria-label="Diff">
@@ -191,14 +223,14 @@ function DiffBody({
   }
   if (state.error !== null) {
     return (
-      <p className="rv-empty" role="alert" style={{ padding: "var(--space-4)" }}>
+      <p className="rv-empty" role="alert" style={{ padding: 14 }}>
         {state.error}
       </p>
     );
   }
   if (state.loading) {
     return (
-      <p className="rv-empty" role="status" style={{ padding: "var(--space-4)" }}>
+      <p className="rv-empty" role="status" style={{ padding: 14 }}>
         Loading diff…
       </p>
     );
@@ -224,11 +256,7 @@ function DiffBody({
   return (
     <div className="rv-body">
       {state.truncated ? (
-        <p
-          className="rv-truncated"
-          role="status"
-          style={{ ...SUBTLE_TEXT_STYLE, padding: "var(--space-4)" }}
-        >
+        <p className="rv-truncated" role="status" style={{ ...SUBTLE_TEXT_STYLE, padding: 14 }}>
           This diff is large and has been truncated.
         </p>
       ) : null}

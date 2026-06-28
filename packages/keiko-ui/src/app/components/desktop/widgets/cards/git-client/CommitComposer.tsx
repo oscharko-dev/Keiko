@@ -1,12 +1,14 @@
 "use client";
 
-// Commit composer (Issue #1575, Epic #1571). Pinned beneath the changed-file list: a summary line,
-// an optional description body, a live but secondary commit-policy preview, and the commit action —
-// all executed through the existing governed commit preview/execute routes via the injected seam.
+// Commit composer (Issue #1575, Epic #1571 — "Git Window" redesign). Pinned beneath the changed-file
+// list: a summary line, an optional description body, a live but secondary commit-policy preview, the
+// commit action, and the PR/Merge flow row. All execution runs through the existing governed commit
+// preview/execute routes via the injected seam.
 //
 // The commit button is gated by the single hard signal `messageValidation.ok` (a content-free,
-// server-resolved policy result); quality warnings are advisory and never block. Visible product
-// text says "Git" only (contract §7); styles compose existing globals.css tokens (ADR-0051).
+// server-resolved policy result); quality warnings are advisory and never block. Visible product text
+// says "Git" only (contract §7); styles compose existing globals.css tokens (ADR-0051). AI-suggestion
+// affordances from the redesign render only when a genuine suggestion exists — never fabricated.
 
 import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -14,17 +16,18 @@ import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import { Icons } from "../../../Icons";
 import { violationLabel, warningLabel } from "./git-client-seam";
 import type { GitMutationOutcome } from "./git-client-seam";
-import { CodeList, FieldLabel, MutationOutcome, StatusPill } from "./git-client-ui";
+import { CodeList, MutationOutcome, StatusPill } from "./git-client-ui";
 import {
-  ACTION_ROW_STYLE,
   COMMIT_PANEL_STYLE,
+  DESCRIPTION_FIELD_STYLE,
   disabledStyle,
-  INPUT_STYLE,
+  FLOW_ROW_STYLE,
   MONO_INLINE_STYLE,
   PREVIEW_STYLE,
   PRIMARY_BTN,
+  SECONDARY_BTN,
   SUBTLE_TEXT_STYLE,
-  TEXTAREA_STYLE,
+  summaryFieldStyle,
 } from "./git-client-styles";
 
 const PREVIEW_DEBOUNCE_MS = 400;
@@ -32,6 +35,7 @@ const PREVIEW_DEBOUNCE_MS = 400;
 interface CommitComposerProps {
   /** Non-empty when a repository is selected; the composer is inert otherwise. */
   readonly projectId: string | null;
+  readonly branchName?: string | undefined;
   readonly stagedFileCount: number;
   readonly busy: boolean;
   readonly outcome: GitMutationOutcome | null;
@@ -41,6 +45,8 @@ interface CommitComposerProps {
   readonly previewError: string | null;
   readonly onPreview: (messageDraft: string) => void;
   readonly onCommit: (message: string) => void;
+  readonly onCreatePullRequest?: (() => void) | undefined;
+  readonly onMerge?: (() => void) | undefined;
 }
 
 /** Compose the git commit message from the subject line and the optional body. */
@@ -52,6 +58,7 @@ export function composeCommitMessage(summary: string, body: string): string {
 
 export function CommitComposer({
   projectId,
+  branchName,
   stagedFileCount,
   busy,
   outcome,
@@ -61,12 +68,12 @@ export function CommitComposer({
   previewError,
   onPreview,
   onCommit,
+  onCreatePullRequest,
+  onMerge,
 }: CommitComposerProps): ReactNode {
   const [summary, setSummary] = useState("");
   const [body, setBody] = useState("");
   const baseId = useId();
-  const summaryId = `${baseId}-summary`;
-  const bodyId = `${baseId}-body`;
   const hintId = `${baseId}-hint`;
   const previewId = `${baseId}-preview`;
   const onPreviewRef = useRef(onPreview);
@@ -101,53 +108,85 @@ export function CommitComposer({
   else if (policyBlocked) hint = "Resolve the commit-policy issues below to commit.";
   else hint = "Commits the staged changes to the current branch.";
 
+  const commitLabel =
+    branchName !== undefined && branchName !== "" ? `Commit to ${branchName}` : "Commit";
+
   return (
     <section style={COMMIT_PANEL_STYLE} aria-label="Commit">
-      <FieldLabel label="Summary" htmlFor={summaryId}>
-        <input
-          id={summaryId}
-          type="text"
-          style={INPUT_STYLE}
-          value={summary}
-          disabled={!hasRepository}
-          aria-invalid={policyBlocked ? "true" : undefined}
-          aria-describedby={policyBlocked ? previewId : hintId}
-          onChange={(e) => setSummary(e.target.value)}
-          placeholder="Concise summary of the change"
-        />
-      </FieldLabel>
-      <FieldLabel label="Description" htmlFor={bodyId}>
-        <textarea
-          id={bodyId}
-          style={TEXTAREA_STYLE}
-          value={body}
-          disabled={!hasRepository}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="Optional — explain the intent and verification"
-        />
-      </FieldLabel>
-      <div style={ACTION_ROW_STYLE}>
-        <p
-          id={hintId}
-          role="status"
-          aria-live="polite"
-          style={{ ...SUBTLE_TEXT_STYLE, flex: 1, minWidth: 0 }}
-        >
-          {hint}
-        </p>
-        <button
-          type="button"
-          style={{ ...PRIMARY_BTN, ...disabledStyle(commitDisabled) }}
-          disabled={commitDisabled}
-          aria-describedby={hintId}
-          onClick={() => onCommit(message)}
-        >
-          <Icons.check size={12} /> Commit
-          {hasStaged ? ` ${stagedFileCount.toString()}` : ""}
-        </button>
-      </div>
+      <input
+        type="text"
+        aria-label="Summary"
+        style={summaryFieldStyle(false)}
+        value={summary}
+        disabled={!hasRepository}
+        aria-invalid={policyBlocked ? "true" : undefined}
+        aria-describedby={policyBlocked ? previewId : hintId}
+        onChange={(e) => setSummary(e.target.value)}
+        placeholder="Concise summary of the change"
+      />
+      <textarea
+        aria-label="Description"
+        style={DESCRIPTION_FIELD_STYLE}
+        value={body}
+        disabled={!hasRepository}
+        onChange={(e) => setBody(e.target.value)}
+        placeholder="Optional — explain the intent and verification"
+      />
+      <p
+        id={hintId}
+        role="status"
+        aria-live="polite"
+        style={{ ...SUBTLE_TEXT_STYLE, fontSize: 11.5, color: "var(--fg-faint)" }}
+      >
+        {hint}
+      </p>
+      <button
+        type="button"
+        style={{ ...PRIMARY_BTN, width: "100%", ...disabledStyle(commitDisabled) }}
+        disabled={commitDisabled}
+        aria-describedby={hintId}
+        onClick={() => onCommit(message)}
+      >
+        <Icons.commit size={16} /> {commitLabel}
+      </button>
+      {onCreatePullRequest !== undefined || onMerge !== undefined ? (
+        <div style={FLOW_ROW_STYLE}>
+          {onCreatePullRequest !== undefined ? (
+            <button
+              type="button"
+              style={{ ...SECONDARY_BTN, flex: 1, ...disabledStyle(!hasRepository) }}
+              disabled={!hasRepository}
+              onClick={onCreatePullRequest}
+            >
+              <span style={{ color: "var(--fg-dim)" }}>
+                <Icons.pullRequest size={16} />
+              </span>
+              Create pull request
+            </button>
+          ) : null}
+          {onMerge !== undefined ? (
+            <button
+              type="button"
+              style={{ ...SECONDARY_BTN, flex: 1, ...disabledStyle(!hasRepository) }}
+              disabled={!hasRepository}
+              onClick={onMerge}
+            >
+              <span style={{ color: "var(--fg-dim)" }}>
+                <Icons.merge size={16} />
+              </span>
+              Merge…
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {previewError !== null ? (
-        <div role="alert" style={{ ...PREVIEW_STYLE, borderColor: "var(--feedback-danger)" }}>
+        <div
+          role="alert"
+          style={{
+            ...PREVIEW_STYLE,
+            boxShadow: "inset 0 0 0 1px color-mix(in oklch, var(--danger) 48%, var(--line))",
+          }}
+        >
           <StatusPill tone="danger">
             <Icons.info size={11} /> Preview unavailable
           </StatusPill>
@@ -183,21 +222,19 @@ function CommitPolicyPreview({
       aria-live={blocked ? undefined : "polite"}
       style={PREVIEW_STYLE}
     >
-      <div
-        style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}
-      >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <StatusPill tone={blocked ? "danger" : "success"}>
           <Icons.check size={11} /> {blocked ? "Policy: action needed" : "Meets commit policy"}
         </StatusPill>
-        <p style={{ ...SUBTLE_TEXT_STYLE, color: "var(--text-primary)" }}>
-          {summary.stagedFileCount.toString()} staged file
-          {summary.stagedFileCount === 1 ? "" : "s"} across {summary.areaCount.toString()} area
+        <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, color: "var(--fg)" }}>
+          {summary.stagedFileCount} staged file
+          {summary.stagedFileCount === 1 ? "" : "s"} across {summary.areaCount} area
           {summary.areaCount === 1 ? "" : "s"}
           {summary.touchesTests ? " · touches tests" : ""}
         </p>
       </div>
       {intent.suggestedSubjectPrefix !== undefined ? (
-        <p style={{ ...SUBTLE_TEXT_STYLE, color: "var(--text-primary)" }}>
+        <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, color: "var(--fg)" }}>
           Suggested prefix: <code style={MONO_INLINE_STYLE}>{intent.suggestedSubjectPrefix}</code>
         </p>
       ) : null}

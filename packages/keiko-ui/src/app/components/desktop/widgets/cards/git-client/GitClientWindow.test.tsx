@@ -436,19 +436,19 @@ afterEach(() => {
 });
 
 describe("GitClientWindow — repository list", () => {
-  it("lists multiple repos in the sidebar after load", async () => {
+  it("lists multiple repos in the connect panel after load", async () => {
     render(<GitClientWindow client={makeClient()} />);
-    await waitFor(() => expect(screen.getByRole("option", { name: /alpha/ })).toBeInTheDocument());
-    expect(screen.getByRole("option", { name: /beta/ })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
   });
 
-  it("selecting a repo from the sidebar calls updateCfg with the repo path", async () => {
+  it("selecting a repo from the connect panel calls updateCfg with the repo path", async () => {
     const updateCfg = vi.fn();
     const client = makeClient();
     render(<GitClientWindow client={client} updateCfg={updateCfg} />);
-    await waitFor(() => expect(screen.getByRole("option", { name: /alpha/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("option", { name: /alpha/ }));
+    fireEvent.click(screen.getByRole("button", { name: /alpha/ }));
 
     expect(updateCfg).toHaveBeenCalledWith({ projectPath: REPO_A.path });
   });
@@ -456,9 +456,9 @@ describe("GitClientWindow — repository list", () => {
   it("selecting a repo triggers a branch and status load for the chosen path", async () => {
     const client = makeClient();
     render(<GitClientWindow client={client} />);
-    await waitFor(() => expect(screen.getByRole("option", { name: /alpha/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("option", { name: /alpha/ }));
+    fireEvent.click(screen.getByRole("button", { name: /alpha/ }));
 
     await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_A.path));
     expect(client.getStatus).toHaveBeenCalledWith(REPO_A.path);
@@ -474,10 +474,13 @@ describe("GitClientWindow — repository list", () => {
         path === REPO_A.path ? Promise.resolve(makeStatusRich()) : betaStatus,
       ),
     });
+    const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("option", { name: /beta/ }));
+    // Switch to repo B via the toolbar repository selector.
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: /beta/ }));
 
     await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
     expect(screen.queryByLabelText("Stage README.md")).not.toBeInTheDocument();
@@ -511,33 +514,24 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Network failure");
   });
 
-  it("renders search input with accessible label", async () => {
+  it("offers Connect repository and Clone from URL actions in the connect panel", async () => {
     render(<GitClientWindow client={makeClient()} />);
-    expect(screen.getByRole("searchbox", { name: "Search repositories" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect repository" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clone from URL" })).toBeInTheDocument();
   });
 
-  it("supports Arrow, Home, and End keyboard movement between repositories", async () => {
+  it("renders recent repositories as focusable buttons", async () => {
     render(<GitClientWindow client={makeClient()} />);
-    await waitFor(() => expect(screen.getByRole("option", { name: /alpha/ })).toBeInTheDocument());
-
-    const alpha = screen.getByRole("option", { name: /alpha/ });
-    const beta = screen.getByRole("option", { name: /beta/ });
+    const alpha = await screen.findByRole("button", { name: /alpha/ });
     alpha.focus();
-
-    fireEvent.keyDown(alpha, { key: "ArrowDown" });
-    expect(beta).toHaveFocus();
-
-    fireEvent.keyDown(beta, { key: "Home" });
     expect(alpha).toHaveFocus();
-
-    fireEvent.keyDown(alpha, { key: "End" });
-    expect(beta).toHaveFocus();
+    expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
   });
 });
 
 describe("GitClientWindow — repository selector combobox (toolbar)", () => {
   it("renders the Repository combobox trigger in the toolbar", async () => {
-    render(<GitClientWindow client={makeClient()} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Repository" })).toBeInTheDocument(),
     );
@@ -545,12 +539,12 @@ describe("GitClientWindow — repository selector combobox (toolbar)", () => {
 });
 
 describe("GitClientWindow — add-repository dialog", () => {
-  it("opens the dialog when the add-repository button is clicked", async () => {
+  it("opens the dialog when the connect-repository button is clicked", async () => {
     const user = userEvent.setup();
     render(<GitClientWindow client={makeClient()} />);
-    await waitFor(() => expect(screen.getByRole("option", { name: /alpha/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
 
-    await user.click(screen.getByRole("button", { name: "Add repository" }));
+    await user.click(screen.getByRole("button", { name: "Clone from URL" }));
 
     expect(screen.getByRole("dialog", { name: "Add repository" })).toBeInTheDocument();
   });
@@ -559,9 +553,9 @@ describe("GitClientWindow — add-repository dialog", () => {
     const user = userEvent.setup();
     const client = makeClient();
     render(<GitClientWindow client={client} />);
-    await waitFor(() => expect(screen.getByRole("option", { name: /alpha/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
 
-    await user.click(screen.getByRole("button", { name: "Add repository" }));
+    await user.click(screen.getByRole("button", { name: "Clone from URL" }));
     const dialog = screen.getByRole("dialog");
 
     // Clone mode is default
@@ -587,9 +581,9 @@ describe("GitClientWindow — add-repository dialog", () => {
     const user = userEvent.setup();
     const client = makeClient();
     render(<GitClientWindow client={client} />);
-    await waitFor(() => expect(screen.getByRole("option", { name: /alpha/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
 
-    await user.click(screen.getByRole("button", { name: "Add repository" }));
+    await user.click(screen.getByRole("button", { name: "Connect repository" }));
     const dialog = screen.getByRole("dialog");
 
     await user.click(within(dialog).getByRole("button", { name: "Open local repository" }));
@@ -607,9 +601,9 @@ describe("GitClientWindow — add-repository dialog", () => {
   it("closes the dialog on Escape", async () => {
     const user = userEvent.setup();
     render(<GitClientWindow client={makeClient()} />);
-    await waitFor(() => expect(screen.getByRole("option", { name: /alpha/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /alpha/ })).toBeInTheDocument());
 
-    await user.click(screen.getByRole("button", { name: "Add repository" }));
+    await user.click(screen.getByRole("button", { name: "Clone from URL" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
@@ -693,7 +687,7 @@ describe("GitClientWindow — toolbar actions", () => {
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
     await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
-    await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+    await user.click(screen.getByRole("button", { name: /Create pull request/ }));
 
     expect(openWindow).not.toHaveBeenCalled();
     const panel = await screen.findByRole("region", { name: "Pull Request" });
@@ -738,7 +732,7 @@ describe("GitClientWindow — toolbar actions", () => {
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
     await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
-    await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+    await user.click(screen.getByRole("button", { name: /Create pull request/ }));
     const panel = await screen.findByRole("region", { name: "Pull Request" });
     await user.click(within(panel).getByLabelText("Update"));
     await user.type(within(panel).getByLabelText("Pull Request number"), "1640");
@@ -792,7 +786,7 @@ describe("GitClientWindow — toolbar actions", () => {
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
     await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
-    await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+    await user.click(screen.getByRole("button", { name: /Create pull request/ }));
     const panel = await screen.findByRole("region", { name: "Pull Request" });
     const titleInput = within(panel).getByLabelText("Pull Request title");
     fireEvent.change(titleInput, { target: { value: "fix: auth path" } });
@@ -864,7 +858,7 @@ describe("GitClientWindow — toolbar actions", () => {
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
 
-    await user.click(screen.getByRole("button", { name: /Create Pull Request/ }));
+    await user.click(screen.getByRole("button", { name: /Create pull request/ }));
     expect(await screen.findByRole("region", { name: "Pull Request" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Back to diff" }));
     const diff = screen.getByRole("region", { name: "Diff" });
@@ -1114,7 +1108,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
 
 describe("GitClientWindow — Changes/History tabs", () => {
   it("renders a tablist with Changes and History tabs, Changes aria-selected initially", async () => {
-    render(<GitClientWindow client={makeClient()} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     const tablist = screen.getByRole("tablist");
     expect(tablist).toBeInTheDocument();
 
@@ -1127,7 +1121,7 @@ describe("GitClientWindow — Changes/History tabs", () => {
 
   it("clicking History tab makes it aria-selected and deselects Changes", async () => {
     const user = userEvent.setup();
-    render(<GitClientWindow client={makeClient()} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     const tablist = screen.getByRole("tablist");
 
     await user.click(within(tablist).getByRole("tab", { name: "History" }));
@@ -1143,7 +1137,7 @@ describe("GitClientWindow — Changes/History tabs", () => {
   });
 
   it("ArrowRight on Changes tab moves focus and selection to History", async () => {
-    render(<GitClientWindow client={makeClient()} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     const changesTab = screen.getByRole("tab", { name: "Changes" });
     changesTab.focus();
     fireEvent.keyDown(changesTab, { key: "ArrowRight" });
@@ -1155,7 +1149,7 @@ describe("GitClientWindow — Changes/History tabs", () => {
 
   it("ArrowLeft on History tab wraps back to Changes", async () => {
     const user = userEvent.setup();
-    render(<GitClientWindow client={makeClient()} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
 
     // Navigate to History first
     await user.click(screen.getByRole("tab", { name: "History" }));
@@ -1170,7 +1164,7 @@ describe("GitClientWindow — Changes/History tabs", () => {
 
   it("Home key on History tab moves to Changes", async () => {
     const user = userEvent.setup();
-    render(<GitClientWindow client={makeClient()} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
 
     await user.click(screen.getByRole("tab", { name: "History" }));
     const historyTab = screen.getByRole("tab", { name: "History" });
@@ -1183,7 +1177,7 @@ describe("GitClientWindow — Changes/History tabs", () => {
   });
 
   it("End key on Changes tab moves to History", async () => {
-    render(<GitClientWindow client={makeClient()} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     const changesTab = screen.getByRole("tab", { name: "Changes" });
     changesTab.focus();
     fireEvent.keyDown(changesTab, { key: "End" });
@@ -1195,10 +1189,11 @@ describe("GitClientWindow — Changes/History tabs", () => {
 });
 
 describe("GitClientWindow — empty / loading / error states", () => {
-  it("shows empty state when no repo is selected (no status, no changes)", () => {
+  it("shows the connect panel when no repo is selected (no status, no changes)", () => {
     render(<GitClientWindow client={makeClient()} />);
-    // Before any selection the changes pane shows a prompt
-    expect(screen.getByText(/Select a repository to view its changes/i)).toBeInTheDocument();
+    // Before any selection the body shows the Connect panel rather than the two-column view.
+    expect(screen.getByText("No repository connected")).toBeInTheDocument();
+    expect(screen.getByText(/Connect a folder or repository/i)).toBeInTheDocument();
   });
 
   it("shows a loading state while status is pending after repo selection", async () => {
@@ -1247,9 +1242,12 @@ describe("GitClientWindow — empty / loading / error states", () => {
     render(<GitClientWindow client={client} />);
 
     await waitFor(() => expect(client.listRepositories).toHaveBeenCalled());
-    expect(screen.getByText("No repositories yet. Add a repository to begin.")).toBeInTheDocument();
-    // The add-repository affordance stays reachable from the empty list.
-    expect(screen.getByRole("button", { name: "Add repository" })).toBeInTheDocument();
+    expect(
+      screen.getByText("No repositories yet. Connect or clone one to get started."),
+    ).toBeInTheDocument();
+    // The connect affordances stay reachable from the empty list.
+    expect(screen.getByRole("button", { name: "Connect repository" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clone from URL" })).toBeInTheDocument();
   });
 
   // AC (Issue #1576): the empty repository state (initialized repo with zero commits) must
@@ -1279,7 +1277,7 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     // "M" glyph for staged file, "M" for worktree-only file
-    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
     expect(screen.getByText("README.md")).toBeInTheDocument();
   });
 
@@ -1290,8 +1288,8 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
-    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("src/index.ts").closest("button")!);
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("index.ts").closest("button")!);
 
     // src/index.ts is staged-only, so the pane defaults its scope to "staged".
     await waitFor(() =>
@@ -1327,8 +1325,8 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
-    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("src/index.ts").closest("button")!);
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("index.ts").closest("button")!);
 
     // Both file headings from the diff must be present — the second file is the regression guard.
     await waitFor(() => expect(screen.getByText("src/first.ts")).toBeInTheDocument());
@@ -1342,25 +1340,27 @@ describe("GitClientWindow — required visible / absent words", () => {
   // getByText (exact substring match in rendered node text) or getByRole/getByLabelText where
   // textContent concatenation makes word-boundary regexes unreliable.
 
-  it("renders 'Git' as a visible heading/label in the toolbar", () => {
+  it("renders 'Git' as the card's accessible heading", () => {
     render(<GitClientWindow client={makeClient()} />);
-    // The word "Git" appears as the standalone header span text in the toolbar
-    expect(screen.getByText("Git")).toBeInTheDocument();
+    // The Git window labels itself "Git" (the visible "Git" title is workspace chrome).
+    expect(screen.getByRole("heading", { name: "Git" })).toBeInTheDocument();
   });
 
   it("renders 'Repository' as the combobox label in the toolbar", async () => {
-    render(<GitClientWindow client={makeClient()} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     // KeikoSelect renders with aria-label="Repository"
-    expect(screen.getByRole("combobox", { name: "Repository" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Repository" })).toBeInTheDocument(),
+    );
   });
 
   it("renders 'Changes' as a visible tab label", () => {
-    render(<GitClientWindow client={makeClient()} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     expect(screen.getByRole("tab", { name: "Changes" })).toBeInTheDocument();
   });
 
   it("renders 'History' as a visible tab label", () => {
-    render(<GitClientWindow client={makeClient()} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
     expect(screen.getByRole("tab", { name: "History" })).toBeInTheDocument();
   });
 
@@ -1380,26 +1380,34 @@ describe("GitClientWindow — required visible / absent words", () => {
   });
 
   it("renders 'Pull Request' as a visible button", async () => {
-    render(<GitClientWindow client={makeClient()} onOpenEditor={vi.fn()} openWindow={vi.fn()} />);
-    expect(screen.getByRole("button", { name: /Pull Request/ })).toBeInTheDocument();
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        client={makeClient()}
+        onOpenEditor={vi.fn()}
+        openWindow={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: /Create pull request/i })).toBeInTheDocument();
   });
 
   it("renders 'Merge' as a visible button", async () => {
-    render(<GitClientWindow client={makeClient()} onOpenEditor={vi.fn()} openWindow={vi.fn()} />);
-    expect(screen.getByRole("button", { name: /Merge/ })).toBeInTheDocument();
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        client={makeClient()}
+        onOpenEditor={vi.fn()}
+        openWindow={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: /Merge/ })).toBeInTheDocument();
   });
 
-  it("renders 'Commit' as visible text in the History tab panel", async () => {
-    // "Commit" is required visible vocabulary per contract §7. It appears in the History
-    // tab panel's empty state ("Commit history appears here…"). Asserting the rendered word
-    // directly — rather than a proxy like "Clone repository" — keeps the requirement
-    // mutation-robust: renaming the empty-state copy away from "Commit" fails this test.
-    const user = userEvent.setup();
-    render(<GitClientWindow client={makeClient()} />);
-    await user.click(screen.getByRole("tab", { name: "History" }));
-    // The commit composer (which also renders the word "Commit") lives in the always-mounted
-    // Changes panel, so target the History panel's own empty-state copy precisely.
-    expect(screen.getByText(/Commit history/)).toBeInTheDocument();
+  it("renders 'Commit' as visible text in the composer", async () => {
+    // "Commit" is required visible vocabulary per contract §7. The commit button reads
+    // "Commit to <branch>" — asserting it directly keeps the requirement mutation-robust.
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+    expect(await screen.findByRole("button", { name: /^Commit/ })).toBeInTheDocument();
   });
 
   it("never renders forbidden governance / delivery vocabulary in visible text", async () => {
@@ -1429,15 +1437,17 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
-    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
     // A staged file's checkbox is checked and reads "Unstage <path>".
     expect(screen.getByLabelText("Unstage src/index.ts")).toBeChecked();
     // An unstaged file's checkbox is unchecked and reads "Stage <path>".
     expect(screen.getByLabelText("Stage README.md")).not.toBeChecked();
-    // Indicator badges convey state as words (never colour alone).
-    expect(screen.getByText("Untracked")).toBeInTheDocument();
-    expect(screen.getByText("Conflict")).toBeInTheDocument();
-    expect(screen.getByText("Partially staged")).toBeInTheDocument();
+    // Each row's accessible name conveys its state as words (never colour alone).
+    expect(screen.getByRole("button", { name: /notes\.txt, untracked/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /merge\.ts, conflicted/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /partial\.ts, staged modified; worktree modified/ }),
+    ).toBeInTheDocument();
   });
 
   it("checking an unstaged file stages it through the stage route", async () => {
@@ -1475,7 +1485,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
   it("unchecking a staged file unstages it through the unstage route", async () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
 
     fireEvent.click(screen.getByLabelText("Unstage src/index.ts"));
 
@@ -1505,7 +1515,7 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
   it("Unstage all unstages every staged path", async () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: "Unstage all" }));
 
@@ -1587,7 +1597,8 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
 
     // Begin staging in repo A (in flight), then switch to repo B before it resolves.
     fireEvent.click(screen.getByLabelText("Stage README.md"));
-    fireEvent.click(screen.getByRole("option", { name: /beta/ }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Repository" }));
+    fireEvent.click(await screen.findByRole("option", { name: /beta/ }));
     await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
 
     await act(async () => {
@@ -1609,7 +1620,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
 
     await user.type(screen.getByLabelText("Summary"), "feat: wire commit composer");
     const button = screen.getByRole("button", { name: /^Commit/ });
@@ -1628,7 +1639,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
 
     await user.type(screen.getByLabelText("Summary"), "feat: subject");
     await user.type(screen.getByLabelText("Description"), "Body line.");
@@ -1649,7 +1660,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     const client = makeClient({ getStatus });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
     const callsBefore = getStatus.mock.calls.length;
 
     await user.type(screen.getByLabelText("Summary"), "feat: done");
@@ -1678,7 +1689,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-    await waitFor(() => expect(screen.getByText("src/index.ts")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("index.ts")).toBeInTheDocument());
 
     await user.type(screen.getByLabelText("Summary"), "feat: wait for preview");
     const button = screen.getByRole("button", { name: /^Commit/ });

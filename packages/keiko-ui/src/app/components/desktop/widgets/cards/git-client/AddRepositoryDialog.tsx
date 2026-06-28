@@ -32,19 +32,19 @@ const DIALOG_STYLE: CSSProperties = {
   maxHeight: "100%",
   overflow: "auto",
   padding: "var(--space-6)",
-  border: "1px solid var(--border-default)",
-  borderRadius: "var(--radius-surface)",
-  background: "var(--surface-primary)",
+  borderRadius: "var(--radius)",
+  background: "var(--card)",
+  boxShadow: "var(--shadow-pop)",
 };
 
 const FIELD_LABEL_STYLE: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "var(--space-3)",
-  font: "var(--weight-semibold) var(--text-caption) var(--font-ui)",
+  font: "600 11px var(--font-ui)",
   textTransform: "uppercase",
   letterSpacing: "0.02em",
-  color: "var(--text-faint)",
+  color: "var(--fg-faint)",
 };
 
 const MODE_TAB_STYLE: CSSProperties = {
@@ -53,9 +53,9 @@ const MODE_TAB_STYLE: CSSProperties = {
 };
 
 const MODE_TAB_ACTIVE_STYLE: CSSProperties = {
-  border: "1px solid var(--border-accent)",
-  background: "var(--surface-inset)",
-  color: "var(--text-primary)",
+  border: "1px solid var(--accent-line)",
+  background: "var(--accent-dim)",
+  color: "var(--accent-text)",
 };
 
 type AddMode = "clone" | "open";
@@ -64,6 +64,7 @@ interface AddRepositoryDialogProps {
   readonly client: GitClientSeam;
   readonly onAdded: (project: ProjectWithAvailability) => void;
   readonly onClose: () => void;
+  readonly initialMode?: AddMode | undefined;
 }
 
 function focusableInside(root: HTMLElement): readonly HTMLElement[] {
@@ -75,8 +76,9 @@ export function AddRepositoryDialog({
   client,
   onAdded,
   onClose,
+  initialMode = "clone",
 }: AddRepositoryDialogProps): ReactNode {
-  const [mode, setMode] = useState<AddMode>("clone");
+  const [mode, setMode] = useState<AddMode>(initialMode);
   const [repositoryUrl, setRepositoryUrl] = useState("");
   const [destinationPath, setDestinationPath] = useState("");
   const [localPath, setLocalPath] = useState("");
@@ -175,13 +177,7 @@ export function AddRepositoryDialog({
         onKeyDown={onKeyDown}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)" }}>
-          <h2
-            style={{
-              margin: 0,
-              font: "var(--weight-semibold) var(--text-heading) var(--font-ui)",
-              color: "var(--text-primary)",
-            }}
-          >
+          <h2 style={{ margin: 0, font: "600 17px var(--font-ui)", color: "var(--fg)" }}>
             Add repository
           </h2>
           <span style={{ flex: 1 }} />
@@ -254,7 +250,7 @@ export function AddRepositoryDialog({
         )}
 
         {error !== null ? (
-          <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, color: "var(--text-primary)" }}>
+          <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, color: "var(--fg)" }}>
             {error}
           </p>
         ) : null}

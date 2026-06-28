@@ -30,7 +30,7 @@ import { GovernedMergeCard } from "../GovernedMergeCard";
 import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
 import { Icons } from "../../../Icons";
 import { RepositoryToolbar } from "./RepositoryToolbar";
-import { RepositoryListSearch } from "./RepositoryListSearch";
+import { ConnectPanel } from "./ConnectPanel";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { ChangesPane } from "./ChangesPane";
 import type { ChangesTab } from "./ChangesPane";
@@ -70,7 +70,11 @@ function normalizeDiffScopeForChange(current: GitDiffScope, change: GitChangedFi
   if (change.staged && !change.unstaged && !change.untracked && current === "worktree") {
     return "staged";
   }
-  if (!change.staged && (change.unstaged || change.untracked || change.conflicted) && current === "staged") {
+  if (
+    !change.staged &&
+    (change.unstaged || change.untracked || change.conflicted) &&
+    current === "staged"
+  ) {
     return "worktree";
   }
   return current;
@@ -94,15 +98,23 @@ function ownerRepoFromRemoteUrl(value: string | undefined): string | undefined {
 
 function inferOwnerAndRepo(remotes: readonly GitRemoteSummary[]): string | undefined {
   for (const remote of remotes) {
-    const ownerRepo = ownerRepoFromRemoteUrl(remote.fetchUrl) ?? ownerRepoFromRemoteUrl(remote.pushUrl);
+    const ownerRepo =
+      ownerRepoFromRemoteUrl(remote.fetchUrl) ?? ownerRepoFromRemoteUrl(remote.pushUrl);
     if (ownerRepo !== undefined) return ownerRepo;
   }
   return undefined;
 }
 
-function inferBaseBranch(currentBranch: string | undefined, summary: GitRepositorySummary | null): string {
+function inferBaseBranch(
+  currentBranch: string | undefined,
+  summary: GitRepositorySummary | null,
+): string {
   const upstreamBranch = summary?.upstream?.branch;
-  if (currentBranch !== undefined && upstreamBranch !== undefined && upstreamBranch !== currentBranch) {
+  if (
+    currentBranch !== undefined &&
+    upstreamBranch !== undefined &&
+    upstreamBranch !== currentBranch
+  ) {
     return upstreamBranch;
   }
   if (currentBranch !== undefined && currentBranch !== "main") return "main";
@@ -145,6 +157,7 @@ export function GitClientWindow({
   const [diffScope, setDiffScope] = useState<GitDiffScope>("worktree");
   const [commitNonce, setCommitNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogMode, setDialogMode] = useState<"clone" | "open">("clone");
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncOutcome, setSyncOutcome] = useState<string | null>(null);
@@ -342,7 +355,8 @@ export function GitClientWindow({
         setHistoryLoading(false);
         setSelectedCommitSha((current) => {
           if (res.entries.length === 0) return null;
-          if (current !== null && res.entries.some((entry) => entry.sha === current)) return current;
+          if (current !== null && res.entries.some((entry) => entry.sha === current))
+            return current;
           return res.entries[0]?.sha ?? null;
         });
       },
@@ -440,8 +454,7 @@ export function GitClientWindow({
   const activeStatus = selectedPath !== null && statusProjectKey === selectedPath ? status : null;
   const activeSummary =
     selectedPath !== null && summaryProjectKey === selectedPath ? summary : null;
-  const activeRemotes =
-    selectedPath !== null && remotesProjectKey === selectedPath ? remotes : [];
+  const activeRemotes = selectedPath !== null && remotesProjectKey === selectedPath ? remotes : [];
   const activeHistory =
     selectedPath !== null && historyProjectKey === selectedPath ? history : null;
   const selectedCommit: GitHistoryEntry | null =
@@ -482,7 +495,9 @@ export function GitClientWindow({
 
   const stageAll = useCallback((): void => {
     if (selectedPath === null || activeStatus === null || activeStatus.truncated) return;
-    const pathspecs = activeStatus.changes.filter((c) => c.unstaged || c.untracked).map((c) => c.path);
+    const pathspecs = activeStatus.changes
+      .filter((c) => c.unstaged || c.untracked)
+      .map((c) => c.path);
     if (pathspecs.length === 0) return;
     const includeUntracked = activeStatus.changes.some((c) => c.untracked);
     staging.runMutation(() =>
@@ -514,7 +529,13 @@ export function GitClientWindow({
   );
 
   const createBranch = useCallback(
-    ({ branchName, baseBranchName }: { readonly branchName: string; readonly baseBranchName: string }): void => {
+    ({
+      branchName,
+      baseBranchName,
+    }: {
+      readonly branchName: string;
+      readonly baseBranchName: string;
+    }): void => {
       if (selectedPath === null) return;
       const baseBranch = branches.find((branch) => branch.name === baseBranchName);
       if (baseBranch === undefined) return;
@@ -527,7 +548,9 @@ export function GitClientWindow({
         });
         if (created.status !== "succeeded") return created;
         const switched = await client.branchSwitch({ projectId: selectedPath, branchName });
-        return switched.status === "succeeded" ? { ...switched, actionKind: "branch-create" } : switched;
+        return switched.status === "succeeded"
+          ? { ...switched, actionKind: "branch-create" }
+          : switched;
       });
     },
     [branchActions, branches, client, selectedPath],
@@ -596,7 +619,9 @@ export function GitClientWindow({
         .pushPreview(input)
         .then((preview) => {
           if (preview.policyOutcome !== "allowed" || preview.preflightBlockingCodes.length > 0) {
-            done(`Blocked: ${preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", ")}`);
+            done(
+              `Blocked: ${preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", ")}`,
+            );
             return undefined;
           }
           return client.pushExecute(input);
@@ -612,7 +637,9 @@ export function GitClientWindow({
     (mode: Exclude<RightPaneMode, "diff">): void => {
       if (selectedPath === null) return;
       setRightPaneMode(mode);
-      setRightPaneAnnouncement(mode === "pull-request" ? "Pull Request panel opened." : "Merge panel opened.");
+      setRightPaneAnnouncement(
+        mode === "pull-request" ? "Pull Request panel opened." : "Merge panel opened.",
+      );
     },
     [selectedPath],
   );
@@ -633,6 +660,7 @@ export function GitClientWindow({
 
   return (
     <div style={WORKSPACE_STYLE} aria-label="Git">
+      <h2 className="rv-sr-only">Git</h2>
       <p
         role="status"
         aria-live="polite"
@@ -675,101 +703,115 @@ export function GitClientWindow({
         onOpenFiles={onOpenFiles}
       />
       <div style={BODY_STYLE}>
-        <div style={SIDEBAR_STYLE}>
-          <RepositoryListSearch
+        {selectedPath === null ? (
+          <ConnectPanel
             repositories={repositories}
-            selectedPath={selectedPath}
             loading={reposLoading}
             error={reposError}
             onSelect={selectRepository}
-            onAddRepository={() => setDialogOpen(true)}
+            onConnect={() => {
+              setDialogMode("open");
+              setDialogOpen(true);
+            }}
+            onClone={() => {
+              setDialogMode("clone");
+              setDialogOpen(true);
+            }}
           />
-          <ChangesPane
-            tab={tab}
-            onTabChange={setTab}
-            status={activeStatus}
-            statusLoading={statusLoading}
-            statusError={statusError}
-            selectedChangePath={selectedChangePath}
-            onSelectChange={selectChange}
-            onStageFile={stageFile}
-            onUnstageFile={unstageFile}
-            onStageAll={stageAll}
-            onUnstageAll={unstageAll}
-            stagingBusy={staging.flow.busy}
-            stagingOutcome={visibleStagingOutcome}
-            stagingError={staging.flow.error}
-            history={activeHistory}
-            historyLoading={historyLoading}
-            historyError={historyError}
-            selectedCommitSha={selectedCommitSha}
-            onSelectCommit={(entry) => setSelectedCommitSha(entry.sha)}
-            commitComposer={
-              <CommitComposer
-                key={`${selectedPath ?? "none"}:${commitNonce.toString()}`}
-                projectId={selectedPath}
-                stagedFileCount={activeStatus?.stagedCount ?? 0}
-                busy={commit.flow.busy}
-                outcome={commit.flow.outcome}
-                error={commit.flow.error}
-                preview={commit.preview}
-                previewDraft={commit.previewDraft}
-                previewError={commit.previewError}
-                onPreview={commit.runPreview}
-                onCommit={commitChanges}
-              />
-            }
-          />
-        </div>
-        {rightPaneMode === "diff" ? (
-          <div ref={diffPaneRef} style={{ minWidth: 0, minHeight: 0, display: "contents" }}>
-            <DiffPane
-              client={client}
-              repositoryRoot={selectedPath}
-              selectedChangePath={selectedChangePath}
-              selectedCommit={tab === "history" ? selectedCommit : null}
-              scope={diffScope}
-              onScopeChange={setDiffScope}
-              revision={statusRevision}
-              onCreatePullRequest={() => openRightPane("pull-request")}
-              onMerge={() => openRightPane("merge")}
-            />
-          </div>
         ) : (
-          <div
-            ref={rightPaneRef}
-            style={PANE_STYLE}
-            role="region"
-            aria-label={rightPaneMode === "pull-request" ? "Pull Request" : "Merge"}
-          >
-            <div style={DIFF_HEADER_STYLE}>
-              <button type="button" style={SECONDARY_BTN} onClick={returnToDiff}>
-                <Icons.chevronR size={12} style={{ transform: "rotate(180deg)" }} /> Back to diff
-              </button>
+          <>
+            <div style={SIDEBAR_STYLE}>
+              <ChangesPane
+                tab={tab}
+                onTabChange={setTab}
+                status={activeStatus}
+                statusLoading={statusLoading}
+                statusError={statusError}
+                selectedChangePath={selectedChangePath}
+                onSelectChange={selectChange}
+                onStageFile={stageFile}
+                onUnstageFile={unstageFile}
+                onStageAll={stageAll}
+                onUnstageAll={unstageAll}
+                stagingBusy={staging.flow.busy}
+                stagingOutcome={visibleStagingOutcome}
+                stagingError={staging.flow.error}
+                history={activeHistory}
+                historyLoading={historyLoading}
+                historyError={historyError}
+                selectedCommitSha={selectedCommitSha}
+                onSelectCommit={(entry) => setSelectedCommitSha(entry.sha)}
+                commitComposer={
+                  <CommitComposer
+                    key={`${selectedPath}:${commitNonce.toString()}`}
+                    projectId={selectedPath}
+                    branchName={currentBranch}
+                    stagedFileCount={activeStatus?.stagedCount ?? 0}
+                    busy={commit.flow.busy}
+                    outcome={commit.flow.outcome}
+                    error={commit.flow.error}
+                    preview={commit.preview}
+                    previewDraft={commit.previewDraft}
+                    previewError={commit.previewError}
+                    onPreview={commit.runPreview}
+                    onCommit={commitChanges}
+                    onCreatePullRequest={() => openRightPane("pull-request")}
+                    onMerge={() => openRightPane("merge")}
+                  />
+                }
+              />
             </div>
-            {rightPaneMode === "pull-request" ? (
-              <GovernedPullRequestCard
-                projectId={selectedPath ?? undefined}
-                headBranchName={currentBranch}
-                ownerAndRepo={inferredOwnerAndRepo}
-                baseBranchName={inferredBaseBranch}
-                client={client}
-              />
+            {rightPaneMode === "diff" ? (
+              <div ref={diffPaneRef} style={{ minWidth: 0, minHeight: 0, display: "contents" }}>
+                <DiffPane
+                  client={client}
+                  repositoryRoot={selectedPath}
+                  selectedChangePath={selectedChangePath}
+                  selectedCommit={tab === "history" ? selectedCommit : null}
+                  scope={diffScope}
+                  onScopeChange={setDiffScope}
+                  revision={statusRevision}
+                />
+              </div>
             ) : (
-              <GovernedMergeCard
-                projectId={selectedPath ?? undefined}
-                headBranchName={currentBranch}
-                ownerAndRepo={inferredOwnerAndRepo}
-                baseBranchName={inferredBaseBranch}
-                client={client}
-              />
+              <div
+                ref={rightPaneRef}
+                style={PANE_STYLE}
+                role="region"
+                aria-label={rightPaneMode === "pull-request" ? "Pull Request" : "Merge"}
+              >
+                <div style={DIFF_HEADER_STYLE}>
+                  <button type="button" style={SECONDARY_BTN} onClick={returnToDiff}>
+                    <Icons.chevronR size={12} style={{ transform: "rotate(180deg)" }} /> Back to
+                    diff
+                  </button>
+                </div>
+                {rightPaneMode === "pull-request" ? (
+                  <GovernedPullRequestCard
+                    projectId={selectedPath}
+                    headBranchName={currentBranch}
+                    ownerAndRepo={inferredOwnerAndRepo}
+                    baseBranchName={inferredBaseBranch}
+                    client={client}
+                  />
+                ) : (
+                  <GovernedMergeCard
+                    projectId={selectedPath}
+                    headBranchName={currentBranch}
+                    ownerAndRepo={inferredOwnerAndRepo}
+                    baseBranchName={inferredBaseBranch}
+                    client={client}
+                  />
+                )}
+              </div>
             )}
-          </div>
+          </>
         )}
       </div>
       {dialogOpen ? (
         <AddRepositoryDialog
           client={client}
+          initialMode={dialogMode}
           onAdded={onRepositoryAdded}
           onClose={() => setDialogOpen(false)}
         />
@@ -777,7 +819,9 @@ export function GitClientWindow({
       {newBranchOpen ? (
         <NewBranchDialog
           branches={branches}
-          currentBranch={activeStatus?.branch ?? branches.find((branch) => branch.current)?.name ?? ""}
+          currentBranch={
+            activeStatus?.branch ?? branches.find((branch) => branch.current)?.name ?? ""
+          }
           busy={branchActions.flow.busy}
           error={branchActions.flow.error}
           onCreate={createBranch}
