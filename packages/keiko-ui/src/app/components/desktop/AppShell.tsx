@@ -782,12 +782,8 @@ function AppShellInner(): ReactNode {
               onTileAll={ws.api.tileAll}
               onSplitFront={ws.api.splitFront}
               onCascade={ws.api.cascade}
+              contextControl={<TaskWorkspaceSwitcher />}
             />
-            {/* Issue #446 — the active task-workspace context control sits in the top chrome so the
-              operator always sees which task workspace every surface is bound to. */}
-            <div className="tw-switcher-strip" style={{ padding: "0.25rem 0.6rem" }}>
-              <TaskWorkspaceSwitcher />
-            </div>
             <div className="mid">
               {needsGatewaySetup ? null : (
                 <LeftRail

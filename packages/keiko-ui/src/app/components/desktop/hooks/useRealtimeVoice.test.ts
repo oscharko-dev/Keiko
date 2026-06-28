@@ -20,6 +20,7 @@ function makeFakeSession(offerSdp = "v=0\r\nfake-offer"): {
   fireRemoteTrack: (stream: MediaStream) => void;
   fireDataChannelEvent: (event: unknown) => void;
   sendDataChannelEvent: ReturnType<typeof vi.fn>;
+  setInputMuted: ReturnType<typeof vi.fn>;
   applyAnswer: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
 } {
@@ -28,11 +29,13 @@ function makeFakeSession(offerSdp = "v=0\r\nfake-offer"): {
   let dataChannelEventCb: ((event: unknown) => void) | undefined;
   const applyAnswer = vi.fn(async (_sdp: string): Promise<void> => {});
   const sendDataChannelEvent = vi.fn((_event: unknown) => true);
+  const setInputMuted = vi.fn();
   const close = vi.fn();
 
   const session: VoiceRtcSession = {
     offerSdp,
     applyAnswer,
+    setInputMuted,
     onRemoteTrack(cb): void {
       remoteTrackCb = cb;
     },
@@ -52,6 +55,7 @@ function makeFakeSession(offerSdp = "v=0\r\nfake-offer"): {
     fireRemoteTrack: (stream) => remoteTrackCb?.(stream),
     fireDataChannelEvent: (event) => dataChannelEventCb?.(event),
     sendDataChannelEvent,
+    setInputMuted,
     applyAnswer,
     close,
   };
@@ -169,6 +173,41 @@ describe("useRealtimeVoice — assistant remote audio (regression: silent realti
 
     act(() => result.current.stop());
     expect(release).toHaveBeenCalled();
+  });
+});
+
+describe("useRealtimeVoice — microphone mute", () => {
+  it("toggles the active WebRTC input track instead of muting assistant playback", async () => {
+    const { session, setInputMuted } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const setOutputMuted = vi.fn();
+    const sink: RealtimeAudioSink = {
+      attach: vi.fn(),
+      setMuted: setOutputMuted,
+      release: vi.fn(),
+    };
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        createAudioSink: () => sink,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    expect(setInputMuted).toHaveBeenCalledWith(false);
+
+    act(() => result.current.toggleMute());
+    expect(result.current.muted).toBe(true);
+    expect(setInputMuted).toHaveBeenLastCalledWith(true);
+    expect(setOutputMuted).not.toHaveBeenCalled();
+
+    act(() => result.current.toggleMute());
+    expect(result.current.muted).toBe(false);
+    expect(setInputMuted).toHaveBeenLastCalledWith(false);
   });
 });
 
@@ -294,6 +333,173 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
     expect(onAssistantTranscriptCommitted).toHaveBeenCalledTimes(2);
     expect(onAssistantTranscriptCommitted).toHaveBeenNthCalledWith(1, "Gerne.");
     expect(onAssistantTranscriptCommitted).toHaveBeenNthCalledWith(2, "Gerne.");
+  });
+
+  it("routes grounded realtime function calls through the BFF tool and suppresses duplicate transcript persistence", async () => {
+    const { session, fireDataChannelEvent, sendDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onUserTranscriptCommitted = vi.fn();
+    const onAssistantTranscriptCommitted = vi.fn();
+    const onGroundedToolCall = vi.fn(async () => ({
+      status: "ok",
+      answer: "Das Fachkonzept behandelt die Kreditwürdigkeitsprüfung.",
+      persisted: { userMessageId: "u-msg", assistantMessageId: "a-msg" },
+    }));
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        groundingActive: true,
+        onGroundedToolCall,
+        onUserTranscriptCommitted,
+        onAssistantTranscriptCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "user-audio-1",
+        transcript: "Worum geht es im Fachkonzept?",
+      });
+      fireDataChannelEvent({
+        type: "response.function_call_arguments.delta",
+        response_id: "r-tool",
+        item_id: "item-tool",
+        call_id: "call-1",
+        name: "search_keiko_grounding",
+        delta: '{"query":"Worum geht es ',
+      });
+      fireDataChannelEvent({
+        type: "response.function_call_arguments.delta",
+        response_id: "r-tool",
+        item_id: "item-tool",
+        call_id: "call-1",
+        delta: 'im Fachkonzept?"}',
+      });
+      fireDataChannelEvent({
+        type: "response.output_item.done",
+        response_id: "r-tool",
+        item: {
+          id: "item-tool",
+          type: "function_call",
+          call_id: "call-1",
+          name: "search_keiko_grounding",
+          arguments: '{"query":"Worum geht es im Fachkonzept?"}',
+        },
+      });
+      // Duplicate provider completion for the same call must not run the BFF tool twice.
+      fireDataChannelEvent({
+        type: "response.done",
+        response: {
+          id: "r-tool",
+          output: [
+            {
+              id: "item-tool",
+              type: "function_call",
+              call_id: "call-1",
+              name: "search_keiko_grounding",
+              arguments: '{"query":"Worum geht es im Fachkonzept?"}',
+            },
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => expect(onGroundedToolCall).toHaveBeenCalledTimes(1));
+    expect(onGroundedToolCall).toHaveBeenCalledWith(
+      {
+        callId: "call-1",
+        query: "Worum geht es im Fachkonzept?",
+        userTranscript: "Worum geht es im Fachkonzept?",
+        responseId: "r-tool",
+        itemId: "item-tool",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(onUserTranscriptCommitted).not.toHaveBeenCalled();
+
+    await waitFor(() =>
+      expect(sendDataChannelEvent).toHaveBeenCalledWith({ type: "response.create" }),
+    );
+    const outputCall = sendDataChannelEvent.mock.calls.find(
+      ([event]) =>
+        typeof event === "object" &&
+        event !== null &&
+        (event as { type?: unknown }).type === "conversation.item.create",
+    );
+    expect(outputCall).toBeDefined();
+    const outputEvent = outputCall?.[0] as {
+      readonly item?: { readonly call_id?: string; readonly output?: string };
+    };
+    expect(outputEvent.item?.call_id).toBe("call-1");
+    expect(JSON.parse(outputEvent.item?.output ?? "{}")).toMatchObject({
+      status: "ok",
+      persisted: { userMessageId: "u-msg", assistantMessageId: "a-msg" },
+    });
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r-spoken",
+        transcript: "Das Fachkonzept behandelt die Kreditwürdigkeitsprüfung.",
+      });
+    });
+    expect(onAssistantTranscriptCommitted).not.toHaveBeenCalled();
+  });
+
+  it("moves from listening into thinking while a grounded retrieval tool call is pending", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    let resolveTool!: (output: unknown) => void;
+    const toolPromise = new Promise<unknown>((resolve) => {
+      resolveTool = resolve;
+    });
+    const onGroundedToolCall = vi.fn(() => toolPromise);
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        groundingActive: true,
+        onGroundedToolCall,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({ type: "input_audio_buffer.speech_started", item_id: "user-audio-1" });
+    });
+    expect(result.current.turnSnapshot.state).toBe("listening");
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "response.output_item.done",
+        response_id: "r-tool",
+        item: {
+          id: "item-tool",
+          type: "function_call",
+          call_id: "call-1",
+          name: "search_keiko_grounding",
+          arguments: '{"query":"Worum geht es im Fachkonzept?"}',
+        },
+      });
+    });
+
+    await waitFor(() => expect(onGroundedToolCall).toHaveBeenCalledTimes(1));
+    expect(result.current.turnSnapshot.state).toBe("thinking");
+
+    act(() => {
+      resolveTool({ status: "ok", answer: "Antwort." });
+    });
   });
 
   it("sends response.cancel when the user interrupts the assistant", async () => {

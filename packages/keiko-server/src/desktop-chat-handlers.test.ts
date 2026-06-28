@@ -89,6 +89,54 @@ function scriptedIdentityRecallModel(): ModelPort {
   };
 }
 
+function scriptedOliverProfileMemoryModel(): ModelPort {
+  return {
+    call(request): Promise<NormalizedResponse> {
+      seenRequests.push(request);
+      const system = request.messages[0]?.content ?? "";
+      const content = system.includes("You extract durable memories from a chat turn")
+        ? JSON.stringify([
+            {
+              body: "The user's name is Oliver.",
+              type: "semantic-fact",
+              confidence: 0.96,
+              scope: "user",
+              tags: ["identity", "name"],
+            },
+            {
+              body: "The user is 35 years old.",
+              type: "semantic-fact",
+              confidence: 0.9,
+              scope: "user",
+              tags: ["identity", "age"],
+            },
+            {
+              body: "The user is a software developer.",
+              type: "semantic-fact",
+              confidence: 0.9,
+              scope: "user",
+              tags: ["identity", "profession"],
+            },
+          ])
+        : "Understood.";
+      return Promise.resolve({
+        modelId: request.modelId,
+        content,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "desktop-chat-test",
+          promptTokens: 7,
+          completionTokens: 3,
+          latencyMs: 11,
+          costClass: "high",
+        },
+      });
+    },
+  };
+}
+
 function deps(
   model: ModelPort = fakeModel("test response"),
   overrides: Partial<UiHandlerDeps> = {},
@@ -378,6 +426,61 @@ describe("desktop chat routes", () => {
       ["user", "open the deploy log"],
       ["assistant", "The deploy log is open."],
     ]);
+  });
+
+  it("captures MemoriaViva proposals from realtime voice turns without generating a second chat answer", async () => {
+    const memoryDir = join(tmp, "voice-turn-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(
+      deps(fakeModel("unused"), {
+        memoryVault,
+        modelPortFactory: () => undefined,
+      }),
+    );
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string; title: string } };
+
+    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        messages: [
+          { role: "user", content: "remember that my preferred database is postgres" },
+          { role: "assistant", content: "I will remember that preference." },
+        ],
+        memory: {
+          enabled: true,
+          budgetTokens: 900,
+          context: {},
+        },
+      }),
+    });
+
+    expect(appendRes.status).toBe(200);
+    const body = (await appendRes.json()) as {
+      messages: { role: string; content: string; runId?: string }[];
+      memory?: { actions: { kind: string; proposalId?: string }[] };
+    };
+    expect(seenRequests).toHaveLength(0);
+    expect(body.messages.map((message) => [message.role, message.content])).toEqual([
+      ["user", "remember that my preferred database is postgres"],
+      ["assistant", "I will remember that preference."],
+    ]);
+    expect(body.memory?.actions[0]?.kind).toBe("candidate");
+    const proposalId = body.memory?.actions[0]?.proposalId;
+    expect(proposalId).toBeDefined();
+    if (proposalId !== undefined) {
+      expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+    }
+    memoryVault.close();
   });
 
   it("rejects an empty model response without persisting a fake assistant message", async () => {
@@ -680,6 +783,61 @@ describe("desktop chat routes", () => {
     expect(recalled?.capturedAt).toBe(acceptedMemory?.provenance.capturedAt);
     expect(recallBody.messages[1]?.content).toBe("Paul");
     expect(seenRequests[2]?.messages.at(-1)?.content).toContain("The user's name is Paul.");
+    memoryVault.close();
+  });
+
+  it("captures a spoken-profile chat turn as proposed MemoriaViva candidates", async () => {
+    const memoryDir = join(tmp, "memory-vault-spoken-profile");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(deps(scriptedOliverProfileMemoryModel(), { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Ich heiße Oliver, bin 35 Jahre alt und bin Softwareentwickler.",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: {
+        context: { enabled: boolean; memories: unknown[] };
+        actions: { kind: string; proposalId?: string; body?: string }[];
+      };
+    };
+    const candidates = body.memory?.actions.filter((action) => action.kind === "candidate") ?? [];
+    const candidateBodies = candidates.map((action) => action.body);
+    expect(body.memory?.context.enabled).toBe(true);
+    expect(body.memory?.context.memories).toHaveLength(0);
+    expect(candidateBodies).toEqual(
+      expect.arrayContaining([
+        "The user's name is Oliver.",
+        "The user is 35 years old.",
+        "The user is a software developer.",
+      ]),
+    );
+    for (const action of candidates) {
+      expect(typeof action.proposalId).toBe("string");
+      if (action.proposalId !== undefined) {
+        expect(memoryVault.getMemory(action.proposalId as MemoryId)?.status).toBe("proposed");
+      }
+    }
+    expect(seenRequests.some((request) => request.messages.at(-1)?.content.includes("Oliver"))).toBe(
+      true,
+    );
     memoryVault.close();
   });
 

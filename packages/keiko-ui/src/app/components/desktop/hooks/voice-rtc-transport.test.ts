@@ -283,4 +283,17 @@ describe("createBrowserVoiceRtcTransport", () => {
     session.close();
     expect(track.stop).toHaveBeenCalledTimes(1);
   });
+
+  it("setInputMuted disables and re-enables the local microphone track", async () => {
+    const track = { enabled: true, stop: vi.fn() };
+    stubMedia(async () => fakeStream(track), track);
+    const transport = createBrowserVoiceRtcTransport();
+    const session = await transport.connect();
+
+    session.setInputMuted?.(true);
+    expect(track.enabled).toBe(false);
+
+    session.setInputMuted?.(false);
+    expect(track.enabled).toBe(true);
+  });
 });

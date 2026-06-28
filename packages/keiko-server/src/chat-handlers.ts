@@ -347,7 +347,7 @@ export interface SendDesktopChatRequest {
   readonly discussionMode: DiscussionMode | undefined;
 }
 
-interface ParsedConversationMemoryRequest {
+export interface ParsedConversationMemoryRequest {
   readonly enabled: boolean;
   readonly budgetTokens?: number;
   readonly context: Record<string, unknown>;
@@ -393,7 +393,7 @@ function parseMemoryBudget(raw: Record<string, unknown>): number | RouteResult |
   };
 }
 
-function parseMemoryRequest(
+export function parseMemoryRequest(
   value: unknown,
 ): ParsedConversationMemoryRequest | RouteResult | undefined {
   if (value === undefined) return undefined;
@@ -1199,10 +1199,11 @@ interface VoiceTurnAppendMessage {
   readonly timestamp?: number | undefined;
 }
 
-interface VoiceTurnAppendRequest {
+export interface VoiceTurnAppendRequest {
   readonly chatId: string;
   readonly projectPath: string;
   readonly messages: readonly VoiceTurnAppendMessage[];
+  readonly memory: ParsedConversationMemoryRequest | undefined;
 }
 
 const MAX_VOICE_TURN_MESSAGES = 8;
@@ -1242,15 +1243,135 @@ function voiceTurnAppendRequestFromBody(
       body: errorBody("BAD_REQUEST", "messages must contain committed user or assistant text."),
     };
   }
+  const memory = parseMemoryRequest(body.memory);
+  if (isRouteResult(memory)) return memory;
   return {
     chatId,
     projectPath,
     messages: messages as readonly VoiceTurnAppendMessage[],
+    memory,
   };
 }
 
 function sanitizeVoiceTurnText(text: string, deps: UiHandlerDeps): string {
   return deps.redactor(stripUnsafeFormatChars(text)) as string;
+}
+
+function voiceTurnCombinedText(messages: readonly VoiceTurnAppendMessage[]): string {
+  return messages.map((message) => message.content).join("\n").trim();
+}
+
+function voiceTurnAsSendRequest(request: VoiceTurnAppendRequest, content: string): SendDesktopChatRequest {
+  return {
+    chatId: request.chatId,
+    projectPath: request.projectPath,
+    content,
+    modelId: undefined,
+    documentContext: [],
+    attachments: [],
+    memory: request.memory,
+    discussionMode: undefined,
+  };
+}
+
+async function collectVoiceTurnMemoryActions(
+  deps: UiHandlerDeps,
+  request: VoiceTurnAppendRequest,
+  context: ConversationMemoryRuntimeContext | undefined,
+  modelId: string,
+): Promise<readonly ConversationMemoryActionWire[]> {
+  if (context === undefined || request.memory?.enabled !== true) {
+    return [];
+  }
+  if (deps.memoryVault === undefined) {
+    return [];
+  }
+  const actions: ConversationMemoryActionWire[] = [];
+  for (const message of request.messages) {
+    const outcomes = extractCandidatesFromUserText(message.content, buildCaptureContext(context), {
+      ...memoryCapturePolicyForDeps(deps, {
+        resolver: createMemoryTargetResolver(deps.memoryVault),
+      }),
+    });
+    for (const outcome of outcomes) {
+      const action = await captureActionFromOutcome(outcome, deps);
+      if (action !== null) actions.push(action);
+    }
+  }
+  const userText = request.messages
+    .filter((message) => message.role === "user")
+    .map((message) => message.content)
+    .join("\n")
+    .trim();
+  const assistantText = request.messages
+    .filter((message) => message.role === "assistant")
+    .map((message) => message.content)
+    .join("\n")
+    .trim();
+  const salientActions = await captureSalientFromTurn(
+    deps,
+    {
+      content: userText.length > 0 ? userText : voiceTurnCombinedText(request.messages),
+      memory: request.memory,
+    },
+    context,
+    modelId,
+    assistantText,
+  );
+  actions.push(...salientActions);
+  return actions;
+}
+
+export async function buildVoiceTurnMemoryResult(
+  deps: UiHandlerDeps,
+  request: VoiceTurnAppendRequest,
+  chat: Chat,
+  memoryContext: ConversationMemoryRuntimeContext | undefined,
+): Promise<ConversationMemoryResultWire | undefined> {
+  if (request.memory === undefined) {
+    return undefined;
+  }
+  if (memoryContext === undefined) {
+    return emptyMemoryResult(false);
+  }
+  const content = voiceTurnCombinedText(request.messages);
+  const memory = await buildMemoryResult(voiceTurnAsSendRequest(request, content), deps, memoryContext);
+  const actions = await collectVoiceTurnMemoryActions(deps, request, memoryContext, chat.selectedModel);
+  return { ...memory, actions };
+}
+
+function persistVoiceTurnMessages(
+  deps: UiHandlerDeps,
+  request: VoiceTurnAppendRequest,
+): readonly ChatMessage[] {
+  const baseNow = Date.now();
+  return deps.store.createMessages(
+    request.messages.map((message, index) => ({
+      chatId: request.chatId,
+      role: message.role,
+      content: sanitizeVoiceTurnText(message.content, deps),
+      timestamp: message.timestamp ?? baseNow + index,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    })),
+  );
+}
+
+function updateChatAfterVoiceTurn(
+  deps: UiHandlerDeps,
+  request: VoiceTurnAppendRequest,
+  chat: Chat,
+  created: readonly ChatMessage[],
+): Chat {
+  const firstUser = created.find((message) => message.role === "user");
+  const chatPatch =
+    chat.title === DEFAULT_CHAT_TITLE && firstUser !== undefined
+      ? { title: firstUser.content.slice(0, 60) }
+      : {};
+  return deps.store.updateChat(request.chatId, chatPatch);
 }
 
 export async function handleAppendDesktopVoiceTurn(
@@ -1267,28 +1388,23 @@ export async function handleAppendDesktopVoiceTurn(
   if (chat === undefined) {
     return { status: 404, body: errorBody("NOT_FOUND", "Chat not found.") };
   }
+  const memoryContext =
+    request.memory === undefined
+      ? undefined
+      : resolveConversationMemoryContext(deps, normalizedProjectPath, request.chatId);
+  if (isRouteResult(memoryContext)) return memoryContext;
   try {
-    const baseNow = Date.now();
-    const created = deps.store.createMessages(
-      request.messages.map((message, index) => ({
-        chatId: request.chatId,
-        role: message.role,
-        content: sanitizeVoiceTurnText(message.content, deps),
-        timestamp: message.timestamp ?? baseNow + index,
-        runId: undefined,
-        workflowId: undefined,
-        workflowStatus: undefined,
-        shortResult: undefined,
-        taskType: undefined,
-      })),
-    );
-    const firstUser = created.find((message) => message.role === "user");
-    const chatPatch =
-      chat.title === DEFAULT_CHAT_TITLE && firstUser !== undefined
-        ? { title: firstUser.content.slice(0, 60) }
-        : {};
-    const updatedChat = deps.store.updateChat(request.chatId, chatPatch);
-    return { status: 200, body: { chat: updatedChat, messages: created } };
+    const created = persistVoiceTurnMessages(deps, request);
+    const updatedChat = updateChatAfterVoiceTurn(deps, request, chat, created);
+    const memory = await buildVoiceTurnMemoryResult(deps, request, updatedChat, memoryContext);
+    return {
+      status: 200,
+      body: {
+        chat: updatedChat,
+        messages: created,
+        ...(memory === undefined ? {} : { memory }),
+      },
+    };
   } catch (error) {
     return desktopChatErrorResult(error, deps);
   }

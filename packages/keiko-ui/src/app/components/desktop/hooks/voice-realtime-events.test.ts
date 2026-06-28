@@ -84,6 +84,77 @@ describe("parseRealtimeVoiceEvent", () => {
     });
   });
 
+  it("parses realtime function-call argument deltas", () => {
+    expect(
+      parseRealtimeVoiceEvent({
+        type: "response.function_call_arguments.delta",
+        response_id: "r-tool",
+        item_id: "item-tool",
+        call_id: "call-1",
+        name: "search_keiko_grounding",
+        delta: '{"query":"Fachkonzept"',
+      }),
+    ).toEqual({
+      kind: "function-call-arguments-delta",
+      responseId: "r-tool",
+      itemId: "item-tool",
+      callId: "call-1",
+      name: "search_keiko_grounding",
+      delta: '{"query":"Fachkonzept"',
+    });
+  });
+
+  it("parses committed function calls from output_item.done", () => {
+    expect(
+      parseRealtimeVoiceEvent({
+        type: "response.output_item.done",
+        response_id: "r-tool",
+        item: {
+          id: "item-tool",
+          type: "function_call",
+          call_id: "call-1",
+          name: "search_keiko_grounding",
+          arguments: '{"query":"Worum geht es im Fachkonzept?"}',
+        },
+      }),
+    ).toEqual({
+      kind: "function-call-committed",
+      responseId: "r-tool",
+      itemId: "item-tool",
+      callId: "call-1",
+      name: "search_keiko_grounding",
+      argumentsText: '{"query":"Worum geht es im Fachkonzept?"}',
+    });
+  });
+
+  it("parses committed function calls from response.done output", () => {
+    expect(
+      parseRealtimeVoiceEvent({
+        type: "response.done",
+        response: {
+          id: "r-tool",
+          status: "completed",
+          output: [
+            {
+              id: "item-tool",
+              type: "function_call",
+              call_id: "call-1",
+              name: "search_keiko_grounding",
+              arguments: { query: "Welche Quellen sind verbunden?" },
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      kind: "function-call-committed",
+      responseId: "r-tool",
+      itemId: "item-tool",
+      callId: "call-1",
+      name: "search_keiko_grounding",
+      argumentsText: '{"query":"Welche Quellen sind verbunden?"}',
+    });
+  });
+
   it("ignores unknown and empty transcript events", () => {
     expect(parseRealtimeVoiceEvent({ type: "session.created" })).toBeUndefined();
     expect(

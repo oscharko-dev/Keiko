@@ -14,6 +14,7 @@ import type {
   ChatsResponse,
   ConversationDocumentContextWire,
   ConversationMemoryRequestWire,
+  ConversationMemoryResultWire,
   ChatStatus,
   ChatMessageRole,
   ChatWorkflowStatus,
@@ -763,11 +764,13 @@ export interface AppendDesktopChatVoiceTurnInput {
   readonly chatId: string;
   readonly projectPath: string;
   readonly messages: readonly AppendDesktopChatVoiceTurnMessage[];
+  readonly memory?: ConversationMemoryRequestWire;
 }
 
 export interface AppendDesktopChatVoiceTurnResponse {
   readonly chat: Chat;
   readonly messages: readonly ChatMessage[];
+  readonly memory?: ConversationMemoryResultWire;
 }
 
 export async function appendDesktopChatVoiceTurn(
@@ -776,6 +779,53 @@ export async function appendDesktopChatVoiceTurn(
   return fetchJson<AppendDesktopChatVoiceTurnResponse>("/api/desktop/chat/voice-turn", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export interface RealtimeGroundedToolInput {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly callId: string;
+  readonly query: string;
+  readonly userTranscript?: string | undefined;
+  readonly modelId?: string | undefined;
+  readonly memory?: ConversationMemoryRequestWire | undefined;
+}
+
+export interface RealtimeGroundedToolOutput {
+  readonly status: "ok";
+  readonly answer: string;
+  readonly groundingKind: GroundedAnswer["groundingKind"];
+  readonly elapsedMs: number;
+  readonly citations: readonly {
+    readonly marker: string;
+    readonly label: string;
+    readonly source?: string | undefined;
+  }[];
+  readonly evidenceRunId?: string | undefined;
+  readonly persisted: {
+    readonly userMessageId: string;
+    readonly assistantMessageId: string;
+  };
+  readonly instruction: string;
+}
+
+export interface RealtimeGroundedToolResponse {
+  readonly chat: Chat;
+  readonly messages: readonly ChatMessage[];
+  readonly groundedAnswer: GroundedAnswer;
+  readonly toolOutput: RealtimeGroundedToolOutput;
+  readonly memory?: ConversationMemoryResultWire | undefined;
+}
+
+export async function runRealtimeGroundedTool(
+  input: RealtimeGroundedToolInput,
+  signal?: AbortSignal,
+): Promise<RealtimeGroundedToolResponse> {
+  return fetchJson<RealtimeGroundedToolResponse>("/api/voice/realtime/grounded-tool", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: signal ?? null,
   });
 }
 

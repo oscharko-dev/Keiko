@@ -100,6 +100,18 @@ describe("VoiceDialogModeSwitch", () => {
     expect(screen.getByRole("switch")).toHaveAttribute("data-active", "true");
   });
 
+  it("uses the Keiko logo as the decorative switch glyph", () => {
+    render(<VoiceDialogModeSwitch active={false} onToggle={() => undefined} />);
+    const logo = screen.getByRole("switch").querySelector("img");
+    expect(logo).not.toBeNull();
+    expect(logo).toHaveAttribute("src", "/assets/keiko-logo.svg");
+    expect(logo).toHaveAttribute("alt", "");
+    expect(logo).toHaveAttribute("aria-hidden", "true");
+    expect(logo).toHaveAttribute("width", "34");
+    expect(logo).toHaveAttribute("height", "34");
+    expect(screen.getByRole("switch")).toHaveClass("cmp-voice-dialog-logo");
+  });
+
   it("forwards a ref to the underlying button", () => {
     const ref = { current: null as HTMLButtonElement | null };
     render(<VoiceDialogModeSwitch active={false} onToggle={() => undefined} buttonRef={ref} />);

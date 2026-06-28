@@ -283,6 +283,10 @@ export interface VoiceCapabilityResolution {
     readonly speechToText: boolean;
     readonly speechOutput: boolean;
     readonly realtimeVoice: boolean;
+    // True only when the elected realtime voice provider can drive custom tool calls. Grounded
+    // Voice Dialogue requires this so Keiko never disguises STT/TTS or ungrounded realtime as
+    // repository/knowledge-aware speech.
+    readonly realtimeToolCalling?: boolean | undefined;
   };
   readonly transport: VoiceTransportPosture;
   // Aggregate union of the product voice personas offered across reachable speech-output / realtime

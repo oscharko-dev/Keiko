@@ -79,6 +79,19 @@ export function supportsRealtimeVoice(resolution: VoiceCapabilityResolution | un
   );
 }
 
+// Advisory hint for deployments that explicitly advertise Realtime function calling. Absence of this
+// optional flag is not a hard UI negative: grounded Voice Dialogue is gated by Full-Realtime/WebRTC,
+// and the BFF configures or rejects the actual grounded Realtime tool bridge server-side.
+export function supportsRealtimeToolCalling(
+  resolution: VoiceCapabilityResolution | undefined,
+): boolean {
+  return (
+    resolution !== undefined &&
+    supportsRealtimeVoice(resolution) &&
+    resolution.capabilities.realtimeToolCalling === true
+  );
+}
+
 // True only when the resolved capability advertises optional assistant speech output — the providers
 // that may speak the assistant's reply (text-to-speech or realtime speech output). This is the Issue
 // #501 gate: it is satisfied by the `speech-output` profile and by `full-realtime` (which also speaks),
@@ -92,21 +105,5 @@ export function supportsSpeechOutput(resolution: VoiceCapabilityResolution | und
     resolution.available &&
     resolution.capabilities.speechOutput &&
     (resolution.profile === "speech-output" || resolution.profile === "full-realtime")
-  );
-}
-
-// True only when the resolved capability permits a voice session recap (Issue #504). The recap derives
-// memory candidates from the COMMITTED transcript, so it is gated on the same capability as committed
-// transcript capture: `speech-to-text` and `full-realtime` (the two profiles that capture user speech).
-// `speech-output` (playback only) and `none` return false, so a recap surface never appears where no
-// user transcript is captured — mirroring `voiceRecapAllowed(profile)` in the contract. `undefined`
-// (unresolved / failed) and any unavailable resolution both return false, so a slow or failed probe
-// never lights up the recap UI. The SERVER enforces this against the deployment capability, not the
-// client-claimed profile; this predicate only governs whether the optional surface is shown.
-export function supportsVoiceRecap(resolution: VoiceCapabilityResolution | undefined): boolean {
-  return (
-    resolution !== undefined &&
-    resolution.available &&
-    (resolution.profile === "speech-to-text" || resolution.profile === "full-realtime")
   );
 }

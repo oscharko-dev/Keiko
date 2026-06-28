@@ -44,6 +44,7 @@ import {
 import { deriveVoiceDialogState, type VoiceDialogState } from "./voice-dialog-state";
 import {
   runDialogueEffects,
+  canArmListening,
   shouldSpeakAnswer,
   signalForDictationPhase,
   signalForInterrupt,
@@ -98,6 +99,7 @@ export interface VoiceDialogueSession {
   readonly dialogueAvailable: boolean;
   readonly state: VoiceDialogState;
   readonly listening: boolean;
+  readonly readyToListen: boolean;
   readonly speaking: boolean;
   readonly canInterrupt: boolean;
   readonly muted: boolean;
@@ -318,6 +320,7 @@ export function useVoiceDialogueSession(
     dialogueAvailable,
     state,
     listening: turnSnapshot.state === "listening",
+    readyToListen: active && dialogueAvailable && canArmListening(turnSnapshot, dictation.phase),
     speaking: turnSnapshot.state === "speaking",
     canInterrupt: mode.canInterrupt && turnSnapshot.floorHolder === "assistant",
     muted: playback.snapshot.muted,

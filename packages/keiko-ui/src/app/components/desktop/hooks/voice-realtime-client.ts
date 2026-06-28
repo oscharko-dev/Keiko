@@ -8,6 +8,7 @@ import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   VOICE_PROTOCOL_VERSION,
   type VoiceControlMessage,
+  type VoiceSessionChatContext,
   type VoicePersona,
   isVoiceControlMessage,
 } from "@oscharko-dev/keiko-contracts";
@@ -49,6 +50,7 @@ function buildSessionCreatePayload(
   sessionId: string,
   idempotencyKey: string,
   persona?: VoicePersona,
+  chatContext?: VoiceSessionChatContext,
 ): Record<string, unknown> {
   return {
     protocolVersion: VOICE_PROTOCOL_VERSION,
@@ -61,6 +63,7 @@ function buildSessionCreatePayload(
     negotiationMode: "proxied-sdp",
     // Content-free persona enum so the host can resolve the realtime voice to the user's choice.
     ...(persona !== undefined ? { persona } : {}),
+    ...(chatContext !== undefined ? { chatContext } : {}),
   };
 }
 
@@ -80,6 +83,7 @@ function buildSdpOfferPayload(sessionId: string, sdp: string): Record<string, un
 export function createBrowserVoiceControlClient(
   socketFactory?: WebSocketFactory,
   persona?: VoicePersona,
+  chatContext?: VoiceSessionChatContext,
 ): VoiceControlClient {
   const factory = socketFactory ?? ((url: string) => new WebSocket(url));
   let ws: WebSocket | undefined;
@@ -164,7 +168,9 @@ export function createBrowserVoiceControlClient(
 
         ws.addEventListener("open", () => {
           opened = true;
-          ws?.send(JSON.stringify(buildSessionCreatePayload(sessionId, idempotencyKey, persona)));
+          ws?.send(
+            JSON.stringify(buildSessionCreatePayload(sessionId, idempotencyKey, persona, chatContext)),
+          );
         });
 
         ws.addEventListener("message", (event: MessageEvent) => {

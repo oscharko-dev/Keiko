@@ -29,10 +29,40 @@ export type VoiceDialogState =
   | "interrupted"
   | "error";
 
+export type VoiceAuraState =
+  | "ready"
+  | "listening"
+  | "thinking"
+  | "speaking"
+  | "muted"
+  | "interrupted"
+  | "error"
+  | "pressure";
+
+export type VoiceAuraIntensity = "low" | "medium" | "high";
+
 export interface VoiceDialogStateInputs {
   readonly realtimePhase: RealtimeVoicePhase;
   readonly turnState: VoiceTurnState;
   readonly muted: boolean;
+}
+
+export interface VoiceAuraStateInputs {
+  readonly voiceDialogActive: boolean;
+  readonly voiceDialogAvailable: boolean;
+  readonly voiceDialogState: VoiceDialogState;
+  readonly listening: boolean;
+  readonly speaking: boolean;
+  readonly sending: boolean;
+  readonly sendStatus: string;
+  readonly budgetExceeded: boolean;
+  readonly hasSessionError: boolean;
+}
+
+export interface VoiceAuraStateSnapshot {
+  readonly active: boolean;
+  readonly state: VoiceAuraState;
+  readonly intensity: VoiceAuraIntensity;
 }
 
 // Derive the dialog-session label. The ordering is load-bearing and pinned in tests:
@@ -67,6 +97,55 @@ export function deriveVoiceDialogState(inputs: VoiceDialogStateInputs): VoiceDia
     return "listening";
   }
   return "idle";
+}
+
+export function deriveVoiceAuraState(inputs: VoiceAuraStateInputs): VoiceAuraStateSnapshot {
+  const {
+    voiceDialogActive,
+    voiceDialogAvailable,
+    voiceDialogState,
+    listening,
+    speaking,
+    sending,
+    sendStatus,
+    budgetExceeded,
+    hasSessionError,
+  } = inputs;
+
+  if (!voiceDialogActive) {
+    return { active: false, state: "ready", intensity: "low" };
+  }
+  if (!voiceDialogAvailable || hasSessionError || voiceDialogState === "error") {
+    return { active: true, state: "error", intensity: "high" };
+  }
+  if (budgetExceeded) {
+    return { active: true, state: "pressure", intensity: "high" };
+  }
+  if (voiceDialogState === "interrupted") {
+    return { active: true, state: "interrupted", intensity: "medium" };
+  }
+  if (voiceDialogState === "muted") {
+    return { active: true, state: "muted", intensity: "medium" };
+  }
+  if (speaking || voiceDialogState === "speaking") {
+    return { active: true, state: "speaking", intensity: "medium" };
+  }
+  if (listening || voiceDialogState === "listening") {
+    return { active: true, state: "listening", intensity: "medium" };
+  }
+  if (voiceDialogState === "thinking" || voiceDialogState === "connecting") {
+    return { active: true, state: "thinking", intensity: "high" };
+  }
+  if (
+    sending ||
+    sendStatus === "queued" ||
+    sendStatus === "contacting" ||
+    sendStatus === "streaming"
+  ) {
+    return { active: true, state: "thinking", intensity: "high" };
+  }
+
+  return { active: true, state: "ready", intensity: "low" };
 }
 
 // Assistive-text headline per state (professional English). A total record makes adding a state without

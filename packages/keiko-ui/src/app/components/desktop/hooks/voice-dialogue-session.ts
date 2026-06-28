@@ -16,14 +16,15 @@
 
 import type { VoiceProfile } from "@/lib/types";
 import type { VoiceCapabilityResolution } from "@/lib/types";
-import { supportsDictation, supportsSpeechOutput } from "./useVoiceCapability";
+import { supportsRealtimeVoice } from "./useVoiceCapability";
 import type { DictationPhase } from "./useDictation";
 import type { VoiceTurnEffect, VoiceTurnSignal, VoiceTurnSnapshot } from "./voice-turn-manager";
 
 // ─── Fallback matrix (D2) ────────────────────────────────────────────────────────
 // The capture strategy the offered session uses. `"none"` is the fail-closed default for every
-// not-offered case; `"dictation"` is the single deployed user-capture path (the STT-batch route).
-export type VoiceDialogueCapture = "none" | "dictation";
+// not-offered case; `"webrtc"` is the only Voice Dialogue path. STT dictation stays a separate
+// composer feature and must never be treated as spoken dialogue.
+export type VoiceDialogueCapture = "none" | "webrtc";
 
 // The total description the matrix returns for a resolution. `offered` gates the dialogue switch; the
 // remaining fields describe what an offered session can do. Every field is deterministically derived,
@@ -42,25 +43,20 @@ const DIALOGUE_DORMANT: VoiceDialogueMode = {
   canInterrupt: false,
 };
 
-// Dialogue is offered IFF the deployment can both capture user speech (dictation) and speak the answer
-// (speech output), AND the browser can capture audio, AND at least one persona is advertised. That
-// conjunction is true only for the `full-realtime` profile (ADR-0096 D2) — identical whether or not the
-// browser has WebRTC media, which is exactly the STT+TTS fallback the issue fixes (D3). `undefined`,
-// `none`, and every partial profile short-circuit to the dormant, fail-closed result.
+// Dialogue is offered IFF the deployment advertises full realtime voice, the media posture includes
+// WebRTC, the browser exposes realtime media APIs, and at least one persona is advertised. STT-only,
+// speech-output-only, and "full realtime without browser WebRTC" deployments deliberately stay
+// dormant: there is no STT -> Chat -> TTS fallback masquerading as Voice Dialogue.
 export function voiceDialogueModeForResolution(
   resolution: VoiceCapabilityResolution | undefined,
-  browserCaptureSupported: boolean,
+  browserRealtimeSupported: boolean,
 ): VoiceDialogueMode {
   const personaCount = resolution?.availableVoicePersonas?.length ?? 0;
-  const offered =
-    supportsDictation(resolution) &&
-    supportsSpeechOutput(resolution) &&
-    browserCaptureSupported &&
-    personaCount > 0;
+  const offered = supportsRealtimeVoice(resolution) && browserRealtimeSupported && personaCount > 0;
   if (!offered) {
     return DIALOGUE_DORMANT;
   }
-  return { offered: true, capture: "dictation", speaks: true, canInterrupt: true };
+  return { offered: true, capture: "webrtc", speaks: true, canInterrupt: true };
 }
 
 // ─── Event → VoiceTurnSignal mapping (D5) ─────────────────────────────────────────

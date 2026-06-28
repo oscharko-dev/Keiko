@@ -1513,6 +1513,238 @@ button {
   font-weight: var(--weight-strong);
   letter-spacing: -0.01em;
 }
+.hd-context {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin-left: var(--space-1);
+}
+.tw-switcher {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  position: relative;
+}
+.tw-switcher-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  height: 30px;
+  max-width: min(260px, 36vw);
+  padding: 0 0.7rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: color-mix(in oklch, var(--surface-primary) 78%, transparent);
+  color: var(--text-secondary);
+  box-shadow: none;
+  white-space: nowrap;
+}
+.tw-switcher-trigger:hover,
+.tw-switcher-trigger[aria-expanded="true"] {
+  border-color: color-mix(in oklch, var(--accent-line) 58%, var(--border-subtle));
+  background: color-mix(in oklch, var(--surface-primary) 88%, var(--accent) 8%);
+  color: var(--text-primary);
+}
+.tw-switcher-trigger[data-active="true"] {
+  border-color: color-mix(in oklch, var(--accent-line) 76%, var(--border-subtle));
+  background: color-mix(in oklch, var(--accent) 18%, var(--surface-primary));
+  color: var(--text-primary);
+}
+.tw-switcher-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tw-switcher-status-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+.tw-switcher-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  width: min(360px, calc(100vw - 24px));
+  padding: 10px;
+  border: 1px solid color-mix(in oklch, var(--border-strong) 70%, transparent);
+  border-radius: 8px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--surface-primary) 94%, var(--accent) 3%),
+    var(--surface-primary)
+  );
+  color: var(--text-primary);
+  box-shadow:
+    0 20px 48px -26px rgb(var(--shadow-ink-rgb) / 0.9),
+    0 0 0 1px rgb(var(--shadow-ink-rgb) / 0.18);
+}
+.tw-switcher-panel-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 2px 10px;
+}
+.tw-switcher-panel-head strong {
+  font-size: var(--text-body-md);
+  font-weight: var(--weight-strong);
+  line-height: 1.25;
+}
+.tw-switcher-kicker,
+.tw-switcher-section-title {
+  font-size: 11px;
+  font-weight: var(--weight-strong);
+  line-height: 1.2;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+.tw-switcher-section {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+.tw-switcher-section-title {
+  margin-bottom: 7px;
+}
+.tw-switcher-empty {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid color-mix(in oklch, var(--border-subtle) 78%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface-secondary) 74%, transparent);
+}
+.tw-switcher-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in oklch, var(--accent-line) 45%, var(--border-subtle));
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.tw-switcher-empty strong {
+  display: block;
+  margin: 0 0 3px;
+  font-size: var(--text-body-sm);
+  line-height: 1.25;
+}
+.tw-switcher-empty p,
+.tw-switcher-list-empty,
+.tw-switcher-path,
+.tw-switcher-activity {
+  margin: 0;
+}
+.tw-switcher-empty p,
+.tw-switcher-list-empty {
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+  line-height: 1.45;
+}
+.tw-switcher-list {
+  display: grid;
+  gap: 6px;
+}
+.tw-switcher-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface-secondary) 58%, transparent);
+}
+.tw-switcher-list-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+}
+.tw-switcher-list-label strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tw-switcher-list-label > span {
+  flex: none;
+}
+.tw-switcher-actions,
+.tw-switcher-create {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tw-switcher-create {
+  flex-direction: column;
+}
+.tw-switcher-action {
+  min-height: 30px;
+  padding: 0 0.65rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: color-mix(in oklch, var(--surface-secondary) 64%, transparent);
+  color: var(--text-primary);
+}
+.tw-switcher-action:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-secondary);
+}
+.tw-switcher-action[aria-disabled="true"] {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+.tw-switcher-field {
+  display: grid;
+  gap: 0.25rem;
+  font-size: var(--text-body-sm);
+  color: var(--text-secondary);
+}
+.tw-switcher-field input {
+  min-height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: 0 0.5rem;
+  background: color-mix(in oklch, var(--surface-secondary) 72%, transparent);
+  color: var(--text-primary);
+}
+.tw-switcher-field input:focus {
+  border-color: var(--accent-line);
+  outline: 2px solid color-mix(in oklch, var(--accent) 24%, transparent);
+  outline-offset: 1px;
+}
+.tw-switcher-create-submit {
+  min-height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: 0 0.65rem;
+  background: color-mix(in oklch, var(--accent) 16%, var(--surface-secondary));
+  color: var(--text-primary);
+}
+.tw-switcher-create-submit:not(:disabled):hover {
+  border-color: var(--accent-line);
+  background: color-mix(in oklch, var(--accent) 22%, var(--surface-secondary));
+}
+.tw-switcher-create-submit:disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
 .tb-btn {
   width: 30px;
   height: 30px;
@@ -2722,6 +2954,8 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  position: relative;
+  isolation: isolate;
   background: color-mix(in oklch, var(--card-surface) 92%, var(--surface-overlay));
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
@@ -2738,6 +2972,197 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 :root[data-input-modality="pointer"] .cmp-box:has(.cmp-input:focus) {
   border-color: var(--line);
   box-shadow: var(--shadow-card);
+}
+.chatw:has(.cmp-box[data-voice-aura="on"]) {
+  --voice-aura-core: oklch(0.76 0.12 156);
+  --voice-aura-secondary: oklch(0.78 0.1 185);
+  --voice-aura-tertiary: oklch(0.7 0.09 145);
+  --voice-aura-composer-opacity: 0.2;
+  --voice-aura-edge-mix: 24%;
+  --voice-aura-speed: 18s;
+  --voice-aura-composer-lift: -2px;
+  --voice-aura-composer-scale-x: 1.004;
+  --voice-aura-composer-scale-y: 1.022;
+  position: relative;
+  isolation: isolate;
+}
+.chatw:has(.cmp-box[data-voice-aura-state="listening"]) {
+  --voice-aura-core: oklch(0.83 0.15 154);
+  --voice-aura-secondary: oklch(0.8 0.13 190);
+  --voice-aura-tertiary: oklch(0.72 0.1 168);
+  --voice-aura-composer-opacity: 0.31;
+  --voice-aura-edge-mix: 36%;
+  --voice-aura-speed: 12s;
+  --voice-aura-composer-lift: -4px;
+  --voice-aura-composer-scale-x: 1.008;
+  --voice-aura-composer-scale-y: 1.05;
+}
+.chatw:has(.cmp-box[data-voice-aura-state="thinking"]) {
+  --voice-aura-core: oklch(0.83 0.17 163);
+  --voice-aura-secondary: oklch(0.78 0.15 206);
+  --voice-aura-tertiary: oklch(0.72 0.13 257);
+  --voice-aura-composer-opacity: 0.48;
+  --voice-aura-edge-mix: 48%;
+  --voice-aura-speed: 7.2s;
+  --voice-aura-composer-lift: -7px;
+  --voice-aura-composer-scale-x: 1.014;
+  --voice-aura-composer-scale-y: 1.12;
+}
+.chatw:has(.cmp-box[data-voice-aura-state="speaking"]) {
+  --voice-aura-core: oklch(0.85 0.1 164);
+  --voice-aura-secondary: oklch(0.82 0.09 205);
+  --voice-aura-tertiary: oklch(0.78 0.07 178);
+  --voice-aura-composer-opacity: 0.27;
+  --voice-aura-edge-mix: 30%;
+  --voice-aura-speed: 15s;
+  --voice-aura-composer-lift: -3px;
+  --voice-aura-composer-scale-x: 1.006;
+  --voice-aura-composer-scale-y: 1.04;
+}
+.chatw:has(.cmp-box[data-voice-aura-state="muted"]),
+.chatw:has(.cmp-box[data-voice-aura-state="interrupted"]) {
+  --voice-aura-core: oklch(0.82 0.13 77);
+  --voice-aura-secondary: oklch(0.74 0.11 42);
+  --voice-aura-tertiary: oklch(0.72 0.08 68);
+  --voice-aura-edge-mix: 50%;
+}
+.chatw:has(.cmp-box[data-voice-aura-state="pressure"]) {
+  --voice-aura-core: oklch(0.78 0.14 52);
+  --voice-aura-secondary: oklch(0.67 0.15 31);
+  --voice-aura-tertiary: oklch(0.72 0.1 70);
+  --voice-aura-edge-mix: 58%;
+}
+.chatw:has(.cmp-box[data-voice-aura-state="error"]) {
+  --voice-aura-core: oklch(0.68 0.18 28);
+  --voice-aura-secondary: oklch(0.78 0.12 58);
+  --voice-aura-tertiary: oklch(0.62 0.12 18);
+  --voice-aura-edge-mix: 62%;
+}
+.chatw:has(.cmp-box[data-voice-aura-intensity="medium"]) {
+  --voice-aura-composer-opacity: max(var(--voice-aura-composer-opacity), 0.3);
+}
+.chatw:has(.cmp-box[data-voice-aura-intensity="high"]) {
+  --voice-aura-composer-opacity: max(var(--voice-aura-composer-opacity), 0.44);
+}
+.chatw:has(.cmp-box[data-voice-aura="on"])::before {
+  display: none;
+  content: none;
+}
+.chatw:has(.cmp-box[data-voice-aura="on"]) > * {
+  position: relative;
+  z-index: 1;
+}
+.cmp-box[data-voice-aura="on"] {
+  border-color: color-mix(in oklch, var(--voice-aura-core) 42%, var(--border-default));
+  box-shadow:
+    var(--card-shadow),
+    inset 0 0 30px -24px color-mix(in oklch, var(--voice-aura-core) 86%, #000),
+    inset 0 -1px 0
+      color-mix(in oklch, var(--voice-aura-core) var(--voice-aura-edge-mix), transparent);
+  transition:
+    border-color 260ms ease,
+    box-shadow 360ms ease;
+}
+.cmp-box[data-voice-aura="on"] > * {
+  position: relative;
+  z-index: 1;
+}
+.cmp-box[data-voice-aura="on"]::before,
+.cmp-box[data-voice-aura="on"]::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  z-index: 0;
+  border-radius: calc(var(--radius-lg) - 1px);
+  pointer-events: none;
+}
+.cmp-box[data-voice-aura="on"]::before {
+  background:
+    radial-gradient(
+      ellipse at 50% 100%,
+      color-mix(in oklch, var(--voice-aura-core) 36%, transparent) 0%,
+      transparent 62%
+    ),
+    radial-gradient(
+      ellipse at 18% 94%,
+      color-mix(in oklch, var(--voice-aura-secondary) 26%, transparent) 0%,
+      transparent 44%
+    ),
+    radial-gradient(
+      ellipse at 82% 94%,
+      color-mix(in oklch, var(--voice-aura-tertiary) 22%, transparent) 0%,
+      transparent 44%
+    );
+  box-shadow:
+    inset 0 -32px 68px -38px color-mix(in oklch, var(--voice-aura-core) 92%, #000),
+    inset 0 0 28px -20px color-mix(in oklch, var(--voice-aura-secondary) 82%, #000),
+    inset 0 -1px 0
+      color-mix(in oklch, var(--voice-aura-core) var(--voice-aura-edge-mix), transparent);
+  opacity: var(--voice-aura-composer-opacity);
+  transform-origin: 50% 100%;
+  transition:
+    opacity 320ms ease,
+    transform 380ms ease;
+}
+.cmp-box[data-voice-aura="on"]::after {
+  display: none;
+  content: none;
+}
+:root[data-input-modality="keyboard"] .cmp-box[data-voice-aura="on"]:has(.cmp-input:focus) {
+  border-color: var(--accent-line);
+  box-shadow:
+    0 0 0 3px var(--accent-glow),
+    var(--shadow-card),
+    inset 0 0 26px -22px color-mix(in oklch, var(--voice-aura-core) 82%, #000);
+}
+:root[data-input-modality="pointer"] .cmp-box[data-voice-aura="on"]:has(.cmp-input:focus) {
+  border-color: var(--line);
+  box-shadow:
+    var(--shadow-card),
+    inset 0 0 26px -22px color-mix(in oklch, var(--voice-aura-core) 82%, #000);
+}
+@keyframes voice-aura-composer-breathe {
+  0% {
+    opacity: calc(var(--voice-aura-composer-opacity) * 0.7);
+    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+  }
+  48% {
+    opacity: calc(var(--voice-aura-composer-opacity) * 1.05);
+    transform: translate3d(0, calc(var(--voice-aura-composer-lift) * 0.58), 0)
+      scale3d(var(--voice-aura-composer-scale-x), var(--voice-aura-composer-scale-y), 1);
+  }
+  100% {
+    opacity: var(--voice-aura-composer-opacity);
+    transform: translate3d(0, var(--voice-aura-composer-lift), 0)
+      scale3d(var(--voice-aura-composer-scale-x), var(--voice-aura-composer-scale-y), 1);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cmp-box[data-voice-aura="on"]::before {
+    animation: voice-aura-composer-breathe var(--voice-aura-speed) ease-in-out infinite alternate;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chatw:has(.cmp-box[data-voice-aura="on"])::before,
+  .cmp-box[data-voice-aura="on"]::before,
+  .cmp-box[data-voice-aura="on"]::after {
+    animation: none;
+    transform: none;
+  }
+  .cmp-box[data-voice-aura="on"]::after {
+    opacity: 0.14;
+  }
+}
+@media (forced-colors: active) {
+  .chatw:has(.cmp-box[data-voice-aura="on"])::before,
+  .cmp-box[data-voice-aura="on"]::before,
+  .cmp-box[data-voice-aura="on"]::after {
+    display: none;
+  }
+  .cmp-box[data-voice-aura="on"] {
+    border-color: Highlight;
+    box-shadow: none;
+  }
 }
 .cmp-input-stack {
   display: flex;
@@ -2762,14 +3187,68 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .cmp-input::placeholder {
   color: var(--input-placeholder);
 }
+.cmp-box-voice-dialog {
+  gap: 0;
+  transition:
+    gap 280ms ease,
+    border-color 260ms ease,
+    box-shadow 360ms ease;
+}
+.cmp-box-voice-dialog .cmp-input-stack-voice-dialog {
+  min-height: 36px;
+  transition: min-height 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cmp-box-voice-dialog .cmp-input {
+  min-height: 36px;
+  color: transparent;
+  caret-color: transparent;
+  pointer-events: none;
+  transition:
+    min-height 360ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 180ms ease,
+    caret-color 180ms ease;
+}
+.cmp-box-voice-dialog .cmp-input::placeholder {
+  color: transparent;
+}
 .cmp-footer-row {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
+  position: relative;
   min-width: 0;
   padding-top: 10px;
   border-top: 1px solid var(--border-subtle);
+}
+.cmp-footer-row-motion {
+  min-height: 34px;
+}
+.cmp-composer-motion-layer {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  pointer-events: none;
+  z-index: 3;
+}
+.cmp-composer-motion-layer-normal {
+  justify-content: space-between;
+  transform-origin: 50% 100%;
+  will-change: opacity, transform;
+  animation: cmp-normal-controls-exit 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.cmp-composer-motion-layer-voice {
+  justify-content: center;
+  transform-origin: 50% 50%;
+  will-change: opacity, transform;
+  animation: cmp-voice-controls-ghost-leave 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.cmp-composer-motion-layer .cmp-bar-voice-dialog {
+  flex: 1 1 auto;
+  width: 100%;
 }
 .cmp-bar {
   display: flex;
@@ -2786,6 +3265,190 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
+}
+/* Active resting layout: the cluster sits as a balanced, vertically-centred control pair
+   inside the composer rather than pinned to the bottom edge. The footer grows by the same
+   amount the transparent input area shrinks, so the box height stays stable (no reflow)
+   while the cluster moves toward the optical centre of the aura. */
+.cmp-box-voice-dialog .cmp-footer-row {
+  justify-content: center;
+  align-items: center;
+  min-height: 64px;
+  padding-top: 0;
+  border-top: none;
+  transition:
+    min-height 360ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    justify-content 360ms ease,
+    padding-top 260ms ease,
+    border-color 220ms ease;
+}
+.cmp-bar-voice-dialog {
+  flex: 1 1 auto;
+  justify-content: center;
+  width: 100%;
+}
+.cmp-bar-main-voice-dialog {
+  flex: 0 0 auto;
+  justify-content: center;
+  gap: 10px;
+}
+/* The two real voice controls resolve into their centred resting place with a calm
+   rise + settle. The 80ms delay lets the outgoing normal controls clear focus first,
+   so the eye sees a deliberate hand-off rather than two clusters crossing at once. */
+.cmp-box-voice-dialog-entering .cmp-bar-voice-dialog {
+  transform-origin: 50% 50%;
+  will-change: opacity, transform;
+  animation: cmp-voice-controls-enter 360ms cubic-bezier(0.2, 0.8, 0.2, 1) 80ms both;
+}
+.cmp-box-voice-dialog-entering .cmp-input-stack-voice-dialog {
+  animation: cmp-voice-input-enter 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+/* Ease the height back as well as the border: the min-height transitions live on the
+   active scope, which is gone the instant the box leaves dialogue mode, so without this
+   the composer would snap to full height. Mirroring the easing here keeps the box growing
+   smoothly back to the text layout (no hard reflow on leave). */
+.cmp-box-voice-dialog-leaving .cmp-footer-row {
+  animation: cmp-voice-footer-leave 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  transition: min-height 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cmp-box-voice-dialog-leaving .cmp-input-stack {
+  transition: min-height 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Direct child only: the real ComposerBar returning to view. Without the `>` this also
+   matched the ghost voice cluster nested in the leaving motion layer, fighting its
+   fade-out with a fade-in on the same node (the source of the abrupt feel). */
+.cmp-box-voice-dialog-leaving .cmp-footer-row > .cmp-bar {
+  transform-origin: 50% 50%;
+  will-change: opacity, transform;
+  animation: cmp-voice-controls-leave 340ms cubic-bezier(0.2, 0.8, 0.2, 1) 80ms both;
+}
+.cmp-box-voice-dialog-leaving .cmp-input,
+.cmp-box-voice-dialog-leaving .cmp-input::placeholder {
+  animation: cmp-voice-text-return 280ms ease 100ms both;
+  transition: min-height 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cmp-bar-main-voice-dialog .cmp-icon {
+  border-color: transparent;
+  background: transparent;
+}
+.cmp-bar-main-voice-dialog .cmp-icon:hover {
+  background: color-mix(in oklch, var(--surface-secondary) 54%, transparent);
+  border-color: color-mix(in oklch, var(--border-subtle) 60%, transparent);
+}
+.cmp-voice-dialog-mute[data-muted="true"] {
+  color: var(--feedback-warning, var(--text-secondary));
+}
+.cmp-voice-dialog-mic-glyph {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+.cmp-voice-dialog-mic-slash {
+  position: absolute;
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: rotate(-42deg);
+  transform-origin: center;
+}
+/* Calm vertical settle, no horizontal travel: the voice cluster rises a few px into its
+   resting place and resolves into focus. Reads as a deliberate focus shift, not a slide. */
+@keyframes cmp-voice-controls-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 9px, 0) scale(0.97);
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+/* Outgoing normal controls recede a touch and soften out of focus (tiny blur), never fly off-screen. */
+@keyframes cmp-normal-controls-exit {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 7px, 0) scale(0.985);
+    filter: blur(1px);
+  }
+}
+@keyframes cmp-voice-controls-ghost-leave {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, 9px, 0) scale(0.97);
+    filter: blur(1px);
+  }
+}
+@keyframes cmp-voice-input-enter {
+  0% {
+    opacity: 0.6;
+    transform: translate3d(0, 4px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+@keyframes cmp-voice-footer-leave {
+  0% {
+    border-color: transparent;
+  }
+  100% {
+    border-color: var(--border-subtle);
+  }
+}
+@keyframes cmp-voice-controls-leave {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 7px, 0) scale(0.985);
+  }
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+@keyframes cmp-voice-text-return {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No flight motion: drop the cross-fade ghosts entirely so the real controls swap in a
+     single static state change (the ghosts would otherwise sit statically over the live
+     controls for the motion window, reading as a duplicate-controls flash). */
+  .cmp-composer-motion-layer-normal,
+  .cmp-composer-motion-layer-voice {
+    display: none;
+  }
+  .cmp-box-voice-dialog-entering .cmp-bar-voice-dialog,
+  .cmp-box-voice-dialog-entering .cmp-input-stack-voice-dialog,
+  .cmp-box-voice-dialog-leaving .cmp-footer-row,
+  .cmp-box-voice-dialog-leaving .cmp-footer-row > .cmp-bar,
+  .cmp-box-voice-dialog-leaving .cmp-input,
+  .cmp-box-voice-dialog-leaving .cmp-input::placeholder {
+    animation: none;
+    transform: none;
+    filter: none;
+  }
 }
 .cmp-add {
   width: 32px;
@@ -2896,6 +3559,25 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   background: var(--button-secondary-surface-hover);
   border-color: var(--button-secondary-border);
   color: var(--button-secondary-text);
+}
+.cmp-voice-dialog-logo {
+  padding: 0;
+  overflow: visible;
+  border-color: transparent;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+}
+.cmp-voice-dialog-logo:hover {
+  border-color: transparent;
+  background: transparent;
+}
+.cmp-voice-dialog-logo img {
+  display: block;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  object-fit: contain;
 }
 .cmp-icon:focus-visible,
 .attach-chip-remove:focus-visible {

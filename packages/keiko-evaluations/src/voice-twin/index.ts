@@ -2,7 +2,7 @@
 // ADR-0068). Exposes the deterministic observation derivation, the eleven-dimension scorer, the suite
 // runner, the scorecard renderer, the privacy / metric / profile / capability helpers, the fixture
 // registry, and the result / fixture types. Re-exported from the package barrel as the `VoiceTwinEval`
-// namespace (mirroring `VoiceRecapEval`), and proven by suite.test.ts.
+// namespace, and proven by suite.test.ts.
 
 export { deriveVoiceTwinObservation, runVoiceTwinEvaluation } from "./runner.js";
 export { scoreVoiceTwinQuality, aggregateVoiceTwinQuality } from "./scorer.js";

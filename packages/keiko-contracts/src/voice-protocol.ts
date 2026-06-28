@@ -100,8 +100,7 @@ export const VOICE_REPLAY_CLASSES: readonly VoiceReplayClass[] = [
 //                    charset before logging so a hostile id cannot inject into log/audit lines.
 // `reviewable-text`— user-reviewable transcript text; the transport runs `stripUnsafeFormatChars`
 //                    (text-safety.ts: strips bidi / zero-width / C0-C1 / DEL, preserves TAB/LF/CR)
-//                    then redacts-by-construction, deep-redacts, and identifier-hashes at persist,
-//                    exactly as recap / session-state records already are.
+//                    then redacts-by-construction, deep-redacts, and identifier-hashes at persist.
 // `secret-bearing` — SDP / ICE / ephemeral-credential material that may carry private IPs or tokens;
 //                    never logged or persisted raw.
 // `raw-media`      — raw audio frames; never persisted and never a control message (media plane only).
@@ -285,6 +284,25 @@ interface VoiceControlEnvelope<K extends VoiceControlMessageKind> {
   readonly kind: K;
 }
 
+export interface VoiceSessionMemoryContext {
+  readonly enabled: boolean;
+  readonly budgetTokens?: number | undefined;
+}
+
+export type VoiceSessionGroundingKind = "files" | "knowledge" | "hybrid" | "multi";
+
+export interface VoiceSessionGroundingContext {
+  readonly enabled: boolean;
+  readonly sourceCount: number;
+  readonly kind: VoiceSessionGroundingKind;
+}
+
+export interface VoiceSessionChatContext {
+  readonly chatId: string;
+  readonly memory?: VoiceSessionMemoryContext | undefined;
+  readonly grounding?: VoiceSessionGroundingContext | undefined;
+}
+
 export interface VoiceSessionCreateMessage extends VoiceControlEnvelope<"session.create"> {
   // Idempotency key so a re-sent create after a reconnect resolves to the same session, never a second.
   readonly idempotencyKey: string;
@@ -294,6 +312,10 @@ export interface VoiceSessionCreateMessage extends VoiceControlEnvelope<"session
   // (an enum, never a provider voice id); the host resolves it server-side to a realtime-valid voice so
   // the spoken voice matches the user's choice. Absent ⇒ the host uses its configured default voice.
   readonly persona?: VoicePersona | undefined;
+  // Active chat context for server-side realtime instructions and MemoriaViva retrieval. Carries only
+  // the chat id plus memory flags; the host resolves project ownership and never receives provider
+  // credential material from the browser.
+  readonly chatContext?: VoiceSessionChatContext | undefined;
 }
 
 export interface VoiceSessionCreatedMessage extends VoiceControlEnvelope<"session.created"> {

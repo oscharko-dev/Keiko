@@ -51,6 +51,16 @@ describe("Header release controls", () => {
   });
 });
 
+describe("Header context control", () => {
+  it("mounts task context controls inside the header chrome", () => {
+    renderHeader({ contextControl: <button type="button">Task workspace</button> });
+
+    const slot = document.querySelector(".hd-context");
+    expect(slot).not.toBeNull();
+    expect(slot).toContainElement(screen.getByRole("button", { name: "Task workspace" }));
+  });
+});
+
 describe("Header editor selector", () => {
   it("does not expose the Preferred editor control in the header", () => {
     renderHeader();

@@ -351,6 +351,39 @@ describe("voice dialogue context grounding (Issue #1561)", () => {
     );
   });
 
+  it("regression — a spoken identity/profile update enters the normal memory-enabled chat send", async () => {
+    bootstrapMocks(chat());
+    vi.mocked(sendDesktopChat).mockResolvedValue({
+      chat: chat(),
+      messages: [],
+      memory: {
+        context: { enabled: true, text: "" },
+        proposals: [
+          { id: "mem-name", text: "The user's name is Oliver." },
+          { id: "mem-age", text: "The user is 35 years old." },
+          { id: "mem-job", text: "The user is a software developer." },
+        ],
+      },
+    } as never);
+
+    const spokenProfile =
+      "Ich heiße Oliver, bin 35 Jahre alt und bin Softwareentwickler.";
+    const rendered = await renderIntegration(stableProps(spokenProfile));
+    await speakOneTurn(rendered);
+
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(1));
+    const body = vi.mocked(sendDesktopChat).mock.calls[0]?.[0];
+    expect(body?.content).toBe(spokenProfile);
+    expect(body?.memory?.enabled).toBe(true);
+    expect(body?.memory?.context).toMatchObject({
+      conversationId: "chat-1",
+      projectId: "/repo",
+      userId: "local-operator",
+      workspaceId: "/repo",
+    });
+    expect(JSON.stringify(body)).not.toContain("RAWAUDIO");
+  });
+
   it("evidence — the spoken send body carries only the committed text, never raw audio", async () => {
     bootstrapMocks(chat());
     vi.mocked(sendDesktopChat).mockResolvedValue({
