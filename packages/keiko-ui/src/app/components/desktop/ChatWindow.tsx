@@ -10,22 +10,21 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type CSSProperties,
   type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
   type Ref,
+  type RefObject,
   type SyntheticEvent,
-  type WheelEvent,
 } from "react";
 import type { VoiceSessionGroundingContext } from "@oscharko-dev/keiko-contracts";
 import { useChatSessionContext } from "./context/ChatSessionContext";
-import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
-import { NumberControlStepper } from "./NumberControlStepper";
 import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
   repositoryReferenceRoots,
@@ -41,9 +40,8 @@ import {
   SentDocumentsNote,
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, RunSummaryCard } from "./WorkflowHandoff";
-import { Toggle } from "./widgets/shared/Toggle";
 import { FileIcon } from "./widgets/shared/projectTree";
-import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
+import type { ChatSessionApi, SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import {
   supportsDictation,
@@ -193,9 +191,16 @@ function onComposerKeyDown(
 const CITATION_MARKER_PATTERN = /\s*[[【［]\d+[\]】］]/g;
 const COLLAPSIBLE_ANSWER_MIN_CHARS = 1800;
 const COLLAPSIBLE_ANSWER_MIN_LINES = 32;
+const QUESTION_MAP_PREVIEW_MAX = 76;
 
 export function copyableMessageText(content: string): string {
   return sanitizeRepositoryEvidenceText(content).replace(CITATION_MARKER_PATTERN, "");
+}
+
+function questionMapPreview(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= QUESTION_MAP_PREVIEW_MAX) return normalized;
+  return `${normalized.slice(0, QUESTION_MAP_PREVIEW_MAX - 3).trimEnd()}...`;
 }
 
 async function writeTextWithFallback(text: string): Promise<void> {
@@ -244,7 +249,7 @@ function isCollapsibleAssistantAnswer(content: string): boolean {
 
 // uiux-fix F042 (C208) — quiet per-bubble copy affordance for assistant
 // responses. Mirrors SafeMarkdown's code-block CopyButton: clipboard guard for
-// non-secure contexts, announced status (WCAG 4.1.3), width-stable label swap.
+// non-secure contexts and announced status (WCAG 4.1.3).
 function MessageCopyButton({ content }: { readonly content: string }): ReactNode {
   const { t } = useI18n();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
@@ -274,15 +279,14 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
     <div className="chat-msg-copy-wrap">
       <button
         type="button"
-        className="chat-msg-copy ui-tip"
+        className="chat-msg-copy"
         aria-label={copied ? t("chat.copy.copied") : t("chat.copy.message")}
-        data-tip={copied ? t("chat.copy.copied") : t("chat.copy.message")}
+        title={copied ? t("chat.copy.copied") : t("chat.copy.message")}
         data-copied={copied ? "true" : "false"}
         data-failed={failed ? "true" : "false"}
         onClick={handleCopy}
       >
-        <Icons.copy size={13} aria-hidden="true" />
-        <span>{copied ? t("chat.copy.copied") : t("chat.copy.short")}</span>
+        <Icons.copy size={20} aria-hidden="true" />
       </button>
       <span role="status" className="chat-msg-copy-status">
         {status}
@@ -481,6 +485,7 @@ interface ConversationThreadProps {
   readonly sendStatus: SendStatus;
   readonly activeChat: Chat | undefined;
   readonly onCancelGrounded: () => void;
+  readonly registerQuestionAnchor?: (messageId: string, node: HTMLDivElement | null) => void;
 }
 
 function ConversationThreadImpl({
@@ -494,48 +499,60 @@ function ConversationThreadImpl({
   sendStatus,
   activeChat,
   onCancelGrounded,
+  registerQuestionAnchor,
 }: ConversationThreadProps): ReactNode {
   const { t } = useI18n();
   const turns = useMemo(() => conversationTurns(messages), [messages]);
   return (
     <div className="chatw-thread">
-      {turns.map((turn) => (
-        <div className="chat-turn" key={turn.id}>
-          <div className="chat-turn-cell chat-turn-prompt">
-            {turn.user !== null ? (
-              <ChatBubble
-                message={turn.user}
-                onOpenRunResult={onOpenRunResult}
-                repositoryRoots={repositoryRoots}
-                openRepositoryReference={openRepositoryReference}
-                previewWindows={previewWindows}
-                windowId={windowId}
-                layout="turn"
-              />
-            ) : null}
+      {turns.map((turn) => {
+        const userMessage = turn.user;
+        return (
+          <div className="chat-turn" key={turn.id}>
+            <div
+              className="chat-turn-cell chat-turn-prompt"
+              data-chat-question-id={userMessage?.id}
+              ref={
+                userMessage !== null && registerQuestionAnchor !== undefined
+                  ? (node) => registerQuestionAnchor(userMessage.id, node)
+                  : undefined
+              }
+            >
+              {userMessage !== null ? (
+                <ChatBubble
+                  message={userMessage}
+                  onOpenRunResult={onOpenRunResult}
+                  repositoryRoots={repositoryRoots}
+                  openRepositoryReference={openRepositoryReference}
+                  previewWindows={previewWindows}
+                  windowId={windowId}
+                  layout="turn"
+                />
+              ) : null}
+            </div>
+            <div className="chat-turn-cell chat-turn-answer">
+              {turn.responses.map((response, index) => (
+                <ChatBubble
+                  key={response.id}
+                  message={response}
+                  onOpenRunResult={onOpenRunResult}
+                  repositoryRoots={repositoryRoots}
+                  openRepositoryReference={openRepositoryReference}
+                  previewWindows={previewWindows}
+                  windowId={windowId}
+                  layout="turn"
+                  streaming={
+                    sendStatus === "streaming" &&
+                    response.role === "assistant" &&
+                    turn === turns[turns.length - 1] &&
+                    index === turn.responses.length - 1
+                  }
+                />
+              ))}
+            </div>
           </div>
-          <div className="chat-turn-cell chat-turn-answer">
-            {turn.responses.map((response, index) => (
-              <ChatBubble
-                key={response.id}
-                message={response}
-                onOpenRunResult={onOpenRunResult}
-                repositoryRoots={repositoryRoots}
-                openRepositoryReference={openRepositoryReference}
-                previewWindows={previewWindows}
-                windowId={windowId}
-                layout="turn"
-                streaming={
-                  sendStatus === "streaming" &&
-                  response.role === "assistant" &&
-                  turn === turns[turns.length - 1] &&
-                  index === turn.responses.length - 1
-                }
-              />
-            ))}
-          </div>
-        </div>
-      ))}
+        );
+      })}
       {sending && sendStatus !== "streaming" ? (
         <div className="chat-turn chat-turn-pending">
           <div className="chat-turn-cell chat-turn-prompt" />
@@ -557,6 +574,105 @@ function ConversationThreadImpl({
         </div>
       ) : null}
     </div>
+  );
+}
+
+interface ConversationQuestionMapItem {
+  readonly id: string;
+  readonly index: number;
+  readonly preview: string;
+  readonly time: string;
+}
+
+function setQuestionMapButtonWave(button: HTMLButtonElement, wave: number, peak: boolean): void {
+  const clamped = Math.max(0, Math.min(1, wave));
+  button.style.setProperty("--wave-width", `${(8 + clamped * 16).toFixed(1)}px`);
+  button.dataset.peak = peak ? "true" : "false";
+}
+
+function ConversationQuestionMap({
+  items,
+  onJump,
+}: {
+  readonly items: readonly ConversationQuestionMapItem[];
+  readonly onJump: (messageId: string) => void;
+}): ReactNode {
+  const { t } = useI18n();
+  const buttonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const setWaveFromPointer = useCallback((clientY: number): void => {
+    const buttons = Array.from(buttonRefs.current.values());
+    if (buttons.length === 0) return;
+    const sigmaPx = 23;
+    let nearest: HTMLButtonElement | undefined;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (const button of buttons) {
+      const rect = button.getBoundingClientRect();
+      const centerY = rect.top + rect.height / 2;
+      const distance = Math.abs(clientY - centerY);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = button;
+      }
+      const wave = Math.exp(-(distance * distance) / (2 * sigmaPx * sigmaPx));
+      setQuestionMapButtonWave(button, wave, false);
+    }
+    if (nearest !== undefined) setQuestionMapButtonWave(nearest, 1, true);
+  }, []);
+  const resetWave = useCallback((): void => {
+    for (const button of buttonRefs.current.values()) {
+      setQuestionMapButtonWave(button, 0, false);
+    }
+  }, []);
+  const registerButton = useCallback((messageId: string, node: HTMLButtonElement | null): void => {
+    if (node === null) {
+      buttonRefs.current.delete(messageId);
+      return;
+    }
+    buttonRefs.current.set(messageId, node);
+  }, []);
+  if (items.length < 2) return null;
+
+  return (
+    <nav
+      className="chat-question-map"
+      aria-label={t("chat.questionMap.label")}
+      onPointerMove={(event) => setWaveFromPointer(event.clientY)}
+      onPointerLeave={resetWave}
+    >
+      <ol className="chat-question-map-list">
+        {items.map((item) => (
+          <li key={item.id} className="chat-question-map-item">
+            <button
+              ref={(node) => registerButton(item.id, node)}
+              type="button"
+              className="chat-question-map-button"
+              data-peak="false"
+              style={
+                {
+                  "--wave-width": "8px",
+                } as CSSProperties
+              }
+              aria-label={t("chat.questionMap.jump", {
+                index: item.index,
+                preview: item.preview,
+              })}
+              onFocus={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setWaveFromPointer(rect.top + rect.height / 2);
+              }}
+              onBlur={resetWave}
+              onClick={() => onJump(item.id)}
+            >
+              <span className="chat-question-map-mark" aria-hidden="true" />
+              <span className="chat-question-map-card" aria-hidden="true">
+                <span className="chat-question-map-card-title">{item.preview}</span>
+                <span className="chat-question-map-card-time">{item.time}</span>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </nav>
   );
 }
 
@@ -1168,9 +1284,6 @@ interface ComposerBarProps {
   readonly onAttachFiles: (files: readonly File[]) => void;
   readonly controlsNarrow?: boolean;
   readonly barCompact?: boolean;
-  // Issue #151 — when true, the budget for the next send exceeds the model's
-  // window and the send button must be focusable but inert.
-  readonly budgetExceeded: boolean;
   // Issue #495 — capability-gated dictation. The mic affordance renders only when
   // `voiceDictationVisible` is true (STT advertised + browser can capture). `dictation` is the
   // composer-local state machine and `micButtonRef` lets the preview return focus to the button.
@@ -1276,7 +1389,6 @@ function ComposerBar({
   onAttachFiles,
   controlsNarrow = false,
   barCompact = false,
-  budgetExceeded,
   voiceDictationVisible,
   dictation,
   micButtonRef,
@@ -1303,26 +1415,22 @@ function ComposerBar({
   // AC #1 / AC #4: when no eligible model is configured the send button must be
   // focusable (so screen-reader users discover the error) but must not submit.
   // Use aria-disabled rather than the HTML disabled attribute so focus is retained.
-  // Issue #151 — budget-exceeded also blocks send.
-  const sendBlocked = noEligibleModels || budgetExceeded || !ready;
+  const sendBlocked = noEligibleModels || !ready;
   const draftEmpty = draft.trim().length === 0;
 
   // AC #2: aria-describedby chains:
   // - model select → NO_MODEL_ALERT_ID when noEligibleModels
   // - send button  → NO_MODEL_ALERT_ID when noEligibleModels,
-  //                  BUDGET_EXCEEDED_ALERT_ID when context exceeded,
   //                  LOADING_STATUS_ID while bootstrapping,
   //                  else SEND_HINT_ID when only the draft is empty
   const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
   const sendDescribedBy = noEligibleModels
     ? NO_MODEL_ALERT_ID
-    : budgetExceeded
-      ? BUDGET_EXCEEDED_ALERT_ID
-      : loading
-        ? LOADING_STATUS_ID
-        : draftEmpty
-          ? SEND_HINT_ID
-          : undefined;
+    : loading
+      ? LOADING_STATUS_ID
+      : draftEmpty
+        ? SEND_HINT_ID
+        : undefined;
 
   const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
   const compactModelTip = loading
@@ -1333,7 +1441,7 @@ function ComposerBar({
 
   return (
     <div className={`cmp-bar${barCompact ? " cmp-bar-compact" : ""}`}>
-      <div className="cmp-bar-main">
+      <div className="cmp-bar-model">
         {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button.
             uiux-fix F040 C207 — tell the button whether ANY configured model can attach, so its
             sr-only hint does not suggest a model switch that cannot succeed. */}
@@ -1387,6 +1495,8 @@ function ComposerBar({
             }}
           />
         </div>
+      </div>
+      <div className="cmp-bar-main">
         {/* Issue #495 — capability-gated dictation. Rendered only when the deployment advertises
             speech-to-text and the browser can capture audio; a no-voice deployment shows no mic at
             all so the composer stays clean and fully text-capable (AC1). The button is STT dictation
@@ -1423,6 +1533,40 @@ function ComposerBar({
             compact={controlsNarrow}
           />
         ) : null}
+        {/* Issue #152 — while a send is in flight the primary action button
+            flips to "Cancel response" (AC#1 + AC#3). Type="button" so it never
+            submits the surrounding form; onClick calls cancelSend which is a
+            safe no-op when the status is already terminal. */}
+        {sending ? (
+          <button
+            type="button"
+            className="cmp-send cmp-send-cancel cmp-tip-end"
+            data-on
+            aria-label={t("chat.send.cancel")}
+            data-tip={t("chat.send.cancel")}
+            onClick={cancelSend}
+          >
+            <Icons.close size={16} />
+          </button>
+        ) : (
+          <button
+            type={sendBlocked ? "button" : "submit"}
+            className="cmp-send cmp-tip-end"
+            data-on={!sendBlocked}
+            data-tip={
+              noEligibleModels
+                ? t("chat.send.noModel")
+                : loading
+                  ? t("chat.send.connecting")
+                  : t("chat.send.label")
+            }
+            aria-disabled={sendBlocked}
+            aria-describedby={sendDescribedBy}
+            aria-label={t("chat.send.label")}
+          >
+            <Icons.arrowUp size={16} />
+          </button>
+        )}
       </div>
       {/* AC #2: visually-hidden hint for screen readers when send is blocked by empty draft */}
       {sendDescribedBy === SEND_HINT_ID ? (
@@ -1430,42 +1574,6 @@ function ComposerBar({
           {t("chat.send.hint")}
         </span>
       ) : null}
-      {/* Issue #152 — while a send is in flight the primary action button
-          flips to "Cancel response" (AC#1 + AC#3). Type="button" so it never
-          submits the surrounding form; onClick calls cancelSend which is a
-          safe no-op when the status is already terminal. */}
-      {sending ? (
-        <button
-          type="button"
-          className="cmp-send cmp-send-cancel cmp-tip-end"
-          data-on
-          aria-label={t("chat.send.cancel")}
-          data-tip={t("chat.send.cancel")}
-          onClick={cancelSend}
-        >
-          <Icons.close size={16} />
-        </button>
-      ) : (
-        <button
-          type={sendBlocked ? "button" : "submit"}
-          className="cmp-send cmp-tip-end"
-          data-on={!sendBlocked}
-          data-tip={
-            noEligibleModels
-              ? t("chat.send.noModel")
-              : budgetExceeded
-                ? t("chat.send.contextTooLarge")
-                : loading
-                  ? t("chat.send.connecting")
-                  : t("chat.send.label")
-          }
-          aria-disabled={sendBlocked}
-          aria-describedby={sendDescribedBy}
-          aria-label={t("chat.send.label")}
-        >
-          <Icons.arrowUp size={16} />
-        </button>
-      )}
     </div>
   );
 }
@@ -1585,22 +1693,12 @@ function ComposerCore({
     pendingAttachments,
     addPendingAttachment,
     removePendingAttachment,
-    budget,
     error,
-    clearHistory,
     messages,
     activeChat,
     activeProject,
     replaceChat,
   } = session;
-  // Issue #151 — budget can be undefined while bootstrapping; treat that as
-  // not-exceeded so the composer remains submittable. CB-F1: a runtime-configured
-  // model with contextWindow 0 reports pressure "exceeded" from the estimator but
-  // has no real window — it must NOT block send (and BudgetIndicator self-hides),
-  // so we gate on contextWindowTokens > 0 via the shared predicate. This also keeps
-  // aria-describedby from dangling at a BudgetIndicator that renders nothing.
-  const budgetExceeded = isBudgetExceeded(budget);
-
   // uiux-fix F009 C089 — auto-grow the composer with its content up to 220px
   // (~8-9 lines at 15px/1.5), then scroll. Clearing the draft after a send
   // collapses the textarea back to its rows={2} minimum. The mini composer
@@ -1714,7 +1812,6 @@ function ComposerCore({
     speaking: realtimeVoice.speaking,
     sending,
     sendStatus,
-    budgetExceeded,
     hasSessionError: error !== undefined || realtimeVoice.error !== undefined,
   });
   const enterVoiceDialog = useCallback(() => {
@@ -2065,14 +2162,6 @@ function ComposerCore({
             aria-hidden="true"
             inert
           >
-            {minimal ? null : (
-              <BudgetIndicator
-                budget={budget}
-                onClearHistory={clearHistory}
-                disabled={sending || loading}
-                compact={compact}
-              />
-            )}
             <ComposerBar
               session={session}
               ready={ready}
@@ -2080,7 +2169,6 @@ function ComposerCore({
               onAttachFiles={handleFiles}
               controlsNarrow={controlsNarrow}
               barCompact={barCompact}
-              budgetExceeded={budgetExceeded}
               voiceDictationVisible={voiceDictationVisible}
               dictation={dictation}
               micButtonRef={motionMicButtonRef}
@@ -2095,15 +2183,6 @@ function ComposerCore({
             />
           </div>
         ) : null}
-        {/* Issue #151 — context-pressure indicator + clear-history affordance */}
-        {minimal || voiceDialog.active ? null : (
-          <BudgetIndicator
-            budget={budget}
-            onClearHistory={clearHistory}
-            disabled={sending || loading}
-            compact={compact}
-          />
-        )}
         {voiceDialog.active ? (
           <VoiceDialogComposerControls
             voiceMuted={voiceMuted}
@@ -2122,7 +2201,6 @@ function ComposerCore({
             onAttachFiles={handleFiles}
             controlsNarrow={controlsNarrow}
             barCompact={barCompact}
-            budgetExceeded={budgetExceeded}
             voiceDictationVisible={voiceDictationVisible}
             dictation={dictation}
             micButtonRef={micButtonRef}
@@ -2559,9 +2637,11 @@ function LocalKnowledgeScopeControl({
 function ChatScopeHeader({
   chat,
   onChatChanged,
+  memoryControl,
 }: {
   readonly chat: Chat;
   readonly onChatChanged: (chat: Chat) => void;
+  readonly memoryControl?: ReactNode;
 }): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
@@ -2577,6 +2657,9 @@ function ChatScopeHeader({
         catalog={catalog}
         connected={connected}
       />
+      {memoryControl !== undefined ? (
+        <div className="chat-scope-header-actions">{memoryControl}</div>
+      ) : null}
     </div>
   );
 }
@@ -2809,192 +2892,167 @@ function formatMemoryCapturedAt(capturedAt: number): string {
   return new Date(capturedAt).toISOString().slice(0, 10);
 }
 
-function MemoryPanel({
-  memoryEnabled,
-  setMemoryEnabled,
-  memoryBudgetTokens,
-  setMemoryBudgetTokens,
-  latestMemory,
-  acceptCandidate,
-  rejectCandidate,
-  forgetMemoryAction,
-  compact = false,
-}: {
-  readonly memoryEnabled: boolean;
-  readonly setMemoryEnabled: (next: boolean) => void;
-  readonly memoryBudgetTokens: number;
-  readonly setMemoryBudgetTokens: (next: number) => void;
-  readonly latestMemory: ConversationMemoryResultWire | undefined;
-  readonly acceptCandidate: (proposalId: string) => Promise<void>;
-  readonly rejectCandidate: (proposalId: string) => Promise<void>;
-  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
-  readonly compact?: boolean;
-}): ReactNode {
+interface MemoryDisclosureState {
+  readonly open: boolean;
+  readonly actionStatus: string;
+  readonly disclosureId: string;
+  readonly disclosureButtonRef: RefObject<HTMLButtonElement>;
+  readonly memoryCount: number;
+  readonly memoryCountLabel: string;
+  readonly memoryDisclosureLabel: string;
+  readonly toggleDisclosure: () => void;
+  readonly handleActionSettled: (message: string) => void;
+}
+
+function useMemoryDisclosureState(
+  latestMemory: ConversationMemoryResultWire | undefined,
+): MemoryDisclosureState {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
   const generatedId = useId();
   const disclosureId = `${generatedId}-chat-memory-disclosure`;
-  const budgetInputId = `${generatedId}-chat-memory-budget`;
-  const budgetHelpId = `${generatedId}-chat-memory-budget-help`;
   const disclosureButtonRef = useRef<HTMLButtonElement>(null);
   const handleActionSettled = useCallback((message: string): void => {
     setActionStatus(message);
     disclosureButtonRef.current?.focus();
+  }, []);
+  const toggleDisclosure = useCallback((): void => {
+    setOpen((current) => !current);
   }, []);
   const memoryCount = latestMemory?.context.memories.length ?? 0;
   const memoryDisclosureLabel =
     memoryCount > 0
       ? t("chat.memory.included", { count: memoryCount })
       : t("chat.memory.noneIncluded");
-  const memoryBudgetHelp = t("chat.memory.budgetHelp");
-  const stepMemoryBudget = (delta: number): void => {
-    setMemoryBudgetTokens(Math.max(0, memoryBudgetTokens + delta));
+  const memoryCountLabel = memoryCount > 99 ? "99+" : String(memoryCount);
+
+  return {
+    open,
+    actionStatus,
+    disclosureId,
+    disclosureButtonRef,
+    memoryCount,
+    memoryCountLabel,
+    memoryDisclosureLabel,
+    toggleDisclosure,
+    handleActionSettled,
   };
-  const handleBudgetWheel = (event: WheelEvent<HTMLInputElement>): void => {
-    if (event.deltaY === 0) return;
-    event.preventDefault();
-    const direction = event.deltaY < 0 ? 1 : -1;
-    stepMemoryBudget(direction * 100);
-  };
-  const budgetControl = (
-    <div className="chat-memory-budget">
-      <span className="chat-memory-budget-label" data-tip={memoryBudgetHelp}>
-        <label htmlFor={budgetInputId}>{t("chat.memory.budget")}</label>
-        {/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- matches the existing BudgetIndicator info affordance: keyboard-focusable data-tip tooltip. */}
-        <span
-          className="cmp-budget-info chat-memory-budget-info"
-          role="img"
-          tabIndex={0}
-          aria-label={memoryBudgetHelp}
-        >
-          i
+}
+
+function MemoryDisclosureButton({
+  disclosure,
+}: {
+  readonly disclosure: MemoryDisclosureState;
+}): ReactNode {
+  return (
+    <button
+      ref={disclosure.disclosureButtonRef}
+      type="button"
+      className="chat-memory-disclosure-toggle ui-tip cmp-tip-end"
+      aria-expanded={disclosure.open}
+      aria-controls={disclosure.disclosureId}
+      aria-label={disclosure.memoryDisclosureLabel}
+      data-empty={disclosure.memoryCount === 0 ? "true" : "false"}
+      data-tip={disclosure.memoryDisclosureLabel}
+      onClick={disclosure.toggleDisclosure}
+    >
+      <Icons.brain size={16} />
+      {disclosure.memoryCount > 0 ? (
+        <span className="chat-memory-count" aria-hidden="true">
+          {disclosure.memoryCountLabel}
         </span>
-        {/* eslint-enable jsx-a11y/no-noninteractive-tabindex */}
-      </span>
-      <span className="number-control number-control-pill">
-        <input
-          id={budgetInputId}
-          type="number"
-          className="number-control-input"
-          min={0}
-          step={100}
-          value={memoryBudgetTokens}
-          aria-describedby={budgetHelpId}
-          onChange={(event) => setMemoryBudgetTokens(Math.max(0, Number(event.target.value) || 0))}
-          onWheel={handleBudgetWheel}
-        />
-        <NumberControlStepper
-          label={t("chat.memory.budgetStepper")}
-          onStepUp={() => stepMemoryBudget(100)}
-          onStepDown={() => stepMemoryBudget(-100)}
-        />
-      </span>
-      <span id={budgetHelpId} className="sr-only">
-        {memoryBudgetHelp}
-      </span>
-    </div>
+      ) : null}
+    </button>
   );
+}
+
+function MemoryPanel({
+  latestMemory,
+  acceptCandidate,
+  rejectCandidate,
+  forgetMemoryAction,
+  disclosure,
+}: {
+  readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly acceptCandidate: (proposalId: string) => Promise<void>;
+  readonly rejectCandidate: (proposalId: string) => Promise<void>;
+  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
+  readonly disclosure: MemoryDisclosureState;
+}): ReactNode {
+  const { t } = useI18n();
+  if (!disclosure.open) return null;
 
   return (
     <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
-      <div className="chat-memory-panel-head">
-        <div className="chat-memory-toggle">
-          {/* uiux-fix F042 (C323) — the panel mixed generic "memory" with the
-              product name: feature = MemoriaViva, items = memories. The budget
-              unit (tokens) was previously only discoverable from the disclosure
-              line after the next send. */}
-          <Toggle on={memoryEnabled} onChange={setMemoryEnabled} label={t("chat.memory.enable")} />
-          <span>{memoryEnabled ? t("chat.memory.stateOn") : t("chat.memory.stateOff")}</span>
-        </div>
-        {compact ? null : budgetControl}
-        <button
-          ref={disclosureButtonRef}
-          type="button"
-          className={`chip${compact ? " chip-icon chat-memory-disclosure-toggle ui-tip cmp-tip-end" : ""}`}
-          aria-expanded={open}
-          aria-controls={disclosureId}
-          aria-label={memoryDisclosureLabel}
-          data-tip={compact ? memoryDisclosureLabel : undefined}
-          onClick={() => setOpen((current) => !current)}
-        >
-          {compact ? (
-            <Icons.brainSlash size={16} style={{ color: "var(--accent)" }} />
-          ) : (
-            memoryDisclosureLabel
-          )}
-        </button>
-      </div>
-      {open ? (
-        <div id={disclosureId} className="chat-memory-disclosure">
-          <p className="chat-memory-summary">
-            {latestMemory === undefined
-              ? t("chat.memory.disclosurePending")
-              : latestMemory.context.enabled
-                ? t("chat.memory.usedTokens", {
-                    used: latestMemory.context.budget.used,
-                    tokens: latestMemory.context.budget.tokens,
-                  })
-                : t("chat.memory.disabledLast")}
-          </p>
-          {latestMemory?.context.memories.map((memory) => (
-            <article key={memory.memoryId} className="chat-memory-item">
-              <div className="chat-memory-item-head">
-                <strong>{memory.memoryId}</strong>
-                <span>{memory.inclusionReason}</span>
+      <div id={disclosure.disclosureId} className="chat-memory-disclosure">
+        <p className="chat-memory-summary">
+          {latestMemory === undefined
+            ? t("chat.memory.disclosurePending")
+            : latestMemory.context.enabled
+              ? t("chat.memory.usedTokens", {
+                  used: latestMemory.context.budget.used,
+                  tokens: latestMemory.context.budget.tokens,
+                })
+              : t("chat.memory.disabledLast")}
+        </p>
+        {latestMemory?.context.memories.map((memory) => (
+          <article key={memory.memoryId} className="chat-memory-item">
+            <div className="chat-memory-item-head">
+              <strong>{memory.memoryId}</strong>
+              <span>{memory.inclusionReason}</span>
+            </div>
+            <p>{memory.bodyExcerpt}</p>
+            <dl
+              className="chat-memory-meta"
+              aria-label={t("chat.memory.provenance", { id: memory.memoryId })}
+            >
+              <div>
+                <dt>{t("chat.memory.source")}</dt>
+                <dd>{memory.sourceKind}</dd>
               </div>
-              <p>{memory.bodyExcerpt}</p>
-              <dl
-                className="chat-memory-meta"
-                aria-label={t("chat.memory.provenance", { id: memory.memoryId })}
-              >
-                <div>
-                  <dt>{t("chat.memory.source")}</dt>
-                  <dd>{memory.sourceKind}</dd>
-                </div>
-                <div>
-                  <dt>{t("chat.memory.sensitivity")}</dt>
-                  <dd>{memory.sensitivity}</dd>
-                </div>
-                <div>
-                  <dt>{t("chat.memory.status")}</dt>
-                  <dd>{memory.status}</dd>
-                </div>
-                <div>
-                  <dt>{t("chat.memory.confidence")}</dt>
-                  <dd>{`${String(Math.round(memory.confidence * 100))}%`}</dd>
-                </div>
-                <div>
-                  <dt>{t("chat.memory.captured")}</dt>
-                  <dd>{formatMemoryCapturedAt(memory.capturedAt)}</dd>
-                </div>
-              </dl>
-              {memory.captureRationale !== undefined ? (
-                <p className="chat-memory-rationale">{memory.captureRationale}</p>
-              ) : null}
-            </article>
-          ))}
-          {latestMemory?.actions.map((action) => (
-            <MemoryActionCard
-              key={
-                action.kind === "candidate"
-                  ? action.proposalId
-                  : action.kind === "rejected"
-                    ? action.reason
-                    : action.memoryId
-              }
-              action={action}
-              acceptCandidate={acceptCandidate}
-              rejectCandidate={rejectCandidate}
-              forgetMemoryAction={forgetMemoryAction}
-              onActionSettled={handleActionSettled}
-            />
-          ))}
-          <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-            {actionStatus}
-          </p>
-        </div>
-      ) : null}
+              <div>
+                <dt>{t("chat.memory.sensitivity")}</dt>
+                <dd>{memory.sensitivity}</dd>
+              </div>
+              <div>
+                <dt>{t("chat.memory.status")}</dt>
+                <dd>{memory.status}</dd>
+              </div>
+              <div>
+                <dt>{t("chat.memory.confidence")}</dt>
+                <dd>{`${String(Math.round(memory.confidence * 100))}%`}</dd>
+              </div>
+              <div>
+                <dt>{t("chat.memory.captured")}</dt>
+                <dd>{formatMemoryCapturedAt(memory.capturedAt)}</dd>
+              </div>
+            </dl>
+            {memory.captureRationale !== undefined ? (
+              <p className="chat-memory-rationale">{memory.captureRationale}</p>
+            ) : null}
+          </article>
+        ))}
+        {latestMemory?.actions.map((action) => (
+          <MemoryActionCard
+            key={
+              action.kind === "candidate"
+                ? action.proposalId
+                : action.kind === "rejected"
+                  ? action.reason
+                  : action.memoryId
+            }
+            action={action}
+            acceptCandidate={acceptCandidate}
+            rejectCandidate={rejectCandidate}
+            forgetMemoryAction={forgetMemoryAction}
+            onActionSettled={disclosure.handleActionSettled}
+          />
+        ))}
+        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {disclosure.actionStatus}
+        </p>
+      </div>
     </section>
   );
 }
@@ -3030,10 +3088,6 @@ export function ChatWindow({
     replaceChat,
     latestMemory,
     lastSentDocuments,
-    memoryEnabled,
-    setMemoryEnabled,
-    memoryBudgetTokens,
-    setMemoryBudgetTokens,
     acceptMemoryCandidate,
     rejectMemoryCandidate,
     forgetMemoryAction,
@@ -3065,6 +3119,34 @@ export function ChatWindow({
   const effectiveCompact = compact || mini;
   const effectiveControlsNarrow = controlsNarrow || mini || effectiveMinimal || workflowCompact;
   const effectiveBarCompact = barCompact || effectiveMinimal;
+  const memoryDisclosure = useMemoryDisclosureState(latestMemory);
+  const questionAnchorsRef = useRef(new Map<string, HTMLDivElement>());
+  const questionMapItems = useMemo<readonly ConversationQuestionMapItem[]>(() => {
+    return visible
+      .filter((message) => message.role === "user")
+      .map((message, index) => ({
+        id: message.id,
+        index: index + 1,
+        preview: questionMapPreview(message.content),
+        time: timeLabel(message.timestamp),
+      }));
+  }, [visible]);
+  const registerQuestionAnchor = useCallback(
+    (messageId: string, node: HTMLDivElement | null): void => {
+      if (node === null) {
+        questionAnchorsRef.current.delete(messageId);
+        return;
+      }
+      questionAnchorsRef.current.set(messageId, node);
+    },
+    [],
+  );
+  const scrollToQuestion = useCallback((messageId: string): void => {
+    const node = questionAnchorsRef.current.get(messageId);
+    if (node === undefined) return;
+    stickRef.current = false;
+    node.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, []);
   useEffect(() => {
     if (sending && !prevSendingRef.current) stickRef.current = true;
     prevSendingRef.current = sending;
@@ -3077,19 +3159,19 @@ export function ChatWindow({
       className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
     >
       {activeChat !== undefined ? (
-        <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
+        <ChatScopeHeader
+          chat={activeChat}
+          onChatChanged={replaceChat}
+          memoryControl={<MemoryDisclosureButton disclosure={memoryDisclosure} />}
+        />
       ) : null}
       {activeChat !== undefined ? (
         <MemoryPanel
-          memoryEnabled={memoryEnabled}
-          setMemoryEnabled={setMemoryEnabled}
-          memoryBudgetTokens={memoryBudgetTokens}
-          setMemoryBudgetTokens={setMemoryBudgetTokens}
           latestMemory={latestMemory}
           acceptCandidate={acceptMemoryCandidate}
           rejectCandidate={rejectMemoryCandidate}
           forgetMemoryAction={forgetMemoryAction}
-          compact={effectiveCompact || effectiveMinimal}
+          disclosure={memoryDisclosure}
         />
       ) : null}
       {noEligibleModels ? (
@@ -3127,22 +3209,26 @@ export function ChatWindow({
             <NoChatState />
           )
         ) : (
-          <div className="chatw-log">
-            <ConversationThread
-              messages={visible}
-              onOpenRunResult={onOpenRunResult}
-              repositoryRoots={repositoryRoots}
-              openRepositoryReference={openRepositoryReference}
-              previewWindows={previewWindows}
-              windowId={windowId}
-              sending={sending}
-              sendStatus={sendStatus}
-              activeChat={activeChat}
-              onCancelGrounded={cancelGrounded}
-            />
-            <GroundedAnswerPanel chat={activeChat} busy={sending} />
-            {/* Issue #148 — disclose which attached documents contributed extracted context. */}
-            <SentDocumentsNote documents={lastSentDocuments} />
+          <div className="chatw-log-shell">
+            <ConversationQuestionMap items={questionMapItems} onJump={scrollToQuestion} />
+            <div className="chatw-log">
+              <ConversationThread
+                messages={visible}
+                onOpenRunResult={onOpenRunResult}
+                repositoryRoots={repositoryRoots}
+                openRepositoryReference={openRepositoryReference}
+                previewWindows={previewWindows}
+                windowId={windowId}
+                sending={sending}
+                sendStatus={sendStatus}
+                activeChat={activeChat}
+                onCancelGrounded={cancelGrounded}
+                registerQuestionAnchor={registerQuestionAnchor}
+              />
+              <GroundedAnswerPanel chat={activeChat} busy={sending} />
+              {/* Issue #148 — disclose which attached documents contributed extracted context. */}
+              <SentDocumentsNote documents={lastSentDocuments} />
+            </div>
           </div>
         )}
       </div>

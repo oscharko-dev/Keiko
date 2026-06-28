@@ -98,7 +98,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    budget: undefined,
     memoryEnabled: true,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
@@ -108,7 +107,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
-    clearHistory: vi.fn(),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -416,10 +414,7 @@ describe("AC #4 — keyboard and screen-reader preservation", () => {
     await user.tab();
     // Next is a button (attach), then mode button, then model picker.
     let iterations = 0;
-    while (
-      document.activeElement?.getAttribute("aria-label") !== "Models" &&
-      iterations < 10
-    ) {
+    while (document.activeElement?.getAttribute("aria-label") !== "Models" && iterations < 10) {
       await user.tab();
       iterations++;
     }

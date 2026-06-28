@@ -4,8 +4,7 @@
 //   1. ChatWindow UI tests (prop-injected session) — pin the role="status"
 //      lifecycle indicator and the Send→Cancel button label flip without
 //      touching the network. The makeSession helper mirrors the shapes in
-//      ChatWindow.test.tsx / ContextBudget.test.tsx so the surface stays
-//      legible alongside the existing suite.
+//      ChatWindow.test.tsx so the surface stays legible alongside the existing suite.
 //   2. useChatSession hook tests — drive the real hook via renderHook and
 //      mock @/lib/api at the module boundary so we can pin the discriminated
 //      sendStatus union, idempotency under concurrent sendMessage calls,
@@ -74,7 +73,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    budget: undefined,
     memoryEnabled: true,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
@@ -84,7 +82,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
-    clearHistory: vi.fn(),
     lastSentDocuments: [],
     ...overrides,
   };

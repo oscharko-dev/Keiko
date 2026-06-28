@@ -933,7 +933,7 @@ export function FigmaSnapshotWindow({
   const [screenJsonError, setScreenJsonError] = useState<string | null>(null);
   const [screenJsonCopyStatus, setScreenJsonCopyStatus] = useState<string | null>(null);
 
-  // Fix #3: PAT revoke state — two-step inline confirm (mirrors ContextBudget pattern).
+  // Fix #3: PAT revoke state — two-step inline confirm.
   const [revokeConfirming, setRevokeConfirming] = useState(false);
   const [revokeStatus, setRevokeStatus] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
@@ -2434,7 +2434,7 @@ export function FigmaSnapshotWindow({
               <code>FIGMA_ACCESS_TOKEN</code> environment variable. This window never holds or
               transmits the token.
             </p>
-            {/* Fix #3: two-step inline confirm for PAT revoke (mirrors ContextBudget pattern).
+            {/* Fix #3: two-step inline confirm for PAT revoke.
                 Revoke removes the stored encrypted PAT from the server vault (#758). */}
             <div className="figma-snapshot-revoke-row">
               {revokeConfirming ? (

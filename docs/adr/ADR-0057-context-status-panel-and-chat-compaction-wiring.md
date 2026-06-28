@@ -102,12 +102,10 @@ the evidence path (PR5 W3). It will pass the same result as the fourth argument.
 `budgetPressure` are a number and an enum. `includedItems` is a count. The type is structurally
 path-free by inspection — there is no field that can hold a `string` that is a file path.
 
-**Why not ConversationBudgetBreakdown lane fields**: ADR-0052 D8 deferred those optional lane
-fields to a later UI PR. The composer pressure indicator (`BudgetIndicator`, `ContextBudget.tsx`)
-is unrelated to the grounded context-assembly path and has no access to `ContextAssemblyDiagnostics`.
-Mixing the two signals would couple the grounded path's assembly pass to the pre-send byte
-estimator. PR6 does not touch `ConversationBudgetBreakdown`. That decision remains open and is
-explicitly out of scope.
+**Why a dedicated grounded context summary**: the grounded context-assembly path has access to
+`ContextAssemblyDiagnostics`; composer history controls do not. Mixing those signals would couple
+the grounded path's assembly pass to composer affordances. PR6 keeps the context status panel
+grounded-context-specific.
 
 ### D2 — A new ContextStatusPanel component (separate file, collapsed-by-default disclosure)
 
@@ -302,8 +300,7 @@ Prerequisite: a workspace is open and at least one grounded question has been an
 
 ### Neutral
 
-- `ConversationBudgetBreakdown` lane fields (sketched in ADR-0052 D8) remain deferred. The
-  composer pressure indicator is a separate concern from the grounded assembly panel; mixing them
+- Composer history controls are a separate concern from the grounded assembly panel; mixing them
   in PR6 would introduce a cross-path dependency without a measurable user benefit.
 - `lib/types.ts` (the ADR-0019 re-export barrel) must be extended to export
   `GroundedAnswerContextSummary` and `ContextLaneId` so `ContextStatusPanel.tsx` can import them
@@ -318,7 +315,7 @@ Prerequisite: a workspace is open and at least one grounded question has been an
 
 ## What PR6 does NOT do
 
-- Does not add `ConversationBudgetBreakdown` lane fields or change `BudgetIndicator`.
+- Does not change composer history controls.
 - Does not add a new `EvidenceTaskType` (consistent with PR5 D1).
 - Does not expose per-file paths, scores, or excerpt content in the browser (structural type
   guarantee).
