@@ -38,7 +38,7 @@ Focused issue #1636 verification: `PASS`.
 - Targeted eslint on the changed citation-viewer/chat files: PASS, with only the
   existing Next.js pages-directory warning and the expected ignored `globals.css`
   warning for direct CLI invocation.
-- Focused Vitest slice: PASS, 3 files / 17 tests.
+- Focused Vitest slice: PASS, 3 files / 18 tests.
 - Screenshot and axe harness:
   `node docs/design-system/evidence/1636/equivalence-harness.mjs`.
 - Captured visual states:
