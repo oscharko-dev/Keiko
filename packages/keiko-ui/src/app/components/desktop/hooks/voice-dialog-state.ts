@@ -36,8 +36,7 @@ export type VoiceAuraState =
   | "speaking"
   | "muted"
   | "interrupted"
-  | "error"
-  | "pressure";
+  | "error";
 
 export type VoiceAuraIntensity = "low" | "medium" | "high";
 
@@ -55,7 +54,6 @@ export interface VoiceAuraStateInputs {
   readonly speaking: boolean;
   readonly sending: boolean;
   readonly sendStatus: string;
-  readonly budgetExceeded: boolean;
   readonly hasSessionError: boolean;
 }
 
@@ -108,7 +106,6 @@ export function deriveVoiceAuraState(inputs: VoiceAuraStateInputs): VoiceAuraSta
     speaking,
     sending,
     sendStatus,
-    budgetExceeded,
     hasSessionError,
   } = inputs;
 
@@ -117,9 +114,6 @@ export function deriveVoiceAuraState(inputs: VoiceAuraStateInputs): VoiceAuraSta
   }
   if (!voiceDialogAvailable || hasSessionError || voiceDialogState === "error") {
     return { active: true, state: "error", intensity: "high" };
-  }
-  if (budgetExceeded) {
-    return { active: true, state: "pressure", intensity: "high" };
   }
   if (voiceDialogState === "interrupted") {
     return { active: true, state: "interrupted", intensity: "medium" };

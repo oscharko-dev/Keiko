@@ -73,9 +73,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    // Issue #151 — budget + clear-history fields default to "no known limits"
-    // so the existing cancel-button tests keep their previous semantics.
-    budget: undefined,
     memoryEnabled: true,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
@@ -85,7 +82,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
-    clearHistory: vi.fn(),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -419,7 +415,7 @@ describe("ChatWindow cancel button", () => {
 });
 
 describe("ChatWindow memory disclosure", () => {
-  it("exposes expanded state and disclosure linkage on the memory chip", async () => {
+  it("exposes expanded state and disclosure linkage on the memory brain button", async () => {
     const user = userEvent.setup();
     renderWindow(
       makeSession({
@@ -450,6 +446,11 @@ describe("ChatWindow memory disclosure", () => {
     );
 
     const disclosureButton = screen.getByRole("button", { name: /1 memories included/i });
+    expect(disclosureButton).toHaveClass("chat-memory-disclosure-toggle");
+    expect(document.querySelector(".chat-scope-header")).toContainElement(disclosureButton);
+    expect(document.querySelector(".chat-memory-panel-head")).toBeNull();
+    expect(disclosureButton).toHaveAttribute("data-empty", "false");
+    expect(disclosureButton.querySelector(".chat-memory-count")).toHaveTextContent("1");
     expect(disclosureButton).toHaveAttribute("aria-expanded", "false");
     expect(disclosureButton.getAttribute("aria-controls")).toContain("chat-memory-disclosure");
     await user.click(disclosureButton);
@@ -461,6 +462,17 @@ describe("ChatWindow memory disclosure", () => {
     expect(screen.getByText("explicit-user-instruction")).toBeInTheDocument();
     expect(screen.getByText("user asked Keiko to remember this")).toBeInTheDocument();
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
+  });
+
+  it("renders the memory brain as visually disabled when no memories were included", () => {
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    const disclosureButton = screen.getByRole("button", { name: /no memories included/i });
+    expect(disclosureButton).toHaveAttribute("data-empty", "true");
+    expect(document.querySelector(".chat-scope-header")).toContainElement(disclosureButton);
+    expect(disclosureButton.querySelector(".chat-memory-count")).toBeNull();
+    expect(disclosureButton.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByText("No memories included")).toBeNull();
   });
 
   it("uses unique disclosure ids for multiple chat windows", () => {
@@ -1364,6 +1376,42 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     expect(container.querySelector(".cmp-model")).toHaveClass("cmp-model-compact");
   });
 
+  it("keeps attach and model controls left while action buttons stay right", () => {
+    const model = {
+      ...chatModelCapability("test-chat-1"),
+      supportsDocumentInput: true,
+      supportsImageInput: true,
+    };
+    const { container } = render(
+      <ChatSessionProvider
+        value={makeSession({
+          models: [model],
+          selectedModel: model.id,
+          activeChat: makeChat({ selectedModel: model.id }),
+        })}
+      >
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    const leftGroup = container.querySelector(".cmp-bar-model");
+    const rightGroup = container.querySelector(".cmp-bar-main:not(.cmp-bar-main-voice-dialog)");
+    const attachButton = screen.getByRole("button", { name: "Attach file" });
+    const modelTrigger = screen.getByRole("combobox", { name: "Models" });
+    const sendButton = screen.getByRole("button", { name: "Send message" });
+
+    expect(leftGroup).toContainElement(attachButton);
+    expect(leftGroup).toContainElement(modelTrigger);
+    expect(rightGroup).not.toContainElement(attachButton);
+    expect(rightGroup).toContainElement(sendButton);
+    expect(
+      Boolean(
+        attachButton.compareDocumentPosition(modelTrigger) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    ).toBe(true);
+    expect(attachButton.querySelector('path[d="M12 5v14M5 12h14"]')).not.toBeNull();
+  });
+
   it("opens the compact model picker with the same menu width as the compact full model button", async () => {
     const user = userEvent.setup();
     const model = { ...chatModelCapability("test-chat-1"), workflowEligible: true };
@@ -1397,27 +1445,11 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     expect(document.querySelector(".cmp-model-menu")).toHaveStyle({ width: "118px" });
   });
 
-  it("uses the compact no-memory disclosure icon and hides budget in minimal mode", () => {
+  it("uses the memory brain disclosure icon and hides history controls in minimal mode", () => {
     const { container } = render(
       <ChatSessionProvider
         value={makeSession({
           activeChat: makeChat(),
-          budget: {
-            approximateBytes: 2_000,
-            approximateTokens: 500,
-            contextWindowTokens: 10_000,
-            reservedOutputTokens: 2_000,
-            availableInputTokens: 8_000,
-            pressure: "low",
-            breakdown: {
-              draftBytes: 100,
-              historyBytes: 1_900,
-              documentBytes: 0,
-              repoContextBytes: 0,
-              knowledgeBytes: 0,
-              memoryBytes: 0,
-            },
-          },
         })}
       >
         <ChatWindow minimalChat compact />
@@ -1427,51 +1459,28 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     expect(container.querySelector(".chatw")).toHaveClass("chatw-minimal");
     const disclosure = screen.getByRole("button", { name: "No memories included" });
     expect(disclosure).toHaveClass("chat-memory-disclosure-toggle");
+    expect(disclosure).toHaveAttribute("data-empty", "true");
     expect(disclosure).toHaveAttribute("data-tip", "No memories included");
+    expect(disclosure.querySelector("svg")).not.toBeNull();
     expect(screen.queryByText(/Approximate context:/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /clear history/i })).toBeNull();
   });
 });
 
 describe("ChatWindow memory controls", () => {
-  it("lets users disable MemoriaViva for the next request and adjust the context budget", () => {
-    const setMemoryEnabled = vi.fn();
-    const setMemoryBudgetTokens = vi.fn();
+  it("keeps MemoriaViva configuration out of the chat window while preserving disclosure", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
-        memoryEnabled: true,
-        memoryBudgetTokens: 1200,
-        setMemoryEnabled,
-        setMemoryBudgetTokens,
       }),
     );
 
-    const toggle = screen.getByRole("switch", {
-      name: "Enable MemoriaViva for the next request",
-    });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(toggle);
-    expect(setMemoryEnabled).toHaveBeenCalledWith(false);
-
-    expect(screen.getByText("MemoriaViva budget")).toBeInTheDocument();
-    const memoryBudgetHelp = screen.getByLabelText(
-      /Limits only the MemoriaViva memory context/i,
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(document.querySelector(".chat-memory-budget")).toBeNull();
+    expect(document.querySelector(".chat-memory-toggle")).toBeNull();
+    expect(screen.getByRole("button", { name: /no memories included/i })).toHaveClass(
+      "chat-memory-disclosure-toggle",
     );
-    expect(memoryBudgetHelp.closest(".chat-memory-budget-label")).toHaveAttribute(
-      "data-tip",
-      expect.stringContaining("not the model context window"),
-    );
-
-    fireEvent.change(screen.getByLabelText("MemoriaViva budget"), {
-      target: { value: "800" },
-    });
-    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(800);
-
-    fireEvent.click(screen.getByRole("button", { name: "Increase MemoriaViva budget" }));
-    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(1300);
-
-    fireEvent.click(screen.getByRole("button", { name: "Decrease MemoriaViva budget" }));
-    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(1100);
   });
 
   it("discloses disabled no-memory responses without deleting stored memories", async () => {
@@ -1492,7 +1501,6 @@ describe("ChatWindow memory controls", () => {
       }),
     );
 
-    expect(screen.getByText("MemoriaViva off")).toBeInTheDocument();
     const disclosureButton = screen.getByRole("button", { name: /no memories included/i });
     await user.click(disclosureButton);
     expect(screen.getByText(/MemoriaViva was disabled for the last request/i)).toBeInTheDocument();
@@ -1806,6 +1814,85 @@ describe("ChatWindow message copy", () => {
     expect(turn?.querySelector('[role="separator"]')).toBeNull();
   });
 
+  it("renders a left-side question map and jumps to the selected prompt", () => {
+    const scrollSpy = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m1",
+            chatId: "chat-1",
+            role: "user",
+            content: "First question with a short body.",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "First answer.",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "m3",
+            chatId: "chat-1",
+            role: "user",
+            content:
+              "Second question has enough words to show a useful hover preview in the compact navigation rail.",
+            timestamp: 3,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "m4",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Second answer.",
+            timestamp: 4,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    const map = screen.getByRole("navigation", { name: "Conversation questions" });
+    const buttons = screen.getAllByRole("button", { name: /Jump to question/u });
+    expect(buttons).toHaveLength(2);
+    const secondButton = buttons[1];
+    if (secondButton === undefined) throw new Error("second question map marker missing");
+    expect(map.querySelectorAll(".chat-question-map-mark")).toHaveLength(2);
+    expect(map.querySelectorAll(".chat-question-map-card")).toHaveLength(2);
+    expect(map.querySelector(".chat-question-map-card-title")).toHaveTextContent("First question");
+    expect(secondButton).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Second question has enough words"),
+    );
+    expect(secondButton).not.toHaveAttribute("title");
+    expect(document.querySelector('[data-chat-question-id="m3"]')).not.toBeNull();
+
+    fireEvent.click(secondButton);
+    expect(scrollSpy).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
+    scrollSpy.mockRestore();
+  });
+
   it("renders assistant identity as the Keiko logo without the visible wordmark", () => {
     renderWindow(
       makeSession({
@@ -1887,7 +1974,15 @@ describe("ChatWindow message copy", () => {
 
     // Exactly one copy button — the assistant bubble's. User bubbles carry none.
     expect(screen.getAllByRole("button", { name: "Copy answer" })).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+    const copyButton = screen.getByRole("button", { name: "Copy answer" });
+    expect(copyButton).toHaveTextContent("");
+    expect(copyButton).not.toHaveClass("ui-tip");
+    expect(copyButton).not.toHaveAttribute("data-tip");
+    const copyIcon = copyButton.querySelector("svg");
+    expect(copyIcon).not.toBeNull();
+    expect(copyIcon).toHaveAttribute("width", "20");
+    expect(copyIcon).toHaveAttribute("height", "20");
+    fireEvent.click(copyButton);
     await waitFor(() => {
       // Citation markers (ASCII + CJK/fullwidth glyphs) and their leading
       // whitespace are stripped from the copied plaintext.

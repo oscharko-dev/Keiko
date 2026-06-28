@@ -3,7 +3,7 @@
 // Issue #147 — Modality-aware attachment intake and UI validation.
 //
 // This module owns all client-side attachment UI:
-//   - AttachButton    : the paperclip button in the composer bar
+//   - AttachButton    : the add-attachment button in the composer bar
 //   - AttachDropZone  : drag-and-drop surface above the textarea
 //   - AttachmentChip  : one chip per pending attachment (thumbnail + name + remove)
 //   - AttachmentStrip : the horizontal chip row rendered below the textarea
@@ -325,7 +325,7 @@ export function AttachButton({
         data-tip={supportsAny ? t("attachment.attachFile") : t("attachment.notSupported")}
         onClick={handleClick}
       >
-        <Icons.files size={16} />
+        <Icons.plus size={16} />
       </button>
     </>
   );
@@ -383,9 +383,7 @@ export function SentDocumentsNote({ documents }: SentDocumentsNoteProps): ReactN
         ))}
       </ul>
       {anyTruncated ? (
-        <span className="sent-docs-note-hint">
-          {t("attachment.truncatedHint")}
-        </span>
+        <span className="sent-docs-note-hint">{t("attachment.truncatedHint")}</span>
       ) : null}
     </div>
   );

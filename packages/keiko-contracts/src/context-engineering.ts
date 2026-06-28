@@ -315,8 +315,8 @@ const TOKEN_BYTES_PER_TOKEN_DIVISOR = 3.5;
 // returns exactly this (never 0 / NaN).
 const TOKEN_STRUCTURAL_OVERHEAD = 2;
 
-// Mirrors conversation-budget.ts utf8ByteLength: TextEncoder when available, char-length
-// fallback for any legacy harness without it. Never throws.
+// Uses TextEncoder when available, with a char-length fallback for any legacy
+// harness without it. Never throws.
 function utf8ByteLength(text: string): number {
   if (typeof TextEncoder !== "undefined") {
     return new TextEncoder().encode(text).length;

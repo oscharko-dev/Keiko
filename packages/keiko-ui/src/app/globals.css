@@ -2977,12 +2977,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   --voice-aura-core: oklch(0.76 0.12 156);
   --voice-aura-secondary: oklch(0.78 0.1 185);
   --voice-aura-tertiary: oklch(0.7 0.09 145);
-  --voice-aura-composer-opacity: 0.2;
+  /* ready (active, no question): a calm but PERCEPTIBLE slow wave — "Keiko is awake and
+     ready" must read as alive, not off. Kept low-opacity so it stays quiet/enterprise. */
+  --voice-aura-composer-opacity: 0.24;
   --voice-aura-edge-mix: 24%;
-  --voice-aura-speed: 18s;
-  --voice-aura-composer-lift: -2px;
-  --voice-aura-composer-scale-x: 1.004;
-  --voice-aura-composer-scale-y: 1.022;
+  --voice-aura-speed: 14s;
+  --voice-aura-composer-lift: -5px;
+  --voice-aura-composer-scale-x: 1.01;
+  --voice-aura-composer-scale-y: 1.06;
   position: relative;
   isolation: isolate;
 }
@@ -3104,9 +3106,25 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     opacity 320ms ease,
     transform 380ms ease;
 }
+/* Second, slower depth layer. It drifts at a different rate from ::before so the two glows
+   move in and out of phase — an organic, non-repeating "living" motion (state-of-the-art
+   ambient feel) rather than one flat pulse. Kept subtle; screen blend keeps it additive on
+   the dark surface without muddying the controls (which sit above at z-index 1). */
 .cmp-box[data-voice-aura="on"]::after {
-  display: none;
-  content: none;
+  background:
+    radial-gradient(
+      ellipse 78% 92% at 50% 104%,
+      color-mix(in oklch, var(--voice-aura-secondary) 28%, transparent) 0%,
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 120% 80% at 50% 100%,
+      color-mix(in oklch, var(--voice-aura-core) 18%, transparent) 0%,
+      transparent 72%
+    );
+  opacity: calc(var(--voice-aura-composer-opacity) * 0.55);
+  transform-origin: 50% 100%;
+  mix-blend-mode: screen;
 }
 :root[data-input-modality="keyboard"] .cmp-box[data-voice-aura="on"]:has(.cmp-input:focus) {
   border-color: var(--accent-line);
@@ -3121,15 +3139,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     var(--shadow-card),
     inset 0 0 26px -22px color-mix(in oklch, var(--voice-aura-core) 82%, #000);
 }
+/* The wave draws inward: it rests low and slightly contracted at the bottom edge (0%), then
+   is drawn up and expands into the composer (100%). With ease-in-out + alternate this reads
+   as a calm wave breathing inward and receding, not a one-way grow. Per-state vars scale the
+   amplitude/speed (calm for ready, larger and faster for thinking, softer for speaking). */
 @keyframes voice-aura-composer-breathe {
   0% {
-    opacity: calc(var(--voice-aura-composer-opacity) * 0.7);
-    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
-  }
-  48% {
-    opacity: calc(var(--voice-aura-composer-opacity) * 1.05);
-    transform: translate3d(0, calc(var(--voice-aura-composer-lift) * 0.58), 0)
-      scale3d(var(--voice-aura-composer-scale-x), var(--voice-aura-composer-scale-y), 1);
+    opacity: calc(var(--voice-aura-composer-opacity) * 0.62);
+    transform: translate3d(0, 3px, 0) scale3d(0.99, 0.965, 1);
   }
   100% {
     opacity: var(--voice-aura-composer-opacity);
@@ -3137,12 +3154,30 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
       scale3d(var(--voice-aura-composer-scale-x), var(--voice-aura-composer-scale-y), 1);
   }
 }
+/* Depth layer: same idea, smaller amplitude, no horizontal scale — a slower undercurrent. */
+@keyframes voice-aura-composer-drift {
+  0% {
+    opacity: calc(var(--voice-aura-composer-opacity) * 0.3);
+    transform: translate3d(0, 2px, 0) scale3d(1, 0.98, 1);
+  }
+  100% {
+    opacity: calc(var(--voice-aura-composer-opacity) * 0.62);
+    transform: translate3d(0, calc(var(--voice-aura-composer-lift) * 0.6), 0)
+      scale3d(1, calc(1 + (var(--voice-aura-composer-scale-y) - 1) * 0.7), 1);
+  }
+}
 @media (prefers-reduced-motion: no-preference) {
   .cmp-box[data-voice-aura="on"]::before {
     animation: voice-aura-composer-breathe var(--voice-aura-speed) ease-in-out infinite alternate;
   }
+  /* 1.55× period + a small negative delay keeps the two layers permanently out of phase. */
+  .cmp-box[data-voice-aura="on"]::after {
+    animation: voice-aura-composer-drift calc(var(--voice-aura-speed) * 1.55) -2.3s ease-in-out
+      infinite alternate;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
+  /* Static calm glow: both layers hold a steady state, no motion. */
   .chatw:has(.cmp-box[data-voice-aura="on"])::before,
   .cmp-box[data-voice-aura="on"]::before,
   .cmp-box[data-voice-aura="on"]::after {
@@ -3150,7 +3185,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     transform: none;
   }
   .cmp-box[data-voice-aura="on"]::after {
-    opacity: 0.14;
+    opacity: calc(var(--voice-aura-composer-opacity) * 0.45);
   }
 }
 @media (forced-colors: active) {
@@ -3254,17 +3289,27 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   display: flex;
   align-items: center;
   gap: 8px;
-  justify-content: flex-end;
+  justify-content: space-between;
   margin-top: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  width: 100%;
+}
+.cmp-bar-model {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   flex: 0 1 auto;
 }
 .cmp-bar-main {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   min-width: 0;
-  flex: 1 1 auto;
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 /* Active resting layout: the cluster sits as a balanced, vertically-centred control pair
    inside the composer rather than pinned to the bottom edge. The footer grows by the same
@@ -3288,9 +3333,18 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   width: 100%;
 }
 .cmp-bar-main-voice-dialog {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   justify-content: center;
   gap: 10px;
+  /* .cmp-bar-main carries margin-left:auto (pushes the normal controls toward the send
+     button). In voice mode that auto-margin would pin the two-icon cluster to the right
+     edge — the exact "icons stuck at the right" defect. Reset it so the cluster centres. */
+  margin-inline: 0;
+}
+/* The compact composer drops the footer to a column at ≤560px (container query). Keep the
+   voice cluster on its own centred row so the two controls read as a deliberate pair. */
+.cmp-box-voice-dialog .cmp-footer-row {
+  flex-direction: row;
 }
 /* The two real voice controls resolve into their centred resting place with a calm
    rise + settle. The 80ms delay lets the outgoing normal controls clear focus first,
@@ -3663,6 +3717,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   flex-wrap: nowrap;
 }
 .cmp-bar-compact .cmp-bar-main {
+  flex: 0 0 auto;
   min-width: 0;
 }
 .cmp-model-compact {
@@ -3737,7 +3792,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .cmp-send {
   flex: none;
-  margin-left: auto;
 }
 .cmp-mode[data-tip]:hover::after,
 .cmp-mode[data-tip]:focus-visible::after,
@@ -3781,14 +3835,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     align-items: stretch;
     flex-direction: column;
   }
-  .cmp-budget {
-    width: 100%;
-  }
   .cmp-bar {
     width: 100%;
   }
-  .cmp-bar-main {
+  .cmp-bar-model {
     flex: 1 1 auto;
+  }
+  .cmp-bar-main {
+    flex: 0 0 auto;
   }
 }
 
@@ -4250,91 +4304,77 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   padding: 8px 16px 0;
 }
 
-.chat-memory-panel-head {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.chat-memory-toggle {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  font-size: 12px;
-  color: var(--text-secondary); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
-}
-
-.chat-memory-budget {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  font-size: 12px;
-  color: var(--text-secondary); /* --fg-dim 3.89:1 on dark --card, AA fail (uiux-fix F012) */
-}
-
-.chat-memory-budget-label {
+.chat-memory-disclosure-toggle {
   position: relative;
   display: inline-flex;
-  gap: 6px;
   align-items: center;
-  min-width: 0;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--surface-primary) 78%, transparent);
+  color: var(--accent);
+  flex: none;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
 }
-
-.chat-memory-budget-label[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  width: max-content;
-  max-width: min(280px, calc(100vw - 32px));
-  padding: 5px 9px;
-  border: 1px solid var(--popover-border);
-  border-radius: 7px;
-  background: var(--surface-primary);
-  color: var(--text-primary);
-  box-shadow: var(--popover-shadow);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.35;
-  text-align: left;
-  text-wrap: pretty;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s ease;
-  z-index: var(--z-tooltip);
+.chat-memory-disclosure-toggle[data-empty="true"] {
+  color: var(--text-secondary);
+  opacity: 0.52;
 }
-
-.chat-memory-budget-label[data-tip]:hover::after,
-.chat-memory-budget-label[data-tip]:focus-within::after {
+.chat-memory-disclosure-toggle:hover,
+.chat-memory-disclosure-toggle:focus-visible,
+.chat-memory-disclosure-toggle[aria-expanded="true"] {
+  border-color: color-mix(in oklch, var(--accent) 48%, var(--border-strong));
+  background: color-mix(in oklch, var(--accent) 12%, var(--surface-primary));
+  color: var(--accent);
   opacity: 1;
 }
-
-.chat-memory-budget .number-control-pill {
-  --number-stepper-size: 18px;
-  --number-stepper-right: 8px;
-}
-
-.chat-memory-budget input {
-  width: 104px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border-subtle);
-  background: var(--surface-primary);
-  color: var(--text-primary);
-}
-.chat-memory-disclosure-toggle {
-  margin-left: auto;
-  flex: none;
+.chat-memory-disclosure-toggle:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
 }
 .chat-memory-disclosure-toggle[data-tip]::after {
   max-width: min(144px, calc(100vw - 20px));
+}
+.chat-memory-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid var(--surface-primary);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--text-inverse);
+  box-shadow: 0 2px 7px color-mix(in oklch, var(--accent) 24%, transparent);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .chat-memory-disclosure {
   display: grid;
   gap: 10px;
   margin-top: 10px;
+  margin-left: auto;
+  width: min(460px, 100%);
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface-primary) 94%, transparent);
+  box-shadow: var(--popover-shadow);
 }
 
 .chat-memory-summary {
@@ -8271,7 +8311,8 @@ select.dlg-input {
 .chatw-scroll {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 4px 16px 18px;
   cursor: default;
   user-select: text;
@@ -8280,6 +8321,112 @@ select.dlg-input {
 .chatw-log {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+}
+.chatw-log-shell {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+.chat-question-map {
+  position: sticky;
+  top: 8px;
+  z-index: 4;
+  align-self: start;
+  width: 48px;
+  max-height: min(520px, 68vh);
+  pointer-events: auto;
+}
+.chat-question-map-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  max-height: inherit;
+  margin: 3px 0 0;
+  padding: 4px 0;
+  overflow: hidden;
+  list-style: none;
+}
+.chat-question-map-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 48px;
+  height: 6px;
+}
+.chat-question-map-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 48px;
+  height: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.chat-question-map-mark {
+  width: var(--wave-width, 8px);
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.58;
+  transform-origin: left center;
+  transition: width 0.12s ease;
+}
+.chat-question-map-button:focus-visible {
+  outline: none;
+}
+.chat-question-map-button:focus-visible .chat-question-map-mark {
+  width: 24px;
+}
+.chat-question-map-card {
+  position: absolute;
+  top: 50%;
+  left: 52px;
+  display: grid;
+  gap: 5px;
+  width: min(300px, calc(100cqw - 108px));
+  max-width: calc(100cqw - 108px);
+  padding: 10px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface-elevated) 94%, transparent);
+  box-shadow: var(--popover-shadow);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-4px, -50%) scale(0.98);
+  transform-origin: left center;
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+}
+.chat-question-map-button[data-peak="true"] .chat-question-map-card,
+.chat-question-map-button:focus-visible .chat-question-map-card {
+  opacity: 1;
+  transform: translate(0, -50%) scale(1);
+}
+.chat-question-map-card-title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-question-map-card-time {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
 }
 .chatw-thread {
   display: flex;
@@ -8299,9 +8446,12 @@ select.dlg-input {
 .chat-turn-prompt {
   display: flex;
   justify-content: flex-end;
+  min-width: 0;
 }
 .chat-turn-answer {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 .chat-turn-answer > .chat-msg + .chat-msg,
 .chat-turn-answer > .run-summary-card + .chat-msg,
@@ -8332,19 +8482,8 @@ select.dlg-input {
 .chatw-compact .chat-memory-panel {
   padding: 8px 12px 0;
 }
-.chatw-compact .chat-memory-panel-head {
-  gap: 8px;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-.chatw-compact .chat-memory-toggle,
-.chatw-compact .chat-memory-budget,
 .chatw-compact .scope-grounding {
   font-size: 11.5px;
-}
-.chatw-compact .chat-memory-budget input {
-  width: 96px;
-  padding: 4px 8px;
 }
 .chatw-compact .scope-grounding-select {
   width: 180px;
@@ -8359,19 +8498,6 @@ select.dlg-input {
   gap: 8px;
   padding-top: 8px;
 }
-.chatw-compact .cmp-budget {
-  font-size: 11.5px;
-}
-.chatw-compact .cmp-budget-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.chatw-compact .cmp-budget-info {
-  width: 14px;
-  height: 14px;
-}
 .chatw-minimal .chatw-scroll {
   padding: 0 6px 4px;
 }
@@ -8381,19 +8507,8 @@ select.dlg-input {
 .chatw-minimal .chat-memory-panel {
   padding: 4px 6px 0;
 }
-.chatw-minimal .chat-memory-panel-head {
-  gap: 4px;
-  justify-content: space-between;
-  align-items: center;
-}
-.chatw-minimal .chat-memory-toggle,
-.chatw-minimal .chat-memory-budget,
 .chatw-minimal .scope-grounding {
   font-size: 11px;
-}
-.chatw-minimal .chat-memory-budget input {
-  width: 92px;
-  padding: 3px 7px;
 }
 .chatw-minimal .scope-grounding-select {
   width: 180px;
@@ -8434,6 +8549,8 @@ select.dlg-input {
 }
 .chat-msg {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   margin-bottom: 14px;
   user-select: text;
   -webkit-user-select: text;
@@ -8452,6 +8569,8 @@ select.dlg-input {
 }
 .chat-msg-bubble {
   max-width: min(640px, 84%);
+  min-width: 0;
+  box-sizing: border-box;
   border: 1px solid var(--border-subtle);
   border-radius: 14px;
   padding: 10px 13px;
@@ -8461,12 +8580,15 @@ select.dlg-input {
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
   cursor: text;
   user-select: text;
   -webkit-user-select: text;
 }
 .chat-msg-content {
   min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .chat-msg-content[data-collapsed="true"] {
   position: relative;
@@ -8591,6 +8713,19 @@ select.dlg-input {
   }
 }
 @container (max-width: 720px) {
+  .chatw-log-shell {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+  .chat-question-map,
+  .chat-question-map-item,
+  .chat-question-map-button {
+    width: 24px;
+  }
+  .chat-question-map-card {
+    left: 28px;
+    width: min(240px, calc(100cqw - 68px));
+    max-width: calc(100cqw - 68px);
+  }
   .chatw-thread {
     gap: 20px;
   }
@@ -8599,6 +8734,14 @@ select.dlg-input {
   }
   .chat-msg[data-role="user"][data-layout="turn"] .chat-msg-bubble {
     max-width: min(640px, 88%);
+  }
+}
+@container (max-width: 480px) {
+  .chatw-log-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chat-question-map {
+    display: none;
   }
 }
 /* functional model picker, styled as the design's static .cmp-model chip */
@@ -13341,6 +13484,140 @@ html[data-keiko-gateway-setup-open="true"] {
   font-size: 12px;
   border-radius: 7px;
 }
+.memoria-window .mv-settings {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface-primary) 60%, transparent);
+}
+.memoria-window .mv-settings-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.memoria-window .mv-settings-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+.memoria-window .mv-settings-copy {
+  max-width: 520px;
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.memoria-window .mv-settings-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  flex: none;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--surface-inset) 70%, transparent);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.memoria-window .mv-settings-status[data-enabled="true"] {
+  border-color: color-mix(in oklch, var(--accent) 42%, var(--border-subtle));
+  background: color-mix(in oklch, var(--accent) 12%, var(--surface-inset));
+  color: var(--text-primary);
+}
+.memoria-window .mv-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) minmax(236px, 0.9fr);
+  gap: 10px;
+  align-items: stretch;
+}
+.memoria-window .mv-setting-toggle,
+.memoria-window .mv-setting-budget {
+  min-width: 0;
+  min-height: 72px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface-inset) 62%, transparent);
+}
+.memoria-window .mv-setting-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+}
+.memoria-window .mv-setting-toggle > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.memoria-window .mv-setting-toggle strong,
+.memoria-window .mv-setting-budget label {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+.memoria-window .mv-setting-toggle span span,
+.memoria-window .mv-setting-help {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.memoria-window .mv-setting-toggle .auto-toggle {
+  width: 38px;
+  height: 22px;
+  flex: none;
+}
+.memoria-window .mv-setting-toggle .auto-toggle span {
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+}
+.memoria-window .mv-setting-toggle .auto-toggle.on span {
+  left: 18px;
+}
+.memoria-window .mv-setting-budget {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+}
+.memoria-window .mv-budget-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.memoria-window .mv-budget-control .number-control-pill {
+  --number-stepper-size: 20px;
+  --number-stepper-right: 8px;
+  flex: none;
+}
+.memoria-window .mv-budget-control input {
+  width: 116px;
+  padding: 5px 28px 5px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.memoria-window .mv-budget-unit {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+.memoria-window .mv-setting-help {
+  margin: 0;
+}
 .memoria-window .mc-filters {
   gap: 7px;
   padding: 10px;
@@ -13424,6 +13701,9 @@ html[data-keiko-gateway-setup-open="true"] {
   .memoria-window .mc-policy-switch {
     order: -1;
   }
+  .memoria-window .mv-settings-grid {
+    grid-template-columns: 1fr;
+  }
   .memoria-window .mc-filter-row {
     grid-template-columns: 1fr;
   }
@@ -13445,6 +13725,21 @@ html[data-keiko-gateway-setup-open="true"] {
   }
   .memoria-window .mc-policy-switch {
     order: -1;
+  }
+  .memoria-window .mv-settings-main,
+  .memoria-window .mv-setting-toggle,
+  .memoria-window .mv-budget-control {
+    align-items: flex-start;
+  }
+  .memoria-window .mv-settings-main,
+  .memoria-window .mv-setting-toggle {
+    flex-direction: column;
+  }
+  .memoria-window .mv-settings-grid {
+    grid-template-columns: 1fr;
+  }
+  .memoria-window .mv-settings-status {
+    flex: none;
   }
 }
 
@@ -14849,8 +15144,11 @@ html[data-keiko-gateway-setup-open="true"] {
    (the parent .chat-msg-bubble uses white-space: pre-wrap which
    would break markdown layout). */
 .sm-root {
+  min-width: 0;
+  max-width: 100%;
   white-space: normal;
   word-break: break-word;
+  overflow-wrap: anywhere;
   color: var(--text-primary);
   font-size: inherit;
   line-height: 1.66;
@@ -14860,6 +15158,9 @@ html[data-keiko-gateway-setup-open="true"] {
 
 /* Paragraphs */
 .sm-p {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   margin: 0 0 12px;
 }
 .sm-p:last-child {
@@ -14894,6 +15195,9 @@ html[data-keiko-gateway-setup-open="true"] {
 /* Lists */
 .sm-ul,
 .sm-ol {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   margin: 0 0 13px 1.35em;
   padding: 0;
 }
@@ -14918,6 +15222,7 @@ html[data-keiko-gateway-setup-open="true"] {
   border-radius: 4px;
   padding: 1px 4px;
   color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
 /* Fenced code block container */
@@ -15115,6 +15420,7 @@ html[data-keiko-gateway-setup-open="true"] {
   position: relative;
   display: inline-flex;
   align-items: baseline;
+  min-width: 0;
   max-width: 100%;
   vertical-align: baseline;
 }
@@ -15132,6 +15438,8 @@ html[data-keiko-gateway-setup-open="true"] {
   text-align: left;
   text-decoration: underline;
   text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   cursor: pointer;
   user-select: text;
   -webkit-user-select: text;
@@ -19276,37 +19584,8 @@ button.figma-view-preview {
   color: #fff;
 }
 
-/* ==== uiux-fix F010: context-budget indicator, scope pills (C044/C081/C169/C175/C321/C326) ==== */
-/* C044/C081 — the BudgetIndicator's cmp-budget-* classes had 0 CSS rules: the row rendered
-   as one unformatted inline text run ("tokensLowiClear history"), the pressure badge carried
-   no semantics and "Clear history" inherited the bare button reset. Badge tints follow the
-   .qi-badge status pattern (AA-documented); low/moderate read through their text label,
-   colour semantics reserved for high/exceeded escalation. */
-.cmp-budget {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin-top: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-  min-width: 0;
-  flex: 1 1 auto;
-}
-.cmp-budget-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-}
-.cmp-budget-count {
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
+/* ==== uiux-fix F010: scope-pill focus and pressure badge styling (C169/C326) ==== */
+/* Scope pressure badges follow the .qi-badge status pattern. */
 .cmp-budget-badge {
   display: inline-flex;
   align-items: center;
@@ -19339,98 +19618,6 @@ button.figma-view-preview {
    are already AA-darkened in the light token block, so moderate/high/exceeded need no override. */
 [data-theme="light"] .cmp-budget-badge-low {
   color: var(--ink-inverse);
-}
-/* C321 — the approximate-tokens hint was hover-only (title attribute): sighted keyboard
-   users could never reach it. The icon is focusable (tabIndex=0) and reveals a data-tip
-   pseudo tooltip on hover AND :focus-visible (rail-tooltip keyboard-parity pattern). */
-.cmp-budget-info {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  flex: none;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-style: italic;
-  cursor: help;
-}
-.cmp-budget-info:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 2px;
-}
-.cmp-budget-info[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: 240px;
-  padding: 5px 9px;
-  border-radius: 7px;
-  background: var(--surface-primary);
-  border: 1px solid var(--popover-border);
-  color: var(--text-primary);
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 500;
-  line-height: 1.35;
-  box-shadow: var(--popover-shadow);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s ease;
-  z-index: 9999;
-}
-.cmp-budget-info[data-tip]:hover::after,
-.cmp-budget-info[data-tip]:focus-visible::after {
-  opacity: 1;
-}
-/* Clear-history button: recognisable secondary chip with a ≥24px target (WCAG 2.5.8). */
-.cmp-budget-clear {
-  min-height: 28px;
-  padding: 3px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  transition:
-    border-color 0.15s ease,
-    background 0.15s ease,
-    color 0.15s ease;
-}
-.cmp-budget-clear:hover:not(:disabled) {
-  background: var(--button-secondary-surface-hover);
-  border-color: var(--border-strong);
-  color: var(--button-secondary-text);
-}
-.cmp-budget-clear:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--focus-ring);
-  outline-offset: 2px;
-}
-.cmp-budget-clear:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-/* C175 — inline two-step confirm + post-clear status note for "Clear history". */
-.cmp-budget-confirm {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.cmp-budget-confirm-label {
-  color: var(--text-primary);
-}
-.cmp-budget-cleared {
-  font-size: 11.5px;
-  color: var(--text-secondary);
-}
-.cmp-budget-alert {
-  margin-top: 2px;
 }
 /* C169 — pills now keep the × focusable during the in-flight request (aria-disabled
    instead of native disabled, so keyboard focus is not dropped mid-flow). */
@@ -21134,6 +21321,13 @@ ul.integ {
   flex-wrap: nowrap;
   padding: 6px 16px 4px;
 }
+.chat-scope-header-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 32px;
+}
 /* C178 — grounding control label (was fully inline-styled). */
 .scope-grounding {
   display: inline-flex;
@@ -21470,7 +21664,14 @@ ul.integ {
     border-color 0.1s;
 }
 .chat-msg-copy {
-  min-width: 112px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  gap: 0;
+  border-color: transparent;
+  background: transparent;
 }
 .chat-msg-collapse {
   min-width: 120px;
@@ -21484,6 +21685,10 @@ ul.integ {
   border-color: var(--border-strong);
   background: var(--button-secondary-surface-hover);
 }
+.chat-msg-copy:hover {
+  border-color: transparent;
+  background: transparent;
+}
 .chat-msg-copy:focus-visible,
 .chat-msg-collapse:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
@@ -21491,11 +21696,9 @@ ul.integ {
 }
 .chat-msg-copy[data-copied="true"] {
   color: var(--feedback-success);
-  border-color: color-mix(in oklch, var(--feedback-success) 60%, var(--border-subtle));
 }
 .chat-msg-copy[data-failed="true"] {
   color: var(--feedback-danger);
-  border-color: color-mix(in oklch, var(--feedback-danger) 60%, var(--border-subtle));
 }
 .chat-msg-copy-status {
   min-height: 16px;

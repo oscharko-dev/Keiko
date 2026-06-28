@@ -335,8 +335,7 @@ only the legacy code paths and remain byte-identical.
   rendering is a future PR.
 - **Tool-observations lane eviction** — the allocator runs in diagnostic mode only; it does not
   yet evict or compact `role:tool` messages from the harness `ctx.messages`.
-- **UI disclosure** — `ConversationBudgetBreakdown` lane fields and the `ContextStatusPanel`
-  are PR6.
+- **UI disclosure** — `ContextStatusPanel` grounding disclosure is PR6.
 - **Injection-signal gating** — the `hasCriticalInjectionSignal` flag on shaped observations is
   recorded in diagnostics; it does not yet block or route tool calls in PR4 (that is a future
   behavioral change requiring its own ADR and gate).

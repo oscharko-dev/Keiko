@@ -62,7 +62,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
     lastSentDocuments: [],
-    budget: undefined,
     memoryEnabled: true,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
@@ -72,7 +71,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
     forgetMemoryAction: vi.fn(),
-    clearHistory: vi.fn(),
     ...overrides,
   };
 }
@@ -148,14 +146,8 @@ describe("ChatHistoryPanel", () => {
     await user.click(screen.getByRole("button", { name: /restore/i }));
 
     await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "open" }));
-    expect(screen.getByRole("tab", { name: /active/i })).toHaveAttribute(
-      "aria-selected",
-      "false",
-    );
-    expect(screen.getByRole("tab", { name: /deleted/i })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(screen.getByRole("tab", { name: /active/i })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: /deleted/i })).toHaveAttribute("aria-selected", "true");
   });
 
   it("renames a chat through the PATCH helper", async () => {

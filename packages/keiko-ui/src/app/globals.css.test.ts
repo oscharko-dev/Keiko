@@ -822,28 +822,23 @@ describe("Fix 5 — mobile root toolbar compression", () => {
   });
 });
 
-// ─── uiux-fix F010 — context-budget indicator + scope-pill focus ring ─────────
+// ─── uiux-fix F010 — scope pressure badges + focus ring ───────────────────────
 
-describe("uiux-fix F010 — cmp-budget styling and scope-pill focus visibility", () => {
-  it("defines the cmp-budget layout and badge rules (C044/C081 — classes were orphaned)", () => {
-    expect(css).toContain(".cmp-budget-row");
+describe("uiux-fix F010 — scope pressure badge styling and focus visibility", () => {
+  it("defines shared scope pressure badge rules without restoring composer history controls", () => {
     expect(css).toContain(".cmp-budget-badge-exceeded");
-    expect(css).toContain(".cmp-budget-clear:focus-visible");
-    expect(css).toContain(".cmp-budget-clear:disabled");
-    // The flex row is what un-merges the inline text run ("tokensLowiClear history").
-    const rowIdx = css.lastIndexOf(".cmp-budget-row");
-    const rowBlock = css.slice(rowIdx, css.indexOf("}", rowIdx) + 1);
-    expect(rowBlock).toContain("display: flex");
-    expect(rowBlock).toContain("gap: 8px");
+    expect(css).not.toContain(".cmp-history-clear");
+    expect(css).not.toContain(".cmp-history-row");
   });
 
   it("light theme overrides the low-badge text to ink-inverse (raw accent ≈1.97:1 on the tint)", () => {
     expect(css).toContain('[data-theme="light"] .cmp-budget-badge-low');
   });
 
-  it("reveals the cmp-budget-info data-tip on focus-visible as well as hover (C321)", () => {
-    expect(css).toContain(".cmp-budget-info[data-tip]:focus-visible::after");
-    expect(css).toContain(".cmp-budget-info[data-tip]:hover::after");
+  it("styles the MemoriaViva request settings moved out of the chat window", () => {
+    expect(css).toContain(".memoria-window .mv-settings");
+    expect(css).toContain(".memoria-window .mv-setting-budget");
+    expect(css).toContain(".memoria-window .mv-budget-control input");
   });
 
   it("styles the connector pill modifier distinctly from folder pills (C326)", () => {
@@ -2421,6 +2416,48 @@ describe("Issue #1295 — high-traffic product-surface token migration", () => {
     expect(block).toContain("var(--border-subtle)");
     expect(block).toContain("color: var(--text-primary)");
     expect(block).not.toMatch(/var\(--card\)|var\(--line-soft\)|var\(--fg\)/u);
+  });
+
+  it("keeps the conversation log vertical-only and forces message content to wrap", () => {
+    const scroll = cssBlock("\n.chatw-scroll {");
+    expect(scroll).toContain("overflow-y: auto");
+    expect(scroll).toContain("overflow-x: hidden");
+
+    const message = cssBlock("\n.chat-msg {");
+    expect(message).toContain("min-width: 0");
+    expect(message).toContain("max-width: 100%");
+
+    const bubble = cssBlock("\n.chat-msg-bubble {");
+    expect(bubble).toContain("min-width: 0");
+    expect(bubble).toContain("box-sizing: border-box");
+    expect(bubble).toContain("overflow-wrap: anywhere");
+
+    const content = cssBlock("\n.chat-msg-content {");
+    expect(content).toContain("max-width: 100%");
+    expect(content).toContain("overflow-wrap: anywhere");
+
+    const markdownRoot = cssBlock("\n.sm-root {");
+    expect(markdownRoot).toContain("min-width: 0");
+    expect(markdownRoot).toContain("max-width: 100%");
+    expect(markdownRoot).toContain("overflow-wrap: anywhere");
+  });
+
+  it("keeps the question map wave to length-only marker changes", () => {
+    const mark = cssBlock("\n.chat-question-map-mark {");
+    expect(mark).toContain("width: var(--wave-width, 8px)");
+    expect(mark).toContain("height: 2px");
+    expect(mark).toContain("transition: width 0.12s ease");
+    expect(mark).not.toContain("color 0.16s");
+
+    const focusMark = cssBlock(
+      "\n.chat-question-map-button:focus-visible .chat-question-map-mark {",
+    );
+    expect(focusMark).toContain("width: 24px");
+
+    const peakCard = cssBlock(
+      '\n.chat-question-map-button[data-peak="true"] .chat-question-map-card,\n.chat-question-map-button:focus-visible .chat-question-map-card {',
+    );
+    expect(peakCard).toContain("opacity: 1");
   });
 
   it("routes Quality-Intelligence candidate cards through --surface-primary / --border-default", () => {

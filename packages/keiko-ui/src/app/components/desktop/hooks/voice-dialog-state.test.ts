@@ -144,7 +144,6 @@ const AURA_BASE: VoiceAuraStateInputs = {
   speaking: false,
   sending: false,
   sendStatus: "idle",
-  budgetExceeded: false,
   hasSessionError: false,
 };
 
@@ -169,17 +168,6 @@ describe("deriveVoiceAuraState", () => {
         intensity: "high",
       });
     }
-  });
-
-  it("reserves pressure for budget pressure before normal floor states", () => {
-    expect(
-      deriveVoiceAuraState({
-        ...AURA_BASE,
-        voiceDialogState: "listening",
-        listening: true,
-        budgetExceeded: true,
-      }),
-    ).toEqual({ active: true, state: "pressure", intensity: "high" });
   });
 
   it("maps active voice floor states onto the visual aura language", () => {

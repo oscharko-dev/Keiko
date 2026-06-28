@@ -464,8 +464,7 @@ checks. The threshold is added to `scripts/check-context-quality.budget.json` as
   in PR3. That is PR4 (`buildGatewayMessages`/`conversationForGateway`/harness loop integration).
 - **No evidence persistence**: `ContextToolRehydrationHandle.artifactId` is computed but nothing
   is written to `EvidenceStore`. That is PR5 (`persistContextAssemblyEvidence`).
-- **No UI disclosure**: `ConversationBudgetBreakdown` lane fields and the `ContextStatusPanel`
-  are PR6.
+- **No UI disclosure**: `ContextStatusPanel` grounding disclosure is PR6.
 - **No change to summarizeCommand output**: `ToolCallResult.output` is byte-identical to today.
 - **No live browser shaper**: `ShapedBrowserObservation` is defined but has no producer in PR3.
 - **No `ToolCallMetadata` extension**: the audit-ledger metadata branch is unchanged in PR3.
