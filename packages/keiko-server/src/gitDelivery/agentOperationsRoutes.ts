@@ -71,7 +71,97 @@ interface IdempotencyEntry {
   readonly result?: GitRepositoryAgentOperationResponse;
 }
 
-const idempotencyCache = new Map<string, IdempotencyEntry>();
+// Defaults for the process-memory idempotency cache. The cap bounds worst-case memory against a client
+// that streams many distinct idempotency keys; the TTL lets settled replay entries self-evict so the
+// map self-cleans even for keys that are never queried again.
+export const DEFAULT_IDEMPOTENCY_MAX_ENTRIES = 1024;
+export const DEFAULT_IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
+
+export interface IdempotencyCacheOptions {
+  readonly maxEntries?: number;
+  readonly ttlMs?: number;
+  readonly now?: () => number;
+}
+
+interface StoredEntry {
+  readonly entry: IdempotencyEntry;
+  // Wall-clock expiry, enforced only once the entry holds a settled result. A pending reservation is a
+  // short-lived guard for an in-flight delegation; it is never TTL-pruned or LRU-evicted so a duplicate
+  // request can never re-trigger an operation that is still running (idempotency is preserved exactly).
+  readonly expiresAt: number;
+}
+
+// Bounded LRU + TTL store for the agent-facade idempotency replay window. Exposes the Map subset the
+// handler relies on (get / set / delete) plus `size` for tests. Overflow eviction targets the
+// least-recently-used *settled* entry only; in-flight reservations are exempt.
+export class IdempotencyCache {
+  private readonly entries = new Map<string, StoredEntry>();
+  private readonly maxEntries: number;
+  private readonly ttlMs: number;
+  private readonly now: () => number;
+
+  public constructor(options: IdempotencyCacheOptions = {}) {
+    this.maxEntries = Math.max(
+      1,
+      Math.floor(options.maxEntries ?? DEFAULT_IDEMPOTENCY_MAX_ENTRIES),
+    );
+    this.ttlMs = Math.max(1, Math.floor(options.ttlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS));
+    this.now = options.now ?? Date.now;
+  }
+
+  public get size(): number {
+    return this.entries.size;
+  }
+
+  public get(key: string): IdempotencyEntry | undefined {
+    const stored = this.entries.get(key);
+    if (stored === undefined) return undefined;
+    if (stored.entry.result !== undefined && this.now() >= stored.expiresAt) {
+      this.entries.delete(key);
+      return undefined;
+    }
+    // Refresh LRU recency on a hit by reinserting at the tail; the TTL window is unchanged.
+    this.entries.delete(key);
+    this.entries.set(key, stored);
+    return stored.entry;
+  }
+
+  public set(key: string, entry: IdempotencyEntry): void {
+    this.entries.delete(key);
+    this.pruneExpired();
+    this.entries.set(key, { entry, expiresAt: this.now() + this.ttlMs });
+    this.evictOverflow();
+  }
+
+  public delete(key: string): void {
+    this.entries.delete(key);
+  }
+
+  private pruneExpired(): void {
+    const now = this.now();
+    for (const [key, stored] of this.entries) {
+      if (stored.entry.result !== undefined && now >= stored.expiresAt) {
+        this.entries.delete(key);
+      }
+    }
+  }
+
+  private evictOverflow(): void {
+    while (this.entries.size > this.maxEntries) {
+      let victim: string | undefined;
+      for (const [key, stored] of this.entries) {
+        if (stored.entry.pending === undefined) {
+          victim = key;
+          break;
+        }
+      }
+      if (victim === undefined) break; // every entry is an in-flight reservation — cannot safely evict
+      this.entries.delete(victim);
+    }
+  }
+}
+
+const idempotencyCache = new IdempotencyCache();
 
 function denied(
   request: Partial<GitRepositoryAgentOperationRequest>,
@@ -88,7 +178,9 @@ function denied(
   };
 }
 
-async function readParsed(req: IncomingMessage): Promise<
+async function readParsed(
+  req: IncomingMessage,
+): Promise<
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly result: RouteResult }
 > {
@@ -341,16 +433,16 @@ function normalizedForDigest(value: unknown): unknown {
 }
 
 function fingerprintRequest(request: GitRepositoryAgentOperationRequest): string {
-  return createHash("sha256").update(JSON.stringify(normalizedForDigest(request))).digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify(normalizedForDigest(request)))
+    .digest("hex");
 }
 
 function deniedStatus(reason: GitRepositoryAgentDenialReason): number {
   return reason === "unsupported-direct-shell" ? 200 : 400;
 }
 
-async function parseAgentRequest(
-  req: IncomingMessage,
-): Promise<
+async function parseAgentRequest(req: IncomingMessage): Promise<
   | {
       readonly ok: true;
       readonly request: GitRepositoryAgentOperationRequest;
@@ -390,10 +482,7 @@ function idempotencyConflict(request: GitRepositoryAgentOperationRequest): Route
   };
 }
 
-function responseResult(
-  body: GitRepositoryAgentOperationResponse,
-  replay = false,
-): RouteResult {
+function responseResult(body: GitRepositoryAgentOperationResponse, replay = false): RouteResult {
   const response = body.status === "delegated" && replay ? { ...body, replay: true } : body;
   return {
     status: body.status === "delegated" ? body.routeStatus : 200,
@@ -415,27 +504,28 @@ export async function handleGitAgentOperationWithDelegate(
   request: GitRepositoryAgentOperationRequest,
   fingerprint: string,
   delegate: () => Promise<RouteResult>,
+  cache: IdempotencyCache = idempotencyCache,
 ): Promise<RouteResult> {
   const key = cacheKey(request);
   if (key === undefined) {
     const result = await delegate();
     return { status: result.status, body: wrapDelegated(request, result) };
   }
-  const cached = idempotencyCache.get(key);
+  const cached = cache.get(key);
   if (cached !== undefined) {
     if (cached.fingerprint !== fingerprint) return idempotencyConflict(request);
     if (cached.result !== undefined) return responseResult(cached.result, true);
     if (cached.pending !== undefined) return responseResult(await cached.pending, true);
   }
   const pending = delegate().then((result) => wrapDelegated(request, result));
-  idempotencyCache.set(key, { fingerprint, pending });
+  cache.set(key, { fingerprint, pending });
   try {
     const body = await pending;
-    idempotencyCache.set(key, { fingerprint, result: body });
+    cache.set(key, { fingerprint, result: body });
     return responseResult(body);
   } catch (error) {
-    const current = idempotencyCache.get(key);
-    if (current?.pending === pending) idempotencyCache.delete(key);
+    const current = cache.get(key);
+    if (current?.pending === pending) cache.delete(key);
     throw error;
   }
 }
