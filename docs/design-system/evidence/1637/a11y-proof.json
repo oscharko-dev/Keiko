@@ -1,0 +1,40 @@
+{
+  "issue": 1637,
+  "verdict": "PASS",
+  "cssSha256": "93baaa524d245b1e05a7b5bb7fc78ba3ee5ed68bb37acd969fd8cba1265083dd",
+  "captures": [
+    {
+      "file": "01-restored-shell-dark.png",
+      "violations": []
+    },
+    {
+      "file": "02-restored-shell-light.png",
+      "violations": []
+    },
+    {
+      "file": "03-transient-retry.png",
+      "violations": []
+    },
+    {
+      "file": "04-hard-blocked.png",
+      "violations": []
+    },
+    {
+      "file": "05-safe-persistence.png",
+      "violations": []
+    },
+    {
+      "file": "06-large-slow.png",
+      "violations": []
+    },
+    {
+      "file": "07-responsive.png",
+      "violations": []
+    },
+    {
+      "file": "08-forced-colors.png",
+      "violations": []
+    }
+  ],
+  "gate": "zero serious/critical axe violations across restored, recovery, persistence, responsive, and forced-colors states"
+}

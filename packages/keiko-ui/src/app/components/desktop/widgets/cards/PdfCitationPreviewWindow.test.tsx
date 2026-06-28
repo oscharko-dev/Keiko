@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchPdfCitationPreviewDocument } from "@/lib/api";
+import { ApiError, fetchPdfCitationPreviewDocument } from "@/lib/api";
 import {
   getPdfCitationPreviewBackToChatAvailability,
   clearPdfCitationPreviewWindowRegistryForTests,
@@ -83,12 +83,10 @@ describe("PdfCitationPreviewWindow", () => {
     }));
     page.render.mockReturnValue(renderTask);
     pdfDocument.getPage.mockResolvedValue(page);
-    vi
-      .spyOn(HTMLCanvasElement.prototype, "getContext")
-      .mockReturnValue({} as CanvasRenderingContext2D);
-    vi
-      .spyOn(HTMLElement.prototype, "scrollIntoView")
-      .mockImplementation(() => undefined);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      {} as CanvasRenderingContext2D,
+    );
+    vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -108,9 +106,75 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /open this viewer from a verified citation preview session/i,
+      /restored without an active verified preview session/i,
     );
     expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
+  });
+
+  it("restores a safe shell without rendering bytes and allows only scalar intent controls", async () => {
+    const updateCfg = vi.fn();
+    render(
+      <PdfCitationPreviewWindow
+        cfg={{
+          documentLabel: "Policy wording.pdf",
+          currentPage: 7,
+          pageNumber: 7,
+          anchorQuality: "page-only",
+          zoomMode: "manual",
+          zoomValue: 1.2,
+          rotation: 90,
+        }}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={updateCfg}
+        windowId="restored-preview-window"
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/requires re-verification/i);
+    expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /previous/i })).toBeDisabled();
+    expect(screen.getByLabelText(/current page/i)).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: /zoom in/i }));
+    expect(updateCfg).toHaveBeenCalledWith({ zoomMode: "manual", zoomValue: 1.3 });
+
+    await userEvent.click(screen.getByRole("button", { name: /fit page/i }));
+    expect(updateCfg).toHaveBeenCalledWith({ zoomMode: "fit-page" });
+
+    await userEvent.click(screen.getByRole("button", { name: /rotate right/i }));
+    expect(updateCfg).toHaveBeenCalledWith({ rotation: 180 });
+  });
+
+  it("allows retry when a live verified session document fetch fails transiently", async () => {
+    vi.mocked(fetchPdfCitationPreviewDocument).mockRejectedValueOnce(
+      new ApiError("PREVIEW_SOURCE_UNREADABLE", "source unreadable", 503),
+    );
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+    const cfg = firstCall[1] as Record<string, unknown>;
+
+    render(
+      <PdfCitationPreviewWindow
+        cfg={cfg}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={vi.fn()}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /could not read the verified PDF safely/i,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /retry preview/i }));
+
+    await waitFor(() => {
+      expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
   });
 
   it("loads the verified PDF bytes, renders controls, supports page and zoom actions, and stays axe-clean", async () => {

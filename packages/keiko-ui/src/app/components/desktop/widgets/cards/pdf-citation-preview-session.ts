@@ -96,7 +96,10 @@ const MESSAGE_UNAVAILABLE_REASON = "The originating answer is no longer availabl
 const previewSessionsByWindowId = new Map<string, PdfCitationPreviewSessionEntry>();
 const renderedChatWindowsById = new Map<string, PdfCitationPreviewRenderedChatWindow>();
 const workspaceChatWindowsById = new Map<string, PdfCitationPreviewWorkspaceChatWindow>();
-const pendingBackNavigationByChatWindowId = new Map<string, PdfCitationPreviewBackNavigationRequest>();
+const pendingBackNavigationByChatWindowId = new Map<
+  string,
+  PdfCitationPreviewBackNavigationRequest
+>();
 const highlightTimersByElement = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 const registryListeners = new Set<() => void>();
 
@@ -138,49 +141,54 @@ function activeFailureCopy(reason: PdfCitationPreviewReasonCode): {
         title: "Preview recovery required",
         message:
           "Keiko can no longer verify this citation for immediate PDF preview. Reopen the answer after the preview metadata is refreshed.",
-        retryable: true,
+        retryable: false,
       };
     case "document-not-ready":
       return {
         title: "Preview not ready",
-        message: "Keiko is still preparing the verified PDF source for preview. Retry in a moment.",
-        retryable: true,
+        message:
+          "Keiko is still preparing the verified PDF source for preview. Reopen the citation when preparation completes.",
+        retryable: false,
       };
     case "document-content-mismatch":
       return {
         title: "Preview changed",
-        message: "The verified PDF bytes changed after this answer was generated. Retry to request a fresh preview.",
-        retryable: true,
+        message:
+          "The verified PDF bytes changed after this answer was generated. Keiko will not bypass the original citation hash.",
+        retryable: false,
       };
     case "page-provenance-missing":
       return {
         title: "Preview recovery required",
-        message: "Keiko can verify the PDF source, but the cited page anchor is no longer available for preview.",
-        retryable: true,
+        message:
+          "Keiko can verify the PDF source, but the cited page anchor is no longer available for preview.",
+        retryable: false,
       };
     case "preview-source-missing":
       return {
         title: "Preview source unavailable",
         message: "The verified PDF source is no longer available for preview.",
-        retryable: true,
+        retryable: false,
       };
     case "preview-source-unreadable":
       return {
         title: "Preview temporarily unavailable",
-        message: "Keiko could not read the verified PDF safely. Retry to request the preview again.",
-        retryable: true,
+        message:
+          "Keiko could not read the verified PDF safely. Reopen the citation to request a fresh preview session.",
+        retryable: false,
       };
     case "preview-source-oversized":
       return {
         title: "Preview too large",
         message: "The verified PDF exceeds the passive preview size limit for this viewer.",
-        retryable: true,
+        retryable: false,
       };
     case "stable-id-mismatch":
     case "citation-not-found":
       return {
         title: "Preview unavailable",
-        message: "This citation no longer matches the structured grounded-answer metadata for this response.",
+        message:
+          "This citation no longer matches the structured grounded-answer metadata for this response.",
         retryable: false,
       };
     case "assistant-message-not-found":
@@ -189,7 +197,8 @@ function activeFailureCopy(reason: PdfCitationPreviewReasonCode): {
     case "not-local-knowledge-citation":
       return {
         title: "Preview unavailable",
-        message: "This answer no longer carries a verified Local Knowledge PDF preview for the selected citation.",
+        message:
+          "This answer no longer carries a verified Local Knowledge PDF preview for the selected citation.",
         retryable: false,
       };
     case "lineage-missing":
@@ -261,7 +270,7 @@ function findInlineMarkerTarget(messageElement: HTMLElement, marker: string): HT
   return (
     Array.from(targets).find((target) => {
       if (target.textContent?.trim() !== marker) return false;
-      return target.closest(".chat-msg-content[data-collapsed=\"true\"]") === null;
+      return target.closest('.chat-msg-content[data-collapsed="true"]') === null;
     }) ?? null
   );
 }
@@ -317,11 +326,7 @@ function consumePendingBackNavigation(chatWindowId: string): void {
   pendingBackNavigationByChatWindowId.delete(chatWindowId);
   messageElement.scrollIntoView({ block: "center", inline: "nearest" });
 
-  const target = findBackNavigationTarget(
-    messageElement,
-    request.marker,
-    request.representation,
-  );
+  const target = findBackNavigationTarget(messageElement, request.marker, request.representation);
   if (target !== null) {
     target.focus({ preventScroll: true });
     applyBackNavigationHighlight(target);
@@ -427,7 +432,9 @@ export function activatePdfCitationPreviewContext(
   const existing = previewSessionsByWindowId.get(windowId);
   const context = existing?.context;
   if (existing === undefined || context === undefined) return undefined;
-  const nextCitation = context.citations.find((citation) => citation.citation.stableId === stableId);
+  const nextCitation = context.citations.find(
+    (citation) => citation.citation.stableId === stableId,
+  );
   if (nextCitation === undefined) return undefined;
   if (context.activeStableId === stableId && existing.display === nextCitation.display) {
     return nextCitation;
@@ -538,9 +545,7 @@ export function showPdfCitationPreviewResult(
 export function syncPdfCitationPreviewWindowRegistry(wins: readonly AppWindow[] | null): void {
   let changed = false;
   const activeWindowIds = new Set(
-    (wins ?? [])
-      .filter((win) => win.type === "pdfCitationPreview")
-      .map((win) => win.id),
+    (wins ?? []).filter((win) => win.type === "pdfCitationPreview").map((win) => win.id),
   );
   for (const [windowId, entry] of previewSessionsByWindowId) {
     if (activeWindowIds.has(windowId)) continue;

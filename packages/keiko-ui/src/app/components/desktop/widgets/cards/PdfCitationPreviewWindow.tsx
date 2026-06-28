@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy as PdfJsDocumentProxy } from "pdfjs-dist";
 import { ApiError, fetchPdfCitationPreviewDocument } from "@/lib/api";
 import { Icons } from "../../Icons";
 import type { WorkspaceApi } from "../../hooks/useWorkspace.types";
@@ -48,7 +48,7 @@ interface PdfDocumentLoadingTask {
 }
 
 type PdfJsModule = typeof import("pdfjs-dist");
-type PdfDocumentProxy = PDFDocumentProxy & {
+type PdfDocumentProxy = PdfJsDocumentProxy & {
   readonly destroy?: () => Promise<void> | void;
 };
 
@@ -74,7 +74,7 @@ function clampScale(scale: number): number {
 }
 
 function normalizeRotation(value: number): number {
-  return ((Math.round(value / 90) * 90) % 360 + 360) % 360;
+  return (((Math.round(value / 90) * 90) % 360) + 360) % 360;
 }
 
 function readNumber(value: unknown, fallback: number): number {
@@ -157,7 +157,8 @@ function previewFailure(error: unknown): PreviewFailure {
       case "PREVIEW_SOURCE_NOT_READY":
         return {
           title: "Preview not ready",
-          message: "Keiko is still verifying the PDF source for passive preview. Retry in a moment.",
+          message:
+            "Keiko is still verifying the PDF source for passive preview. Retry in a moment.",
           retryable: true,
         };
       case "PREVIEW_SOURCE_UNREADABLE":
@@ -204,6 +205,22 @@ function previewFailure(error: unknown): PreviewFailure {
   };
 }
 
+function restoredShellFailure(failureOverride: PreviewFailure | null): PreviewFailure {
+  if (failureOverride !== null) {
+    return {
+      title: failureOverride.title,
+      message: `${failureOverride.message} Reopen the citation from the answer to re-verify before Keiko renders PDF bytes.`,
+      retryable: false,
+    };
+  }
+  return {
+    title: "Preview requires re-verification",
+    message:
+      "This viewer was restored without an active verified preview session. Reopen the citation from the answer to re-verify the source before Keiko renders PDF bytes.",
+    retryable: false,
+  };
+}
+
 function isRenderingCancelled(error: unknown): boolean {
   return error instanceof Error && error.name === "RenderingCancelledException";
 }
@@ -221,7 +238,7 @@ function PdfCanvasPage({
   readonly onError: (error: unknown) => void;
   readonly onMeasured: (page: number, size: PageSize) => void;
   readonly pageNumber: number;
-  readonly pdf: PDFDocumentProxy;
+  readonly pdf: PdfDocumentProxy;
   readonly rotation: number;
   readonly scale: number;
 }): ReactNode {
@@ -256,8 +273,7 @@ function PdfCanvasPage({
         const renderTask = page.render({
           canvas: canvas,
           canvasContext: context,
-          transform:
-            deviceScale === 1 ? undefined : [deviceScale, 0, 0, deviceScale, 0, 0],
+          transform: deviceScale === 1 ? undefined : [deviceScale, 0, 0, deviceScale, 0, 0],
           viewport,
         });
         cancelRender = (): void => {
@@ -310,7 +326,7 @@ export function PdfCitationPreviewWindow({
   );
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [defaultPageSize, setDefaultPageSize] = useState<PageSize | null>(null);
-  const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
+  const [doc, setDoc] = useState<PdfDocumentProxy | null>(null);
   const [failure, setFailure] = useState<PreviewFailure | null>(null);
   const [measuredSizes, setMeasuredSizes] = useState<Record<number, PageSize>>({});
   const [numPages, setNumPages] = useState(0);
@@ -332,35 +348,33 @@ export function PdfCitationPreviewWindow({
       (citation) => citation.citation.stableId === citationContext.activeStableId,
     ) ?? citationContext?.citations[0];
 
-  const display = useMemo(
-    (): Pick<
-      PdfCitationPreviewSafeWindowCfg,
-      "anchorQuality" | "documentLabel" | "pageLabel" | "pageNumber" | "sourceLabel"
-    > => {
-      const sourceLabel = readOptionalString(cfg.sourceLabel) ?? sessionEntry?.display.sourceLabel;
-      const pageNumber =
-        typeof cfg.pageNumber === "number" ? cfg.pageNumber : sessionEntry?.display.pageNumber;
-      const pageLabel = readOptionalString(cfg.pageLabel) ?? sessionEntry?.display.pageLabel;
-      return {
-        documentLabel:
-          readOptionalString(cfg.documentLabel) ??
-          sessionEntry?.display.documentLabel ??
-          "PDF Preview",
-        anchorQuality: activeCitation?.display.anchorQuality ?? sessionEntry?.display.anchorQuality ?? "page-only",
-        ...(sourceLabel === undefined ? {} : { sourceLabel }),
-        ...(pageNumber === undefined ? {} : { pageNumber }),
-        ...(pageLabel === undefined ? {} : { pageLabel }),
-      };
-    },
-    [
-      activeCitation?.display.anchorQuality,
-      cfg.documentLabel,
-      cfg.pageLabel,
-      cfg.pageNumber,
-      cfg.sourceLabel,
-      sessionEntry,
-    ],
-  );
+  const display = useMemo((): Pick<
+    PdfCitationPreviewSafeWindowCfg,
+    "anchorQuality" | "documentLabel" | "pageLabel" | "pageNumber" | "sourceLabel"
+  > => {
+    const sourceLabel = readOptionalString(cfg.sourceLabel) ?? sessionEntry?.display.sourceLabel;
+    const pageNumber =
+      typeof cfg.pageNumber === "number" ? cfg.pageNumber : sessionEntry?.display.pageNumber;
+    const pageLabel = readOptionalString(cfg.pageLabel) ?? sessionEntry?.display.pageLabel;
+    return {
+      documentLabel:
+        readOptionalString(cfg.documentLabel) ??
+        sessionEntry?.display.documentLabel ??
+        "PDF Preview",
+      anchorQuality:
+        activeCitation?.display.anchorQuality ?? sessionEntry?.display.anchorQuality ?? "page-only",
+      ...(sourceLabel === undefined ? {} : { sourceLabel }),
+      ...(pageNumber === undefined ? {} : { pageNumber }),
+      ...(pageLabel === undefined ? {} : { pageLabel }),
+    };
+  }, [
+    activeCitation?.display.anchorQuality,
+    cfg.documentLabel,
+    cfg.pageLabel,
+    cfg.pageNumber,
+    cfg.sourceLabel,
+    sessionEntry,
+  ]);
 
   const zoomMode = readZoomMode(cfg.zoomMode);
   const zoomValue = clampScale(readNumber(cfg.zoomValue, 1));
@@ -379,6 +393,8 @@ export function PdfCitationPreviewWindow({
       retryable: readOptionalBoolean(cfg.failureRetryable) ?? false,
     };
   }, [cfg.failureMessage, cfg.failureRetryable, cfg.failureTitle]);
+  const restoredSafeShell = sessionEntry === undefined;
+  const scalarIntentControlsEnabled = doc !== null || restoredSafeShell;
   const currentPageSize = measuredSizes[currentPage] ?? defaultPageSize;
   const effectiveScale = useMemo((): number => {
     if (currentPageSize === null) return zoomValue;
@@ -424,14 +440,7 @@ export function PdfCitationPreviewWindow({
   useEffect(() => {
     const sessionHandle = sessionEntry?.session.handle;
     if (sessionHandle === undefined) {
-      setFailure(
-        failureOverride ?? {
-          title: "Preview unavailable",
-          message:
-            "Open this viewer from a verified citation preview session. Raw paths, URLs, and file handles are not accepted here.",
-          retryable: false,
-        },
-      );
+      setFailure(restoredShellFailure(failureOverride));
       setDefaultPageSize(null);
       setDoc(null);
       setNumPages(0);
@@ -463,7 +472,7 @@ export function PdfCitationPreviewWindow({
       .then(async (pdf) => {
         if (pdf === null) return;
         if (disposed) {
-          await pdf.destroy();
+          await pdf.destroy?.();
           return;
         }
         const firstPage = await pdf.getPage(1);
@@ -492,7 +501,7 @@ export function PdfCitationPreviewWindow({
 
   useEffect(() => {
     return () => {
-      void doc?.destroy();
+      void doc?.destroy?.();
     };
   }, [doc]);
 
@@ -584,9 +593,11 @@ export function PdfCitationPreviewWindow({
     });
     if (nextCitation.display.pageNumber !== undefined) {
       requestAnimationFrame(() => {
-        pageRefs.current.get(nextCitation.display.pageNumber ?? currentPageRef.current)?.scrollIntoView({
-          block: "start",
-        });
+        pageRefs.current
+          .get(nextCitation.display.pageNumber ?? currentPageRef.current)
+          ?.scrollIntoView({
+            block: "start",
+          });
       });
     }
   };
@@ -629,9 +640,13 @@ export function PdfCitationPreviewWindow({
               <button
                 type="button"
                 className="tm-action pdfv-back-to-chat"
-                aria-describedby={backToChat.reason === undefined ? undefined : backToChatDescriptionId}
+                aria-describedby={
+                  backToChat.reason === undefined ? undefined : backToChatDescriptionId
+                }
                 aria-disabled={backToChat.enabled ? undefined : "true"}
-                data-tip={backToChat.reason ?? "Restore the originating chat and highlight this citation"}
+                data-tip={
+                  backToChat.reason ?? "Restore the originating chat and highlight this citation"
+                }
                 onClick={() => {
                   if (!backToChat.enabled) return;
                   activatePdfCitationPreviewBackToChat(windowId, { focusWindow, restoreWindow });
@@ -650,7 +665,10 @@ export function PdfCitationPreviewWindow({
           {citationContext !== undefined && citationContext.citations.length > 1 ? (
             <div className="pdfv-context-rail">
               <span className="grounded-citations-label">Same answer citations</span>
-              <ul className="grounded-citations pdfv-context-list" aria-label="Same answer citations">
+              <ul
+                className="grounded-citations pdfv-context-list"
+                aria-label="Same answer citations"
+              >
                 {citationContext.citations.map((citation) => {
                   const active = citation.citation.stableId === citationContext.activeStableId;
                   return (
@@ -741,7 +759,9 @@ export function PdfCitationPreviewWindow({
           <button
             type="button"
             className="pdfv-btn tm-action"
-            disabled={doc === null || (zoomMode === "manual" && zoomValue <= MIN_SCALE)}
+            disabled={
+              !scalarIntentControlsEnabled || (zoomMode === "manual" && zoomValue <= MIN_SCALE)
+            }
             onClick={() =>
               updateCfg({
                 zoomMode: "manual",
@@ -755,7 +775,9 @@ export function PdfCitationPreviewWindow({
           <button
             type="button"
             className="pdfv-btn tm-action"
-            disabled={doc === null || (zoomMode === "manual" && zoomValue >= MAX_SCALE)}
+            disabled={
+              !scalarIntentControlsEnabled || (zoomMode === "manual" && zoomValue >= MAX_SCALE)
+            }
             onClick={() =>
               updateCfg({
                 zoomMode: "manual",
@@ -769,7 +791,7 @@ export function PdfCitationPreviewWindow({
           <button
             type="button"
             className="pdfv-btn tm-action"
-            disabled={doc === null}
+            disabled={!scalarIntentControlsEnabled}
             data-selected={zoomMode === "fit-width" ? "true" : "false"}
             onClick={() => updateCfg({ zoomMode: "fit-width" })}
           >
@@ -778,7 +800,7 @@ export function PdfCitationPreviewWindow({
           <button
             type="button"
             className="pdfv-btn tm-action"
-            disabled={doc === null}
+            disabled={!scalarIntentControlsEnabled}
             data-selected={zoomMode === "fit-page" ? "true" : "false"}
             onClick={() => updateCfg({ zoomMode: "fit-page" })}
           >
@@ -787,7 +809,7 @@ export function PdfCitationPreviewWindow({
           <button
             type="button"
             className="pdfv-btn tm-action"
-            disabled={doc === null}
+            disabled={!scalarIntentControlsEnabled}
             onClick={() => updateCfg({ rotation: normalizeRotation(rotation - 90) })}
           >
             <span>Rotate left</span>
@@ -795,7 +817,7 @@ export function PdfCitationPreviewWindow({
           <button
             type="button"
             className="pdfv-btn tm-action"
-            disabled={doc === null}
+            disabled={!scalarIntentControlsEnabled}
             onClick={() => updateCfg({ rotation: normalizeRotation(rotation + 90) })}
           >
             <span>Rotate right</span>
