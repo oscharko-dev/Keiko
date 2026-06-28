@@ -170,12 +170,10 @@ function connectorNodeStateLabel(state: string | undefined): string {
 }
 
 function KnowledgeConnectorNode({
-  selectedId,
   selectedLabel,
   selectedState,
   onManageConnectors,
 }: {
-  readonly selectedId: string;
   readonly selectedLabel: string | undefined;
   readonly selectedState: string | undefined;
   readonly onManageConnectors: () => void;
@@ -269,7 +267,6 @@ export function ConnectorPickerWidget({
   if (isConnectorNode) {
     return (
       <KnowledgeConnectorNode
-        selectedId={selectedId}
         selectedLabel={selectedLabel}
         selectedState={selectedState}
         onManageConnectors={onManageConnectors}

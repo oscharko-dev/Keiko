@@ -8,7 +8,6 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "../../../../../lib/api";
-import { formatMs } from "../../../../../lib/format";
 import {
   cancelCommandRun,
   commandEventsUrl,

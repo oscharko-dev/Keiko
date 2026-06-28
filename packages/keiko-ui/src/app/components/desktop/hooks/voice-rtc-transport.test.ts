@@ -251,13 +251,6 @@ describe("createBrowserVoiceRtcTransport", () => {
     const stateChanges: RTCPeerConnectionState[] = [];
     session.onConnectionStateChange((s) => stateChanges.push(s));
 
-    // The FakePeerConnection is captured inside the transport; find it via the stub.
-    const pcInstances = (RTCPeerConnection as unknown as { instances: FakePeerConnection[] })
-      .instances;
-    // If instances aren't tracked, simulate via the stored pc reference through a different approach:
-    // We patched onconnectionstatechange in buildSession, so fire the closure directly.
-    // Instead, grab the latest instance from the constructor stub by patching it.
-    // For simplicity, test the ontrack path via simulateRemoteTrack if we have the instance.
     // Since FakePeerConnection is a class we can introspect, this test verifies callback wiring
     // by using a spy on the callback itself.
     expect(stateChanges).toHaveLength(0);

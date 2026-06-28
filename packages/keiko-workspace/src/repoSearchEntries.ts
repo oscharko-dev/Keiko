@@ -54,7 +54,6 @@ function allowedByFilters(relPath: string): boolean {
 
 function handleDirectoryEntry(
   walk: EntryWalk,
-  absoluteDir: string,
   dirRel: string,
   entry: WorkspaceDirEntry,
   depth: number,
@@ -94,7 +93,7 @@ function walkEntryDirectory(
       walk.truncated = true;
       return;
     }
-    handleDirectoryEntry(walk, absoluteDir, dirRel, entry, depth);
+    handleDirectoryEntry(walk, dirRel, entry, depth);
   }
 }
 

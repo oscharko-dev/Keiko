@@ -13,7 +13,6 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
-import { defaultLayout } from "../windows/connectionUtils";
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";

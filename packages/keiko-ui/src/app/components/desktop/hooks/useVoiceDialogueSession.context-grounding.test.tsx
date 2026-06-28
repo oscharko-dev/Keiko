@@ -468,7 +468,7 @@ describe("voice dialogue context grounding (Issue #1561)", () => {
   it("AC3 — the assistant audio is synthesized from the exact settled answer text", async () => {
     bootstrapMocks(chat());
     const synthesize = vi.fn(async () => ({ audio: btoa("AUDIO"), mimeType: "audio/mpeg" }));
-    const rendered = await renderIntegration(
+    await renderIntegration(
       stableProps("anything", {
         synthesize,
         answerText: "The deploy failed at step 7 due to a timeout.",

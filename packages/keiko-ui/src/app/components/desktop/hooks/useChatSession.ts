@@ -1323,7 +1323,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const sendGrounded = useCallback(
     async (
       chat: Chat,
-      project: ProjectWithAvailability,
+      _project: ProjectWithAvailability,
       content: string,
       optimisticId: string,
       modelId: string,

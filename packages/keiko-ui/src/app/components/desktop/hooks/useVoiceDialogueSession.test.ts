@@ -4,7 +4,7 @@
 // committed text sent via the existing chat lifecycle, AC2); barge-in routing to playback + chat (AC1);
 // and the idempotent master cleanup on stop / unmount / capability loss (AC3).
 
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCapabilityResolution } from "@/lib/types";
 import type { DictationRecorder, DictationSession } from "./dictation-recorder";

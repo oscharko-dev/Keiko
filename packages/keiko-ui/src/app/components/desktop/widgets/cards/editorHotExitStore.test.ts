@@ -10,16 +10,16 @@ import {
   writeEditorHotExitSnapshot,
 } from "./editorHotExitStore";
 
-type RequestHandler<T> = ((event?: Event) => void) | null;
+type RequestHandler = ((event?: Event) => void) | null;
 type FakeOpenRequest = FakeIdbRequest<FakeDatabase> & {
-  onupgradeneeded: RequestHandler<FakeDatabase>;
+  onupgradeneeded: RequestHandler;
 };
 
 class FakeIdbRequest<T = unknown> {
   result!: T;
   error: Error | null = null;
-  onsuccess: RequestHandler<T> = null;
-  onerror: RequestHandler<T> = null;
+  onsuccess: RequestHandler = null;
+  onerror: RequestHandler = null;
 }
 
 class FakeObjectStore {
@@ -58,9 +58,9 @@ class FakeObjectStore {
 }
 
 class FakeTransaction {
-  oncomplete: RequestHandler<void> = null;
-  onerror: RequestHandler<void> = null;
-  onabort: RequestHandler<void> = null;
+  oncomplete: RequestHandler = null;
+  onerror: RequestHandler = null;
+  onabort: RequestHandler = null;
   error: Error | null = null;
 
   constructor(private readonly records: Map<string, unknown>) {}
@@ -150,9 +150,9 @@ class RequestErrorObjectStore {
 }
 
 class RequestErrorTransaction {
-  oncomplete: RequestHandler<void> = null;
-  onerror: RequestHandler<void> = null;
-  onabort: RequestHandler<void> = null;
+  oncomplete: RequestHandler = null;
+  onerror: RequestHandler = null;
+  onabort: RequestHandler = null;
   error: Error | null = null;
 
   objectStore(): RequestErrorObjectStore {
@@ -189,9 +189,9 @@ class AbortObjectStore {
 }
 
 class AbortTransaction {
-  oncomplete: RequestHandler<void> = null;
-  onerror: RequestHandler<void> = null;
-  onabort: RequestHandler<void> = null;
+  oncomplete: RequestHandler = null;
+  onerror: RequestHandler = null;
+  onabort: RequestHandler = null;
   error: Error | null = null;
 
   objectStore(): AbortObjectStore {
