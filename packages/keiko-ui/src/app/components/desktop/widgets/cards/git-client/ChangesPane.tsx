@@ -126,7 +126,7 @@ export function ChangesPane({
 
   const onTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
     const index = TABS.findIndex((entry) => entry.id === tab);
-    let nextIndex = index;
+    let nextIndex: number;
     if (event.key === "ArrowRight") nextIndex = (index + 1) % TABS.length;
     else if (event.key === "ArrowLeft") nextIndex = (index - 1 + TABS.length) % TABS.length;
     else if (event.key === "Home") nextIndex = 0;
