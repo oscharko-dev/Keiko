@@ -260,7 +260,7 @@ describe("useWorkspace wheel zoom routing", () => {
     });
 
     callbacks[0]?.(0);
-    callbacks[1]?.(140);
+    callbacks[1]?.(16);
 
     await waitFor(() => {
       expect(screen.getByTestId("view-x")).toHaveTextContent("-20");

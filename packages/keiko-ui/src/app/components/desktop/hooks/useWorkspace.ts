@@ -263,6 +263,7 @@ interface UsePanZoomArgs {
 
 interface QueueViewOptions {
   readonly smoothnessScale?: number;
+  readonly minDurationMs?: number;
 }
 
 interface PanZoomResult {
@@ -345,6 +346,7 @@ function usePanZoom({
   renderedViewRef.current = view;
   const pendingViewRef = useRef<View | null>(null);
   const pendingViewSmoothnessScaleRef = useRef(1);
+  const pendingViewMinDurationRef = useRef(MIN_CAMERA_ANIMATION_DURATION_MS);
   const frameRef = useRef<number | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const animationStartRef = useRef<View>(view);
@@ -396,7 +398,7 @@ function usePanZoom({
   );
 
   const animateView = useCallback(
-    (target: View, smoothnessScale = 1): void => {
+    (target: View, smoothnessScale = 1, minDurationMs = MIN_CAMERA_ANIMATION_DURATION_MS): void => {
       const effectiveSmoothness = Math.min(
         100,
         Math.max(0, cameraSmoothness * smoothnessScale),
@@ -416,10 +418,8 @@ function usePanZoom({
       }
 
       const durationMs =
-        MIN_CAMERA_ANIMATION_DURATION_MS +
-        ((MAX_CAMERA_ANIMATION_DURATION_MS - MIN_CAMERA_ANIMATION_DURATION_MS) *
-          effectiveSmoothness) /
-          100;
+        minDurationMs +
+        ((MAX_CAMERA_ANIMATION_DURATION_MS - minDurationMs) * effectiveSmoothness) / 100;
       const now =
         typeof performance !== "undefined" && typeof performance.now === "function"
           ? performance.now()
@@ -474,9 +474,11 @@ function usePanZoom({
       const base = pendingViewRef.current ?? viewRef.current;
       const resolved = typeof next === "function" ? next(base) : next;
       const smoothnessScale = options.smoothnessScale ?? 1;
+      const minDurationMs = options.minDurationMs ?? MIN_CAMERA_ANIMATION_DURATION_MS;
       viewRef.current = resolved;
       pendingViewRef.current = resolved;
       pendingViewSmoothnessScaleRef.current = smoothnessScale;
+      pendingViewMinDurationRef.current = minDurationMs;
       scheduleViewPersist();
 
       if (
@@ -493,9 +495,11 @@ function usePanZoom({
         frameRef.current = null;
         const pending = pendingViewRef.current;
         const pendingSmoothnessScale = pendingViewSmoothnessScaleRef.current;
+        const pendingMinDurationMs = pendingViewMinDurationRef.current;
         pendingViewRef.current = null;
         pendingViewSmoothnessScaleRef.current = 1;
-        if (pending !== null) animateView(pending, pendingSmoothnessScale);
+        pendingViewMinDurationRef.current = MIN_CAMERA_ANIMATION_DURATION_MS;
+        if (pending !== null) animateView(pending, pendingSmoothnessScale, pendingMinDurationMs);
       });
     },
     [animateView, scheduleViewPersist, setView],
@@ -537,6 +541,7 @@ function usePanZoom({
       e.preventDefault();
       const delta = normalizeWheelDelta(e);
       queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }), {
+        minDurationMs: 0,
         smoothnessScale: PAN_CAMERA_SMOOTHNESS_SCALE,
       });
     };
@@ -583,6 +588,7 @@ function usePanZoom({
   const panBy = useCallback(
     (dx: number, dy: number): void =>
       queueView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }), {
+        minDurationMs: 0,
         smoothnessScale: PAN_CAMERA_SMOOTHNESS_SCALE,
       }),
     [queueView],
