@@ -300,9 +300,11 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
   await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toBeVisible();
-  const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
-  await expect(interrupt).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
 
   await page.screenshot({
@@ -321,11 +323,10 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   await expect(composer).toHaveValue("");
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
-  // Leaving removes the Realtime controls, flips the switch off, and runs the master cleanup; the
-  // composer stays fully usable.
-  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
-  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  // Leaving is the same Keiko-logo switch: no separate Stop / Leave panel exists.
+  await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
   await expect(composer).toBeVisible();
 }
 
@@ -359,9 +360,10 @@ async function micLifecycleFlow(page: Page): Promise<void> {
     fullPage: true,
   });
 
-  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
+  await dialogSwitch.click();
   await expect.poll(() => micStat(page, "stopped")).toBeGreaterThanOrEqual(1);
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
 }
@@ -389,13 +391,11 @@ async function unavailableProfileFlow(page: Page, capability: unknown): Promise<
   await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
 }
 
-// Issue #1563 — voice selection + live session status browser evidence.
+// Issue #1563 — active-session composer evidence.
 //
-// Proves, in the real browser, two surfaces the evaluation's accessibility and lifecycle dimensions
-// depend on: the voice/persona selector is operable and its visible active-voice label updates, and the
-// live-region status strip announces the listening state when a turn begins. Captures the #1563 evidence
-// screenshot of the active evaluation surface.
-async function voiceSelectionAndStatusFlow(page: Page): Promise<void> {
+// Voice selection now lives in Settings > General. The active composer remains a clean dialogue surface:
+// the Keiko-logo switch plus the microphone mute control are the only voice-dialogue controls.
+async function activeComposerControlsFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit());
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
   await openComposer(page);
@@ -404,15 +404,11 @@ async function voiceSelectionAndStatusFlow(page: Page): Promise<void> {
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
-  // Voice selection: the persona selector is operable, and choosing a voice updates its visible
-  // active-voice label (the accessible name is the "Voice profile: <persona>" label).
-  const profile = page.getByRole("combobox", { name: /^Voice profile/u });
-  await expect(profile).toBeVisible();
-  await profile.click();
-  await page.getByRole("option", { name: "Neutral voice" }).click();
-  await expect(page.getByRole("combobox", { name: "Voice profile: Neutral voice" })).toBeVisible();
-
   await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
 
   await page.screenshot({
     path: "docs/voice/evidence/1563-dialogue-evaluation.png",
@@ -420,8 +416,9 @@ async function voiceSelectionAndStatusFlow(page: Page): Promise<void> {
   });
 
   // Leave returns to a clean, text-capable composer (master cleanup).
-  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
+  await dialogSwitch.click();
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
 }
 
@@ -443,31 +440,11 @@ test("voice dialogue @smoke — full-realtime without WebRTC offers no dialogue 
   await unavailableProfileFlow(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
 });
 
-test("voice dialogue @smoke — voice selection updates the active voice and status announces readiness (AC1/AC4)", async ({
+test("voice dialogue @smoke — active composer keeps only switch and mic mute visible (AC1/AC4)", async ({
   page,
 }) => {
-  await voiceSelectionAndStatusFlow(page);
+  await activeComposerControlsFlow(page);
 });
-
-// Issue #1564, Epic #1556 — end-to-end acceptance evidence for ALL THREE product voice personas.
-//
-// Deliverable 1 of the closure gate asks for end-to-end acceptance evidence for dialog mode with male,
-// female, AND neutral voice choices (the existing #1563 selection smoke only exercised 'neutral'). This
-// walks every persona through the real persona selector in the real browser, asserts the visible
-// active-voice label updates for each, captures a per-persona evidence screenshot, and then proves the
-// selection PERSISTS across a full page reload (Epic #1556 AC3): the content-free persona enum is stored
-// in localStorage (keiko.voice.dialog.persona) and restored on the next load. The deep persona->voiceId
-// resolution stays server-side and is proven in the required `ci` keiko-ui + keiko-server suites; this
-// smoke proves the user-facing selectability and persistence of all three personas in the real app.
-const PERSONA_ACCEPTANCE: readonly {
-  readonly slug: string;
-  readonly option: string;
-  readonly label: string;
-}[] = [
-  { slug: "male", option: "Male voice", label: "Voice profile: Male voice" },
-  { slug: "female", option: "Female voice", label: "Voice profile: Female voice" },
-  { slug: "neutral", option: "Neutral voice", label: "Voice profile: Neutral voice" },
-];
 
 async function enterDialogue(page: Page): Promise<void> {
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
@@ -478,52 +455,37 @@ async function enterDialogue(page: Page): Promise<void> {
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 }
 
-async function selectPersona(page: Page, option: string): Promise<void> {
-  // exact: true — "Male voice" is a substring of "Female voice", so a non-exact name matches both.
-  await page.getByRole("combobox", { name: /^Voice profile/u }).click();
-  await page.getByRole("option", { name: option, exact: true }).click();
-}
-
-async function personaAcceptanceFlow(page: Page): Promise<void> {
+async function personaStorageFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit());
   await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
   await openComposer(page);
-  await enterDialogue(page);
-
-  // Every persona is selectable, and choosing it updates the visible active-voice label (AC3/TO2).
-  for (const { slug, option, label } of PERSONA_ACCEPTANCE) {
-    await selectPersona(page, option);
-    await expect(page.getByRole("combobox", { name: label })).toBeVisible();
-    await page.screenshot({
-      path: `docs/voice/evidence/1564-persona-${slug}.png`,
-      fullPage: true,
-    });
-  }
-
-  // AC3 persistence: select 'male' and confirm the chosen persona is written to localStorage as the
-  // content-free enum (never a voice id), keyed exactly as the production hook reads it.
-  await selectPersona(page, "Male voice");
-  await expect(page.getByRole("combobox", { name: "Voice profile: Male voice" })).toBeVisible();
+  await page.evaluate(() => {
+    window.localStorage.setItem("keiko.voice.dialog.persona", "male");
+  });
   expect(await page.evaluate(() => window.localStorage.getItem("keiko.voice.dialog.persona"))).toBe(
     "male",
   );
+  await enterDialogue(page);
+  await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
 
-  // Leaving returns a clean, text-capable composer (master cleanup) without clearing the preference.
-  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
-  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  await page.screenshot({
+    path: "docs/voice/evidence/1564-persona-storage.png",
+    fullPage: true,
+  });
+
+  const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await dialogSwitch.click();
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
 
-  // The persona preference survives a full page reload (the persisted enum round-trips a real load).
-  // UI restoration of the persisted persona on re-mount is pinned deterministically in the required `ci`
-  // keiko-ui suite (useVoiceDialogMode.test.ts); here we prove the persisted value itself is durable.
   await page.reload();
   expect(await page.evaluate(() => window.localStorage.getItem("keiko.voice.dialog.persona"))).toBe(
     "male",
   );
 }
 
-test("voice dialogue @smoke — male, female, and neutral voices are all selectable and persist across reload (AC3)", async ({
+test("voice dialogue @smoke — persona preference stays content-free and out of the active composer (AC3)", async ({
   page,
 }) => {
-  await personaAcceptanceFlow(page);
+  await personaStorageFlow(page);
 });
