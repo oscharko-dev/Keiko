@@ -63,6 +63,9 @@ export type WindowType =
   | "figmaJson"
   // A scoped, image-only Figma screen-render source window derived from a Figma Snapshot view.
   | "figmaImage"
+  // Epic #1631, Issue #1634 — passive PDF viewer window backed only by verified #1633 preview
+  // sessions. Not palette-launchable: opened programmatically from a citation preview action.
+  | "pdfCitationPreview"
   // Epic #470, Issue #475 — Git flow surface. A per-project card walking
   // branch → staging → commit (live preview + message-policy + policy decision) entirely through the
   // governed mutation kernel.
@@ -597,6 +600,16 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 420,
     min: { w: 300, h: 240 },
     tiny: { w: 240, h: 180 },
+  },
+  pdfCitationPreview: {
+    title: "PDF Preview",
+    icon: "file",
+    accent: true,
+    desc: "Read a verified PDF preview in Keiko",
+    w: 880,
+    h: 680,
+    min: { w: 440, h: 320 },
+    tiny: { w: 320, h: 220 },
   },
   // Epic #470, Issue #475 — Git flow. Branch → staging → commit, walked entirely
   // through the governed mutation kernel. Reads the active project root from cfg (like terminal).

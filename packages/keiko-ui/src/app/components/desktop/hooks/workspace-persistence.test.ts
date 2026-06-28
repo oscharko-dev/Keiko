@@ -25,6 +25,11 @@ describe("workspace-persistence", () => {
   it("does not persist transient window types into the durable local snapshot", () => {
     const persisted = sanitizePersistedWindows([
       win({ id: "browser-1", type: "browser", cfg: { url: "https://example.test" } }),
+      win({
+        id: "pdf-preview-1",
+        type: "pdfCitationPreview",
+        cfg: { documentLabel: "Policy wording.pdf", currentPage: 7 },
+      }),
       win({ id: "review-1", type: "review", cfg: { runId: "run-123" } }),
     ]);
 
