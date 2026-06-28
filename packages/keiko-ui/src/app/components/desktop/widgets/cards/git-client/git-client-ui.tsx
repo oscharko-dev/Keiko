@@ -1,12 +1,14 @@
 "use client";
 
 // Shared presentational primitives for the Git client staging + commit surface (Issue #1575,
-// Epic #1571). Carried forward verbatim in behaviour from the removed GovernedGitFlowCard
-// (contract §2 "replace"): the status pill, the uppercase field label, the typed-code list, and
-// the mutation-outcome banner. Every primitive conveys state through text + icon, never colour
-// alone (WCAG 1.4.1), and styles compose existing globals.css tokens via inline styles (ADR-0051).
+// Epic #1571). Carried forward in behaviour from the removed GovernedGitFlowCard (contract §2
+// "replace"): the status pill, the uppercase field label, the typed-code list, and the
+// mutation-outcome banner. Every primitive conveys state through text + icon, never colour alone
+// (WCAG 1.4.1), and styles compose existing globals.css tokens via inline styles (ADR-0051). The
+// "Git Window" redesign migrated the palette to the design-system tokens (--ok/--warn/--danger/
+// --info, --fg*, --inset, --line).
 
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Icons } from "../../../Icons";
 import { STATUS_LABEL, violationLabel } from "./git-client-seam";
 import type { GitMutationOutcome } from "./git-client-seam";
@@ -17,17 +19,17 @@ export type PillTone = "neutral" | "accent" | "success" | "warning" | "danger" |
 function toneColor(tone: PillTone): string {
   switch (tone) {
     case "success":
-      return "var(--feedback-success)";
+      return "var(--ok)";
     case "warning":
-      return "var(--feedback-warning)";
+      return "var(--warn)";
     case "danger":
-      return "var(--feedback-danger)";
+      return "var(--danger)";
     case "info":
-      return "var(--feedback-info)";
+      return "var(--info)";
     case "accent":
-      return "var(--text-accent)";
+      return "var(--accent-text)";
     case "neutral":
-      return "var(--text-secondary)";
+      return "var(--fg-muted)";
   }
 }
 
@@ -44,17 +46,15 @@ export function StatusPill({
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: "var(--space-3)",
+        gap: 6,
         width: "fit-content",
         padding: "3px 10px",
-        borderRadius: "var(--radius-pill)",
+        borderRadius: 999,
         border: `1px solid color-mix(in oklch, ${color} 42%, transparent)`,
         background:
-          tone === "neutral"
-            ? "var(--surface-inset)"
-            : `color-mix(in oklch, ${color} 12%, transparent)`,
+          tone === "neutral" ? "var(--inset)" : `color-mix(in oklch, ${color} 12%, transparent)`,
         color,
-        font: "var(--weight-semibold) var(--text-caption) var(--font-ui)",
+        font: "600 11px var(--font-ui)",
         whiteSpace: "nowrap",
       }}
     >
@@ -64,33 +64,6 @@ export function StatusPill({
       />
       {children}
     </span>
-  );
-}
-
-export function FieldLabel({
-  label,
-  htmlFor,
-  children,
-}: {
-  readonly label: string;
-  readonly htmlFor: string;
-  readonly children: ReactNode;
-}): ReactNode {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", minWidth: 0 }}>
-      <label
-        htmlFor={htmlFor}
-        style={{
-          font: "var(--weight-semibold) var(--text-caption) var(--font-ui)",
-          letterSpacing: "0.02em",
-          textTransform: "uppercase",
-          color: "var(--text-faint)",
-        }}
-      >
-        {label}
-      </label>
-      {children}
-    </div>
   );
 }
 
@@ -110,27 +83,18 @@ export function CodeList({
     <div data-testid={testid}>
       <p
         style={{
-          margin: "0 0 var(--space-2)",
-          font: "var(--weight-semibold) var(--text-caption) var(--font-ui)",
-          color: "var(--text-faint)",
+          margin: "0 0 6px",
+          font: "600 11px var(--font-ui)",
+          color: "var(--fg-faint)",
           textTransform: "uppercase",
           letterSpacing: "0.03em",
         }}
       >
         {label}
       </p>
-      <ul
-        style={{
-          margin: 0,
-          paddingLeft: "var(--space-7)",
-          font: "var(--text-body-sm) var(--font-ui)",
-        }}
-      >
+      <ul style={{ margin: 0, paddingLeft: 18, font: "400 12px var(--font-ui)" }}>
         {items.map((item) => (
-          <li
-            key={item.key}
-            style={{ color: "var(--text-primary)", lineHeight: "var(--leading-normal)" }}
-          >
+          <li key={item.key} style={{ color: "var(--fg)", lineHeight: 1.5 }}>
             <Icons.info size={11} /> {item.text}
           </li>
         ))}
@@ -164,14 +128,14 @@ export function MutationOutcome({
         role="alert"
         style={{
           ...PREVIEW_STYLE,
-          borderColor: "color-mix(in oklch, var(--feedback-danger) 48%, var(--border-default))",
-          background: "color-mix(in oklch, var(--feedback-danger) 10%, var(--surface-primary))",
+          boxShadow: "inset 0 0 0 1px color-mix(in oklch, var(--danger) 48%, var(--line))",
+          background: "color-mix(in oklch, var(--danger) 10%, var(--inset))",
         }}
       >
         <StatusPill tone="danger">
           <Icons.info size={11} /> Error
         </StatusPill>
-        <p style={{ ...SUBTLE_TEXT_STYLE, color: "var(--text-primary)" }}>{error}</p>
+        <p style={{ ...SUBTLE_TEXT_STYLE, color: "var(--fg)" }}>{error}</p>
       </div>
     );
   }
@@ -184,45 +148,30 @@ export function MutationOutcome({
     ...(outcome.executionErrorCode !== undefined ? [`error: ${outcome.executionErrorCode}`] : []),
     ...(outcome.messageViolations ?? []).map((v) => violationLabel(v)),
   ];
-  const borderColor: CSSProperties["borderColor"] =
+  const ringColor =
     tone === "success"
-      ? "color-mix(in oklch, var(--feedback-success) 42%, var(--border-default))"
+      ? "color-mix(in oklch, var(--ok) 42%, var(--line))"
       : tone === "warning"
-        ? "color-mix(in oklch, var(--feedback-warning) 42%, var(--border-default))"
+        ? "color-mix(in oklch, var(--warn) 42%, var(--line))"
         : tone === "danger"
-          ? "color-mix(in oklch, var(--feedback-danger) 42%, var(--border-default))"
-          : "var(--border-subtle)";
+          ? "color-mix(in oklch, var(--danger) 42%, var(--line))"
+          : "var(--line)";
   return (
     <div
       data-testid={testid}
       role={tone === "danger" ? "alert" : "status"}
-      style={{ ...PREVIEW_STYLE, borderColor }}
+      style={{ ...PREVIEW_STYLE, boxShadow: `inset 0 0 0 1px ${ringColor}` }}
     >
       <StatusPill tone={tone}>
         <Icons.check size={11} /> {STATUS_LABEL[outcome.status]}
       </StatusPill>
-      <p
-        style={{
-          margin: 0,
-          font: "var(--weight-semibold) var(--text-body-sm) var(--font-ui)",
-          color: "var(--text-primary)",
-        }}
-      >
+      <p style={{ margin: 0, font: "600 13px var(--font-ui)", color: "var(--fg)" }}>
         {outcome.actionKind}: {STATUS_LABEL[outcome.status]}
       </p>
       {codes.length > 0 ? (
-        <ul
-          style={{
-            margin: 0,
-            paddingLeft: "var(--space-7)",
-            font: "var(--text-caption) var(--font-ui)",
-          }}
-        >
+        <ul style={{ margin: 0, paddingLeft: 18, font: "400 11px var(--font-ui)" }}>
           {codes.map((code) => (
-            <li
-              key={code}
-              style={{ color: "var(--text-secondary)", lineHeight: "var(--leading-normal)" }}
-            >
+            <li key={code} style={{ color: "var(--fg-muted)", lineHeight: 1.5 }}>
               {code}
             </li>
           ))}

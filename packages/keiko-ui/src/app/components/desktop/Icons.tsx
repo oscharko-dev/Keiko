@@ -272,6 +272,75 @@ export const Icons = {
     </Ico>
   ),
   diff: (p: IcoProps): ReactNode => <Ico {...p} d="M12 4v6M9 7h6M5 17h14" />,
+  /* Lift: commit node (open ring seam at top) on the history line. Geometry mirrors lift-glyphs.js. */
+  commit: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M12.99 8.75 A3.4 3.4 0 1 1 11.01 8.75" />
+      <path d="M3 12 H8.6 M15.4 12 H21" />
+    </Ico>
+  ),
+  /* Lift: pull request — source node, target node, and the merge arrow into the branch. */
+  pullRequest: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <circle cx="6.5" cy="6" r="2" />
+      <circle cx="6.5" cy="18" r="2" />
+      <circle cx="17.5" cy="18" r="2" />
+      <path d="M6.5 8 V16" />
+      <path d="M17.5 16 V11 A3 3 0 0 0 14.5 8 H11.6" />
+      <path d="M13.6 6 L11.2 8.4 L13.6 10.8" />
+    </Ico>
+  ),
+  /* Lift: merge — two source nodes curving into a single target node. */
+  merge: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <circle cx="6.5" cy="5.5" r="2" />
+      <circle cx="17.5" cy="5.5" r="2" />
+      <circle cx="12" cy="18.5" r="2" />
+      <path d="M6.5 7.5 C 6.5 12 9 13.5 12 16.5" />
+      <path d="M17.5 7.5 C 17.5 12 15 13.5 12 16.5" />
+    </Ico>
+  ),
+  /* Lift: download / pull — shaft, arrowhead, baseline. */
+  download: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M12 4 V15" />
+      <path d="M7.5 10.5 L12 15 L16.5 10.5" />
+      <path d="M5 19.5 H19" />
+    </Ico>
+  ),
+  /* Lift: code — angle brackets + slash. */
+  code: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M8.5 8 L4.5 12 L8.5 16" />
+      <path d="M15.5 8 L19.5 12 L15.5 16" />
+      <path d="M13.5 5.5 L10.5 18.5" />
+    </Ico>
+  ),
+  /* Lift: regenerate — two seam'd arcs with arrowheads (refresh, with the lift gap). */
+  regenerate: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M6 9.5 A6.8 6.8 0 0 1 18.2 8.2" />
+      <path d="M18.6 4.2 L18.4 8.4 L14.3 7.7" />
+      <path d="M18 14.5 A6.8 6.8 0 0 1 5.8 15.8" />
+      <path d="M5.4 19.8 L5.6 15.6 L9.7 16.3" />
+    </Ico>
+  ),
+  /* Lift: external link — arrow out of a seam'd box. */
+  external: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M14 4.8 H19.2 V10" />
+      <path d="M19.2 4.8 L11 13" />
+      <path d="M17 13.5 V18 a1.6 1.6 0 0 1 -1.6 1.6 H6.6 A1.6 1.6 0 0 1 5 18 V9.2 A1.6 1.6 0 0 1 6.6 7.6 H11" />
+    </Ico>
+  ),
+  /* Lift: link — two rounded chain halves with the connector. */
+  link: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M9.5 14.5 L14.5 9.5" />
+      <path d="M11 7.8 L12.8 6 a3.4 3.4 0 0 1 4.8 4.8 L15.8 12.6" />
+      <path d="M13 16.2 L11.2 18 a3.4 3.4 0 0 1 -4.8 -4.8 L8.2 11.4" />
+    </Ico>
+  ),
   /* Lift: top node is an open ring (seam); the two child nodes stay closed. */
   branch: (p: IcoProps): ReactNode => (
     <Ico {...p}>

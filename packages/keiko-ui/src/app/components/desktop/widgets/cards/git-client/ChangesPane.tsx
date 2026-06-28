@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type {
   GitChangedFile,
   GitHistoryEntry,
@@ -13,15 +13,23 @@ import type { GitMutationOutcome } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
 import { HistoryPane } from "./HistoryPane";
 import {
-  badgeStyle,
   CHANGES_HEADER_STYLE,
   COMPACT_BTN,
   disabledStyle,
   EMPTY_STATE_STYLE,
-  FILE_ROW_SELECTED_STYLE,
-  FILE_ROW_STYLE,
-  FILE_SELECT_BTN_STYLE,
+  FILE_LIST_STYLE,
+  FILE_NAME_STYLE,
+  FILE_PATH_STYLE,
+  fileRowStyle,
+  stageBoxStyle,
+  statusSquareStyle,
   SUBTLE_TEXT_STYLE,
+  SUMMARY_CHECK_STYLE,
+  SUMMARY_STRIP_STYLE,
+  TABS_ROW_STYLE,
+  tabBadgeStyle,
+  tabButtonStyle,
+  tabUnderlineStyle,
 } from "./git-client-styles";
 
 export type ChangesTab = "changes" | "history";
@@ -29,21 +37,9 @@ export type ChangesTab = "changes" | "history";
 // Single-char status glyph, reused vocabulary from FilesWidget gitChangeLabel (contract §2 extend).
 function gitChangeLabel(change: GitChangedFile): string {
   if (change.conflicted) return "U";
-  if (change.untracked) return "?";
+  if (change.untracked) return "A";
   if (change.indexStatus !== " ") return change.indexStatus;
   return change.worktreeStatus;
-}
-
-// The indicator badge for a row (text + colour, never colour alone). Conflict and untracked take
-// precedence; otherwise the staged / partially-staged state is surfaced for tracked changes.
-function changeBadge(
-  change: GitChangedFile,
-): { readonly text: string; readonly tone: Parameters<typeof badgeStyle>[0] } | null {
-  if (change.conflicted) return { text: "Conflict", tone: "danger" };
-  if (change.untracked) return { text: "Untracked", tone: "warning" };
-  if (change.staged && change.unstaged) return { text: "Partially staged", tone: "accent" };
-  if (change.staged) return { text: "Staged", tone: "accent" };
-  return null;
 }
 
 function gitStatusCodeLabel(status: string): string {
@@ -68,6 +64,13 @@ function gitChangeStatusLabel(change: GitChangedFile): string {
   if (staged !== null) return `staged ${staged}`;
   if (worktree !== null) return worktree;
   return "changed";
+}
+
+// Split a repo-relative path into its directory (with trailing slash) and the file name.
+function splitPath(path: string): { readonly dir: string; readonly name: string } {
+  const idx = path.lastIndexOf("/");
+  if (idx < 0) return { dir: "", name: path };
+  return { dir: path.slice(0, idx + 1), name: path.slice(idx + 1) };
 }
 
 interface ChangesPaneProps {
@@ -123,6 +126,7 @@ export function ChangesPane({
 }: ChangesPaneProps): ReactNode {
   const tablistRef = useRef<HTMLDivElement | null>(null);
   const baseId = useId();
+  const changeCount = status?.changes.length ?? 0;
 
   const onTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
     const index = TABS.findIndex((entry) => entry.id === tab);
@@ -142,31 +146,36 @@ export function ChangesPane({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
-      <div className="ed-tabs mono">
+      <div style={TABS_ROW_STYLE}>
         <div
           ref={tablistRef}
-          className="ed-tablist"
           role="tablist"
           aria-label="Changes and history"
+          style={{ display: "flex", alignItems: "stretch" }}
         >
           {TABS.map((entry) => {
             const active = entry.id === tab;
             return (
-              <span className={`ed-tab${active ? " active" : ""}`} key={entry.id}>
-                <button
-                  type="button"
-                  className="ed-tab-hit"
-                  role="tab"
-                  id={`${baseId}-tab-${entry.id}`}
-                  aria-selected={active ? "true" : "false"}
-                  aria-controls={`${baseId}-panel-${entry.id}`}
-                  tabIndex={active ? 0 : -1}
-                  onClick={() => onTabChange(entry.id)}
-                  onKeyDown={onTabKeyDown}
-                >
-                  <span className="ed-tab-label">{entry.label}</span>
-                </button>
-              </span>
+              <button
+                key={entry.id}
+                type="button"
+                role="tab"
+                id={`${baseId}-tab-${entry.id}`}
+                aria-selected={active ? "true" : "false"}
+                aria-controls={`${baseId}-panel-${entry.id}`}
+                tabIndex={active ? 0 : -1}
+                style={tabButtonStyle(active)}
+                onClick={() => onTabChange(entry.id)}
+                onKeyDown={onTabKeyDown}
+              >
+                {entry.label}
+                {entry.id === "changes" ? (
+                  <span aria-hidden="true" style={tabBadgeStyle(active)}>
+                    {changeCount}
+                  </span>
+                ) : null}
+                <span aria-hidden="true" style={tabUnderlineStyle(active)} />
+              </button>
             );
           })}
         </div>
@@ -253,14 +262,14 @@ function ChangesList({
 }): ReactNode {
   if (statusError !== null) {
     return (
-      <p className="rv-empty" role="alert" style={{ padding: "var(--space-4)" }}>
+      <p className="rv-empty" role="alert" style={{ padding: 14 }}>
         {statusError}
       </p>
     );
   }
   if (statusLoading && status === null) {
     return (
-      <p className="rv-empty" role="status" style={{ padding: "var(--space-4)" }}>
+      <p className="rv-empty" role="status" style={{ padding: 14 }}>
         Loading changes…
       </p>
     );
@@ -286,7 +295,8 @@ function ChangesList({
       <div style={EMPTY_STATE_STYLE} role="alert" aria-live="assertive">
         <Icons.branch size={20} />
         <p style={SUBTLE_TEXT_STYLE}>
-          Detached HEAD. Switch to an existing branch or create a branch before committing or syncing.
+          Detached HEAD. Switch to an existing branch or create a branch before committing or
+          syncing.
         </p>
       </div>
     );
@@ -305,23 +315,33 @@ function ChangesList({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "var(--space-3)",
-            padding: "var(--space-3) var(--space-4)",
-            borderBottom: "1px solid var(--border-subtle)",
-            color: "var(--feedback-danger)",
-            background: "color-mix(in oklch, var(--feedback-danger) 10%, var(--surface-primary))",
-            font: "var(--text-body-sm) var(--font-ui)",
+            gap: 8,
+            padding: "8px 14px",
+            borderBottom: "1px solid var(--line-soft)",
+            color: "var(--danger)",
+            background: "color-mix(in oklch, var(--danger) 10%, transparent)",
+            font: "400 13px var(--font-ui)",
           }}
         >
           <Icons.info size={14} />
           Resolve conflicted files before committing or syncing.
         </div>
       ) : null}
+
+      {hasChanges ? (
+        <div style={SUMMARY_STRIP_STYLE}>
+          <span aria-hidden="true" style={SUMMARY_CHECK_STYLE}>
+            <Icons.check size={11} />
+          </span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--fg-muted)" }}>
+            {status.stagedCount} of {status.changes.length} files staged
+          </span>
+        </div>
+      ) : null}
+
       {hasChanges ? (
         <div style={CHANGES_HEADER_STYLE}>
-          <span style={{ ...SUBTLE_TEXT_STYLE, flex: 1, minWidth: 0 }}>
-            {`${status.changes.length.toString()} changed · ${status.stagedCount.toString()} staged`}
-          </span>
+          <span style={{ flex: 1, minWidth: 0 }} />
           <button
             type="button"
             style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasUnstaged) }}
@@ -342,7 +362,7 @@ function ChangesList({
       ) : null}
 
       {stagingError !== null || stagingOutcome !== null ? (
-        <div style={{ padding: "var(--space-3) var(--space-4) 0" }}>
+        <div style={{ padding: "0 14px 8px" }}>
           <MutationOutcome
             outcome={stagingOutcome}
             error={stagingError}
@@ -352,22 +372,19 @@ function ChangesList({
       ) : null}
 
       {status.truncated ? (
-        <p
-          style={{ ...SUBTLE_TEXT_STYLE, padding: "var(--space-3) var(--space-4) 0" }}
-          role="status"
-        >
-          Showing the first {status.maxChanges.toString()} changes; the list is truncated.
+        <p style={{ ...SUBTLE_TEXT_STYLE, padding: "0 14px 6px", fontSize: 12 }} role="status">
+          Showing the first {status.maxChanges} changes; the list is truncated.
         </p>
       ) : null}
 
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+      <div style={FILE_LIST_STYLE}>
         {status.clean || status.changes.length === 0 ? (
           <div className="rv-empty">
             <p className="rv-empty-p">No changes</p>
           </div>
         ) : (
-          <nav className="rv-filelist" aria-label="Changed files">
-            <ul style={{ listStyle: "none", margin: 0, padding: "var(--space-2)" }}>
+          <nav aria-label="Changed files">
+            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {status.changes.map((change) => (
                 <ChangeRow
                   key={change.path}
@@ -388,6 +405,16 @@ function ChangesList({
   );
 }
 
+const STAGE_INPUT_STYLE: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  width: "100%",
+  height: "100%",
+  margin: 0,
+  opacity: 0,
+  cursor: "pointer",
+};
+
 function ChangeRow({
   change,
   selected,
@@ -401,41 +428,58 @@ function ChangeRow({
   readonly onSelect: () => void;
   readonly onToggleStage: () => void;
 }): ReactNode {
-  const badge = changeBadge(change);
   const statusLabel = gitChangeStatusLabel(change);
+  const statusLetter = gitChangeLabel(change);
   const toggleLabel = `${change.staged ? "Unstage" : "Stage"} ${change.path}`;
+  const { dir, name } = splitPath(change.path);
   return (
-    <li
-      style={{
-        ...FILE_ROW_STYLE,
-        ...(selected ? FILE_ROW_SELECTED_STYLE : null),
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={change.staged}
-        disabled={stagingBusy}
-        onChange={onToggleStage}
-        aria-label={toggleLabel}
-        title={toggleLabel}
-      />
-      <button
-        type="button"
-        style={FILE_SELECT_BTN_STYLE}
-        title={change.path}
-        aria-label={`${change.path}, ${statusLabel}`}
-        aria-pressed={selected}
-        onClick={onSelect}
-      >
-        <span className="rv-stat mono" aria-hidden="true">
-          {gitChangeLabel(change)}
+    <li style={{ padding: "0 0 2px" }}>
+      <div style={fileRowStyle(selected)}>
+        <label
+          style={{ position: "relative", display: "inline-flex", flex: "none", cursor: "pointer" }}
+        >
+          <input
+            type="checkbox"
+            checked={change.staged}
+            disabled={stagingBusy}
+            onChange={onToggleStage}
+            aria-label={toggleLabel}
+            title={toggleLabel}
+            style={STAGE_INPUT_STYLE}
+          />
+          <span aria-hidden="true" style={stageBoxStyle(change.staged)}>
+            {change.staged ? <Icons.check size={11} /> : null}
+          </span>
+        </label>
+        <button
+          type="button"
+          title={change.path}
+          aria-label={`${change.path}, ${statusLabel}`}
+          aria-pressed={selected}
+          onClick={onSelect}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            minWidth: 0,
+            flex: 1,
+            border: 0,
+            background: "transparent",
+            cursor: "pointer",
+            textAlign: "left",
+            padding: 0,
+          }}
+        >
+          <span style={FILE_NAME_STYLE}>
+            <span className="rv-sr-only">{statusLabel} </span>
+            {name}
+          </span>
+          {dir !== "" ? <span style={FILE_PATH_STYLE}>{dir}</span> : null}
+        </button>
+        <span aria-hidden="true" style={statusSquareStyle(statusLetter)}>
+          {statusLetter}
         </span>
-        <span className="rv-filerow-path mono">
-          <span className="rv-sr-only">{statusLabel} </span>
-          {change.path}
-        </span>
-      </button>
-      {badge !== null ? <span style={badgeStyle(badge.tone)}>{badge.text}</span> : null}
+      </div>
     </li>
   );
 }

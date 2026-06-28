@@ -8,6 +8,7 @@ import {
   COMPACT_BTN,
   INPUT_STYLE,
   LIST_STYLE,
+  MENU_STYLE,
   REPO_OPTION_SELECTED_STYLE,
   REPO_OPTION_STYLE,
   SECONDARY_BTN,
@@ -68,10 +69,7 @@ export function BranchSelector({
     optionRefs.current[clamped]?.focus();
   };
 
-  const onOptionKeyDown = (
-    event: ReactKeyboardEvent<HTMLButtonElement>,
-    index: number,
-  ): void => {
+  const onOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       moveFocus(index + 1);
@@ -126,28 +124,14 @@ export function BranchSelector({
         <Icons.plus size={11} /> New
       </button>
       {open ? (
-        <div
-          style={{
-            position: "absolute",
-            zIndex: 20,
-            top: "calc(100% + 6px)",
-            left: 0,
-            width: 300,
-            maxWidth: "min(80vw, 360px)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius-control)",
-            background: "var(--surface-primary)",
-            boxShadow: "var(--shadow-popover)",
-            padding: "var(--space-3)",
-          }}
-        >
+        <div style={MENU_STYLE}>
           <label
             htmlFor={searchId}
             style={{
               display: "block",
-              marginBottom: "var(--space-2)",
-              font: "var(--weight-semibold) var(--text-caption) var(--font-ui)",
-              color: "var(--text-faint)",
+              marginBottom: 6,
+              font: "600 11px var(--font-ui)",
+              color: "var(--fg-faint)",
               textTransform: "uppercase",
             }}
           >
@@ -159,7 +143,7 @@ export function BranchSelector({
             type="search"
             value={query}
             aria-label="Search branches"
-            style={{ ...INPUT_STYLE, marginBottom: "var(--space-3)" }}
+            style={{ ...INPUT_STYLE, marginBottom: 10 }}
             onChange={(event) => setQuery(event.currentTarget.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape") close(true);
@@ -176,9 +160,7 @@ export function BranchSelector({
             style={{ ...LIST_STYLE, maxHeight: 260, padding: 0 }}
           >
             {filtered.length === 0 ? (
-              <p style={{ ...SUBTLE_TEXT_STYLE, padding: "var(--space-3)" }}>
-                No matching branches.
-              </p>
+              <p style={{ ...SUBTLE_TEXT_STYLE, padding: 12 }}>No matching branches.</p>
             ) : (
               filtered.map((branch, index) => {
                 const selected = branch.name === currentBranch || branch.current;
@@ -205,7 +187,7 @@ export function BranchSelector({
                   >
                     <span className="mono">{branch.name}</span>
                     {selected ? (
-                      <span style={{ float: "right", font: "var(--text-caption) var(--font-ui)" }}>
+                      <span style={{ float: "right", font: "400 11px var(--font-ui)" }}>
                         current
                       </span>
                     ) : null}

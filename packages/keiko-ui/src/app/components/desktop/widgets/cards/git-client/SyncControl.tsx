@@ -180,7 +180,7 @@ export function SyncControl({
           ...STATUS_PILL_STYLE,
           maxWidth: 320,
           whiteSpace: "normal",
-          color: error === null ? "var(--text-secondary)" : "var(--feedback-danger)",
+          color: error === null ? "var(--fg-muted)" : "var(--danger)",
         }}
       >
         {error ?? outcome ?? view.description}
