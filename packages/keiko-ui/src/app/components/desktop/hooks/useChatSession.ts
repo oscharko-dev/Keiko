@@ -1485,7 +1485,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.activeProject,
       state.selectedModel,
       state.models,
-      state.messages,
       pendingAttachments,
       sendGrounded,
       sendUngrounded,
