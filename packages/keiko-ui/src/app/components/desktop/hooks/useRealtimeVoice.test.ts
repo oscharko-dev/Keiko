@@ -18,12 +18,16 @@ function makeFakeSession(offerSdp = "v=0\r\nfake-offer"): {
   session: VoiceRtcSession;
   fireConnectionState: (state: RTCPeerConnectionState) => void;
   fireRemoteTrack: (stream: MediaStream) => void;
+  fireDataChannelEvent: (event: unknown) => void;
+  sendDataChannelEvent: ReturnType<typeof vi.fn>;
   applyAnswer: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
 } {
   let connectionStateCb: ((state: RTCPeerConnectionState) => void) | undefined;
   let remoteTrackCb: ((stream: MediaStream) => void) | undefined;
+  let dataChannelEventCb: ((event: unknown) => void) | undefined;
   const applyAnswer = vi.fn(async (_sdp: string): Promise<void> => {});
+  const sendDataChannelEvent = vi.fn((_event: unknown) => true);
   const close = vi.fn();
 
   const session: VoiceRtcSession = {
@@ -35,6 +39,10 @@ function makeFakeSession(offerSdp = "v=0\r\nfake-offer"): {
     onConnectionStateChange(cb): void {
       connectionStateCb = cb;
     },
+    onDataChannelEvent(cb): void {
+      dataChannelEventCb = cb;
+    },
+    sendDataChannelEvent,
     close,
   };
 
@@ -42,6 +50,8 @@ function makeFakeSession(offerSdp = "v=0\r\nfake-offer"): {
     session,
     fireConnectionState: (state) => connectionStateCb?.(state),
     fireRemoteTrack: (stream) => remoteTrackCb?.(stream),
+    fireDataChannelEvent: (event) => dataChannelEventCb?.(event),
+    sendDataChannelEvent,
     applyAnswer,
     close,
   };
@@ -159,6 +169,71 @@ describe("useRealtimeVoice — assistant remote audio (regression: silent realti
 
     act(() => result.current.stop());
     expect(release).toHaveBeenCalled();
+  });
+});
+
+describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
+  it("forwards committed user and assistant transcripts through callbacks", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onUserTranscriptCommitted = vi.fn();
+    const onAssistantTranscriptCommitted = vi.fn();
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        onUserTranscriptCommitted,
+        onAssistantTranscriptCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u1",
+        transcript: "Open the deploy log.",
+      });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r1",
+        item_id: "a1",
+        transcript: "The deploy log is open.",
+      });
+    });
+
+    expect(onUserTranscriptCommitted).toHaveBeenCalledWith("Open the deploy log.");
+    expect(onAssistantTranscriptCommitted).toHaveBeenCalledWith("The deploy log is open.");
+    expect(result.current.turnSnapshot.state).toBe("yielding");
+  });
+
+  it("sends response.cancel when the user interrupts the assistant", async () => {
+    const { session, fireDataChannelEvent, sendDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({ type: "response.output_audio.delta", response_id: "r1" });
+    });
+    expect(result.current.canInterrupt).toBe(true);
+
+    act(() => result.current.interrupt());
+    expect(sendDataChannelEvent).toHaveBeenCalledWith({ type: "response.cancel" });
+    expect(result.current.turnSnapshot.state).toBe("interrupted");
   });
 });
 

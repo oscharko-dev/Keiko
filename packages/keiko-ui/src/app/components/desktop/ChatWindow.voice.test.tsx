@@ -231,24 +231,31 @@ class StubRTCPeerConnection {}
 function stubRealtimeBrowser(getUserMedia: () => Promise<MediaStream>): void {
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
-    value: { getUserMedia: vi.fn(getUserMedia) },
+    value: {
+      getUserMedia: vi.fn(async () => {
+        const stream = await getUserMedia();
+        return typeof stream.getTracks === "function"
+          ? stream
+          : ({ getTracks: () => [] } as unknown as MediaStream);
+      }),
+    },
   });
   vi.stubGlobal("MediaRecorder", StubMediaRecorder);
   vi.stubGlobal("RTCPeerConnection", StubRTCPeerConnection);
 }
 
 describe("ChatWindow realtime voice integration (Issue #497)", () => {
-  it("shows NO realtime button in a no-voice deployment (AC1)", async () => {
+  it("shows NO dialogue switch in a no-voice deployment (AC1)", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: NONE });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
     await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
-    expect(screen.queryByRole("button", { name: "Start realtime voice" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
   });
 
-  it("shows NO realtime button for an STT-only deployment (AC3)", async () => {
+  it("shows NO dialogue switch for an STT-only deployment (AC3)", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
@@ -258,22 +265,26 @@ describe("ChatWindow realtime voice integration (Issue #497)", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Dictate a message" })).toBeInTheDocument(),
     );
-    expect(screen.queryByRole("button", { name: "Start realtime voice" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
   });
 
-  it("renders the realtime button when full-realtime is advertised and RTCPeerConnection is available", async () => {
-    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME });
+  it("renders the dialogue switch when full-realtime, personas, and RTCPeerConnection are available", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: { ...FULL_REALTIME, availableVoicePersonas: ["male"] },
+    });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Start realtime voice" })).toBeInTheDocument(),
+      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument(),
     );
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
   });
 
-  it("hides the realtime button when full-realtime is advertised but RTCPeerConnection is absent", async () => {
-    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME });
+  it("hides the dialogue switch when full-realtime is advertised but RTCPeerConnection is absent", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
+      voice: { ...FULL_REALTIME, availableVoicePersonas: ["male"] },
+    });
     // Stub MediaRecorder but NOT RTCPeerConnection -> realtimeVoiceTransportSupported() false.
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
@@ -284,7 +295,7 @@ describe("ChatWindow realtime voice integration (Issue #497)", () => {
     renderWindow(makeSession());
 
     await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
-    expect(screen.queryByRole("button", { name: "Start realtime voice" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
   });
 });
@@ -499,8 +510,8 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
 
 // ─── Issue #1560 — live dialogue-session controller wiring ───────────────────────────────────────────
 
-// Full-realtime WITH personas but WITHOUT browser WebRTC media — the production STT+TTS fallback the
-// matrix must still offer (ADR-0096 D3). Identical caps to FULL_REALTIME_WITH_PERSONAS except transport.
+// Full-realtime WITH personas but WITHOUT browser WebRTC media. This no longer offers dialogue by
+// default; STT/TTS remains separate dictation/read-aloud capability.
 const FULL_REALTIME_NO_WEBRTC_WITH_PERSONAS: VoiceCapabilityResolution = {
   ...FULL_REALTIME_WITH_PERSONAS,
   transport: { websocketControl: true, webrtcMedia: false },
@@ -532,75 +543,60 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     );
   });
 
-  it("STILL offers the dialogue switch for full-realtime WITHOUT browser WebRTC (STT+TTS fallback, D3)", async () => {
+  it("does not offer the dialogue switch for full-realtime WITHOUT browser WebRTC", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
       voice: FULL_REALTIME_NO_WEBRTC_WITH_PERSONAS,
     });
-    // Capture-capable browser (MediaRecorder + mediaDevices) but NO RTCPeerConnection: the matrix gates
-    // on dictation capture, not WebRTC media, so dialogue must be offered here — the production fix.
     stubCaptureBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
-    await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(api.fetchVoiceCapability).toHaveBeenCalled());
+    expect(screen.queryByRole("switch", { name: "Voice dialogue mode" })).toBeNull();
   });
 
-  it("entering dialogue renders the per-turn controls (Speak + Interrupt) without disturbing the composer (AC1)", async () => {
+  it("entering dialogue renders Realtime session controls without disturbing the composer (AC1)", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
-      voice: FULL_REALTIME_NO_WEBRTC_WITH_PERSONAS,
+      voice: FULL_REALTIME_WITH_PERSONAS,
     });
-    stubCaptureBrowser(async () => ({}) as MediaStream);
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
 
     await enterDialogue();
 
-    // The turn controls are present so the user can actually take the floor (AC1).
-    expect(screen.getByRole("button", { name: "Start speaking" })).toBeInTheDocument();
-    // Interrupt is present but disabled until the assistant holds the floor.
+    expect(screen.getByRole("button", { name: "Stop voice dialogue" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Leave voice dialogue" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
-    // The text composer is untouched and fully usable throughout (AC1/AC2).
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Chat message" })).not.toBeDisabled();
   });
 
-  it("activating the mic begins a listening turn (AC1)", async () => {
+  it("does not render the retired push-to-talk turn controls in Realtime dialogue", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
-      voice: FULL_REALTIME_NO_WEBRTC_WITH_PERSONAS,
+      voice: FULL_REALTIME_WITH_PERSONAS,
     });
-    stubCaptureBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+    stubRealtimeBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
     renderWindow(makeSession());
 
     await enterDialogue();
-    const mic = screen.getByRole("button", { name: "Start speaking" });
-    await userEvent.click(mic);
 
-    // Once capturing, the mic flips to the stop-and-send affordance (aria-pressed=true), proving the
-    // dialogue session took the floor. The deep transcribe→send path is proven deterministically in
-    // hooks/useVoiceDialogueSession.test.ts (the full jsdom MediaRecorder capture cycle is too fragile
-    // to drive end-to-end here, mirroring the #1559 persona-routing decision above).
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Stop speaking and send" })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      ),
-    );
+    expect(screen.queryByRole("button", { name: "Start speaking" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop speaking and send" })).toBeNull();
   });
 
   it("leaving dialogue removes the turn controls and runs cleanup (AC3)", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
-      voice: FULL_REALTIME_NO_WEBRTC_WITH_PERSONAS,
+      voice: FULL_REALTIME_WITH_PERSONAS,
     });
-    stubCaptureBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+    stubRealtimeBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
     renderWindow(makeSession());
 
     await enterDialogue();
-    expect(screen.getByRole("button", { name: "Start speaking" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Leave voice dialogue" })).toBeInTheDocument();
 
     // Leave via the session cluster's Leave control (runs the master cleanup, D9).
     await userEvent.click(screen.getByRole("button", { name: "Leave voice dialogue" }));
 
-    expect(screen.queryByRole("button", { name: "Start speaking" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
     // The switch is back to off and the composer remains usable.
     expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
@@ -656,9 +652,9 @@ describe("ChatWindow voice dialogue survives the first committed turn (Issue #15
 
   it("keeps dialogue mode active when the first message populates an empty chat (spoken or typed)", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
-      voice: FULL_REALTIME_NO_WEBRTC_WITH_PERSONAS,
+      voice: FULL_REALTIME_WITH_PERSONAS,
     });
-    stubCaptureBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+    stubRealtimeBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
 
     // Start in a fresh, empty chat (messages: [] -> the empty composer slot).
     const { rerender } = render(
@@ -674,10 +670,10 @@ describe("ChatWindow voice dialogue survives the first committed turn (Issue #15
       "aria-checked",
       "true",
     );
-    expect(screen.getByRole("button", { name: "Start speaking" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Leave voice dialogue" })).toBeInTheDocument();
 
     // The first turn lands and the chat flips empty → populated (what useChatSession does on the first
-    // send). The dialogue session must survive: the switch stays on and the per-turn controls remain.
+    // send). The dialogue session must survive: the switch stays on and Realtime controls remain.
     rerender(
       <ChatSessionProvider value={makeSessionWithUserMessage()}>
         <ChatWindow />
@@ -688,18 +684,18 @@ describe("ChatWindow voice dialogue survives the first committed turn (Issue #15
       "aria-checked",
       "true",
     );
-    expect(screen.getByRole("button", { name: "Start speaking" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Leave voice dialogue" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeInTheDocument();
     // The conversation is now shown and the composer stays fully usable.
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Chat message" })).not.toBeDisabled();
   });
 
-  it("can take a SECOND spoken turn after the first one populated the chat (the session is still live)", async () => {
+  it("keeps Realtime controls live after the first message populated the chat", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({
-      voice: FULL_REALTIME_NO_WEBRTC_WITH_PERSONAS,
+      voice: FULL_REALTIME_WITH_PERSONAS,
     });
-    stubCaptureBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+    stubRealtimeBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
 
     const { rerender } = render(
       <ChatSessionProvider value={makeSession()}>
@@ -709,7 +705,7 @@ describe("ChatWindow voice dialogue survives the first committed turn (Issue #15
 
     const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
     await userEvent.click(dialogSwitch);
-    expect(screen.getByRole("button", { name: "Start speaking" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Leave voice dialogue" })).toBeInTheDocument();
 
     // First turn populates the chat (empty → populated transition).
     rerender(
@@ -718,15 +714,11 @@ describe("ChatWindow voice dialogue survives the first committed turn (Issue #15
       </ChatSessionProvider>,
     );
 
-    // A second turn can still be taken: the live mic control flips to stop-and-send, proving the dialogue
-    // session (not just the switch label) survived the transition. On the old two-slot layout the dialogue
-    // had already exited here, so "Start speaking" would be absent.
-    await userEvent.click(screen.getByRole("button", { name: "Start speaking" }));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Stop speaking and send" })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      ),
+    expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
+      "aria-checked",
+      "true",
     );
+    expect(screen.getByRole("button", { name: "Leave voice dialogue" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start speaking" })).toBeNull();
   });
 });

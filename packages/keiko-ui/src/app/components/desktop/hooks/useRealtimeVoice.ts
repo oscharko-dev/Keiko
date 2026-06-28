@@ -9,7 +9,7 @@
 // Phases: idle → requesting (getUserMedia) → negotiating (WS handshake) → connected.
 // Every failure resolves to a non-blocking `error` phase that leaves the composer fully usable (AC4).
 
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import {
   createBrowserVoiceRtcTransport,
@@ -22,6 +22,12 @@ import {
   VoiceControlError,
   type VoiceControlClient,
 } from "./voice-realtime-client";
+import { parseRealtimeVoiceEvent, type ParsedRealtimeVoiceEvent } from "./voice-realtime-events";
+import {
+  createVoiceTurnManager,
+  type VoiceTurnManagerEngine,
+  type VoiceTurnSnapshot,
+} from "./voice-turn-manager";
 
 // A transient WebRTC `disconnected` state is recoverable (a brief network blip, an ICE restart): the
 // connection often returns to `connected` on its own. Tearing the session down the instant it appears
@@ -35,6 +41,7 @@ const ICE_DISCONNECT_GRACE_MS = 5_000;
 // tests inject a fake to assert the wiring without touching real media APIs.
 export interface RealtimeAudioSink {
   attach(stream: MediaStream): void;
+  setMuted?(muted: boolean): void;
   release(): void;
 }
 
@@ -51,6 +58,10 @@ function createBrowserRealtimeAudioSink(): RealtimeAudioSink {
       // user gesture (the composer button), so it resolves in practice. Swallow a late rejection so it
       // never surfaces as an unhandled promise rejection.
       void audio.play?.().catch(() => {});
+    },
+    setMuted(muted: boolean): void {
+      if (audio === undefined) return;
+      audio.muted = muted;
     },
     release(): void {
       if (audio === undefined) return;
@@ -126,18 +137,26 @@ export interface UseRealtimeVoiceOptions {
   readonly createTransport?: (() => VoiceRtcTransport) | undefined;
   readonly createControl?: (() => VoiceControlClient) | undefined;
   readonly createAudioSink?: (() => RealtimeAudioSink) | undefined;
+  readonly onUserTranscriptCommitted?: ((text: string) => void | Promise<void>) | undefined;
+  readonly onAssistantTranscriptCommitted?: ((text: string) => void | Promise<void>) | undefined;
 }
 
 export interface RealtimeVoiceController {
   readonly phase: RealtimeVoicePhase;
   // True while a connection attempt is in progress (requesting | negotiating | connected).
   readonly busy: boolean;
+  readonly turnSnapshot: VoiceTurnSnapshot;
+  readonly listening: boolean;
+  readonly speaking: boolean;
+  readonly canInterrupt: boolean;
+  readonly muted: boolean;
   readonly error:
-    | { readonly reason: RealtimeVoiceErrorReason; readonly message: string }
-    | undefined;
+    { readonly reason: RealtimeVoiceErrorReason; readonly message: string } | undefined;
   readonly start: () => void;
   readonly stop: () => void;
   readonly retry: () => void;
+  readonly interrupt: () => void;
+  readonly toggleMute: () => void;
 }
 
 // Maps a thrown error from the transport or control step to a non-blocking error phase.
@@ -154,8 +173,22 @@ function classifyError(error: unknown): {
   return { reason: "connection-failed", message: "Real-time voice could not be started." };
 }
 
+function eventIdentity(event: {
+  readonly responseId?: string | undefined;
+  readonly itemId?: string | undefined;
+}): string | undefined {
+  return event.itemId ?? event.responseId;
+}
+
 export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoiceController {
   const [state, dispatch] = useReducer(realtimeVoiceReducer, INITIAL_STATE);
+  const turnManagerRef = useRef<VoiceTurnManagerEngine>(
+    createVoiceTurnManager({ profile: "full-realtime" }),
+  );
+  const [turnSnapshot, setTurnSnapshot] = useState<VoiceTurnSnapshot>(() =>
+    turnManagerRef.current.snapshot(),
+  );
+  const [muted, setMuted] = useState(false);
 
   const transportFactory = options.createTransport ?? createBrowserVoiceRtcTransport;
   // Read the latest persona at start() time without churning the control factory identity (which is a
@@ -169,16 +202,155 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     [options.createControl],
   );
   const audioSinkFactory = options.createAudioSink ?? createBrowserRealtimeAudioSink;
+  const onUserTranscriptCommittedRef = useRef(options.onUserTranscriptCommitted);
+  const onAssistantTranscriptCommittedRef = useRef(options.onAssistantTranscriptCommitted);
+  onUserTranscriptCommittedRef.current = options.onUserTranscriptCommitted;
+  onAssistantTranscriptCommittedRef.current = options.onAssistantTranscriptCommitted;
 
   const sessionRef = useRef<VoiceRtcSession | undefined>(undefined);
   const controlRef = useRef<VoiceControlClient | undefined>(undefined);
   const audioSinkRef = useRef<RealtimeAudioSink | undefined>(undefined);
+  const userTranscriptItemsRef = useRef<Set<string>>(new Set());
+  const assistantTranscriptItemsRef = useRef<Set<string>>(new Set());
+  const assistantTranscriptBufferRef = useRef("");
+  const assistantTranscriptResponseRef = useRef<string | undefined>(undefined);
   // Pending teardown timer for a transient `disconnected` state (see ICE_DISCONNECT_GRACE_MS).
   const graceTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Guards every state update that runs after an `await`, so a composer that unmounts mid-flow
   // (e.g. while permission is pending or negotiation is in flight) never dispatches onto an
   // unmounted component and never leaves the microphone open.
   const mountedRef = useRef(true);
+
+  const applyTurnSignal = useCallback(
+    (signal: Parameters<VoiceTurnManagerEngine["apply"]>[0]): void => {
+      const result = turnManagerRef.current.apply(signal);
+      setTurnSnapshot(result.snapshot);
+      if (
+        result.effects.includes("stop-playback") ||
+        result.effects.includes("cancel-speech-generation")
+      ) {
+        sessionRef.current?.sendDataChannelEvent?.({ type: "response.cancel" });
+      }
+    },
+    [],
+  );
+
+  const resetTurnState = useCallback((): void => {
+    turnManagerRef.current.reset();
+    setTurnSnapshot(turnManagerRef.current.snapshot());
+    userTranscriptItemsRef.current.clear();
+    assistantTranscriptItemsRef.current.clear();
+    assistantTranscriptBufferRef.current = "";
+    assistantTranscriptResponseRef.current = undefined;
+  }, []);
+
+  const commitUserTranscript = useCallback(
+    (event: Extract<ParsedRealtimeVoiceEvent, { kind: "user-transcript-committed" }>): void => {
+      const id = eventIdentity(event);
+      if (id !== undefined) {
+        if (userTranscriptItemsRef.current.has(id)) {
+          return;
+        }
+        userTranscriptItemsRef.current.add(id);
+      }
+      void onUserTranscriptCommittedRef.current?.(event.text);
+    },
+    [],
+  );
+
+  const commitAssistantTranscript = useCallback(
+    (
+      event: Extract<ParsedRealtimeVoiceEvent, { kind: "assistant-transcript-committed" }>,
+    ): void => {
+      const id = eventIdentity(event);
+      if (id !== undefined) {
+        if (assistantTranscriptItemsRef.current.has(id)) {
+          return;
+        }
+        assistantTranscriptItemsRef.current.add(id);
+      }
+      assistantTranscriptBufferRef.current = "";
+      assistantTranscriptResponseRef.current = undefined;
+      applyTurnSignal({ kind: "assistant-speech-start" });
+      void onAssistantTranscriptCommittedRef.current?.(event.text);
+      applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
+    },
+    [applyTurnSignal],
+  );
+
+  const commitBufferedAssistantTranscript = useCallback(
+    (responseId: string | undefined): void => {
+      const text = assistantTranscriptBufferRef.current.trim();
+      if (text.length === 0) {
+        return;
+      }
+      commitAssistantTranscript({
+        kind: "assistant-transcript-committed",
+        text,
+        responseId: responseId ?? assistantTranscriptResponseRef.current,
+      });
+    },
+    [commitAssistantTranscript],
+  );
+
+  const handleRealtimeEvent = useCallback(
+    (raw: unknown): void => {
+      const event = parseRealtimeVoiceEvent(raw);
+      if (event === undefined) {
+        return;
+      }
+      switch (event.kind) {
+        case "user-speech-start":
+          applyTurnSignal({ kind: "user-speech-start" });
+          return;
+        case "user-speech-stop":
+          applyTurnSignal({ kind: "user-end-of-turn" });
+          return;
+        case "user-transcript-committed":
+          commitUserTranscript(event);
+          return;
+        case "assistant-output-start":
+          applyTurnSignal({ kind: "assistant-speech-start" });
+          return;
+        case "assistant-output-stop":
+          applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
+          return;
+        case "assistant-transcript-delta":
+          assistantTranscriptBufferRef.current += event.delta;
+          assistantTranscriptResponseRef.current = event.responseId;
+          applyTurnSignal({ kind: "assistant-speech-start" });
+          return;
+        case "assistant-transcript-committed":
+          commitAssistantTranscript(event);
+          return;
+        case "response-done":
+          if (event.status === "cancelled") {
+            applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
+            return;
+          }
+          if (event.status === "failed" || event.status === "incomplete") {
+            applyTurnSignal({ kind: "provider-failure", recoverable: true });
+            return;
+          }
+          commitBufferedAssistantTranscript(event.responseId);
+          applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
+          return;
+        case "response-cancelled":
+          applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
+          return;
+        case "error":
+          applyTurnSignal({ kind: "provider-failure", recoverable: true });
+          dispatch({ type: "error", reason: "connection-failed", message: event.message });
+          return;
+      }
+    },
+    [
+      applyTurnSignal,
+      commitAssistantTranscript,
+      commitBufferedAssistantTranscript,
+      commitUserTranscript,
+    ],
+  );
 
   const cleanupRefs = useCallback((): void => {
     if (graceTimerRef.current !== undefined) {
@@ -191,7 +363,12 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     sessionRef.current = undefined;
     controlRef.current?.close();
     controlRef.current = undefined;
-  }, []);
+    resetTurnState();
+  }, [resetTurnState]);
+
+  useEffect(() => {
+    audioSinkRef.current?.setMuted?.(muted);
+  }, [muted]);
 
   const stop = useCallback((): void => {
     cleanupRefs();
@@ -223,9 +400,14 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         // Without this the negotiated audio track plays nowhere and the assistant is silent.
         const audioSink = audioSinkFactory();
         audioSinkRef.current = audioSink;
+        audioSink.setMuted?.(muted);
         session.onRemoteTrack((stream) => {
           if (!mountedRef.current) return;
           audioSink.attach(stream);
+        });
+        session.onDataChannelEvent?.((event) => {
+          if (!mountedRef.current) return;
+          handleRealtimeEvent(event);
         });
 
         // Wire connection-state changes before applying the answer so early "failed" events are
@@ -272,13 +454,22 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         const { reason, message } = classifyError(error);
         dispatch({ type: "error", reason, message });
       });
-  }, [transportFactory, controlFactory, audioSinkFactory, cleanupRefs]);
+  }, [transportFactory, controlFactory, audioSinkFactory, muted, handleRealtimeEvent, cleanupRefs]);
 
   const retry = useCallback((): void => {
     cleanupRefs();
     dispatch({ type: "reset" });
     start();
   }, [cleanupRefs, start]);
+
+  const interrupt = useCallback((): void => {
+    sessionRef.current?.sendDataChannelEvent?.({ type: "response.cancel" });
+    applyTurnSignal({ kind: "user-interrupt" });
+  }, [applyTurnSignal]);
+
+  const toggleMute = useCallback((): void => {
+    setMuted((current) => !current);
+  }, []);
 
   // Release the microphone and WS when the composer unmounts mid-flow. Clearing both refs ensures
   // a late-firing async operation finds no live session and dispatches nothing.
@@ -298,8 +489,15 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       state.errorReason !== undefined && state.errorMessage !== undefined
         ? { reason: state.errorReason, message: state.errorMessage }
         : undefined,
+    turnSnapshot,
+    listening: turnSnapshot.state === "listening",
+    speaking: turnSnapshot.state === "speaking",
+    canInterrupt: turnSnapshot.floorHolder === "assistant",
+    muted,
     start,
     stop,
     retry,
+    interrupt,
+    toggleMute,
   };
 }
