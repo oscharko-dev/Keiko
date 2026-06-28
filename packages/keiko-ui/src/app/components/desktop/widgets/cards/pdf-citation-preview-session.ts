@@ -259,7 +259,10 @@ function openCitationChipDisclosure(messageElement: HTMLElement): void {
 function findInlineMarkerTarget(messageElement: HTMLElement, marker: string): HTMLElement | null {
   const targets = messageElement.querySelectorAll<HTMLElement>(".citation-inline-marker");
   return (
-    Array.from(targets).find((target) => target.textContent?.trim() === marker) ?? null
+    Array.from(targets).find((target) => {
+      if (target.textContent?.trim() !== marker) return false;
+      return target.closest(".chat-msg-content[data-collapsed=\"true\"]") === null;
+    }) ?? null
   );
 }
 

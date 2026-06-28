@@ -400,6 +400,99 @@ describe("pdf-citation-preview-session", () => {
     }
   });
 
+  it("treats an inline marker inside collapsed answer content as unreachable and falls back to the citation chip", async () => {
+    vi.useFakeTimers();
+    try {
+      const add = vi.fn(() => "pdf-preview-1");
+      openPdfCitationPreviewWindow(add, PREVIEW, {
+        context: {
+          activeStableId: "stable-1",
+          citations: [
+            {
+              citation: { stableId: "stable-1", marker: "[1]", label: "policy.pdf" },
+              display: PREVIEW.display,
+            },
+          ],
+          origin: {
+            assistantMessageId: "msg-a",
+            chatId: "chat-1",
+            chatWindowId: "chat-window-1",
+            marker: "[1]",
+            representation: "inline-marker",
+          },
+        },
+      });
+      syncPdfCitationPreviewWindowRegistry([chatWindow(), previewWindow()]);
+
+      const message = document.createElement("article");
+      message.tabIndex = -1;
+      message.innerHTML = `
+        <div class="chat-msg-content" data-collapsed="true">
+          <p>Answer text with inline marker <button type="button" class="citation-inline-marker">[1]</button>.</p>
+          <details class="grounded-evidence-disclosure">
+            <summary>Evidence</summary>
+            <button
+              type="button"
+              class="grounded-citation grounded-citation-action"
+              aria-label="[1] policy.pdf · Open PDF"
+            >
+              <span class="grounded-citation-range">[1] policy.pdf</span>
+            </button>
+          </details>
+        </div>
+      `;
+      document.body.appendChild(message);
+      const scrollIntoView = vi
+        .spyOn(HTMLElement.prototype, "scrollIntoView")
+        .mockImplementation(() => undefined);
+      const focusMessage = vi.fn();
+      const focusMarker = vi.fn();
+      const focusChip = vi.fn();
+      message.focus = focusMessage;
+      const marker = message.querySelector<HTMLButtonElement>(".citation-inline-marker");
+      if (marker === null) throw new Error("expected inline marker");
+      marker.focus = focusMarker;
+      const chip = message.querySelector<HTMLButtonElement>(".grounded-citation-action");
+      if (chip === null) throw new Error("expected chip");
+      chip.focus = focusChip;
+
+      const unregister = registerPdfCitationPreviewMessageTarget({
+        assistantMessageId: "msg-a",
+        chatId: "chat-1",
+        chatWindowId: "chat-window-1",
+        element: message,
+      });
+      const restoreWindow = vi.fn();
+      const focusWindow = vi.fn();
+
+      expect(
+        activatePdfCitationPreviewBackToChat("pdf-preview-1", {
+          focusWindow,
+          restoreWindow,
+        }),
+      ).toBe(true);
+      await Promise.resolve();
+
+      expect(restoreWindow).toHaveBeenCalledWith("chat-window-1");
+      expect(focusWindow).toHaveBeenCalledWith("chat-window-1");
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", inline: "nearest" });
+      expect(focusMarker).not.toHaveBeenCalled();
+      expect(focusChip).toHaveBeenCalledWith({ preventScroll: true });
+      expect(message.querySelector("details")?.open).toBe(true);
+      expect(chip).toHaveAttribute("data-back-to-chat-highlighted", "true");
+      expect(marker).not.toHaveAttribute("data-back-to-chat-highlighted");
+
+      vi.advanceTimersByTime(1800);
+      expect(chip).not.toHaveAttribute("data-back-to-chat-highlighted");
+
+      unregister();
+      message.remove();
+      scrollIntoView.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports Back to chat as unavailable when the source chat window or answer is no longer available", () => {
     const add = vi.fn(() => "pdf-preview-1");
     openPdfCitationPreviewWindow(add, PREVIEW, {
