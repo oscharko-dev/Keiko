@@ -10,6 +10,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "git-delivery", "evidence", "1577");
+const EVIDENCE_PROJECT_PATH = "keiko-git-pr-merge-1577";
 const ARTIFACT_NAMES = ["manifest.json", "git-pr-merge-agent-ops.png"] as const;
 type ArtifactName = (typeof ARTIFACT_NAMES)[number];
 
@@ -327,7 +328,10 @@ function writeManifest(ledger: RouteLedger): void {
         appPath: "packaged-cli-ui",
         evidencePath: "docs/git-delivery/evidence/1577",
         routesIntercepted: ROUTES,
-        fixture: "temporary registered repository with deterministic route stubs",
+        fixture: {
+          kind: "temporary registered repository with deterministic route stubs",
+          browserProjectPath: EVIDENCE_PROJECT_PATH,
+        },
         statesVerified: [
           "Git-window right pane switches from Diff to Pull Request and back",
           "Git-window right pane switches from Diff to Merge",
@@ -339,6 +343,7 @@ function writeManifest(ledger: RouteLedger): void {
           prPreviewCalls: ledger.prPreviews.length,
           mergePreviewCalls: ledger.mergePreviews.length,
           remoteUrlsRendered: false,
+          localPathsRendered: false,
           externalCredentialsUsed: false,
         },
         artifacts: ARTIFACT_NAMES,
@@ -354,11 +359,13 @@ test("Git window embeds Pull Request and Merge repository operations", async ({ 
   const fixtureRoot = makeFixtureRoot();
   const ledger: RouteLedger = { prPreviews: [], mergePreviews: [] };
   ensureEvidenceDir();
-  await interceptRoutes(page, fixtureRoot, ledger);
-  await seedGitClientWindow(page, fixtureRoot);
+  await interceptRoutes(page, EVIDENCE_PROJECT_PATH, ledger);
+  await seedGitClientWindow(page, EVIDENCE_PROJECT_PATH);
   await page.goto("/");
 
-  await expect(page.locator('[data-window-id="issue-1577-git-pr-merge"]')).toBeVisible();
+  const gitWindow = page.locator('[data-window-id="issue-1577-git-pr-merge"]');
+  await expect(gitWindow).toBeVisible();
+  await expect(gitWindow).not.toContainText(fixtureRoot);
   await page.getByRole("button", { name: "Create Pull Request" }).click();
   const prPanel = page.getByRole("region", { name: "Pull Request", exact: true });
   await expect(prPanel).toBeVisible();

@@ -1,0 +1,70 @@
+{
+  "issue": "#1578",
+  "epic": "#1571",
+  "harness": "playwright.issue-1578-git-client-closeout.config.ts",
+  "appPath": "packaged-cli-ui",
+  "route": "/",
+  "evidencePath": "docs/git-delivery/evidence/1578",
+  "fixture": {
+    "kind": "local-bare-repository",
+    "worktree": "temporary-local-worktree",
+    "remote": "temporary-local-bare-remote",
+    "browserProjectPath": "keiko-git-client-closeout-1578"
+  },
+  "routesIntercepted": [
+    "/api/projects",
+    "/api/git/status",
+    "/api/git/branches",
+    "/api/git/summary",
+    "/api/git/history",
+    "/api/git/remotes",
+    "/api/git/diff",
+    "/api/git-delivery/staging/stage",
+    "/api/git-delivery/commit/preview",
+    "/api/git-delivery/commit/execute",
+    "/api/git-delivery/local-branch/create",
+    "/api/git-delivery/local-branch/switch",
+    "/api/git-delivery/pull/preview",
+    "/api/git-delivery/pull/execute",
+    "/api/git-delivery/pr/preview",
+    "/api/git-delivery/merge/preview"
+  ],
+  "childEvidence": [
+    "docs/git-delivery/evidence/1575/manifest.json",
+    "docs/git-delivery/evidence/1575/git-changes-view.png",
+    "docs/git-delivery/evidence/1576/manifest.json",
+    "docs/git-delivery/evidence/1576/git-branch-history-sync.png",
+    "docs/git-delivery/evidence/1577/manifest.json",
+    "docs/git-delivery/evidence/1577/git-pr-merge-agent-ops.png"
+  ],
+  "statesVerified": [
+    "repository selection and add-repository clone/open dialog",
+    "changed files, staging, diff pane, commit preview, and commit execute",
+    "branch search, branch switch, and new branch creation",
+    "history list and selected commit details",
+    "sync pull preview and execute",
+    "Pull Request and Merge panel entry, preview, blocked/readiness outcomes",
+    "desktop and constrained viewport screenshots",
+    "path-free and credential-free browser evidence"
+  ],
+  "assertions": {
+    "stageCalls": 1,
+    "commitPreviews": 2,
+    "commitExecutes": 1,
+    "branchCreates": 1,
+    "branchSwitches": 2,
+    "syncPreviews": 1,
+    "syncExecutes": 1,
+    "prPreviews": 1,
+    "mergePreviews": 1,
+    "localPathsRendered": false,
+    "remoteUrlsRendered": false,
+    "externalCredentialsUsed": false,
+    "forbiddenVisibleGovernanceLanguage": false
+  },
+  "artifacts": [
+    "manifest.json",
+    "git-client-closeout-desktop.png",
+    "git-client-closeout-constrained.png"
+  ]
+}

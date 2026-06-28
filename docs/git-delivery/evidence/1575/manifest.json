@@ -5,11 +5,17 @@
   "appPath": "packaged-cli-ui",
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/1575",
-  "generatedAt": "2026-06-27T16:39:44.517Z",
-  "fixtureRoot": "/private/var/folders/nz/l9bkdcg15sn8tfbbt4gv0dfm0000gn/T/keiko-e2e-git-changes-1575-PqHyOb",
+  "fixture": {
+    "kind": "local-git-repository",
+    "worktree": "temporary-local-worktree",
+    "browserProjectPath": "keiko-git-changes-1575"
+  },
   "routesIntercepted": [
     "/api/git/status",
     "/api/git/branches",
+    "/api/git/summary",
+    "/api/git/history",
+    "/api/git/remotes",
     "/api/git/diff",
     "/api/projects",
     "/api/git-delivery/staging/stage",

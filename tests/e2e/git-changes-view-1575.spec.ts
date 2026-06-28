@@ -32,6 +32,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "git-delivery", "evidence", "1575");
+const EVIDENCE_PROJECT_PATH = "keiko-git-changes-1575";
 const ARTIFACT_NAMES = ["manifest.json", "git-changes-view.png"] as const;
 type ArtifactName = (typeof ARTIFACT_NAMES)[number];
 
@@ -250,15 +251,16 @@ function jsonBody(body: unknown): { status: number; contentType: string; body: s
   return { status: 200, contentType: "application/json", body: JSON.stringify(body) };
 }
 
-// Read surface: /api/git/status (all six file states) + /api/git/branches (toolbar) +
-// /api/git/diff (a text hunk for app.ts; empty diff for other paths).
-async function interceptReadRoutes(page: Page): Promise<void> {
+async function interceptStatusRoute(page: Page): Promise<void> {
   await page.route("**/api/git/status**", async (route) => {
     const rootParam = new URL(route.request().url()).searchParams.get("root") ?? "";
     await route.fulfill(
       jsonBody({ ...STATUS_FIXTURE, root: rootParam, repositoryRoot: rootParam }),
     );
   });
+}
+
+async function interceptBranchRoute(page: Page): Promise<void> {
   await page.route("**/api/git/branches**", async (route) => {
     const rootParam = new URL(route.request().url()).searchParams.get("root") ?? "";
     await route.fulfill(
@@ -273,6 +275,72 @@ async function interceptReadRoutes(page: Page): Promise<void> {
       }),
     );
   });
+}
+
+async function interceptSummaryRoute(page: Page): Promise<void> {
+  await page.route("**/api/git/summary**", async (route) => {
+    const rootParam = new URL(route.request().url()).searchParams.get("root") ?? "";
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root: rootParam,
+        repositoryRoot: rootParam,
+        state: "available",
+        available: true,
+        branch: "main",
+        detached: false,
+        upstream: { ref: "origin/main", remote: "origin", branch: "main" },
+        ahead: 0,
+        behind: 0,
+        stagedCount: 3,
+        unstagedCount: 1,
+        untrackedCount: 1,
+        conflictedCount: 1,
+        clean: false,
+        remotes: [{ name: "origin" }],
+        truncated: false,
+      }),
+    );
+  });
+}
+
+async function interceptHistoryRoute(page: Page): Promise<void> {
+  await page.route("**/api/git/history**", async (route) => {
+    const rootParam = new URL(route.request().url()).searchParams.get("root") ?? "";
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root: rootParam,
+        repositoryRoot: rootParam,
+        state: "available",
+        available: true,
+        entries: [],
+        limit: 50,
+        skip: 0,
+        truncated: false,
+      }),
+    );
+  });
+}
+
+async function interceptRemotesRoute(page: Page): Promise<void> {
+  await page.route("**/api/git/remotes**", async (route) => {
+    const rootParam = new URL(route.request().url()).searchParams.get("root") ?? "";
+    await route.fulfill(
+      jsonBody({
+        schemaVersion: "1",
+        root: rootParam,
+        repositoryRoot: rootParam,
+        state: "available",
+        available: true,
+        remotes: [{ name: "origin" }],
+        truncated: false,
+      }),
+    );
+  });
+}
+
+async function interceptDiffRoute(page: Page): Promise<void> {
   await page.route("**/api/git/diff**", async (route) => {
     const url = new URL(route.request().url());
     const rootParam = url.searchParams.get("root") ?? "";
@@ -295,8 +363,18 @@ async function interceptReadRoutes(page: Page): Promise<void> {
   });
 }
 
+// Read surface: deterministic Git state for every route the Git window loads.
+async function interceptReadRoutes(page: Page): Promise<void> {
+  await interceptStatusRoute(page);
+  await interceptBranchRoute(page);
+  await interceptSummaryRoute(page);
+  await interceptHistoryRoute(page);
+  await interceptRemotesRoute(page);
+  await interceptDiffRoute(page);
+}
+
 // /api/projects (the fixture repo) + governed staging/commit-preview routes (deterministic success).
-async function interceptProjectAndMutationRoutes(page: Page, fixtureRoot: string): Promise<void> {
+async function interceptProjectAndMutationRoutes(page: Page, browserProjectPath: string): Promise<void> {
   await page.route("**/api/projects**", async (route) => {
     if (route.request().method() !== "GET") {
       await route.continue();
@@ -306,7 +384,7 @@ async function interceptProjectAndMutationRoutes(page: Page, fixtureRoot: string
       jsonBody({
         projects: [
           {
-            path: fixtureRoot,
+            path: browserProjectPath,
             name: "keiko-git-changes-1575",
             favorite: false,
             createdAt: Date.now(),
@@ -328,9 +406,9 @@ async function interceptProjectAndMutationRoutes(page: Page, fixtureRoot: string
   });
 }
 
-async function interceptGitRoutes(page: Page, fixtureRoot: string): Promise<void> {
+async function interceptGitRoutes(page: Page, browserProjectPath: string): Promise<void> {
   await interceptReadRoutes(page);
-  await interceptProjectAndMutationRoutes(page, fixtureRoot);
+  await interceptProjectAndMutationRoutes(page, browserProjectPath);
 }
 
 // ─── Window seeding ───────────────────────────────────────────────────────────────────────────────
@@ -391,6 +469,9 @@ function artifactPath(name: ArtifactName): string {
 const MANIFEST_ROUTES = [
   "/api/git/status",
   "/api/git/branches",
+  "/api/git/summary",
+  "/api/git/history",
+  "/api/git/remotes",
   "/api/git/diff",
   "/api/projects",
   "/api/git-delivery/staging/stage",
@@ -414,7 +495,7 @@ const MANIFEST_NOTES = [
   "The real git fixture is built in a temp dir (execFileSync git init/add/commit/mv/rm/merge).",
 ] as const;
 
-function writeEvidenceManifest(fixtureRoot: string): void {
+function writeEvidenceManifest(): void {
   const manifest = {
     issue: "#1575",
     epic: "#1571",
@@ -422,8 +503,11 @@ function writeEvidenceManifest(fixtureRoot: string): void {
     appPath: "packaged-cli-ui",
     route: "/",
     evidencePath: "docs/git-delivery/evidence/1575",
-    generatedAt: new Date().toISOString(),
-    fixtureRoot,
+    fixture: {
+      kind: "local-git-repository",
+      worktree: "temporary-local-worktree",
+      browserProjectPath: EVIDENCE_PROJECT_PATH,
+    },
     routesIntercepted: MANIFEST_ROUTES,
     windowRegistration: {
       kind: "gitClient",
@@ -510,18 +594,19 @@ test("Issue #1575 — Git Changes view renders all six file states against a rea
   ensureEvidenceDir();
   const fixtureRoot = buildGitFixture();
 
-  await interceptGitRoutes(page, fixtureRoot);
-  await seedGitClientWindow(page, fixtureRoot);
+  await interceptGitRoutes(page, EVIDENCE_PROJECT_PATH);
+  await seedGitClientWindow(page, EVIDENCE_PROJECT_PATH);
   await page.goto("/");
 
   const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
+  await expect(gitWindow).not.toContainText(fixtureRoot);
 
   const nav = await assertChangedFileList(gitWindow);
   await assertDiffAndCommitComposer(page, gitWindow, nav);
 
   await page.locator("body").screenshot({ path: artifactPath("git-changes-view.png") });
-  writeEvidenceManifest(fixtureRoot);
+  writeEvidenceManifest();
 });
 
 // ─── Focused sub-assertions (mutation-robust, single act each) ────────────────────────────────────
@@ -530,12 +615,13 @@ test("Issue #1575 — Stage all button is enabled when unstaged changes are pres
   page,
 }) => {
   const fixtureRoot = buildGitFixture();
-  await interceptGitRoutes(page, fixtureRoot);
-  await seedGitClientWindow(page, fixtureRoot);
+  await interceptGitRoutes(page, EVIDENCE_PROJECT_PATH);
+  await seedGitClientWindow(page, EVIDENCE_PROJECT_PATH);
   await page.goto("/");
 
   const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
+  await expect(gitWindow).not.toContainText(fixtureRoot);
   const stageAllBtn = gitWindow.getByRole("button", { name: "Stage all", exact: true });
   await expect(stageAllBtn).toBeVisible();
   // The fixture has 1 unstaged (app.ts) + 1 untracked (notes.txt) → Stage all must be enabled.
@@ -546,12 +632,13 @@ test("Issue #1575 — Unstage all button is enabled when staged changes are pres
   page,
 }) => {
   const fixtureRoot = buildGitFixture();
-  await interceptGitRoutes(page, fixtureRoot);
-  await seedGitClientWindow(page, fixtureRoot);
+  await interceptGitRoutes(page, EVIDENCE_PROJECT_PATH);
+  await seedGitClientWindow(page, EVIDENCE_PROJECT_PATH);
   await page.goto("/");
 
   const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
+  await expect(gitWindow).not.toContainText(fixtureRoot);
   const unstageAllBtn = gitWindow.getByRole("button", { name: "Unstage all", exact: true });
   await expect(unstageAllBtn).toBeVisible();
   // The fixture has 3 staged files → Unstage all must be enabled.
@@ -562,12 +649,13 @@ test("Issue #1575 — Untracked row checkbox aria-label uses 'Stage' not 'Unstag
   page,
 }) => {
   const fixtureRoot = buildGitFixture();
-  await interceptGitRoutes(page, fixtureRoot);
-  await seedGitClientWindow(page, fixtureRoot);
+  await interceptGitRoutes(page, EVIDENCE_PROJECT_PATH);
+  await seedGitClientWindow(page, EVIDENCE_PROJECT_PATH);
   await page.goto("/");
 
   const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
+  await expect(gitWindow).not.toContainText(fixtureRoot);
   const nav = gitWindow.locator('nav[aria-label="Changed files"]');
   // Untracked files are unstaged; their checkbox must say "Stage <path>", not "Unstage <path>".
   await expect(nav.locator('input[aria-label="Stage notes.txt"]')).toBeVisible();
@@ -578,12 +666,13 @@ test("Issue #1575 — Conflicted row checkbox aria-label uses 'Stage' not 'Unsta
   page,
 }) => {
   const fixtureRoot = buildGitFixture();
-  await interceptGitRoutes(page, fixtureRoot);
-  await seedGitClientWindow(page, fixtureRoot);
+  await interceptGitRoutes(page, EVIDENCE_PROJECT_PATH);
+  await seedGitClientWindow(page, EVIDENCE_PROJECT_PATH);
   await page.goto("/");
 
   const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
+  await expect(gitWindow).not.toContainText(fixtureRoot);
   const nav = gitWindow.locator('nav[aria-label="Changed files"]');
   // Conflicted files show staged=false; their checkbox must say "Stage <path>".
   await expect(nav.locator('input[aria-label="Stage src/shared.ts"]')).toBeVisible();
@@ -594,12 +683,13 @@ test("Issue #1575 — Switching diff scope from Worktree to Staged changes aria-
   page,
 }) => {
   const fixtureRoot = buildGitFixture();
-  await interceptGitRoutes(page, fixtureRoot);
-  await seedGitClientWindow(page, fixtureRoot);
+  await interceptGitRoutes(page, EVIDENCE_PROJECT_PATH);
+  await seedGitClientWindow(page, EVIDENCE_PROJECT_PATH);
   await page.goto("/");
 
   const gitWindow = page.locator('[data-window-id="issue-1575-git-changes"]');
   await expect(gitWindow).toBeVisible();
+  await expect(gitWindow).not.toContainText(fixtureRoot);
 
   // Select the modified file so the diff pane activates.
   const nav = gitWindow.locator('nav[aria-label="Changed files"]');
