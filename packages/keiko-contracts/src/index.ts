@@ -405,6 +405,78 @@ export {
   validateGitRepositoryDiffResponse,
 } from "./git-repository.js";
 
+// ─── Git repository summary + remotes BFF (Issue #1573, Epic #1572) ───────────────
+// Read-only repository summary (branch/upstream/ahead-behind/counts/remotes/last-sync) and a
+// dedicated remotes response. The browser receives bounded, redacted metadata only; all Git
+// process execution stays server-side. Reuses GitRepositoryState/GitUnavailableReason unions.
+export type {
+  GitRemoteSummary,
+  GitRepositorySummaryRemote,
+  GitUpstreamSummary,
+  GitLastSyncMetadata,
+  GitRepositorySummary,
+  GitRemotesResponse,
+  GitRepositorySummaryValidation,
+} from "./git-repository-summary.js";
+export {
+  GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION,
+  validateGitRepositorySummary,
+  validateGitRemotesResponse,
+} from "./git-repository-summary.js";
+
+// ─── Git commit history BFF (Issue #1573, Epic #1572) ─────────────────────────────
+// Read-only, paginated commit history (sha/subject/author/ISO date/refs/parent and changed-file
+// counts). Bounded entries with limit/skip/truncated; all Git process execution stays server-side.
+export type { GitHistoryEntry, GitHistoryResponse } from "./git-history.js";
+export { GIT_HISTORY_SCHEMA_VERSION, validateGitHistoryResponse } from "./git-history.js";
+
+// ─── Git fetch/pull sync BFF (Issue #1573, Epic #1572) ────────────────────────────
+// Read-only sync preview (readiness/executable gate + block reason) and the governed execute
+// request/response with an evidence-friendly outcome taxonomy. Fetch/pull deliberately do NOT
+// enter the GitDeliveryActionKind mutation taxonomy; they use a dedicated bounded git executor.
+export type {
+  GitSyncOperation,
+  GitSyncOutcome,
+  GitSyncBlockReason,
+  GitSyncExecuteRequest,
+  GitSyncPreview,
+  GitSyncExecuteResponse,
+} from "./git-sync.js";
+export {
+  GIT_SYNC_SCHEMA_VERSION,
+  GIT_SYNC_OPERATIONS,
+  GIT_SYNC_OUTCOMES,
+  GIT_SYNC_BLOCK_REASONS,
+  isGitSyncOperation,
+  isGitSyncOutcome,
+  validateGitSyncPreview,
+  validateGitSyncExecuteResponse,
+} from "./git-sync.js";
+
+// ─── Agent repository operation facade (Issue #1577, Epic #1571) ─────────────
+// Typed agent admission contract over existing Git reads and governed Git delivery routes. It grants
+// no shell/provider authority and reject command-shaped payloads before the BFF can delegate.
+export type {
+  GitRepositoryAgentOperationMode,
+  GitRepositoryAgentOperationKind,
+  GitRepositoryAgentDenialReason,
+  GitRepositoryAgentOperationRequest,
+  GitRepositoryAgentOperationDelegatedResponse,
+  GitRepositoryAgentOperationDeniedResponse,
+  GitRepositoryAgentOperationResponse,
+  GitRepositoryAgentParseOk,
+  GitRepositoryAgentParseFail,
+  GitRepositoryAgentParseResult,
+} from "./git-repository-agent.js";
+export {
+  GIT_REPOSITORY_AGENT_SCHEMA_VERSION,
+  GIT_REPOSITORY_AGENT_OPERATION_MODES,
+  GIT_REPOSITORY_AGENT_OPERATION_KINDS,
+  GIT_REPOSITORY_AGENT_DENIAL_REASONS,
+  parseGitRepositoryAgentOperationRequest,
+  isGitRepositoryAgentOperationResponse,
+} from "./git-repository-agent.js";
+
 // ─── Controlled command executor (Issue #1387, Epic #1491) ────────────────────────
 // Wire contract for the governed test/build/run command runner: a server-discovered catalog of
 // vetted tasks, a run request that names a catalog `taskId` (never free-form argv), the structured
@@ -691,6 +763,10 @@ export type {
   VoicePlaybackState,
   VoicePolicyDecision,
   VoiceProtocolErrorCode,
+  VoiceSessionMemoryContext,
+  VoiceSessionGroundingKind,
+  VoiceSessionGroundingContext,
+  VoiceSessionChatContext,
   VoiceSessionCreateMessage,
   VoiceSessionCreatedMessage,
   VoiceSessionCloseMessage,
@@ -2311,37 +2387,6 @@ export {
   validateSpokenActionProposal,
   validateSpokenActionAuditRecord,
 } from "./voice-action-intent.js";
-
-// ─── Voice session recap (Issue #504 / Epic #491; ADR-0067) ──────────────────────
-// User-triggered recap of a voice session's committed transcript that derives memory candidates via the
-// EXISTING governed `extractCandidatesFromUserText` path and surfaces them in the existing review queue.
-// Pure, content-free leaf module: descriptors and the audit record carry no raw text/audio, only
-// enums/counts/durations. The committed transcript roll-up reuses `VoiceTranscriptEvidenceSummary`.
-export type {
-  VoiceSessionRecapSchemaVersion,
-  VoiceRecapCandidateStatus,
-  VoiceRecapCommittedSpanDescriptor,
-  VoiceRecapAssistantTurnSource,
-  VoiceRecapAssistantTurnDescriptor,
-  VoiceSessionRecapEvidenceSummary,
-  VoiceSessionRecapAuditRecord,
-  VoiceSessionRecapAuditInput,
-  VoiceSessionRecapCandidateCounts,
-  VoiceSessionRecapValidationResult,
-} from "./voice-session-recap.js";
-export {
-  VOICE_SESSION_RECAP_SCHEMA_VERSION,
-  VOICE_RECAP_CANDIDATE_STATUSES,
-  VOICE_RECAP_ASSISTANT_TURN_SOURCES,
-  isVoiceSessionRecapSchemaVersionSupported,
-  voiceRecapAllowed,
-  isVoiceRecapCandidateStatus,
-  assertNeverVoiceRecapCandidateStatus,
-  isVoiceRecapAssistantTurnSource,
-  buildVoiceSessionRecapAuditRecord,
-  summarizeVoiceSessionRecap,
-  validateVoiceSessionRecapAuditRecord,
-} from "./voice-session-recap.js";
 
 // ─── Task-scoped workspace domain (Issue #444, Epic #443) ───
 // The authoritative contract for what a task-scoped isolated workspace IS, how a task binds to it,

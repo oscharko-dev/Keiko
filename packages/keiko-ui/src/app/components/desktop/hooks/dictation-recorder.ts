@@ -41,6 +41,11 @@ export class DictationRecorderError extends Error {
 // An active recording. `stop` resolves with the captured clip; `cancel` discards it. Both release the
 // microphone track so the OS-level "recording" indicator clears immediately (AC3 "stops visibly").
 export interface DictationSession {
+  // The live capture stream. Exposed so a dialogue-mode voice-activity detector can analyse the same
+  // microphone (it never opens its own) to end the turn on trailing silence. The session still owns
+  // teardown — stop()/cancel() release the tracks. Optional only so existing test fakes need not provide
+  // it; the production recorder always sets it.
+  readonly stream?: MediaStream;
   stop(): Promise<DictationCapture>;
   cancel(): void;
 }
@@ -130,6 +135,28 @@ function stopTracks(stream: MediaStream): void {
   }
 }
 
+// Full-duplex dictation capture constraints. In dialogue mode the assistant's reply plays through the
+// speakers while the next turn may be captured, so echo cancellation / noise suppression keep the
+// assistant's own audio and room noise out of both the transcript and the voice-activity detector. Mono
+// is sufficient for speech. Falls back to the unconstrained mic when a device cannot satisfy them.
+const DICTATION_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+};
+
+async function acquireDictationMicrophone(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: DICTATION_AUDIO_CONSTRAINTS });
+  } catch (error) {
+    if (error instanceof Error && error.name === "OverconstrainedError") {
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    throw error;
+  }
+}
+
 function waitForStop(recorder: MediaRecorder): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     recorder.addEventListener("stop", () => resolve(), { once: true });
@@ -157,6 +184,7 @@ function beginSession(stream: MediaStream): DictationSession {
   let settled = false;
 
   return {
+    stream,
     async stop(): Promise<DictationCapture> {
       if (settled) {
         throw new DictationRecorderError("capture-failed", "The recording is no longer active.");
@@ -204,7 +232,7 @@ export function createBrowserDictationRecorder(): DictationRecorder {
       }
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await acquireDictationMicrophone();
       } catch (error) {
         throw new DictationRecorderError(
           classifyGetUserMediaError(error),

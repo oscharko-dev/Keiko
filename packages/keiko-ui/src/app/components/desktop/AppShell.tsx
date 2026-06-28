@@ -13,6 +13,10 @@ import { Header, type HeaderStatusTone } from "./Header";
 import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
+import {
+  readWorkspaceCameraSmoothness,
+  WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
+} from "./workspace-appearance";
 import { CommandPalette, type Command } from "./modals/CommandPalette";
 import { GatewaySetupDialog } from "./modals/GatewaySetupDialog";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
@@ -537,7 +541,21 @@ function AppShellInner(): ReactNode {
     },
     [chatForWindow, session],
   );
+  const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
+
+  useEffect(() => {
+    const onCameraSmoothness = (event: Event): void => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      setCameraSmoothness(typeof detail === "number" ? detail : 0);
+    };
+    window.addEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
+    return () => {
+      window.removeEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
+    };
+  }, []);
+
   const ws = useWorkspace(wsRef, {
+    cameraSmoothness,
     onScopeBind: handleScopeBind,
     onScopeUnbind: handleScopeUnbind,
     onConnectorBind: handleConnectorBind,
@@ -764,12 +782,8 @@ function AppShellInner(): ReactNode {
               onTileAll={ws.api.tileAll}
               onSplitFront={ws.api.splitFront}
               onCascade={ws.api.cascade}
+              contextControl={<TaskWorkspaceSwitcher />}
             />
-            {/* Issue #446 — the active task-workspace context control sits in the top chrome so the
-              operator always sees which task workspace every surface is bound to. */}
-            <div className="tw-switcher-strip" style={{ padding: "0.25rem 0.6rem" }}>
-              <TaskWorkspaceSwitcher />
-            </div>
             <div className="mid">
               {needsGatewaySetup ? null : (
                 <LeftRail

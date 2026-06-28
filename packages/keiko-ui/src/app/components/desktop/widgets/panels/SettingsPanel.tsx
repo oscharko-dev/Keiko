@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
 import { LOCALE_LABELS, useI18n, type I18nTranslate } from "@/lib/i18n";
 import type {
@@ -10,6 +11,7 @@ import type {
   GatewayReadinessReport,
   ModelCapability,
   SafeGatewayConfig,
+  VoicePersona,
 } from "@/lib/types";
 import {
   describeVoiceProviderAvailability,
@@ -19,6 +21,13 @@ import {
 } from "@/lib/types";
 import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
+import { personaLabel } from "../../VoiceDialogMode";
+import {
+  readVoicePersonaPreference,
+  VOICE_PERSONA_CHANGED_EVENT,
+  VOICE_PERSONA_STORAGE_KEY,
+  writeVoicePersonaPreference,
+} from "../../hooks/useVoiceDialogMode";
 import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
 import { Toggle } from "../shared/Toggle";
 import { GATEWAY_SETUP_REQUEST_EVENT, consumePendingGatewaySetup } from "../shared/gatewaySetupBus";
@@ -36,6 +45,8 @@ import {
   WORKSPACE_BACKGROUND_BRIGHTNESS_KEY,
   WORKSPACE_GRID_STRENGTH_EVENT,
   WORKSPACE_GRID_STRENGTH_KEY,
+  WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
+  WORKSPACE_CAMERA_SMOOTHNESS_KEY,
   applyFrameBorderStrength,
   applyWorkspaceBackgroundBrightness,
   applyWorkspaceGridStrength,
@@ -44,6 +55,7 @@ import {
   readWallpaperEnabled,
   readWallpaperOpacity,
   readWorkspaceBackgroundBrightness,
+  readWorkspaceCameraSmoothness,
   readWorkspaceGridStrength,
 } from "../../workspace-appearance";
 
@@ -102,6 +114,16 @@ function voiceProviderShortLabel(model: ModelCapability, t: I18nTranslate): stri
   if (availability.speechOutput) return t("settings.models.voiceCapabilitySpeechOutput");
   if (availability.speechToText) return t("settings.models.voiceCapabilitySpeechToText");
   return t("settings.models.voiceCapabilityVoice");
+}
+
+function voicePersonasFromModels(models: readonly ModelCapability[]): readonly VoicePersona[] {
+  const present = new Set<VoicePersona>();
+  for (const model of models) {
+    for (const persona of describeVoiceProviderAvailability(model).personas) {
+      present.add(persona);
+    }
+  }
+  return VOICE_PERSONAS.filter((persona) => present.has(persona));
 }
 
 // uiux-fix C359/C057: short visible badge copy — the long form stays in
@@ -463,16 +485,59 @@ function ModelCapabilityRow({
   );
 }
 
-function GeneralPrefs(): ReactNode {
+interface GeneralPrefsProps {
+  readonly voicePersonas: readonly VoicePersona[];
+}
+
+function GeneralPrefs({ voicePersonas }: GeneralPrefsProps): ReactNode {
   const { locale, setLocale, t } = useI18n();
+  const voicePersonaOptions = useMemo(
+    () => (voicePersonas.length > 0 ? voicePersonas : VOICE_PERSONAS),
+    [voicePersonas],
+  );
+  const [voicePersona, setVoicePersona] = useState<VoicePersona>(
+    () => readVoicePersonaPreference(voicePersonaOptions) ?? voicePersonaOptions[0]!,
+  );
   const [wallpaperEnabled, setWallpaperEnabled] = useState<boolean>(readWallpaperEnabled);
   const [wp, setWp] = useState<number>(readWallpaperOpacity);
   const [bgBrightness, setBgBrightness] = useState<number>(readWorkspaceBackgroundBrightness);
   const [gridStrength, setGridStrength] = useState<number>(readWorkspaceGridStrength);
+  const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
   const [frameBorderStrength, setFrameBorderStrength] = useState<number>(readFrameBorderStrength);
   const [frameInnerGlowStrength, setFrameInnerGlowStrength] = useState<number>(
     readFrameInnerGlowStrength,
   );
+
+  useEffect(() => {
+    setVoicePersona(readVoicePersonaPreference(voicePersonaOptions) ?? voicePersonaOptions[0]!);
+  }, [voicePersonaOptions]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const applyStoredPreference = (): void => {
+      setVoicePersona(readVoicePersonaPreference(voicePersonaOptions) ?? voicePersonaOptions[0]!);
+    };
+    const applyStoragePreference = (event: StorageEvent): void => {
+      if (event.key === VOICE_PERSONA_STORAGE_KEY) {
+        applyStoredPreference();
+      }
+    };
+    window.addEventListener(VOICE_PERSONA_CHANGED_EVENT, applyStoredPreference);
+    window.addEventListener("storage", applyStoragePreference);
+    return () => {
+      window.removeEventListener(VOICE_PERSONA_CHANGED_EVENT, applyStoredPreference);
+      window.removeEventListener("storage", applyStoragePreference);
+    };
+  }, [voicePersonaOptions]);
+
+  const voiceSections = [
+    {
+      options: voicePersonaOptions.map((persona) => ({
+        value: persona,
+        label: personaLabel(persona),
+      })),
+    },
+  ];
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -521,6 +586,18 @@ function GeneralPrefs(): ReactNode {
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
+      window.localStorage.setItem(WORKSPACE_CAMERA_SMOOTHNESS_KEY, String(cameraSmoothness));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    window.dispatchEvent(
+      new CustomEvent(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, { detail: cameraSmoothness }),
+    );
+  }, [cameraSmoothness]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
       window.localStorage.setItem(FRAME_BORDER_STRENGTH_KEY, String(frameBorderStrength));
     } catch {
       /* ignore quota / private mode */
@@ -548,6 +625,9 @@ function GeneralPrefs(): ReactNode {
   const fill: CSSProperties = { ["--p"]: `${String(wp)}%` } as CSSProperties;
   const bgFill: CSSProperties = { ["--p"]: `${String(bgBrightness)}%` } as CSSProperties;
   const gridFill: CSSProperties = { ["--p"]: `${String(gridStrength)}%` } as CSSProperties;
+  const cameraSmoothnessFill: CSSProperties = {
+    ["--p"]: `${String(cameraSmoothness)}%`,
+  } as CSSProperties;
   const frameBorderFill: CSSProperties = {
     ["--p"]: `${String(frameBorderStrength)}%`,
   } as CSSProperties;
@@ -591,6 +671,38 @@ function GeneralPrefs(): ReactNode {
         </div>
         <div id={languageHelpId} className="gpref-help">
           {t("settings.language.help")}
+        </div>
+      </div>
+      <div className="set-sec-h">
+        <div>
+          <div className="set-sec-t">{t("settings.voice.title")}</div>
+          <div className="set-sec-d">{t("settings.voice.description")}</div>
+        </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <span className="gpref-label">{t("settings.voice.label")}</span>
+          <KeikoSelect
+            ariaLabel={t("settings.voice.label")}
+            ariaDescribedBy="settings-voice-help"
+            attached={false}
+            leadingVisual={<Icons.mic size={15} />}
+            menuMinWidth={172}
+            onValueChange={(next) => {
+              if ((voicePersonaOptions as readonly string[]).includes(next)) {
+                const selected = next as VoicePersona;
+                setVoicePersona(selected);
+                writeVoicePersonaPreference(selected);
+              }
+            }}
+            sections={voiceSections}
+            showMenuHeader={false}
+            triggerClassName="settings-language-select"
+            value={voicePersona}
+          />
+        </div>
+        <div id="settings-voice-help" className="gpref-help">
+          {voicePersonas.length > 0 ? t("settings.voice.help") : t("settings.voice.unavailable")}
         </div>
       </div>
       <div className="set-sec-h">
@@ -684,6 +796,31 @@ function GeneralPrefs(): ReactNode {
           <span>{t("settings.scale.subtle")}</span>
           <span>{t("settings.scale.strong")}</span>
         </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <label className="gpref-label" htmlFor="ws-camera-smoothness">
+            {t("settings.workspace.cameraAnimation")}
+          </label>
+          <span className="gpref-val mono">{cameraSmoothness}%</span>
+        </div>
+        <input
+          id="ws-camera-smoothness"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={cameraSmoothness}
+          onChange={(e) => setCameraSmoothness(Number.parseInt(e.target.value, 10))}
+          style={cameraSmoothnessFill}
+          aria-label={t("settings.workspace.cameraAnimation")}
+        />
+        <div className="gpref-scale">
+          <span>{t("settings.workspace.cameraAnimationMinimal")}</span>
+          <span>{t("settings.workspace.cameraAnimationSmooth")}</span>
+        </div>
+        <div className="gpref-help">{t("settings.workspace.cameraAnimationHelp")}</div>
       </div>
       <div className="gpref">
         <div className="gpref-row">
@@ -833,6 +970,7 @@ export function SettingsPanel(): ReactNode {
 
   // Issue #144: source of truth is the helper, not an inline kind check.
   const chatCount = models.filter(isConversationEligibleModel).length;
+  const voicePersonas = useMemo(() => voicePersonasFromModels(models), [models]);
   const gatewayConfigured = configPresent;
   const hasDiscoveredModels = models.length > 0;
   const gatewayStatusLabel = !gatewayConfigured
@@ -995,7 +1133,7 @@ export function SettingsPanel(): ReactNode {
             ) : null}
           </>
         )}
-        {tab === "general" && <GeneralPrefs />}
+        {tab === "general" && <GeneralPrefs voicePersonas={voicePersonas} />}
         {tab === "security" && (
           <div className="set-placeholder">{t("settings.security.placeholder")}</div>
         )}

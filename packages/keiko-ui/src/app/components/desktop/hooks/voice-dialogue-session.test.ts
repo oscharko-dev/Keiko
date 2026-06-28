@@ -97,18 +97,18 @@ describe("voiceDialogueModeForResolution — fallback matrix (D2/D3, AC4)", () =
   it("IS offered for full-realtime with WebRTC media", () => {
     expect(voiceDialogueModeForResolution(FULL_REALTIME_WEBRTC, true)).toEqual({
       offered: true,
-      capture: "dictation",
+      capture: "webrtc",
       speaks: true,
       canInterrupt: true,
     });
   });
 
-  it("IS STILL offered for full-realtime WITHOUT WebRTC media (the STT+TTS fallback fix, D3)", () => {
+  it("is NOT offered for full-realtime WITHOUT WebRTC media", () => {
     expect(voiceDialogueModeForResolution(FULL_REALTIME_NO_WEBRTC, true)).toEqual({
-      offered: true,
-      capture: "dictation",
-      speaks: true,
-      canInterrupt: true,
+      offered: false,
+      capture: "none",
+      speaks: false,
+      canInterrupt: false,
     });
   });
 
@@ -116,7 +116,7 @@ describe("voiceDialogueModeForResolution — fallback matrix (D2/D3, AC4)", () =
     expect(voiceDialogueModeForResolution(FULL_REALTIME_NO_PERSONAS, true).offered).toBe(false);
   });
 
-  it("is NOT offered when the browser cannot capture audio, even for full-realtime", () => {
+  it("is NOT offered when the browser cannot open realtime media, even for full-realtime", () => {
     expect(voiceDialogueModeForResolution(FULL_REALTIME_WEBRTC, false).offered).toBe(false);
   });
 });

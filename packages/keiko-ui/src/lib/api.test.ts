@@ -13,7 +13,12 @@ import {
   fetchFilesSearch,
   fetchFilesTree,
   fetchGitBranches,
+  fetchGitDeliverySyncExecute,
+  fetchGitDeliverySyncPreview,
   fetchGitDiff,
+  fetchGitHistory,
+  fetchGitRemotes,
+  fetchGitSummary,
   fetchGitStatus,
   fetchModels,
   fetchPdfCitationPreviewDocument,
@@ -556,6 +561,155 @@ describe("files API helpers", () => {
       "/api/git/diff?root=%2Frepo+space&path=src%2Fapp.ts&scope=worktree",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("encodes Git summary, history, and remotes requests", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          state: "available",
+          available: true,
+          branch: "main",
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          stagedCount: 0,
+          unstagedCount: 0,
+          untrackedCount: 0,
+          conflictedCount: 0,
+          clean: true,
+          remotes: [],
+          truncated: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          state: "available",
+          available: true,
+          entries: [],
+          limit: 25,
+          skip: 50,
+          truncated: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          state: "available",
+          available: true,
+          remotes: [],
+          truncated: false,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitSummary("/repo space");
+    await fetchGitHistory({ root: "/repo space", limit: 25, skip: 50 });
+    await fetchGitRemotes("/repo space");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git/summary?root=%2Frepo+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git/history?root=%2Frepo+space&limit=25&skip=50",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/git/remotes?root=%2Frepo+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("posts fetch and pull sync preview/execute envelopes with CSRF", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          operation: "fetch",
+          available: true,
+          state: "available",
+          branch: "main",
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          hasRemote: true,
+          hasUpstream: true,
+          dirty: false,
+          executable: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          operation: "pull",
+          status: "succeeded",
+          available: true,
+          branch: "main",
+          truncated: false,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitDeliverySyncPreview({
+      operation: "fetch",
+      projectId: "/repo space",
+      remote: "origin",
+    });
+    await fetchGitDeliverySyncExecute({
+      operation: "pull",
+      projectId: "/repo space",
+      remote: "origin",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git-delivery/fetch/preview",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          schemaVersion: "1",
+          projectId: "/repo space",
+          remote: "origin",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git-delivery/pull/execute",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          schemaVersion: "1",
+          projectId: "/repo space",
+          remote: "origin",
+        }),
       }),
     );
   });

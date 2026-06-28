@@ -37,26 +37,19 @@ export function personaLabel(persona: VoicePersona): string {
   return PERSONA_LABEL[persona];
 }
 
-// Decorative speech-bubble glyph for the dialogue switch; `aria-hidden` so the accessible name comes
-// from the switch's `aria-label`. Inline so the component depends on no icon asset.
-function DialogueGlyph(): ReactNode {
+// Decorative Keiko logo for the dialogue switch; `aria-hidden` so the accessible name comes from the
+// switch's `aria-label`.
+function KeikoLogoGlyph(): ReactNode {
   return (
-    <svg
-      width={16}
-      height={16}
-      viewBox="0 0 24 24"
-      fill="none"
+    // eslint-disable-next-line @next/next/no-img-element -- this matches the header logo treatment and keeps the icon unwrapped inside the fixed-size button.
+    <img
+      src="/assets/keiko-logo.svg"
+      alt=""
+      width={34}
+      height={34}
       aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        d="M4 5h16v10H9l-4 4V5z"
-        fill="currentColor"
-        stroke="currentColor"
-        strokeWidth={1.5}
-        strokeLinejoin="round"
-      />
-    </svg>
+      decoding="async"
+    />
   );
 }
 
@@ -77,7 +70,7 @@ export function VoiceDialogModeSwitch({
   compact = false,
   buttonRef,
 }: VoiceDialogModeSwitchProps): ReactNode {
-  // role="switch" + aria-checked mirrors the shared Toggle but carries the dialogue glyph and tooltip,
+  // role="switch" + aria-checked mirrors the shared Toggle but carries the Keiko logo and tooltip,
   // so screen-reader users hear an on/off control with a stable accessible name (AC4).
   return (
     <button
@@ -89,10 +82,10 @@ export function VoiceDialogModeSwitch({
       data-tip={SWITCH_LABEL}
       data-active={active ? "true" : "false"}
       disabled={disabled}
-      className={`cmp-icon cmp-voice ui-tip${compact ? " cmp-mode-compact" : ""}`}
+      className={`cmp-icon cmp-voice cmp-voice-dialog-logo ui-tip${compact ? " cmp-mode-compact" : ""}`}
       onClick={onToggle}
     >
-      <DialogueGlyph />
+      <KeikoLogoGlyph />
     </button>
   );
 }
@@ -181,6 +174,8 @@ interface VoiceDialogControlsProps {
   readonly state: VoiceDialogState;
   readonly muted: boolean;
   readonly onToggleMute: () => void;
+  readonly canInterrupt?: boolean | undefined;
+  readonly onInterrupt?: (() => void) | undefined;
   readonly onStop: () => void;
   readonly onLeave: () => void;
   readonly personas: readonly VoicePersona[];
@@ -194,6 +189,8 @@ export function VoiceDialogControls({
   state,
   muted,
   onToggleMute,
+  canInterrupt = false,
+  onInterrupt,
   onStop,
   onLeave,
   personas,
@@ -226,6 +223,17 @@ export function VoiceDialogControls({
         buttonRef={muteButtonRef}
         compact={compact}
       />
+      {onInterrupt !== undefined ? (
+        <button
+          type="button"
+          className="cmp-voice-btn"
+          aria-label="Interrupt the assistant"
+          disabled={!canInterrupt}
+          onClick={onInterrupt}
+        >
+          Interrupt
+        </button>
+      ) : null}
       <button
         type="button"
         className="cmp-voice-btn"

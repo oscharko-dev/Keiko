@@ -17,6 +17,7 @@ import {
   type SyntheticEvent,
   type WheelEvent,
 } from "react";
+import type { VoiceSessionGroundingContext } from "@oscharko-dev/keiko-contracts";
 import { useChatSessionContext } from "./context/ChatSessionContext";
 import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { ErrorNoticeFromError } from "./ErrorNotice";
@@ -46,43 +47,27 @@ import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import {
   supportsDictation,
-  supportsRealtimeVoice,
   supportsSpeechOutput,
-  supportsVoiceRecap,
   useVoiceCapability,
 } from "./hooks/useVoiceCapability";
 import { useDictation, type DictationController } from "./hooks/useDictation";
 import { dictationCaptureSupported } from "./hooks/dictation-recorder";
 import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./VoiceDictation";
-import { useRealtimeVoice, type RealtimeVoiceController } from "./hooks/useRealtimeVoice";
-import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
-import { VoiceRealtimeButton, VoiceRealtimeStatusFromController } from "./VoiceRealtime";
-import { type VoicePlaybackBinding } from "./hooks/useVoicePlayback";
 import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
-import { VoicePlaybackMuteButton, VoicePlaybackStatusFromBinding } from "./VoicePlayback";
+import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
-import { useVoiceDialogueSession } from "./hooks/useVoiceDialogueSession";
+import { useRealtimeVoice } from "./hooks/useRealtimeVoice";
 import {
   usePdfCitationPreviewController,
   type PdfCitationPreviewWindowApi,
 } from "./hooks/usePdfCitationPreview";
 import { registerPdfCitationPreviewMessageTarget } from "./widgets/cards/pdf-citation-preview-session";
 import {
+  deriveVoiceAuraState,
   deriveVoiceDialogState,
-  playbackPhaseToTurnState,
-  type VoiceDialogState,
+  voiceDialogStateHeadline,
 } from "./hooks/voice-dialog-state";
-import {
-  VoiceDialogModeSwitch,
-  VoiceDialogSessionStatus,
-  VoiceDialogControls,
-  VoiceDialogTurnControls,
-} from "./VoiceDialogMode";
-import {
-  useVoiceSessionRecap,
-  type VoiceSessionRecapController,
-} from "./hooks/voice-session-recap";
-import { VoiceRecapButton, VoiceRecapPanel } from "./VoiceRecap";
+import { VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -1181,7 +1166,6 @@ interface ComposerBarProps {
   readonly ready: boolean;
   readonly selectedModelCapability: ModelCapability | undefined;
   readonly onAttachFiles: (files: readonly File[]) => void;
-  readonly compact?: boolean;
   readonly controlsNarrow?: boolean;
   readonly barCompact?: boolean;
   // Issue #151 — when true, the budget for the next send exceeds the model's
@@ -1193,27 +1177,96 @@ interface ComposerBarProps {
   readonly voiceDictationVisible: boolean;
   readonly dictation: DictationController;
   readonly micButtonRef: Ref<HTMLButtonElement>;
-  // Issue #497 — capability-gated realtime voice. The button renders only when the deployment
-  // advertises full-realtime AND the browser can open a WebRTC peer connection.
-  readonly voiceRealtimeVisible: boolean;
-  readonly realtime: RealtimeVoiceController;
-  readonly realtimeButtonRef: Ref<HTMLButtonElement>;
   // Issue #501 — capability-gated assistant speech output. The mute toggle renders only when the
   // deployment advertises speech output; a no-voice / STT-only deployment shows nothing (AC1).
   readonly voiceSpeechOutputVisible: boolean;
-  readonly playback: VoicePlaybackBinding;
+  readonly voiceMuted: boolean;
+  readonly onToggleVoiceMute: () => void;
   readonly playbackButtonRef: Ref<HTMLButtonElement>;
-  // Issue #504 — capability-gated voice session recap. The button renders only when the deployment
-  // captures a user transcript; it is inert until there is committed content to review (AC1).
-  readonly voiceRecapVisible: boolean;
-  readonly recap: VoiceSessionRecapController;
-  readonly recapButtonRef: Ref<HTMLButtonElement>;
-  // Issue #1559 — capability-gated voice dialogue switch. Rendered only when `voiceDialogAvailable` is
-  // true (full-realtime advertised AND at least one persona). `voiceDialogActive` drives aria-checked.
+  // Issue #1559/#1560 — capability-gated voice dialogue switch. Rendered only when
+  // `voiceDialogAvailable` is true (speech capture + speech output + at least one persona).
+  // `voiceDialogActive` drives aria-checked.
   readonly voiceDialogAvailable: boolean;
   readonly voiceDialogActive: boolean;
   readonly onToggleVoiceDialog: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
+}
+
+interface VoiceDialogComposerControlsProps {
+  readonly voiceMuted: boolean;
+  readonly onToggleVoiceMute: () => void;
+  readonly playbackButtonRef: Ref<HTMLButtonElement>;
+  readonly voiceDialogActive: boolean;
+  readonly onToggleVoiceDialog: () => void;
+  readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
+  readonly compact?: boolean | undefined;
+}
+
+interface VoiceDialogMicMuteButtonProps {
+  readonly muted: boolean;
+  readonly onToggle: () => void;
+  readonly buttonRef?: Ref<HTMLButtonElement> | undefined;
+  readonly compact?: boolean | undefined;
+}
+
+function VoiceDialogMicMuteButton({
+  muted,
+  onToggle,
+  buttonRef,
+  compact = false,
+}: VoiceDialogMicMuteButtonProps): ReactNode {
+  const hintId = useId();
+  const label = muted ? "Unmute voice dialogue microphone" : "Mute voice dialogue microphone";
+  return (
+    <button
+      type="button"
+      ref={buttonRef}
+      className={`cmp-icon cmp-voice cmp-voice-dialog-mute ui-tip${compact ? " cmp-mode-compact" : ""}`}
+      data-muted={muted ? "true" : "false"}
+      data-tip={label}
+      aria-label={label}
+      aria-pressed={muted}
+      aria-describedby={hintId}
+      onClick={onToggle}
+    >
+      <span className="cmp-voice-dialog-mic-glyph" aria-hidden="true">
+        <Icons.mic size={16} />
+        {muted ? <span className="cmp-voice-dialog-mic-slash" /> : null}
+      </span>
+      <span id={hintId} className="sr-only">
+        When muted, Keiko cannot hear your microphone until you unmute.
+      </span>
+    </button>
+  );
+}
+
+function VoiceDialogComposerControls({
+  voiceMuted,
+  onToggleVoiceMute,
+  playbackButtonRef,
+  voiceDialogActive,
+  onToggleVoiceDialog,
+  voiceDialogButtonRef,
+  compact = false,
+}: VoiceDialogComposerControlsProps): ReactNode {
+  return (
+    <div className="cmp-bar cmp-bar-voice-dialog">
+      <div className="cmp-bar-main cmp-bar-main-voice-dialog">
+        <VoiceDialogModeSwitch
+          active={voiceDialogActive}
+          onToggle={onToggleVoiceDialog}
+          buttonRef={voiceDialogButtonRef}
+          compact={compact}
+        />
+        <VoiceDialogMicMuteButton
+          muted={voiceMuted}
+          onToggle={onToggleVoiceMute}
+          buttonRef={playbackButtonRef}
+          compact={compact}
+        />
+      </div>
+    </div>
+  );
 }
 
 function ComposerBar({
@@ -1221,22 +1274,16 @@ function ComposerBar({
   ready,
   selectedModelCapability,
   onAttachFiles,
-  compact = false,
   controlsNarrow = false,
   barCompact = false,
   budgetExceeded,
   voiceDictationVisible,
   dictation,
   micButtonRef,
-  voiceRealtimeVisible,
-  realtime,
-  realtimeButtonRef,
   voiceSpeechOutputVisible,
-  playback,
+  voiceMuted,
+  onToggleVoiceMute,
   playbackButtonRef,
-  voiceRecapVisible,
-  recap,
-  recapButtonRef,
   voiceDialogAvailable,
   voiceDialogActive,
   onToggleVoiceDialog,
@@ -1277,10 +1324,6 @@ function ComposerBar({
           ? SEND_HINT_ID
           : undefined;
 
-  // AC #2 / title for disabled model select.
-  const selectTitle = noEligibleModels
-    ? t("chat.model.noneConfiguredTitle")
-    : t("chat.model.title");
   const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
   const compactModelTip = loading
     ? t("chat.model.loading")
@@ -1357,21 +1400,9 @@ function ComposerBar({
             compact={controlsNarrow}
           />
         ) : null}
-        {/* Issue #497 — capability-gated realtime voice. Rendered only when full-realtime is
-            advertised and the browser supports WebRTC; a no-voice / STT-only deployment shows
-            nothing new (AC1/AC3/AC4). */}
-        {voiceRealtimeVisible ? (
-          <VoiceRealtimeButton
-            phase={realtime.phase}
-            onStart={realtime.start}
-            onStop={realtime.stop}
-            buttonRef={realtimeButtonRef}
-            compact={controlsNarrow}
-          />
-        ) : null}
-        {/* Issue #1559 — capability-gated voice dialogue switch. Rendered only when the deployment can
-            hold a realtime spoken dialogue AND offers a voice persona; otherwise nothing new appears and
-            the composer stays clean and fully text-capable (AC3). The switch enters / leaves spoken
+        {/* Issue #1559/#1560 — capability-gated voice dialogue switch. Rendered only when the deployment
+            can capture speech, speak answers, and offers a voice persona; otherwise nothing new appears
+            and the composer stays clean and fully text-capable (AC3). The switch enters / leaves spoken
             dialogue; the active-session status and controls render in the input stack above the bar. */}
         {voiceDialogAvailable ? (
           <VoiceDialogModeSwitch
@@ -1386,21 +1417,9 @@ function ComposerBar({
             the assistant answers in text with no playback control (AC1). */}
         {voiceSpeechOutputVisible ? (
           <VoicePlaybackMuteButton
-            muted={playback.snapshot.muted}
-            onToggle={playback.toggleMute}
+            muted={voiceMuted}
+            onToggle={onToggleVoiceMute}
             buttonRef={playbackButtonRef}
-            compact={controlsNarrow}
-          />
-        ) : null}
-        {/* Issue #504 — capability-gated voice session recap. Rendered only when the deployment captures
-            a user transcript; inert until there is committed content to review, so it never produces a
-            side effect from an empty session (AC1). */}
-        {voiceRecapVisible ? (
-          <VoiceRecapButton
-            committedSegmentCount={recap.committedSegmentCount}
-            busy={recap.busy}
-            onTrigger={recap.trigger}
-            buttonRef={recapButtonRef}
             compact={controlsNarrow}
           />
         ) : null}
@@ -1567,6 +1586,7 @@ function ComposerCore({
     addPendingAttachment,
     removePendingAttachment,
     budget,
+    error,
     clearHistory,
     messages,
     activeChat,
@@ -1628,23 +1648,16 @@ function ComposerCore({
   // environment shows no voice control at all, so the composer stays clean and fully text-capable.
   const voiceCapability = useVoiceCapability();
   const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
-  // Issue #497 — realtime voice gate: reuse the already-fetched voiceCapability probe (no second
-  // fetch). Only true when full-realtime is advertised AND the browser can open a WebRTC connection.
-  const voiceRealtimeVisible =
-    supportsRealtimeVoice(voiceCapability) && realtimeVoiceTransportSupported();
   // Issue #501 — assistant speech-output gate: reuse the already-fetched voiceCapability probe (no
   // second fetch). Only true when the deployment advertises speech output; STT-only and no-voice
   // deployments leave it false, so no playback control appears and Keiko answers in text (AC1).
   const voiceSpeechOutputVisible = supportsSpeechOutput(voiceCapability);
-  // Issue #504 — voice session recap gate: reuse the already-fetched voiceCapability probe (no second
-  // fetch). Only true when the deployment captures a user transcript (speech-to-text / full-realtime);
-  // playback-only and no-voice deployments leave it false, so no recap control appears (AC1).
-  const voiceRecapVisible = supportsVoiceRecap(voiceCapability);
   const micButtonRef = useRef<HTMLButtonElement>(null);
-  const realtimeButtonRef = useRef<HTMLButtonElement>(null);
   const playbackButtonRef = useRef<HTMLButtonElement>(null);
-  const recapButtonRef = useRef<HTMLButtonElement>(null);
   const voiceDialogButtonRef = useRef<HTMLButtonElement>(null);
+  const motionMicButtonRef = useRef<HTMLButtonElement>(null);
+  const motionPlaybackButtonRef = useRef<HTMLButtonElement>(null);
+  const motionVoiceDialogButtonRef = useRef<HTMLButtonElement>(null);
   // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
@@ -1655,88 +1668,125 @@ function ComposerCore({
     [draft, setDraft],
   );
   const dictation = useDictation({ onInsert: insertTranscript });
-  const realtime = useRealtimeVoice({});
-  // Issue #1559 — dialog-mode availability + persona selection. Offered ONLY when the deployment can
-  // hold a realtime spoken dialogue AND advertises at least one voice persona, so a no-voice / STT-only
-  // / speech-output-only deployment shows no dialogue switch and the composer stays clean (AC3). The
-  // hook owns no transport: entering / leaving below starts / stops the existing realtime controller.
+  // Issue #1559/#1560 — dialog-mode availability + persona selection. Voice Dialogue is true
+  // WebRTC realtime speech-to-speech; STT dictation remains a separate "speech to draft" feature.
   const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
-  // Issue #501 / #1558 — assistant speech-output binding with the live audio engine. The latest
-  // COMPLETE assistant message in the transcript is the only text ever synthesized, so the spoken
-  // answer cannot diverge from the visible text (AC2); a streaming or pending turn is excluded until it
-  // settles. A non-playback profile or a deployment without speech output keeps the engine inert (AC1),
-  // and a synthesis or playback failure degrades to the visible text without breaking the chat (AC4).
-  const latestVisibleMessage = useMemo(() => {
-    const visibleMessages = visibleOnly(messages);
-    return visibleMessages[visibleMessages.length - 1];
-  }, [messages]);
-  const spokenTurnSettled =
-    !sending &&
-    sendStatus !== "streaming" &&
-    latestVisibleMessage !== undefined &&
-    latestVisibleMessage.role === "assistant" &&
-    latestVisibleMessage.content.trim().length > 0;
   const playback = useAssistantSpeech({
     profile: voiceCapability?.profile ?? "none",
-    // Issue #1560 — while spoken dialogue is active the dialogue session owns the spoken turn (it runs
-    // its own speech engine bound to the live turn manager), so the standalone composer playback engine
-    // is muted to avoid double synthesis. The mute toggle still surfaces the user's playback preference.
-    enabled: voiceSpeechOutputVisible && !voiceDialog.active,
-    text: spokenTurnSettled ? latestVisibleMessage.content : undefined,
-    messageId: spokenTurnSettled ? latestVisibleMessage.id : undefined,
+    // Voice output is owned by the explicit Voice Dialogue loop. A reload or normal text chat must not
+    // auto-speak the latest settled assistant answer just because speech output is available.
+    enabled: false,
+    text: undefined,
+    messageId: undefined,
   });
-  // Issue #1560 (ADR-0096) — the live dialogue session controller. It drives ONE turn manager as the
-  // single conversational truth, captures via dictation, speaks the settled answer, and routes barge-in
-  // to playback + chat. Entering starts this session (NOT the realtime media plane, D7); leaving runs
-  // its master cleanup (D9). The text composer stays fully usable throughout (AC2).
-  const dialogueSession = useVoiceDialogueSession({
-    capability: voiceCapability,
-    active: voiceDialog.active,
-    persona: voiceDialog.active ? voiceDialog.persona : undefined,
-    session,
-    answerText: spokenTurnSettled ? latestVisibleMessage.content : undefined,
-    answerId: spokenTurnSettled ? latestVisibleMessage.id : undefined,
-    onLeave: voiceDialog.leave,
+  const voiceGrounding = voiceSessionGroundingContext(activeChat);
+  const realtimeVoice = useRealtimeVoice({
+    persona: voiceDialog.persona,
+    chatContext:
+      activeChat === undefined
+        ? undefined
+        : {
+            chatId: activeChat.id,
+            memory: {
+              enabled: session.memoryEnabled,
+              budgetTokens: session.memoryBudgetTokens,
+            },
+            ...(voiceGrounding === undefined ? {} : { grounding: voiceGrounding }),
+          },
+    groundingActive: voiceGrounding?.enabled === true,
+    onGroundedToolCall: session.runRealtimeGroundedTool,
+    onUserTranscriptCommitted: (text) =>
+      session.appendVoiceTurn?.([{ role: "user", content: text }]),
+    onAssistantTranscriptCommitted: (text) =>
+      session.appendVoiceTurn?.([{ role: "assistant", content: text }]),
   });
-  // Issue #1560 (ADR-0096 D4) — the dialogue surface label is derived from the LIVE turn state (the
-  // dialogue session's snapshot), replacing the #1559 playback-phase synthesis. When dialogue is
-  // inactive the standalone playback floor still feeds the label so the speech-output controls behave.
-  const voiceDialogState: VoiceDialogState = voiceDialog.active
-    ? dialogueSession.state
-    : deriveVoiceDialogState({
-        realtimePhase: realtime.phase,
-        turnState: playbackPhaseToTurnState(playback.snapshot.phase),
-        muted: playback.snapshot.muted,
-      });
-  const dialogMuteButtonRef = useRef<HTMLButtonElement>(null);
-  // Issue #1560 (ADR-0096 D7) — entering records dialog intent and arms the dialogue session; it does
-  // NOT start the realtime media plane (which had no transcript consumer and double-captured the mic).
-  // Leaving runs the dialogue session master cleanup and clears intent.
+  const voiceDialogAvailable = voiceDialog.available && activeChat !== undefined;
+  const voiceDialogState = deriveVoiceDialogState({
+    realtimePhase: realtimeVoice.phase,
+    turnState: realtimeVoice.turnSnapshot.state,
+    muted: realtimeVoice.muted,
+  });
+  const voiceAura = deriveVoiceAuraState({
+    voiceDialogActive: voiceDialog.active,
+    voiceDialogAvailable,
+    voiceDialogState,
+    listening: realtimeVoice.listening,
+    speaking: realtimeVoice.speaking,
+    sending,
+    sendStatus,
+    budgetExceeded,
+    hasSessionError: error !== undefined || realtimeVoice.error !== undefined,
+  });
   const enterVoiceDialog = useCallback(() => {
-    // Fail-closed symmetry with voiceDialog.enter(): never open the realtime session on a deployment
-    // that does not offer dialogue, even if the switch were ever rendered without its availability gate.
-    if (!voiceDialog.available) {
+    if (!voiceDialogAvailable) {
       return;
     }
     voiceDialog.enter();
-  }, [voiceDialog]);
+    realtimeVoice.start();
+  }, [voiceDialog, voiceDialogAvailable, realtimeVoice]);
   const leaveVoiceDialog = useCallback(() => {
-    dialogueSession.onStop();
-  }, [dialogueSession]);
+    realtimeVoice.stop();
+    voiceDialog.leave();
+  }, [realtimeVoice, voiceDialog]);
+  // Toggling the mode swaps the composer footer between ComposerBar and the voice-control
+  // cluster, so the clicked switch unmounts and focus would fall to <body>. Flag the user
+  // toggle so the post-swap effect can return focus to the freshly mounted switch (WCAG
+  // 2.4.3). Programmatic auto-leave (capability lost) goes through leaveVoiceDialog directly
+  // and never sets the flag, so it never steals focus from wherever the user is.
+  const restoreVoiceDialogFocusRef = useRef(false);
   const toggleVoiceDialog = useCallback(() => {
+    restoreVoiceDialogFocusRef.current = true;
     if (voiceDialog.active) {
       leaveVoiceDialog();
     } else {
       enterVoiceDialog();
     }
   }, [voiceDialog.active, enterVoiceDialog, leaveVoiceDialog]);
-  // Issue #504 — voice session recap. Derives memory candidates from the COMMITTED voice transcript via
-  // the additive recap route, then lists them through the EXISTING review queue. Live committed-transcript
-  // segments are not yet surfaced by the composer (the #500 voice-transcript-segments store is not consumed
-  // by the live realtime/dictation hooks yet); useVoiceSessionRecap's `segments` prop is the seam for that
-  // future wiring. Until segments are supplied the controller is correctly inert
-  // (committedSegmentCount === 0), so the button shows but cannot trigger a side effect.
-  const recap = useVoiceSessionRecap({ profile: voiceCapability?.profile ?? "none" });
+  useEffect(() => {
+    if (voiceDialog.active && !voiceDialogAvailable) {
+      leaveVoiceDialog();
+    }
+  }, [leaveVoiceDialog, voiceDialog.active, voiceDialogAvailable]);
+  useEffect(() => {
+    if (!voiceDialog.active && realtimeVoice.phase !== "idle") {
+      realtimeVoice.stop();
+    }
+  }, [voiceDialog.active, realtimeVoice]);
+  const voiceMuted = voiceDialog.active ? realtimeVoice.muted : playback.snapshot.muted;
+  const toggleVoiceMute = voiceDialog.active ? realtimeVoice.toggleMute : playback.toggleMute;
+  const [voiceComposerMotion, setVoiceComposerMotion] = useState<"idle" | "entering" | "leaving">(
+    "idle",
+  );
+  const previousVoiceDialogActiveRef = useRef(voiceDialog.active);
+  const voiceComposerMotionTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    if (previousVoiceDialogActiveRef.current === voiceDialog.active) {
+      return undefined;
+    }
+    previousVoiceDialogActiveRef.current = voiceDialog.active;
+    // The swap remounted the dialogue switch under a new parent; return focus to it so a
+    // keyboard user is not dropped onto <body>. Runs only for a user-driven toggle.
+    if (restoreVoiceDialogFocusRef.current) {
+      restoreVoiceDialogFocusRef.current = false;
+      voiceDialogButtonRef.current?.focus();
+    }
+    if (voiceComposerMotionTimerRef.current !== undefined) {
+      clearTimeout(voiceComposerMotionTimerRef.current);
+    }
+    setVoiceComposerMotion(voiceDialog.active ? "entering" : "leaving");
+    voiceComposerMotionTimerRef.current = setTimeout(() => {
+      voiceComposerMotionTimerRef.current = undefined;
+      setVoiceComposerMotion("idle");
+    }, 460);
+    return undefined;
+  }, [voiceDialog.active]);
+  useEffect(() => {
+    return () => {
+      if (voiceComposerMotionTimerRef.current !== undefined) {
+        clearTimeout(voiceComposerMotionTimerRef.current);
+      }
+    };
+  }, []);
 
   const repositoryRoots = useMemo(
     () => connectedRepositoryRoots(activeChat, activeProject?.path),
@@ -1911,11 +1961,30 @@ function ComposerCore({
     ],
   );
 
+  const composerBoxClassName = [
+    "cmp-box",
+    compact ? "cmp-box-compact" : "",
+    voiceDialog.active ? "cmp-box-voice-dialog" : "",
+    voiceComposerMotion === "entering" ? "cmp-box-voice-dialog-entering" : "",
+    voiceComposerMotion === "leaving" ? "cmp-box-voice-dialog-leaving" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className={`cmp-box${compact ? " cmp-box-compact" : ""}`}>
-      <div className="cmp-input-stack">
+    <div
+      className={composerBoxClassName}
+      data-voice-aura={voiceAura.active ? "on" : undefined}
+      data-voice-aura-state={voiceAura.active ? voiceAura.state : undefined}
+      data-voice-aura-intensity={voiceAura.active ? voiceAura.intensity : undefined}
+    >
+      <div
+        className={`cmp-input-stack${voiceDialog.active ? " cmp-input-stack-voice-dialog" : ""}`}
+      >
         {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
-        <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
+        {voiceDialog.active ? null : (
+          <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
+        )}
         <textarea
           className="cmp-input"
           ref={taRef}
@@ -1931,7 +2000,7 @@ function ComposerCore({
           // pre-typed during streaming. Re-submit stays blocked by the isInFlight
           // guard in useChatSession, and the primary button is "Cancel" meanwhile.
         />
-        {repositoryPickerOpen ? (
+        {!voiceDialog.active && repositoryPickerOpen ? (
           <div className="repo-focus repo-focus-inline">
             <span className="sr-only" role="status" aria-live="polite">
               {repositoryPickError ?? repositorySearch.error ?? repositorySearch.message}
@@ -1954,91 +2023,80 @@ function ComposerCore({
             />
           </div>
         ) : null}
-        <RepositoryReferenceStrip
-          references={repositoryReferences}
-          onRemove={removeRepositoryReference}
-        />
+        {voiceDialog.active ? null : (
+          <RepositoryReferenceStrip
+            references={repositoryReferences}
+            onRemove={removeRepositoryReference}
+          />
+        )}
         {/* Chip strip below the textarea, above the composer bar (AC #3) */}
-        <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
+        {voiceDialog.active ? null : (
+          <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
+        )}
         {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
-        <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+        {voiceDialog.active ? null : (
+          <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+        )}
         {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
             adjacent to the textarea so SR users hear the state without losing
             composer focus. Hidden when there is nothing to announce. */}
-        <SendLifecycleStatus status={sendStatus} />
+        {voiceDialog.active ? null : <SendLifecycleStatus status={sendStatus} />}
+        {voiceAura.active ? (
+          <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {voiceDialogStateHeadline(voiceDialogState)}
+          </span>
+        ) : null}
         {/* Issue #495 — dictation transcript review / transcribing status / error. Lives in the input
             stack so it is contextually adjacent to the textarea and announced to assistive tech. It
             renders nothing while idle or recording (the mic button carries those states). */}
-        {voiceDictationVisible ? (
+        {!voiceDialog.active && voiceDictationVisible ? (
           <VoiceDictationPreviewFromController
             controller={dictation}
             onAfterDiscard={() => micButtonRef.current?.focus()}
           />
         ) : null}
-        {/* Issue #497 — realtime voice status / error. Adjacent to the dictation preview in the
-            input stack. Renders nothing while idle (the button carries that state). */}
-        {voiceRealtimeVisible ? (
-          <VoiceRealtimeStatusFromController
-            controller={realtime}
-            onAfterDismiss={() => realtimeButtonRef.current?.focus()}
-          />
-        ) : null}
-        {/* Issue #501 — assistant speech-output status / controls. Adjacent to the realtime status in
-            the input stack. Renders nothing between spoken turns; while a spoken response is active or
-            freshly settled it announces the state and offers pause / resume / stop / replay (AC1). */}
-        {voiceSpeechOutputVisible ? <VoicePlaybackStatusFromBinding binding={playback} /> : null}
-        {/* Issue #1559 — active voice-dialogue status + controls. Shown only while dialogue is active:
-            a live-region status strip (AC2/AC4) plus the control cluster (mute reuse + Stop + Leave +
-            persona selector). Entering / leaving never touches the text composer, which stays usable
-            throughout (AC1). */}
-        {voiceDialog.active ? (
-          <>
-            <VoiceDialogSessionStatus state={voiceDialogState} />
-            {/* Issue #1560 (ADR-0096) — the active dialogue cluster is wired to the LIVE dialogue
-                session, not the standalone playback / realtime bindings (which are inert while dialogue
-                owns the spoken turn). Mute, Stop, and barge-in all route through the session controller. */}
-            <VoiceDialogControls
-              state={voiceDialogState}
-              muted={dialogueSession.muted}
-              onToggleMute={dialogueSession.toggleMute}
-              onStop={dialogueSession.onStop}
-              onLeave={leaveVoiceDialog}
-              personas={voiceDialog.availablePersonas}
-              selectedPersona={voiceDialog.persona}
-              onSelectPersona={voiceDialog.selectPersona}
-              compact={controlsNarrow}
-              muteButtonRef={dialogMuteButtonRef}
-            />
-            {/* Issue #1560 — the per-turn controls that let the user actually speak: a mic toggle
-                (start / stop-and-send) and a barge-in Interrupt. Without these the user has no way to
-                take the floor (AC1). */}
-            <VoiceDialogTurnControls
-              listening={dialogueSession.listening}
-              speaking={dialogueSession.speaking}
-              canInterrupt={dialogueSession.canInterrupt}
-              onListen={dialogueSession.onListen}
-              onInterrupt={dialogueSession.onInterrupt}
-              compact={controlsNarrow}
-            />
-          </>
-        ) : null}
-        {/* Issue #504 — voice session recap candidates. Adjacent to the playback status in the input
-            stack. Renders nothing until a recap is triggered and proposes candidates; the listed
-            candidates use the EXISTING governed accept / edit / reject / forget actions (AC3). */}
-        {voiceRecapVisible ? (
-          <VoiceRecapPanel
-            loading={recap.loading}
-            candidates={recap.candidates}
-            onApprove={recap.approve}
-            onEdit={recap.edit}
-            onReject={recap.reject}
-            onForget={recap.forget}
-          />
-        ) : null}
       </div>
-      <div className="cmp-footer-row">
+      <div
+        className={`cmp-footer-row${voiceComposerMotion !== "idle" ? " cmp-footer-row-motion" : ""}`}
+      >
+        {voiceDialog.active && voiceComposerMotion === "entering" ? (
+          <div
+            className="cmp-composer-motion-layer cmp-composer-motion-layer-normal"
+            aria-hidden="true"
+            inert
+          >
+            {minimal ? null : (
+              <BudgetIndicator
+                budget={budget}
+                onClearHistory={clearHistory}
+                disabled={sending || loading}
+                compact={compact}
+              />
+            )}
+            <ComposerBar
+              session={session}
+              ready={ready}
+              selectedModelCapability={selectedModelCapability}
+              onAttachFiles={handleFiles}
+              controlsNarrow={controlsNarrow}
+              barCompact={barCompact}
+              budgetExceeded={budgetExceeded}
+              voiceDictationVisible={voiceDictationVisible}
+              dictation={dictation}
+              micButtonRef={motionMicButtonRef}
+              voiceSpeechOutputVisible={voiceSpeechOutputVisible}
+              voiceMuted={playback.snapshot.muted}
+              onToggleVoiceMute={playback.toggleMute}
+              playbackButtonRef={motionPlaybackButtonRef}
+              voiceDialogAvailable={voiceDialogAvailable}
+              voiceDialogActive={false}
+              onToggleVoiceDialog={toggleVoiceDialog}
+              voiceDialogButtonRef={motionVoiceDialogButtonRef}
+            />
+          </div>
+        ) : null}
         {/* Issue #151 — context-pressure indicator + clear-history affordance */}
-        {minimal ? null : (
+        {minimal || voiceDialog.active ? null : (
           <BudgetIndicator
             budget={budget}
             onClearHistory={clearHistory}
@@ -2046,32 +2104,55 @@ function ComposerCore({
             compact={compact}
           />
         )}
-        <ComposerBar
-          session={session}
-          ready={ready}
-          selectedModelCapability={selectedModelCapability}
-          onAttachFiles={handleFiles}
-          compact={compact}
-          controlsNarrow={controlsNarrow}
-          barCompact={barCompact}
-          budgetExceeded={budgetExceeded}
-          voiceDictationVisible={voiceDictationVisible}
-          dictation={dictation}
-          micButtonRef={micButtonRef}
-          voiceRealtimeVisible={voiceRealtimeVisible}
-          realtime={realtime}
-          realtimeButtonRef={realtimeButtonRef}
-          voiceSpeechOutputVisible={voiceSpeechOutputVisible}
-          playback={playback}
-          playbackButtonRef={playbackButtonRef}
-          voiceRecapVisible={voiceRecapVisible}
-          recap={recap}
-          recapButtonRef={recapButtonRef}
-          voiceDialogAvailable={voiceDialog.available}
-          voiceDialogActive={voiceDialog.active}
-          onToggleVoiceDialog={toggleVoiceDialog}
-          voiceDialogButtonRef={voiceDialogButtonRef}
-        />
+        {voiceDialog.active ? (
+          <VoiceDialogComposerControls
+            voiceMuted={voiceMuted}
+            onToggleVoiceMute={toggleVoiceMute}
+            playbackButtonRef={playbackButtonRef}
+            voiceDialogActive={voiceDialog.active}
+            onToggleVoiceDialog={toggleVoiceDialog}
+            voiceDialogButtonRef={voiceDialogButtonRef}
+            compact={controlsNarrow}
+          />
+        ) : (
+          <ComposerBar
+            session={session}
+            ready={ready}
+            selectedModelCapability={selectedModelCapability}
+            onAttachFiles={handleFiles}
+            controlsNarrow={controlsNarrow}
+            barCompact={barCompact}
+            budgetExceeded={budgetExceeded}
+            voiceDictationVisible={voiceDictationVisible}
+            dictation={dictation}
+            micButtonRef={micButtonRef}
+            voiceSpeechOutputVisible={voiceSpeechOutputVisible}
+            voiceMuted={voiceMuted}
+            onToggleVoiceMute={toggleVoiceMute}
+            playbackButtonRef={playbackButtonRef}
+            voiceDialogAvailable={voiceDialogAvailable}
+            voiceDialogActive={voiceDialog.active}
+            onToggleVoiceDialog={toggleVoiceDialog}
+            voiceDialogButtonRef={voiceDialogButtonRef}
+          />
+        )}
+        {!voiceDialog.active && voiceComposerMotion === "leaving" ? (
+          <div
+            className="cmp-composer-motion-layer cmp-composer-motion-layer-voice"
+            aria-hidden="true"
+            inert
+          >
+            <VoiceDialogComposerControls
+              voiceMuted={realtimeVoice.muted}
+              onToggleVoiceMute={toggleVoiceMute}
+              playbackButtonRef={motionPlaybackButtonRef}
+              voiceDialogActive={true}
+              onToggleVoiceDialog={toggleVoiceDialog}
+              voiceDialogButtonRef={motionVoiceDialogButtonRef}
+              compact={controlsNarrow}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -2116,108 +2197,6 @@ function NoChatState(): ReactNode {
       <p className="chatw-empty-no-chat-label">{t("chat.empty.noChat.title")}</p>
       <p className="chatw-empty-no-chat-hint">{t("chat.empty.noChat.hint")}</p>
     </div>
-  );
-}
-
-function ChatHero({
-  session,
-  ready,
-}: {
-  readonly session: ChatSessionApi;
-  readonly ready: boolean;
-}): ReactNode {
-  const { t } = useI18n();
-  const { loading, activeProject, sendMessage } = session;
-  return (
-    <form
-      className="composer composer-compact"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void sendMessage();
-      }}
-    >
-      <h1 className="composer-title">{t("chat.hero.title")}</h1>
-      <ComposerCore
-        session={session}
-        ready={ready}
-        placeholder={loading ? t("chat.hero.loadingWorkspace") : t("chat.hero.placeholder")}
-      />
-      <div className="cmp-context">
-        {activeProject !== undefined && (
-          <button type="button" className="chip">
-            <Icons.folder size={14} style={{ color: "var(--accent)" }} />
-            <span className="chip-label">{activeProject.name}</span>
-            <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
-          </button>
-        )}
-        <button type="button" className="chip">
-          <Icons.cube size={14} style={{ color: "var(--fg-dim)" }} />
-          <span className="chip-label">{t("chat.workLocally")}</span>
-          <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function MiniChat({
-  session,
-  ready,
-}: {
-  readonly session: ChatSessionApi;
-  readonly ready: boolean;
-}): ReactNode {
-  const { t } = useI18n();
-  const { draft, loading, sending, sendStatus, cancelSend, setDraft, sendMessage } = session;
-  return (
-    <form
-      className="composer composer-fill"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void sendMessage();
-      }}
-    >
-      <div className="cmp-box cmp-box-fill">
-        <textarea
-          className="cmp-input cmp-input-mini"
-          value={draft}
-          aria-label={t("chat.messageLabel")}
-          placeholder={loading ? t("chat.composer.loading") : t("chat.composer.placeholder")}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={onComposerKeyDown(sendMessage)}
-          // uiux-fix F041 (C205) — see ComposerCore: editable while sending so the
-          // next message can be pre-typed; re-submit is blocked by isInFlight.
-        />
-        {/* ST-F1 — match ComposerBar: while a send is in flight the primary
-            action flips to "Cancel response" (#152 AC#3) so the mini composer
-            offers the same cancel affordance as the full composer. */}
-        {sending ? (
-          <button
-            type="button"
-            className="cmp-send cmp-send-float cmp-send-cancel cmp-tip-end"
-            data-on
-            aria-label={t("chat.send.cancel")}
-            data-tip={t("chat.send.cancel")}
-            onClick={cancelSend}
-          >
-            <Icons.close size={16} />
-          </button>
-        ) : (
-          <button
-            type={ready ? "submit" : "button"}
-            className="cmp-send cmp-send-float cmp-tip-end"
-            data-on={ready}
-            data-tip={t("chat.send.label")}
-            aria-disabled={!ready}
-            aria-label={t("chat.send.label")}
-          >
-            <Icons.arrowUp size={16} />
-          </button>
-        )}
-      </div>
-      {/* ST-F1 — #152 AC#3 lifecycle status region for the mini composer. */}
-      <SendLifecycleStatus status={sendStatus} />
-    </form>
   );
 }
 
@@ -2281,6 +2260,35 @@ function hasConnectorGroundingScope(chat: Chat | undefined): boolean {
 
 function hasGroundingScope(chat: Chat | undefined): boolean {
   return hasFolderGroundingScope(chat) || hasConnectorGroundingScope(chat);
+}
+
+function voiceSessionGroundingContext(
+  chat: Chat | undefined,
+): VoiceSessionGroundingContext | undefined {
+  if (chat === undefined) return undefined;
+  const folderCount =
+    chat.connectedScopes !== undefined
+      ? chat.connectedScopes.length
+      : chat.connectedScope !== undefined
+        ? 1
+        : 0;
+  const connectorCount =
+    chat.localKnowledgeScopes !== undefined
+      ? chat.localKnowledgeScopes.length
+      : chat.localKnowledgeScope !== undefined
+        ? 1
+        : 0;
+  const sourceCount = folderCount + connectorCount;
+  if (sourceCount === 0) return undefined;
+  const kind: VoiceSessionGroundingContext["kind"] =
+    folderCount > 0 && connectorCount > 0
+      ? "hybrid"
+      : sourceCount > 1
+        ? "multi"
+        : folderCount > 0
+          ? "files"
+          : "knowledge";
+  return { enabled: true, sourceCount, kind };
 }
 
 function formatScopeUpdateError(error: unknown, t: ReturnType<typeof useI18n>["t"]): string {
@@ -3015,7 +3023,6 @@ export function ChatWindow({
     sendStatus,
     error,
     noEligibleModels,
-    selectedModel,
     sendMessage,
     cancelGrounded,
     activeProject,

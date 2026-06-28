@@ -79,6 +79,8 @@ export interface RealtimeNegotiationRequest {
   readonly instructions?: string;
   readonly voiceId?: string;
   readonly transcriptionModel?: string;
+  readonly tools?: readonly RealtimeSessionTool[] | undefined;
+  readonly toolChoice?: RealtimeSessionToolChoice | undefined;
   // The browser's opaque SDP offer (already validated for length by the caller). Never persisted or
   // logged by this module; forwarded verbatim to the provider's realtime SDP-exchange endpoint.
   readonly offerSdp: string;
@@ -87,6 +89,21 @@ export interface RealtimeNegotiationRequest {
   readonly fetchImpl?: typeof fetch;
   readonly egress?: OutboundHttpEgressConfig | undefined;
 }
+
+export interface RealtimeFunctionTool {
+  readonly type: "function";
+  readonly name: string;
+  readonly description?: string | undefined;
+  readonly parameters: Record<string, unknown>;
+}
+
+export type RealtimeSessionTool = RealtimeFunctionTool;
+
+export type RealtimeSessionToolChoice =
+  | "auto"
+  | "none"
+  | "required"
+  | { readonly type: "function"; readonly name: string };
 
 export interface RealtimeNegotiationSuccess {
   // The provider's opaque SDP answer. `secret-bearing` per the protocol (may carry private ICE
@@ -273,6 +290,10 @@ function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
   };
   if (request.instructions !== undefined && request.instructions.length > 0) {
     session.instructions = request.instructions;
+  }
+  if (request.tools !== undefined && request.tools.length > 0) {
+    session.tools = request.tools;
+    session.tool_choice = request.toolChoice ?? "auto";
   }
   const audioInput: Record<string, unknown> = {
     // server_vad gives provider-side end-of-turn detection and barge-in (interrupt_response) for the

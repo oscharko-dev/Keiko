@@ -4,9 +4,17 @@
 // reviewable-text sanitisation, the replay buffer, and deterministic teardown.
 
 import { describe, expect, it, vi } from "vitest";
-import { VoiceControlConnection, type VoiceControlSocket } from "./voice-realtime.js";
+import {
+  sweepControlHeartbeat,
+  VoiceControlConnection,
+  type VoiceControlSocket,
+} from "./voice-realtime.js";
 import type { RealtimeNegotiationOutcome } from "@oscharko-dev/keiko-model-gateway";
-import type { VoiceControlMessage } from "@oscharko-dev/keiko-contracts";
+import type {
+  VoiceControlMessage,
+  VoicePersona,
+  VoiceSessionChatContext,
+} from "@oscharko-dev/keiko-contracts";
 
 const OFFER_SDP =
   "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
@@ -29,6 +37,8 @@ interface TestSession {
   idempotencyKey: string;
   profile: "full-realtime";
   providerLocality: "azure-foundry" | undefined;
+  persona: VoicePersona | undefined;
+  chatContext: VoiceSessionChatContext | undefined;
   hostSeq: number;
   lastClientSeq: number;
   replay: VoiceControlMessage[];
@@ -41,6 +51,8 @@ function makeSession(overrides: Partial<TestSession> = {}): TestSession {
     idempotencyKey: "idem-1",
     profile: "full-realtime",
     providerLocality: "azure-foundry",
+    persona: undefined,
+    chatContext: undefined,
     hostSeq: 0,
     lastClientSeq: 0,
     replay: [],
@@ -58,7 +70,12 @@ function okAsync(): Promise<RealtimeNegotiationOutcome> {
 }
 
 function connect(options?: {
-  negotiate?: (offerSdp: string, signal: AbortSignal) => Promise<RealtimeNegotiationOutcome>;
+  negotiate?: (
+    offerSdp: string,
+    persona: VoicePersona | undefined,
+    chatContext: VoiceSessionChatContext | undefined,
+    signal: AbortSignal,
+  ) => Promise<RealtimeNegotiationOutcome>;
   redact?: (value: unknown) => unknown;
   session?: TestSession;
 }): { socket: FakeSocket; session: TestSession; conn: VoiceControlConnection } {
@@ -135,14 +152,20 @@ describe("VoiceControlConnection.start", () => {
 describe("VoiceControlConnection proxied-SDP signaling", () => {
   it("negotiates an SDP offer and returns the answer with live media-track state", async () => {
     const negotiate = vi.fn(
-      (_offerSdp: string, _signal: AbortSignal): Promise<RealtimeNegotiationOutcome> => okAsync(),
+      (
+        _offerSdp: string,
+        _persona: VoicePersona | undefined,
+        _chatContext: VoiceSessionChatContext | undefined,
+        _signal: AbortSignal,
+      ): Promise<RealtimeNegotiationOutcome> => okAsync(),
     );
     const { socket, session, conn } = connect({ negotiate });
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
     expect(negotiate).toHaveBeenCalledTimes(1);
-    expect(negotiate).toHaveBeenCalledWith(OFFER_SDP, expect.anything());
+    // offer + the session's (here undefined) persona + chat context + the abort signal.
+    expect(negotiate).toHaveBeenCalledWith(OFFER_SDP, undefined, undefined, expect.anything());
     expect(kinds(socket)).toEqual([
       "media.track.state",
       "signal.sdp.answer",
@@ -155,8 +178,26 @@ describe("VoiceControlConnection proxied-SDP signaling", () => {
     expect(session.replay.some((m) => m.kind === "signal.sdp.answer")).toBe(false);
   });
 
+  it("threads the session's selected persona to the negotiation seam (realtime honors the voice choice)", async () => {
+    const negotiate = vi.fn(
+      (
+        _offerSdp: string,
+        _persona: VoicePersona | undefined,
+        _chatContext: VoiceSessionChatContext | undefined,
+        _signal: AbortSignal,
+      ): Promise<RealtimeNegotiationOutcome> => okAsync(),
+    );
+    const { conn } = connect({ negotiate, session: makeSession({ persona: "female" }) });
+    conn.start(false);
+    await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
+    expect(negotiate).toHaveBeenCalledWith(OFFER_SDP, "female", undefined, expect.anything());
+  });
+
   it("answers a negotiation failure with error negotiation-failed and an ended track", async () => {
-    const { socket, conn } = connect({ negotiate: (): Promise<RealtimeNegotiationOutcome> => Promise.resolve({ ok: false, kind: "transport" }) });
+    const { socket, conn } = connect({
+      negotiate: (): Promise<RealtimeNegotiationOutcome> =>
+        Promise.resolve({ ok: false, kind: "transport" }),
+    });
     conn.start(false);
     socket.sent.length = 0;
     await conn.receive(clientMessage("signal.sdp.offer", 1, { sdp: OFFER_SDP }));
@@ -290,5 +331,36 @@ describe("VoiceControlConnection transcripts, replay & teardown", () => {
     socket.sent.length = 0;
     await conn.receive(clientMessage("capability.select", 1, { profile: "full-realtime" }));
     expect(socket.sent).toHaveLength(0);
+  });
+});
+
+describe("sweepControlHeartbeat (liveness)", () => {
+  it("terminates a socket that missed the previous ping; re-arms and pings a live one", () => {
+    const deadPing = vi.fn<() => void>();
+    const deadTerminate = vi.fn<() => void>();
+    const livePing = vi.fn<() => void>();
+    const liveTerminate = vi.fn<() => void>();
+    const dead = { isAlive: false, ping: deadPing, terminate: deadTerminate };
+    const live = { isAlive: true, ping: livePing, terminate: liveTerminate };
+    sweepControlHeartbeat([dead, live]);
+    expect(deadTerminate).toHaveBeenCalledTimes(1);
+    expect(deadPing).not.toHaveBeenCalled();
+    expect(liveTerminate).not.toHaveBeenCalled();
+    expect(livePing).toHaveBeenCalledTimes(1);
+    // The live socket must answer THIS ping (isAlive re-armed to false) or be terminated next sweep.
+    expect(live.isAlive).toBe(false);
+  });
+
+  it("treats a freshly-connected socket (isAlive undefined) as live", () => {
+    const ping = vi.fn<() => void>();
+    const terminate = vi.fn<() => void>();
+    const fresh: { isAlive?: boolean; ping: () => void; terminate: () => void } = {
+      ping,
+      terminate,
+    };
+    sweepControlHeartbeat([fresh]);
+    expect(terminate).not.toHaveBeenCalled();
+    expect(ping).toHaveBeenCalledTimes(1);
+    expect(fresh.isAlive).toBe(false);
   });
 });

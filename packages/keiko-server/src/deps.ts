@@ -63,6 +63,7 @@ import type {
   SpeechToTextRequest,
   TextToSpeechOutcome,
   TextToSpeechRequest,
+  TextToSpeechStreamOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   createRelationshipStorePort,
@@ -288,6 +289,12 @@ export interface UiHandlerDeps {
   // synthesized audio is held only in memory for the response, never persisted.
   readonly voiceSpeechRequest?:
     | ((request: TextToSpeechRequest) => Promise<TextToSpeechOutcome>)
+    | undefined;
+  // Streaming counterpart of voiceSpeechRequest (Issue #1556). Lets the /api/voice/speak/stream route
+  // forward provider PCM chunk-by-chunk in tests without touching global fetch. Production leaves it
+  // undefined and uses requestTextToSpeechStream; raw audio is streamed through, never persisted.
+  readonly voiceSpeechStreamRequest?:
+    | ((request: TextToSpeechRequest) => Promise<TextToSpeechStreamOutcome>)
     | undefined;
   // Issue #497 (Epic #491) — realtime voice proxied-SDP negotiation seam (ADR-0058 D3/D6). Lets the
   // WebSocket control plane perform the browser↔provider SDP exchange through the provider-neutral

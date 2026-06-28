@@ -544,8 +544,8 @@ function WindowFrameImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- linkRevision is the cross-window invalidation signal
     [api, win.type, win.id, linkRevision],
   );
-  const ew = win.w / zoom;
-  const eh = win.h / zoom;
+  const ew = Math.round((win.w / zoom) * 1000) / 1000;
+  const eh = Math.round((win.h / zoom) * 1000) / 1000;
   const updateCfg = useCallback(
     (patch: AppWindow["cfg"]): void => {
       api.update(win.id, { cfg: { ...win.cfg, ...patch } });
@@ -930,13 +930,20 @@ function WindowFrameImpl({
     () => ({
       left: win.x,
       top: win.y,
+      width: win.w,
+      height: win.h,
+      zIndex: win.z,
+    }),
+    [win.x, win.y, win.w, win.h, win.z],
+  );
+  const contentZoomStyle = useMemo<CSSProperties>(
+    () => ({
       width: ew,
       height: eh,
-      zIndex: win.z,
       transform: `scale(${String(zoom)})`,
       transformOrigin: "0 0",
     }),
-    [win.x, win.y, ew, eh, win.z, zoom],
+    [ew, eh, zoom],
   );
 
   return (
@@ -967,123 +974,127 @@ function WindowFrameImpl({
         if (!top) window.setTimeout(() => api.focus(win.id), 0);
       }}
     >
-      {/* Header is a drag surface; keyboard equivalent is ⌘+Arrows handled by useKeyboardCtrls. */}
-      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
-      <header
-        className="win-head"
-        onPointerDown={onHeaderPointerDown}
-        onDoubleClick={(e) => {
-          if (shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
-        }}
-      >
-        <span
-          className="win-ico"
-          style={{ color: def.accent === true ? "var(--accent)" : "var(--fg-muted)" }}
+      <div className="win-content-zoom" style={contentZoomStyle}>
+        {/* Header is a drag surface; keyboard equivalent is ⌘+Arrows handled by useKeyboardCtrls. */}
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
+        <header
+          className="win-head"
+          onPointerDown={onHeaderPointerDown}
+          onDoubleClick={(e) => {
+            if (shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
+          }}
         >
-          <Icon size={14} />
-        </span>
-        <span className="win-title">{def.title}</span>
-        {/* Audit C159 — the badge ellipsizes at 150px; title= keeps the full
-            path/URL reachable for mouse users. */}
-        {sub !== null ? (
-          <span className="win-sub mono" title={sub}>
-            <span className="win-sub-text">{sub}</span>
+          <span
+            className="win-ico"
+            style={{ color: def.accent === true ? "var(--accent)" : "var(--fg-muted)" }}
+          >
+            <Icon size={14} />
           </span>
-        ) : null}
-        <span className="spacer" />
-        {/* Audit C297 — every window carried word-identical control labels; with
+          <span className="win-title">{def.title}</span>
+          {/* Audit C159 — the badge ellipsizes at 150px; title= keeps the full
+            path/URL reachable for mouse users. */}
+          {sub !== null ? (
+            <span className="win-sub mono" title={sub}>
+              <span className="win-sub-text">{sub}</span>
+            </span>
+          ) : null}
+          <span className="spacer" />
+          {/* Audit C297 — every window carried word-identical control labels; with
             several windows open, screen-reader and voice-control users could not
             tell WHICH window a Close/Zoom/Connect control acts on (WCAG 2.4.6).
             def.title scopes each label; the visible chrome is unchanged. */}
-        {showHeaderZoom ? (
-          <div className="win-zoom">
+          {showHeaderZoom ? (
+            <div className="win-zoom">
+              <button
+                type="button"
+                className="win-zbtn ui-tip"
+                data-tip="Zoom content out"
+                aria-label={`Zoom ${def.title} content out`}
+                disabled={zoom <= CONTENT_MIN_ZOOM}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                }}
+                onClick={() => setZoom(zoom - 0.1)}
+              >
+                <Icons.zoomOut size={13} />
+              </button>
+              <button
+                type="button"
+                className="win-zpct ui-tip"
+                data-tip="Reset content zoom to 100%"
+                aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                }}
+                onClick={() => api.update(win.id, { zoom: 1 })}
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                className="win-zbtn ui-tip"
+                data-tip="Zoom content in"
+                aria-label={`Zoom ${def.title} content in`}
+                disabled={zoom >= CONTENT_MAX_ZOOM}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                }}
+                onClick={() => setZoom(zoom + 0.1)}
+              >
+                <Icons.zoomIn size={13} />
+              </button>
+            </div>
+          ) : null}
+          <div className="win-traffic" role="group" aria-label={`${def.title} window controls`}>
             <button
               type="button"
-              className="win-zbtn ui-tip"
-              data-tip="Zoom content out"
-              aria-label={`Zoom ${def.title} content out`}
-              disabled={zoom <= CONTENT_MIN_ZOOM}
+              className="win-traffic-btn win-traffic-minimize ui-tip"
+              data-tip="Minimize"
+              aria-label={`Minimize ${def.title} window`}
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => {
                 e.stopPropagation();
               }}
-              onClick={() => setZoom(zoom - 0.1)}
+              onClick={minimizeWithFocusRestore}
             >
-              <Icons.zoomOut size={13} />
+              <Icons.minimize size={17} />
             </button>
             <button
               type="button"
-              className="win-zpct ui-tip"
-              data-tip="Reset content zoom to 100%"
-              aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
+              className="win-traffic-btn win-traffic-maximize ui-tip"
+              data-tip={win.max ? "Restore" : "Full screen"}
+              aria-label={
+                win.max ? `Restore ${def.title} window` : `Full screen ${def.title} window`
+              }
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => {
                 e.stopPropagation();
               }}
-              onClick={() => api.update(win.id, { zoom: 1 })}
+              onClick={() => api.maximize(win.id)}
             >
-              {Math.round(zoom * 100)}%
+              {win.max ? <Icons.restore size={17} /> : <Icons.maximize size={17} />}
             </button>
             <button
               type="button"
-              className="win-zbtn ui-tip"
-              data-tip="Zoom content in"
-              aria-label={`Zoom ${def.title} content in`}
-              disabled={zoom >= CONTENT_MAX_ZOOM}
+              className="win-traffic-btn win-traffic-close ui-tip"
+              data-tip="Close"
+              aria-label={`Close ${def.title} window`}
               onPointerDown={(e) => e.stopPropagation()}
               onDoubleClick={(e) => {
                 e.stopPropagation();
               }}
-              onClick={() => setZoom(zoom + 0.1)}
+              onClick={closeWithFocusRestore}
             >
-              <Icons.zoomIn size={13} />
+              <Icons.close size={17} />
             </button>
           </div>
-        ) : null}
-        <div className="win-traffic" role="group" aria-label={`${def.title} window controls`}>
-          <button
-            type="button"
-            className="win-traffic-btn win-traffic-minimize ui-tip"
-            data-tip="Minimize"
-            aria-label={`Minimize ${def.title} window`}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={minimizeWithFocusRestore}
-          >
-            <Icons.minimize size={17} />
-          </button>
-          <button
-            type="button"
-            className="win-traffic-btn win-traffic-maximize ui-tip"
-            data-tip={win.max ? "Restore" : "Full screen"}
-            aria-label={win.max ? `Restore ${def.title} window` : `Full screen ${def.title} window`}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={() => api.maximize(win.id)}
-          >
-            {win.max ? <Icons.restore size={17} /> : <Icons.maximize size={17} />}
-          </button>
-          <button
-            type="button"
-            className="win-traffic-btn win-traffic-close ui-tip"
-            data-tip="Close"
-            aria-label={`Close ${def.title} window`}
-            onPointerDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-            }}
-            onClick={closeWithFocusRestore}
-          >
-            <Icons.close size={17} />
-          </button>
+        </header>
+        <div ref={bodyRef} className="win-body" data-mode={bodyMode} style={bodyStyle}>
+          {body}
         </div>
-      </header>
-      <div ref={bodyRef} className="win-body" data-mode={bodyMode} style={bodyStyle}>
-        {body}
       </div>
       {!win.max
         ? HANDLES.map((d: Handle) => (

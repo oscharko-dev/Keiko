@@ -344,6 +344,9 @@ describe("API route contract", () => {
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/stream"),
     ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/voice-turn"),
+    ).toBeDefined();
   });
 
   it("includes the ADR-0018 terminal tool routes (no PTY surface)", () => {

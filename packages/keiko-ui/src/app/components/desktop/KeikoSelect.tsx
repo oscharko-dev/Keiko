@@ -265,6 +265,7 @@ export default function KeikoSelect({
   const selectedOption = selectedIndex === -1 ? null : flatOptions[selectedIndex]!;
   const visibleLabel = selectedOption?.label ?? placeholder;
   const visibleDescription = selectedOption?.description ?? null;
+  const menuLabel = menuTitle ?? ariaLabel ?? placeholder;
 
   const closeMenu = (): void => {
     setOpen(false);
@@ -534,6 +535,7 @@ export default function KeikoSelect({
               className="ksel-menu-scroll"
               role="listbox"
               id={menuId}
+              aria-label={menuLabel}
               style={{ maxHeight: `${position.maxHeight.toString()}px` }}
             >
               {sections.map((section, sectionIndex) => (

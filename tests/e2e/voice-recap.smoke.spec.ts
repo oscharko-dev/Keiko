@@ -1,15 +1,6 @@
-// Issue #504, Epic #491 — voice session recap browser smoke. Drives the REAL app composer in headless
-// Chromium through the documented Studio path (Left Rail → Chat History → New). It proves the recap
-// surface's capability gating in the real browser (AC1):
-//   1. No-voice deployment: /api/voice/capability reports unavailable → NO "Review voice session" control
-//      and the composer stays fully text-capable.
-//   2. Playback-only (speech-output) deployment: the assistant can speak but NO user transcript is
-//      captured → NO recap control (recap derives from the committed user transcript, not playback).
-//   3. STT / full-realtime deployment: the recap control is present, accessible, and — because the live
-//      composer does not yet feed committed transcript segments to the hook (the #500 transcript-segments
-//      store is not yet consumed by the composer; the hook's `segments` prop is the seam) — it is
-//      correctly inert (aria-disabled) until there is committed content, so it can never propose a memory
-//      candidate from an empty session. The composer stays fully text-capable throughout.
+// Voice recap regression smoke. The composer no longer exposes a separate "Review voice session"
+// control. MemoriaViva capture runs through committed chat turns; STT remains only dictation, and
+// Realtime Voice persists final transcripts through the normal chat lifecycle.
 //
 // Tagged @smoke so the Studio browser quality gate exercises it. The required `ci` check does not run
 // Playwright; the executable AC coverage that runs in `ci` lives in the keiko-contracts + keiko-server +
@@ -91,25 +82,14 @@ async function playbackOnlyFlow(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: RECAP_BUTTON })).toHaveCount(0);
 }
 
-async function transcriptCapturingFlow(
-  page: Page,
-  body: unknown,
-  evidencePath: string,
-): Promise<void> {
+async function noRecapControlFlow(page: Page, body: unknown, text: string): Promise<void> {
   await stubCapability(page, body);
   await openComposer(page);
 
-  const recap = page.getByRole("button", { name: RECAP_BUTTON });
-  await expect(recap).toBeVisible();
-  // Inert until committed content exists (no live segment store wired yet); aria-disabled keeps focus
-  // operability while preventing any side effect from an empty session (AC1).
-  await expect(recap).toHaveAttribute("aria-disabled", "true");
-  await page.screenshot({ path: evidencePath, fullPage: true });
-
-  // The composer stays fully text-capable alongside the recap affordance.
+  await expect(page.getByRole("button", { name: RECAP_BUTTON })).toHaveCount(0);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
-  await composer.fill("typing with a voice-capable deployment");
-  await expect(composer).toHaveValue("typing with a voice-capable deployment");
+  await composer.fill(text);
+  await expect(composer).toHaveValue(text);
 }
 
 test("voice recap @smoke — no-voice composer has no recap control (AC1)", async ({ page }) => {
@@ -122,22 +102,15 @@ test("voice recap @smoke — playback-only deployment has no recap control (AC1)
   await playbackOnlyFlow(page);
 });
 
-test("voice recap @smoke — STT deployment renders an accessible, inert-until-committed recap control (AC1)", async ({
+test("voice recap @smoke — STT deployment keeps recap control absent; dictation remains separate (AC1)", async ({
   page,
 }) => {
-  await transcriptCapturingFlow(
-    page,
-    STT_CAPABILITY,
-    "docs/voice/evidence/504-recap-stt-control.png",
-  );
+  await noRecapControlFlow(page, STT_CAPABILITY, "typing with an STT deployment");
+  await expect(page.getByRole("button", { name: "Dictate a message" })).toBeVisible();
 });
 
-test("voice recap @smoke — full-realtime deployment renders the recap control (AC1)", async ({
+test("voice recap @smoke — full-realtime deployment keeps recap control absent (AC1)", async ({
   page,
 }) => {
-  await transcriptCapturingFlow(
-    page,
-    REALTIME_CAPABILITY,
-    "docs/voice/evidence/504-recap-realtime-control.png",
-  );
+  await noRecapControlFlow(page, REALTIME_CAPABILITY, "typing with realtime voice available");
 });

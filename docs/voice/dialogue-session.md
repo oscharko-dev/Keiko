@@ -1,5 +1,12 @@
 # Voice dialogue session (Issue #1560, Epic #1556)
 
+> **Superseded architecture note:** Voice Dialogue is now Realtime WebRTC-first. The product dialogue
+> switch starts `useRealtimeVoice` directly when `full-realtime + persona + browser WebRTC` are
+> available, and committed Realtime transcripts append to the existing chat history through
+> `/api/desktop/chat/voice-turn`. The STT+TTS turn loop documented below remains historical Epic #1556
+> context and is not the default dialogue mode; STT and TTS remain separate dictation/read-aloud helper
+> surfaces unless an operator explicitly enables a degraded compatibility path.
+
 The **voice dialogue session** is the orchestration layer that turns the shipped voice surface into an
 actual colleague-like conversation: it coordinates microphone capture, transcript commit, chat send, the
 assistant response, speech output, interruption (barge-in), and the next listening turn. It is an

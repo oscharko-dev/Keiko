@@ -14,8 +14,7 @@
 // these states lives in keiko-ui (`voice-transcript-segments.ts`) as a synchronous deterministic engine;
 // this leaf contract holds the state catalog, the classification tables, the legal-transition table, the
 // validators, and the AC5 committed-only integration boundary so server-side consumers (#503 governed
-// spoken actions, #504 recap / memory review) can enforce committed-only consumption without forking the
-// reducer.
+// spoken actions and memory review) can enforce committed-only consumption without forking the reducer.
 //
 // `VOICE_TRANSCRIPT_SCHEMA_VERSION` follows the same evolution rule as `VOICE_PROTOCOL_VERSION`: a
 // breaking change introduces a NEW literal rather than mutating "1". It is INDEPENDENT of the wire
@@ -69,7 +68,7 @@ export const VOICE_TRANSCRIPT_SEGMENT_STATES: readonly VoiceTranscriptSegmentSta
   "provider-error",
 ] as const;
 
-// The two states whose text downstream integrations (memory, workflow, recap, evaluation) may consume.
+// The two states whose text downstream integrations (memory, workflow, evaluation) may consume.
 // This is the load-bearing AC5 invariant expressed as data: a segment's text crosses the integration
 // boundary if and only if its state is in this set.
 export const VOICE_TRANSCRIPT_CONSUMABLE_STATES: readonly VoiceTranscriptSegmentState[] = [
@@ -152,7 +151,7 @@ export const VOICE_TRANSCRIPT_SEGMENT_REPLAY: Record<
 
 // Redaction: the text-bearing states (`partial`, `stable`, `committed`, `corrected`) are
 // `reviewable-text` — they must pass through the existing `stripUnsafeFormatChars` + redact-at-persist
-// seam before any log or evidence manifest, exactly as recap / session-state records are. The
+// seam before any log or evidence manifest. The
 // content-free states carry no reviewable text, so they are `content-free`.
 export const VOICE_TRANSCRIPT_SEGMENT_REDACTION: Record<
   VoiceTranscriptSegmentState,
@@ -280,7 +279,7 @@ export function voiceTranscriptPreviewAllowed(profile: VoiceProfile): boolean {
 
 // ─── AC5 committed-only integration boundary (Deliverable: integration contract) ──
 // `selectCommittedVoiceTranscript` is THE integration boundary: the single typed projection that
-// composer dictation (#495), full voice mode (#497), recap (#504), and evaluation may consume. It
+// composer dictation (#495), full voice mode (#497), memory review, and evaluation may consume. It
 // returns only `committed` + `corrected` segments, ordered deterministically by `seq` (ties broken by
 // `id`), and a concatenation of their text. Partial, stable, discarded, redacted, and provider-error
 // segments can never appear in the projection, so a consumer that reads only this projection structurally
@@ -339,7 +338,7 @@ export function selectCommittedVoiceTranscript(
 }
 
 // ─── Evidence-safe summary (AC5: store only evidence-safe summaries / metadata) ───
-// A content-free roll-up for recap / evaluation: counts and the committed character length only — never
+// A content-free roll-up for evaluation: counts and the committed character length only — never
 // any segment text. This is the only transcript representation that may enter an evidence manifest
 // without first passing reviewable text through the redact-at-persist seam.
 export interface VoiceTranscriptEvidenceSummary {

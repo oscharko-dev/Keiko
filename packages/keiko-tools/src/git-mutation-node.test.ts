@@ -26,7 +26,7 @@ function makeAdapter(rec: SpawnRecorder, signal?: AbortSignal): GitLocalMutation
 }
 
 describe("node git mutation adapter — governed argv reaches the spawn boundary", () => {
-  it("spawns exactly the governed `git add -- <path>` and reports success on exit 0", async () => {
+  it("spawns exactly the governed literalized `git add -- <path>` and reports success on exit 0", async () => {
     const rec = recordingSpawn();
     const ad = makeAdapter(rec);
     const pending = ad.stage({ pathspecs: ["src/x.ts"] });
@@ -35,7 +35,7 @@ describe("node git mutation adapter — governed argv reaches the spawn boundary
     expect(result.outcome).toBe("succeeded");
     expect(rec.calls()).toHaveLength(1);
     expect(rec.calls()[0]?.command).toBe("git");
-    expect(rec.calls()[0]?.args).toEqual(["add", "--", "src/x.ts"]);
+    expect(rec.calls()[0]?.args).toEqual(["add", "--", ":(literal)src/x.ts"]);
     // The spawn is shell-less by construction.
     expect(rec.calls()[0]?.options.shell).toBe(false);
   });

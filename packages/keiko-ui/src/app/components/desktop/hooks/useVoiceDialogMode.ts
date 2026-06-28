@@ -1,9 +1,9 @@
 // Issue #1559, Epic #1556 — the UI state hook behind the chat dialog-mode switch and voice-profile
-// selection. It owns NO transport and NO orchestration: it gates availability off the existing
+// selection. It owns NO active transport and NO orchestration: it gates availability off the existing
 // capability probe, persists a content-free persona preference, and exposes the active flag plus
-// enter / leave intents. The actual realtime session is started / stopped by the existing
-// `useRealtimeVoice` controller in ChatWindow; this hook only records the user's intent so the two
-// stay decoupled (a no-op enter on an unavailable deployment can never start a session).
+// enter / leave intents. The actual spoken-dialogue controller is `useRealtimeVoice` in
+// ChatWindow; this hook only records the user's intent so the two stay decoupled (a no-op enter on an
+// unavailable deployment can never start a session).
 //
 // Fail-closed everywhere: an undefined / unavailable capability, an empty persona list, a stale or
 // corrupt localStorage value, or a missing `window` (SSR) all resolve to "no dialogue offered" or the
@@ -13,10 +13,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { VOICE_PERSONAS, type VoicePersona } from "@oscharko-dev/keiko-contracts";
 import type { VoiceCapabilityResolution } from "@/lib/types";
-import { dictationCaptureSupported } from "./dictation-recorder";
+import { realtimeVoiceTransportSupported } from "./voice-rtc-transport";
 import { voiceDialogueModeForResolution } from "./voice-dialogue-session";
 
-const PERSONA_STORAGE_KEY = "keiko.voice.dialog.persona";
+export const VOICE_PERSONA_STORAGE_KEY = "keiko.voice.dialog.persona";
+export const VOICE_PERSONA_CHANGED_EVENT = "keiko:voice-dialog-persona";
 
 const VALID_PERSONAS: ReadonlySet<string> = new Set(VOICE_PERSONAS);
 
@@ -25,7 +26,7 @@ export interface UseVoiceDialogModeOptions {
 }
 
 export interface VoiceDialogMode {
-  // True only when the deployment can hold a realtime spoken dialogue AND offers at least one persona.
+  // True only when the deployment can capture speech, speak answers, and offers at least one persona.
   readonly available: boolean;
   // The personas the deployment offers, in canonical VOICE_PERSONAS order. Empty when unavailable.
   readonly availablePersonas: readonly VoicePersona[];
@@ -42,14 +43,16 @@ export interface VoiceDialogMode {
 // value that is absent, malformed, or no longer offered (deployment changed) falls back to the first
 // available persona, so the selection is never stale or invalid (fail-closed). Never throws: a missing
 // or sandboxed localStorage (SSR, privacy mode) is caught and treated as "no stored preference".
-function readStoredPersona(available: readonly VoicePersona[]): VoicePersona | undefined {
+export function readVoicePersonaPreference(
+  available: readonly VoicePersona[],
+): VoicePersona | undefined {
   if (available.length === 0) {
     return undefined;
   }
   let stored: string | null = null;
   try {
     stored =
-      typeof window === "undefined" ? null : window.localStorage.getItem(PERSONA_STORAGE_KEY);
+      typeof window === "undefined" ? null : window.localStorage.getItem(VOICE_PERSONA_STORAGE_KEY);
   } catch {
     stored = null;
   }
@@ -61,10 +64,11 @@ function readStoredPersona(available: readonly VoicePersona[]): VoicePersona | u
 
 // Persist the persona enum. Swallows storage failures (quota, privacy mode, SSR) so a chat that cannot
 // persist a preference still works for the current session.
-function writeStoredPersona(persona: VoicePersona): void {
+export function writeVoicePersonaPreference(persona: VoicePersona): void {
   try {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(PERSONA_STORAGE_KEY, persona);
+      window.localStorage.setItem(VOICE_PERSONA_STORAGE_KEY, persona);
+      window.dispatchEvent(new CustomEvent(VOICE_PERSONA_CHANGED_EVENT, { detail: persona }));
     }
   } catch {
     // best-effort: a non-persisted preference is acceptable; the in-memory selection still applies.
@@ -84,15 +88,16 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
     [personaKey],
   );
 
-  // Issue #1560 (ADR-0096 D3) — dialogue is offered for the STT+TTS conjunction (speech capture AND
-  // spoken answer AND a capture-capable browser AND a persona), NOT for realtime WebRTC alone. This is
-  // the production fallback fix: a full-realtime deployment in a browser without WebRTC media now
-  // correctly offers dialogue over the STT+TTS turn loop instead of being wrongly hidden. The matrix
-  // predicate (which already requires personas) is the single source of this gate.
-  const available = voiceDialogueModeForResolution(capability, dictationCaptureSupported()).offered;
+  // Voice Dialogue is the product conversation surface and must be true WebRTC realtime speech-to-
+  // speech. Requiring the native realtime transport here prevents the old STT -> Chat -> TTS fallback
+  // from being offered as a dialogue mode.
+  const available = voiceDialogueModeForResolution(
+    capability,
+    realtimeVoiceTransportSupported(),
+  ).offered;
 
   const [persona, setPersona] = useState<VoicePersona>(
-    () => readStoredPersona(availablePersonas) ?? VOICE_PERSONAS[0]!,
+    () => readVoicePersonaPreference(availablePersonas) ?? VOICE_PERSONAS[0]!,
   );
   const [active, setActive] = useState(false);
 
@@ -106,8 +111,28 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
     setPersona((current) =>
       availablePersonas.includes(current)
         ? current
-        : (readStoredPersona(availablePersonas) ?? availablePersonas[0]!),
+        : (readVoicePersonaPreference(availablePersonas) ?? availablePersonas[0]!),
     );
+  }, [availablePersonas]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || availablePersonas.length === 0) {
+      return;
+    }
+    const applyStoredPreference = (): void => {
+      setPersona(readVoicePersonaPreference(availablePersonas) ?? availablePersonas[0]!);
+    };
+    const applyStoragePreference = (event: StorageEvent): void => {
+      if (event.key === VOICE_PERSONA_STORAGE_KEY) {
+        applyStoredPreference();
+      }
+    };
+    window.addEventListener(VOICE_PERSONA_CHANGED_EVENT, applyStoredPreference);
+    window.addEventListener("storage", applyStoragePreference);
+    return () => {
+      window.removeEventListener(VOICE_PERSONA_CHANGED_EVENT, applyStoredPreference);
+      window.removeEventListener("storage", applyStoragePreference);
+    };
   }, [availablePersonas]);
 
   // Leaving is forced the moment the deployment stops offering dialogue, so a capability that flips to
@@ -124,7 +149,7 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
         return;
       }
       setPersona(next);
-      writeStoredPersona(next);
+      writeVoicePersonaPreference(next);
     },
     [availablePersonas],
   );

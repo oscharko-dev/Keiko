@@ -1,33 +1,32 @@
-// Issue #1560, Epic #1556 — voice dialogue-session browser smoke. Drives the REAL app composer in
-// headless Chromium through the documented Studio path (Left Rail → Chat History → New). It proves the
-// colleague-like dialogue surface renders and runs its user-side turn loop in the real browser:
+// Voice Dialogue browser smoke. Drives the REAL app composer in headless Chromium through the documented
+// Studio path (Left Rail → Chat History → New). It proves the colleague-like dialogue surface renders
+// and starts the Realtime WebRTC transport from the single Voice Dialogue switch:
 //   1. No-voice deployment: /api/voice/capability reports unavailable → NO dialogue switch and the
 //      composer stays fully text-capable (AC4).
-//   2. Full-realtime WITHOUT browser WebRTC media (the production STT+TTS fallback, ADR-0096 D3): a fake
-//      getUserMedia + MediaRecorder + stubbed /api/voice/transcribe + /api/voice/speak are injected (no
-//      hardware, no provider; privacy contract preserved). The dialogue switch AND the per-turn controls
-//      (Speak + Interrupt) render; activating the mic begins a listening turn and stopping commits the
-//      transcript through the dialogue session's chat-send seam — Issue #1561: the committed text is sent
-//      through the SAME chat send path a typed message uses (carrying the same context), not parked in
-//      the composer draft, so the captured send carries the transcript and the composer clears (AC1/AC2).
-//      Issue #1560 lifecycle: committing that first turn flips the chat from empty to populated, and the
-//      dialogue session SURVIVES it — the switch stays on and the controls remain, so a SECOND spoken
-//      turn can be taken (the user is never silently kicked back to the text composer); only leaving
-//      removes the controls and runs the master cleanup (AC3). A screenshot of the active dialogue
-//      surface is captured as evidence.
+//   2. Full-realtime WITH browser WebRTC media: fake getUserMedia + RTCPeerConnection + WebSocket are
+//      injected (no hardware, no provider; privacy contract preserved). The dialogue switch starts the
+//      Realtime session directly; provider data-channel transcript events append committed user and
+//      assistant turns through /api/desktop/chat/voice-turn, without raw audio or a second chat send.
+//   3. Full-realtime WITHOUT browser WebRTC media: no fluid dialogue switch is offered. Dictation and
+//      read-aloud remain separate helper surfaces.
 //
-// Scope note (mirrors the #501 / #504 voice smokes): the assistant answer → spoken playback → barge-in
-// half of the loop depends on a live chat + TTS provider that CI does not deploy, and the deep
-// transcribe→send and interrupt routing is proven deterministically in the required `ci` check by the
-// keiko-ui suites (voice-dialogue-session core, useVoiceDialogueSession hook, the VoiceDialogTurnControls
-// component, and the ChatWindow voice integration). This browser smoke proves the gated surface renders,
-// the user-side turn loop runs through real component code, and the composer stays text-capable — it
-// does not drive a real model/audio round trip.
+// Scope note: the provider itself is faked at the WebRTC/control boundary. The executable unit and
+// integration suites cover parser, turn-manager, and BFF persistence behavior; this smoke proves the
+// user-facing surface is a single Realtime dialogue mode and the composer stays text-capable.
 
 import { expect, test, type Page } from "@playwright/test";
 
-// Full-realtime WITH personas but WITHOUT browser WebRTC media — the STT+TTS fallback the matrix must
-// still offer (ADR-0096 D3). availableVoicePersonas is required to unlock the dialogue switch.
+const FULL_REALTIME_WEBRTC_CAPABILITY = {
+  voice: {
+    available: true,
+    profile: "full-realtime",
+    capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+    transport: { websocketControl: true, webrtcMedia: true },
+    availableVoicePersonas: ["male", "female", "neutral"],
+    providerLocality: "azure-foundry",
+  },
+};
+
 const FULL_REALTIME_NO_WEBRTC_CAPABILITY = {
   voice: {
     available: true,
@@ -76,71 +75,133 @@ const SPEECH_OUTPUT_ONLY_CAPABILITY = {
   },
 };
 
-// Injected before any app script runs: a fake getUserMedia + MediaRecorder so the real dialogue
-// dictation exercises a complete capture cycle in the browser without touching hardware or a provider.
-function fakeMediaInit(): string {
-  return `
-    (() => {
-      const fakeTrack = { stop() {} };
-      const fakeStream = { getTracks: () => [fakeTrack] };
-      Object.defineProperty(navigator, "mediaDevices", {
-        configurable: true,
-        value: { getUserMedia: async () => fakeStream },
-      });
-      class FakeMediaRecorder {
-        static isTypeSupported() { return true; }
-        constructor() { this.state = "inactive"; this.mimeType = "audio/webm"; this._l = {}; }
-        addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
-        start() { this.state = "recording"; }
-        stop() {
-          this.state = "inactive";
-          for (const cb of this._l["dataavailable"] || []) {
-            cb({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }) });
-          }
-          for (const cb of this._l["stop"] || []) cb({});
+const REALTIME_BROWSER_FAKE_SCRIPT = `
+  const options = window.__keikoVoiceFakeOptions || {};
+  const emitTranscript = options.emitTranscript === true;
+  const instrumentMic = options.instrumentMic === true;
+  const OFFER = "v=0\\r\\no=- 1 1 IN IP4 127.0.0.1\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
+  const ANSWER = "v=0\\r\\no=- 2 2 IN IP4 0.0.0.0\\r\\ns=-\\r\\nt=0 0\\r\\nm=audio 9 UDP/TLS/RTP/SAVPF 111\\r\\n";
+  if (instrumentMic) window.__micStats = { getUserMedia: 0, stopped: 0 };
+  const fakeTrack = {
+    stop() {
+      if (instrumentMic) window.__micStats.stopped++;
+    },
+  };
+  const fakeStream = { getTracks: () => [fakeTrack] };
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: {
+      getUserMedia: async () => {
+        if (instrumentMic) window.__micStats.getUserMedia++;
+        return fakeStream;
+      },
+    },
+  });
+  class FakeDataChannel {
+    constructor() {
+      this.readyState = "open";
+      this._l = {};
+      this.sent = [];
+    }
+    addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
+    emit(obj) {
+      for (const cb of this._l["message"] || []) cb({ data: JSON.stringify(obj) });
+    }
+    send(data) { this.sent.push(data); }
+    close() {
+      this.readyState = "closed";
+      for (const cb of this._l["close"] || []) cb({});
+    }
+  }
+  function emitRealtimeTranscript(channel) {
+    channel.emit({ type: "input_audio_buffer.speech_started", item_id: "user-item" });
+    channel.emit({ type: "input_audio_buffer.speech_stopped", item_id: "user-item" });
+    channel.emit({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "user-item",
+      transcript: "what is the deploy status",
+    });
+    channel.emit({ type: "response.output_audio.delta", response_id: "resp-1", delta: "stub" });
+    channel.emit({
+      type: "response.output_audio_transcript.done",
+      response_id: "resp-1",
+      transcript: "The deploy is green.",
+    });
+    channel.emit({ type: "response.done", response: { id: "resp-1", status: "completed" } });
+  }
+  class FakeRTCPeerConnection {
+    constructor() {
+      this.iceGatheringState = "complete";
+      this.localDescription = null;
+      this.connectionState = "new";
+      this.ontrack = null;
+      this.onconnectionstatechange = null;
+      this._channel = null;
+    }
+    addEventListener() {}
+    removeEventListener() {}
+    addTrack() {}
+    createDataChannel() {
+      this._channel = new FakeDataChannel();
+      return this._channel;
+    }
+    async createOffer() { return { type: "offer", sdp: OFFER }; }
+    async setLocalDescription(desc) { this.localDescription = { type: desc.type, sdp: desc.sdp }; }
+    async setRemoteDescription() {
+      setTimeout(() => {
+        this.connectionState = "connected";
+        if (this.onconnectionstatechange) this.onconnectionstatechange({});
+        if (emitTranscript && this._channel) {
+          setTimeout(() => emitRealtimeTranscript(this._channel), 0);
         }
+      }, 0);
+    }
+    close() {}
+  }
+  window.RTCPeerConnection = FakeRTCPeerConnection;
+  const RealWebSocket = window.WebSocket;
+  class FakeWebSocket {
+    constructor(url, protocols) {
+      if (!String(url).includes("/api/voice/control")) {
+        return new RealWebSocket(url, protocols);
       }
-      window.MediaRecorder = FakeMediaRecorder;
-    })();
-  `;
-}
+      this.url = url; this.readyState = 0; this._l = {};
+      setTimeout(() => { this.readyState = 1; this._emit("open", {}); }, 0);
+    }
+    addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
+    removeEventListener() {}
+    _emit(type, ev) { for (const cb of this._l[type] || []) cb(ev); }
+    send(data) {
+      let msg; try { msg = JSON.parse(data); } catch { return; }
+      const reply = (obj) => this._emit("message", { data: JSON.stringify(obj) });
+      const base = (seq, kind) => ({ protocolVersion: "1", sessionId: msg.sessionId, seq, direction: "host-to-client", kind });
+      if (msg.kind === "session.create") {
+        reply({ ...base(0, "session.created"), profile: "full-realtime", controlTransport: "loopback-websocket", mediaTransport: "webrtc", negotiationMode: "proxied-sdp" });
+        reply({ ...base(1, "capability.offer"), profile: "full-realtime", capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true } });
+      } else if (msg.kind === "signal.sdp.offer") {
+        reply({ ...base(2, "media.track.state"), track: "audio-in", state: "negotiating" });
+        reply({ ...base(3, "signal.sdp.answer"), sdp: ANSWER });
+      }
+    }
+    close() { this.readyState = 3; this._emit("close", {}); }
+  }
+  window.WebSocket = FakeWebSocket;
+`;
 
-// Issue #1562, AC2/AC3/D3 — instrumented variant that exposes window.__micStats so the browser smoke
-// can assert exact getUserMedia call counts and deterministic track-stop counts without touching real
-// hardware. Each getUserMedia call increments __micStats.getUserMedia; each fake track.stop() call
-// increments __micStats.stopped. The counters are initialised synchronously before any app script runs
-// so assertions on count=0 before the first capture are race-free.
-function fakeMediaInitWithStats(): string {
+function fakeRealtimeInit({
+  emitTranscript = false,
+  instrumentMic = false,
+}: {
+  readonly emitTranscript?: boolean;
+  readonly instrumentMic?: boolean;
+} = {}): string {
   return `
     (() => {
-      window.__micStats = { getUserMedia: 0, stopped: 0 };
-      const fakeTrack = {
-        stop() { window.__micStats.stopped++; },
+      window.__keikoVoiceFakeOptions = {
+        emitTranscript: ${JSON.stringify(emitTranscript)},
+        instrumentMic: ${JSON.stringify(instrumentMic)},
       };
-      const fakeStream = { getTracks: () => [fakeTrack] };
-      Object.defineProperty(navigator, "mediaDevices", {
-        configurable: true,
-        value: {
-          getUserMedia: async () => {
-            window.__micStats.getUserMedia++;
-            return fakeStream;
-          },
-        },
-      });
-      class FakeMediaRecorder {
-        static isTypeSupported() { return true; }
-        constructor() { this.state = "inactive"; this.mimeType = "audio/webm"; this._l = {}; }
-        addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
-        start() { this.state = "recording"; }
-        stop() {
-          this.state = "inactive";
-          for (const cb of this._l["dataavailable"] || []) {
-            cb({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }) });
-          }
-          for (const cb of this._l["stop"] || []) cb({});
-        }
-      }
-      window.MediaRecorder = FakeMediaRecorder;
+      ${REALTIME_BROWSER_FAKE_SCRIPT}
     })();
   `;
 }
@@ -158,51 +219,29 @@ async function stubCapability(page: Page, body: unknown): Promise<void> {
   );
 }
 
-async function stubVoiceProviders(page: Page): Promise<void> {
-  await page.route("**/api/voice/transcribe", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ transcript: "what is the deploy status", confidence: 0.95 }),
-    }),
-  );
-  await page.route("**/api/voice/speak", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ audio: btoa("stub-audio"), mimeType: "audio/mpeg" }),
-    }),
-  );
-}
-
-// Issue #1561 — captures the chat send dispatched when a spoken turn is committed, and fulfils it with a
-// canned response so the smoke stays deterministic (no model round trip — the deep send routing is proven
-// in the required `ci` keiko-ui suites). The streaming route is forced to a non-SSE response so the
-// client falls back to the buffered send, which is the one we capture. This is the browser-level proof
-// that the committed transcript flows through the SAME chat send path a typed message uses.
-interface CapturedSendBody {
+interface CapturedVoiceTurnBody {
   readonly chatId?: string;
   readonly projectPath?: string;
-  readonly modelId?: string;
-  readonly content?: string;
+  readonly messages?: readonly { readonly role?: string; readonly content?: string }[];
 }
 
-function stubChatSend(page: Page): { sends: () => readonly string[] } {
-  // Every committed turn is captured in order, so the test can assert BOTH that the first spoken turn
-  // reached the chat send AND that a second turn fired after the chat went from empty to populated.
-  const captured: { sends: string[] } = { sends: [] };
-  void page.route("**/api/desktop/chat/stream", (route) =>
-    route.fulfill({
-      status: 400,
-      contentType: "application/json",
-      body: JSON.stringify({ code: "STREAMING_UNSUPPORTED", message: "buffered in smoke" }),
-    }),
-  );
-  void page.route("**/api/desktop/chat", (route) => {
-    const body = (route.request().postDataJSON() ?? {}) as CapturedSendBody;
-    if (typeof body.content === "string" && body.content.length > 0) {
-      captured.sends.push(body.content);
-    }
+function stubVoiceTurnAppend(page: Page): {
+  turns: () => readonly { readonly role: string; readonly content: string }[];
+} {
+  const captured: { turns: { role: string; content: string }[] } = { turns: [] };
+  void page.route("**/api/desktop/chat/voice-turn", (route) => {
+    const body = (route.request().postDataJSON() ?? {}) as CapturedVoiceTurnBody;
+    const messages =
+      body.messages
+        ?.filter(
+          (message): message is { role: string; content: string } =>
+            typeof message.role === "string" &&
+            typeof message.content === "string" &&
+            message.content.length > 0,
+        )
+        .map((message) => ({ role: message.role, content: message.content })) ?? [];
+    captured.turns.push(...messages);
     const chatId = body.chatId ?? "chat";
-    const turn = captured.sends.length;
     return route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -210,29 +249,27 @@ function stubChatSend(page: Page): { sends: () => readonly string[] } {
           id: chatId,
           projectPath: body.projectPath ?? "/repo",
           title: "New chat",
-          selectedModel: body.modelId ?? "model",
+          selectedModel: "model",
           status: "open",
           connectedScopes: [],
           localKnowledgeScopes: [],
           createdAt: 1,
           updatedAt: 2,
         },
-        messages: [
-          {
-            id: `user-${String(turn)}`,
-            chatId,
-            role: "user",
-            content: body.content ?? "",
-            timestamp: 2,
-          },
-        ],
+        messages: messages.map((message, index) => ({
+          id: `voice-${String(captured.turns.length)}-${String(index)}`,
+          chatId,
+          role: message.role,
+          content: message.content,
+          timestamp: 2,
+        })),
       }),
     });
   });
-  return { sends: () => captured.sends };
+  return { turns: () => captured.turns };
 }
 
-// Reads a counter from the browser-side window.__micStats instrument (see fakeMediaInitWithStats), so
+// Reads a counter from the browser-side window.__micStats instrument (see fakeRealtimeInit), so
 // the lifecycle assertions are on observable call counts rather than on timing.
 async function micStat(page: Page, field: "getUserMedia" | "stopped"): Promise<number | undefined> {
   return page.evaluate(
@@ -251,24 +288,24 @@ async function noVoiceFlow(page: Page): Promise<void> {
 }
 
 async function dialogueTurnFlow(page: Page): Promise<void> {
-  await page.addInitScript(fakeMediaInit());
-  await stubCapability(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
-  await stubVoiceProviders(page);
-  const send = stubChatSend(page);
+  await page.addInitScript(fakeRealtimeInit({ emitTranscript: true }));
+  await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
+  const voiceTurns = stubVoiceTurnAppend(page);
   await openComposer(page);
 
-  // The dialogue switch is offered even though the browser has no WebRTC media (the STT+TTS fallback).
+  await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await expect(dialogSwitch).toBeVisible();
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
-  // The per-turn controls render so the user can take the floor (AC1).
-  const speak = page.getByRole("button", { name: "Start speaking" });
-  await expect(speak).toBeVisible();
-  const interrupt = page.getByRole("button", { name: "Interrupt the assistant" });
-  await expect(interrupt).toBeVisible();
-  await expect(interrupt).toBeDisabled();
+  await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
 
   await page.screenshot({
     path: "docs/voice/evidence/1560-dialogue-session.png",
@@ -276,42 +313,20 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   });
 
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
-  const stopAndSend = page.getByRole("button", { name: "Stop speaking and send" });
-
-  // AC1/AC2 (Issue #1561) — run a spoken turn from the FRESH, empty chat. Activating the mic begins a
-  // listening turn (the control flips to stop-and-send); ending it commits the transcript through the
-  // chat-send seam. The committed text is sent through the SAME chat send path a typed message uses
-  // (carrying the same context), NOT parked in the composer draft: the captured send carries the
-  // transcript and the composer clears. The deep send / grounding routing is proven deterministically in
-  // the required `ci` keiko-ui suites; this smoke proves the spoken turn reaches the chat send in the
-  // real browser.
-  await speak.click();
-  await expect(stopAndSend).toBeVisible();
-  await expect(stopAndSend).toHaveAttribute("aria-pressed", "true");
-  await stopAndSend.click();
-  await expect.poll(() => send.sends().length).toBeGreaterThanOrEqual(1);
-  expect(send.sends()[0]).toMatch(/what is the deploy status/u);
+  await expect.poll(() => voiceTurns.turns().length).toBeGreaterThanOrEqual(2);
+  expect(voiceTurns.turns()).toEqual(
+    expect.arrayContaining([
+      { role: "user", content: "what is the deploy status" },
+      { role: "assistant", content: "The deploy is green." },
+    ]),
+  );
   await expect(composer).toHaveValue("");
-
-  // Issue #1560 lifecycle regression — committing that first turn flips the chat from empty to populated.
-  // The dialogue session MUST survive that transition: the switch stays on and the per-turn controls
-  // remain, so the user is NOT silently kicked back to the plain text composer mid-conversation. (On the
-  // pre-fix two-slot composer layout the ComposerCore remounted here, resetting voiceDialog.active —
-  // this is the assertion that fails against that regression.)
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
-  await expect(speak).toBeVisible();
 
-  // The continuous colleague-like dialogue: a SECOND spoken turn can be taken on the now-populated chat.
-  await speak.click();
-  await expect(stopAndSend).toBeVisible();
-  await stopAndSend.click();
-  await expect.poll(() => send.sends().length).toBeGreaterThanOrEqual(2);
-
-  // AC3 — leaving removes the per-turn controls, flips the switch off, and runs the master cleanup; the
-  // composer stays fully usable.
-  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
-  await expect(speak).toHaveCount(0);
+  // Leaving is the same Keiko-logo switch: no separate Stop / Leave panel exists.
+  await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
   await expect(composer).toBeVisible();
 }
 
@@ -321,77 +336,39 @@ test("voice dialogue @smoke — no-voice deployment offers no dialogue switch (A
   await noVoiceFlow(page);
 });
 
-test("voice dialogue @smoke — STT+TTS fallback renders the turn loop and commits a spoken turn (AC1/AC2/AC3)", async ({
+test("voice dialogue @smoke — Realtime WebRTC appends committed transcript turns (AC1/AC2/AC3)", async ({
   page,
 }) => {
   await dialogueTurnFlow(page);
 });
 
-// Issue #1562, Epic #1556 — AC2/AC3/D3: microphone permission lifecycle browser evidence.
-//
-// Drives the real app composer through the documented dialogue path and asserts — at the browser layer —
-// that the microphone is acquired only in response to an explicit user gesture (AC2) and is released
-// deterministically when the user leaves dialogue mode (AC3). Instrumented via window.__micStats
-// (see fakeMediaInitWithStats) so assertions are on observable call counts, not on timing.
-//
-// What this proves (D3 — manual browser verification as automated checked-in evidence):
-//   - Entering dialogue mode does NOT open the microphone (getUserMedia count stays 0).
-//   - Clicking "Start speaking" opens the microphone exactly once (getUserMedia count becomes 1)
-//     and the visible recording state is reflected (aria-pressed="true" on the stop button).
-//   - Clicking "Leave voice dialogue" stops all fake tracks (stopped count >= 1), satisfying the
-//     deterministic resource-release requirement even when a capture cycle was in progress.
-//   - The per-turn controls are removed after leaving, so the surface is clean (composer still usable).
-//
-// A screenshot is captured to docs/voice/evidence/1562-dialogue-mic-lifecycle.png as the D3 artifact.
-// The coordinator runs the test to generate the PNG.
 async function micLifecycleFlow(page: Page): Promise<void> {
-  // Instrumented init: window.__micStats is set before any app script; getUserMedia/track.stop()
-  // increment the counters so assertions on count=0 before capture are race-free.
-  await page.addInitScript(fakeMediaInitWithStats());
-  await stubCapability(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
-  await stubVoiceProviders(page);
+  await page.addInitScript(fakeRealtimeInit({ instrumentMic: true }));
+  await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
   await openComposer(page);
 
-  // Enter dialogue mode by toggling the switch.
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await expect(dialogSwitch).toBeVisible();
+  await expect.poll(() => micStat(page, "getUserMedia")).toBe(0);
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
-
-  // AC2 — the microphone must NOT be opened merely by entering dialogue mode: the turn controls render
-  // but getUserMedia must still be 0.
-  const speak = page.getByRole("button", { name: "Start speaking" });
-  await expect(speak).toBeVisible();
-  await expect.poll(() => micStat(page, "getUserMedia")).toBe(0);
-
-  // AC2 — clicking "Start speaking" is the explicit user gesture that opens the microphone exactly once,
-  // and the visible recording state must be reflected immediately (aria-pressed on the stop control).
-  await speak.click();
   await expect.poll(() => micStat(page, "getUserMedia")).toBe(1);
-  const stopAndSend = page.getByRole("button", { name: "Stop speaking and send" });
-  await expect(stopAndSend).toBeVisible();
-  await expect(stopAndSend).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
 
-  // Capture the live recording state as the D3 evidence artifact: the mic is open and the visible
-  // recording control is shown. Leaving mid-recording (next) is the strongest AC3 release proof.
   await page.screenshot({
     path: "docs/voice/evidence/1562-dialogue-mic-lifecycle.png",
     fullPage: true,
   });
 
-  // AC3 — leaving dialogue mode while the microphone is live must release all acquired tracks
-  // deterministically (leaveVoiceDialog → dialogue session master teardown → dictation.cancel →
-  // track.stop). Asserted before any turn commits, isolating the lifecycle from the chat-send re-render.
-  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
+  await dialogSwitch.click();
   await expect.poll(() => micStat(page, "stopped")).toBeGreaterThanOrEqual(1);
-
-  // Per-turn controls removed, the switch inactive, and the composer still usable.
-  await expect(speak).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
 }
 
-test("voice dialogue @smoke — microphone acquired only on explicit gesture, released on leave (AC2/AC3/D3)", async ({
+test("voice dialogue @smoke — switch starts WebRTC microphone and leave releases it (AC2/AC3/D3)", async ({
   page,
 }) => {
   await micLifecycleFlow(page);
@@ -409,40 +386,29 @@ async function unavailableProfileFlow(page: Page, capability: unknown): Promise<
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
-  // The partial deployment does not offer spoken dialogue: no switch, and text chat is unaffected.
+  // Partial or non-WebRTC deployments do not offer spoken dialogue; text chat is unaffected.
   await expect(page.getByRole("switch", { name: "Voice dialogue mode" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
 }
 
-// Issue #1563 — voice selection + live session status browser evidence.
+// Issue #1563 — active-session composer evidence.
 //
-// Proves, in the real browser, two surfaces the evaluation's accessibility and lifecycle dimensions
-// depend on: the voice/persona selector is operable and its visible active-voice label updates, and the
-// live-region status strip announces the listening state when a turn begins. Captures the #1563 evidence
-// screenshot of the active evaluation surface.
-async function voiceSelectionAndStatusFlow(page: Page): Promise<void> {
-  await page.addInitScript(fakeMediaInit());
-  await stubCapability(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
-  await stubVoiceProviders(page);
-  stubChatSend(page);
+// Voice selection now lives in Settings > General. The active composer remains a clean dialogue surface:
+// the Keiko-logo switch plus the microphone mute control are the only voice-dialogue controls.
+async function activeComposerControlsFlow(page: Page): Promise<void> {
+  await page.addInitScript(fakeRealtimeInit());
+  await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
   await openComposer(page);
 
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
-  // Voice selection: the persona selector is operable, and choosing a voice updates its visible
-  // active-voice label (the accessible name is the "Voice profile: <persona>" label).
-  const profile = page.getByRole("combobox", { name: /^Voice profile/u });
-  await expect(profile).toBeVisible();
-  await profile.click();
-  await page.getByRole("option", { name: "Neutral voice" }).click();
-  await expect(page.getByRole("combobox", { name: "Voice profile: Neutral voice" })).toBeVisible();
-
-  // Live status: beginning a turn announces the listening state through the live region.
-  const speak = page.getByRole("button", { name: "Start speaking" });
-  await speak.click();
-  await expect(page.getByText("Listening to you.")).toBeVisible();
+  await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
 
   await page.screenshot({
     path: "docs/voice/evidence/1563-dialogue-evaluation.png",
@@ -450,9 +416,9 @@ async function voiceSelectionAndStatusFlow(page: Page): Promise<void> {
   });
 
   // Leave returns to a clean, text-capable composer (master cleanup).
-  await page.getByRole("button", { name: "Stop speaking and send" }).click();
-  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
-  await expect(speak).toHaveCount(0);
+  await dialogSwitch.click();
+  await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
 }
 
@@ -468,31 +434,17 @@ test("voice dialogue @smoke — speech-output-only deployment offers no dialogue
   await unavailableProfileFlow(page, SPEECH_OUTPUT_ONLY_CAPABILITY);
 });
 
-test("voice dialogue @smoke — voice selection updates the active voice and status announces listening (AC1/AC4)", async ({
+test("voice dialogue @smoke — full-realtime without WebRTC offers no dialogue switch (AC1)", async ({
   page,
 }) => {
-  await voiceSelectionAndStatusFlow(page);
+  await unavailableProfileFlow(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
 });
 
-// Issue #1564, Epic #1556 — end-to-end acceptance evidence for ALL THREE product voice personas.
-//
-// Deliverable 1 of the closure gate asks for end-to-end acceptance evidence for dialog mode with male,
-// female, AND neutral voice choices (the existing #1563 selection smoke only exercised 'neutral'). This
-// walks every persona through the real persona selector in the real browser, asserts the visible
-// active-voice label updates for each, captures a per-persona evidence screenshot, and then proves the
-// selection PERSISTS across a full page reload (Epic #1556 AC3): the content-free persona enum is stored
-// in localStorage (keiko.voice.dialog.persona) and restored on the next load. The deep persona->voiceId
-// resolution stays server-side and is proven in the required `ci` keiko-ui + keiko-server suites; this
-// smoke proves the user-facing selectability and persistence of all three personas in the real app.
-const PERSONA_ACCEPTANCE: readonly {
-  readonly slug: string;
-  readonly option: string;
-  readonly label: string;
-}[] = [
-  { slug: "male", option: "Male voice", label: "Voice profile: Male voice" },
-  { slug: "female", option: "Female voice", label: "Voice profile: Female voice" },
-  { slug: "neutral", option: "Neutral voice", label: "Voice profile: Neutral voice" },
-];
+test("voice dialogue @smoke — active composer keeps only switch and mic mute visible (AC1/AC4)", async ({
+  page,
+}) => {
+  await activeComposerControlsFlow(page);
+});
 
 async function enterDialogue(page: Page): Promise<void> {
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
@@ -503,54 +455,37 @@ async function enterDialogue(page: Page): Promise<void> {
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 }
 
-async function selectPersona(page: Page, option: string): Promise<void> {
-  // exact: true — "Male voice" is a substring of "Female voice", so a non-exact name matches both.
-  await page.getByRole("combobox", { name: /^Voice profile/u }).click();
-  await page.getByRole("option", { name: option, exact: true }).click();
-}
-
-async function personaAcceptanceFlow(page: Page): Promise<void> {
-  await page.addInitScript(fakeMediaInit());
-  await stubCapability(page, FULL_REALTIME_NO_WEBRTC_CAPABILITY);
-  await stubVoiceProviders(page);
-  stubChatSend(page);
+async function personaStorageFlow(page: Page): Promise<void> {
+  await page.addInitScript(fakeRealtimeInit());
+  await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
   await openComposer(page);
-  await enterDialogue(page);
-
-  // Every persona is selectable, and choosing it updates the visible active-voice label (AC3/TO2).
-  for (const { slug, option, label } of PERSONA_ACCEPTANCE) {
-    await selectPersona(page, option);
-    await expect(page.getByRole("combobox", { name: label })).toBeVisible();
-    await page.screenshot({
-      path: `docs/voice/evidence/1564-persona-${slug}.png`,
-      fullPage: true,
-    });
-  }
-
-  // AC3 persistence: select 'male' and confirm the chosen persona is written to localStorage as the
-  // content-free enum (never a voice id), keyed exactly as the production hook reads it.
-  await selectPersona(page, "Male voice");
-  await expect(page.getByRole("combobox", { name: "Voice profile: Male voice" })).toBeVisible();
+  await page.evaluate(() => {
+    window.localStorage.setItem("keiko.voice.dialog.persona", "male");
+  });
   expect(await page.evaluate(() => window.localStorage.getItem("keiko.voice.dialog.persona"))).toBe(
     "male",
   );
+  await enterDialogue(page);
+  await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
 
-  // Leaving returns a clean, text-capable composer (master cleanup) without clearing the preference.
-  await page.getByRole("button", { name: "Leave voice dialogue" }).click();
-  await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
+  await page.screenshot({
+    path: "docs/voice/evidence/1564-persona-storage.png",
+    fullPage: true,
+  });
+
+  const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await dialogSwitch.click();
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
 
-  // The persona preference survives a full page reload (the persisted enum round-trips a real load).
-  // UI restoration of the persisted persona on re-mount is pinned deterministically in the required `ci`
-  // keiko-ui suite (useVoiceDialogMode.test.ts); here we prove the persisted value itself is durable.
   await page.reload();
   expect(await page.evaluate(() => window.localStorage.getItem("keiko.voice.dialog.persona"))).toBe(
     "male",
   );
 }
 
-test("voice dialogue @smoke — male, female, and neutral voices are all selectable and persist across reload (AC3)", async ({
+test("voice dialogue @smoke — persona preference stays content-free and out of the active composer (AC3)", async ({
   page,
 }) => {
-  await personaAcceptanceFlow(page);
+  await personaStorageFlow(page);
 });

@@ -129,10 +129,13 @@ export {
 export {
   MAX_SPEECH_AUDIO_BYTES,
   requestTextToSpeech,
+  requestTextToSpeechStream,
   type SpeechResponseFormat,
   type TextToSpeechErrorKind,
   type TextToSpeechOutcome,
   type TextToSpeechRequest,
+  type TextToSpeechStreamOutcome,
+  type TextToSpeechStreamSuccess,
   type TextToSpeechSuccess,
 } from "./text-to-speech-adapter.js";
 
@@ -145,9 +148,12 @@ export {
   requestRealtimeNegotiation,
   type RealtimeVoice,
   type RealtimeNegotiationErrorKind,
+  type RealtimeFunctionTool,
   type RealtimeNegotiationOutcome,
   type RealtimeNegotiationRequest,
   type RealtimeNegotiationSuccess,
+  type RealtimeSessionTool,
+  type RealtimeSessionToolChoice,
 } from "./realtime-voice-adapter.js";
 
 export {

@@ -68,7 +68,9 @@ describe("TaskWorkspaceSwitcher", () => {
   it("shows an unbound label and announces no active workspace", () => {
     renderSwitcher(api());
     expect(screen.getByRole("button", { name: /task workspace/i })).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("No active task workspace");
+    const status = screen.getByRole("status");
+    expect(status).toHaveClass("tw-switcher-status-sr");
+    expect(status).toHaveTextContent("No active task workspace");
   });
 
   it("renders the active identity, branch, base branch and a clean badge", () => {
@@ -177,6 +179,20 @@ describe("TaskWorkspaceSwitcher", () => {
     renderSwitcher(api({ error: "Workspace is locked by another actor" }));
     openPanel();
     expect(screen.getByRole("alert")).toHaveTextContent("locked by another actor");
+  });
+
+  it("does not render the create form while no repository context is available", () => {
+    renderSwitcher(api());
+    openPanel();
+    const panel = screen.getByRole("group", { name: /task workspace context/i });
+
+    expect(within(panel).getByText("No active task workspace")).toBeInTheDocument();
+    expect(
+      within(panel).getByText("Open a project before creating a managed task workspace."),
+    ).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/446-binding/)).toBeNull();
+    expect(screen.queryByPlaceholderText(/e\.g\. dev/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /create task workspace/i })).toBeNull();
   });
 
   it("creates a task workspace from the form when a repository root is known", () => {

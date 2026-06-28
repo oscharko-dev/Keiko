@@ -24,7 +24,7 @@ import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
-import { canConnect, relLabel, subText } from "./windows/connectionUtils";
+import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";

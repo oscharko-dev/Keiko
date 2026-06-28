@@ -101,7 +101,7 @@ function readTagName(
 }
 
 // Returns the next tag starting at or after `from`. Skips comments, CDATA, and DOCTYPE.
-function skipSpecialMarker(text: string, lt: number, after: number): number | null {
+function skipSpecialMarker(text: string, after: number): number | null {
   if (text.startsWith("!--", after)) {
     const close = text.indexOf("-->", after + 3);
     return close === -1 ? text.length : close + 3;
@@ -142,7 +142,7 @@ function nextEvent(text: string, from: number): ScanEvent {
   const lt = text.indexOf("<", from);
   if (lt === -1) return { kind: "text", start: from, end: text.length, next: text.length };
   if (lt > from) return { kind: "text", start: from, end: lt, next: lt };
-  const marker = skipSpecialMarker(text, lt, lt + 1);
+  const marker = skipSpecialMarker(text, lt + 1);
   if (marker !== null) return { kind: "marker", next: marker };
   const tag = readTagAt(text, lt);
   if (tag !== null) return { kind: "tag", tag, next: tag.end };

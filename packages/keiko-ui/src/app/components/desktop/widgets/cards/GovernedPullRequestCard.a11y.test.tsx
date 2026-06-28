@@ -53,7 +53,7 @@ function fillForm(): void {
   fireEvent.change(screen.getByLabelText("Head branch"), {
     target: { value: "claude/issue-477-x" },
   });
-  fireEvent.change(screen.getByLabelText("Pull request title"), { target: { value: "feat: x" } });
+  fireEvent.change(screen.getByLabelText("Pull Request title"), { target: { value: "feat: x" } });
 }
 
 describe("GovernedPullRequestCard — a11y (WCAG 2.2 AA)", () => {

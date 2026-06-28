@@ -130,6 +130,15 @@ describe("resolveVoiceCapabilityFromCapabilities — full voice profile (AC3)", 
     expect(result.transport).toEqual({ websocketControl: true, webrtcMedia: true });
   });
 
+  it("advertises realtime tool calling only when the realtime voice provider supports tools", () => {
+    const withoutTools = resolve([voiceCap({ supportsRealtimeVoice: true, toolCalling: false })]);
+    expect(withoutTools.capabilities.realtimeToolCalling).toBeUndefined();
+
+    const withTools = resolve([voiceCap({ supportsRealtimeVoice: true, toolCalling: true })]);
+    expect(withTools.profile).toBe("full-realtime");
+    expect(withTools.capabilities.realtimeToolCalling).toBe(true);
+  });
+
   it("reports full-realtime when BOTH speech input and speech output are available", () => {
     const result = resolve([
       voiceCap({ id: "stt", supportsSpeechInput: true }),

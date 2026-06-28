@@ -19,8 +19,8 @@
 // these phases lives in keiko-ui (`voice-playback-state.ts`) as a synchronous deterministic engine; this
 // leaf contract holds the phase catalog, the classification tables, the legal-transition table, the
 // capability-gating predicates, the effect vocabulary, the validators, and the content-free turn summary
-// so later voice consumers (#502 discussion intelligence, #504 recap / memory review) can read playback
-// outcomes without forking the reducer.
+// so later voice consumers (#502 discussion intelligence and memory review) can read playback outcomes
+// without forking the reducer.
 //
 // `VOICE_PLAYBACK_SCHEMA_VERSION` follows the same evolution rule as `VOICE_PROTOCOL_VERSION` /
 // `VOICE_TRANSCRIPT_SCHEMA_VERSION`: a breaking change introduces a NEW literal rather than mutating "1".
@@ -90,7 +90,7 @@ export const VOICE_PLAYBACK_ACTIVE_PHASES: readonly VoicePlaybackPhase[] = [
 ] as const;
 
 // The terminal lifecycle facts of a single assistant turn's playback. These are the durable, content-free
-// outcomes a turn summary, recap (#504), or discussion-intelligence pass (#502) may read.
+// outcomes a turn summary or discussion-intelligence pass (#502) may read.
 export const VOICE_PLAYBACK_SETTLED_PHASES: readonly VoicePlaybackPhase[] = [
   "interrupted",
   "canceled",
@@ -123,7 +123,7 @@ export const VOICE_PLAYBACK_FAILURE_KINDS: readonly VoicePlaybackFailureKind[] =
 //
 // Replay (AC5 reconnect semantics): the durable, settled lifecycle facts (`interrupted`, `canceled`,
 // `failed`, `complete`) are `replayable` — a reconnect re-delivers that the assistant turn ended a
-// certain way so turn accounting and recap stay consistent. The in-flight phases (`preparing`,
+// certain way so turn accounting stays consistent. The in-flight phases (`preparing`,
 // `speaking`, `paused`) are `ephemeral`: a reconnect never re-delivers them and never re-plays the
 // audio, mirroring `transcript.partial`. `unavailable` is `ephemeral` (dormant, never a durable fact).
 export const VOICE_PLAYBACK_PHASE_REPLAY: Record<VoicePlaybackPhase, VoiceReplayClass> = {
@@ -206,7 +206,7 @@ export function isActiveVoicePlaybackPhase(phase: VoicePlaybackPhase): boolean {
   return (VOICE_PLAYBACK_ACTIVE_PHASES as readonly string[]).includes(phase);
 }
 
-// Whether this phase is a terminal lifecycle fact of the turn's playback (AC5 / recap consumption).
+// Whether this phase is a terminal lifecycle fact of the turn's playback (AC5 consumption).
 export function isSettledVoicePlaybackPhase(phase: VoicePlaybackPhase): boolean {
   return (VOICE_PLAYBACK_SETTLED_PHASES as readonly string[]).includes(phase);
 }
@@ -318,8 +318,8 @@ export function initialVoicePlaybackPhase(_profile: VoiceProfile): VoicePlayback
   return "unavailable";
 }
 
-// ─── Content-free turn summary (Deliverable: integration boundary for #502/#504) ──
-// A content-free roll-up of a single assistant turn's playback that recap / discussion intelligence may
+// ─── Content-free turn summary (Deliverable: integration boundary for #502) ──
+// A content-free roll-up of a single assistant turn's playback that discussion intelligence may
 // consume: the terminal phase, whether it completed without interruption, and counts only — never any
 // audio, text, credential, or provider detail. This is the only playback representation that may enter an
 // evidence manifest, and it does so without passing through the redact-at-persist seam because it is

@@ -8,10 +8,13 @@ import type {
   BffError,
   ChatConnectedScope,
   ChatLocalKnowledgeScope,
+  Chat,
+  ChatMessage,
   ChatResponse,
   ChatsResponse,
   ConversationDocumentContextWire,
   ConversationMemoryRequestWire,
+  ConversationMemoryResultWire,
   ChatStatus,
   ChatMessageRole,
   ChatWorkflowStatus,
@@ -30,6 +33,12 @@ import type {
   GitDiffScope,
   GitRepositoryDiffResponse,
   GitRepositoryStatusResponse,
+  GitHistoryResponse,
+  GitRepositorySummary,
+  GitRemotesResponse,
+  GitSyncExecuteResponse,
+  GitSyncOperation,
+  GitSyncPreview,
   GatewayReadinessOptions,
   GatewayReadinessReport,
   EditorDocumentVersion,
@@ -312,6 +321,39 @@ export async function synthesizeAssistantSpeech(
     body: JSON.stringify(input),
     ...(signal === undefined ? {} : { signal }),
   });
+}
+
+// Streaming synthesis: returns the raw Response so the caller can read `response.body` as PCM chunks
+// (AudioWorklet playback). The same CSRF + JSON-request envelope applies; a non-2xx is parsed into an
+// ApiError exactly like fetchJson so the caller can fall back to the buffered route. Abortable — on a
+// stop / mute / barge-in the fetch throws and the caller treats it as a silent cancel.
+export async function streamAssistantSpeech(
+  input: VoiceSpeechRequest,
+  signal?: AbortSignal,
+): Promise<Response> {
+  const res = await fetch("/api/voice/speak/stream", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Keiko-CSRF": "1",
+      Accept: "audio/pcm",
+    },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (!res.ok) {
+    let code = "INTERNAL";
+    let message = `HTTP ${res.status.toString()}`;
+    try {
+      const envelope = (await res.json()) as BffError;
+      code = envelope.error.code;
+      message = envelope.error.message;
+    } catch {
+      // parse failure — keep generic message, never log body
+    }
+    throw new ApiError(code, message, res.status);
+  }
+  return res;
 }
 
 export interface GatewaySetupInput {
@@ -746,6 +788,81 @@ export interface SendDesktopChatInput {
   documentContext?: readonly ConversationDocumentContextWire[];
 }
 
+export interface AppendDesktopChatVoiceTurnMessage {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+  readonly timestamp?: number | undefined;
+}
+
+export interface AppendDesktopChatVoiceTurnInput {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly messages: readonly AppendDesktopChatVoiceTurnMessage[];
+  readonly memory?: ConversationMemoryRequestWire;
+}
+
+export interface AppendDesktopChatVoiceTurnResponse {
+  readonly chat: Chat;
+  readonly messages: readonly ChatMessage[];
+  readonly memory?: ConversationMemoryResultWire;
+}
+
+export async function appendDesktopChatVoiceTurn(
+  input: AppendDesktopChatVoiceTurnInput,
+): Promise<AppendDesktopChatVoiceTurnResponse> {
+  return fetchJson<AppendDesktopChatVoiceTurnResponse>("/api/desktop/chat/voice-turn", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export interface RealtimeGroundedToolInput {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly callId: string;
+  readonly query: string;
+  readonly userTranscript?: string | undefined;
+  readonly modelId?: string | undefined;
+  readonly memory?: ConversationMemoryRequestWire | undefined;
+}
+
+export interface RealtimeGroundedToolOutput {
+  readonly status: "ok";
+  readonly answer: string;
+  readonly groundingKind: GroundedAnswer["groundingKind"];
+  readonly elapsedMs: number;
+  readonly citations: readonly {
+    readonly marker: string;
+    readonly label: string;
+    readonly source?: string | undefined;
+  }[];
+  readonly evidenceRunId?: string | undefined;
+  readonly persisted: {
+    readonly userMessageId: string;
+    readonly assistantMessageId: string;
+  };
+  readonly instruction: string;
+}
+
+export interface RealtimeGroundedToolResponse {
+  readonly chat: Chat;
+  readonly messages: readonly ChatMessage[];
+  readonly groundedAnswer: GroundedAnswer;
+  readonly toolOutput: RealtimeGroundedToolOutput;
+  readonly memory?: ConversationMemoryResultWire | undefined;
+}
+
+export async function runRealtimeGroundedTool(
+  input: RealtimeGroundedToolInput,
+  signal?: AbortSignal,
+): Promise<RealtimeGroundedToolResponse> {
+  return fetchJson<RealtimeGroundedToolResponse>("/api/voice/realtime/grounded-tool", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: signal ?? null,
+  });
+}
+
 // Issue #152 — accepts an optional AbortSignal so the Conversation Center can
 // cancel an in-flight ungrounded send. RequestInit.signal is `AbortSignal |
 // null` under exactOptionalPropertyTypes; convert at the boundary so callers
@@ -1106,6 +1223,30 @@ export async function fetchGitBranches(root: string): Promise<GitBranchListRespo
   const params = new URLSearchParams();
   params.set("root", root);
   return fetchJson(`/api/git/branches?${params.toString()}`);
+}
+
+export async function fetchGitSummary(root: string): Promise<GitRepositorySummary> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  return fetchJson(`/api/git/summary?${params.toString()}`);
+}
+
+export async function fetchGitHistory(input: {
+  readonly root: string;
+  readonly limit?: number | undefined;
+  readonly skip?: number | undefined;
+}): Promise<GitHistoryResponse> {
+  const params = new URLSearchParams();
+  params.set("root", input.root);
+  if (input.limit !== undefined) params.set("limit", input.limit.toString());
+  if (input.skip !== undefined) params.set("skip", input.skip.toString());
+  return fetchJson(`/api/git/history?${params.toString()}`);
+}
+
+export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  return fetchJson(`/api/git/remotes?${params.toString()}`);
 }
 
 export async function fetchGitDiff(input: {
@@ -1555,11 +1696,7 @@ export async function fetchGitDeliveryActionSheet(
 // block returns `{ status: "blocked", blockReason: "message-policy", messageViolations }`.
 
 export type GitDeliveryMutationStatus =
-  | "succeeded"
-  | "blocked"
-  | "approval-required"
-  | "failed"
-  | "recovery-required";
+  "succeeded" | "blocked" | "approval-required" | "failed" | "recovery-required";
 
 // Shared mutation response shape for branch + staging + commit execution. Optional fields appear only
 // for the matching outcome (block reason, preflight codes, required approvers, execution error code).
@@ -1785,6 +1922,48 @@ export async function fetchGitDeliveryPushExecute(
   return fetchJson("/api/git-delivery/push/execute", {
     method: "POST",
     body: gitDeliveryPushBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// ─── Fetch / pull sync (Issue #1573 API, consumed by Issue #1576 UI) ─────────────────────────
+
+export interface GitDeliverySyncInput {
+  readonly operation: GitSyncOperation;
+  readonly projectId: string;
+  readonly remote?: string | undefined;
+}
+
+function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    projectId: input.projectId,
+    ...(input.remote === undefined ? {} : { remote: input.remote }),
+  });
+}
+
+function gitDeliverySyncPath(operation: GitSyncOperation, phase: "preview" | "execute"): string {
+  return `/api/git-delivery/${operation}/${phase}`;
+}
+
+export async function fetchGitDeliverySyncPreview(
+  input: GitDeliverySyncInput,
+  signal?: AbortSignal,
+): Promise<GitSyncPreview> {
+  return fetchJson(gitDeliverySyncPath(input.operation, "preview"), {
+    method: "POST",
+    body: gitDeliverySyncBody(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliverySyncExecute(
+  input: GitDeliverySyncInput,
+  signal?: AbortSignal,
+): Promise<GitSyncExecuteResponse> {
+  return fetchJson(gitDeliverySyncPath(input.operation, "execute"), {
+    method: "POST",
+    body: gitDeliverySyncBody(input),
     ...(signal === undefined ? {} : { signal }),
   });
 }

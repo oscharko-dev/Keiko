@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(resolve(here, "globals.css"), "utf8");
+const css = readFileSync(resolve(here, "globals.css"), "utf8").replace(/\r\n?/g, "\n");
 const currentCssSha256 = createHash("sha256").update(css).digest("hex");
 const evidenceHarness1297 = readFileSync(
   resolve(here, "../../../..", "docs/design-system/evidence/1297/equivalence-harness.mjs"),
@@ -675,7 +675,13 @@ describe("Fix 4 — dense desktop text clarity", () => {
   });
 
   it("keeps code and mono text free of programming-operator ligatures", () => {
-    const selectors = [".mono {", ".sm-inline-code", ".sm-pre", ".sm-pre code", ".sm-code-line-src"];
+    const selectors = [
+      ".mono {",
+      ".sm-inline-code",
+      ".sm-pre",
+      ".sm-pre code",
+      ".sm-code-line-src",
+    ];
     for (const selector of selectors) {
       const block = cssBlock(selector);
       expect(block).toContain("font-variant-ligatures: none");
@@ -3947,6 +3953,8 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     ]);
     expect(browserManifest.viewports).toEqual(["desktop", "tablet", "mobile"]);
     const expectedScenarios = [
+      "git-window-constrained",
+      "git-window-desktop",
       "shell",
       "workspace-chat-quality",
       "workspace-files-editor",
@@ -3955,8 +3963,10 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     expect(browserManifest.scenarios.map((scenario) => scenario.id).sort()).toEqual(
       expectedScenarios,
     );
-    expect(browserManifest.shotCount).toBe(72);
-    expect(browserManifest.manifest.length).toBe(72);
+    // 3 viewports x 6 modes x 6 scenarios. Issue #1574 (EV3) added the git-window-desktop and
+    // git-window-constrained scenarios, lifting the matrix from 72 to 108 captured cells.
+    expect(browserManifest.shotCount).toBe(108);
+    expect(browserManifest.manifest.length).toBe(108);
     const expectedCells = new Set(
       browserManifest.viewports.flatMap((viewport) =>
         browserManifest.modes.flatMap((mode) =>
@@ -3995,10 +4005,19 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
         `${shot.viewport}/${shot.mode}/${shot.scenario} must render every required selector`,
       ).toEqual([]);
       if (shot.scenario !== "shell") {
+        // Every seeded window must mount. Count the distinct window-frame selectors the scenario
+        // declares (a bare `[data-window-id="…"]` with no descendant combinator) rather than all
+        // required selectors, so scenarios that additionally assert in-window IA (e.g. the Git client
+        // shell's toolbar/tablist/changed-files structure) are not mistaken for extra seeded windows.
+        const seededWindowSelectors = new Set(
+          shot.requiredSelectors.filter((selector) =>
+            /^\[data-window-id="[^"]+"\]$/u.test(selector.trim()),
+          ),
+        );
         expect(
           shot.windowCount,
-          `${shot.viewport}/${shot.mode} high-traffic shot must render seeded windows`,
-        ).toBeGreaterThanOrEqual(shot.requiredSelectors.length);
+          `${shot.viewport}/${shot.mode}/${shot.scenario} high-traffic shot must render seeded windows`,
+        ).toBeGreaterThanOrEqual(seededWindowSelectors.size);
       }
     }
     expect([...seenCells].sort()).toEqual([...expectedCells].sort());

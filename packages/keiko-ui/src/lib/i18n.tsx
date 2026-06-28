@@ -226,6 +226,12 @@ const EN_MESSAGES = {
   "settings.language.label": "Interface language",
   "settings.language.compactLabel": "Language",
   "settings.language.help": "Saved on this device and applied immediately.",
+  "settings.voice.title": "Assistant voice",
+  "settings.voice.description": "Choose the voice used by Voice Dialogue.",
+  "settings.voice.label": "Voice",
+  "settings.voice.help": "Saved on this device and used the next time Voice Dialogue speaks.",
+  "settings.voice.unavailable":
+    "Voice choices become available after a configured voice provider exposes speech output.",
   "settings.wallpaper.title": "Workspace wallpaper",
   "settings.wallpaper.description":
     "Liquid Chrome - a subtle metallic flow behind the grid that reacts to your cursor and clicks. Turn it off to stop the WebGL animation completely.",
@@ -241,6 +247,11 @@ const EN_MESSAGES = {
   "settings.scale.strong": "Strong",
   "settings.workspace.backgroundBrightness": "Workspace background brightness",
   "settings.workspace.gridStrength": "Workspace grid strength",
+  "settings.workspace.cameraAnimation": "Workspace camera smoothness",
+  "settings.workspace.cameraAnimationMinimal": "Minimal",
+  "settings.workspace.cameraAnimationSmooth": "Smooth",
+  "settings.workspace.cameraAnimationHelp":
+    "Move right to make pan and zoom transitions softer. Minimal applies changes immediately.",
   "settings.workspace.borderStrength": "Workspace border strength",
   "settings.workspace.innerGlow": "Workspace inner glow",
   "settings.models.gatewayTitle": "Model gateway",
@@ -530,6 +541,13 @@ const DE_MESSAGES: Record<MessageKey, string> = {
   "settings.language.label": "Oberflaechensprache",
   "settings.language.compactLabel": "Sprache",
   "settings.language.help": "Wird auf diesem Geraet gespeichert und sofort angewendet.",
+  "settings.voice.title": "Assistenzstimme",
+  "settings.voice.description": "Waehle die Stimme fuer den Voice Dialogue.",
+  "settings.voice.label": "Stimme",
+  "settings.voice.help":
+    "Wird auf diesem Geraet gespeichert und beim naechsten Voice-Dialogue-Sprechen verwendet.",
+  "settings.voice.unavailable":
+    "Stimmen werden verfuegbar, sobald ein konfigurierter Sprachanbieter Sprachausgabe bereitstellt.",
   "settings.wallpaper.title": "Arbeitsbereich-Hintergrund",
   "settings.wallpaper.description":
     "Liquid Chrome - ein dezenter metallischer Verlauf hinter dem Raster, der auf Cursor und Klicks reagiert. Schalte ihn aus, um die WebGL-Animation vollstaendig zu stoppen.",
@@ -545,6 +563,11 @@ const DE_MESSAGES: Record<MessageKey, string> = {
   "settings.scale.strong": "Stark",
   "settings.workspace.backgroundBrightness": "Arbeitsbereich-Helligkeit",
   "settings.workspace.gridStrength": "Rasterstaerke",
+  "settings.workspace.cameraAnimation": "Workspace-Kamera-Sanftheit",
+  "settings.workspace.cameraAnimationMinimal": "Minimal",
+  "settings.workspace.cameraAnimationSmooth": "Sanft",
+  "settings.workspace.cameraAnimationHelp":
+    "Je weiter rechts, desto sanfter werden Schwenken und Zoom. Minimal wendet Aenderungen direkt an.",
   "settings.workspace.borderStrength": "Rahmenstaerke",
   "settings.workspace.innerGlow": "Inneres Leuchten",
   "settings.models.gatewayTitle": "Modell-Gateway",

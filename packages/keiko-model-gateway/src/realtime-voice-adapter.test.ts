@@ -194,6 +194,58 @@ describe("requestRealtimeNegotiation", () => {
     });
   });
 
+  it("includes realtime function tools and tool_choice in the ephemeral session body", async () => {
+    let clientSecretBody = "{}";
+    const fetchImpl = mockFetch((url, init) => {
+      if (url.endsWith("/realtime/client_secrets")) {
+        clientSecretBody = bodyToText(init);
+        return new Response(JSON.stringify({ value: "ephemeral-session-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return sdp(ANSWER_SDP);
+    });
+
+    await requestRealtimeNegotiation({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      realtimeAuthMode: "ephemeral-session",
+      modelId: "keiko-realtime",
+      offerSdp: OFFER_SDP,
+      tools: [
+        {
+          type: "function",
+          name: "search_keiko_grounding",
+          description: "Search connected Keiko grounding sources.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: { query: { type: "string" } },
+            required: ["query"],
+          },
+        },
+      ],
+      toolChoice: "auto",
+      fetchImpl,
+    });
+
+    expect(JSON.parse(clientSecretBody)).toMatchObject({
+      session: {
+        type: "realtime",
+        model: "keiko-realtime",
+        tools: [
+          {
+            type: "function",
+            name: "search_keiko_grounding",
+            description: "Search connected Keiko grounding sources.",
+          },
+        ],
+        tool_choice: "auto",
+      },
+    });
+  });
+
   it("omits session config fields that are not supplied (provider-default session stays valid)", async () => {
     let clientSecretBody = "{}";
     const fetchImpl = mockFetch((url, init) => {

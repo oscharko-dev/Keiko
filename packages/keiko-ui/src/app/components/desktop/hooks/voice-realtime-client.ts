@@ -5,10 +5,18 @@
 // Native WebSocket only — no third-party package added (supply-chain invariant).
 
 import {
+  DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   VOICE_PROTOCOL_VERSION,
   type VoiceControlMessage,
+  type VoiceSessionChatContext,
+  type VoicePersona,
   isVoiceControlMessage,
 } from "@oscharko-dev/keiko-contracts";
+
+// Upper bound on the whole proxied-SDP handshake (open → session.created → answer). A server that
+// accepts the upgrade but then stalls (no session.created / no answer) would otherwise leave the
+// caller hanging on "negotiating" forever; this fails it closed so the composer can degrade to text.
+const NEGOTIATE_TIMEOUT_MS = DEFAULT_VOICE_PROTOCOL_TIMEOUTS.signalingMs;
 
 export class VoiceControlError extends Error {
   constructor(
@@ -41,6 +49,8 @@ function buildWsUrl(): string {
 function buildSessionCreatePayload(
   sessionId: string,
   idempotencyKey: string,
+  persona?: VoicePersona,
+  chatContext?: VoiceSessionChatContext,
 ): Record<string, unknown> {
   return {
     protocolVersion: VOICE_PROTOCOL_VERSION,
@@ -51,6 +61,9 @@ function buildSessionCreatePayload(
     idempotencyKey,
     requestedProfile: "full-realtime",
     negotiationMode: "proxied-sdp",
+    // Content-free persona enum so the host can resolve the realtime voice to the user's choice.
+    ...(persona !== undefined ? { persona } : {}),
+    ...(chatContext !== undefined ? { chatContext } : {}),
   };
 }
 
@@ -69,6 +82,8 @@ function buildSdpOfferPayload(sessionId: string, sdp: string): Record<string, un
 // WebSocket so no real URL is opened unless the real browser client is used.
 export function createBrowserVoiceControlClient(
   socketFactory?: WebSocketFactory,
+  persona?: VoicePersona,
+  chatContext?: VoiceSessionChatContext,
 ): VoiceControlClient {
   const factory = socketFactory ?? ((url: string) => new WebSocket(url));
   let ws: WebSocket | undefined;
@@ -95,11 +110,40 @@ export function createBrowserVoiceControlClient(
         let opened = false;
         let sessionCreated = false;
 
+        // Settle exactly once and clear the handshake timeout. Closing a settled socket is the caller's
+        // job (close()); the timeout path closes it itself before rejecting.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const clearTimer = (): void => {
+          if (timer !== undefined) {
+            clearTimeout(timer);
+            timer = undefined;
+          }
+        };
+        const resolveOnce = (sdp: string): void => {
+          clearTimer();
+          resolve(sdp);
+        };
+        const rejectOnce = (error: VoiceControlError): void => {
+          clearTimer();
+          reject(error);
+        };
+        timer = setTimeout(() => {
+          timer = undefined;
+          try {
+            ws?.close();
+          } catch {
+            // Ignore — already closing.
+          }
+          reject(
+            new VoiceControlError("connection-failed", "Voice control negotiation timed out."),
+          );
+        }, NEGOTIATE_TIMEOUT_MS);
+
         ws.addEventListener("error", () => {
           if (!opened) {
-            reject(new VoiceControlError("unavailable", "Voice control connection failed."));
+            rejectOnce(new VoiceControlError("unavailable", "Voice control connection failed."));
           } else {
-            reject(
+            rejectOnce(
               new VoiceControlError("connection-failed", "Voice control connection was lost."),
             );
           }
@@ -107,13 +151,26 @@ export function createBrowserVoiceControlClient(
 
         ws.addEventListener("close", () => {
           if (!opened) {
-            reject(new VoiceControlError("unavailable", "Voice control connection was closed."));
+            rejectOnce(
+              new VoiceControlError("unavailable", "Voice control connection was closed."),
+            );
+          } else {
+            // Closed after open but before the answer: the handshake was lost — fail fast instead of
+            // waiting out the negotiation timeout. A no-op once the negotiation has already resolved.
+            rejectOnce(
+              new VoiceControlError(
+                "connection-failed",
+                "Voice control connection closed during negotiation.",
+              ),
+            );
           }
         });
 
         ws.addEventListener("open", () => {
           opened = true;
-          ws?.send(JSON.stringify(buildSessionCreatePayload(sessionId, idempotencyKey)));
+          ws?.send(
+            JSON.stringify(buildSessionCreatePayload(sessionId, idempotencyKey, persona, chatContext)),
+          );
         });
 
         ws.addEventListener("message", (event: MessageEvent) => {
@@ -121,8 +178,11 @@ export function createBrowserVoiceControlClient(
           try {
             parsed = JSON.parse(typeof event.data === "string" ? event.data : String(event.data));
           } catch {
-            reject(
-              new VoiceControlError("connection-failed", "Received an unparseable control message."),
+            rejectOnce(
+              new VoiceControlError(
+                "connection-failed",
+                "Received an unparseable control message.",
+              ),
             );
             return;
           }
@@ -137,7 +197,7 @@ export function createBrowserVoiceControlClient(
             const errorMsg = msg as Extract<VoiceControlMessage, { kind: "error" }>;
             const reason =
               errorMsg.code === "negotiation-failed" ? "negotiation-failed" : "connection-failed";
-            reject(new VoiceControlError(reason, `Voice control error: ${errorMsg.code}`));
+            rejectOnce(new VoiceControlError(reason, `Voice control error: ${errorMsg.code}`));
             return;
           }
 
@@ -150,7 +210,7 @@ export function createBrowserVoiceControlClient(
 
           if (msg.kind === "signal.sdp.answer" && sessionCreated) {
             const answerMsg = msg as Extract<VoiceControlMessage, { kind: "signal.sdp.answer" }>;
-            resolve(answerMsg.sdp);
+            resolveOnce(answerMsg.sdp);
             return;
           }
 

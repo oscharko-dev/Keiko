@@ -6,10 +6,12 @@ import type { RealtimeVoicePhase } from "./useRealtimeVoice";
 import type { VoiceTurnState } from "./voice-turn-manager";
 import type { VoicePlaybackPhase } from "./voice-playback-state";
 import {
+  deriveVoiceAuraState,
   deriveVoiceDialogState,
   playbackPhaseToTurnState,
   voiceDialogStateHeadline,
   voiceDialogStateIsLive,
+  type VoiceAuraStateInputs,
   type VoiceDialogState,
 } from "./voice-dialog-state";
 
@@ -131,6 +133,119 @@ describe("voiceDialogStateIsLive", () => {
     for (const state of ALL_STATES) {
       expect(voiceDialogStateIsLive(state)).toBe(live.includes(state));
     }
+  });
+});
+
+const AURA_BASE: VoiceAuraStateInputs = {
+  voiceDialogActive: true,
+  voiceDialogAvailable: true,
+  voiceDialogState: "idle",
+  listening: false,
+  speaking: false,
+  sending: false,
+  sendStatus: "idle",
+  budgetExceeded: false,
+  hasSessionError: false,
+};
+
+describe("deriveVoiceAuraState", () => {
+  it("does not activate while dialogue mode is off", () => {
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogActive: false })).toEqual({
+      active: false,
+      state: "ready",
+      intensity: "low",
+    });
+  });
+
+  it("surfaces unavailable sessions, session errors, and dialog errors as error", () => {
+    for (const patch of [
+      { voiceDialogAvailable: false },
+      { hasSessionError: true },
+      { voiceDialogState: "error" as const },
+    ]) {
+      expect(deriveVoiceAuraState({ ...AURA_BASE, ...patch })).toEqual({
+        active: true,
+        state: "error",
+        intensity: "high",
+      });
+    }
+  });
+
+  it("reserves pressure for budget pressure before normal floor states", () => {
+    expect(
+      deriveVoiceAuraState({
+        ...AURA_BASE,
+        voiceDialogState: "listening",
+        listening: true,
+        budgetExceeded: true,
+      }),
+    ).toEqual({ active: true, state: "pressure", intensity: "high" });
+  });
+
+  it("maps active voice floor states onto the visual aura language", () => {
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "listening" })).toEqual({
+      active: true,
+      state: "listening",
+      intensity: "medium",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, listening: true })).toEqual({
+      active: true,
+      state: "listening",
+      intensity: "medium",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "thinking" })).toEqual({
+      active: true,
+      state: "thinking",
+      intensity: "high",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "speaking" })).toEqual({
+      active: true,
+      state: "speaking",
+      intensity: "medium",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, speaking: true })).toEqual({
+      active: true,
+      state: "speaking",
+      intensity: "medium",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "muted" })).toEqual({
+      active: true,
+      state: "muted",
+      intensity: "medium",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "interrupted" })).toEqual({
+      active: true,
+      state: "interrupted",
+      intensity: "medium",
+    });
+  });
+
+  it("uses chat in-flight state as a thinking fallback only after voice state precedence", () => {
+    expect(deriveVoiceAuraState({ ...AURA_BASE, sending: true })).toEqual({
+      active: true,
+      state: "thinking",
+      intensity: "high",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, sendStatus: "streaming" })).toEqual({
+      active: true,
+      state: "thinking",
+      intensity: "high",
+    });
+    expect(
+      deriveVoiceAuraState({
+        ...AURA_BASE,
+        voiceDialogState: "speaking",
+        sending: true,
+      }),
+    ).toEqual({ active: true, state: "speaking", intensity: "medium" });
+  });
+
+  it("falls back to a low-intensity ready aura while active and idle", () => {
+    expect(deriveVoiceAuraState(AURA_BASE)).toEqual({
+      active: true,
+      state: "ready",
+      intensity: "low",
+    });
   });
 });
 

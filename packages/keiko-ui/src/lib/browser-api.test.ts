@@ -41,7 +41,7 @@ describe("browserFetch header injection", () => {
     await fetchBrowserStatus(9222);
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBeUndefined();
     expect(headers["X-Keiko-CSRF"]).toBeUndefined();
@@ -55,7 +55,7 @@ describe("browserFetch header injection", () => {
     await deleteBrowserSession("sess-1");
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = init.headers as Record<string, string>;
     // Both headers must be present on DELETE even though DELETE carries no body —
     // the server's rejectIfInvalidStateChange gate checks Content-Type for all

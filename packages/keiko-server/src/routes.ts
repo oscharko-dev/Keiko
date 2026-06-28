@@ -18,8 +18,11 @@ import {
   handleEvidenceDetail,
 } from "./read-handlers.js";
 import { handleGetWorkspaceState, handlePutWorkspaceState } from "./workspace-state-handlers.js";
-import { handleVoiceSpeak, handleVoiceTranscribe } from "./voice-handlers.js";
-import { handleVoiceRecapBuild } from "./voice-recap.js";
+import {
+  handleVoiceSpeak,
+  handleVoiceSpeakStream,
+  handleVoiceTranscribe,
+} from "./voice-handlers.js";
 import {
   handleCreateRun,
   handleRunEvents,
@@ -41,7 +44,11 @@ import {
   handleCreateRunSummaryPair,
   handleUpdateMessage,
 } from "./store-handlers.js";
-import { handleCreateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
+import {
+  handleAppendDesktopVoiceTurn,
+  handleCreateDesktopChat,
+  handleSendDesktopChat,
+} from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
 import { handleCloneRepository } from "./gitRepositoryRoutes.js";
 import {
@@ -71,6 +78,7 @@ import {
 } from "./memory-consolidation-handlers.js";
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
+import { handleRealtimeGroundedVoiceTool } from "./voice-realtime-grounded-tool.js";
 import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import {
@@ -124,6 +132,7 @@ import {
   handleFilesTree,
 } from "./files.js";
 import { handleGitBranches, handleGitDiff, handleGitStatus } from "./gitRoutes.js";
+import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepositoryReads.js";
 import {
   handleEditorLanguage,
   handleEditorLanguageCapabilitiesForRoute,
@@ -230,6 +239,8 @@ import { GIT_DELIVERY_COMMIT_ROUTE_GROUP } from "./gitDelivery/commitRoutes.js";
 import { GIT_DELIVERY_PUSH_ROUTE_GROUP } from "./gitDelivery/pushRoutes.js";
 import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
 import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
+import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
+import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -286,11 +297,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // the visible assistant answer text (inside the JSON + CSRF envelope) and receive synthesized audio
   // as base64; answers VOICE_UNAVAILABLE when no speech-output capability is configured/enabled.
   { method: "POST", pattern: "/api/voice/speak", handler: handleVoiceSpeak },
-  // Issue #504 (Epic #491, ADR-0067) — optional, capability-gated, user-triggered voice session recap.
-  // POST the committed transcript text (content-free counts alongside) and derive memory candidates via
-  // the EXISTING governed capture path; candidates surface in the existing review queue as "proposed".
-  // Answers VOICE_UNAVAILABLE when the deployment is not voice-recap-capable (AC1).
-  { method: "POST", pattern: "/api/voice/recap/build", handler: handleVoiceRecapBuild },
+  { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
@@ -326,10 +333,20 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
   // Issue #185 — grounded repository-aware Q&A. Composes #179-#183 behind the chat-scope binding.
   { method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },
+  {
+    method: "POST",
+    pattern: "/api/voice/realtime/grounded-tool",
+    handler: handleRealtimeGroundedVoiceTool,
+  },
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/stream", handler: handleSendDesktopChatStream },
+  {
+    method: "POST",
+    pattern: "/api/desktop/chat/voice-turn",
+    handler: handleAppendDesktopVoiceTurn,
+  },
   // ADR-0018 — bounded permitted-command execution. PTY routes (shells/sessions/WS upgrade) and
   // the WebSocket upgrade handler in server.ts are removed; commands run via synchronous POST.
   { method: "GET", pattern: "/api/terminal/policy", handler: handleTerminalPolicy },
@@ -366,6 +383,24 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/git/branches",
     handler: (ctx, deps) => handleGitBranches(ctx, deps, deps.gitRouteOptions),
+  },
+  // Issue #1573 — read-only Git repository summary, history, and remotes BFF. Reuses the hardened
+  // runner + selected-root containment from the #1386 reads; responses are content-free (counts,
+  // typed codes, branch/remote names, ISO dates) and pass through the live-payload redactor.
+  {
+    method: "GET",
+    pattern: "/api/git/summary",
+    handler: (ctx, deps) => handleGitSummary(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/history",
+    handler: (ctx, deps) => handleGitHistory(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/remotes",
+    handler: (ctx, deps) => handleGitRemotes(ctx, deps, deps.gitRouteOptions),
   },
   // Issue #1387 — controlled test/build/run command executor. Tasks are discovered from package
   // scripts and run through the single governed spawn boundary (keiko-tools runCommand): allowlisted
@@ -892,6 +927,14 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // execute through the SEPARATE merge gateway (dedicated `gh api` merge allowlist, readiness gate, final
   // approval) + #474 evidence ledger; same capability flag and CSRF.
   ...GIT_DELIVERY_MERGE_ROUTE_GROUP,
+  // #1573 governed fetch/pull sync: sync preview (read-only readiness + executable gate) + execute
+  // through a preflight-gated credential-capable runner (NOT the #472 kernel — fetch/pull have no
+  // GitDeliveryActionKind) + a dedicated content-free sync evidence ledger; same central CSRF + JSON
+  // content-type gate.
+  ...GIT_DELIVERY_SYNC_ROUTE_GROUP,
+  // #1577 agent repository operations: typed facade over existing Git read and governed delivery
+  // handlers. No shell/provider authority is introduced; command-shaped payloads are denied first.
+  ...GIT_AGENT_OPERATION_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

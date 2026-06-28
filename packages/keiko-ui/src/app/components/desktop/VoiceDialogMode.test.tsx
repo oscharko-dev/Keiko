@@ -3,7 +3,7 @@
 // headlines, controls presence, keyboard operability, compact flag, and the "unavailable => nothing"
 // guarantee (AC3).
 
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
@@ -98,6 +98,18 @@ describe("VoiceDialogModeSwitch", () => {
     expect(screen.getByRole("switch")).toHaveAttribute("data-active", "false");
     rerender(<VoiceDialogModeSwitch active={true} onToggle={() => undefined} />);
     expect(screen.getByRole("switch")).toHaveAttribute("data-active", "true");
+  });
+
+  it("uses the Keiko logo as the decorative switch glyph", () => {
+    render(<VoiceDialogModeSwitch active={false} onToggle={() => undefined} />);
+    const logo = screen.getByRole("switch").querySelector("img");
+    expect(logo).not.toBeNull();
+    expect(logo).toHaveAttribute("src", "/assets/keiko-logo.svg");
+    expect(logo).toHaveAttribute("alt", "");
+    expect(logo).toHaveAttribute("aria-hidden", "true");
+    expect(logo).toHaveAttribute("width", "34");
+    expect(logo).toHaveAttribute("height", "34");
+    expect(screen.getByRole("switch")).toHaveClass("cmp-voice-dialog-logo");
   });
 
   it("forwards a ref to the underlying button", () => {

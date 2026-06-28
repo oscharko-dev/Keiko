@@ -65,11 +65,13 @@ client                                   BFF (/api/voice/control)            pro
 - `hooks/voice-realtime-client.ts` — the injectable WebSocket control client. Opens the WS
   **same-origin** (`ws(s)://${location.host}/api/voice/control`), runs the handshake, resolves with the
   answer SDP.
-- `hooks/useRealtimeVoice.ts` — the `idle → requesting → negotiating → connected` state machine, with
-  the `mountedRef` unmount-safety and deterministic teardown pattern shared with `useDictation`.
-- The composer renders the realtime affordance only when `supportsRealtimeVoice(capability)` **and**
-  `realtimeVoiceTransportSupported()` (the browser exposes `getUserMedia` + `RTCPeerConnection`); a
-  no-voice / STT-only deployment renders nothing new.
+- `hooks/useRealtimeVoice.ts` — the `idle → requesting → negotiating → connected` state machine, the
+  Realtime data-channel parser bridge, committed transcript callbacks, barge-in/cancel routing, and the
+  deterministic teardown pattern shared with `useDictation`.
+- The composer no longer renders a separate **Start realtime voice** button. The **Voice dialogue mode**
+  switch starts this Realtime session directly when `supportsRealtimeVoice(capability)` **and**
+  `realtimeVoiceTransportSupported()` (the browser exposes `getUserMedia` + `RTCPeerConnection`) are
+  true; a no-voice / STT-only / STT+TTS-without-WebRTC deployment renders no dialogue switch.
 
 ## 5. Security and privacy (ADR-0060 D3/D4, privacy-contract §2/§4)
 
@@ -84,9 +86,10 @@ client                                   BFF (/api/voice/control)            pro
 
 ## 6. State boundary
 
-The transport persists **no** new on-disk state (the replay buffer is in-memory, bounded, ephemeral).
-Persisting transcripts / recap / memory candidates is deferred to #504, which adds the corresponding
-`docs/local-runtime-state-contract.md` rows.
+The transport persists **no raw audio** and keeps the replay buffer in-memory, bounded, and ephemeral.
+Committed Realtime user/assistant transcript turns are returned to Keiko's existing chat history through
+`POST /api/desktop/chat/voice-turn`; that endpoint stores normal chat messages only and does not invoke a
+second chat model call or create a parallel memory/evidence path.
 
 ## 7. References
 
@@ -97,4 +100,4 @@ Persisting transcripts / recap / memory candidates is deferred to #504, which ad
 - Transport code: `packages/keiko-server/src/voice-realtime.ts`,
   `packages/keiko-model-gateway/src/realtime-voice-adapter.ts`, and the keiko-ui
   `hooks/voice-rtc-transport.ts` / `hooks/voice-realtime-client.ts` / `hooks/useRealtimeVoice.ts` /
-  `VoiceRealtime.tsx` client.
+  `VoiceDialogMode.tsx` / `ChatWindow.tsx` client path.

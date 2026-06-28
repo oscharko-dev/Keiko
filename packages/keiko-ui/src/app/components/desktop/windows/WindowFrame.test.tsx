@@ -327,7 +327,7 @@ describe("WindowFrame content zoom controls", () => {
     ).toBeInTheDocument();
   });
 
-  it("scales the whole window chrome with content zoom while preserving visual geometry", () => {
+  it("scales window chrome inside a stable outer workspace box", () => {
     const { container } = render(
       <WindowFrame
         win={appWindow({ w: 700, h: 420, zoom: 1.4 })}
@@ -340,14 +340,21 @@ describe("WindowFrame content zoom controls", () => {
     );
 
     const windowSection = container.querySelector<HTMLElement>(".window");
+    const contentZoom = container.querySelector<HTMLElement>(".win-content-zoom");
     const body = container.querySelector<HTMLElement>(".win-body");
     expect(windowSection).not.toBeNull();
+    expect(contentZoom).not.toBeNull();
     expect(body).not.toBeNull();
-    expect(Number.parseFloat(windowSection?.style.width ?? "")).toBeCloseTo(500, 5);
     expect(windowSection).toHaveStyle({
-      height: "300px",
       left: "40px",
       top: "40px",
+      width: "700px",
+      height: "420px",
+    });
+    expect(windowSection?.style.zoom).toBe("");
+    expect(contentZoom).toHaveStyle({
+      width: "500px",
+      height: "300px",
       transform: "scale(1.4)",
       transformOrigin: "0 0",
     });

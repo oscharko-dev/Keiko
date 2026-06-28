@@ -17,6 +17,7 @@ import type { IncomingMessage } from "node:http";
 import {
   requestSpeechToText,
   requestTextToSpeech,
+  requestTextToSpeechStream,
   resolveVoiceCapability,
   selectSpeechOutputModel,
   selectSpeechToTextModel,
@@ -29,11 +30,12 @@ import {
   type SpeechToTextSuccess,
   type TextToSpeechErrorKind,
   type TextToSpeechRequest,
+  type TextToSpeechStreamOutcome,
   type TextToSpeechSuccess,
   type VoicePersona,
 } from "@oscharko-dev/keiko-model-gateway";
-import type { RouteContext, RouteResult } from "./routes.js";
-import { errorBody } from "./routes.js";
+import type { HandlerOutcome, RouteContext, RouteResult } from "./routes.js";
+import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
 import { isVoiceDisabledByPolicy } from "./read-handlers.js";
@@ -604,10 +606,18 @@ function speechResult(value: TextToSpeechSuccess): RouteResult {
   };
 }
 
-export async function handleVoiceSpeak(
+interface ResolvedSpeak {
+  readonly validated: ValidatedSpeech;
+  readonly provider: ModelProviderConfig;
+  readonly target: SpeechTarget;
+}
+
+// Shared front-matter for both speak routes: gate the capability, parse + validate the request, and
+// resolve the provider + voice target. Returns the resolved request, or a RouteResult to return as-is.
+async function resolveSpeakRequest(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-): Promise<RouteResult> {
+): Promise<ResolvedSpeak | RouteResult> {
   const gated = gateSpeechOutput(deps);
   if (isRouteResult(gated)) {
     return gated;
@@ -628,7 +638,103 @@ export async function handleVoiceSpeak(
   if (provider === undefined) {
     return speechUnavailable(deps);
   }
+  return { validated, provider, target };
+}
+
+export async function handleVoiceSpeak(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const resolved = await resolveSpeakRequest(ctx, deps);
+  if (isRouteResult(resolved)) {
+    return resolved;
+  }
   const synthesize = deps.voiceSpeechRequest ?? requestTextToSpeech;
-  const outcome = await synthesize(buildTtsRequest(provider, target, validated, deps));
+  const outcome = await synthesize(
+    buildTtsRequest(resolved.provider, resolved.target, resolved.validated, deps),
+  );
   return outcome.ok ? speechResult(outcome.value) : speechProviderErrorResult(deps, outcome.kind);
+}
+
+// The streaming speak path requests raw PCM (the fastest provider format to first audio) and forwards
+// the bytes to the browser un-buffered (no base64 JSON envelope) for AudioWorklet start-on-first-chunk
+// playback. The buffered /api/voice/speak route stays as the universal fallback.
+const STREAM_SPEECH_FORMAT = "pcm" as const;
+
+function buildStreamTtsRequest(
+  resolved: ResolvedSpeak,
+  deps: UiHandlerDeps,
+  signal: AbortSignal,
+): TextToSpeechRequest {
+  return {
+    ...buildTtsRequest(resolved.provider, resolved.target, resolved.validated, deps),
+    responseFormat: STREAM_SPEECH_FORMAT,
+    signal,
+  };
+}
+
+// Aborts the synthesis when the client disconnects (res "close" is the canonical signal), so a barge-in
+// or navigation stops the provider stream rather than producing audio no one will hear.
+function abortOnResClose(ctx: RouteContext): AbortController {
+  const controller = new AbortController();
+  ctx.res.on("close", () => {
+    controller.abort();
+  });
+  return controller;
+}
+
+// Pipes the provider audio stream to the response honoring backpressure (res.write → false aborts) and
+// client disconnect. Once 200 + audio headers are sent no JSON error is possible, so a mid-stream
+// failure just ends the partial stream — the client falls back to the buffered route on the next turn.
+async function pipeAudioStream(
+  ctx: RouteContext,
+  body: ReadableStream<Uint8Array>,
+  controller: AbortController,
+): Promise<void> {
+  const reader = body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done || controller.signal.aborted) {
+        break;
+      }
+      if (!ctx.res.write(value)) {
+        controller.abort();
+        ctx.res.destroy();
+        break;
+      }
+    }
+  } catch {
+    // partial stream — ended in finally
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // already released
+    }
+    ctx.res.end();
+  }
+}
+
+export async function handleVoiceSpeakStream(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<HandlerOutcome> {
+  const resolved = await resolveSpeakRequest(ctx, deps);
+  if (isRouteResult(resolved)) {
+    return resolved;
+  }
+  const controller = abortOnResClose(ctx);
+  const synthesizeStream: (request: TextToSpeechRequest) => Promise<TextToSpeechStreamOutcome> =
+    deps.voiceSpeechStreamRequest ?? requestTextToSpeechStream;
+  const outcome = await synthesizeStream(buildStreamTtsRequest(resolved, deps, controller.signal));
+  if (!outcome.ok) {
+    return speechProviderErrorResult(deps, outcome.kind);
+  }
+  const mimeType = ALLOWED_SPEECH_MIME.has(outcome.value.mimeType)
+    ? outcome.value.mimeType
+    : DEFAULT_SPEECH_MIME;
+  ctx.res.writeHead(200, { "Content-Type": mimeType, "Cache-Control": "no-store" });
+  await pipeAudioStream(ctx, outcome.value.body, controller);
+  return STREAMING;
 }

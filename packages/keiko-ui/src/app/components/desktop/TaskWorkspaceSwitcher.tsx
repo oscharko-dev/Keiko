@@ -8,7 +8,7 @@
 // the shared ActiveWorkspace context, so the badges and the bound-surface roots are always derived
 // from ONE source of truth. a11y: state changes announce through a role=status aria-live region,
 // busy controls use aria-disabled (focus stays put), errors use role=alert, recovery hints sit in a
-// <details> disclosure. No globals.css edits — visual tone comes from inline design tokens.
+// <details> disclosure.
 
 import {
   memo,
@@ -25,6 +25,7 @@ import {
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import { useActiveWorkspace } from "./context/ActiveWorkspaceContext";
+import { Icons } from "./Icons";
 
 type Tone = "success" | "warning" | "danger" | "info" | "muted";
 
@@ -152,16 +153,6 @@ function actionButton(props: {
       onClick={() => {
         if (!disabled) props.onClick();
       }}
-      style={{
-        padding: "0.2rem 0.55rem",
-        borderRadius: "var(--radius-sm, 4px)",
-        border: "1px solid var(--border-subtle, #ccc)",
-        background: "transparent",
-        // Disabled cue via a tertiary text token (keeps ≥4.5:1 contrast, WCAG 1.4.3) rather than an
-        // opacity fade, which would drop the label below the minimum contrast ratio.
-        color: disabled ? "var(--text-tertiary, #6b6b6b)" : "var(--text-primary, inherit)",
-        cursor: disabled ? "not-allowed" : "pointer",
-      }}
     >
       {props.label}
     </button>
@@ -225,18 +216,9 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
         onClick={() => {
           setOpen((value) => !value);
         }}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: "0.4rem",
-          padding: "0.2rem 0.6rem",
-          borderRadius: "var(--radius-sm, 4px)",
-          border: "1px solid var(--border-subtle, #ccc)",
-          background: active !== null ? "var(--accent, #2b6cb0)" : "transparent",
-          color: active !== null ? "var(--text-on-accent, #fff)" : "var(--text-primary, inherit)",
-        }}
+        data-active={active !== null ? "true" : "false"}
       >
-        <span aria-hidden="true">⌥</span>
+        <Icons.branch size={14} />
         <span className="tw-switcher-trigger-label">
           {active === null ? "Task workspace" : active.taskId}
         </span>
@@ -254,18 +236,11 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
           className="tw-switcher-panel"
           role="group"
           aria-label="Task workspace context"
-          style={{
-            position: "absolute",
-            zIndex: 50,
-            marginTop: "0.3rem",
-            minWidth: "20rem",
-            padding: "0.6rem",
-            borderRadius: "var(--radius-md, 6px)",
-            border: "1px solid var(--border-subtle, #ccc)",
-            background: "var(--surface-raised, var(--surface, #fff))",
-            boxShadow: "0 6px 20px rgba(0,0,0,0.2)",
-          }}
         >
+          <div className="tw-switcher-panel-head">
+            <span className="tw-switcher-kicker">Task workspace</span>
+            <strong>{active === null ? "No workspace bound" : active.taskId}</strong>
+          </div>
           {api.error !== null ? (
             <p role="alert" className="tw-switcher-error" style={{ color: TONE_VAR.danger }}>
               {api.error}
@@ -300,111 +275,107 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
               </div>
             </>
           ) : (
-            <p className="tw-switcher-empty" style={{ color: TONE_VAR.muted }}>
-              No active task workspace. Switch to one below or create a new one.
-            </p>
-          )}
-
-          <hr style={{ margin: "0.6rem 0", borderColor: "var(--border-subtle, #ddd)" }} />
-
-          {api.instances.length === 0 ? (
-            <p
-              className="tw-switcher-list-empty"
-              style={{ color: TONE_VAR.muted, fontSize: "0.78rem" }}
-            >
-              {api.loading ? "Loading…" : "No task workspaces yet."}
-            </p>
-          ) : (
-            <div className="tw-switcher-list" role="list" aria-label="Task workspaces">
-              {api.instances.map((instance) => {
-                const isActive = active?.workspaceId === instance.workspaceId;
-                return (
-                  <div
-                    key={instance.workspaceId}
-                    role="listitem"
-                    className="tw-switcher-list-item"
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: "0.4rem",
-                      padding: "0.2rem 0",
-                    }}
-                  >
-                    <span className="tw-switcher-list-label" title={instance.managedWorktreePath}>
-                      {instance.taskId} · {instance.lifecycleState}
-                      {isWorkspaceDirty(instance) ? " ·" : ""}
-                      {isWorkspaceDirty(instance) ? badge("dirty", "warning") : null}
-                    </span>
-                    {actionButton({
-                      label: isActive ? "Active" : "Switch",
-                      onClick: () => void api.switchTo(instance.workspaceId),
-                      enabled: !isActive && canSwitchTo(instance),
-                      busy: api.switching,
-                    })}
-                  </div>
-                );
-              })}
+            <div className="tw-switcher-empty">
+              <span className="tw-switcher-empty-icon" aria-hidden="true">
+                <Icons.branch size={16} />
+              </span>
+              <div>
+                <strong>No active task workspace</strong>
+                <p>
+                  {repositoryRoot === null
+                    ? "Open a project before creating a managed task workspace."
+                    : "Switch to an existing workspace or create one for this repository."}
+                </p>
+              </div>
             </div>
           )}
 
-          <hr style={{ margin: "0.6rem 0", borderColor: "var(--border-subtle, #ddd)" }} />
+          <div className="tw-switcher-section">
+            <div className="tw-switcher-section-title">Available workspaces</div>
 
-          <form
-            className="tw-switcher-create"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (createDisabled || repositoryRoot === null) {
-                return;
-              }
-              void api
-                .provision({
-                  root: repositoryRoot,
-                  taskId: taskId.trim(),
-                  baseBranch: baseBranch.trim(),
-                })
-                .then(() => {
-                  setTaskId("");
-                  setBaseBranch("");
-                });
-            }}
-          >
-            <label className="tw-switcher-field">
-              <span>Task id</span>
-              <input
-                type="text"
-                value={taskId}
-                onChange={(event) => {
-                  setTaskId(event.target.value);
-                }}
-                placeholder="e.g. 446-binding"
-              />
-            </label>
-            <label className="tw-switcher-field">
-              <span>Base branch</span>
-              <input
-                type="text"
-                value={baseBranch}
-                onChange={(event) => {
-                  setBaseBranch(event.target.value);
-                }}
-                placeholder="e.g. dev"
-              />
-            </label>
-            <button
-              type="submit"
-              className="tw-switcher-create-submit"
-              disabled={createDisabled}
-              aria-disabled={createDisabled}
-            >
-              Create task workspace
-            </button>
-            {repositoryRoot === null ? (
-              <p style={{ color: TONE_VAR.muted, fontSize: "0.72rem" }}>
-                Open a project to create a task workspace.
+            {api.instances.length === 0 ? (
+              <p className="tw-switcher-list-empty">
+                {api.loading ? "Loading workspaces…" : "No managed task workspaces yet."}
               </p>
-            ) : null}
-          </form>
+            ) : (
+              <div className="tw-switcher-list" role="list" aria-label="Task workspaces">
+                {api.instances.map((instance) => {
+                  const isActive = active?.workspaceId === instance.workspaceId;
+                  return (
+                    <div key={instance.workspaceId} role="listitem" className="tw-switcher-list-item">
+                      <span className="tw-switcher-list-label" title={instance.managedWorktreePath}>
+                        <strong>{instance.taskId}</strong>
+                        <span>{instance.lifecycleState}</span>
+                        {isWorkspaceDirty(instance) ? badge("dirty", "warning") : null}
+                      </span>
+                      {actionButton({
+                        label: isActive ? "Active" : "Switch",
+                        onClick: () => void api.switchTo(instance.workspaceId),
+                        enabled: !isActive && canSwitchTo(instance),
+                        busy: api.switching,
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {repositoryRoot !== null ? (
+            <div className="tw-switcher-section">
+              <div className="tw-switcher-section-title">Create workspace</div>
+              <form
+                className="tw-switcher-create"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (createDisabled) {
+                    return;
+                  }
+                  void api
+                    .provision({
+                      root: repositoryRoot,
+                      taskId: taskId.trim(),
+                      baseBranch: baseBranch.trim(),
+                    })
+                    .then(() => {
+                      setTaskId("");
+                      setBaseBranch("");
+                    });
+                }}
+              >
+                <label className="tw-switcher-field">
+                  <span>Task id</span>
+                  <input
+                    type="text"
+                    value={taskId}
+                    onChange={(event) => {
+                      setTaskId(event.target.value);
+                    }}
+                    placeholder="e.g. 446-binding"
+                  />
+                </label>
+                <label className="tw-switcher-field">
+                  <span>Base branch</span>
+                  <input
+                    type="text"
+                    value={baseBranch}
+                    onChange={(event) => {
+                      setBaseBranch(event.target.value);
+                    }}
+                    placeholder="e.g. dev"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className="tw-switcher-create-submit"
+                  disabled={createDisabled}
+                  aria-disabled={createDisabled}
+                >
+                  Create task workspace
+                </button>
+              </form>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
