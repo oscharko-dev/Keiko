@@ -7762,6 +7762,9 @@ select.dlg-input {
 .chat-msg[data-layout="turn"] {
   margin-bottom: 0;
 }
+.chat-msg[data-role="user"][data-layout="turn"] {
+  width: 100%;
+}
 .chat-msg[data-role="assistant"][data-layout="turn"] {
   justify-content: stretch;
 }
@@ -7815,6 +7818,7 @@ select.dlg-input {
   background: var(--accent-dim);
 }
 .chat-msg[data-role="user"][data-layout="turn"] .chat-msg-bubble {
+  width: max-content;
   max-width: min(720px, 72%);
   border-color: var(--border-subtle);
   border-radius: 18px;

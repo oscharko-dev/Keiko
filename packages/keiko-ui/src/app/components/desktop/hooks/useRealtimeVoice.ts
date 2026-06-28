@@ -180,6 +180,13 @@ function eventIdentity(event: {
   return event.itemId ?? event.responseId;
 }
 
+function transcriptTextIdentity(event: {
+  readonly text: string;
+  readonly responseId?: string | undefined;
+}): string {
+  return `${event.responseId ?? "unknown-response"}:${event.text.replace(/\s+/gu, " ").trim()}`;
+}
+
 export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoiceController {
   const [state, dispatch] = useReducer(realtimeVoiceReducer, INITIAL_STATE);
   const turnManagerRef = useRef<VoiceTurnManagerEngine>(
@@ -212,6 +219,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   const audioSinkRef = useRef<RealtimeAudioSink | undefined>(undefined);
   const userTranscriptItemsRef = useRef<Set<string>>(new Set());
   const assistantTranscriptItemsRef = useRef<Set<string>>(new Set());
+  const assistantTranscriptTextItemsRef = useRef<Set<string>>(new Set());
   const assistantTranscriptBufferRef = useRef("");
   const assistantTranscriptResponseRef = useRef<string | undefined>(undefined);
   // Pending teardown timer for a transient `disconnected` state (see ICE_DISCONNECT_GRACE_MS).
@@ -240,6 +248,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     setTurnSnapshot(turnManagerRef.current.snapshot());
     userTranscriptItemsRef.current.clear();
     assistantTranscriptItemsRef.current.clear();
+    assistantTranscriptTextItemsRef.current.clear();
     assistantTranscriptBufferRef.current = "";
     assistantTranscriptResponseRef.current = undefined;
   }, []);
@@ -253,6 +262,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         }
         userTranscriptItemsRef.current.add(id);
       }
+      assistantTranscriptTextItemsRef.current.clear();
       void onUserTranscriptCommittedRef.current?.(event.text);
     },
     [],
@@ -269,6 +279,11 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         }
         assistantTranscriptItemsRef.current.add(id);
       }
+      const textKey = transcriptTextIdentity(event);
+      if (assistantTranscriptTextItemsRef.current.has(textKey)) {
+        return;
+      }
+      assistantTranscriptTextItemsRef.current.add(textKey);
       assistantTranscriptBufferRef.current = "";
       assistantTranscriptResponseRef.current = undefined;
       applyTurnSignal({ kind: "assistant-speech-start" });

@@ -211,6 +211,91 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
     expect(result.current.turnSnapshot.state).toBe("yielding");
   });
 
+  it("deduplicates assistant transcripts mirrored by multiple provider event shapes", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onAssistantTranscriptCommitted = vi.fn();
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        onAssistantTranscriptCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r1",
+        item_id: "audio-item",
+        transcript: "Na klar, machen wir weiter auf Deutsch.",
+      });
+      fireDataChannelEvent({
+        type: "response.output_item.done",
+        response: { id: "r1" },
+        item: {
+          role: "assistant",
+          content: [{ transcript: "Na klar, machen wir weiter auf Deutsch." }],
+        },
+      });
+    });
+
+    expect(onAssistantTranscriptCommitted).toHaveBeenCalledTimes(1);
+    expect(onAssistantTranscriptCommitted).toHaveBeenCalledWith(
+      "Na klar, machen wir weiter auf Deutsch.",
+    );
+  });
+
+  it("allows the same assistant text again after a new user turn", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onAssistantTranscriptCommitted = vi.fn();
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        onAssistantTranscriptCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u1",
+        transcript: "Hallo.",
+      });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r1",
+        transcript: "Gerne.",
+      });
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u2",
+        transcript: "Nochmal.",
+      });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r2",
+        transcript: "Gerne.",
+      });
+    });
+
+    expect(onAssistantTranscriptCommitted).toHaveBeenCalledTimes(2);
+    expect(onAssistantTranscriptCommitted).toHaveBeenNthCalledWith(1, "Gerne.");
+    expect(onAssistantTranscriptCommitted).toHaveBeenNthCalledWith(2, "Gerne.");
+  });
+
   it("sends response.cancel when the user interrupts the assistant", async () => {
     const { session, fireDataChannelEvent, sendDataChannelEvent } = makeFakeSession();
     const transport = makeFakeTransport({ session });
