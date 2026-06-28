@@ -109,9 +109,11 @@ describe("PdfCitationPreviewWindow", () => {
   });
 
   it("loads the verified PDF bytes, renders controls, supports page and zoom actions, and stays axe-clean", async () => {
-    const add = vi.fn(() => "pdf-preview-1");
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
     const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
-    const cfg = add.mock.calls[0]?.[1] as Record<string, unknown>;
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+    const cfg = firstCall[1] as Record<string, unknown>;
     const updateCfg = vi.fn();
 
     const { container } = render(

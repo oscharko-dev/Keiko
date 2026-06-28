@@ -1,6 +1,7 @@
 import type {
   CurrentPdfCitationPreviewSnapshot,
   PdfCitationPreviewAuthorizationResponse,
+  PdfCitationPreviewCitationStatus,
   PdfCitationPreviewDisplay,
   PdfCitationPreviewReasonCode,
   PdfCitationPreviewSelection,
@@ -269,41 +270,29 @@ function loadMessageContext(
   return { citations: deps.store.findGroundedPreviewCitations(assistantMessageId) };
 }
 
-function firstRejectedByState(
-  results: readonly PreviewOutcome[],
-  state: "recoverable" | "blocked",
-): RejectedPreviewOutcome | undefined {
-  return results.find(
-    (result) =>
-      result.kind === "rejected" && pdfCitationPreviewFailureState(result.reason) === state,
-  ) as RejectedPreviewOutcome | undefined;
-}
-
-function aggregateStatus(
-  results: readonly PreviewOutcome[],
-  matchedCitationCount: number,
-): PdfCitationPreviewStatusResponse {
-  for (const result of results) {
-    if (result.kind === "available") {
-      return { state: "available", display: result.display, matchedCitationCount };
-    }
+function passiveStatusState(result: PreviewOutcome): PdfCitationPreviewCitationStatus["state"] {
+  if (result.kind === "available") {
+    return "available";
   }
-  const recoverable = firstRejectedByState(results, "recoverable");
-  return recoverable !== undefined
-    ? rejectedStatus("recoverable", recoverable, matchedCitationCount)
-    : rejectedStatus("blocked", firstRejectedByState(results, "blocked"), matchedCitationCount);
+  if (result.reason === "document-not-pdf") {
+    return "not-applicable";
+  }
+  return pdfCitationPreviewFailureState(result.reason);
 }
 
-function rejectedStatus(
-  state: "recoverable" | "blocked",
-  failure: RejectedPreviewOutcome | undefined,
-  matchedCitationCount: number,
-): PdfCitationPreviewStatusResponse {
+function passiveCitationStatus(
+  citation: StoredPdfCitationPreviewCitation,
+  result: PreviewOutcome,
+): PdfCitationPreviewCitationStatus {
+  const state = passiveStatusState(result);
   return {
-    state: failure === undefined && state === "blocked" ? "not-applicable" : state,
-    ...(failure === undefined ? {} : { reason: failure.reason }),
-    ...(failure?.display === undefined ? {} : { display: failure.display }),
-    matchedCitationCount,
+    stableId: citation.stableId,
+    marker: citation.marker,
+    markerIndex: citation.markerIndex,
+    state,
+    ...(result.kind === "available" ? { display: result.display } : {}),
+    ...(result.kind === "rejected" && state !== "not-applicable" ? { reason: result.reason } : {}),
+    ...(result.kind === "rejected" && result.display !== undefined ? { display: result.display } : {}),
   };
 }
 
@@ -313,40 +302,25 @@ export function getPdfCitationPreviewStatus(
 ): PdfCitationPreviewStatusResponse {
   const loaded = loadMessageContext(deps, input.chatId, input.assistantMessageId);
   if ("kind" in loaded) {
-    return {
-      state: pdfCitationPreviewFailureState(loaded.reason),
-      reason: loaded.reason,
-      ...(loaded.display !== undefined ? { display: loaded.display } : {}),
-      matchedCitationCount: 0,
-    };
+    return { citations: [] };
   }
   if (loaded.citations === undefined) {
-    return { state: "recoverable", reason: "preview-metadata-missing", matchedCitationCount: 0 };
+    return { citations: [] };
   }
   if (loaded.citations.length === 0) {
-    return { state: "not-applicable", reason: "not-local-knowledge-citation", matchedCitationCount: 0 };
+    return { citations: [] };
   }
   const selected = selectedCitations(loaded.citations, input.marker, input.stableId);
   if (selected.kind !== "selected") {
-    const failure = selected;
-    return {
-      state: pdfCitationPreviewFailureState(failure.reason),
-      reason: failure.reason,
-      ...(failure.display !== undefined ? { display: failure.display } : {}),
-      matchedCitationCount: 0,
-    };
+    return { citations: [] };
   }
   const session = openStoreForDeps(deps);
   try {
-    const results: PreviewOutcome[] = [];
-    for (const citation of selected.citations) {
-      const outcome = evaluateStoredCitation(session.store, citation);
-      results.push(outcome);
-      if (outcome.kind === "available") {
-        return { state: "available", display: outcome.display, matchedCitationCount: selected.citations.length };
-      }
-    }
-    return aggregateStatus(results, selected.citations.length);
+    return {
+      citations: selected.citations.map((citation) =>
+        passiveCitationStatus(citation, evaluateStoredCitation(session.store, citation)),
+      ),
+    };
   } finally {
     session.close();
   }

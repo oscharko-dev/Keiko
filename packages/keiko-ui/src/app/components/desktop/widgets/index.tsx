@@ -224,6 +224,11 @@ function ChatWindowSessionHost({
           linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
           linkedRoots={ctx.linkedRoots}
           openEditorFile={ctx.openEditorFile}
+          previewWindows={{
+            add: ctx.openWindow,
+            focus: ctx.focusWindow,
+            update: ctx.updateWindow,
+          }}
           onOpenRunResult={openRunResult}
         />
       )}

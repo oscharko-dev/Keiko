@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 
 import type {
   PdfCitationPreviewOpenResponse,
+  PdfCitationPreviewOrigin,
   PdfCitationPreviewSelection,
   PdfCitationPreviewStatusRequest,
 } from "@oscharko-dev/keiko-contracts";
@@ -101,6 +102,11 @@ function parseMarker(body: Record<string, unknown>, required: boolean): string |
   return marker;
 }
 
+function parseOrigin(body: Record<string, unknown>): PdfCitationPreviewOrigin | undefined {
+  const origin = body.origin;
+  return origin === "inline-marker" || origin === "citation-chip" ? origin : undefined;
+}
+
 function invalidRequestResult(message: string): RouteResult {
   return { status: 400, body: errorBody("BAD_REQUEST", message) };
 }
@@ -143,7 +149,12 @@ function previewSourceError(reason: string): RouteResult {
 function selectionInput(body: Record<string, unknown>): PdfCitationPreviewSelection {
   const base = parseBaseBody(body);
   const marker = parseMarker(body, true);
-  return { ...base, marker: marker ?? "[1]" };
+  const origin = parseOrigin(body);
+  return {
+    ...base,
+    marker: marker ?? "[1]",
+    ...(origin === undefined ? {} : { origin }),
+  };
 }
 
 function invalidRangeResult(message: string): RouteResult {

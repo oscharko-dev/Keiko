@@ -63,6 +63,10 @@ import { VoicePlaybackMuteButton, VoicePlaybackStatusFromBinding } from "./Voice
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
 import { useVoiceDialogueSession } from "./hooks/useVoiceDialogueSession";
 import {
+  usePdfCitationPreviewController,
+  type PdfCitationPreviewWindowApi,
+} from "./hooks/usePdfCitationPreview";
+import {
   deriveVoiceDialogState,
   playbackPhaseToTurnState,
   type VoiceDialogState,
@@ -111,6 +115,7 @@ interface ChatWindowProps {
   readonly linkedRoot?: string | null;
   readonly linkedRoots?: readonly string[];
   readonly openEditorFile?: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
+  readonly previewWindows?: PdfCitationPreviewWindowApi | undefined;
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
 }
 
@@ -304,6 +309,7 @@ function ChatBubbleImpl({
   onOpenRunResult,
   repositoryRoots,
   openRepositoryReference,
+  previewWindows,
   streaming = false,
   layout = "stack",
 }: {
@@ -311,16 +317,23 @@ function ChatBubbleImpl({
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
+  readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
   // so the DS 0.4.0 streaming caret blinks at the growing edge of the text.
   readonly streaming?: boolean;
   readonly layout?: "stack" | "turn";
 }): ReactNode {
   const { t } = useI18n();
+  const { activeChat } = useChatSessionContext();
   const contentId = useId();
   const [collapsed, setCollapsed] = useState(false);
   const isRunSummary = isRunSummaryMessage(message);
   const isUser = message.role === "user";
+  const citationPreview = usePdfCitationPreviewController({
+    answer: message.groundedAnswer,
+    chatId: activeChat?.id,
+    windows: previewWindows,
+  });
   const canCollapse = !isUser && !isRunSummary && isCollapsibleAssistantAnswer(message.content);
 
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
@@ -351,6 +364,7 @@ function ChatBubbleImpl({
               source={message.content}
               repositoryRoots={repositoryRoots}
               openRepositoryReference={openRepositoryReference}
+              citationPreview={citationPreview}
             />
           )}
           {/* Issue #1296 — DS 0.4.0 streaming caret at the live edge of the growing
@@ -391,6 +405,7 @@ function ChatBubbleImpl({
               busy={false}
               repositoryRoots={repositoryRoots}
               openRepositoryReference={openRepositoryReference}
+              citationPreview={citationPreview}
             />
             <ContextStatusPanel contextSummary={contextSummaryOf(message.groundedAnswer)} />
           </div>
@@ -445,6 +460,7 @@ interface ConversationThreadProps {
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
+  readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
   readonly sending: boolean;
   readonly sendStatus: SendStatus;
   readonly activeChat: Chat | undefined;
@@ -456,6 +472,7 @@ function ConversationThreadImpl({
   onOpenRunResult,
   repositoryRoots,
   openRepositoryReference,
+  previewWindows,
   sending,
   sendStatus,
   activeChat,
@@ -474,6 +491,7 @@ function ConversationThreadImpl({
                 onOpenRunResult={onOpenRunResult}
                 repositoryRoots={repositoryRoots}
                 openRepositoryReference={openRepositoryReference}
+                previewWindows={previewWindows}
                 layout="turn"
               />
             ) : null}
@@ -486,6 +504,7 @@ function ConversationThreadImpl({
                 onOpenRunResult={onOpenRunResult}
                 repositoryRoots={repositoryRoots}
                 openRepositoryReference={openRepositoryReference}
+                previewWindows={previewWindows}
                 layout="turn"
                 streaming={
                   sendStatus === "streaming" &&
@@ -2948,6 +2967,7 @@ export function ChatWindow({
   linkedRoot = null,
   linkedRoots = [],
   openEditorFile,
+  previewWindows,
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
   const { t } = useI18n();
@@ -3071,6 +3091,7 @@ export function ChatWindow({
               onOpenRunResult={onOpenRunResult}
               repositoryRoots={repositoryRoots}
               openRepositoryReference={openRepositoryReference}
+              previewWindows={previewWindows}
               sending={sending}
               sendStatus={sendStatus}
               activeChat={activeChat}

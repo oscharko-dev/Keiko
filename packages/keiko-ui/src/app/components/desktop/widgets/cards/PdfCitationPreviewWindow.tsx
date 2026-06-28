@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy } from "pdfjs-dist";
 import { ApiError, fetchPdfCitationPreviewDocument } from "@/lib/api";
 import { Icons } from "../../Icons";
 import type { AppWindow } from "../../windows/types";
@@ -10,8 +10,6 @@ import {
   type PdfCitationPreviewSafeWindowCfg,
   type PdfCitationPreviewZoomMode,
 } from "./pdf-citation-preview-session";
-
-GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
 
 const MAX_SCALE = 2;
 const MIN_SCALE = 0.5;
@@ -36,6 +34,21 @@ interface PdfDocumentLoadingTask {
   readonly promise: Promise<PDFDocumentProxy>;
 }
 
+type PdfJsModule = typeof import("pdfjs-dist");
+
+let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
+
+function loadPdfJs(): Promise<PdfJsModule> {
+  pdfJsModulePromise ??= import("pdfjs-dist").then((pdfjs) => {
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+      "pdfjs-dist/build/pdf.worker.mjs",
+      import.meta.url,
+    ).toString();
+    return pdfjs;
+  });
+  return pdfJsModulePromise;
+}
+
 function clampPage(page: number, totalPages: number): number {
   return Math.max(1, Math.min(totalPages, page));
 }
@@ -54,6 +67,10 @@ function readNumber(value: unknown, fallback: number): number {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function readZoomMode(value: unknown): PdfCitationPreviewZoomMode {
@@ -250,26 +267,22 @@ export function PdfCitationPreviewWindow({
     (): Pick<
       PdfCitationPreviewSafeWindowCfg,
       "anchorQuality" | "documentLabel" | "pageLabel" | "pageNumber" | "sourceLabel"
-    > => ({
-      documentLabel:
-        readOptionalString(cfg.documentLabel) ?? sessionEntry?.display.documentLabel ?? "PDF Preview",
-      anchorQuality: sessionEntry?.display.anchorQuality ?? "page-only",
-      ...(readOptionalString(cfg.sourceLabel) === undefined
-        ? sessionEntry?.display.sourceLabel === undefined
-          ? {}
-          : { sourceLabel: sessionEntry.display.sourceLabel }
-        : { sourceLabel: readOptionalString(cfg.sourceLabel) }),
-      ...(typeof cfg.pageNumber === "number"
-        ? { pageNumber: cfg.pageNumber }
-        : sessionEntry?.display.pageNumber === undefined
-          ? {}
-          : { pageNumber: sessionEntry.display.pageNumber }),
-      ...(readOptionalString(cfg.pageLabel) === undefined
-        ? sessionEntry?.display.pageLabel === undefined
-          ? {}
-          : { pageLabel: sessionEntry.display.pageLabel }
-        : { pageLabel: readOptionalString(cfg.pageLabel) }),
-    }),
+    > => {
+      const sourceLabel = readOptionalString(cfg.sourceLabel) ?? sessionEntry?.display.sourceLabel;
+      const pageNumber =
+        typeof cfg.pageNumber === "number" ? cfg.pageNumber : sessionEntry?.display.pageNumber;
+      const pageLabel = readOptionalString(cfg.pageLabel) ?? sessionEntry?.display.pageLabel;
+      return {
+        documentLabel:
+          readOptionalString(cfg.documentLabel) ??
+          sessionEntry?.display.documentLabel ??
+          "PDF Preview",
+        anchorQuality: sessionEntry?.display.anchorQuality ?? "page-only",
+        ...(sourceLabel === undefined ? {} : { sourceLabel }),
+        ...(pageNumber === undefined ? {} : { pageNumber }),
+        ...(pageLabel === undefined ? {} : { pageLabel }),
+      };
+    },
     [cfg.documentLabel, cfg.pageLabel, cfg.pageNumber, cfg.sourceLabel, sessionEntry],
   );
 
@@ -280,6 +293,16 @@ export function PdfCitationPreviewWindow({
     readNumber(cfg.currentPage, display.pageNumber ?? 1),
     numPages > 0 ? numPages : Number.MAX_SAFE_INTEGER,
   );
+  const failureOverride = useMemo((): PreviewFailure | null => {
+    const title = readOptionalString(cfg.failureTitle);
+    const message = readOptionalString(cfg.failureMessage);
+    if (title === undefined || message === undefined) return null;
+    return {
+      title,
+      message,
+      retryable: readOptionalBoolean(cfg.failureRetryable) ?? false,
+    };
+  }, [cfg.failureMessage, cfg.failureRetryable, cfg.failureTitle]);
   const currentPageSize = measuredSizes[currentPage] ?? defaultPageSize;
   const effectiveScale = useMemo((): number => {
     if (currentPageSize === null) return zoomValue;
@@ -325,12 +348,14 @@ export function PdfCitationPreviewWindow({
   useEffect(() => {
     const sessionHandle = sessionEntry?.session.handle;
     if (sessionHandle === undefined) {
-      setFailure({
-        title: "Preview unavailable",
-        message:
-          "Open this viewer from a verified citation preview session. Raw paths, URLs, and file handles are not accepted here.",
-        retryable: false,
-      });
+      setFailure(
+        failureOverride ?? {
+          title: "Preview unavailable",
+          message:
+            "Open this viewer from a verified citation preview session. Raw paths, URLs, and file handles are not accepted here.",
+          retryable: false,
+        },
+      );
       setDefaultPageSize(null);
       setDoc(null);
       setNumPages(0);
@@ -352,9 +377,11 @@ export function PdfCitationPreviewWindow({
     const slowTimer = window.setTimeout(() => setShowSlowLoad(true), SLOW_LOAD_MS);
 
     void fetchPdfCitationPreviewDocument(sessionHandle, controller.signal)
-      .then((bytes) => {
+      .then(async (bytes) => {
         if (disposed) return null;
-        loadingTask = getDocument({ data: bytes }) as PdfDocumentLoadingTask;
+        const pdfjs = await loadPdfJs();
+        if (disposed) return null;
+        loadingTask = pdfjs.getDocument({ data: bytes }) as PdfDocumentLoadingTask;
         return loadingTask.promise;
       })
       .then(async (pdf) => {
@@ -385,7 +412,7 @@ export function PdfCitationPreviewWindow({
       void loadingTask?.destroy();
       window.clearTimeout(slowTimer);
     };
-  }, [retryToken, sessionEntry]);
+  }, [failureOverride, retryToken, sessionEntry]);
 
   useEffect(() => {
     return () => {

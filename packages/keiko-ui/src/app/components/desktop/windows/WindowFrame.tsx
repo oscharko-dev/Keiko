@@ -134,6 +134,8 @@ function selectBody(
   activeBinding: WorkspaceBinding | null,
   updateCfg: (patch: AppWindow["cfg"]) => void,
   openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null,
+  focusWindow: (id: string) => void,
+  updateWindow: (id: string, patch: Partial<AppWindow>) => void,
   openEditorFile: WorkspaceApi["openEditorFile"],
 ): BodySelection {
   const def = WIN_TYPES[type];
@@ -167,6 +169,8 @@ function selectBody(
         activeBinding,
         updateCfg,
         openWindow,
+        focusWindow,
+        updateWindow,
         openEditorFile,
       }),
     };
@@ -190,6 +194,8 @@ function selectBody(
       activeBinding,
       updateCfg,
       openWindow,
+      focusWindow,
+      updateWindow,
       openEditorFile,
     }),
   };
@@ -551,6 +557,11 @@ function WindowFrameImpl({
     (request) => api.openEditorFile(request),
     [api],
   );
+  const focusWindow = useCallback((id: string): void => api.focus(id), [api]);
+  const updateWindow = useCallback(
+    (id: string, patch: Partial<AppWindow>): void => api.update(id, patch),
+    [api],
+  );
   // Build the body element tree only when an input that actually shapes it changes.
   // `linked` is now a stable object, ew/eh drive the chat/tiny breakpoints, and
   // win.cfg is the content source — so a drag (x/y only) no longer rebuilds the
@@ -575,6 +586,8 @@ function WindowFrameImpl({
         activeBinding,
         updateCfg,
         openWindow,
+        focusWindow,
+        updateWindow,
         openEditorFile,
       ),
     [
@@ -588,6 +601,8 @@ function WindowFrameImpl({
       activeBinding,
       updateCfg,
       openWindow,
+      focusWindow,
+      updateWindow,
       openEditorFile,
     ],
   );

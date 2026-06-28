@@ -109,11 +109,16 @@ export interface PdfCitationPreviewDisplay {
   readonly anchorQuality: PdfCitationPreviewAnchorQuality;
 }
 
+export type PdfCitationPreviewOrigin = "inline-marker" | "citation-chip";
+
+export const PDF_CITATION_PREVIEW_ORIGINS = ["inline-marker", "citation-chip"] as const;
+
 export interface PdfCitationPreviewSelection {
   readonly chatId: string;
   readonly assistantMessageId: string;
   readonly marker: string | number;
   readonly stableId?: string;
+  readonly origin?: PdfCitationPreviewOrigin;
 }
 
 export interface PdfCitationPreviewStatusRequest {
@@ -139,11 +144,17 @@ export type PdfCitationPreviewAuthorizationResponse =
   | PdfCitationPreviewAuthorized
   | PdfCitationPreviewRejected;
 
-export interface PdfCitationPreviewStatusResponse {
+export interface PdfCitationPreviewCitationStatus {
+  readonly stableId: string;
+  readonly marker: string;
+  readonly markerIndex: number;
   readonly state: PdfCitationPreviewStatusState;
   readonly reason?: PdfCitationPreviewReasonCode;
   readonly display?: PdfCitationPreviewDisplay;
-  readonly matchedCitationCount: number;
+}
+
+export interface PdfCitationPreviewStatusResponse {
+  readonly citations: readonly PdfCitationPreviewCitationStatus[];
 }
 
 export interface PdfCitationPreviewSessionMetadata {

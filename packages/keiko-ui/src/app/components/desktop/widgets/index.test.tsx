@@ -301,6 +301,9 @@ vi.mock("./cards/ConnectorPickerWidget", () => ({
     </div>
   ),
 }));
+vi.mock("./cards/PdfCitationPreviewWindow", () => ({
+  PdfCitationPreviewWindow: () => <div>PdfCitationPreviewWindow</div>,
+}));
 vi.mock("./figma/FigmaSnapshotWindow", () => ({
   FigmaSnapshotWindow: ({
     snapshotRunId,
@@ -436,6 +439,8 @@ function makeCtx(): WindowRenderContext & {
     activeBinding: null,
     updateCfg: vi.fn<UpdateCfg>(),
     openWindow: vi.fn(() => "win-1"),
+    focusWindow: vi.fn(),
+    updateWindow: vi.fn(),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
   };
 }

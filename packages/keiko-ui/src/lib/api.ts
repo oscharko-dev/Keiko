@@ -88,6 +88,8 @@ import type {
   GitDeliveryApprovalRequirement,
   PdfCitationPreviewOpenResponse,
   PdfCitationPreviewSelection,
+  PdfCitationPreviewStatusRequest,
+  PdfCitationPreviewStatusResponse,
   VoicePersona,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -1479,6 +1481,15 @@ export async function askGrounded(
 // ---------------------------------------------------------------------------
 // PDF citation preview
 // ---------------------------------------------------------------------------
+
+export async function fetchPdfCitationPreviewStatus(
+  input: PdfCitationPreviewStatusRequest,
+): Promise<PdfCitationPreviewStatusResponse> {
+  return fetchJson("/api/local-knowledge/citation-preview/status", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
 
 export async function openPdfCitationPreviewSession(
   input: PdfCitationPreviewSelection,

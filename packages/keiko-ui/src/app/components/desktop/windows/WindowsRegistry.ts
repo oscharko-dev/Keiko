@@ -135,6 +135,8 @@ export interface WindowRenderContext {
    * Returns the new/focused window id, or null when the workspace viewport is not ready.
    */
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
+  readonly focusWindow: (id: string) => void;
+  readonly updateWindow: (id: string, patch: Partial<AppWindow>) => void;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
 }
 
