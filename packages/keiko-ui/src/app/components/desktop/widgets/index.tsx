@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { registerWindowRender } from "../windows/WindowsRegistry";
-import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import type { WindowRenderContext, WindowType } from "../windows/WindowsRegistry";
 import { ChatWindow } from "../ChatWindow";
 import { ChatSessionProvider } from "../context/ChatSessionContext";
 import { useChatSession } from "../hooks/useChatSession";
@@ -19,15 +19,23 @@ import { FilesWidget } from "./cards/FilesWidget";
 import { EditorWidget } from "./cards/EditorWidget";
 import { BrowserWidget } from "./cards/BrowserWidget";
 import { TerminalWidget } from "./cards/TerminalWidget";
+import { CommandsWidget } from "./cards/CommandsWidget";
+import { RuntimeHubWidget } from "./cards/RuntimeHubWidget";
+import { GitClientWindow } from "./cards/git-client/GitClientWindow";
+import { GovernedPullRequestCard } from "./cards/GovernedPullRequestCard";
+import { GovernedMergeCard } from "./cards/GovernedMergeCard";
+import { ContainerStatusWidget } from "./cards/ContainerStatusWidget";
 import { ReviewWidget } from "./cards/ReviewWidget";
 import { AgentRunWidget, type AgentRunCfg } from "./cards/AgentRunWidget";
 import { IntegrationsWidget } from "./cards/IntegrationsWidget";
 import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
+import { PdfCitationPreviewWindow } from "./cards/PdfCitationPreviewWindow";
 import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
 import { FigmaJsonSourceWindow } from "./figma/FigmaJsonSourceWindow";
 import { FigmaImageSourceWindow } from "./figma/FigmaImageSourceWindow";
+import { requestGatewaySetup } from "./shared/gatewaySetupBus";
 import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
 import { RelationshipsView } from "../../../relationships/RelationshipsView";
@@ -44,6 +52,18 @@ import type { ChatMessage } from "@/lib/types";
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
   return typeof v === "string" ? v : undefined;
+}
+
+// Issue #446 (ADR-0090) — the single root-resolution choke point for bound surfaces. When a task
+// workspace is active, its managed-worktree root OVERRIDES the window's per-window cfg root and the
+// linked-window fallback, so a switch atomically retargets every surface and none can keep executing
+// against the previous workspace (AC1/AC2, SC1/SC3). In unbound mode (no active workspace) the legacy
+// cfg → linkedRoot chain is preserved unchanged.
+export function resolveBoundRoot(
+  ctx: Pick<WindowRenderContext, "activeRoot" | "linkedRoot">,
+  cfgRoot: string | undefined,
+): string | undefined {
+  return ctx.activeRoot ?? cfgRoot ?? ctx.linkedRoot ?? undefined;
 }
 
 function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
@@ -175,7 +195,10 @@ function ChatWindowSessionHost({
       const cfg: Record<string, string | number | boolean> = { runId: message.runId };
       const workflow = message.workflowId ?? message.taskType;
       if (workflow !== undefined) cfg.workflow = workflow;
-      if (activeProject?.path !== undefined) cfg.workspaceRoot = activeProject.path;
+      // Issue #446 — when a task workspace is active, a run opened from chat is scoped to its root, so
+      // the chat task-context stays consistent with the other bound surfaces.
+      const runRoot = ctx.activeRoot ?? activeProject?.path;
+      if (runRoot !== undefined) cfg.workspaceRoot = runRoot;
       ctx.openWindow("agents", cfg);
     },
     [activeProject?.path, ctx],
@@ -192,15 +215,21 @@ function ChatWindowSessionHost({
         <div className="lk-loading">Opening chat...</div>
       ) : (
         <ChatWindow
+          windowId={ctx.windowId}
           mini={ctx.mini === true}
           minimalChat={ctx.minimalChat === true}
           compact={ctx.compact === true}
           controlsNarrow={ctx.controlsNarrow === true}
           barCompact={ctx.barCompact === true}
           workflowCompact={ctx.workflowCompact === true}
-          linkedRoot={ctx.linkedRoot}
+          linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
           linkedRoots={ctx.linkedRoots}
           openEditorFile={ctx.openEditorFile}
+          previewWindows={{
+            add: ctx.openWindow,
+            focus: ctx.focusWindow,
+            update: ctx.updateWindow,
+          }}
           onOpenRunResult={openRunResult}
         />
       )}
@@ -235,6 +264,15 @@ registerWindowRender("activity", () => <TimelinePanel />);
 registerWindowRender("keiko", () => <KeikoTwinPanel />);
 registerWindowRender("settings", () => <SettingsPanel />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
+registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
+  <PdfCitationPreviewWindow
+    cfg={cfg}
+    focusWindow={ctx.focusWindow}
+    restoreWindow={ctx.restoreWindow}
+    updateCfg={ctx.updateCfg}
+    windowId={ctx.windowId}
+  />
+));
 
 // Epic #270 — Quality Intelligence. The hub is a singleton tool window; selecting/finishing a run
 // opens a `qiRun` result card on the canvas (one per run, keyed by cfg.runId).
@@ -290,7 +328,7 @@ registerWindowRender("qiRun", (cfg, ctx) => {
 registerWindowRender("relationships", () => <RelationshipsView />);
 
 registerWindowRender("files", (cfg, ctx) => {
-  const root = str(cfg, "root");
+  const root = resolveBoundRoot(ctx, str(cfg, "root"));
   const onActiveFileChange = (
     path: string | null,
     resolvedRoot: string | null,
@@ -318,23 +356,28 @@ registerWindowRender("files", (cfg, ctx) => {
   const onOpenFile = (fileRoot: string, path: string): void => {
     ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] });
   };
+  const onOpenGitDelivery = (projectRoot: string): void => {
+    ctx.openWindow("governedGit", { projectPath: projectRoot });
+  };
   return root !== undefined ? (
     <FilesWidget
       root={root}
       onActiveFileChange={onActiveFileChange}
       onRootChange={onRootChange}
       onOpenFile={onOpenFile}
+      onOpenGitDelivery={onOpenGitDelivery}
     />
   ) : (
     <FilesWidget
       onActiveFileChange={onActiveFileChange}
       onRootChange={onRootChange}
       onOpenFile={onOpenFile}
+      onOpenGitDelivery={onOpenGitDelivery}
     />
   );
 });
 registerWindowRender("editor", (cfg, ctx) => {
-  const root = str(cfg, "root");
+  const root = resolveBoundRoot(ctx, str(cfg, "root"));
   const file = str(cfg, "file");
   const openFiles = stringArray(cfg, "openFiles");
   const layoutJson = str(cfg, "layoutJson");
@@ -378,19 +421,97 @@ registerWindowRender("editor", (cfg, ctx) => {
   props.onWorkspaceChange = (patch) => {
     ctx.updateCfg(patch);
   };
-  return <EditorWidget {...props} />;
+  // Issue #446 (AC4 / SC3) — remount on a workspace switch so no Monaco model or open document from
+  // the previous workspace root survives into the new one. The #1491 dirty-buffer/hot-exit save fires
+  // on unmount before the new tree mounts.
+  return <EditorWidget key={ctx.activeRoot ?? "unbound"} {...props} />;
 });
 registerWindowRender("browser", (cfg) => {
   const url = str(cfg, "url");
   return url !== undefined && url !== "" ? <BrowserWidget url={url} /> : <BrowserWidget />;
 });
-registerWindowRender("terminal", (cfg) => {
-  const cwd = str(cfg, "cwd");
-  const projectPath = str(cfg, "projectPath");
+registerWindowRender("terminal", (cfg, ctx) => {
+  // Issue #446 — when a workspace is active the terminal opens in (and resolves commands against) the
+  // active root; the previous workspace cannot leak in as a stale cwd/projectId after a switch (SC3).
+  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
+  const cwd = ctx.activeRoot ?? str(cfg, "cwd");
   const props: { cwd?: string; projectPath?: string } = {};
   if (cwd !== undefined) props.cwd = cwd;
   if (projectPath !== undefined) props.projectPath = projectPath;
   return <TerminalWidget {...props} />;
+});
+registerWindowRender("commands", (cfg, ctx) => {
+  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
+  const props: { projectPath?: string } = {};
+  if (projectPath !== undefined) props.projectPath = projectPath;
+  return <CommandsWidget {...props} />;
+});
+registerWindowRender("runtime", (cfg, ctx) => {
+  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
+  const openWithProject = (
+    type: "commands" | "governedGit" | "governedPullRequest" | "governedMerge",
+    root: string,
+  ): void => {
+    ctx.openWindow(type, { projectPath: root });
+  };
+  return (
+    <RuntimeHubWidget
+      projectPath={projectPath}
+      onProjectPathChange={(nextProjectPath) => ctx.updateCfg({ projectPath: nextProjectPath })}
+      onOpenFiles={(root) => {
+        ctx.openWindow("files", root !== undefined ? { root } : undefined);
+      }}
+      onOpenCommands={(root) => openWithProject("commands", root)}
+      onOpenContainers={(root) => {
+        ctx.openWindow("containerStatus", root !== undefined ? { projectPath: root } : undefined);
+      }}
+      onOpenGovernedGit={(root) => openWithProject("governedGit", root)}
+      onOpenPullRequest={(root) => openWithProject("governedPullRequest", root)}
+      onOpenMerge={(root) => openWithProject("governedMerge", root)}
+    />
+  );
+});
+// Epic #1571, Issue #1574 — Git client window shell. The active project root acts as the projectId.
+// Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a linked
+// Files/Editor window root; an empty state renders when none is available. The shell persists the
+// selected repository via ctx.updateCfg (so resolveBoundRoot re-targets) and opens the reused
+// governed Pull Request / Merge windows via ctx.openWindow.
+registerWindowRender("governedGit", (cfg, ctx) => {
+  // Issue #446 (AC3 / SC2) — the active workspace root is the projectId, so the read surface and the
+  // governed PR/merge windows run scoped to the active worktree and can never execute against the
+  // previous workspace after a switch.
+  const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
+  return (
+    <GitClientWindow
+      projectId={projectId}
+      onOpenFiles={(root) => ctx.openWindow("files", { root })}
+      onOpenEditor={(root) => ctx.openWindow("editor", { root })}
+      openWindow={(key, windowCfg) => ctx.openWindow(key as WindowType, windowCfg)}
+      updateCfg={(patch) => ctx.updateCfg(patch)}
+    />
+  );
+});
+// Epic #470, Issue #477 — Governed GitHub pull request command center. The active project root acts as
+// the projectId; the published head branch is carried in cfg from the Publish section.
+registerWindowRender("governedPullRequest", (cfg, ctx) => {
+  const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
+  const headBranchName = str(cfg, "headBranchName") ?? undefined;
+  return <GovernedPullRequestCard projectId={projectId} headBranchName={headBranchName} />;
+});
+// Epic #470, Issue #478 — Governed merge command center. The active project root acts as the projectId;
+// the head branch under review is carried in cfg from the Pull Request section.
+registerWindowRender("governedMerge", (cfg, ctx) => {
+  const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
+  const headBranchName = str(cfg, "headBranchName") ?? undefined;
+  return <GovernedMergeCard projectId={projectId} headBranchName={headBranchName} />;
+});
+// Issue #1388 (ADR-0070) — container engine status surface. Always renders: the unavailable state
+// degrades gracefully and never blocks. An optional project path scopes the allowlisted catalog.
+registerWindowRender("containerStatus", (cfg, ctx) => {
+  const projectPath = resolveBoundRoot(ctx, str(cfg, "projectPath"));
+  const props: { projectPath?: string } = {};
+  if (projectPath !== undefined) props.projectPath = projectPath;
+  return <ContainerStatusWidget {...props} />;
 });
 // uiux-fix F018 C110: a review window without a run ID was a dead end — the empty
 // state now offers an inline run-ID form, persisted via updateCfg like files/figma.
@@ -435,6 +556,11 @@ registerWindowRender("figma", (cfg, ctx) => {
           selectedScreenName: name,
         });
       }}
+      // Issue #1399: deep-link a PAT/credential error straight to the Figma access-token settings.
+      openTokenSettings={() => {
+        requestGatewaySetup();
+        ctx.openWindow("settings");
+      }}
       updateCfg={(patch) => {
         ctx.updateCfg(patch);
       }}
@@ -452,6 +578,11 @@ registerWindowRender("figmaView", (cfg, ctx) => {
       snapshotRunId={snapshotRunId}
       selectedScreenIds={selectedScreenIds}
       selectedScreenName={selectedScreenName}
+      // Issue #1399: deep-link a PAT/credential error straight to the Figma access-token settings.
+      openTokenSettings={() => {
+        requestGatewaySetup();
+        ctx.openWindow("settings");
+      }}
       updateCfg={(patch) => {
         ctx.updateCfg(patch);
       }}

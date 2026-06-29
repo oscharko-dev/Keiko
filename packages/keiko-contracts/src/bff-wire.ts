@@ -995,6 +995,17 @@ export interface TerminalEventEnvelope {
 }
 
 // ─── Files browser + editor (selected-root filesystem) ────────────────────────────
+//
+// Root-relative project-tree contract (Issue #1374). Across this section `root` is an ABSOLUTE
+// machine path (the selected workspace root) and every `path` field is a ROOT-RELATIVE POSIX file
+// identifier interpreted relative to that root — never an absolute path. The BFF emits tree/
+// content/preview paths root-relative and HARD-rejects an absolute `path` with 400 BAD_PATH
+// ("The path must be relative to the selected root.", keiko-server/src/files.ts). The lone
+// exception is FilesDirectoryListing / FilesDirectoryRoot below (the lazy directory picker), whose
+// `path` fields are ABSOLUTE machine paths; callers MUST convert such a path to a root-relative
+// identifier (see `resolveWorkspaceFileIdentifier` in ./editor-workspace-path) before using it as a
+// tree/content/write file id. Clients normalize candidate paths through that contract so an
+// absolute identifier can never reach these endpoints.
 
 export interface FilesDirectoryRoot {
   readonly label: string;
@@ -1112,6 +1123,52 @@ export interface FilesWriteRequest {
   // save with STALE_SESSION (409) if the on-disk document no longer matches this revision. This
   // supersedes the coarser mtime-only `expectedModifiedAt` check.
   readonly baseVersion?: EditorDocumentVersion;
+}
+
+// File-tree mutation wire types (create / rename / delete). Each mutation is contained inside the
+// selected root, deny-checked on every affected path, and non-destructive by default (no overwrite).
+export interface FilesCreateRequest {
+  readonly root: string;
+  // Root-relative POSIX path of the new entry. Its parent must already exist inside the root.
+  readonly path: string;
+  readonly kind: "file" | "directory";
+}
+
+export interface FilesRenameRequest {
+  readonly root: string;
+  // Root-relative POSIX path of the existing entry to move.
+  readonly path: string;
+  // Root-relative POSIX destination path; its parent must exist and it must not already exist.
+  readonly newPath: string;
+  // Issue 2.6: optional version-aware precondition for a FILE move — the BFF rejects with
+  // STALE_SESSION (409) if the on-disk file changed since this revision. Only a caller holding an open
+  // buffer (editor/agent) has it; the metadata-only tree omits it.
+  readonly baseVersion?: EditorDocumentVersion;
+}
+
+export interface FilesDeleteRequest {
+  readonly root: string;
+  // Root-relative POSIX path of the entry to delete. A directory is removed recursively.
+  readonly path: string;
+  // Issue 2.6: optional version-aware precondition for a FILE delete (see FilesRenameRequest).
+  readonly baseVersion?: EditorDocumentVersion;
+}
+
+export interface FilesCopyRequest {
+  readonly root: string;
+  // Root-relative POSIX path of the existing entry to copy (a directory is copied recursively).
+  readonly sourcePath: string;
+  // Root-relative POSIX destination path; its parent must exist and it must not already exist.
+  readonly destPath: string;
+}
+
+// Shared response for create / rename / delete: the affected entry's canonical root-relative path
+// (the NEW path for create and rename), the prior path on a rename, and the entry kind.
+export interface FilesMutationResponse {
+  readonly root: string;
+  readonly path: string;
+  readonly previousPath?: string;
+  readonly kind: FilesEntryKind;
 }
 
 // Re-export the editor-session shapes that the file content/write wire types reference, so wire

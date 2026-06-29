@@ -537,7 +537,7 @@
       "mode": "dark",
       "title": "Editor Theme · Keiko Design System",
       "theme": "dark",
-      "textLen": 8583
+      "textLen": 8594
     },
     {
       "file": "ref-editor-theme-light.png",
@@ -545,7 +545,7 @@
       "mode": "light",
       "title": "Editor Theme · Keiko Design System",
       "theme": "light",
-      "textLen": 8583
+      "textLen": 8594
     },
     {
       "file": "ref-editor-chrome-dark.png",
@@ -553,7 +553,7 @@
       "mode": "dark",
       "title": "Editor · Chrome & Tabs · Keiko Design System",
       "theme": "dark",
-      "textLen": 5978
+      "textLen": 5989
     },
     {
       "file": "ref-editor-chrome-light.png",
@@ -561,7 +561,7 @@
       "mode": "light",
       "title": "Editor · Chrome & Tabs · Keiko Design System",
       "theme": "light",
-      "textLen": 5978
+      "textLen": 5989
     },
     {
       "file": "ref-editor-gutter-dark.png",
@@ -569,7 +569,7 @@
       "mode": "dark",
       "title": "Editor · Gutter · Keiko Design System",
       "theme": "dark",
-      "textLen": 6176
+      "textLen": 6187
     },
     {
       "file": "ref-editor-gutter-light.png",
@@ -577,7 +577,7 @@
       "mode": "light",
       "title": "Editor · Gutter · Keiko Design System",
       "theme": "light",
-      "textLen": 6176
+      "textLen": 6187
     },
     {
       "file": "ref-editor-navigation-dark.png",
@@ -585,7 +585,7 @@
       "mode": "dark",
       "title": "Editor · Navigation & Search · Keiko Design System",
       "theme": "dark",
-      "textLen": 5580
+      "textLen": 5591
     },
     {
       "file": "ref-editor-navigation-light.png",
@@ -593,7 +593,7 @@
       "mode": "light",
       "title": "Editor · Navigation & Search · Keiko Design System",
       "theme": "light",
-      "textLen": 5580
+      "textLen": 5591
     },
     {
       "file": "ref-editor-panels-dark.png",
@@ -601,7 +601,7 @@
       "mode": "dark",
       "title": "Editor · Tool Windows · Keiko Design System",
       "theme": "dark",
-      "textLen": 5084
+      "textLen": 5095
     },
     {
       "file": "ref-editor-panels-light.png",
@@ -609,7 +609,7 @@
       "mode": "light",
       "title": "Editor · Tool Windows · Keiko Design System",
       "theme": "light",
-      "textLen": 5084
+      "textLen": 5095
     },
     {
       "file": "ref-editor-markdown-dark.png",
@@ -617,7 +617,7 @@
       "mode": "dark",
       "title": "Editor · Markdown Views · Keiko Design System",
       "theme": "dark",
-      "textLen": 5927
+      "textLen": 5938
     },
     {
       "file": "ref-editor-markdown-light.png",
@@ -625,7 +625,7 @@
       "mode": "light",
       "title": "Editor · Markdown Views · Keiko Design System",
       "theme": "light",
-      "textLen": 5927
+      "textLen": 5938
     },
     {
       "file": "ref-editor-agent-dark.png",
@@ -633,7 +633,7 @@
       "mode": "dark",
       "title": "Editor · Agent in Editor · Keiko Design System",
       "theme": "dark",
-      "textLen": 6012
+      "textLen": 6023
     },
     {
       "file": "ref-editor-agent-light.png",
@@ -641,7 +641,7 @@
       "mode": "light",
       "title": "Editor · Agent in Editor · Keiko Design System",
       "theme": "light",
-      "textLen": 6012
+      "textLen": 6023
     }
   ],
   "runningEditorEvidence": {

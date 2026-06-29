@@ -18,19 +18,69 @@
 // (voice-protocol.ts redaction class): they are never logged or persisted here.
 
 import { apiKeyHeaderValue } from "./config.js";
-import { gatewayFetch, OutboundHttpEgressError, type OutboundHttpEgressErrorCode } from "./http.js";
+import {
+  gatewayFetch,
+  OutboundHttpEgressError,
+  readJsonCapped,
+  type OutboundHttpEgressErrorCode,
+} from "./http.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
+import type { RealtimeAuthMode } from "./types.js";
 
 // SDP offers/answers are small (a single audio m-line plus ICE/DTLS metadata is typically a few KB);
 // cap the negotiated answer well below the 10 MB gateway default so a hostile or misconfigured
 // endpoint cannot stream an unbounded body into the loopback control plane.
 export const MAX_SDP_BYTES = 256_000;
 
+// The voice ids the OpenAI/Azure-Foundry realtime models accept. This set is NARROWER than the
+// text-to-speech voice set (TTS also offers e.g. 'nova'/'onyx'); a persona→voice mapping authored for
+// TTS can therefore carry a voice the realtime model rejects — verified against the live endpoint,
+// where realtime `voice: "nova"` returns HTTP 400 and would break session creation. `resolveRealtimeVoice`
+// guards against that by falling back to a safe default for any non-realtime voice id.
+export const REALTIME_VOICES = [
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "sage",
+  "shimmer",
+  "verse",
+] as const;
+export type RealtimeVoice = (typeof REALTIME_VOICES)[number];
+export const DEFAULT_REALTIME_VOICE: RealtimeVoice = "alloy";
+
+export function isRealtimeVoice(voiceId: string | undefined): voiceId is RealtimeVoice {
+  return voiceId !== undefined && (REALTIME_VOICES as readonly string[]).includes(voiceId);
+}
+
+// Returns the requested voice when it is realtime-valid, otherwise the safe default — so an operator
+// mapping that reuses a TTS-only voice id for the realtime model never breaks the session.
+export function resolveRealtimeVoice(voiceId: string | undefined): RealtimeVoice {
+  return isRealtimeVoice(voiceId) ? voiceId : DEFAULT_REALTIME_VOICE;
+}
+
 export interface RealtimeNegotiationRequest {
   readonly endpoint: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string;
+  readonly realtimeAuthMode?: RealtimeAuthMode;
   readonly modelId: string;
+  // Grounded session configuration applied server-side at ephemeral-session mint time so the realtime
+  // assistant speaks as Keiko (not the provider's default demo persona) and emits user-utterance
+  // transcripts. These never reach the browser as anything other than the session's own behavior.
+  //   - instructions: the Keiko system persona (same source the text chat uses), so spoken and written
+  //     Keiko cannot diverge.
+  //   - voiceId: a provider realtime-VALID voice id resolved from the configured persona mapping.
+  //   - transcriptionModel: enables input-audio transcription so the chat transcript can capture what
+  //     the user said by voice.
+  // Applied only in ephemeral-session mode (the path that mints the session config). Omitted fields
+  // fall back to provider defaults.
+  readonly instructions?: string;
+  readonly voiceId?: string;
+  readonly transcriptionModel?: string;
+  readonly tools?: readonly RealtimeSessionTool[] | undefined;
+  readonly toolChoice?: RealtimeSessionToolChoice | undefined;
   // The browser's opaque SDP offer (already validated for length by the caller). Never persisted or
   // logged by this module; forwarded verbatim to the provider's realtime SDP-exchange endpoint.
   readonly offerSdp: string;
@@ -39,6 +89,21 @@ export interface RealtimeNegotiationRequest {
   readonly fetchImpl?: typeof fetch;
   readonly egress?: OutboundHttpEgressConfig | undefined;
 }
+
+export interface RealtimeFunctionTool {
+  readonly type: "function";
+  readonly name: string;
+  readonly description?: string | undefined;
+  readonly parameters: Record<string, unknown>;
+}
+
+export type RealtimeSessionTool = RealtimeFunctionTool;
+
+export type RealtimeSessionToolChoice =
+  | "auto"
+  | "none"
+  | "required"
+  | { readonly type: "function"; readonly name: string };
 
 export interface RealtimeNegotiationSuccess {
   // The provider's opaque SDP answer. `secret-bearing` per the protocol (may carry private ICE
@@ -89,6 +154,15 @@ function joinUrl(endpoint: string, modelId: string): string {
   return `${trimmed}/realtime/calls?model=${encodeURIComponent(modelId)}`;
 }
 
+function joinClientSecretsUrl(endpoint: string): string {
+  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  return `${trimmed}/realtime/client_secrets`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function classifyStatus(status: number): RealtimeNegotiationErrorKind | null {
   if (status === 401 || status === 403) return "wrong-header";
   if (status === 429) return "rate-limited";
@@ -117,6 +191,7 @@ function classifyDispatchError(
 
 interface BuiltRequest {
   readonly url: string;
+  readonly clientSecretsUrl: string;
   readonly headers: Record<string, string>;
   readonly body: string;
   readonly signal: AbortSignal;
@@ -138,6 +213,7 @@ function buildRequest(request: RealtimeNegotiationRequest): BuiltRequest {
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {
     url: joinUrl(request.endpoint, request.modelId),
+    clientSecretsUrl: joinClientSecretsUrl(request.endpoint),
     headers,
     body: request.offerSdp,
     signal,
@@ -201,6 +277,118 @@ async function dispatch(
   }
 }
 
+// Builds the ephemeral client-secret request body. The session-config schema is the GA nested
+// `audio.{input,output}` shape (verified against the live Azure Foundry realtime endpoint: the older
+// top-level `voice`/`input_audio_transcription` shape is rejected with HTTP 500). `instructions`,
+// `audio.output.voice`, and `audio.input.transcription` are only included when supplied, so an
+// unconfigured deployment still mints a valid (provider-default) session.
+function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
+  const session: Record<string, unknown> = {
+    type: "realtime",
+    model: request.modelId,
+    output_modalities: ["audio"],
+  };
+  if (request.instructions !== undefined && request.instructions.length > 0) {
+    session.instructions = request.instructions;
+  }
+  if (request.tools !== undefined && request.tools.length > 0) {
+    session.tools = request.tools;
+    session.tool_choice = request.toolChoice ?? "auto";
+  }
+  const audioInput: Record<string, unknown> = {
+    // server_vad gives provider-side end-of-turn detection and barge-in (interrupt_response) for the
+    // realtime media plane without any client polling.
+    turn_detection: { type: "server_vad" },
+  };
+  if (request.transcriptionModel !== undefined && request.transcriptionModel.length > 0) {
+    audioInput.transcription = { model: request.transcriptionModel };
+  }
+  const audio: Record<string, unknown> = { input: audioInput };
+  if (request.voiceId !== undefined && request.voiceId.length > 0) {
+    audio.output = { voice: request.voiceId };
+  }
+  session.audio = audio;
+  return JSON.stringify({ session });
+}
+
+function extractEphemeralToken(parsed: unknown): string | undefined {
+  if (isRecord(parsed) && typeof parsed.value === "string" && parsed.value.length > 0) {
+    return parsed.value;
+  }
+  if (
+    isRecord(parsed) &&
+    isRecord(parsed.client_secret) &&
+    typeof parsed.client_secret.value === "string" &&
+    parsed.client_secret.value.length > 0
+  ) {
+    return parsed.client_secret.value;
+  }
+  return undefined;
+}
+
+async function requestEphemeralToken(
+  built: BuiltRequest,
+  request: RealtimeNegotiationRequest,
+): Promise<
+  | { readonly ok: true; readonly token: string }
+  | { readonly ok: false; readonly kind: RealtimeNegotiationErrorKind }
+> {
+  const name = headerName(request.apiKeyHeaderName);
+  try {
+    const response = await gatewayFetch(built.clientSecretsUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [name]: apiKeyHeaderValue(name, request.apiKey),
+      },
+      body: buildClientSecretBody(request),
+      signal: built.signal,
+      maxResponseBytes: MAX_SDP_BYTES,
+      ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),
+      ...(request.egress !== undefined ? { egress: request.egress } : {}),
+    });
+    if (!response.ok) {
+      const kind = classifyStatus(response.status) ?? "transport";
+      await discardBody(response);
+      return { ok: false, kind };
+    }
+    const token = extractEphemeralToken(await readJsonCapped(response, MAX_SDP_BYTES));
+    return token === undefined ? { ok: false, kind: "invalid-response" } : { ok: true, token };
+  } catch (error) {
+    return {
+      ok: false,
+      kind: classifyDispatchError(error, built.timeoutSignal, built.callerSignal),
+    };
+  }
+}
+
+async function dispatchWithEphemeralToken(
+  built: BuiltRequest,
+  request: RealtimeNegotiationRequest,
+): Promise<Response | RealtimeNegotiationErrorKind> {
+  const tokenResult = await requestEphemeralToken(built, request);
+  if (!tokenResult.ok) {
+    return tokenResult.kind;
+  }
+  try {
+    return await gatewayFetch(built.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/sdp",
+        "content-length": String(Buffer.byteLength(built.body, "utf8")),
+        authorization: `Bearer ${tokenResult.token}`,
+      },
+      body: built.body,
+      signal: built.signal,
+      maxResponseBytes: MAX_SDP_BYTES,
+      ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),
+      ...(request.egress !== undefined ? { egress: request.egress } : {}),
+    });
+  } catch (error) {
+    return classifyDispatchError(error, built.timeoutSignal, built.callerSignal);
+  }
+}
+
 async function decodeSuccess(response: Response): Promise<RealtimeNegotiationOutcome> {
   let answerSdp: string | null;
   try {
@@ -223,7 +411,10 @@ export async function requestRealtimeNegotiation(
   request: RealtimeNegotiationRequest,
 ): Promise<RealtimeNegotiationOutcome> {
   const built = buildRequest(request);
-  const dispatched = await dispatch(built, request.fetchImpl, request.egress);
+  const dispatched =
+    request.realtimeAuthMode === "ephemeral-session"
+      ? await dispatchWithEphemeralToken(built, request)
+      : await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
     return { ok: false, kind: dispatched };
   }

@@ -113,7 +113,7 @@ describe("API route contract", () => {
     const localKnowledgeRoutes = API_ROUTES.filter((r) =>
       r.pattern.startsWith("/api/local-knowledge"),
     );
-    expect(localKnowledgeRoutes).toHaveLength(12);
+    expect(localKnowledgeRoutes).toHaveLength(17);
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules",
@@ -179,6 +179,36 @@ describe("API route contract", () => {
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "DELETE" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "POST" && r.pattern === "/api/local-knowledge/citation-preview/status",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "POST" && r.pattern === "/api/local-knowledge/citation-preview/authorize",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "POST" && r.pattern === "/api/local-knowledge/citation-preview/open",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "GET" &&
+          r.pattern === "/api/local-knowledge/citation-preview/sessions/:sessionHandle/document",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "DELETE" &&
+          r.pattern === "/api/local-knowledge/citation-preview/sessions/:sessionHandle",
       ),
     ).toBeDefined();
   });
@@ -263,6 +293,30 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the metadata-only runtime capability route (#1385)", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/runtime/capabilities"),
+    ).toBeDefined();
+    expect(matchRoute("GET", "/api/runtime/capabilities")).toMatchObject({
+      definition: { pattern: "/api/runtime/capabilities" },
+    });
+  });
+
+  it("includes the read-only Git repository routes (#1386)", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/status"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/diff"),
+    ).toBeDefined();
+    expect(matchRoute("GET", "/api/git/status")).toMatchObject({
+      definition: { pattern: "/api/git/status" },
+    });
+    expect(matchRoute("GET", "/api/git/diff")).toMatchObject({
+      definition: { pattern: "/api/git/diff" },
+    });
+  });
+
   it("includes the run-summary message routes (#66)", () => {
     const patchRoute = API_ROUTES.find(
       (r) => r.method === "PATCH" && r.pattern === "/api/chats/messages",
@@ -289,6 +343,9 @@ describe("API route contract", () => {
     // Issue #152 — additive SSE streaming surface alongside the buffered send route.
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/stream"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/voice-turn"),
     ).toBeDefined();
   });
 

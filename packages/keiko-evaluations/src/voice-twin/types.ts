@@ -6,7 +6,7 @@
 // `voice-playback`) across the profile × environment matrix from
 // `docs/voice/deployment-profile-matrix.md` §3. It is NOT the agent-trajectory harness (`../types.ts`):
 // the capstone is judged on its own closed set of eleven dimensions, mirroring the Voice Action
-// (`../voice-action/`), Discussion (`../discussion/`), and Recap (`../voice-recap/`) subpackages.
+// (`../voice-action/`) and Discussion (`../discussion/`) subpackages.
 //
 // Import boundary (ADR-0019 rule 3l): keiko-evaluations may import ONLY keiko-contracts (and node fs in
 // .test.ts for the repo manifest scan). All voice RUNTIME mechanics (timing engine, turn manager,

@@ -433,11 +433,23 @@ function makeConnectHarness(
 ): ReturnType<typeof makeConnectActions> {
   const winsRef = ref(wins);
   const connsRef = ref(conns);
+  const connsByEndpoint = new Map<string, Connection[]>();
+  for (const c of conns) {
+    const a = connsByEndpoint.get(c.a);
+    if (a === undefined) connsByEndpoint.set(c.a, [c]);
+    else a.push(c);
+    const b = connsByEndpoint.get(c.b);
+    if (b === undefined) connsByEndpoint.set(c.b, [c]);
+    else b.push(c);
+  }
   return makeConnectActions({
     wsRef: { current: null } as RefObject<HTMLElement | null>,
     viewRef: ref<View>({ zoom: 1, x: 0, y: 0 }),
     winsRef,
     connsRef,
+    winsByIdRef: ref<ReadonlyMap<string, AppWindow>>(new Map(wins.map((w) => [w.id, w]))),
+    connsByIdRef: ref<ReadonlyMap<string, Connection>>(new Map(conns.map((c) => [c.id, c]))),
+    connsByEndpointRef: ref<ReadonlyMap<string, readonly Connection[]>>(connsByEndpoint),
     connectingRef: ref<ConnectingState | null>(overrides.connecting ?? null),
     connectCleanupRef: ref<(() => void) | null>(null),
     focus: () => undefined,
@@ -1576,6 +1588,33 @@ describe("makeMutations.openEditorFile", () => {
     });
   });
 
+  it("strips a re-included root prefix so an absolute reference stays root-relative (#1374)", () => {
+    // Issue #1374: a reference that re-includes the selected root (e.g. "/repo/src/a.ts") must be
+    // reduced to the bare root-relative identifier the BFF expects, not persisted as a malformed
+    // "repo/src/a.ts" that would resolve outside the root.
+    const h = harness([
+      win("editor", { root: "/repo", file: "src/old.ts", openFiles: ["src/old.ts"] }, "editor-1"),
+    ]);
+
+    const result = h.openEditorFile({ root: "/repo", path: "/repo/src/a.ts" });
+
+    expect(result).toEqual({ ok: true, windowId: "editor-1" });
+    const editor = h.wins().find((w) => w.type === "editor");
+    expect(editor?.cfg).toMatchObject({ root: "/repo", file: "src/a.ts" });
+  });
+
+  it("rejects a traversal-escaping repository reference (#1374)", () => {
+    const h = harness();
+
+    const result = h.openEditorFile({ root: "/repo", path: "../../etc/passwd" });
+
+    expect(result).toEqual({
+      ok: false,
+      message: "This repository reference is not a valid file path.",
+    });
+    expect(h.wins().filter((w) => w.type === "editor")).toHaveLength(0);
+  });
+
   it("returns a user-facing error when viewport geometry is unavailable", () => {
     const h = harness([], null);
 
@@ -1688,6 +1727,7 @@ describe("makeMutations.maximize", () => {
 
 describe("makeMutations.minimize/restore", () => {
   function harness(initial: AppWindow[]): {
+    focus: ReturnType<typeof makeMutations>["focus"];
     minimize: ReturnType<typeof makeMutations>["minimize"];
     restore: ReturnType<typeof makeMutations>["restore"];
     windows: () => readonly AppWindow[];
@@ -1696,12 +1736,12 @@ describe("makeMutations.minimize/restore", () => {
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
       wins = typeof fn === "function" ? fn(wins) : fn;
     };
-    const { minimize, restore } = makeMutations({
+    const { focus, minimize, restore } = makeMutations({
       setWins,
       zc: { current: 10 },
       worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
     });
-    return { minimize, restore, windows: () => wins ?? [] };
+    return { focus, minimize, restore, windows: () => wins ?? [] };
   }
 
   it("marks a window minimized without removing it", () => {
@@ -1719,6 +1759,52 @@ describe("makeMutations.minimize/restore", () => {
     h.restore("files-1");
 
     expect(h.windows()[0]).toMatchObject({ id: "files-1", minimized: false, z: 11 });
+  });
+
+  it("keeps the same window-list reference when focusing the already-front window", () => {
+    const h = harness([
+      { ...win("files", {}, "files-1"), z: 1 },
+      { ...win("chat", {}, "chat-1"), z: 10 },
+    ]);
+    const before = h.windows();
+
+    h.focus("chat-1");
+
+    expect(h.windows()).toBe(before);
+  });
+
+  it("raises a non-front window when focused", () => {
+    const h = harness([
+      { ...win("files", {}, "files-1"), z: 1 },
+      { ...win("chat", {}, "chat-1"), z: 10 },
+    ]);
+
+    h.focus("files-1");
+
+    expect(h.windows().find((w) => w.id === "files-1")).toMatchObject({ z: 11 });
+  });
+
+  it("raises above the current maximum z even when the z counter is stale", () => {
+    const h = harness([
+      { ...win("files", {}, "files-1"), z: 1 },
+      { ...win("chat", {}, "chat-1"), z: 100 },
+    ]);
+
+    h.focus("files-1");
+
+    expect(h.windows().find((w) => w.id === "files-1")).toMatchObject({ z: 101 });
+  });
+
+  it("keeps the same window-list reference when restoring an already-front visible window", () => {
+    const h = harness([
+      { ...win("files", {}, "files-1"), z: 1 },
+      { ...win("chat", {}, "chat-1"), z: 10 },
+    ]);
+    const before = h.windows();
+
+    h.restore("chat-1");
+
+    expect(h.windows()).toBe(before);
   });
 });
 
@@ -1739,6 +1825,28 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
 
     toggleTool("localKnowledge");
     expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(0);
+  });
+
+  it("merges cfg into an existing singleton when add focuses it", () => {
+    let wins: AppWindow[] | null = [win("governedGit", {}, "governedGit")];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 4 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    const id = add("governedGit", { projectPath: "/repo" });
+
+    expect(id).toBe("governedGit");
+    expect(wins).toHaveLength(1);
+    expect(wins?.[0]).toMatchObject({
+      type: "governedGit",
+      cfg: { projectPath: "/repo" },
+      z: 5,
+    });
   });
 });
 

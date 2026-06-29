@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 13 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 14 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -362,7 +362,10 @@ CREATE TABLE capsule_audit_events (
       'retention-applied',
       'retrieval-performed',
       'answer-context-assembled',
-      'model-context-sent'
+      'model-context-sent',
+      'citation-preview-authorized',
+      'citation-preview-recoverable',
+      'citation-preview-blocked'
     )
   ),
   source_id TEXT,
@@ -379,6 +382,50 @@ CREATE TABLE capsule_audit_events (
 
 const CREATE_CAPSULE_AUDIT_EVENTS_INDEX =
   "CREATE INDEX idx_capsule_audit_events_capsule_time ON capsule_audit_events(capsule_id, occurred_at);";
+
+const CREATE_CAPSULE_AUDIT_EVENTS_V14 = `
+CREATE TABLE capsule_audit_events_v14 (
+  id TEXT PRIMARY KEY NOT NULL,
+  capsule_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (
+    kind IN (
+      'capsule-created',
+      'capsule-deleted',
+      'source-added',
+      'source-removed',
+      'indexing-job-started',
+      'indexing-job-completed',
+      'indexing-job-failed',
+      'retention-applied',
+      'retrieval-performed',
+      'answer-context-assembled',
+      'model-context-sent',
+      'citation-preview-authorized',
+      'citation-preview-recoverable',
+      'citation-preview-blocked'
+    )
+  ),
+  source_id TEXT,
+  job_id TEXT,
+  error_code TEXT,
+  processed_documents INTEGER,
+  failed_documents INTEGER,
+  deleted_vector_count INTEGER,
+  deleted_extracted_text_count INTEGER,
+  details_json TEXT,
+  occurred_at INTEGER NOT NULL
+) STRICT;
+`.trim();
+
+const COPY_CAPSULE_AUDIT_EVENTS_TO_V14 = `
+INSERT INTO capsule_audit_events_v14 (
+  id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
+)
+SELECT id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
+FROM capsule_audit_events;
+`.trim();
 
 // extraction_checkpoints — durable per-document progress for the bounded large-document
 // ingestion path (Epic #1160, Issue #1286). One row per (capsule_id, document_id); the row is
@@ -732,6 +779,19 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
     up: [
       "ALTER TABLE sections ADD COLUMN section_path_hash TEXT;",
       CREATE_SECTIONS_SECTION_PATH_HASH_INDEX,
+    ],
+  },
+  {
+    version: 14,
+    reason:
+      "Persist metadata-only PDF citation preview audit events for authorization, recoverable, " +
+      "and blocked outcomes (Issue #1632).",
+    up: [
+      CREATE_CAPSULE_AUDIT_EVENTS_V14,
+      COPY_CAPSULE_AUDIT_EVENTS_TO_V14,
+      "DROP TABLE capsule_audit_events;",
+      "ALTER TABLE capsule_audit_events_v14 RENAME TO capsule_audit_events;",
+      CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
     ],
   },
 ] as const;

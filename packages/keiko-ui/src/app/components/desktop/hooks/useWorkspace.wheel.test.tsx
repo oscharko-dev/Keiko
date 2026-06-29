@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { ReactElement } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
@@ -23,9 +23,13 @@ function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
   };
 }
 
-function Harness(): ReactElement {
+function Harness({
+  cameraSmoothness = 0,
+}: {
+  readonly cameraSmoothness?: number;
+}): ReactElement {
   const wsRef = useRef<HTMLDivElement>(null);
-  const ws = useWorkspace(wsRef);
+  const ws = useWorkspace(wsRef, { cameraSmoothness });
   const files = ws.wins?.find((win) => win.id === "files-1");
 
   return (
@@ -61,6 +65,7 @@ function mockWorkspaceRect(): void {
 
 describe("useWorkspace wheel zoom routing", () => {
   afterEach(() => {
+    cleanup();
     window.localStorage.clear();
     vi.restoreAllMocks();
   });
@@ -165,6 +170,190 @@ describe("useWorkspace wheel zoom routing", () => {
     await waitFor(() => {
       expect(screen.getByTestId("view-x")).toHaveTextContent("-15");
       expect(screen.getByTestId("view-y")).toHaveTextContent("-35");
+    });
+  });
+
+  it("eases free-workspace pan updates when smooth camera animation is selected", async () => {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    const requestAnimationFrameSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback: FrameRequestCallback): number => {
+        callbacks.push(callback);
+        return callbacks.length;
+      });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      () =>
+        ({
+          matches: false,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList,
+    );
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness cameraSmoothness={100} />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("view-x")).toHaveTextContent("0"));
+
+    fireEvent.wheel(screen.getByTestId("workspace"), {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 20,
+      deltaY: 40,
+    });
+
+    expect(requestAnimationFrameSpy).toHaveBeenCalledTimes(1);
+    callbacks[0]?.(0);
+    expect(requestAnimationFrameSpy).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("view-x")).toHaveTextContent("0");
+
+    callbacks[1]?.(140);
+
+    await waitFor(() => {
+      const x = Number(screen.getByTestId("view-x").textContent);
+      const y = Number(screen.getByTestId("view-y").textContent);
+      expect(x).toBeLessThan(0);
+      expect(x).toBeGreaterThan(-20);
+      expect(y).toBeLessThan(0);
+      expect(y).toBeGreaterThan(-40);
+    });
+
+    callbacks[2]?.(280);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
+      expect(screen.getByTestId("view-y")).toHaveTextContent("-40");
+    });
+  });
+
+  it("keeps low free-workspace pan smoothness close to immediate movement", async () => {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        callbacks.push(callback);
+        return callbacks.length;
+      },
+    );
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      () =>
+        ({
+          matches: false,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList,
+    );
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness cameraSmoothness={8} />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("view-x")).toHaveTextContent("0"));
+
+    fireEvent.wheel(screen.getByTestId("workspace"), {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 20,
+      deltaY: 40,
+    });
+
+    callbacks[0]?.(0);
+    callbacks[1]?.(16);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
+      expect(screen.getByTestId("view-y")).toHaveTextContent("-40");
+    });
+  });
+
+  it("settles workspace camera animation before routing Ctrl wheel inside a window", async () => {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        callbacks.push(callback);
+        return callbacks.length;
+      },
+    );
+    const cancelAnimationFrameSpy = vi
+      .spyOn(window, "cancelAnimationFrame")
+      .mockImplementation(() => undefined);
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      () =>
+        ({
+          matches: false,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList,
+    );
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness cameraSmoothness={100} />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("view-x")).toHaveTextContent("0"));
+
+    fireEvent.wheel(screen.getByTestId("workspace"), {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 20,
+      deltaY: 40,
+    });
+    callbacks[0]?.(0);
+
+    fireEvent.wheel(screen.getByTestId("window-target"), {
+      bubbles: true,
+      cancelable: true,
+      clientX: 200,
+      clientY: 200,
+      ctrlKey: true,
+      deltaY: -100,
+    });
+
+    expect(cancelAnimationFrameSpy).toHaveBeenCalledWith(2);
+    await waitFor(() => {
+      expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.2");
+      expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
+      expect(screen.getByTestId("view-y")).toHaveTextContent("-40");
+    });
+  });
+
+  it("uses immediate updates for smooth mode when reduced motion is requested", async () => {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        callbacks.push(callback);
+        return callbacks.length;
+      },
+    );
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      () =>
+        ({
+          matches: true,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList,
+    );
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness cameraSmoothness={100} />);
+    mockWorkspaceRect();
+
+    await waitFor(() => expect(screen.getByTestId("view-x")).toHaveTextContent("0"));
+
+    fireEvent.wheel(screen.getByTestId("workspace"), {
+      bubbles: true,
+      cancelable: true,
+      deltaX: 20,
+      deltaY: 40,
+    });
+
+    callbacks[0]?.(0);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
+      expect(screen.getByTestId("view-y")).toHaveTextContent("-40");
     });
   });
 });

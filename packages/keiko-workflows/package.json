@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-workflows",
-  "version": "0.2.8",
+  "version": "0.2.10",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workflows package: reviewable developer-assist workflows (unit-test generation, bug investigation), prompts/parsers/guards/report rendering, apply-mode verification gating, and UI descriptors (ADR-0008 + ADR-0009 + ADR-0019). Not published independently.",
@@ -25,14 +25,14 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.8",
-    "@oscharko-dev/keiko-security": "0.2.8",
-    "@oscharko-dev/keiko-model-gateway": "0.2.8",
-    "@oscharko-dev/keiko-workspace": "0.2.8",
-    "@oscharko-dev/keiko-tools": "0.2.8",
-    "@oscharko-dev/keiko-evidence": "0.2.8",
-    "@oscharko-dev/keiko-verification": "0.2.8",
-    "@oscharko-dev/keiko-harness": "0.2.8",
-    "@oscharko-dev/keiko-quality-intelligence": "0.2.8"
+    "@oscharko-dev/keiko-contracts": "0.2.10",
+    "@oscharko-dev/keiko-security": "0.2.10",
+    "@oscharko-dev/keiko-model-gateway": "0.2.10",
+    "@oscharko-dev/keiko-workspace": "0.2.10",
+    "@oscharko-dev/keiko-tools": "0.2.10",
+    "@oscharko-dev/keiko-evidence": "0.2.10",
+    "@oscharko-dev/keiko-verification": "0.2.10",
+    "@oscharko-dev/keiko-harness": "0.2.10",
+    "@oscharko-dev/keiko-quality-intelligence": "0.2.10"
   }
 }

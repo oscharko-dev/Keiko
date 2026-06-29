@@ -1,18 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
+  cloneRepository,
   clearModelCacheForTests,
   clearProjectRequestForTests,
   deleteChat,
   deleteProject,
+  closePdfCitationPreviewSession,
   fetchFilesContent,
   fetchFilesDirectories,
   fetchFilesPreview,
   fetchFilesSearch,
   fetchFilesTree,
+  fetchGitBranches,
+  fetchGitDeliverySyncExecute,
+  fetchGitDeliverySyncPreview,
+  fetchGitDiff,
+  fetchGitHistory,
+  fetchGitRemotes,
+  fetchGitSummary,
+  fetchGitStatus,
   fetchModels,
+  fetchPdfCitationPreviewDocument,
   fetchProjects,
   fetchVoiceCapability,
+  openPdfCitationPreviewSession,
   runGatewayReadiness,
   requestEditorCompletion,
   requestEditorDiagnostics,
@@ -23,6 +35,7 @@ import {
   sendDesktopChatStream,
   fetchWorkspaceSummary,
   transcribeDictation,
+  synthesizeAssistantSpeech,
   ApiError,
   type StreamHandlers,
 } from "./api";
@@ -475,6 +488,231 @@ describe("files API helpers", () => {
       }),
     );
   });
+
+  it("encodes Git status, branch list, and diff requests", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          repositoryRoot: "/repo space",
+          state: "available",
+          available: true,
+          branch: "main",
+          detached: false,
+          clean: false,
+          stagedCount: 0,
+          unstagedCount: 1,
+          untrackedCount: 0,
+          conflictedCount: 0,
+          changes: [],
+          truncated: false,
+          maxChanges: 500,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          repositoryRoot: "/repo space",
+          available: true,
+          state: "available",
+          branches: [{ name: "main", headRefHash: "abc123", current: true }],
+          truncated: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          repositoryRoot: "/repo space",
+          state: "available",
+          available: true,
+          path: "src/app.ts",
+          scope: "worktree",
+          diff: "diff --git a/src/app.ts b/src/app.ts\n",
+          truncated: false,
+          maxBytes: 131072,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitStatus("/repo space");
+    await fetchGitBranches("/repo space");
+    await fetchGitDiff({ root: "/repo space", path: "src/app.ts", scope: "worktree" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git/status?root=%2Frepo+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git/branches?root=%2Frepo+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/git/diff?root=%2Frepo+space&path=src%2Fapp.ts&scope=worktree",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("encodes Git summary, history, and remotes requests", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          state: "available",
+          available: true,
+          branch: "main",
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          stagedCount: 0,
+          unstagedCount: 0,
+          untrackedCount: 0,
+          conflictedCount: 0,
+          clean: true,
+          remotes: [],
+          truncated: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          state: "available",
+          available: true,
+          entries: [],
+          limit: 25,
+          skip: 50,
+          truncated: false,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          state: "available",
+          available: true,
+          remotes: [],
+          truncated: false,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitSummary("/repo space");
+    await fetchGitHistory({ root: "/repo space", limit: 25, skip: 50 });
+    await fetchGitRemotes("/repo space");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git/summary?root=%2Frepo+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git/history?root=%2Frepo+space&limit=25&skip=50",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/git/remotes?root=%2Frepo+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("posts fetch and pull sync preview/execute envelopes with CSRF", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          operation: "fetch",
+          available: true,
+          state: "available",
+          branch: "main",
+          detached: false,
+          ahead: 0,
+          behind: 0,
+          hasRemote: true,
+          hasUpstream: true,
+          dirty: false,
+          executable: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          operation: "pull",
+          status: "succeeded",
+          available: true,
+          branch: "main",
+          truncated: false,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitDeliverySyncPreview({
+      operation: "fetch",
+      projectId: "/repo space",
+      remote: "origin",
+    });
+    await fetchGitDeliverySyncExecute({
+      operation: "pull",
+      projectId: "/repo space",
+      remote: "origin",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git-delivery/fetch/preview",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          schemaVersion: "1",
+          projectId: "/repo space",
+          remote: "origin",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git-delivery/pull/execute",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          schemaVersion: "1",
+          projectId: "/repo space",
+          remote: "origin",
+        }),
+      }),
+    );
+  });
 });
 
 describe("fetchModels", () => {
@@ -705,6 +943,51 @@ describe("fetchProjects", () => {
   });
 });
 
+describe("cloneRepository", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts a repository clone request with the CSRF header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        project: {
+          path: "/repo/app",
+          name: "app",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+          available: true,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      cloneRepository({
+        repositoryUrl: "https://github.com/acme/app.git",
+        destinationPath: "/repo/app",
+      }),
+    ).resolves.toMatchObject({ project: { path: "/repo/app", name: "app" } });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/repositories/clone",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          repositoryUrl: "https://github.com/acme/app.git",
+          destinationPath: "/repo/app",
+        }),
+      }),
+    );
+  });
+});
+
 describe("delete helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -922,5 +1205,167 @@ describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
 
     expect(handlers.onDone).toHaveBeenCalledTimes(1);
     expect(handlers.onError).not.toHaveBeenCalled();
+  });
+});
+
+describe("synthesizeAssistantSpeech (Issue #1558)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs the visible text inside the JSON + CSRF envelope and returns the audio", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ audio: "QUJDRA==", mimeType: "audio/mpeg" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await synthesizeAssistantSpeech({ text: "the visible answer" });
+
+    expect(result).toEqual({ audio: "QUJDRA==", mimeType: "audio/mpeg" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/voice/speak",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({ text: "the visible answer" }),
+      }),
+    );
+  });
+
+  it("forwards an abort signal so a stop / mute can cancel pending synthesis", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ audio: "QUJDRA==", mimeType: "audio/mpeg" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await synthesizeAssistantSpeech({ text: "answer" }, controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/voice/speak",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
+  it("surfaces a content-free VOICE_UNAVAILABLE as an ApiError", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ error: { code: "VOICE_UNAVAILABLE", message: "unavailable" } }, 503),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await synthesizeAssistantSpeech({ text: "answer" }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe("VOICE_UNAVAILABLE");
+    expect((error as ApiError).status).toBe(503);
+  });
+});
+
+describe("pdf citation preview api helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("opens a preview session through the local-knowledge BFF route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        outcome: "authorized",
+        display: {
+          documentLabel: "Policy wording.pdf",
+          sourceLabel: "Local capsule",
+          pageNumber: 7,
+          pageLabel: "Page 7",
+          anchorQuality: "page-only",
+        },
+        session: {
+          handle: "preview-session-1",
+          expiresAt: "2026-06-28T12:00:00.000Z",
+          reused: false,
+          byteLength: 4096,
+          contentType: "application/pdf",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await openPdfCitationPreviewSession({
+      chatId: "chat-1",
+      assistantMessageId: "msg-1",
+      marker: 3,
+      stableId: "stable-1",
+    });
+
+    expect(response.outcome).toBe("authorized");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/citation-preview/open",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          chatId: "chat-1",
+          assistantMessageId: "msg-1",
+          marker: 3,
+          stableId: "stable-1",
+        }),
+      }),
+    );
+  });
+
+  it("closes a preview session through the DELETE route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await closePdfCitationPreviewSession("preview/session#1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/citation-preview/sessions/preview%2Fsession%231",
+      expect.objectContaining({
+        method: "DELETE",
+        body: "{}",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
+  });
+
+  it("fetches preview PDF bytes without JSON headers and forwards an abort signal", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([9, 8, 7]), {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const bytes = await fetchPdfCitationPreviewDocument(
+      "preview/session#1",
+      controller.signal,
+    );
+
+    expect(Array.from(bytes)).toEqual([9, 8, 7]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/citation-preview/sessions/preview%2Fsession%231/document",
+      expect.objectContaining({
+        cache: "no-store",
+        signal: controller.signal,
+        headers: expect.objectContaining({
+          Accept: "application/pdf",
+        }),
+      }),
+    );
   });
 });

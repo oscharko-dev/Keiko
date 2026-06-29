@@ -27,9 +27,14 @@ import {
   requestEditorTestGeneration,
   saveFilesContent,
 } from "../../../../../lib/api";
+import {
+  EDITOR_HOT_EXIT_SCHEMA_VERSION,
+  type EditorHotExitSnapshotV1,
+} from "@oscharko-dev/keiko-contracts";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
+import { deleteEditorHotExitSnapshot, readEditorHotExitSnapshot } from "./editorHotExitStore";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -51,6 +56,15 @@ vi.mock("../../../../../lib/api", async () => {
     requestEditorTestGeneration: vi.fn(),
   };
 });
+
+// The hot-exit store reaches IndexedDB, which jsdom does not provide. Mock it so recovery snapshots
+// can be injected deterministically; reads default to "no snapshot" to match the unmocked degraded
+// behaviour the rest of the suite relies on.
+vi.mock("./editorHotExitStore", () => ({
+  readEditorHotExitSnapshot: vi.fn(() => Promise.resolve(null)),
+  writeEditorHotExitSnapshot: vi.fn(() => Promise.resolve()),
+  deleteEditorHotExitSnapshot: vi.fn(() => Promise.resolve()),
+}));
 
 // The real surface dynamically imports `monaco-editor`, which cannot run in jsdom. Replace
 // `next/dynamic` with a probe that captures the host-driven props and lets the test drive the
@@ -137,7 +151,16 @@ class FakeEventSource {
   }
 
   emitAction(action: EditorAgentAction): void {
-    this.emitRaw(JSON.stringify({ action }));
+    // Emit the full editor-agent event envelope the server actually sends, so the widget's
+    // contract-guarded SSE listener (isEditorAgentEvent) accepts the frame.
+    this.emitRaw(
+      JSON.stringify({
+        schemaVersion: "1",
+        eventId: `evt-${action.actionId}`,
+        type: "action",
+        action,
+      }),
+    );
   }
 
   emitRaw(data: string): void {
@@ -209,6 +232,23 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
   };
 }
 
+function recoverySnapshotFixture(over?: Partial<EditorHotExitSnapshotV1>): EditorHotExitSnapshotV1 {
+  return {
+    schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
+    workspaceRoot: "/repo",
+    relativePath: "src/app.ts",
+    content: "recovered edits\n",
+    baseVersion: BASE_VERSION,
+    contentHash: "b".repeat(64),
+    // Matches BASE_VERSION.contentHash by default → the on-disk file is unchanged since the snapshot.
+    savedContentHash: "a".repeat(64),
+    updatedAt: 1,
+    paneId: "pane-1",
+    windowId: "editor-test",
+    ...over,
+  };
+}
+
 afterEach(() => {
   surface.props = null;
   surface.mounts = 0;
@@ -247,6 +287,10 @@ function loadedIdentity(): EditorSurfaceProps["fileModel"]["identity"] {
     throw new Error("editor identity unavailable");
   }
   return identity;
+}
+
+function editorStatusField(id: string): Element | null {
+  return screen.getByTestId("editor-status-bar").querySelector(`[data-field="${id}"]`);
 }
 
 describe("EditorWidget — empty state", () => {
@@ -627,6 +671,9 @@ describe("EditorWidget — conflict and error", () => {
       fileResponse({ modifiedAt: 5, session: { schemaVersion: "1", version: reloadedVersion } }),
     );
     await userEvent.click(reload);
+    // Reloading over the dirty conflict buffer routes through the explicit reload-file discard
+    // acknowledgement before the disk content is loaded (Issue #1376 D1).
+    await userEvent.click(await screen.findByRole("button", { name: "Discard and reload" }));
     await waitFor(() => {
       expect(fetchFilesContent).toHaveBeenCalledTimes(2);
     });
@@ -647,6 +694,88 @@ describe("EditorWidget — conflict and error", () => {
       expect(saveFilesContent).toHaveBeenLastCalledWith(
         expect.objectContaining({ baseVersion: reloadedVersion }),
       );
+    });
+  });
+
+  it("requires explicit confirmation before a dirty conflict reload discards the buffer (Issue #1376)", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "edited\n", sizeBytes: 7 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("conflict");
+    });
+
+    // Clicking Reload over a dirty buffer must not immediately re-fetch from disk; it opens an
+    // explicit discard confirmation (the reload-file dirty-close policy) instead.
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Discard unsaved changes?" }),
+    ).toBeInTheDocument();
+    expect(fetchFilesContent).toHaveBeenCalledTimes(1);
+
+    // Cancel leaves the dirty conflict buffer untouched and reloads nothing.
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull();
+    });
+    expect(fetchFilesContent).toHaveBeenCalledTimes(1);
+    expect(surface.props?.fileModel.dirty).toBe(true);
+    expect(surface.props?.saveStatus).toBe("conflict");
+  });
+
+  it("focuses the reload-file confirmation and closes it on Escape without reloading (Issue #1376)", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "edited\n", sizeBytes: 7 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("conflict");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    await waitFor(() => {
+      expect(dialog).toHaveFocus();
+    });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Discard unsaved changes?" })).toBeNull();
+    });
+    expect(fetchFilesContent).toHaveBeenCalledTimes(1);
+    expect(surface.props?.fileModel.dirty).toBe(true);
+  });
+
+  it("deletes the hot-exit snapshot when a dirty conflict reload is confirmed (Issue #1376)", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "edited\n", sizeBytes: 7 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("conflict");
+    });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    // Isolate the delete caused by confirming the discard from the clean-buffer delete fired on load.
+    vi.mocked(deleteEditorHotExitSnapshot).mockClear();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ modifiedAt: 5 }));
+    await userEvent.click(await screen.findByRole("button", { name: "Discard and reload" }));
+
+    // The discarded edits' snapshot is removed so the reload does not immediately re-offer them.
+    await waitFor(() => {
+      expect(deleteEditorHotExitSnapshot).toHaveBeenCalledWith("/repo", "src/app.ts");
     });
   });
 
@@ -697,6 +826,8 @@ describe("EditorWidget — conflict and error", () => {
       new ApiError("READ_FAILED", "The file could not be loaded.", 500),
     );
     await userEvent.click(reload);
+    // Acknowledge the reload-file discard confirmation before the (failing) disk load runs.
+    await userEvent.click(await screen.findByRole("button", { name: "Discard and reload" }));
 
     const retry = await screen.findByRole("button", { name: "Retry" });
     expect(screen.queryByTestId("editor-surface")).toBeNull();
@@ -1204,6 +1335,57 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
     expect(surface.props?.provideSymbols).toBeUndefined();
     expect(surface.props?.provideFormatting).toBeUndefined();
   });
+
+  it("keeps unavailable providers non-blocking and content-free in status and agent snapshots", async () => {
+    installFakeEventSource();
+    vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValueOnce({
+      schemaVersion: "1",
+      providers: [
+        {
+          id: "python-lsp",
+          languages: ["python"],
+          operations: ["diagnostics", "completion", "hover", "symbols"],
+          availability: "unavailable",
+          unavailableReason: "Required host language tool is blocked by host execution policy.",
+        },
+      ],
+    });
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        path: "src/tool.py",
+        name: "tool.py",
+        extension: "py",
+        content: "value = 1\n",
+      }),
+    );
+
+    render(<EditorRuntimeWidget windowId="provider-status" root="/repo" file="src/tool.py" />);
+    await screen.findByTestId("editor-surface");
+
+    await waitFor(() => {
+      expect(surface.props?.provideCompletions).toBeUndefined();
+      expect(surface.props?.provideDiagnostics).toBeUndefined();
+      expect(surface.props?.provideHover).toBeUndefined();
+      expect(surface.props?.provideSymbols).toBeUndefined();
+      expect(surface.props?.provideFormatting).toBeUndefined();
+      expect(editorStatusField("language-service")).toHaveTextContent("LSP unavailable");
+    });
+    expect(editorStatusField("language-service")).toHaveAttribute(
+      "aria-label",
+      "Language provider unavailable: Required host language tool is blocked by host execution policy.",
+    );
+    expect(fetchEditorLanguageCapabilities).toHaveBeenCalledWith("/repo");
+
+    await waitFor(() => {
+      const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+      expect(snapshot?.languageCapability).toEqual({
+        languageId: "python",
+        providerId: "python-lsp",
+        available: false,
+        unavailableReason: "Required host language tool is blocked by host execution policy.",
+      });
+    });
+  });
 });
 
 describe("EditorWidget — status bar and command surface (Issue #1205)", () => {
@@ -1551,7 +1733,12 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     await renderLoaded();
     expect(surface.props?.formatRequestNonce).toBe(0);
 
-    await userEvent.click(screen.getByRole("button", { name: "Format" }));
+    // The aria-label is dynamic (ADR-0068 D4); the stable locator is the constant data-tip.
+    const formatButton = document.querySelector<HTMLButtonElement>(
+      'button[data-tip="Format document"]',
+    );
+    expect(formatButton).not.toBeNull();
+    await userEvent.click(formatButton as HTMLButtonElement);
 
     await waitFor(() => {
       expect(surface.props?.formatRequestNonce).toBe(1);
@@ -1654,7 +1841,10 @@ describe("EditorWidget — agent bridge", () => {
     ]);
     const source = FakeSource.instances.at(-1);
     expect(source).toBeDefined();
-    expect(source?.url).toBe("/api/editor/agent/events");
+    // Issue #1392 — the bridge connection carries its session id so the BFF can track liveness.
+    expect(source?.url).toBe(
+      `/api/editor/agent/events?sessionId=${encodeURIComponent(String(snapshot?.sessionId))}`,
+    );
     return { source: source as FakeEventSource, sessionId: String(snapshot?.sessionId) };
   }
 
@@ -1726,10 +1916,8 @@ describe("EditorWidget — agent bridge", () => {
       expect.arrayContaining([
         expect.objectContaining({ status: "failed", message: "Missing target file." }),
         expect.objectContaining({ status: "failed", message: "Missing text edits." }),
-        expect.objectContaining({
-          status: "failed",
-          message: "Action must be executed by the editor layout controller.",
-        }),
+        expect.objectContaining({ status: "failed", message: "Provider unavailable." }),
+        expect.objectContaining({ status: "failed", message: "Missing selection target." }),
         expect.objectContaining({ status: "succeeded" }),
       ]),
     );
@@ -1933,9 +2121,769 @@ describe("EditorWidget — agent bridge", () => {
             end: { line: 3, character: 5 },
           },
           diagnosticsSummary: { errors: 1, warnings: 0, infos: 2 },
+          languageCapability: {
+            languageId: "typescript",
+            providerId: "typescript",
+            available: true,
+          },
           dirtyFiles: expect.arrayContaining(["README.md", "src/app.ts"]),
         }),
       );
     });
+  });
+});
+
+// ─── Issue #1394 — AgentConflictBanner + applyPatch review (ADR-0058 D3/D4) ──────────────────
+
+describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
+  function agentResults(): readonly Parameters<typeof postEditorAgentActionResult>[0]["result"][] {
+    return vi.mocked(postEditorAgentActionResult).mock.calls.map(([body]) => body.result);
+  }
+
+  async function renderedAgentSession1394(): Promise<{
+    readonly source: FakeEventSource;
+    readonly sessionId: string;
+  }> {
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget windowId="agent-1394" root="/repo" file="src/app.ts" paneId="pane-1" />,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+      expect(FakeSource.instances.length).toBeGreaterThan(0);
+    });
+    const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    return { source, sessionId: String(snapshot?.sessionId) };
+  }
+
+  // ── AC3: conflict banner visibility (D4) ─────────────────────────────────
+
+  it("renders AgentConflictBanner when a conflict result arrives via SSE", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    // Before the conflict event the banner must not be present.
+    expect(screen.queryByTestId("agent-conflict-banner")).toBeNull();
+
+    // Emit a conflict result from the SSE stream (editor-agent:result event).
+    act(() => {
+      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
+        data: JSON.stringify({
+          schemaVersion: "1",
+          eventId: "ev-1",
+          type: "result",
+          result: {
+            schemaVersion: "1",
+            actionId: "a-1",
+            sessionId,
+            status: "conflict",
+            message: "The target buffer has unsaved changes.",
+            conflict: { code: "DIRTY", message: "The target buffer has unsaved changes." },
+          },
+        }),
+      });
+      // The component listens on "editor-agent:result"; FakeEventSource only wraps
+      // "editor-agent:action" in emitAction, so we dispatch directly to its listeners.
+      for (const listener of (
+        source as unknown as {
+          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
+        }
+      ).listeners.get("editor-agent:result") ?? []) {
+        if (typeof listener === "function") {
+          listener(conflictEvent);
+        } else {
+          listener.handleEvent(conflictEvent);
+        }
+      }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
+    });
+
+    // The editor surface stays mounted — non-destructive (AC3).
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+  });
+
+  it("dismisses the conflict banner when Dismiss is clicked (non-destructive AC3)", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    act(() => {
+      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
+        data: JSON.stringify({
+          schemaVersion: "1",
+          eventId: "ev-dismiss",
+          type: "result",
+          result: {
+            schemaVersion: "1",
+            actionId: "a-dismiss",
+            sessionId,
+            status: "conflict",
+            conflict: { code: "INVALID_EDITS", message: "Edit range was inverted." },
+          },
+        }),
+      });
+      for (const listener of (
+        source as unknown as {
+          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
+        }
+      ).listeners.get("editor-agent:result") ?? []) {
+        if (typeof listener === "function") {
+          listener(conflictEvent);
+        } else {
+          listener.handleEvent(conflictEvent);
+        }
+      }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("agent-conflict-banner")).toBeNull();
+    });
+
+    // Editor surface still mounted.
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+  });
+
+  // ── AC2: overlapping edits produce conflict INVALID_EDITS (D3) ──────────
+
+  it("reports conflict INVALID_EDITS when applyTextEdits contains overlapping edits", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    // applyTextEditsToText throws OverlappingPatchEditError for overlapping ranges.
+    // Two edits covering the same characters will trigger this.
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyTextEdits", {
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 10 } },
+              newText: "first",
+            },
+            {
+              range: { start: { line: 0, character: 3 }, end: { line: 0, character: 8 } },
+              newText: "second",
+            },
+          ],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      const results = agentResults();
+      expect(
+        results.some((r) => r.status === "conflict" && r.conflict?.code === "INVALID_EDITS"),
+      ).toBe(true);
+    });
+
+    // Buffer must remain unchanged (non-destructive).
+    expect(surface.props?.buffer?.content.text).toBe("const value = 1;\n");
+  });
+
+  // ── applyPatch review UI: Accept / Reject (D3) ───────────────────────────
+
+  it("shows Accept and Reject buttons after a queued applyPatch action arrives", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    // The server pre-validates applyPatch and emits the action with textEdits populated
+    // (a whole-document-replace). Simulate what the server emits to the browser.
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyPatch", {
+          target: { file: "src/app.ts" },
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+              newText: "const value = 42;\n",
+            },
+          ],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-patch-accept")).toBeInTheDocument();
+      expect(screen.getByTestId("agent-patch-reject")).toBeInTheDocument();
+    });
+  });
+
+  it("Accept applies the modified content and reports succeeded", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyPatch", {
+          target: { file: "src/app.ts" },
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+              newText: "const value = 99;\n",
+            },
+          ],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-patch-accept")).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByTestId("agent-patch-accept"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
+    });
+
+    // The normal editor surface is restored.
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+
+    // postAgentResult was called with succeeded.
+    await waitFor(() => {
+      expect(agentResults().some((r) => r.status === "succeeded")).toBe(true);
+    });
+  });
+
+  it("Reject keeps the buffer unchanged and reports failed", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyPatch", {
+          target: { file: "src/app.ts" },
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+              newText: "const value = 77;\n",
+            },
+          ],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-patch-reject")).toBeInTheDocument();
+    });
+
+    // Capture the buffer content before rejecting.
+    const contentBefore = surface.props?.buffer?.content.text;
+
+    await userEvent.click(screen.getByTestId("agent-patch-reject"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("agent-patch-reject")).toBeNull();
+    });
+
+    // The normal editor surface is restored with the original content.
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+    expect(surface.props?.buffer?.content.text).toBe(contentBefore);
+
+    // postAgentResult was called with failed.
+    await waitFor(() => {
+      expect(
+        agentResults().some(
+          (r) => r.status === "failed" && r.message === "Patch rejected by user.",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("reports failed (not conflict) when applyPatch arrives with no textEdits", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyPatch", {
+          target: { file: "src/app.ts" },
+          // No textEdits — server failed to derive them.
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(agentResults().some((r) => r.status === "failed")).toBe(true);
+    });
+
+    // Review UI must not appear.
+    expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
+    expect(screen.queryByTestId("agent-patch-reject")).toBeNull();
+  });
+
+  it("reports conflict OUT_OF_SCOPE when applyPatch targets a file not open in this pane", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "applyPatch", {
+          target: { file: "other/file.ts" },
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } },
+              newText: "x",
+            },
+          ],
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        agentResults().some((r) => r.status === "conflict" && r.conflict?.code === "OUT_OF_SCOPE"),
+      ).toBe(true);
+    });
+
+    // Review UI must not appear.
+    expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
+  });
+
+  // ── F6: sessionId filter — conflict for a different sessionId does NOT show banner ────────────
+
+  it("does not show AgentConflictBanner when a conflict result arrives for a different sessionId", async () => {
+    const { source } = await renderedAgentSession1394();
+
+    act(() => {
+      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
+        data: JSON.stringify({
+          schemaVersion: "1",
+          eventId: "ev-other",
+          type: "result",
+          result: {
+            schemaVersion: "1",
+            actionId: "a-other",
+            // A different sessionId — must be filtered out by onAgentResult (F6).
+            sessionId: "completely-different-session",
+            status: "conflict",
+            conflict: { code: "DIRTY", message: "Dirty in another pane." },
+          },
+        }),
+      });
+      for (const listener of (
+        source as unknown as {
+          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
+        }
+      ).listeners.get("editor-agent:result") ?? []) {
+        if (typeof listener === "function") {
+          listener(conflictEvent);
+        } else {
+          listener.handleEvent(conflictEvent);
+        }
+      }
+    });
+
+    // Give React a chance to render; the banner must NOT appear.
+    await act(async () => {});
+    expect(screen.queryByTestId("agent-conflict-banner")).toBeNull();
+
+    // Editor surface must remain mounted.
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+  });
+
+  // ── F5: failed persist after DIRTY conflict keeps banner visible ─────────────────────────────
+
+  it("keeps AgentConflictBanner visible when onSave fails to persist (F5)", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+
+    // Surface the DIRTY conflict banner.
+    act(() => {
+      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
+        data: JSON.stringify({
+          schemaVersion: "1",
+          eventId: "ev-dirty-save",
+          type: "result",
+          result: {
+            schemaVersion: "1",
+            actionId: "a-dirty-save",
+            sessionId,
+            status: "conflict",
+            message: "The target buffer has unsaved changes.",
+            conflict: { code: "DIRTY", message: "The target buffer has unsaved changes." },
+          },
+        }),
+      });
+      for (const listener of (
+        source as unknown as {
+          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
+        }
+      ).listeners.get("editor-agent:result") ?? []) {
+        if (typeof listener === "function") {
+          listener(conflictEvent);
+        } else {
+          listener.handleEvent(conflictEvent);
+        }
+      }
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
+    });
+
+    // Make the buffer dirty.
+    act(() => {
+      surface.props?.onContentChange({ text: "dirty content\n", sizeBytes: 14 }, "human");
+    });
+    // Confirm dirty state: toolbar Save aria-disabled flips to "false".
+    // The toolbar Save has data-tip; the banner Save does not.
+    await waitFor(() => {
+      const allSaves = screen.getAllByRole("button", { name: /^Save$/u });
+      const toolbarBtn = allSaves.find((btn) => btn.hasAttribute("data-tip"));
+      expect(toolbarBtn).toHaveAttribute("aria-disabled", "false");
+    });
+
+    // Use a never-resolving save so we can assert the banner stays visible while saving is
+    // in progress (the banner is dismissed ONLY when persist resolves ok===true; a pending
+    // or rejected save must keep it). Reset first: afterEach uses vi.clearAllMocks(), which does
+    // NOT drain a mockResolvedValueOnce queued by an earlier test in the suite — without this
+    // reset the save would consume that leaked success value and wrongly dismiss the banner.
+    vi.mocked(saveFilesContent).mockReset();
+    vi.mocked(saveFilesContent).mockReturnValueOnce(new Promise(() => {}));
+
+    // Click the Save button inside the banner (DIRTY renders a Save button in the banner;
+    // the toolbar also has one — target unambiguously with `within`).
+    const banner = screen.getByTestId("agent-conflict-banner");
+    await userEvent.click(within(banner).getByRole("button", { name: "Save" }));
+
+    // The save is in-flight and has not resolved, so the banner must still be present.
+    // React should have set saveStatus to "saving" but agentConflict stays non-null.
+    await act(async () => {});
+    expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
+  });
+});
+
+// ─── Issue #1393 — layout-controller bridge actions (ADR-0061) ────────────────
+//
+// These tests render EditorRuntimeWidget with onSplitPane / onMoveTab injected
+// (exactly as EditorWidget.renderPane does) and exercise the AC1 path where
+// agent actions reach and invoke the layout controllers.
+
+describe("EditorWidget — agent layout-controller bridge actions", () => {
+  function agentResultsLayoutCtrl(): readonly Parameters<
+    typeof postEditorAgentActionResult
+  >[0]["result"][] {
+    return vi.mocked(postEditorAgentActionResult).mock.calls.map(([body]) => body.result);
+  }
+
+  async function renderedLayoutSession(
+    onSplitPane: ((paneId: string, direction: "row" | "column") => void) | undefined,
+    onMoveTab: ((fromPaneId: string, file: string, toPaneId: string) => void) | undefined,
+  ): Promise<{ source: FakeEventSource; sessionId: string }> {
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget
+        windowId="layout-ctrl-agent"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+        openFiles={["src/app.ts"]}
+        onSelectOpenFile={vi.fn()}
+        onSplitPane={onSplitPane}
+        onMoveTab={onMoveTab}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+      expect(FakeSource.instances.length).toBeGreaterThan(0);
+    });
+    const sessionId = String(
+      vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
+    );
+    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    return { source, sessionId };
+  }
+
+  // (a) splitPane — layout controller invoked, result succeeded ───────────────
+
+  it("splitPane with onSplitPane injected calls the layout controller and reports succeeded", async () => {
+    const onSplitPane = vi.fn();
+    const { source, sessionId } = await renderedLayoutSession(onSplitPane, vi.fn());
+
+    act(() => {
+      source.emitAction(agentAction(sessionId, "splitPane", { target: { splitDirection: "row" } }));
+    });
+
+    await waitFor(() => {
+      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
+    });
+    expect(onSplitPane).toHaveBeenCalledWith("pane-1", "row");
+  });
+
+  it("splitPane with column direction calls onSplitPane with 'column'", async () => {
+    const onSplitPane = vi.fn();
+    const { source, sessionId } = await renderedLayoutSession(onSplitPane, vi.fn());
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "splitPane", { target: { splitDirection: "column" } }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
+    });
+    expect(onSplitPane).toHaveBeenCalledWith("pane-1", "column");
+  });
+
+  // (b) moveTab — containment check blocks escaping paths ────────────────────
+
+  it("moveTab with an escaping path returns conflict OUT_OF_SCOPE", async () => {
+    const onMoveTab = vi.fn();
+    const { source, sessionId } = await renderedLayoutSession(vi.fn(), onMoveTab);
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "moveTab", {
+          target: { file: "../escape", toPaneId: "pane-x" },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        agentResultsLayoutCtrl().some(
+          (r) => r.status === "conflict" && r.conflict?.code === "OUT_OF_SCOPE",
+        ),
+      ).toBe(true);
+    });
+    expect(onMoveTab).not.toHaveBeenCalled();
+  });
+
+  it("moveTab with a valid file and pane calls onMoveTab and reports succeeded", async () => {
+    const onMoveTab = vi.fn();
+    const { source, sessionId } = await renderedLayoutSession(vi.fn(), onMoveTab);
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "moveTab", {
+          target: { file: "src/app.ts", toPaneId: "pane-2" },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
+    });
+    expect(onMoveTab).toHaveBeenCalledWith("pane-1", "src/app.ts", "pane-2");
+  });
+
+  // (c) setSelection — revealRequest transiently set on editor surface ─────────
+  // The hook sets agentSelectionRequest → surfaceRevealRequest for one render, then
+  // consumeSelectionRequest() clears it in the same act() flush. We capture the
+  // peak value via a spy on the probe write so we can assert on it after act returns.
+
+  it("setSelection passes a revealRequest with correct id and column mapping to the editor surface", async () => {
+    const { source, sessionId } = await renderedLayoutSession(vi.fn(), vi.fn());
+    const selection = {
+      start: { line: 1, character: 2 },
+      end: { line: 1, character: 5 },
+    };
+    const action = agentAction(sessionId, "setSelection", { target: { selection } });
+
+    // Capture all non-null revealRequests seen during any render of the surface probe.
+    const seenRevealRequests: NonNullable<EditorSurfaceProps["revealRequest"]>[] = [];
+    const origProps = Object.getOwnPropertyDescriptor(surface, "props");
+    Object.defineProperty(surface, "props", {
+      configurable: true,
+      set(value: EditorSurfaceProps | null) {
+        if (value?.revealRequest != null) seenRevealRequests.push(value.revealRequest);
+        // Store via direct property so reads work normally.
+        Object.defineProperty(surface, "props", {
+          configurable: true,
+          writable: true,
+          value,
+        });
+      },
+    });
+
+    act(() => {
+      source.emitAction(action);
+    });
+
+    // Restore surface.props descriptor so afterEach cleanup works normally.
+    if (origProps !== undefined) {
+      Object.defineProperty(surface, "props", origProps);
+    } else {
+      Object.defineProperty(surface, "props", { configurable: true, writable: true, value: null });
+    }
+
+    // Primary AC1 proof: the action was dispatched and reported as succeeded.
+    await waitFor(() => {
+      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
+    });
+
+    // Secondary proof: a revealRequest was seen during the transient render.
+    // It carries the actionId and maps character → column (character === column).
+    expect(seenRevealRequests.length).toBeGreaterThan(0);
+    const revealRequest = seenRevealRequests[0];
+    expect(revealRequest?.id).toContain(action.actionId);
+    expect(revealRequest?.range.start.column).toBe(2);
+    expect(revealRequest?.range.end.column).toBe(5);
+  });
+
+  // Smoke: setSelection does not change document.activeElement (AC: no focus theft)
+  it("setSelection does not steal keyboard focus from the current element", async () => {
+    const { source, sessionId } = await renderedLayoutSession(vi.fn(), vi.fn());
+    // Capture the active element before the agent action.
+    const elementBefore = document.activeElement;
+
+    act(() => {
+      source.emitAction(
+        agentAction(sessionId, "setSelection", {
+          target: {
+            selection: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+          },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
+    });
+    // Focus must not have moved to the editor surface or any other element.
+    expect(document.activeElement).toBe(elementBefore);
+    expect(document.activeElement).not.toBe(screen.getByTestId("editor-surface"));
+  });
+});
+
+describe("EditorWidget — hot-exit recovery", () => {
+  it("offers recovery when a hot-exit snapshot differs from disk and restores it on demand (AC3)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n" }),
+    );
+    await renderLoaded();
+
+    expect(
+      await screen.findByText("Recovered unsaved editor changes are available."),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore unsaved changes" }));
+
+    await waitFor(() => {
+      expect(surface.props?.fileModel.dirty).toBe(true);
+    });
+    expect(screen.queryByText("Recovered unsaved editor changes are available.")).toBeNull();
+  });
+
+  it("offers recovery even when the snapshot hash equals the disk version hash (AC3 false-negative guard)", async () => {
+    // The buffer content differs from disk, yet the snapshot's recorded contentHash coincides with
+    // the server-issued version hash (divergent hash normalizations). The removed content-AND-hash
+    // gate suppressed this legitimate recovery offer; gating on content alone must still offer it.
+    // This case fails under the previous condition and is the regression guard for the AC3 fix.
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n", contentHash: "a".repeat(64) }),
+    );
+    await renderLoaded();
+
+    expect(
+      await screen.findByText("Recovered unsaved editor changes are available."),
+    ).toBeInTheDocument();
+  });
+
+  it("does not offer recovery when the snapshot matches the on-disk content (AC3)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "const value = 1;\n" }),
+    );
+    await renderLoaded();
+
+    expect(surface.props?.fileModel.dirty).toBe(false);
+    expect(screen.queryByText(/Recovered/)).toBeNull();
+  });
+
+  it("offers compare, keep-local, use-disk, and cancel when the disk changed under a recovery (AC4)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n", savedContentHash: "f".repeat(64) }),
+    );
+    await renderLoaded();
+
+    expect(
+      await screen.findByText("Recovered editor changes are available, and the disk file changed."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Compare" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep local" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use disk" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+    // Compare opens a true side-by-side diff: on-disk content (original) vs the recovered buffer.
+    await userEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await waitFor(() => {
+      expect(diffSurface.props).not.toBeNull();
+    });
+    expect(diffSurface.props?.model.files[0]?.original).toBe("const value = 1;\n");
+    expect(diffSurface.props?.model.files[0]?.modified).toBe("recovered edits\n");
+  });
+
+  it("deletes the hot-exit snapshot when the disk version is chosen over a recovery (AC4/AC5)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n", savedContentHash: "f".repeat(64) }),
+    );
+    await renderLoaded();
+    await screen.findByText("Recovered editor changes are available, and the disk file changed.");
+
+    // Ignore the clean-buffer delete fired during load; assert the deletion caused by "Use disk".
+    vi.mocked(deleteEditorHotExitSnapshot).mockClear();
+    await userEvent.click(screen.getByRole("button", { name: "Use disk" }));
+
+    await waitFor(() => {
+      expect(deleteEditorHotExitSnapshot).toHaveBeenCalledWith("/repo", "src/app.ts");
+    });
+    expect(screen.queryByText(/Recovered editor changes/)).toBeNull();
+  });
+
+  it("compares against the disk baseline even after the buffer is edited before Compare (AC4)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n", savedContentHash: "f".repeat(64) }),
+    );
+    await renderLoaded();
+    await screen.findByText("Recovered editor changes are available, and the disk file changed.");
+
+    // Edit the freshly-loaded buffer before opening Compare; the diff's "on disk" side must remain
+    // the captured disk baseline, not the now-edited live buffer.
+    act(() => {
+      surface.props?.onContentChange({ text: "typed over disk\n", sizeBytes: 16 }, "human");
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await waitFor(() => {
+      expect(diffSurface.props).not.toBeNull();
+    });
+    expect(diffSurface.props?.model.files[0]?.original).toBe("const value = 1;\n");
+    expect(diffSurface.props?.model.files[0]?.modified).toBe("recovered edits\n");
+  });
+
+  it("has no axe violations in the recovery banner or the compare panel (a11y)", async () => {
+    vi.mocked(readEditorHotExitSnapshot).mockResolvedValueOnce(
+      recoverySnapshotFixture({ content: "recovered edits\n", savedContentHash: "f".repeat(64) }),
+    );
+    const view = await renderLoaded();
+    await screen.findByText("Recovered editor changes are available, and the disk file changed.");
+    expect(await axe(view.container)).toHaveNoViolations();
+
+    await userEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await waitFor(() => {
+      expect(diffSurface.props).not.toBeNull();
+    });
+    expect(await axe(view.container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations in the reload-file confirmation modal (a11y)", async () => {
+    const view = await renderLoaded();
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "edited\n", sizeBytes: 7 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(surface.props?.saveStatus).toBe("conflict");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
+    await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    expect(await axe(view.container)).toHaveNoViolations();
   });
 });

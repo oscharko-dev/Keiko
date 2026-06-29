@@ -73,6 +73,32 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "transient",
   },
+  commands: {
+    lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
+    trustBoundary: ["ui", "fs", "tool"],
+    authority: "user-confirm",
+    // The window holds only a project-path reference (the run catalog and results are fetched live),
+    // so it is restorable like the files/editor surfaces rather than transient like the terminal.
+    persistence: "fs-reference",
+  },
+  // Issue #1389 — composition hub for runtime, read-only Git, governed commands, and Git Delivery.
+  // It owns no execution path; all authority stays in the specialized windows it opens.
+  runtime: {
+    lifecycle: ["idle", "connected", "degraded", "running", "blocked", "error"],
+    trustBoundary: ["ui", "fs", "tool", "evidence"],
+    authority: "user-confirm",
+    persistence: "fs-reference",
+  },
+  // Issue #1388 (ADR-0070) — container engine status surface. Read-mostly: probes the host engine on
+  // demand and, when available, runs a server-frozen diagnostic through the keiko-tools spawn
+  // boundary (user-confirm authority for that crossing). Holds no durable state of its own — the
+  // capability is re-probed on every mount — so persistence is transient like the terminal.
+  containerStatus: {
+    lifecycle: ["idle", "connecting", "connected", "degraded", "running", "blocked", "error"],
+    trustBoundary: ["ui", "fs", "tool"],
+    authority: "user-confirm",
+    persistence: "transient",
+  },
   review: {
     lifecycle: ["proposed", "needs-review", "applied", "reverted", "archived"],
     trustBoundary: ["ui", "evidence"],
@@ -215,6 +241,52 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     trustBoundary: ["ui", "evidence", "model"],
     authority: "user-confirm",
     persistence: "evidence-reference",
+  },
+  // Epic #1631, Issue #1634 — passive PDF preview window. It consumes only the server-issued opaque
+  // preview session over the local BFF. Issue #1637 allows browser-local restoration of a safe shell:
+  // only scalar UI intent survives reload, never session handles, lineage, paths, bytes, or rendered pages.
+  pdfCitationPreview: {
+    lifecycle: ["idle", "connecting", "connected", "degraded", "blocked", "error"],
+    trustBoundary: ["ui", "network"],
+    authority: "user-confirm",
+    persistence: "durable.ui",
+  },
+  // Epic #470, Issue #475 — Governed local Git flow. Drives the governed mutation kernel (preflight +
+  // policy + approval + execute) over the local repository and records evidence; every mutation is a
+  // user-confirmed action. Trust spans the git tool boundary and the evidence ledger.
+  governedGit: {
+    lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
+    // Crosses keiko-workspace path containment (operates on a project's git worktree), drives governed
+    // tools, and produces audit evidence. fs-reference persistence keeps the project path across reloads
+    // (evidence-reference would strip the slash-bearing path, leaving a broken empty window on restore).
+    trustBoundary: ["ui", "fs", "tool", "evidence"],
+    authority: "user-confirm",
+    persistence: "fs-reference",
+  },
+  // Epic #470, Issue #477 — governed GitHub pull request command center. Drives the governed PR gateway
+  // (policy + approval + `gh api` execute) over a project's published branch and records evidence; every
+  // open/update is a user-confirmed action. Trust spans the git/provider tool boundary and the ledger.
+  governedPullRequest: {
+    lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
+    // Reads the project's git worktree and reaches the GitHub provider via the governed `gh api` adapter,
+    // producing audit evidence. fs-reference persistence keeps the slash-bearing project path across
+    // reloads (evidence-reference would strip it, leaving a broken empty window on restore).
+    trustBoundary: ["ui", "fs", "tool", "evidence"],
+    authority: "user-confirm",
+    persistence: "fs-reference",
+  },
+  // Epic #470, Issue #478 — governed merge command center. Drives the governed merge gateway (policy +
+  // final approval + readiness gate + `gh api` merge execute) over a project's review-ready PR and records
+  // evidence; every merge is a user-confirmed action. Trust spans the git/provider tool boundary and the
+  // ledger.
+  governedMerge: {
+    lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
+    // Reads the project's git worktree and reaches the GitHub provider via the governed `gh api` adapter,
+    // producing audit evidence. fs-reference persistence keeps the slash-bearing project path across
+    // reloads (evidence-reference would strip it, leaving a broken empty window on restore).
+    trustBoundary: ["ui", "fs", "tool", "evidence"],
+    authority: "user-confirm",
+    persistence: "fs-reference",
   },
 };
 

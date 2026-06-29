@@ -1,6 +1,6 @@
 import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { APP_BOOT_RECOVERY_BOOTSTRAP } from "./layout";
+import { APP_BOOT_RECOVERY_BOOTSTRAP, LOCALE_BOOTSTRAP } from "./layout";
 
 const RECOVERY_KEY = "keiko.app-boot-recovery-reload-count";
 
@@ -19,6 +19,21 @@ function makeStorage(initial: Record<string, string> = {}): ScriptStorage {
       values.set(key, value);
     },
   };
+}
+
+function runLocaleScript(storage: ScriptStorage): { readonly lang: string; readonly locale: string } {
+  const documentElement = {
+    lang: "en",
+    dataset: {} as Record<string, string>,
+  };
+
+  vm.runInNewContext(LOCALE_BOOTSTRAP, {
+    document: { documentElement },
+    localStorage: storage,
+    String,
+  });
+
+  return { lang: documentElement.lang, locale: documentElement.dataset["locale"] ?? "" };
 }
 
 function runBootRecoveryScript(options: {
@@ -100,5 +115,21 @@ describe("APP_BOOT_RECOVERY_BOOTSTRAP", () => {
     vi.advanceTimersByTime(8000);
 
     expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+describe("LOCALE_BOOTSTRAP", () => {
+  it("applies the stored German locale before hydration", () => {
+    expect(runLocaleScript(makeStorage({ "keiko.locale": "de-DE" }))).toEqual({
+      lang: "de",
+      locale: "de",
+    });
+  });
+
+  it("falls back to English for unsupported locale values", () => {
+    expect(runLocaleScript(makeStorage({ "keiko.locale": "fr-FR" }))).toEqual({
+      lang: "en",
+      locale: "en",
+    });
   });
 });

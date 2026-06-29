@@ -4,14 +4,15 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
+  type DependencyList,
   type Dispatch,
   type MutableRefObject,
   type RefObject,
   type SetStateAction,
 } from "react";
-import { defaultLayout } from "../windows/connectionUtils";
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
@@ -41,12 +42,17 @@ export type { UseWorkspaceResult, ViewportWorld, WorkspaceApi };
 const WS_LS = "keiko.workspace.v4";
 const CONN_LS = "keiko.conns.v1";
 const VIEW_LS = "keiko.view";
+const WORKSPACE_STATE_API = "/api/workspace/state";
+const WORKSPACE_STATE_POLL_MS = 1_500;
 // Exported so the zoom controls in Workspace.tsx can disable themselves at the
 // clamp limits instead of swallowing clicks silently (audit C132/C361).
 export const MIN_ZOOM = 0.3;
 export const MAX_ZOOM = 2.5;
 const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
+const MIN_CAMERA_ANIMATION_DURATION_MS = 90;
+const MAX_CAMERA_ANIMATION_DURATION_MS = 280;
+const PAN_CAMERA_SMOOTHNESS_SCALE = 0.65;
 
 function readView(): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
@@ -106,6 +112,82 @@ function persistList<T>(key: string, value: T): void {
   } catch {
     /* ignore */
   }
+}
+
+// Issue #1580 — persistence is debounced so a drag/resize/pan (which mutates wins
+// or view every animation frame) no longer fires a synchronous localStorage write
+// and a server PUT per frame. A short trailing delay coalesces a whole gesture into
+// a single write; a pagehide/visibility-hidden flush guarantees the final state is
+// never lost if the tab closes mid-gesture.
+const PERSIST_DEBOUNCE_MS = 300;
+
+interface TrailingDebounce {
+  readonly schedule: (run: () => void) => void;
+  readonly flush: () => void;
+  readonly cancel: () => void;
+}
+
+function createTrailingDebounce(delayMs: number): TrailingDebounce {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pending: (() => void) | null = null;
+  const flush = (): void => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const run = pending;
+    pending = null;
+    if (run !== null) run();
+  };
+  const schedule = (run: () => void): void => {
+    pending = run;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(flush, delayMs);
+  };
+  const cancel = (): void => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    pending = null;
+  };
+  return { schedule, flush, cancel };
+}
+
+// Run `write` on a trailing debounce when `deps` change, and always flush the
+// latest pending write on pagehide / visibility-hidden / unmount so a debounced
+// localStorage write is never dropped (issue #1580 No-Data-Loss invariant).
+function useDebouncedPersist(write: () => void, deps: DependencyList): void {
+  const debounceRef = useRef<TrailingDebounce | null>(null);
+  if (debounceRef.current === null)
+    debounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
+  const writeRef = useRef(write);
+  writeRef.current = write;
+
+  useEffect(
+    () => {
+      debounceRef.current?.schedule(() => writeRef.current());
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps are forwarded verbatim by the caller
+    deps,
+  );
+
+  useEffect(() => {
+    const debounce = debounceRef.current;
+    if (debounce === null) return;
+    const flushNow = (): void => debounce.flush();
+    const flushOnHide = (): void => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden")
+        debounce.flush();
+    };
+    window.addEventListener("pagehide", flushNow);
+    document.addEventListener("visibilitychange", flushOnHide);
+    return () => {
+      window.removeEventListener("pagehide", flushNow);
+      document.removeEventListener("visibilitychange", flushOnHide);
+      debounce.flush();
+    };
+  }, []);
 }
 
 interface ArrowState {
@@ -172,9 +254,15 @@ function windowIdFromWheelTarget(target: EventTarget | null): string | null {
 interface UsePanZoomArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
+  readonly cameraSmoothness: number;
   readonly winsRef: MutableRefObject<AppWindow[]>;
   readonly setView: Dispatch<SetStateAction<View>>;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+}
+
+interface QueueViewOptions {
+  readonly smoothnessScale?: number;
+  readonly minDurationMs?: number;
 }
 
 interface PanZoomResult {
@@ -226,31 +314,171 @@ export function fitWorkspaceViewToWindows(
   };
 }
 
-function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs): PanZoomResult {
+function prefersReducedCameraMotion(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function easeCamera(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function interpolateView(from: View, to: View, progress: number): View {
+  return {
+    zoom: from.zoom + (to.zoom - from.zoom) * progress,
+    x: from.x + (to.x - from.x) * progress,
+    y: from.y + (to.y - from.y) * progress,
+  };
+}
+
+function usePanZoom({
+  wsRef,
+  view,
+  cameraSmoothness,
+  winsRef,
+  setView,
+  setWins,
+}: UsePanZoomArgs): PanZoomResult {
   const viewRef = useRef<View>(view);
   viewRef.current = view;
+  const renderedViewRef = useRef<View>(view);
+  renderedViewRef.current = view;
   const pendingViewRef = useRef<View | null>(null);
+  const pendingViewSmoothnessScaleRef = useRef(1);
+  const pendingViewMinDurationRef = useRef(MIN_CAMERA_ANIMATION_DURATION_MS);
   const frameRef = useRef<number | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const animationStartRef = useRef<View>(view);
+  const animationTargetRef = useRef<View>(view);
+  const animationStartedAtRef = useRef<number>(0);
+  const viewPersistDebounceRef = useRef<TrailingDebounce | null>(null);
+  if (viewPersistDebounceRef.current === null)
+    viewPersistDebounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
 
+  const scheduleViewPersist = useCallback((): void => {
+    viewPersistDebounceRef.current?.schedule(() => persistList(VIEW_LS, viewRef.current));
+  }, []);
+
+  // Issue #1580 follow-up — keep the live view synchronous through viewRef, but
+  // take the durable localStorage write out of the pan/zoom frame path. Even this
+  // tiny JSON setItem can contend on weaker Windows/iGPU systems when wheel/pan
+  // frames arrive continuously; pagehide/visibility-hidden/unmount still flush the
+  // latest value so reload state is not lost.
   useEffect(() => {
-    persistList(VIEW_LS, view);
-  }, [view]);
+    const debounce = viewPersistDebounceRef.current;
+    if (debounce === null) return;
+    const flushNow = (): void => debounce.flush();
+    const flushOnHide = (): void => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden")
+        debounce.flush();
+    };
+    window.addEventListener("pagehide", flushNow);
+    document.addEventListener("visibilitychange", flushOnHide);
+    return () => {
+      window.removeEventListener("pagehide", flushNow);
+      document.removeEventListener("visibilitychange", flushOnHide);
+      debounce.flush();
+    };
+  }, []);
 
   useEffect(
     () => () => {
       if (frameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
         window.cancelAnimationFrame(frameRef.current);
       }
+      if (
+        animationFrameRef.current !== null &&
+        typeof window.cancelAnimationFrame === "function"
+      ) {
+        window.cancelAnimationFrame(animationFrameRef.current);
+      }
     },
     [],
   );
 
+  const animateView = useCallback(
+    (target: View, smoothnessScale = 1, minDurationMs = MIN_CAMERA_ANIMATION_DURATION_MS): void => {
+      const effectiveSmoothness = Math.min(
+        100,
+        Math.max(0, cameraSmoothness * smoothnessScale),
+      );
+      if (
+        effectiveSmoothness <= 0 ||
+        prefersReducedCameraMotion() ||
+        typeof window.requestAnimationFrame !== "function" ||
+        typeof window.cancelAnimationFrame !== "function"
+      ) {
+        if (animationFrameRef.current !== null) {
+          window.cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = null;
+        }
+        setView(target);
+        return;
+      }
+
+      const durationMs =
+        minDurationMs +
+        ((MAX_CAMERA_ANIMATION_DURATION_MS - minDurationMs) * effectiveSmoothness) / 100;
+      const now =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+      animationStartRef.current =
+        animationFrameRef.current === null
+          ? renderedViewRef.current
+          : interpolateView(
+              animationStartRef.current,
+              animationTargetRef.current,
+              easeCamera(
+                Math.min(1, (now - animationStartedAtRef.current) / durationMs),
+              ),
+            );
+      animationTargetRef.current = target;
+      animationStartedAtRef.current = now;
+
+      if (animationFrameRef.current !== null) return;
+      const step = (time: number): void => {
+        const progress = Math.min(
+          1,
+          Math.max(0, (time - animationStartedAtRef.current) / durationMs),
+        );
+        const eased = easeCamera(progress);
+        if (progress >= 1) {
+          animationFrameRef.current = null;
+          setView(animationTargetRef.current);
+          return;
+        }
+        setView(interpolateView(animationStartRef.current, animationTargetRef.current, eased));
+        animationFrameRef.current = window.requestAnimationFrame(step);
+      };
+      animationFrameRef.current = window.requestAnimationFrame(step);
+    },
+    [cameraSmoothness, setView],
+  );
+
+  const settleCameraAnimation = useCallback((): void => {
+    if (
+      animationFrameRef.current !== null &&
+      typeof window.cancelAnimationFrame === "function"
+    ) {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+      setView(animationTargetRef.current);
+      renderedViewRef.current = animationTargetRef.current;
+    }
+  }, [setView]);
+
   const queueView = useCallback(
-    (next: View | ((current: View) => View)): void => {
+    (next: View | ((current: View) => View), options: QueueViewOptions = {}): void => {
       const base = pendingViewRef.current ?? viewRef.current;
       const resolved = typeof next === "function" ? next(base) : next;
+      const smoothnessScale = options.smoothnessScale ?? 1;
+      const minDurationMs = options.minDurationMs ?? MIN_CAMERA_ANIMATION_DURATION_MS;
       viewRef.current = resolved;
       pendingViewRef.current = resolved;
+      pendingViewSmoothnessScaleRef.current = smoothnessScale;
+      pendingViewMinDurationRef.current = minDurationMs;
+      scheduleViewPersist();
 
       if (
         typeof window.requestAnimationFrame !== "function" ||
@@ -265,11 +493,15 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
       frameRef.current = window.requestAnimationFrame(() => {
         frameRef.current = null;
         const pending = pendingViewRef.current;
+        const pendingSmoothnessScale = pendingViewSmoothnessScaleRef.current;
+        const pendingMinDurationMs = pendingViewMinDurationRef.current;
         pendingViewRef.current = null;
-        if (pending !== null) setView(pending);
+        pendingViewSmoothnessScaleRef.current = 1;
+        pendingViewMinDurationRef.current = MIN_CAMERA_ANIMATION_DURATION_MS;
+        if (pending !== null) animateView(pending, pendingSmoothnessScale, pendingMinDurationMs);
       });
     },
-    [setView],
+    [animateView, scheduleViewPersist, setView],
   );
 
   useEffect(() => {
@@ -280,6 +512,7 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
         e.preventDefault();
         const windowId = windowIdFromWheelTarget(e.target);
         if (windowId !== null) {
+          settleCameraAnimation();
           setWins((ws) =>
             ws === null
               ? ws
@@ -306,13 +539,16 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
       }
       e.preventDefault();
       const delta = normalizeWheelDelta(e);
-      queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }));
+      queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }), {
+        minDurationMs: 0,
+        smoothnessScale: PAN_CAMERA_SMOOTHNESS_SCALE,
+      });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       el.removeEventListener("wheel", onWheel);
     };
-  }, [wsRef, setWins, queueView]);
+  }, [wsRef, setWins, queueView, settleCameraAnimation]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -349,7 +585,11 @@ function usePanZoom({ wsRef, view, winsRef, setView, setWins }: UsePanZoomArgs):
 
   const resetView = useCallback((): void => queueView({ zoom: 1, x: 0, y: 0 }), [queueView]);
   const panBy = useCallback(
-    (dx: number, dy: number): void => queueView((v) => ({ ...v, x: v.x + dx, y: v.y + dy })),
+    (dx: number, dy: number): void =>
+      queueView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }), {
+        minDurationMs: 0,
+        smoothnessScale: PAN_CAMERA_SMOOTHNESS_SCALE,
+      }),
     [queueView],
   );
 
@@ -363,28 +603,303 @@ interface UseHydrateArgs {
   readonly zc: MutableRefObject<number>;
 }
 
+interface WorkspaceSnapshot {
+  readonly wins: AppWindow[];
+  readonly conns: Connection[];
+}
+
+interface ServerWorkspaceSnapshot {
+  readonly revision: number;
+  readonly windows: readonly unknown[];
+  readonly connections: readonly unknown[];
+}
+
+function snapshotFromRaw(
+  windows: readonly unknown[],
+  connections: readonly unknown[],
+): WorkspaceSnapshot {
+  const wins = sanitizePersistedWindows(windows as readonly AppWindow[]);
+  return {
+    wins,
+    conns: sanitizePersistedConnections(connections as readonly Connection[], wins),
+  };
+}
+
+function readPersistedWorkspaceSnapshot(): {
+  readonly wins: AppWindow[];
+  readonly conns: Connection[];
+} {
+  let wins: AppWindow[] | null = null;
+  try {
+    wins = parsePersistedWindows(window.localStorage.getItem(WS_LS));
+  } catch {
+    wins = null;
+  }
+  const resolvedWins = wins ?? [];
+  try {
+    return {
+      wins: resolvedWins,
+      conns: parsePersistedConnections(window.localStorage.getItem(CONN_LS), resolvedWins),
+    };
+  } catch {
+    return { wins: resolvedWins, conns: [] };
+  }
+}
+
+async function fetchServerWorkspaceSnapshot(): Promise<ServerWorkspaceSnapshot | null> {
+  if (typeof fetch !== "function") return null;
+  try {
+    const response = await fetch(WORKSPACE_STATE_API, { headers: { Accept: "application/json" } });
+    if (!response.ok) return null;
+    const body: unknown = await response.json();
+    if (typeof body !== "object" || body === null || !("workspace" in body)) return null;
+    const workspace = (body as { readonly workspace?: unknown }).workspace;
+    if (typeof workspace !== "object" || workspace === null) return null;
+    const record = workspace as Record<string, unknown>;
+    if (
+      typeof record["revision"] !== "number" ||
+      !Array.isArray(record["windows"]) ||
+      !Array.isArray(record["connections"])
+    ) {
+      return null;
+    }
+    return {
+      revision: record["revision"],
+      windows: record["windows"],
+      connections: record["connections"],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function putServerWorkspaceSnapshot(
+  wins: readonly AppWindow[],
+  conns: readonly Connection[],
+  opts: { readonly signal?: AbortSignal; readonly keepalive?: boolean } = {},
+): Promise<number | null> {
+  if (typeof fetch !== "function") return null;
+  try {
+    const response = await fetch(WORKSPACE_STATE_API, {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+      },
+      body: JSON.stringify({ windows: wins, connections: conns }),
+      // keepalive lets the final flush survive page unload (sanitize already drops
+      // large data-URL payloads, so the body stays well under the 64KB limit).
+      // sendBeacon cannot set the required X-Keiko-CSRF header, hence keepalive.
+      ...(opts.keepalive === true ? { keepalive: true } : {}),
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    });
+    if (!response.ok) return null;
+    const body: unknown = await response.json();
+    const workspace =
+      typeof body === "object" && body !== null && "workspace" in body
+        ? (body as { readonly workspace?: unknown }).workspace
+        : undefined;
+    if (typeof workspace !== "object" || workspace === null) return null;
+    const revision = (workspace as Record<string, unknown>)["revision"];
+    return typeof revision === "number" ? revision : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyPersistedWorkspaceSnapshot(
+  snapshot: { readonly wins: AppWindow[]; readonly conns: Connection[] },
+  setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  setConns: Dispatch<SetStateAction<Connection[]>>,
+  zc: MutableRefObject<number>,
+): void {
+  zc.current = snapshot.wins.length === 0 ? 1 : Math.max(1, ...snapshot.wins.map((w) => w.z));
+  setWins(snapshot.wins);
+  setConns(snapshot.conns);
+}
+
 function useHydrate({ wsRef, setWins, setConns, zc }: UseHydrateArgs): void {
   useLayoutEffect(() => {
     const el = wsRef.current;
     if (el === null) return;
-    const r = el.getBoundingClientRect();
-    let init: AppWindow[] | null = null;
-    try {
-      init = parsePersistedWindows(window.localStorage.getItem(WS_LS));
-    } catch {
-      init = null;
-    }
     // M1 (#532) — no seeded windows on first launch; the empty-state "New window" button
     // in Workspace.tsx and the FAB (+) are always reachable even when `wins` is [].
-    if (init === null) init = [];
-    zc.current = init.length === 0 ? 1 : Math.max(1, ...init.map((w) => w.z));
-    setWins(init);
-    try {
-      setConns(parsePersistedConnections(window.localStorage.getItem(CONN_LS), init));
-    } catch {
-      /* ignore */
-    }
+    applyPersistedWorkspaceSnapshot(readPersistedWorkspaceSnapshot(), setWins, setConns, zc);
   }, [wsRef, setWins, setConns, zc]);
+}
+
+interface UseStorageSyncArgs {
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+  readonly setConns: Dispatch<SetStateAction<Connection[]>>;
+  readonly zc: MutableRefObject<number>;
+  readonly beforeApplyRemote: () => void;
+}
+
+function useWorkspaceStorageSync({
+  setWins,
+  setConns,
+  zc,
+  beforeApplyRemote,
+}: UseStorageSyncArgs): void {
+  useEffect(() => {
+    const onStorage = (event: StorageEvent): void => {
+      if (event.storageArea !== null && event.storageArea !== window.localStorage) return;
+      if (event.key !== WS_LS && event.key !== CONN_LS) return;
+      beforeApplyRemote();
+      applyPersistedWorkspaceSnapshot(readPersistedWorkspaceSnapshot(), setWins, setConns, zc);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [setWins, setConns, zc, beforeApplyRemote]);
+}
+
+interface UseServerSyncArgs {
+  readonly wins: AppWindow[] | null;
+  readonly conns: readonly Connection[];
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+  readonly setConns: Dispatch<SetStateAction<Connection[]>>;
+  readonly zc: MutableRefObject<number>;
+  readonly suppressNextPersistRef: MutableRefObject<boolean>;
+}
+
+function useWorkspaceServerSync({
+  wins,
+  conns,
+  setWins,
+  setConns,
+  zc,
+  suppressNextPersistRef,
+}: UseServerSyncArgs): void {
+  const revisionRef = useRef(0);
+  const winsRef = useRef<AppWindow[] | null>(wins);
+  winsRef.current = wins;
+  const connsRef = useRef<readonly Connection[]>(conns);
+  connsRef.current = conns;
+  const putDebounceRef = useRef<TrailingDebounce | null>(null);
+  if (putDebounceRef.current === null)
+    putDebounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
+  const putAbortRef = useRef<AbortController | null>(null);
+
+  const serverSyncEnabled = typeof navigator === "undefined" || navigator.webdriver !== true;
+
+  // One sanitize+PUT of the LATEST snapshot (read from refs so a debounced/flush run
+  // never sends stale geometry). Supersedes any in-flight PUT via AbortController and
+  // advances the revision monotonically (issue #1580).
+  const runServerPut = useCallback((keepalive: boolean): void => {
+    const latestWins = winsRef.current;
+    if (latestWins === null) return;
+    const persistedWins = sanitizePersistedWindows(latestWins);
+    const persistedConns = sanitizePersistedConnections(connsRef.current, persistedWins);
+    putAbortRef.current?.abort();
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    putAbortRef.current = controller;
+    void putServerWorkspaceSnapshot(persistedWins, persistedConns, {
+      ...(controller !== null ? { signal: controller.signal } : {}),
+      keepalive,
+    }).then((revision) => {
+      if (revision !== null && revision > revisionRef.current) revisionRef.current = revision;
+    });
+  }, []);
+
+  const applyServerSnapshot = useCallback(
+    (serverSnapshot: ServerWorkspaceSnapshot): void => {
+      const snapshot = snapshotFromRaw(serverSnapshot.windows, serverSnapshot.connections);
+      if (serverSnapshot.revision > revisionRef.current) {
+        revisionRef.current = serverSnapshot.revision;
+      }
+      suppressNextPersistRef.current = true;
+      applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc);
+    },
+    [setWins, setConns, zc, suppressNextPersistRef],
+  );
+
+  useEffect(() => {
+    if (!serverSyncEnabled) return;
+    let stopped = false;
+    let interval: number | null = null;
+    const pull = async (): Promise<void> => {
+      const serverSnapshot = await fetchServerWorkspaceSnapshot();
+      if (stopped || serverSnapshot === null) return;
+      if (serverSnapshot.revision <= revisionRef.current) return;
+      if (
+        revisionRef.current === 0 &&
+        serverSnapshot.windows.length === 0 &&
+        (winsRef.current?.length ?? 0) > 0
+      ) {
+        return;
+      }
+      applyServerSnapshot(serverSnapshot);
+    };
+    const startPolling = (): void => {
+      if (interval !== null) return;
+      interval = window.setInterval(() => {
+        void pull();
+      }, WORKSPACE_STATE_POLL_MS);
+    };
+    const stopPolling = (): void => {
+      if (interval === null) return;
+      window.clearInterval(interval);
+      interval = null;
+    };
+    // Issue #1580 — only poll while the document is visible; the old fixed interval
+    // kept fetching/parsing forever in background tabs. Returning to visible does an
+    // immediate catch-up pull so multi-tab convergence is unchanged.
+    const sync = (): void => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        stopPolling();
+      } else {
+        void pull();
+        startPolling();
+      }
+    };
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      stopped = true;
+      stopPolling();
+      document.removeEventListener("visibilitychange", sync);
+    };
+  }, [applyServerSnapshot, serverSyncEnabled]);
+
+  // Debounced server PUT (issue #1580): an uncoalesced drag previously fired one
+  // full-snapshot PUT per pointer frame. The echo-suppression flag is consumed
+  // SYNCHRONOUSLY here so a snapshot just applied from server/storage is never
+  // echoed back; the actual PUT is deferred to the trailing flush.
+  useEffect(() => {
+    if (!serverSyncEnabled) return;
+    if (wins === null) return;
+    if (suppressNextPersistRef.current) {
+      suppressNextPersistRef.current = false;
+      return;
+    }
+    putDebounceRef.current?.schedule(() => runServerPut(false));
+  }, [wins, conns, suppressNextPersistRef, serverSyncEnabled, runServerPut]);
+
+  // Guarantee the final snapshot reaches the server even if the tab closes during a
+  // gesture: cancel the pending debounce and send one keepalive PUT on unload, and
+  // flush any pending PUT on unmount.
+  useEffect(() => {
+    if (!serverSyncEnabled) return;
+    const debounce = putDebounceRef.current;
+    const flushKeepalive = (): void => {
+      debounce?.cancel();
+      runServerPut(true);
+    };
+    const onHide = (): void => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden")
+        flushKeepalive();
+    };
+    window.addEventListener("pagehide", flushKeepalive);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", flushKeepalive);
+      document.removeEventListener("visibilitychange", onHide);
+      debounce?.flush();
+    };
+  }, [serverSyncEnabled, runServerPut]);
 }
 
 interface UseKeyboardArgs {
@@ -543,16 +1058,15 @@ function useConnectionPrune(
 // Release 0.2.0 — bind callbacks return whether the bind was ACCEPTED; `false` (source limit
 // reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
+  readonly cameraSmoothness?: number | undefined;
   readonly onScopeBind?:
-    | ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>)
-    | undefined;
+    ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>) | undefined;
   readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
   readonly onConnectorBind?:
     | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void)
-    | undefined;
+    ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 
 export function useWorkspace(
@@ -565,13 +1079,54 @@ export function useWorkspace(
   const [conns, setConns] = useState<Connection[]>([]);
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
   const [view, setView] = useState<View>(readView);
+  // Issue #1580 — destructure the optional scope-bind callbacks so the memoized
+  // action factories below depend on their (stable) identities rather than on the
+  // `opts` object, which defaults to a fresh `{}` every render and would otherwise
+  // re-create the whole api each frame and defeat memoization.
+  const {
+    cameraSmoothness = 0,
+    onScopeBind,
+    onScopeUnbind,
+    onConnectorBind,
+    onConnectorUnbind,
+  } = opts;
   const zc = useRef<number>(3);
   const snapZone = useRef<SnapZone | null>(null);
+  const suppressNextServerPersistRef = useRef(false);
+  const beforeApplyRemote = useCallback((): void => {
+    suppressNextServerPersistRef.current = true;
+  }, []);
 
   const winsRef = useRef<AppWindow[]>([]);
   winsRef.current = wins ?? [];
   const connsRef = useRef<Connection[]>([]);
   connsRef.current = conns;
+  const winsById = useMemo<ReadonlyMap<string, AppWindow>>(
+    () => new Map((wins ?? []).map((win) => [win.id, win])),
+    [wins],
+  );
+  const connsById = useMemo<ReadonlyMap<string, Connection>>(
+    () => new Map(conns.map((conn) => [conn.id, conn])),
+    [conns],
+  );
+  const connsByEndpoint = useMemo<ReadonlyMap<string, readonly Connection[]>>(() => {
+    const next = new Map<string, Connection[]>();
+    for (const conn of conns) {
+      const a = next.get(conn.a);
+      if (a === undefined) next.set(conn.a, [conn]);
+      else a.push(conn);
+      const b = next.get(conn.b);
+      if (b === undefined) next.set(conn.b, [conn]);
+      else b.push(conn);
+    }
+    return next;
+  }, [conns]);
+  const winsByIdRef = useRef<ReadonlyMap<string, AppWindow>>(winsById);
+  winsByIdRef.current = winsById;
+  const connsByIdRef = useRef<ReadonlyMap<string, Connection>>(connsById);
+  connsByIdRef.current = connsById;
+  const connsByEndpointRef = useRef<ReadonlyMap<string, readonly Connection[]>>(connsByEndpoint);
+  connsByEndpointRef.current = connsByEndpoint;
   // Refs for the click-to-connect flow. connectingRef is a synchronous view of
   // the `connecting` state for handlers fired from child components (confirm).
   // connectCleanupRef stores the global pointermove listener disposer so we
@@ -584,67 +1139,98 @@ export function useWorkspace(
   const { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect } = usePanZoom({
     wsRef,
     view,
+    cameraSmoothness,
     winsRef,
     setView,
     setWins,
   });
 
   useHydrate({ wsRef, setWins, setConns, zc });
+  useWorkspaceStorageSync({ setWins, setConns, zc, beforeApplyRemote });
+  useWorkspaceServerSync({
+    wins,
+    conns,
+    setWins,
+    setConns,
+    zc,
+    suppressNextPersistRef: suppressNextServerPersistRef,
+  });
 
-  useEffect(() => {
-    if (wins === null) return;
-    persistList(CONN_LS, sanitizePersistedConnections(conns, wins));
+  // Debounced localStorage persistence (issue #1580): a drag/resize mutates wins
+  // every frame; without this each frame ran a synchronous sanitize + JSON.stringify
+  // + setItem. The sanitize pipeline still runs in full on the eventual write, so
+  // multi-tab byte-identity is preserved.
+  useDebouncedPersist(() => {
+    if (wins !== null) persistList(CONN_LS, sanitizePersistedConnections(conns, wins));
   }, [conns, wins]);
 
   useConnectionPrune(wins, setConns);
 
-  useEffect(() => {
+  useDebouncedPersist(() => {
     if (wins !== null) persistList(WS_LS, sanitizePersistedWindows(wins));
   }, [wins]);
 
   useKeyboardCtrls({ setWins, rect, cancelConnectRef });
   useFitMaximized({ wsRef, viewRef, setWins });
 
-  const { update, focus, close, minimize, restore, maximize, add, openEditorFile, toggleTool } =
-    makeMutations({
-      setWins,
-      zc,
-      worldVP,
+  // Issue #1580 — the WorkspaceApi object and all of its action closures are the
+  // props that flow into every WindowFrame and the ConnectionsLayer. Built fresh
+  // each render they change identity every pan/zoom rAF frame, which makes any
+  // React.memo on those children a permanent no-op and re-renders all N windows
+  // per frame. Every closure below already mutates via setWins functional updaters
+  // and reads live state through winsRef/connsRef/viewRef/zc, so it captures NO
+  // stale wins/conns/view and can be built ONCE. The only non-stable inputs are the
+  // optional scope-bind callbacks, which are listed in the relevant deps so a parent
+  // swapping a callback still rebinds.
+  const mutations = useMemo(
+    () => makeMutations({ setWins, zc, worldVP, winsRef }),
+    [setWins, zc, worldVP, winsRef],
+  );
+  const layout = useMemo(() => makeLayoutActions({ setWins, worldVP }), [setWins, worldVP]);
+  const snap = useMemo(
+    () => makeSnapActions({ setSnapPrev, snapZone, worldVP, update: mutations.update }),
+    [setSnapPrev, snapZone, worldVP, mutations],
+  );
+  const connectActions = useMemo(
+    () =>
+      makeConnectActions({
+        wsRef,
+        viewRef,
+        winsRef,
+        connsRef,
+        winsByIdRef,
+        connsByIdRef,
+        connsByEndpointRef,
+        connectingRef,
+        connectCleanupRef,
+        focus: mutations.focus,
+        setConns,
+        setConnecting,
+        onScopeBind,
+        onScopeUnbind,
+        onConnectorBind,
+        onConnectorUnbind,
+      }),
+    [
+      wsRef,
+      viewRef,
       winsRef,
-    });
-  const { tileAll, splitFront, cascade } = makeLayoutActions({ setWins, worldVP });
-  const { setSnap, commitSnap } = makeSnapActions({ setSnapPrev, snapZone, worldVP, update });
-  const {
-    startConnect,
-    confirmConnect,
-    cancelConnect,
-    removeConn,
-    connect,
-    linkedFilesRoot,
-    linkedFilesContext,
-    linkedAllFilesRoots,
-    linkedConnectorCapsuleIds,
-    linkedConnectorCapsuleSetIds,
-    linkedFigmaSnapshotRunIds,
-    linkedFigmaSnapshotSources,
-    linkedImageSources,
-    currentFilesContext,
-  } = makeConnectActions({
-    wsRef,
-    viewRef,
-    winsRef,
-    connsRef,
-    connectingRef,
-    connectCleanupRef,
-    focus,
-    setConns,
-    setConnecting,
-    onScopeBind: opts.onScopeBind,
-    onScopeUnbind: opts.onScopeUnbind,
-    onConnectorBind: opts.onConnectorBind,
-    onConnectorUnbind: opts.onConnectorUnbind,
-  });
-  cancelConnectRef.current = cancelConnect;
+      connsRef,
+      winsByIdRef,
+      connsByIdRef,
+      connsByEndpointRef,
+      connectingRef,
+      connectCleanupRef,
+      mutations,
+      setConns,
+      setConnecting,
+      onScopeBind,
+      onScopeUnbind,
+      onConnectorBind,
+      onConnectorUnbind,
+    ],
+  );
+  cancelConnectRef.current = connectActions.cancelConnect;
 
   // uiux-fix F008 C120 — closing a connected window must fire the same unbind callbacks as
   // removing the edge badge (removeConn), otherwise the visible relationship disappears while
@@ -652,51 +1238,58 @@ export function useWorkspace(
   // do this: by the time it runs, the closed window is gone from winsRef and the bind roots can
   // no longer be derived — so the teardown runs here, BEFORE the window list shrinks. The prune
   // effect afterwards only sweeps the now-orphaned edge objects.
-  const closeWithTeardown: WorkspaceApi["close"] = (id) => {
-    const win = winsRef.current.find((w) => w.id === id);
-    if (win !== undefined) {
-      for (const c of connsRef.current) {
-        const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
-        if (otherId === null) continue;
-        const other = winsRef.current.find((w) => w.id === otherId);
-        if (other === undefined) continue;
-        // Release 0.2.0 — prefer the bind-time snapshot on the Connection: the window's current
-        // cfg may have moved on (Files window navigated elsewhere, another capsule selected) and
-        // re-deriving from it would unbind the WRONG source. cfg-derivation remains the fallback
-        // for edges persisted before the snapshot fields existed.
-        const chatWindowId =
-          c.boundChatWindowId ??
-          (win.type === "chat" ? win.id : other.type === "chat" ? other.id : null);
-        const scope = boundScopeOf(c) ?? filesChatBindScope(win, other, Date.now());
-        if (scope !== null && chatWindowId !== null) opts.onScopeUnbind?.(chatWindowId, scope);
-        const connectorScope = boundConnectorScopeOf(c) ?? connectorChatBind(win, other);
-        if (connectorScope !== null && chatWindowId !== null) {
-          opts.onConnectorUnbind?.(chatWindowId, connectorScope);
+  const closeWithTeardown = useCallback<WorkspaceApi["close"]>(
+    (id) => {
+      const win = winsByIdRef.current.get(id);
+      if (win !== undefined) {
+        for (const c of connsByEndpointRef.current.get(id) ?? []) {
+          const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+          if (otherId === null) continue;
+          const other = winsByIdRef.current.get(otherId);
+          if (other === undefined) continue;
+          // Release 0.2.0 — prefer the bind-time snapshot on the Connection: the window's current
+          // cfg may have moved on (Files window navigated elsewhere, another capsule selected) and
+          // re-deriving from it would unbind the WRONG source. cfg-derivation remains the fallback
+          // for edges persisted before the snapshot fields existed.
+          const chatWindowId =
+            c.boundChatWindowId ??
+            (win.type === "chat" ? win.id : other.type === "chat" ? other.id : null);
+          const scope = boundScopeOf(c) ?? filesChatBindScope(win, other, Date.now());
+          if (scope !== null && chatWindowId !== null) onScopeUnbind?.(chatWindowId, scope);
+          const connectorScope = boundConnectorScopeOf(c) ?? connectorChatBind(win, other);
+          if (connectorScope !== null && chatWindowId !== null) {
+            onConnectorUnbind?.(chatWindowId, connectorScope);
+          }
         }
       }
-    }
-    close(id);
-  };
+      mutations.close(id);
+    },
+    [winsByIdRef, connsByEndpointRef, mutations, onScopeUnbind, onConnectorUnbind],
+  );
 
-  const updateConnBoundScope: WorkspaceApi["updateConnBoundScope"] = (
-    connId: string,
-    scope: ChatConnectedScope,
-  ) => {
-    setConns((cs) =>
-      cs.map((conn) =>
-        conn.id === connId
-          ? {
-              ...conn,
-              boundScopeKind: scope.kind,
-              ...(scope.root !== undefined ? { boundRoot: scope.root } : {}),
-              ...(scope.relativePaths[0] !== undefined
-                ? { boundRelativePath: scope.relativePaths[0] }
-                : {}),
-            }
-          : conn,
-      ),
-    );
-  };
+  const updateConnBoundScope = useCallback<WorkspaceApi["updateConnBoundScope"]>(
+    (connId, scope) => {
+      setConns((cs) =>
+        cs.map((conn) =>
+          conn.id === connId
+            ? {
+                ...conn,
+                boundScopeKind: scope.kind,
+                ...(scope.root !== undefined ? { boundRoot: scope.root } : {}),
+                ...(scope.relativePaths[0] !== undefined
+                  ? { boundRelativePath: scope.relativePaths[0] }
+                  : {}),
+              }
+            : conn,
+        ),
+      );
+    },
+    [setConns],
+  );
+
+  // Issue #1580 — stable accessor for the live view (mirrors rect()); lets window
+  // children read pan/zoom at gesture-start without a per-frame `view` prop.
+  const currentView = useCallback((): View => viewRef.current, [viewRef]);
 
   // Component unmount must also drop the global listener.
   useEffect(
@@ -709,42 +1302,64 @@ export function useWorkspace(
     [],
   );
 
-  const api: WorkspaceApi = {
-    add,
-    openEditorFile,
-    toggleTool,
-    focus,
-    close: closeWithTeardown,
-    minimize,
-    restore,
-    maximize,
-    update,
-    setSnap,
-    commitSnap,
-    tileAll,
-    splitFront,
-    cascade,
-    startConnect,
-    confirmConnect,
-    cancelConnect,
-    removeConn,
-    updateConnBoundScope,
-    connect,
-    linkedFilesRoot,
-    linkedFilesContext,
-    linkedAllFilesRoots,
-    linkedConnectorCapsuleIds,
-    linkedConnectorCapsuleSetIds,
-    linkedFigmaSnapshotRunIds,
-    linkedFigmaSnapshotSources,
-    linkedImageSources,
-    currentFilesContext,
-    zoomTo,
-    fitView,
-    resetView,
-    panBy,
-    rect,
-  };
+  // Issue #1580 — assemble the api once per stable-input change. Because every
+  // member above is now referentially stable across pan/zoom/drag frames, this
+  // object keeps a constant identity during gestures, which is what lets the
+  // React.memo on WindowFrame/ConnectionsLayer collapse the per-frame re-render
+  // storm from O(N windows) to O(windows that actually changed).
+  const api = useMemo<WorkspaceApi>(
+    () => ({
+      add: mutations.add,
+      openEditorFile: mutations.openEditorFile,
+      toggleTool: mutations.toggleTool,
+      focus: mutations.focus,
+      close: closeWithTeardown,
+      minimize: mutations.minimize,
+      restore: mutations.restore,
+      maximize: mutations.maximize,
+      update: mutations.update,
+      setSnap: snap.setSnap,
+      commitSnap: snap.commitSnap,
+      tileAll: layout.tileAll,
+      splitFront: layout.splitFront,
+      cascade: layout.cascade,
+      startConnect: connectActions.startConnect,
+      confirmConnect: connectActions.confirmConnect,
+      cancelConnect: connectActions.cancelConnect,
+      removeConn: connectActions.removeConn,
+      updateConnBoundScope,
+      connect: connectActions.connect,
+      linkedFilesRoot: connectActions.linkedFilesRoot,
+      linkedFilesContext: connectActions.linkedFilesContext,
+      linkedAllFilesRoots: connectActions.linkedAllFilesRoots,
+      linkedConnectorCapsuleIds: connectActions.linkedConnectorCapsuleIds,
+      linkedConnectorCapsuleSetIds: connectActions.linkedConnectorCapsuleSetIds,
+      linkedFigmaSnapshotRunIds: connectActions.linkedFigmaSnapshotRunIds,
+      linkedFigmaSnapshotSources: connectActions.linkedFigmaSnapshotSources,
+      linkedImageSources: connectActions.linkedImageSources,
+      currentFilesContext: connectActions.currentFilesContext,
+      zoomTo,
+      fitView,
+      resetView,
+      panBy,
+      rect,
+      currentView,
+    }),
+    [
+      mutations,
+      snap,
+      layout,
+      connectActions,
+      closeWithTeardown,
+      updateConnBoundScope,
+      currentView,
+      zoomTo,
+      fitView,
+      resetView,
+      panBy,
+      rect,
+    ],
+  );
 
   return { wins, snapPrev, palOpen, setPalOpen, conns, connecting, view, api };
 }

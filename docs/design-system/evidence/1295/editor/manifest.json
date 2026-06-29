@@ -1,6 +1,6 @@
 {
   "issue": "#1295",
-  "harness": "playwright.issue-1295-editor-fidelity.config.ts",
+  "harness": "tests/e2e/config/playwright.issue-1295-editor-fidelity.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
   "workspace": "synthetic-temp-project",

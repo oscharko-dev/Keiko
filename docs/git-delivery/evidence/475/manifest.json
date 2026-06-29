@@ -1,0 +1,40 @@
+{
+  "issue": "#475",
+  "epic": "#470",
+  "harness": "tests/e2e/config/playwright.issue-475-git-delivery.config.ts",
+  "appPath": "packaged-cli-ui",
+  "route": "/",
+  "evidencePath": "docs/git-delivery/evidence/475",
+  "generatedAt": "2026-06-27T11:34:19.487Z",
+  "governedRoutes": [
+    "/api/git-delivery/commit/preview",
+    "/api/git-delivery/commit/execute"
+  ],
+  "windowRegistration": {
+    "kind": "governedGit",
+    "seededVia": "keiko.workspace.v4",
+    "renderedBy": "GovernedGitFlowCard"
+  },
+  "assertions": {
+    "packagedUiLoaded": true,
+    "governedWindowMountedFromRegistry": true,
+    "nonConventionalPreviewSurfacesViolation": true,
+    "commitPathSurfacesGovernedBlock": true,
+    "blockReasonIsMessagePolicy": true,
+    "browserReachedGovernedExecuteRoute": true,
+    "conventionalCommitReachesSucceeded": true
+  },
+  "requestLedger": {
+    "previewRequests": 1,
+    "executeRequests": 2
+  },
+  "notes": [
+    "Real packaged CLI UI; governedGit window rendered through the real WindowsRegistry.",
+    "Commit routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/contract suites.",
+    "The UI exposes no force-commit escape: the Commit button always routes through /commit/execute and renders its governed response verbatim."
+  ],
+  "artifacts": [
+    "manifest.json",
+    "governed-commit-block.png"
+  ]
+}

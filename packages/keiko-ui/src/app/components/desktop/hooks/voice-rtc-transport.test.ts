@@ -12,6 +12,25 @@ import {
 
 type Listener = (event: unknown) => void;
 
+class FakeDataChannel {
+  public readyState: RTCDataChannelState = "open";
+  public readonly close = vi.fn(() => {
+    this.readyState = "closed";
+  });
+  public readonly send = vi.fn();
+  private readonly listeners: Record<string, Listener[]> = {};
+
+  addEventListener(type: string, cb: Listener): void {
+    (this.listeners[type] ??= []).push(cb);
+  }
+
+  fireMessage(data: unknown): void {
+    for (const cb of this.listeners["message"] ?? []) {
+      cb({ data });
+    }
+  }
+}
+
 class FakePeerConnection {
   public iceGatheringState: RTCIceGatheringState = "complete";
   public connectionState: RTCPeerConnectionState = "new";
@@ -26,7 +45,7 @@ class FakePeerConnection {
 
   private readonly listeners: Record<string, Listener[]> = {};
   private readonly senders: RTCRtpSender[] = [];
-  private readonly channels: RTCDataChannel[] = [];
+  private readonly channels: FakeDataChannel[] = [];
 
   addTrack(_track: MediaStreamTrack, _stream: MediaStream): RTCRtpSender {
     const sender = { track: _track, stop: vi.fn() } as unknown as RTCRtpSender;
@@ -35,9 +54,9 @@ class FakePeerConnection {
   }
 
   createDataChannel(_label: string): RTCDataChannel {
-    const ch = { close: vi.fn() } as unknown as RTCDataChannel;
+    const ch = new FakeDataChannel();
     this.channels.push(ch);
-    return ch;
+    return ch as unknown as RTCDataChannel;
   }
 
   async createOffer(): Promise<RTCSessionDescriptionInit> {
@@ -232,13 +251,6 @@ describe("createBrowserVoiceRtcTransport", () => {
     const stateChanges: RTCPeerConnectionState[] = [];
     session.onConnectionStateChange((s) => stateChanges.push(s));
 
-    // The FakePeerConnection is captured inside the transport; find it via the stub.
-    const pcInstances = (RTCPeerConnection as unknown as { instances: FakePeerConnection[] })
-      .instances;
-    // If instances aren't tracked, simulate via the stored pc reference through a different approach:
-    // We patched onconnectionstatechange in buildSession, so fire the closure directly.
-    // Instead, grab the latest instance from the constructor stub by patching it.
-    // For simplicity, test the ontrack path via simulateRemoteTrack if we have the instance.
     // Since FakePeerConnection is a class we can introspect, this test verifies callback wiring
     // by using a spy on the callback itself.
     expect(stateChanges).toHaveLength(0);
@@ -263,5 +275,18 @@ describe("createBrowserVoiceRtcTransport", () => {
     const session = await transport.connect();
     session.close();
     expect(track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("setInputMuted disables and re-enables the local microphone track", async () => {
+    const track = { enabled: true, stop: vi.fn() };
+    stubMedia(async () => fakeStream(track), track);
+    const transport = createBrowserVoiceRtcTransport();
+    const session = await transport.connect();
+
+    session.setInputMuted?.(true);
+    expect(track.enabled).toBe(false);
+
+    session.setInputMuted?.(false);
+    expect(track.enabled).toBe(true);
   });
 });

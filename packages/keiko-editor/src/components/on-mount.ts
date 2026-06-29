@@ -222,7 +222,18 @@ export function isSaveChord(event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrl
   return (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s";
 }
 
-function registerTheme(args: WireEditorOnMountArgs): void {
+/**
+ * (Re)define the Keiko Monaco theme for `themeVariant` from the live DOM tokens and apply it to the
+ * running editor — `registerKeikoEditorTheme` calls both `defineTheme` and `setTheme`. Used at mount
+ * and again when the app theme switches (Issue 2.2), so a light/dark toggle re-themes the SAME editor
+ * instance instead of forcing a remount that would discard the undo stack and view state.
+ */
+export function reapplyEditorTheme(args: {
+  readonly monaco: MountMonaco;
+  readonly container: HTMLElement;
+  readonly themeVariant: EditorThemeVariant;
+  readonly onThemeError?: ((message: string) => void) | undefined;
+}): void {
   try {
     const tokens = resolveEditorThemeTokensFromDom(args.container);
     registerKeikoEditorTheme(args.monaco.editor, args.themeVariant, tokens);
@@ -230,6 +241,15 @@ function registerTheme(args: WireEditorOnMountArgs): void {
     const message = error instanceof Error ? error.message : "Editor theme registration failed";
     args.onThemeError?.(message);
   }
+}
+
+function registerTheme(args: WireEditorOnMountArgs): void {
+  reapplyEditorTheme({
+    monaco: args.monaco,
+    container: args.container,
+    themeVariant: args.themeVariant,
+    onThemeError: args.onThemeError,
+  });
 }
 
 function installSaveAction(args: WireEditorOnMountArgs): monaco.IDisposable {

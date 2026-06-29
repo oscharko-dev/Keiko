@@ -1,0 +1,104 @@
+{
+  "measuredAtIso": "2026-06-27T15:29:19.123Z",
+  "harness": "packaged CLI serving the production static UI via tests/e2e/config/playwright.workspace-performance.config.ts",
+  "runs": {
+    "chromium": {
+      "project": "chromium",
+      "windowCount": 12,
+      "connectionCount": 11,
+      "gestures": [
+        {
+          "label": "workspace pan",
+          "frameGapBudgetP75Ms": 34,
+          "frameGapBudgetMaxMs": 120,
+          "frameGapSamples": 72,
+          "frameGapP75Ms": 8,
+          "frameGapMaxMs": 17,
+          "longTaskObserverInstalled": true,
+          "longTaskCount": 0,
+          "maxLongTaskMs": 0,
+          "viewWrites": 1,
+          "workspaceWrites": 0,
+          "workspacePuts": 0
+        },
+        {
+          "label": "workspace zoom",
+          "frameGapBudgetP75Ms": 34,
+          "frameGapBudgetMaxMs": 120,
+          "frameGapSamples": 74,
+          "frameGapP75Ms": 8,
+          "frameGapMaxMs": 9,
+          "longTaskObserverInstalled": true,
+          "longTaskCount": 0,
+          "maxLongTaskMs": 0,
+          "viewWrites": 1,
+          "workspaceWrites": 0,
+          "workspacePuts": 0
+        },
+        {
+          "label": "window drag",
+          "frameGapBudgetP75Ms": 34,
+          "frameGapBudgetMaxMs": 120,
+          "frameGapSamples": 67,
+          "frameGapP75Ms": 8,
+          "frameGapMaxMs": 9,
+          "longTaskObserverInstalled": true,
+          "longTaskCount": 0,
+          "maxLongTaskMs": 0,
+          "viewWrites": 0,
+          "workspaceWrites": 1,
+          "workspacePuts": 1
+        }
+      ]
+    },
+    "webkit": {
+      "project": "webkit",
+      "windowCount": 12,
+      "connectionCount": 11,
+      "gestures": [
+        {
+          "label": "workspace pan",
+          "frameGapBudgetP75Ms": 50,
+          "frameGapBudgetMaxMs": 150,
+          "frameGapSamples": 32,
+          "frameGapP75Ms": 18,
+          "frameGapMaxMs": 26,
+          "longTaskObserverInstalled": true,
+          "longTaskCount": 0,
+          "maxLongTaskMs": 0,
+          "viewWrites": 1,
+          "workspaceWrites": 0,
+          "workspacePuts": 0
+        },
+        {
+          "label": "workspace zoom",
+          "frameGapBudgetP75Ms": 50,
+          "frameGapBudgetMaxMs": 150,
+          "frameGapSamples": 40,
+          "frameGapP75Ms": 17,
+          "frameGapMaxMs": 23,
+          "longTaskObserverInstalled": true,
+          "longTaskCount": 0,
+          "maxLongTaskMs": 0,
+          "viewWrites": 1,
+          "workspaceWrites": 0,
+          "workspacePuts": 0
+        },
+        {
+          "label": "window drag",
+          "frameGapBudgetP75Ms": 50,
+          "frameGapBudgetMaxMs": 150,
+          "frameGapSamples": 31,
+          "frameGapP75Ms": 18,
+          "frameGapMaxMs": 24,
+          "longTaskObserverInstalled": true,
+          "longTaskCount": 0,
+          "maxLongTaskMs": 0,
+          "viewWrites": 0,
+          "workspaceWrites": 1,
+          "workspacePuts": 1
+        }
+      ]
+    }
+  }
+}

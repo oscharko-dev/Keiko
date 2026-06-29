@@ -76,7 +76,7 @@ built on the existing tooling, not a new framework.
 Plan:
 
 1. **Harness** — add a Playwright visual-regression project to the existing chromium config
-   ([playwright.config.ts](../../playwright.config.ts), `workers:1`, builds packages + `scripts/dev-runner.mjs`).
+   ([tests/e2e/config/playwright.config.ts](../../tests/e2e/config/playwright.config.ts), `workers:1`, builds packages + `scripts/dev-runner.mjs`).
    Use `expect(page).toHaveScreenshot()` with a committed baseline. Do **not** introduce a second framework.
 2. **Targets** — (a) the live `/` route and each high-traffic surface from the fidelity matrix; (b) the
    `design-system/*.html` reference pages as the designer ground truth (foundations, components, accessibility,

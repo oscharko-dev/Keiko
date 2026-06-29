@@ -5,6 +5,12 @@ export const EDITOR_AGENT_SCHEMA_VERSION = "1" as const;
 
 export type EditorAgentSnapshotTextMode = "none" | "selection" | "activeFile";
 
+// Issue #1391 AC1 — snapshot text defaults to `none`. An agent that does not explicitly opt into a
+// text mode never receives document content: the default is the content-free projection. The read
+// request parser fills this in when `textMode` is omitted (a present-but-invalid value is still
+// rejected), so the resolved request always carries a concrete, safe-by-default mode.
+export const DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE: EditorAgentSnapshotTextMode = "none";
+
 export interface EditorAgentPaneSnapshot {
   readonly paneId: string;
   readonly activeFile: string | null;
@@ -22,8 +28,21 @@ export interface EditorAgentSessionSnapshot {
   readonly activeFile: string | null;
   readonly cursor: { readonly line: number; readonly character: number } | null;
   readonly selection: LanguageRange | null;
-  readonly diagnosticsSummary:
-    | { readonly errors: number; readonly warnings: number; readonly infos: number }
+  readonly diagnosticsSummary: {
+    readonly errors: number;
+    readonly warnings: number;
+    readonly infos: number;
+  } | null;
+  // Issue #1379 AC4 (ADR-0067 D6) — content-free language-provider availability for the active file.
+  // Additive and optional: old snapshots (field absent) still validate. ids/booleans/short reason
+  // strings only — never buffer text. `providerId` is null when no provider serves the language.
+  readonly languageCapability?:
+    | {
+        readonly languageId: string;
+        readonly providerId: string | null;
+        readonly available: boolean;
+        readonly unavailableReason?: string | undefined;
+      }
     | null;
   readonly documentVersion?: EditorDocumentVersion | undefined;
   readonly activeFileContentHash?: string | undefined;
@@ -50,20 +69,74 @@ export interface EditorAgentAction {
   readonly idempotencyKey: string;
   readonly sessionId: string;
   readonly type: EditorAgentActionType;
-  readonly target?: {
-    readonly paneId?: string | undefined;
-    readonly file?: string | undefined;
-    readonly toPaneId?: string | undefined;
-    readonly splitDirection?: "row" | "column" | undefined;
-    readonly selection?: LanguageRange | undefined;
-  } | undefined;
+  readonly target?:
+    | {
+        readonly paneId?: string | undefined;
+        readonly file?: string | undefined;
+        readonly toPaneId?: string | undefined;
+        readonly splitDirection?: "row" | "column" | undefined;
+        readonly selection?: LanguageRange | undefined;
+      }
+    | undefined;
   readonly expectedDocumentVersion?: EditorDocumentVersion | undefined;
   readonly expectedContentHash?: string | undefined;
-  readonly textEdits?: readonly { readonly range: LanguageRange; readonly newText: string }[] | undefined;
+  readonly textEdits?:
+    | readonly { readonly range: LanguageRange; readonly newText: string }[]
+    | undefined;
   readonly patch?: string | undefined;
 }
 
 export type EditorAgentActionStatus = "queued" | "succeeded" | "failed" | "conflict";
+
+// Issue #1391 — the structured error-code taxonomy for agent action conflicts. Every conflict a
+// write action can raise is one of these stable, machine-discriminable codes so agents, the BFF, and
+// the conflict UI all reason over the same vocabulary rather than parsing free text (AC3).
+//
+//   - DIRTY                  the target buffer has unsaved changes (a non-`save` write was refused).
+//   - VERSION_MISMATCH       the asserted `expectedDocumentVersion` no longer matches the document.
+//   - CONTENT_HASH_MISMATCH  the asserted `expectedContentHash` no longer matches the document.
+//   - NO_ACTIVE_SESSION      no browser bridge has registered a snapshot for the action's session.
+//   - NO_ACTIVE_BRIDGE       a snapshot is registered but no live bridge is connected to execute the
+//                            action (Issue #1392 — the session's SSE bridge has disconnected).
+//   - INVALID_EDITS          the edits/patch are structurally invalid (overlap, inverted, malformed).
+//   - OUT_OF_SCOPE           the target escapes the workspace root or the action is unsupported here.
+//   - PRECONDITION_REQUIRED  a write action omitted the mandatory version/hash precondition (AC2).
+export type EditorAgentConflictCode =
+  | "DIRTY"
+  | "VERSION_MISMATCH"
+  | "CONTENT_HASH_MISMATCH"
+  | "NO_ACTIVE_SESSION"
+  | "NO_ACTIVE_BRIDGE"
+  | "INVALID_EDITS"
+  | "OUT_OF_SCOPE"
+  | "PRECONDITION_REQUIRED";
+
+export const EDITOR_AGENT_CONFLICT_CODES: readonly EditorAgentConflictCode[] = [
+  "DIRTY",
+  "VERSION_MISMATCH",
+  "CONTENT_HASH_MISMATCH",
+  "NO_ACTIVE_SESSION",
+  "NO_ACTIVE_BRIDGE",
+  "INVALID_EDITS",
+  "OUT_OF_SCOPE",
+  "PRECONDITION_REQUIRED",
+] as const;
+
+// Issue #1392 — structured lifecycle failure codes (status: "failed") raised AFTER an action is
+// admitted to the bounded queue, distinct from the preflight conflict taxonomy above:
+//   - TIMED_OUT   the connected bridge never reported a result before the action deadline elapsed.
+//   - QUEUE_FULL  the bounded per-session action queue was already saturated when the action arrived.
+export type EditorAgentFailureCode = "TIMED_OUT" | "QUEUE_FULL";
+
+export const EDITOR_AGENT_FAILURE_CODES: readonly EditorAgentFailureCode[] = [
+  "TIMED_OUT",
+  "QUEUE_FULL",
+] as const;
+
+export interface EditorAgentActionFailure {
+  readonly code: EditorAgentFailureCode;
+  readonly message: string;
+}
 
 export interface EditorAgentActionResult {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
@@ -73,10 +146,11 @@ export interface EditorAgentActionResult {
   readonly message?: string | undefined;
   readonly conflict?:
     | {
-        readonly code: "DIRTY" | "VERSION_MISMATCH" | "CONTENT_HASH_MISMATCH" | "NO_ACTIVE_SESSION";
+        readonly code: EditorAgentConflictCode;
         readonly message: string;
       }
     | undefined;
+  readonly failure?: EditorAgentActionFailure | undefined;
 }
 
 export type EditorAgentEvent =
@@ -203,8 +277,12 @@ function isDocumentVersion(value: unknown): value is EditorDocumentVersion {
   );
 }
 
-function isPosition(value: unknown): value is { readonly line: number; readonly character: number } {
-  return isRecord(value) && isNonNegativeInteger(value.line) && isNonNegativeInteger(value.character);
+function isPosition(
+  value: unknown,
+): value is { readonly line: number; readonly character: number } {
+  return (
+    isRecord(value) && isNonNegativeInteger(value.line) && isNonNegativeInteger(value.character)
+  );
 }
 
 function isRange(value: unknown): value is LanguageRange {
@@ -219,6 +297,20 @@ function isDiagnosticsSummary(
     isNonNegativeInteger(value.errors) &&
     isNonNegativeInteger(value.warnings) &&
     isNonNegativeInteger(value.infos)
+  );
+}
+
+// Issue #1379 AC4 — the content-free language-capability detail. languageId is a non-empty string,
+// providerId is a string or null, available is a boolean, and unavailableReason (when present) is a
+// string. Reuses the existing isRecord / string / isUndefinedOr helpers so the validator style
+// matches the rest of this module.
+function isLanguageCapability(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.languageId) &&
+    (value.providerId === null || isString(value.providerId)) &&
+    typeof value.available === "boolean" &&
+    isUndefinedOr(value.unavailableReason, isString)
   );
 }
 
@@ -253,20 +345,28 @@ export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAge
     isNullOr(value.cursor, isPosition),
     isNullOr(value.selection, isRange),
     isNullOr(value.diagnosticsSummary, isDiagnosticsSummary),
+    isUndefinedOr(value.languageCapability, (c) => c === null || isLanguageCapability(c)),
     isUndefinedOr(value.documentVersion, isDocumentVersion),
     isUndefinedOr(value.activeFileContentHash, isSha256Hex),
     isSnapshotTextMode(value.textMode),
     isUndefinedOr(value.text, isString),
-    isUndefinedOr(value.textTruncated, (candidate): candidate is boolean => typeof candidate === "boolean"),
+    isUndefinedOr(
+      value.textTruncated,
+      (candidate): candidate is boolean => typeof candidate === "boolean",
+    ),
     isNonNegativeInteger(value.updatedAt),
   ].every(Boolean);
 }
 
 function isActionType(value: unknown): value is EditorAgentActionType {
-  return typeof value === "string" && EDITOR_AGENT_ACTION_TYPES.includes(value as EditorAgentActionType);
+  return (
+    typeof value === "string" && EDITOR_AGENT_ACTION_TYPES.includes(value as EditorAgentActionType)
+  );
 }
 
-function isSplitDirection(value: unknown): value is NonNullable<NonNullable<EditorAgentAction["target"]>["splitDirection"]> {
+function isSplitDirection(
+  value: unknown,
+): value is NonNullable<NonNullable<EditorAgentAction["target"]>["splitDirection"]> {
   return value === "row" || value === "column";
 }
 
@@ -282,7 +382,9 @@ function isActionTarget(value: unknown): value is NonNullable<EditorAgentAction[
   ].every(Boolean);
 }
 
-function isTextEdit(value: unknown): value is { readonly range: LanguageRange; readonly newText: string } {
+function isTextEdit(
+  value: unknown,
+): value is { readonly range: LanguageRange; readonly newText: string } {
   return isRecord(value) && isRange(value.range) && typeof value.newText === "string";
 }
 
@@ -308,8 +410,64 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
   ].every(Boolean);
 }
 
+// Issue #1391 AC2 — write actions. These four action types mutate buffer or file content and must
+// therefore assert an optimistic-concurrency precondition before they run. The remaining action types
+// (openFile, focusTab, moveTab, splitPane, setSelection) are navigation/inspection and carry no such
+// requirement. The server reuses this frozen table so "what is a write action" has a single source of
+// truth across the contract, the BFF preflight, and any future agent.
+export const EDITOR_AGENT_WRITE_ACTION_TYPES: readonly EditorAgentActionType[] = [
+  "format",
+  "save",
+  "applyTextEdits",
+  "applyPatch",
+] as const;
+
+export function isEditorAgentWriteActionType(value: unknown): value is EditorAgentActionType {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_WRITE_ACTION_TYPES.includes(value as EditorAgentActionType)
+  );
+}
+
+// True when the action pins the document revision it expects to write against — by document version
+// or by content hash. Either precondition is sufficient; both may be supplied. The mandatory
+// `idempotencyKey` (validated by `isEditorAgentAction`) covers safe retry; this covers safe write.
+export function editorAgentActionHasWritePrecondition(action: EditorAgentAction): boolean {
+  return action.expectedDocumentVersion !== undefined || action.expectedContentHash !== undefined;
+}
+
+// Issue #1391 AC2 — a write action must assert a version/hash precondition in addition to its
+// mandatory idempotency key, so an agent can never blind-write over a buffer whose revision it has
+// not pinned (lost-update prevention). Returns a stable, content-free error string when a write
+// action is missing the precondition, or null when the action satisfies it or is not a write action.
+// Pure and throw-free, consistent with the other editor-agent validators; consumers (the BFF
+// preflight, tests, future agents) reuse it rather than re-deriving the rule.
+export function editorAgentWritePreconditionError(action: EditorAgentAction): string | null {
+  if (!isEditorAgentWriteActionType(action.type)) return null;
+  if (editorAgentActionHasWritePrecondition(action)) return null;
+  return "Write actions require an expected document version or content hash precondition.";
+}
+
 function isActionStatus(value: unknown): value is EditorAgentActionStatus {
   return value === "queued" || value === "succeeded" || value === "failed" || value === "conflict";
+}
+
+// A conflict detail, when present, must carry a code drawn from the taxonomy and a string message —
+// so a result that claims a conflict cannot smuggle an out-of-taxonomy code past the guard.
+function isEditorAgentConflictDetail(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isRecord(value) && isEditorAgentConflictCode(value.code) && typeof value.message === "string"
+  );
+}
+
+// Issue #1392 — a failure detail, when present, mirrors the conflict-detail guard against the
+// lifecycle-failure taxonomy, so a "failed" result cannot smuggle an out-of-taxonomy code past it.
+function isEditorAgentFailureDetail(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isRecord(value) && isEditorAgentFailureCode(value.code) && typeof value.message === "string"
+  );
 }
 
 export function isEditorAgentActionResult(value: unknown): value is EditorAgentActionResult {
@@ -319,8 +477,114 @@ export function isEditorAgentActionResult(value: unknown): value is EditorAgentA
     isNonEmptyString(value.actionId) &&
     isNonEmptyString(value.sessionId) &&
     isActionStatus(value.status) &&
-    (value.message === undefined || typeof value.message === "string")
+    (value.message === undefined || typeof value.message === "string") &&
+    isEditorAgentConflictDetail(value.conflict) &&
+    isEditorAgentFailureDetail(value.failure)
   );
+}
+
+export function isEditorAgentConflictCode(value: unknown): value is EditorAgentConflictCode {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_CONFLICT_CODES.includes(value as EditorAgentConflictCode)
+  );
+}
+
+export function isEditorAgentFailureCode(value: unknown): value is EditorAgentFailureCode {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_FAILURE_CODES.includes(value as EditorAgentFailureCode)
+  );
+}
+
+// Issue #1391 — structural guard over the full editor-agent event union. Validates the shared
+// envelope fields (schemaVersion, eventId) and the payload of every event kind (session, action,
+// result, heartbeat). Consumers that read events off the SSE stream (the browser bridge today, any
+// future agent transport) use it to reject malformed frames at the trust boundary instead of casting
+// untyped JSON. Pure and throw-free.
+export function isEditorAgentEvent(value: unknown): value is EditorAgentEvent {
+  if (!isRecord(value)) return false;
+  if (value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION) return false;
+  if (!isNonEmptyString(value.eventId)) return false;
+  switch (value.type) {
+    case "session":
+      return isEditorAgentSessionSnapshot(value.snapshot);
+    case "action":
+      return isEditorAgentAction(value.action);
+    case "result":
+      return isEditorAgentActionResult(value.result);
+    case "heartbeat":
+      return isNonNegativeInteger(value.updatedAt);
+    default:
+      return false;
+  }
+}
+
+function validateAgentTextEdit(
+  edit: { readonly range: LanguageRange; readonly newText: string },
+  index: number,
+): string | null {
+  const { start, end } = edit.range;
+  const label = String(index);
+  if (start.line < 0 || start.character < 0 || end.line < 0 || end.character < 0) {
+    return `Edit ${label} has a negative line or character coordinate.`;
+  }
+  if (end.line < start.line || (end.line === start.line && end.character < start.character)) {
+    return `Edit ${label} has an inverted range (end before start).`;
+  }
+  return null;
+}
+
+function positionLessThan(
+  a: { readonly line: number; readonly character: number },
+  b: { readonly line: number; readonly character: number },
+): boolean {
+  return a.line < b.line || (a.line === b.line && a.character < b.character);
+}
+
+// Half-open ranges [start, end) overlap iff the later edit starts strictly before the earlier
+// edit ends. Adjacency (next.start === current.end) does not overlap and is allowed.
+function rangesOverlap(current: LanguageRange, next: LanguageRange): boolean {
+  return positionLessThan(next.start, current.end);
+}
+
+function overlapError(
+  edits: readonly { readonly range: LanguageRange; readonly newText: string }[],
+): string | null {
+  const ordered = edits
+    .map((edit, index) => ({ edit, index }))
+    .sort((a, b) => (positionLessThan(a.edit.range.start, b.edit.range.start) ? -1 : 1));
+  for (let i = 1; i < ordered.length; i += 1) {
+    const current = ordered[i - 1];
+    const next = ordered[i];
+    if (current === undefined || next === undefined) continue;
+    if (rangesOverlap(current.edit.range, next.edit.range)) {
+      const [lo, hi] = [current.index, next.index].sort((x, y) => x - y);
+      return `Edits ${String(lo)} and ${String(hi)} overlap.`;
+    }
+  }
+  return null;
+}
+
+export function validateAgentTextEdits(
+  edits: readonly { readonly range: LanguageRange; readonly newText: string }[],
+): string | null {
+  let index = 0;
+  for (const edit of edits) {
+    const error = validateAgentTextEdit(edit, index);
+    if (error !== null) return error;
+    index += 1;
+  }
+  return overlapError(edits);
+}
+
+export function isContainedAgentPath(candidate: string): boolean {
+  if (candidate.length === 0) return false;
+  if (candidate.startsWith("/")) return false;
+  if (/^[A-Za-z]:/u.test(candidate)) return false;
+  if (candidate.includes("\u0000")) return false;
+  const segments = candidate.split(/[/\\]/u);
+  return !segments.includes("..");
 }
 
 function parseBridgeSnapshotRequest(
@@ -339,11 +603,18 @@ function parseBridgeSnapshotRequest(
   };
 }
 
-function parseReadSnapshotRequest(value: Record<string, unknown>): EditorAgentParse<EditorAgentSnapshotRequest> {
+function parseReadSnapshotRequest(
+  value: Record<string, unknown>,
+): EditorAgentParse<EditorAgentSnapshotRequest> {
   if (value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION) {
     return { ok: false, errors: ["schemaVersion must be 1"] };
   }
-  if (!isSnapshotTextMode(value.textMode)) {
+  // AC1 (#1391): snapshot text defaults to `none`. An omitted `textMode` resolves to the content-free
+  // default so an agent never receives document content it did not explicitly request; a value that is
+  // present but not one of the three modes is still a hard error.
+  const textMode =
+    value.textMode === undefined ? DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE : value.textMode;
+  if (!isSnapshotTextMode(textMode)) {
     return { ok: false, errors: ["textMode must be none, selection, or activeFile"] };
   }
   if (value.sessionId !== undefined && typeof value.sessionId !== "string") {
@@ -357,7 +628,7 @@ function parseReadSnapshotRequest(value: Record<string, unknown>): EditorAgentPa
     value: {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       ...(value.sessionId === undefined ? {} : { sessionId: value.sessionId }),
-      textMode: value.textMode,
+      textMode,
       ...(value.maxBytes === undefined ? {} : { maxBytes: value.maxBytes }),
     },
   };
@@ -367,7 +638,9 @@ export function parseEditorAgentSnapshotRequest(
   value: unknown,
 ): EditorAgentParse<EditorAgentSnapshotRequest | EditorAgentBridgeSnapshotRequest> {
   if (!isRecord(value)) return { ok: false, errors: ["request must be an object"] };
-  return value.kind === "snapshot" ? parseBridgeSnapshotRequest(value) : parseReadSnapshotRequest(value);
+  return value.kind === "snapshot"
+    ? parseBridgeSnapshotRequest(value)
+    : parseReadSnapshotRequest(value);
 }
 
 export function parseEditorAgentActionsPostBody(

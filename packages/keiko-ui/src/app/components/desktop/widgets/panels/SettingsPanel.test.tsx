@@ -6,10 +6,12 @@
 //   - the rendered markup contains no host-name pattern or credential-shape
 //     literal (the no-leak invariant).
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { I18nProvider } from "@/lib/i18n";
 import type { ModelCapability } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
+import { consumePendingGatewaySetup, requestGatewaySetup } from "../shared/gatewaySetupBus";
 
 const fetchConfigMock = vi.fn();
 const fetchModelsMock = vi.fn();
@@ -86,6 +88,31 @@ function ocrVisionCapability(id = "test-ocr-1"): ModelCapability {
   };
 }
 
+function voiceCapability(
+  id = "keiko-tts",
+  overrides: Partial<ModelCapability> = {},
+): ModelCapability {
+  return {
+    id,
+    kind: "voice",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    voiceProviderLocality: "azure-foundry",
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "test fixture",
+    preferredUseCases: ["Voice"],
+    knownLimitations: ["test fixture"],
+    ...overrides,
+  };
+}
+
 function primeFetches(models: readonly ModelCapability[]): void {
   fetchConfigMock.mockResolvedValue({ config: null, configPresent: true });
   fetchModelsMock.mockResolvedValue({ models });
@@ -102,7 +129,11 @@ function setClipboard(writeText: (text: string) => Promise<void>): PropertyDescr
 
 afterEach(() => {
   vi.clearAllMocks();
+  // Issue #1399: clear any residual gateway-setup latch so it cannot leak across tests.
+  consumePendingGatewaySetup();
   window.localStorage.clear();
+  document.documentElement.lang = "en";
+  document.documentElement.removeAttribute("data-locale");
   document.documentElement.style.removeProperty("--workspace-bg-brightness");
   document.documentElement.style.removeProperty("--workspace-grid-strength");
   document.documentElement.style.removeProperty("--frame-border-strength");
@@ -149,6 +180,45 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
     expect(status?.className).toContain("connected");
     expect(container.textContent ?? "").toContain("0 chat");
   });
+
+  it("renders a positive 'Voice provider' badge for a configured voice provider (Issue #1557 AC4)", async () => {
+    primeFetches([
+      voiceCapability("keiko-tts", {
+        supportsSpeechOutput: true,
+        supportedVoicePersonas: ["male", "female", "neutral"],
+      }),
+    ]);
+    render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-elig-ok")).toHaveTextContent(/voice provider/i);
+    });
+    // It is presented as available, NOT as the red chat-ineligibility warning.
+    expect(screen.queryByTestId("conv-elig-no")).toBeNull();
+    expect(screen.getByTestId("voice-elig-ok")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/available for speech output; voices: male, female, neutral/i),
+    );
+  });
+
+  it("describes an STT-only voice provider as available for speech-to-text (Issue #1557 AC4)", async () => {
+    primeFetches([voiceCapability("keiko-stt", { supportsSpeechInput: true })]);
+    render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-elig-ok")).toHaveTextContent(/speech-to-text/i);
+    });
+    expect(screen.queryByTestId("conv-elig-no")).toBeNull();
+  });
+
+  it("does NOT show the voice-available badge for a voice kind with no advertised sub-capability (fail-closed)", async () => {
+    // The config parser rejects this combination; the UI defends in depth — a degenerate voice
+    // capability falls through to the not-selectable badge rather than claiming availability.
+    primeFetches([voiceCapability("degenerate-voice", {})]);
+    render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId("conv-elig-no")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("voice-elig-ok")).toBeNull();
+  });
 });
 
 describe("SettingsPanel chat-count uses the eligibility helper (Issue #144 AC #1)", () => {
@@ -158,12 +228,13 @@ describe("SettingsPanel chat-count uses the eligibility helper (Issue #144 AC #1
       chatCapability("test-chat-2"),
       embeddingCapability("test-embed-1"),
       ocrVisionCapability("test-ocr-1"),
+      voiceCapability("test-stt-1", { supportsSpeechInput: true }),
     ]);
     const { container } = render(<SettingsPanel />);
     await waitFor(() => {
       expect(container.textContent ?? "").toContain("2 chat");
     });
-    expect(container.textContent ?? "").toContain("4 models");
+    expect(container.textContent ?? "").toContain("5 models");
   });
 });
 
@@ -397,6 +468,58 @@ describe("SettingsPanel tabs (uiux-fix C070/C147)", () => {
 });
 
 describe("SettingsPanel workspace wallpaper controls", () => {
+  it("persists the selected interface language from General settings", async () => {
+    primeFetches([]);
+    render(
+      <I18nProvider>
+        <SettingsPanel />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Interface language" }));
+    fireEvent.click(screen.getByRole("option", { name: "Deutsch" }));
+
+    expect(window.localStorage.getItem("keiko.locale")).toBe("de");
+    expect(document.documentElement.lang).toBe("de");
+    expect(document.documentElement.dataset.locale).toBe("de");
+    expect(screen.getByText("Einstellungen")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allgemein" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("persists the selected assistant voice from General settings", async () => {
+    primeFetches([
+      voiceCapability("keiko-tts", {
+        supportsSpeechOutput: true,
+        supportsRealtimeVoice: true,
+        supportedVoicePersonas: ["male", "female"],
+      }),
+    ]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    const voiceSelect = await screen.findByRole("combobox", { name: "Voice" });
+    vi.spyOn(voiceSelect, "getBoundingClientRect").mockReturnValue({
+      bottom: 142,
+      height: 42,
+      left: 64,
+      right: 304,
+      top: 100,
+      width: 240,
+      x: 64,
+      y: 100,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.click(voiceSelect);
+    fireEvent.click(screen.getByRole("option", { name: "Female voice" }));
+
+    expect(window.localStorage.getItem("keiko.voice.dialog.persona")).toBe("female");
+  });
+
   it("defaults the liquid wallpaper off and enables opacity only after opt-in", async () => {
     primeFetches([]);
     render(<SettingsPanel />);
@@ -445,6 +568,26 @@ describe("SettingsPanel workspace wallpaper controls", () => {
     );
   });
 
+  it("persists workspace camera smoothness and emits the runtime event", async () => {
+    const listener = vi.fn();
+    window.addEventListener("keiko:workspace-camera-smoothness", listener);
+    primeFetches([]);
+    render(<SettingsPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Workspace camera smoothness" }), {
+      target: { value: "72" },
+    });
+
+    expect(window.localStorage.getItem("keiko.workspace.camera.smoothness")).toBe("72");
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ detail: 72 }),
+    );
+    expect(screen.getByRole("slider", { name: "Workspace camera smoothness" })).toHaveValue("72");
+
+    window.removeEventListener("keiko:workspace-camera-smoothness", listener);
+  });
+
   it("persists workspace border strength and applies the CSS variable", async () => {
     primeFetches([]);
     render(<SettingsPanel />);
@@ -471,5 +614,66 @@ describe("SettingsPanel workspace wallpaper controls", () => {
     expect(document.documentElement.style.getPropertyValue("--frame-inner-glow-strength")).toBe(
       "34%",
     );
+  });
+});
+
+// Issue #1399: the Figma Snapshot PAT error deep-links here via the gateway-setup bus. The panel
+// must open the gateway-setup dialog (Figma access-token section) whether it was already open
+// (live event) or just opened by openWindow (latch read on mount).
+describe("SettingsPanel Figma token deep-link (Issue #1399)", () => {
+  it("opens the gateway-setup dialog on the Figma token section when already open", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    render(<SettingsPanel />);
+    // Wait until config has loaded (preserveExisting depends on it).
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Update credentials" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText(/figma access token/iu)).not.toBeInTheDocument();
+
+    act(() => {
+      requestGatewaySetup();
+    });
+
+    await waitFor(() => expect(screen.getByLabelText(/figma access token/iu)).toBeInTheDocument());
+    // The dialog's Figma section heading confirms the deep-link target.
+    expect(screen.getByRole("heading", { name: "Figma Snapshot" })).toBeInTheDocument();
+  });
+
+  it("opens the dialog after mount when the request was latched before Settings existed", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    // Settings was just opened by openWindow: the request is latched before the panel mounts.
+    requestGatewaySetup();
+    render(<SettingsPanel />);
+
+    await waitFor(() => expect(screen.getByLabelText(/figma access token/iu)).toBeInTheDocument());
+  });
+
+  it("does not open the dialog on a normal mount without a pending request", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    render(<SettingsPanel />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Update credentials" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText(/figma access token/iu)).not.toBeInTheDocument();
+  });
+
+  it("defers opening the dialog when config load fails, then opens after a successful Retry", async () => {
+    // First load fails → the latched request must NOT open the dialog in misleading first-run
+    // wording; the panel shows its own error + Retry. A successful retry then opens it correctly.
+    fetchConfigMock.mockRejectedValueOnce(new Error("HTTP 500"));
+    fetchModelsMock.mockRejectedValueOnce(new Error("HTTP 500"));
+    fetchConfigMock.mockResolvedValue({ config: null, configPresent: true });
+    fetchModelsMock.mockResolvedValue({ models: [chatCapability("test-chat-1")] });
+
+    requestGatewaySetup();
+    render(<SettingsPanel />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Could not load gateway settings");
+    // The dialog must stay closed while config is unresolved.
+    expect(screen.queryByLabelText(/figma access token/iu)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getByLabelText(/figma access token/iu)).toBeInTheDocument());
   });
 });

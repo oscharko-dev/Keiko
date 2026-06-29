@@ -163,7 +163,7 @@ function capsuleId(value: string): KnowledgeCapsuleId {
   return value as KnowledgeCapsuleId;
 }
 
-function baseCtx(tmp: string, method: string, body?: Record<string, unknown>): RouteContext {
+function baseCtx(_tmp: string, method: string, body?: Record<string, unknown>): RouteContext {
   return {
     req: jsonRequest(body, method),
     res: {} as never,

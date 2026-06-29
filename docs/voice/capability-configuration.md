@@ -86,6 +86,73 @@ precedence order:
 The long-lived key stays on the Keiko host. The voice capability resolution carries no credential, so no
 secret can leak into evidence or UI logs.
 
+## 2a. Product voice personas (male / female / neutral) — Issue #1557
+
+A **product voice persona** is the voice identity a user hears — `male`, `female`, or `neutral` — mapped to a
+provider-specific voice id by configuration (Issue [#1557](https://github.com/oscharko-dev/Keiko/issues/1557),
+[ADR-0094](../adr/ADR-0094-voice-provider-capability-registry-extension.md) D1/D2). A persona is a
+**product-level** concept, deliberately distinct from the `VoiceProfile` capability degradation ladder
+(`none` / `speech-to-text` / `speech-output` / `full-realtime`): the ladder describes _how much voice the
+deployment can do_; a persona describes _what the assistant sounds like_. Personas are **output** voices, so
+they are declared only on a voice provider that advertises speech output or realtime.
+
+The persona → provider-voice-id mapping is **provider-sensitive** and lives on the credential tier, beside
+`apiKey`: a provider's optional `voiceProfiles` array. It is **never serialized to the browser** — the safe
+config projection (`toSafeObject`) drops it by allowlist, and the contracts leaf cannot reference it. Only the
+**content-free** persona enums (`supportedVoicePersonas`, derived at parse time) cross to the UI, so a user
+can choose _which persona_ without the browser ever learning _which provider voice id_ backs it.
+
+```jsonc
+{
+  "providers": [
+    {
+      "modelId": "keiko-tts",
+      "baseUrl": "https://<your-foundry-host>/...",
+      "apiKeySecretRef": "voice/keiko-tts",
+      "capability": {
+        "kind": "voice",
+        "supportsSpeechOutput": true,
+        "voiceProviderLocality": "azure-foundry",
+        "costClass": "low",
+        "latencyClass": "fast",
+        "throughputHint": "Azure Foundry TTS deployment",
+        "preferredUseCases": ["Speech output"],
+        "knownLimitations": [],
+      },
+      // Credential-tier persona → provider voice-id mapping (never reaches the browser):
+      "voiceProfiles": [
+        { "persona": "male", "voiceId": "<provider-male-voice-id>" },
+        { "persona": "female", "voiceId": "<provider-female-voice-id>" },
+        { "persona": "neutral", "voiceId": "<provider-neutral-voice-id>" },
+      ],
+    },
+  ],
+}
+```
+
+A `keiko-realtime` provider (`"supportsRealtimeVoice": true`) declares `voiceProfiles` identically. The config
+parser enforces three invariants:
+
+1. `voiceProfiles` is valid **only** on a `kind: "voice"` capability that advertises `supportsSpeechOutput` or
+   `supportsRealtimeVoice`; an STT-only or non-voice provider that declares it is rejected.
+2. Each entry's `persona` is one of `male` / `female` / `neutral`, `voiceId` is a non-empty string, and a
+   persona may not be declared twice.
+3. `supportedVoicePersonas` (the content-free derived view) is **not** an accepted input key — it is derived
+   from `voiceProfiles` (against the effective merged capability) and re-derived on every reload, so it is
+   never persisted and cannot be smuggled past the strict parser.
+
+Server-side, `selectVoicePersonaVoice(config, persona)` resolves the cheapest configured output/realtime
+provider that maps the requested persona to its `voiceId`; the resolver result carries the `voiceId` and
+therefore stays server-side. It is the seam the assistant speech-output feature (Issue #1558) consumes.
+
+> **Realtime voice ids are a narrower set than text-to-speech voice ids.** The realtime models accept
+> `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, and `verse`; some text-to-speech-only voices
+> (for example `nova` and `onyx`) are **rejected** by the realtime model and would break realtime session
+> creation. For this reason a `keiko-realtime` provider's `voiceProfiles` must map each persona to a
+> realtime-valid voice id. The realtime negotiation applies `resolveRealtimeVoice` as a defense-in-depth
+> guard: a configured voice id outside the realtime set falls back to `alloy` rather than failing the
+> session. A `keiko-tts` provider keeps the broader text-to-speech voice set.
+
 ## 3. Reading the capability: the BFF endpoint
 
 The UI reads the resolved voice capability before rendering any voice affordance:
@@ -102,6 +169,7 @@ GET /api/voice/capability  →  { "voice": VoiceCapabilityResolution }
   "profile": "speech-to-text", // "none" | "speech-to-text" | "speech-output" | "full-realtime"
   "capabilities": { "speechToText": true, "speechOutput": false, "realtimeVoice": false },
   "transport": { "websocketControl": true, "webrtcMedia": false },
+  "availableVoicePersonas": [], // Issue #1557: content-free product personas; [] for no-voice / STT-only
   "providerLocality": "azure-foundry", // omitted when none or mixed
   "reason": "no-voice-provider", // present only when available is false
 }
@@ -155,6 +223,8 @@ the transport child issue.
 ## References
 
 - [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) — decisions D1, D2, D5, D7.
+- [ADR-0094](../adr/ADR-0094-voice-provider-capability-registry-extension.md) — product voice personas,
+  server-side voice-id mapping, and kind-aware readiness (Issue #1557).
 - [architecture.md](architecture.md) §2–§5 — capability gating, profiles, degradation.
 - [deployment-profile-matrix.md](deployment-profile-matrix.md) — provider × environment matrix.
 - [privacy-contract.md](privacy-contract.md) — credential and redaction posture.

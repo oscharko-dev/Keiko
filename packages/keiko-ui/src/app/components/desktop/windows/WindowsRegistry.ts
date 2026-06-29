@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
+  WorkspaceBinding,
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import type { IconName } from "../Icons";
@@ -15,6 +16,13 @@ export type WindowType =
   | "editor"
   | "browser"
   | "terminal"
+  | "commands"
+  | "runtime"
+  // Issue #1388 (ADR-0070) — Container engine status surface. A read-mostly status card: probes the
+  // host container engine on demand and, when available, exposes the server-frozen diagnostic task
+  // catalog + a governed run control. With no engine it shows the structured unavailable state and
+  // never blocks the rest of Keiko. No durable state of its own (capability is re-probed per mount).
+  | "containerStatus"
   | "review"
   | "agents"
   | "integ"
@@ -54,7 +62,22 @@ export type WindowType =
   // A scoped, JSON-only Figma Screen-IR source window derived from a Figma Snapshot view.
   | "figmaJson"
   // A scoped, image-only Figma screen-render source window derived from a Figma Snapshot view.
-  | "figmaImage";
+  | "figmaImage"
+  // Epic #1631, Issue #1634 — passive PDF viewer window backed only by verified #1633 preview
+  // sessions. Not palette-launchable: opened programmatically from a citation preview action.
+  | "pdfCitationPreview"
+  // Epic #470, Issue #475 — Git flow surface. A per-project card walking
+  // branch → staging → commit (live preview + message-policy + policy decision) entirely through the
+  // governed mutation kernel.
+  | "governedGit"
+  // Epic #470, Issue #477 — Governed GitHub pull request command center. Turns a published branch into
+  // a review-ready PR (synthesized editable metadata + readiness + recommendation) through the governed
+  // PR gateway.
+  | "governedPullRequest"
+  // Epic #470, Issue #478 — Governed merge command center. Turns a review-ready PR into a merged base
+  // branch (eligible-strategy selector + readiness + final high-risk approval) through the governed
+  // merge gateway.
+  | "governedMerge";
 
 export interface WindowSize {
   readonly w: number;
@@ -97,6 +120,14 @@ export interface WindowRenderContext {
     | undefined;
   /** Image-only sources connected to Quality Intelligence. */
   readonly linkedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
+  /**
+   * Issue #446 (ADR-0090) — the active task-workspace root, or null in unbound mode. The SINGLE
+   * retarget choke point: when a workspace is active this OVERRIDES a bound surface's per-window cfg
+   * root, so a switch re-renders every window onto the new root atomically (no stale context).
+   */
+  readonly activeRoot: string | null;
+  /** Issue #446 — the derived active binding (taskId/boundSurfaces/activeRoot), or null when unbound. */
+  readonly activeBinding: WorkspaceBinding | null;
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   /**
    * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result
@@ -104,6 +135,9 @@ export interface WindowRenderContext {
    * Returns the new/focused window id, or null when the workspace viewport is not ready.
    */
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
+  readonly focusWindow: (id: string) => void;
+  readonly restoreWindow?: ((id: string) => void) | undefined;
+  readonly updateWindow: (id: string, patch: Partial<AppWindow>) => void;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
 }
 
@@ -256,6 +290,49 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
       // window only needs a project path (acts as projectId) and an optional starting cwd.
       { key: "projectPath", label: "Project path", type: "text", def: "" },
       { key: "cwd", label: "Working directory", type: "directory", def: "" },
+    ],
+  },
+  commands: {
+    title: "Tasks",
+    icon: "terminal",
+    accent: true,
+    desc: "Run test/build/run tasks",
+    w: 460,
+    h: 280,
+    tiny: { w: 250, h: 140 },
+    config: [
+      // Issue #1387 — the command runner discovers test/build/run tasks from the project's package
+      // scripts. The window only needs a project path (acts as projectId); tasks are picked per run.
+      { key: "projectPath", label: "Project path", type: "text", def: "" },
+    ],
+  },
+  runtime: {
+    title: "Runtime",
+    icon: "cube",
+    accent: true,
+    desc: "Runtime, Git, tasks, and audit",
+    w: 500,
+    h: 390,
+    min: { w: 320, h: 260 },
+    tiny: { w: 260, h: 200 },
+    config: [
+      // Issue #1389 — this hub only carries the active project path and opens the specialized
+      // governed surfaces. It does not execute commands or Git operations itself.
+      { key: "projectPath", label: "Project path", type: "text", def: "", optional: true },
+    ],
+  },
+  containerStatus: {
+    title: "Containers",
+    icon: "cube",
+    desc: "Container engine status & diagnostics",
+    w: 460,
+    h: 320,
+    min: { w: 300, h: 220 },
+    tiny: { w: 250, h: 160 },
+    config: [
+      // Issue #1388 — the status surface probes the host container engine on demand. An optional
+      // project path scopes the allowlisted diagnostic catalog; with no engine it degrades gracefully.
+      { key: "projectPath", label: "Project path", type: "text", def: "", optional: true },
     ],
   },
   review: {
@@ -527,6 +604,63 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     min: { w: 300, h: 240 },
     tiny: { w: 240, h: 180 },
   },
+  pdfCitationPreview: {
+    title: "PDF Preview",
+    icon: "file",
+    accent: true,
+    desc: "Read a verified PDF preview in Keiko",
+    w: 880,
+    h: 680,
+    min: { w: 440, h: 320 },
+    tiny: { w: 320, h: 220 },
+  },
+  // Epic #470, Issue #475 — Git flow. Branch → staging → commit, walked entirely
+  // through the governed mutation kernel. Reads the active project root from cfg (like terminal).
+  governedGit: {
+    title: "Git",
+    icon: "git",
+    accent: true,
+    desc: "Branch, stage, commit, and publish",
+    w: 520,
+    h: 640,
+    min: { w: 360, h: 420 },
+    tiny: { w: 300, h: 240 },
+    tool: true,
+    singleton: true,
+    config: [{ key: "projectPath", label: "Project path", type: "text", def: "" }],
+  },
+  // Epic #470, Issue #477 — Governed GitHub pull request command center. Reads the active project root
+  // from cfg (like governedGit) and the published head branch carried from the Publish section.
+  governedPullRequest: {
+    title: "Pull Request",
+    icon: "git",
+    accent: true,
+    desc: "Open a review-ready PR under policy",
+    w: 540,
+    h: 680,
+    min: { w: 380, h: 440 },
+    tiny: { w: 320, h: 260 },
+    config: [
+      { key: "projectPath", label: "Project path", type: "text", def: "" },
+      { key: "headBranchName", label: "Head branch", type: "text", def: "" },
+    ],
+  },
+  // Epic #470, Issue #478 — Governed merge command center. Reads the active project root from cfg (like
+  // governedPullRequest) and the head branch under review carried from the Pull Request section.
+  governedMerge: {
+    title: "Merge",
+    icon: "git",
+    accent: true,
+    desc: "Merge a review-ready PR under policy",
+    w: 540,
+    h: 680,
+    min: { w: 380, h: 440 },
+    tiny: { w: 320, h: 260 },
+    config: [
+      { key: "projectPath", label: "Project path", type: "text", def: "" },
+      { key: "headBranchName", label: "Head branch", type: "text", def: "" },
+    ],
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -593,6 +727,10 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "figmaJson",
   "files",
   "editor",
+  "runtime",
+  "governedGit",
+  "governedPullRequest",
+  "governedMerge",
   "quality",
   "promptEnhancer",
   "relationships",

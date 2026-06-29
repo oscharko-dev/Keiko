@@ -17,13 +17,13 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.8.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.12.0" as const;
 
 // Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.8" as const;
+export const KEIKO_PRODUCT_VERSION = "0.2.10" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -152,6 +152,20 @@ export type {
   EditorDirtyCloseResolution,
 } from "./editor-dirty-close.js";
 export { createEditorDirtyCloseIntent } from "./editor-dirty-close.js";
+// ─── Root-relative project-tree file-identifier contract (Issue #1374) ──────────
+// Single tested place that turns a possibly-absolute candidate into the root-relative file
+// identifier the Files/editor BFF requires, so the editor never triggers the absolute-path load
+// failure. Reuses isContainedAgentPath; introduces no new workspace/project-tree subsystem.
+export type {
+  RootRelativeFileIdentifier,
+  WorkspaceFileIdentifierResolution,
+  WorkspaceFileTarget,
+} from "./editor-workspace-path.js";
+export {
+  isRootRelativeFileIdentifier,
+  resolveWorkspaceFileIdentifier,
+  selectWorkspaceFileTarget,
+} from "./editor-workspace-path.js";
 export type { EditorHotExitSnapshotV1 } from "./editor-hot-exit.js";
 export {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
@@ -160,9 +174,10 @@ export {
   isEditorHotExitSnapshotV1,
 } from "./editor-hot-exit.js";
 
-// ─── Editor agent API (Issue #1391) ─────────────────────────────────────────────
+// ─── Editor agent API (Issues #1391, #1392) ─────────────────────────────────────
 export type {
   EditorAgentAction,
+  EditorAgentActionFailure,
   EditorAgentActionQueuedResponse,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
@@ -170,7 +185,9 @@ export type {
   EditorAgentActionType,
   EditorAgentActionsPostBody,
   EditorAgentBridgeSnapshotRequest,
+  EditorAgentConflictCode,
   EditorAgentEvent,
+  EditorAgentFailureCode,
   EditorAgentPaneSnapshot,
   EditorAgentParse,
   EditorAgentParseFail,
@@ -182,13 +199,52 @@ export type {
   EditorAgentSnapshotTextMode,
 } from "./editor-agent.js";
 export {
+  DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
+  EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_FAILURE_CODES,
   EDITOR_AGENT_SCHEMA_VERSION,
+  EDITOR_AGENT_WRITE_ACTION_TYPES,
+  editorAgentActionHasWritePrecondition,
+  editorAgentWritePreconditionError,
+  isContainedAgentPath,
   isEditorAgentAction,
   isEditorAgentActionResult,
+  isEditorAgentConflictCode,
+  isEditorAgentEvent,
+  isEditorAgentFailureCode,
   isEditorAgentSessionSnapshot,
+  isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
+  validateAgentTextEdits,
 } from "./editor-agent.js";
+
+// ─── Editor agent governance, policy, and audit (Issue #1395, ADR-0062) ─────────
+export type {
+  EditorAgentActionAuditInput,
+  EditorAgentActionAuditRecord,
+  EditorAgentActionDenyReason,
+  EditorAgentActionDisposition,
+  EditorAgentActionEffectClass,
+  EditorAgentActionPolicyContext,
+  EditorAgentActionPolicyDecision,
+  EditorAgentActionReviewReason,
+  EditorAgentAuditResponse,
+} from "./editor-agent-governance.js";
+export {
+  EDITOR_AGENT_ACTION_DENY_REASONS,
+  EDITOR_AGENT_ACTION_DISPOSITIONS,
+  EDITOR_AGENT_ACTION_EFFECT_CLASS,
+  EDITOR_AGENT_ACTION_REVIEW_REASONS,
+  EDITOR_AGENT_AUDIT_SCHEMA_VERSION,
+  EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS,
+  buildEditorAgentActionAuditRecord,
+  classifyEditorAgentAction,
+  isEditorAgentActionAuditRecord,
+  isEditorAgentActionDisposition,
+  isEditorAgentActionEffectClass,
+  isMutatingEditorAgentAction,
+} from "./editor-agent-governance.js";
 
 // ─── Language service (Issue #1198) ───────────────────────────────────────────────
 // Provider-pluggable, language-agnostic deterministic language-intelligence contracts
@@ -239,6 +295,226 @@ export {
   parseLanguageServiceRequest,
 } from "./language-service.js";
 
+// ─── Editor language mode map (Issue #1379, Epic #1491, ADR-0067) ──────────────────
+// The single canonical, frozen const table of the known source-language universe shared by the
+// browser editor tier and the server language service. `plaintext` is intentionally excluded (it is
+// the editor's render fallback, not a registry language). Strict leaf: pure const tables + pure
+// functions, no other keiko-* imports, no clock/crypto/randomness.
+export type { EditorLanguageMode } from "./editor-language-mode-map.js";
+export {
+  EDITOR_LANGUAGE_MODE_MAP,
+  EDITOR_LANGUAGE_MODE_IDS,
+  EDITOR_LANGUAGE_MODE_BY_EXTENSION,
+  inferEditorLanguageModeId,
+  isEditorLanguageModeId,
+} from "./editor-language-mode-map.js";
+
+// ─── Editor built-in capability registry (Issue #1380, Epic #1491, ADR-0068) ──────────────────
+// The single canonical, frozen const table of per-language BROWSER built-in editor capabilities:
+// syntax highlighting, bracket matching, and how "Format Document" is served (Monaco's bundled
+// worker, the Keiko language-service bridge, or none). Sits beside the source-language mode map, not
+// inside it (ADR-0068 D2): browser formatting reachability is an editor-tier concern, not server
+// capability. Strict leaf: pure const tables + pure functions, no other keiko-* imports, no
+// clock/crypto/randomness. Coherence with the mode map is test-pinned (ADR-0068 D6).
+export type {
+  EditorBuiltinCapability,
+  EditorBuiltinFormattingSource,
+} from "./editor-builtin-capabilities.js";
+export {
+  EDITOR_BUILTIN_CAPABILITIES,
+  EDITOR_BUILTIN_CAPABILITY_BY_LANGUAGE,
+  editorBuiltinCapability,
+  editorBuiltinDocumentFormatting,
+  isBuiltinFormattingAvailable,
+} from "./editor-builtin-capabilities.js";
+
+// ─── Governed LSP process manager (Issue #1381, Epic #1491, ADR-0069) ─────────────────────────
+// The status, configuration, error-code, and content-free lifecycle-event vocabulary the long-lived
+// supervised language-server process layer shares across package boundaries: the keiko-server
+// process manager, its status route, and the language-provider registry. `lspStatusToProviderDescriptor`
+// maps a live `LspProcessStatus` onto the existing `LanguageProviderDescriptor` so managed providers
+// flow through `describeLanguageCapabilities()` without a UI change (ADR-0069 D5). Content-free by
+// construction (ADR-0069 D6): `LspLifecycleEvent` carries only enums, ids, counts, and timestamps.
+// Strict leaf: pure types + frozen const tables + throw-free pure functions, no other keiko-*
+// imports, no clock/crypto/randomness.
+export type {
+  LspProcessErrorCode,
+  LspProcessStatus,
+  LspFrameRejectReason,
+  LspNetworkPolicy,
+  LspProcessConfig,
+  LspLifecycleEvent,
+} from "./lsp-process.js";
+export {
+  LSP_PROCESS_SCHEMA_VERSION,
+  LSP_PROCESS_ERROR_CODES,
+  LSP_PROCESS_STATUSES,
+  DEFAULT_LSP_PROCESS_CONFIG,
+  isTerminalLspStatus,
+  lspStatusToProviderDescriptor,
+  parseLspFrameHeader,
+} from "./lsp-process.js";
+
+// ─── Local runtime capabilities (Issue #1385, Epic #1491) ─────────────────────────
+// Wire contract for the BFF-owned runtime inventory: Git, host Node/package managers, common
+// language toolchains, command-source metadata, and container-engine presence. The contract is
+// metadata-only and content-free; the detector implementation lives in keiko-server so the browser
+// never gains process, Git, Docker socket, or filesystem authority.
+export type {
+  RuntimeCapabilityKind,
+  RuntimeCapabilityState,
+  RuntimeCapabilityUnavailableReason,
+  RuntimeCommandKind,
+  RuntimeCommandSourceType,
+  RuntimeCommandSource,
+  RuntimeCapability,
+  RuntimeCapabilitiesResponse,
+  RuntimeCapabilitiesParseOk,
+  RuntimeCapabilitiesParseFail,
+  RuntimeCapabilitiesParse,
+} from "./runtime-capabilities.js";
+export {
+  RUNTIME_CAPABILITY_SCHEMA_VERSION,
+  RUNTIME_CAPABILITY_KINDS,
+  RUNTIME_CAPABILITY_STATES,
+  RUNTIME_CAPABILITY_UNAVAILABLE_REASONS,
+  RUNTIME_COMMAND_KINDS,
+  validateRuntimeCapabilitiesResponse,
+} from "./runtime-capabilities.js";
+
+// ─── Git repository status/diff BFF (Issue #1386, Epic #1491) ─────────────────────
+// Read-only status/diff contract for the local BFF. The browser receives bounded, redacted
+// repository metadata and unified diff text; all Git process execution stays server-side.
+export type {
+  GitRepositoryState,
+  GitUnavailableReason,
+  GitStatusCode,
+  GitChangedFile,
+  GitRepositoryStatusResponse,
+  GitDiffScope,
+  GitRepositoryDiffResponse,
+  GitRepositoryValidationOk,
+  GitRepositoryValidationFail,
+  GitRepositoryValidation,
+} from "./git-repository.js";
+export {
+  GIT_REPOSITORY_SCHEMA_VERSION,
+  GIT_REPOSITORY_STATES,
+  GIT_UNAVAILABLE_REASONS,
+  validateGitRepositoryStatusResponse,
+  validateGitRepositoryDiffResponse,
+} from "./git-repository.js";
+
+// ─── Git repository summary + remotes BFF (Issue #1573, Epic #1572) ───────────────
+// Read-only repository summary (branch/upstream/ahead-behind/counts/remotes/last-sync) and a
+// dedicated remotes response. The browser receives bounded, redacted metadata only; all Git
+// process execution stays server-side. Reuses GitRepositoryState/GitUnavailableReason unions.
+export type {
+  GitRemoteSummary,
+  GitRepositorySummaryRemote,
+  GitUpstreamSummary,
+  GitLastSyncMetadata,
+  GitRepositorySummary,
+  GitRemotesResponse,
+  GitRepositorySummaryValidation,
+} from "./git-repository-summary.js";
+export {
+  GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION,
+  validateGitRepositorySummary,
+  validateGitRemotesResponse,
+} from "./git-repository-summary.js";
+
+// ─── Git commit history BFF (Issue #1573, Epic #1572) ─────────────────────────────
+// Read-only, paginated commit history (sha/subject/author/ISO date/refs/parent and changed-file
+// counts). Bounded entries with limit/skip/truncated; all Git process execution stays server-side.
+export type { GitHistoryEntry, GitHistoryResponse } from "./git-history.js";
+export { GIT_HISTORY_SCHEMA_VERSION, validateGitHistoryResponse } from "./git-history.js";
+
+// ─── Git fetch/pull sync BFF (Issue #1573, Epic #1572) ────────────────────────────
+// Read-only sync preview (readiness/executable gate + block reason) and the governed execute
+// request/response with an evidence-friendly outcome taxonomy. Fetch/pull deliberately do NOT
+// enter the GitDeliveryActionKind mutation taxonomy; they use a dedicated bounded git executor.
+export type {
+  GitSyncOperation,
+  GitSyncOutcome,
+  GitSyncBlockReason,
+  GitSyncExecuteRequest,
+  GitSyncPreview,
+  GitSyncExecuteResponse,
+} from "./git-sync.js";
+export {
+  GIT_SYNC_SCHEMA_VERSION,
+  GIT_SYNC_OPERATIONS,
+  GIT_SYNC_OUTCOMES,
+  GIT_SYNC_BLOCK_REASONS,
+  isGitSyncOperation,
+  isGitSyncOutcome,
+  validateGitSyncPreview,
+  validateGitSyncExecuteResponse,
+} from "./git-sync.js";
+
+// ─── Agent repository operation facade (Issue #1577, Epic #1571) ─────────────
+// Typed agent admission contract over existing Git reads and governed Git delivery routes. It grants
+// no shell/provider authority and reject command-shaped payloads before the BFF can delegate.
+export type {
+  GitRepositoryAgentOperationMode,
+  GitRepositoryAgentOperationKind,
+  GitRepositoryAgentDenialReason,
+  GitRepositoryAgentOperationRequest,
+  GitRepositoryAgentOperationDelegatedResponse,
+  GitRepositoryAgentOperationDeniedResponse,
+  GitRepositoryAgentOperationResponse,
+  GitRepositoryAgentParseOk,
+  GitRepositoryAgentParseFail,
+  GitRepositoryAgentParseResult,
+} from "./git-repository-agent.js";
+export {
+  GIT_REPOSITORY_AGENT_SCHEMA_VERSION,
+  GIT_REPOSITORY_AGENT_OPERATION_MODES,
+  GIT_REPOSITORY_AGENT_OPERATION_KINDS,
+  GIT_REPOSITORY_AGENT_DENIAL_REASONS,
+  parseGitRepositoryAgentOperationRequest,
+  isGitRepositoryAgentOperationResponse,
+} from "./git-repository-agent.js";
+
+// ─── Controlled command executor (Issue #1387, Epic #1491) ────────────────────────
+// Wire contract for the governed test/build/run command runner: a server-discovered catalog of
+// vetted tasks, a run request that names a catalog `taskId` (never free-form argv), the structured
+// run result (exit code, duration, truncation, failure reason), and the SSE run events. The executor
+// allowlist (`COMMAND_TASK_RULES`) is separate from the read-only command rule tables so the
+// test/build/run surface cannot widen them. Discovery + execution live in keiko-server.
+export type {
+  CommandTaskKind,
+  CommandTaskSource,
+  CommandTask,
+  CommandTaskCatalog,
+  CommandFailureReason,
+  CommandTaskRunRequest,
+  CommandTaskRunResult,
+  CommandRunnerEventKind,
+  CommandRunnerEvent,
+  CommandTaskRunRequestParseOk,
+  CommandTaskRunRequestParseFail,
+  CommandTaskRunRequestParse,
+  CommandTaskCatalogParseOk,
+  CommandTaskCatalogParseFail,
+  CommandTaskCatalogParse,
+  CommandTaskRunResultParseOk,
+  CommandTaskRunResultParseFail,
+  CommandTaskRunResultParse,
+} from "./command-runner.js";
+export {
+  COMMAND_RUNNER_SCHEMA_VERSION,
+  COMMAND_TASK_KINDS,
+  COMMAND_TASK_SOURCES,
+  COMMAND_FAILURE_REASONS,
+  COMMAND_RUNNER_EVENT_KINDS,
+  COMMAND_TASK_RULES,
+  parseCommandTaskRunRequest,
+  validateCommandTaskCatalog,
+  validateCommandTaskRunResult,
+} from "./command-runner.js";
+
 // ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
 // Wire request/response for the governed `POST /api/editor/completion` route: deterministic
 // language-service completion (#1198) merged with gated model-assisted completion (#1210) over
@@ -263,6 +539,58 @@ export {
   EDITOR_COMPLETION_SOURCES,
   parseEditorCompletionRequest,
 } from "./editor-completion.js";
+
+// ─── Container engine detection + governed execution (Issue #1388, ADR-0070) ──────
+// Wire vocabulary for the container runtime pilot: the active-probe capability response (engine
+// state aliased from the #1385 runtime-capability vocabulary), the closed execution policy
+// (read-only `/workspace` mount, `--network none`, frozen resource limits, `--pull never`), the
+// server-frozen task catalog + run request/result/events, and the deny-by-default
+// `CONTAINER_TASK_RULES` defense-in-depth allowlist. Detection + execution live in keiko-server.
+export type {
+  ContainerEngineId,
+  ContainerEngineState,
+  ContainerEngineUnavailableReason,
+  ContainerEngineStatus,
+  ContainerCapabilityResponse,
+  ContainerMountMode,
+  ContainerNetworkMode,
+  ContainerResourceLimits,
+  ContainerExecutionPolicy,
+  ContainerTaskKind,
+  ContainerTask,
+  ContainerTaskCatalog,
+  ContainerRunRequest,
+  ContainerFailureReason,
+  ContainerRunResult,
+  ContainerRunnerEventKind,
+  ContainerRunnerEvent,
+  ContainerRunRequestParseOk,
+  ContainerRunRequestParseFail,
+  ContainerRunRequestParse,
+  ContainerCapabilityResponseParseOk,
+  ContainerCapabilityResponseParseFail,
+  ContainerCapabilityResponseParse,
+  ContainerTaskCatalogParseOk,
+  ContainerTaskCatalogParseFail,
+  ContainerTaskCatalogParse,
+  ContainerRunResultParseOk,
+  ContainerRunResultParseFail,
+  ContainerRunResultParse,
+} from "./container-runtime.js";
+export {
+  CONTAINER_RUNTIME_SCHEMA_VERSION,
+  CONTAINER_ENGINE_IDS,
+  CONTAINER_MOUNT_MODES,
+  CONTAINER_NETWORK_MODES,
+  CONTAINER_TASK_KINDS,
+  CONTAINER_FAILURE_REASONS,
+  CONTAINER_RUNNER_EVENT_KINDS,
+  CONTAINER_TASK_RULES,
+  parseContainerRunRequest,
+  validateContainerCapabilityResponse,
+  validateContainerTaskCatalog,
+  validateContainerRunResult,
+} from "./container-runtime.js";
 
 // ─── Editor inline completion (ghost text) (Issue #1200) ───────────────────────────
 // Wire request/response for the governed `POST /api/editor/inline-completion` route (model-only,
@@ -382,15 +710,18 @@ export type {
   StreamDelta,
   StreamEvent,
   VoiceProviderLocality,
+  VoicePersona,
   VoiceProfile,
   VoiceUnavailableReason,
   VoiceTransportPosture,
   VoiceCapabilityResolution,
+  VoiceProviderAvailability,
 } from "./gateway.js";
 export {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
   INFILLING_ALIGNMENTS,
   VOICE_PROVIDER_LOCALITIES,
+  VOICE_PERSONAS,
 } from "./gateway.js";
 export type { ConversationIneligibilityReason } from "./gateway.js";
 export {
@@ -403,6 +734,9 @@ export {
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
   modelSupportsRealtimeVoice,
+  isConfiguredVoiceProvider,
+  describeVoiceProviderAvailability,
+  listVoicePersonas,
 } from "./gateway.js";
 
 // ─── Voice control / media protocol (Issue #496 / Epic #491; ADR-0059) ──────────
@@ -429,6 +763,10 @@ export type {
   VoicePlaybackState,
   VoicePolicyDecision,
   VoiceProtocolErrorCode,
+  VoiceSessionMemoryContext,
+  VoiceSessionGroundingKind,
+  VoiceSessionGroundingContext,
+  VoiceSessionChatContext,
   VoiceSessionCreateMessage,
   VoiceSessionCreatedMessage,
   VoiceSessionCloseMessage,
@@ -1087,6 +1425,36 @@ export {
   validateCapsuleRowShape,
   redactPathInDiagnostic,
 } from "./local-knowledge-schema-validation.js";
+export type {
+  CurrentPdfCitationPreviewSnapshot,
+  PdfCitationPreviewAnchorQuality,
+  PdfCitationPreviewAuthorizationResponse,
+  PdfCitationPreviewAuthorized,
+  PdfCitationPreviewCitationStatus,
+  PdfCitationPreviewDisplay,
+  PdfCitationPreviewFailureState,
+  PdfCitationPreviewOpenAuthorized,
+  PdfCitationPreviewOpenResponse,
+  PdfCitationPreviewOrigin,
+  PdfCitationPreviewReasonCode,
+  PdfCitationPreviewRejected,
+  PdfCitationPreviewSelection,
+  PdfCitationPreviewSessionMetadata,
+  PdfCitationPreviewStatusRequest,
+  PdfCitationPreviewStatusResponse,
+  PdfCitationPreviewStatusState,
+  StoredPdfCitationPreviewCitation,
+  StoredPdfCitationPreviewLineage,
+} from "./local-knowledge-preview.js";
+export {
+  PDF_CITATION_PREVIEW_ANCHOR_QUALITIES,
+  PDF_CITATION_PREVIEW_FAILURE_STATES,
+  PDF_CITATION_PREVIEW_ORIGINS,
+  PDF_CITATION_PREVIEW_REASON_CODES,
+  PDF_CITATION_PREVIEW_STATUS_STATES,
+  pdfCitationPreviewAnchorQuality,
+  pdfCitationPreviewFailureState,
+} from "./local-knowledge-preview.js";
 
 // ─── Governed Enterprise Memory Vault (Issue #205 / Epic #204) ──────────────────
 // Pure contract surface for durable, scoped, governed memory: scopes, sensitivity,
@@ -1202,20 +1570,6 @@ export type {
   MemoryWorkflowPort,
   MemoryWriteCandidateEvent,
 } from "./memory-workflow-port.js";
-
-// ─── Conversation budget estimator (Issue #151 / Epic #142) ─────────────────────
-// Pure, deterministic helper for the Conversation Center context-pressure
-// indicator and the "clear history" affordance. Token counts are APPROXIMATE
-// (bytes/4) by design — UI copy and tests must state this precisely.
-export type {
-  ConversationBudgetBreakdown,
-  ConversationBudgetDocumentContext,
-  ConversationBudgetEstimate,
-  ConversationBudgetInputs,
-  ConversationBudgetMessage,
-  ConversationBudgetPressure,
-} from "./conversation-budget.js";
-export { estimateConversationBudget } from "./conversation-budget.js";
 
 // ─── Quality Intelligence (Issue #277 / Epic #270) ─────────────────────────────
 // QI surface is re-exported under a single namespace because the QI vocabulary
@@ -1560,6 +1914,376 @@ export {
   validatePromptEnhancementWireRequest,
 } from "./prompt-enhancer-bff.js";
 
+// ─── Governed Git delivery contracts (Issue #471, Epic #470; ADR-0058) ───────────
+// The core atom git-delivery.ts owns action kinds, risk taxonomy, the lifecycle envelope, the
+// typed constraint union, the policy decision, provider capability, and the shared parse result.
+// git-delivery-policy.ts owns the policy packs + the deterministic evaluator. git-delivery-provider.ts
+// owns the provider-neutral interfaces. Each symbol is re-exported from whichever file owns it.
+
+// git-delivery.ts
+export type {
+  GitDeliveryActionKind,
+  GitDeliveryRiskClass,
+  GitDeliveryMergeStrategyHint,
+  GitDeliveryAbortableOperation,
+  GitDeliveryRecoveryStrategyHint,
+  GitDeliveryProviderCapability,
+  GitDeliveryBranchMatchKind,
+  GitDeliveryBranchPattern,
+  GitDeliveryBranchPatternConstraint,
+  GitDeliveryProviderCapabilityConstraint,
+  GitDeliveryRiskClassCeilingConstraint,
+  GitDeliveryConstraint,
+  GitDeliveryBlockReason,
+  GitDeliveryMergeBlockReason,
+  GitDeliveryExecutionOutcome,
+  GitDeliveryExecutionErrorCode,
+  GitDeliveryPartialDetail,
+  GitDeliveryBranchCreateInputs,
+  GitDeliveryStageInputs,
+  GitDeliveryUnstageInputs,
+  GitDeliveryCommitInputs,
+  GitDeliveryPushInputs,
+  GitDeliveryPrCreateInputs,
+  GitDeliveryPrUpdateInputs,
+  GitDeliveryMergeInputs,
+  GitDeliveryAbortInputs,
+  GitDeliveryRecoveryInputs,
+  GitDeliveryResolvedInputs,
+  GitDeliveryApprovalNotRequired,
+  GitDeliveryApprovalGranted,
+  GitDeliveryApprovalRequirement,
+  GitDeliveryPolicyDecision,
+  GitDeliveryActionPreview,
+  GitDeliveryExecutionResult,
+  GitDeliveryEvidenceRef,
+  GitDeliveryActionEnvelopeFor,
+  GitDeliveryActionEnvelope,
+  GitDeliveryParseResult,
+} from "./git-delivery.js";
+export {
+  GIT_DELIVERY_SCHEMA_VERSION,
+  GIT_DELIVERY_ACTION_KINDS,
+  GIT_DELIVERY_RISK_CLASSES,
+  GIT_DELIVERY_RISK_CLASS_SEVERITY,
+  GIT_DELIVERY_ACTION_RISK_DEFAULTS,
+  GIT_DELIVERY_MERGE_STRATEGY_HINTS,
+  GIT_DELIVERY_ABORTABLE_OPERATIONS,
+  GIT_DELIVERY_RECOVERY_STRATEGY_HINTS,
+  GIT_DELIVERY_PROVIDER_CAPABILITIES,
+  GIT_DELIVERY_BRANCH_MATCH_KINDS,
+  GIT_DELIVERY_EXECUTION_OUTCOMES,
+  GIT_DELIVERY_EXECUTION_ERROR_CODES,
+  GIT_DELIVERY_BLOCK_REASONS,
+  GIT_DELIVERY_MERGE_BLOCK_REASONS,
+  isGitDeliveryActionKind,
+  isGitDeliveryRiskClass,
+  isGitDeliveryProviderCapability,
+  isGitDeliveryBranchMatchKind,
+  isGitDeliveryBranchPattern,
+  isGitDeliveryConstraint,
+  isGitDeliveryBlockReason,
+  isGitDeliveryMergeBlockReason,
+  isGitDeliveryMergeStrategyHint,
+  isGitDeliveryAbortableOperation,
+  isGitDeliveryRecoveryStrategyHint,
+  isGitDeliveryExecutionOutcome,
+  isGitDeliveryExecutionErrorCode,
+  isGitDeliveryApprovalRequirement,
+  isGitDeliveryPolicyDecision,
+  isGitDeliveryEvidenceRef,
+  isGitDeliveryExecutionResult,
+  parseGitDeliveryResolvedInputs,
+  parseGitDeliveryActionEnvelope,
+  gitDeliveryDefaultRiskClass,
+  gitDeliveryRiskClassForInputs,
+  gitDeliveryRiskClassWithinCeiling,
+  gitDeliveryBranchNameMatchesPattern,
+  gitDeliveryBranchNameMatchesAny,
+} from "./git-delivery.js";
+
+// git-delivery-policy.ts
+export type {
+  GitDeliveryRuleDecision,
+  GitDeliveryPolicyRule,
+  GitDeliveryDefaultRule,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryOrgPolicyPack,
+  GitDeliveryPolicyContext,
+} from "./git-delivery-policy.js";
+export {
+  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+  GIT_DELIVERY_RULE_DECISIONS,
+  isGitDeliveryPolicyRule,
+  evaluateGitPolicy,
+  parseGitPolicyPack,
+  parseGitRepoPolicyPack,
+  parseGitOrgPolicyPack,
+} from "./git-delivery-policy.js";
+
+// git-delivery-provider.ts
+export type {
+  GitDeliveryChecksOverallStatus,
+  GitDeliveryPullRequestStatus,
+  GitDeliveryBranchProtection,
+  GitDeliveryChecksState,
+  GitDeliveryMergeReadiness,
+  GitDeliveryPullRequestState,
+  GitDeliveryRemoteTargetPolicy,
+  GitDeliveryProviderDescriptor,
+} from "./git-delivery-provider.js";
+export {
+  GIT_DELIVERY_PROVIDER_SCHEMA_VERSION,
+  GIT_DELIVERY_CHECKS_OVERALL_STATUSES,
+  GIT_DELIVERY_PULL_REQUEST_STATUSES,
+  isGitDeliveryChecksOverallStatus,
+  isGitDeliveryPullRequestStatus,
+  isGitDeliveryBranchProtection,
+  isGitDeliveryChecksState,
+  isGitDeliveryMergeReadiness,
+  isGitDeliveryPullRequestState,
+  isGitDeliveryProviderDescriptor,
+  isGitDeliveryRemoteTargetPolicy,
+} from "./git-delivery-provider.js";
+
+// git-delivery-action-sheet.ts (Issue #473, Epic #470; ADR-0060)
+// UI-safe approval/preview projection: action-sheet state, approval summary, preview manifest,
+// blocked-cause classification, and recovery hints over the content-free contract facts.
+export type {
+  GitDeliveryActionSheetState,
+  GitDeliveryApprovalNecessity,
+  GitDeliveryBlockedCause,
+  GitDeliveryBlockerSource,
+  GitDeliveryBlockerSeverity,
+  GitDeliveryRemediationClass,
+  GitDeliveryExpectedBlocker,
+  GitDeliveryRecoveryActionHint,
+  GitDeliveryRecoveryHint,
+  GitDeliveryApprovalSummary,
+  GitDeliveryPolicyExplanation,
+  GitDeliveryPreviewManifest,
+  GitDeliveryBlockedDetail,
+  GitDeliveryActionSheet,
+  GitDeliveryActionSheetInput,
+  GitDeliveryPreviewManifestInput,
+  GitDeliveryActionSheetStateInput,
+  GitDeliveryWorktreeSnapshot,
+  GitDeliveryActionSheetProviderState,
+  GitDeliveryActionSheetRequest,
+} from "./git-delivery-action-sheet.js";
+export {
+  GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION,
+  GIT_DELIVERY_ACTION_SHEET_STATES,
+  GIT_DELIVERY_APPROVAL_NECESSITIES,
+  GIT_DELIVERY_BLOCKED_CAUSES,
+  GIT_DELIVERY_BLOCKER_SOURCES,
+  GIT_DELIVERY_BLOCKER_SEVERITIES,
+  GIT_DELIVERY_REMEDIATION_CLASSES,
+  GIT_DELIVERY_RECOVERY_ACTION_HINTS,
+  GIT_DELIVERY_POLICY_DECISION_OUTCOMES,
+  isGitDeliveryPolicyDecisionOutcome,
+  isGitDeliveryActionSheetState,
+  isGitDeliveryApprovalNecessity,
+  isGitDeliveryBlockedCause,
+  isGitDeliveryBlockerSource,
+  isGitDeliveryBlockerSeverity,
+  isGitDeliveryRemediationClass,
+  isGitDeliveryRecoveryActionHint,
+  isGitDeliveryExpectedBlocker,
+  isGitDeliveryRecoveryHint,
+  isGitDeliveryApprovalSummary,
+  isGitDeliveryPolicyExplanation,
+  isGitDeliveryPreviewManifest,
+  isGitDeliveryBlockedDetail,
+  isGitDeliveryActionSheet,
+  parseGitDeliveryActionSheet,
+  buildGitDeliveryPreviewManifest,
+  gitDeliveryApprovalNecessityForDecision,
+  gitDeliveryActionSheetStateFor,
+  gitDeliveryBlockedCauseFor,
+  gitDeliverySuggestedRecoveryStrategy,
+  buildGitDeliveryActionSheet,
+} from "./git-delivery-action-sheet.js";
+
+// git-delivery-evidence.ts (Issue #474, Epic #470; ADR-0061)
+// The retrospective, content-free audit record produced for every governed Git mutation attempt,
+// the exportable audit packet, the AC1 outcome-class vocabulary, the AC3 three-way recovery
+// disposition, and the deterministic recovery-disposition derivations.
+export type {
+  GitDeliveryEvidenceOutcomeClass,
+  GitDeliveryRecoveryDisposition,
+  GitDeliveryEvidenceLifecyclePhase,
+  GitDeliveryRecoveryMetadata,
+  GitDeliveryEvidenceCorrelation,
+  GitDeliveryEvidenceApproval,
+  GitDeliveryEvidencePreviewSummary,
+  GitDeliveryEvidenceExecution,
+  GitDeliveryEvidenceRepoContext,
+  GitDeliveryEvidenceRecord,
+  GitDeliveryAuditPacket,
+} from "./git-delivery-evidence.js";
+export {
+  GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
+  GIT_DELIVERY_EVIDENCE_OUTCOME_CLASSES,
+  GIT_DELIVERY_RECOVERY_DISPOSITIONS,
+  GIT_DELIVERY_EVIDENCE_LIFECYCLE_PHASES,
+  isGitDeliveryEvidenceOutcomeClass,
+  isGitDeliveryRecoveryDisposition,
+  isGitDeliveryEvidenceLifecyclePhase,
+  isGitDeliveryRecoveryMetadata,
+  isGitDeliveryEvidenceRecord,
+  isGitDeliveryAuditPacket,
+  gitDeliveryRecoveryDispositionForExecutionError,
+  gitDeliveryRecoveryDispositionForBlockReason,
+  buildGitDeliveryAuditPacket,
+  GIT_DELIVERY_AUDIT_PACKET_KNOWN_LIMITATIONS,
+} from "./git-delivery-evidence.js";
+
+// git-commit-policy.ts (Issue #475, Epic #470; ADR-0062)
+// The deterministic, content-free commit-message-policy validator: a server-resolved policy shape
+// (conventional-commit, issue-key, sign-off, subject-length) and a pure validator returning typed
+// violation codes only — never any fragment of the message.
+export type {
+  GitCommitConventionalCommitRule,
+  GitCommitIssueKeyRule,
+  GitCommitMessagePolicy,
+  GitCommitMessageViolationCode,
+  GitCommitMessageValidation,
+} from "./git-commit-policy.js";
+export {
+  GIT_COMMIT_POLICY_SCHEMA_VERSION,
+  GIT_COMMIT_MESSAGE_VIOLATION_CODES,
+  KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY,
+  validateGitCommitMessage,
+  isGitCommitMessageViolationCode,
+  isGitCommitMessagePolicy,
+  isGitCommitMessageValidation,
+} from "./git-commit-policy.js";
+
+// git-commit-intent.ts (Issue #475, Epic #470; ADR-0062)
+// The deterministic commit-intent heuristics: a content-free staged-change summary, the quality
+// warning vocabulary, and a pure analyzer producing warnings plus scaffolding suggestions (no model
+// call).
+export type {
+  GitCommitChangeSummary,
+  GitCommitQualityWarningCode,
+  GitCommitIntentAnalysis,
+  GitCommitIntentInput,
+} from "./git-commit-intent.js";
+export {
+  GIT_COMMIT_INTENT_SCHEMA_VERSION,
+  DEFAULT_LARGE_CHANGE_THRESHOLD,
+  GIT_COMMIT_QUALITY_WARNING_CODES,
+  analyzeGitCommitIntent,
+  isGitCommitQualityWarningCode,
+  isGitCommitChangeSummary,
+  isGitCommitIntentAnalysis,
+} from "./git-commit-intent.js";
+
+// git-pull-request.ts (Issue #477, Epic #470; ADR-0064)
+// The provider-neutral, content-free PR-orchestration leaf: the readiness model (objectExists vs
+// reviewReady with severity-ranked blockers), the deterministic metadata-synthesis heuristics, the
+// reviewer/label/linkage suggestion shapes, and the provider-failure rejection taxonomy. The actual PR
+// title/body strings and the GitHub-specific raw-error classifier are keiko-tools concerns.
+export type {
+  GitPrChangeType,
+  GitPrPolicyOutcome,
+  GitPullRequestChangeNarrative,
+  GitPullRequestRiskDigest,
+  GitPrSummarySection,
+  GitPrRiskSection,
+  GitPrChangeNarrativeSection,
+  GitPullRequestMetadataDraft,
+  GitPullRequestReadinessBlockerCode,
+  GitPrBlockerSeverity,
+  GitPrRemediationClass,
+  GitPullRequestReadinessBlocker,
+  GitPullRequestReadinessSummary,
+  GitPullRequestReadinessInput,
+  GitPullRequestRecommendation,
+  GitPrReviewerSuggestionBasis,
+  GitPrLabelSuggestionBasis,
+  GitPrLinkageSuggestionBasis,
+  GitPullRequestReviewerSuggestion,
+  GitPullRequestLabelSuggestion,
+  GitPullRequestLinkageSuggestion,
+  GitPullRequestRejectionReason,
+} from "./git-pull-request.js";
+export {
+  GIT_PULL_REQUEST_SCHEMA_VERSION,
+  GIT_PR_CHANGE_TYPES,
+  GIT_PR_POLICY_OUTCOMES,
+  GIT_PR_READINESS_BLOCKER_CODES,
+  GIT_PR_RECOMMENDATIONS,
+  GIT_PR_REJECTION_REASONS,
+  GIT_PR_REJECTION_ERROR_CODE,
+  GIT_PR_REJECTION_DISPOSITION,
+  gitPrRejectionToErrorCode,
+  gitPrRejectionToDisposition,
+  synthesizePullRequestMetadata,
+  gitPullRequestReadinessFor,
+  gitPullRequestRecommendationFor,
+  gitPullRequestReviewerSuggestionsFor,
+  gitPullRequestLabelSuggestionsFor,
+  gitPullRequestLinkageSuggestionsFor,
+  isGitPrChangeType,
+  isGitPrPolicyOutcome,
+  isGitPullRequestReadinessBlockerCode,
+  isGitPullRequestRecommendation,
+  isGitPullRequestRejectionReason,
+  isGitPullRequestReadinessBlocker,
+  isGitPullRequestReadinessSummary,
+  isGitPullRequestChangeNarrative,
+  isGitPullRequestMetadataDraft,
+  parseGitPullRequestReadinessSummary,
+} from "./git-pull-request.js";
+
+// git-merge.ts (Issue #478, Epic #470; ADR-0065)
+// The provider-neutral, content-free merge-governance leaf: the merge-readiness model (the severity-
+// ranked blocker taxonomy reusing GitDeliveryMergeBlockReason plus the lifecycle/preview states), the
+// strategy-eligibility derivation (policy ∩ provider capability, never a UI default), the merge
+// recommendation, and the provider-failure rejection taxonomy. The GitHub-specific mergeable-state
+// mapper and raw-error classifier are keiko-tools concerns.
+export type {
+  GitMergeLifecycleBlockerCode,
+  GitMergeReadinessBlockerCode,
+  GitMergeBlockerSeverity,
+  GitMergeRemediationClass,
+  GitMergeReadinessBlocker,
+  GitMergeReadinessSummary,
+  GitMergeStrategyPolicy,
+  GitMergeStrategyEligibility,
+  GitMergeRecommendation,
+  GitMergeApprovalContext,
+  GitMergeRejectionReason,
+  GitMergeRejection,
+  GitMergeReadinessInput,
+} from "./git-merge.js";
+export {
+  GIT_MERGE_SCHEMA_VERSION,
+  GIT_MERGE_LIFECYCLE_BLOCKER_CODES,
+  GIT_MERGE_READINESS_BLOCKER_CODES,
+  GIT_MERGE_RECOMMENDATIONS,
+  GIT_MERGE_REJECTION_REASONS,
+  GIT_MERGE_REJECTION_ERROR_CODE,
+  GIT_MERGE_REJECTION_DISPOSITION,
+  gitMergeBlockerRemediationFor,
+  gitMergeBlockerActionHintFor,
+  deriveEligibleMergeStrategies,
+  gitMergeRecommendationFor,
+  gitMergeRejectionToErrorCode,
+  gitMergeRejectionToDisposition,
+  gitMergeRejectionFor,
+  gitMergeReadinessFor,
+  gitMergeReadinessBlockerIsPrerequisite,
+  isGitMergeReadinessBlockerCode,
+  isGitMergeRecommendation,
+  isGitMergeRejectionReason,
+  isGitMergeReadinessBlocker,
+  isGitMergeReadinessSummary,
+  parseGitMergeReadinessSummary,
+} from "./git-merge.js";
+
 // ─── Discussion intelligence (Issue #502 / Epic #491; ADR-0065) ──────────────────
 // Text-first colleague-like discussion contract (5 modes, disagreement structure, confidence bridge,
 // interruption-recovery turn model). Reuses the prompt-enhancer citation/contradiction/grounding vocab
@@ -1650,33 +2374,132 @@ export {
   validateSpokenActionAuditRecord,
 } from "./voice-action-intent.js";
 
-// ─── Voice session recap (Issue #504 / Epic #491; ADR-0067) ──────────────────────
-// User-triggered recap of a voice session's committed transcript that derives memory candidates via the
-// EXISTING governed `extractCandidatesFromUserText` path and surfaces them in the existing review queue.
-// Pure, content-free leaf module: descriptors and the audit record carry no raw text/audio, only
-// enums/counts/durations. The committed transcript roll-up reuses `VoiceTranscriptEvidenceSummary`.
+// ─── Task-scoped workspace domain (Issue #444, Epic #443) ───
+// The authoritative contract for what a task-scoped isolated workspace IS, how a task binds to it,
+// its lifecycle state machine (legal/illegal transitions + SC4 preconditions), drift/recovery
+// semantics, the content-free audit event, the read-only vs mutating operation authority (AC3), and
+// the no-duplicate-subsystem delegation boundary (AC4). Delegates git mutation (#470), editor/runtime
+// context (#1491), terminal mutation (ADR-0018), and workspace discovery + path containment
+// (@oscharko-dev/keiko-workspace) — it never re-implements them. Follow-on slices #445–#450 consume
+// this as the single source for status/health/repair/binding/audit.
 export type {
-  VoiceSessionRecapSchemaVersion,
-  VoiceRecapCandidateStatus,
-  VoiceRecapCommittedSpanDescriptor,
-  VoiceRecapAssistantTurnSource,
-  VoiceRecapAssistantTurnDescriptor,
-  VoiceSessionRecapEvidenceSummary,
-  VoiceSessionRecapAuditRecord,
-  VoiceSessionRecapAuditInput,
-  VoiceSessionRecapCandidateCounts,
-  VoiceSessionRecapValidationResult,
-} from "./voice-session-recap.js";
+  TaskWorkspaceValidationOk,
+  TaskWorkspaceValidationFail,
+  TaskWorkspaceValidation,
+  TaskWorkspaceTransitionValidation,
+  TaskWorkspaceLifecycleState,
+  TaskWorkspaceTransitionPrecondition,
+  TaskWorkspaceTransitionContext,
+  TaskWorkspaceTransitionInput,
+  TaskWorkspaceHealth,
+  TaskWorkspaceDriftMarker,
+  WorkspaceLockReason,
+  WorkspaceLock,
+  WorkspaceFailureClass,
+  WorkspaceRecoveryStrategy,
+  WorkspaceRecoveryHint,
+  WorkspaceSurface,
+  WorkspaceEventType,
+  WorkspaceEvent,
+  WorkspaceInstance,
+  WorkspaceBinding,
+  WorkspaceActivation,
+  WorkspaceOperationAuthority,
+  WorkspaceOperationName,
+  WorkspaceOperation,
+  TaskWorkspaceDelegatedConcern,
+  TaskWorkspaceDelegatedSubsystem,
+  WorkspaceReconciliationStatus,
+  WorkspaceReconciliationFacts,
+  WorkspaceReconciliationOutcome,
+  WorkspaceReconciliationEntry,
+  WorkspaceActiveRestorationKind,
+  WorkspaceActiveRestoration,
+  WorkspaceReconciliationReport,
+  WorkspaceHealthClassification,
+  WorkspaceCleanupRefusalReason,
+  WorkspaceCleanupSafetyFacts,
+  WorkspaceCleanupDecision,
+  WorkspaceHealthSignals,
+  WorkspaceHealthEvaluation,
+  WorkspaceHealthEntryKind,
+  WorkspaceHealthEntry,
+  WorkspaceHealthReport,
+} from "./task-workspace.js";
 export {
-  VOICE_SESSION_RECAP_SCHEMA_VERSION,
-  VOICE_RECAP_CANDIDATE_STATUSES,
-  VOICE_RECAP_ASSISTANT_TURN_SOURCES,
-  isVoiceSessionRecapSchemaVersionSupported,
-  voiceRecapAllowed,
-  isVoiceRecapCandidateStatus,
-  assertNeverVoiceRecapCandidateStatus,
-  isVoiceRecapAssistantTurnSource,
-  buildVoiceSessionRecapAuditRecord,
-  summarizeVoiceSessionRecap,
-  validateVoiceSessionRecapAuditRecord,
-} from "./voice-session-recap.js";
+  TASK_WORKSPACE_SCHEMA_VERSION,
+  TASK_WORKSPACE_LIFECYCLE_STATES,
+  TASK_WORKSPACE_LEGAL_TRANSITIONS,
+  TASK_WORKSPACE_TRANSITION_PRECONDITIONS,
+  TASK_WORKSPACE_HEALTH_STATES,
+  TASK_WORKSPACE_DRIFT_MARKERS,
+  WORKSPACE_LOCK_REASONS,
+  WORKSPACE_FAILURE_CLASSES,
+  WORKSPACE_RECOVERY_STRATEGIES,
+  TASK_WORKSPACE_SURFACES,
+  WORKSPACE_EVENT_TYPES,
+  WORKSPACE_EVENT_ALLOWED_KEYS,
+  WORKSPACE_INSTANCE_ALLOWED_KEYS,
+  WORKSPACE_BINDING_ALLOWED_KEYS,
+  WORKSPACE_ACTIVATION_ALLOWED_KEYS,
+  TASK_WORKSPACE_OPERATIONS,
+  TASK_WORKSPACE_DELEGATED_SUBSYSTEMS,
+  isTaskWorkspaceLifecycleState,
+  isLegalTaskWorkspaceTransition,
+  nextLegalTaskWorkspaceStates,
+  isTaskWorkspaceTransitionPrecondition,
+  requiredTaskWorkspaceTransitionPreconditions,
+  validateTaskWorkspaceTransition,
+  isTaskWorkspaceHealth,
+  isTaskWorkspaceDriftMarker,
+  isWorkspaceLockReason,
+  isWorkspaceFailureClass,
+  isWorkspaceRecoveryStrategy,
+  isWorkspaceSurface,
+  isWorkspaceEventType,
+  validateWorkspaceEvent,
+  validateWorkspaceInstance,
+  validateWorkspaceBinding,
+  validateWorkspaceActivation,
+  taskWorkspaceOperation,
+  isReadOnlyTaskWorkspaceOperation,
+  isMutatingTaskWorkspaceOperation,
+  isDelegatedTaskWorkspaceConcern,
+  taskWorkspaceDelegatedOwner,
+  WORKSPACE_RECONCILIATION_STATUSES,
+  WORKSPACE_RECONCILIATION_ENTRY_ALLOWED_KEYS,
+  WORKSPACE_RECONCILIATION_REPORT_ALLOWED_KEYS,
+  WORKSPACE_ACTIVE_RESTORATION_KINDS,
+  isWorkspaceReconciliationStatus,
+  isWorkspaceActiveRestorationKind,
+  classifyWorkspaceReconciliation,
+  planWorkspaceRecoveryHints,
+  reconciliationHealth,
+  reconciliationRequiresRecoveryFlag,
+  reconciliationStatusFromInstance,
+  isAutomaticWorkspaceRepairStrategy,
+  isWorkspaceRepairStrategyApplicable,
+  workspaceEntryRepairable,
+  workspaceEntryOperatorActionRequired,
+  deriveReconciliationEntry,
+  resolveActiveRestoration,
+  validateWorkspaceReconciliationEntry,
+  validateWorkspaceActiveRestoration,
+  validateWorkspaceReconciliationReport,
+  WORKSPACE_HEALTH_CLASSIFICATIONS,
+  WORKSPACE_CLEANUP_ELIGIBLE_LIFECYCLE_STATES,
+  WORKSPACE_CLEANUP_REFUSAL_REASONS,
+  WORKSPACE_HEALTH_ENTRY_KINDS,
+  WORKSPACE_HEALTH_ENTRY_ALLOWED_KEYS,
+  WORKSPACE_HEALTH_REPORT_ALLOWED_KEYS,
+  isWorkspaceHealthClassification,
+  isCleanupEligibleLifecycleState,
+  isWorkspaceCleanupRefusalReason,
+  isWorkspaceHealthEntryKind,
+  evaluateWorkspaceCleanupSafety,
+  classifyWorkspaceHealth,
+  deriveWorkspaceHealthEntry,
+  deriveOrphanWorktreeHealthEntry,
+  validateWorkspaceHealthEntry,
+  validateWorkspaceHealthReport,
+} from "./task-workspace.js";

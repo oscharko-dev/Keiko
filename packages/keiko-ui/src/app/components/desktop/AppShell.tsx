@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
+import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
+import { useActiveWorkspaceState } from "./hooks/useActiveWorkspaceState";
+import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
 import { TwinProvider, useTwin } from "./context/TwinContext";
 import { WsContext, type WsContextValue } from "./context/WsContext";
 import { Footer } from "./Footer";
@@ -10,6 +13,10 @@ import { Header, type HeaderStatusTone } from "./Header";
 import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
+import {
+  readWorkspaceCameraSmoothness,
+  WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
+} from "./workspace-appearance";
 import { CommandPalette, type Command } from "./modals/CommandPalette";
 import { GatewaySetupDialog } from "./modals/GatewaySetupDialog";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
@@ -32,6 +39,7 @@ import {
   totalSourceCap,
 } from "./hooks/workspaceActions";
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
+import { I18nProvider, useI18n } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
   Chat,
@@ -44,6 +52,7 @@ import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
+import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
 import { applyShellUndoAction, SHELL_SHORTCUT_BINDINGS } from "./shell-undo-bindings";
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
@@ -164,38 +173,27 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-function normalizeComparablePath(path: string): string {
-  return path.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
-}
-
-function editorRelativePath(root: string, file: string): string | null {
-  const normalizedRoot = normalizeComparablePath(root);
-  const normalizedFile = normalizeComparablePath(file);
-  if (normalizedFile.length === 0) return "";
-  if (normalizedRoot.length === 0) {
-    return /^\/+$/u.test(root.trim().replace(/\\/gu, "/"))
-      ? normalizedFile.replace(/^\/+/u, "")
-      : "";
+// Root-relative file-identifier contract (Issue #1374). The editor-window cfg-persistence layer is
+// single-sourced through @oscharko-dev/keiko-contracts, exactly like the editor open flow
+// (EditorWidget / workspaceActions). A persisted cfg file id is resolved to a root-relative
+// identifier under the window's `root`; an absolute-inside-root path is stripped, the root itself or
+// an empty file maps to "" (no active file), and a path that cannot be relativized under the root
+// (absolute-outside or a traversal escape) returns null and is DROPPED — never persisted. This
+// closes the divergence where an absolute path could be written into the editor window cfg, which is
+// the failure #1374 set out to prevent. Cfg persistence intentionally keeps the window's root rather
+// than re-anchoring it, so `resolveWorkspaceFileIdentifier` is used here, not `selectWorkspaceFileTarget`.
+function editorCfgRelativePath(root: string, file: string): string | null {
+  // Filesystem-root ("/") workspace edge: every absolute path is "under" it, so strip the leading
+  // slash. The contract folds a "/" root to empty/outside-root, so this one intentional, tested case
+  // (a whole-disk editor root) is handled locally. `^\/+$` is anchored at both ends — linear.
+  if (/^\/+$/u.test(root.trim().replace(/\\/gu, "/"))) {
+    const comparableFile = file.trim().replace(/\\/gu, "/");
+    return comparableFile.length === 0 ? "" : comparableFile.replace(/^\/+/u, "");
   }
-  const rootCmp = normalizedRoot.toLowerCase();
-  const fileCmp = normalizedFile.toLowerCase();
-  if (fileCmp === rootCmp) return "";
-  if (fileCmp.startsWith(`${rootCmp}/`)) {
-    return normalizedFile.slice(normalizedRoot.length + 1).replace(/^\/+/u, "");
-  }
+  const resolution = resolveWorkspaceFileIdentifier(root, file);
+  if (resolution.kind === "relative") return resolution.path;
+  if (resolution.kind === "root" || resolution.kind === "empty") return "";
   return null;
-}
-
-function isAbsoluteEditorPath(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/u.test(path);
-}
-
-function normalizeEditorCfgPath(root: string, path: string): string | null {
-  const raw = path.trim();
-  if (raw.length === 0) return "";
-  const relative = editorRelativePath(root, raw);
-  if (relative !== null) return relative;
-  return isAbsoluteEditorPath(raw) ? null : raw.replace(/\\/gu, "/").replace(/^\/+/u, "");
 }
 
 function normalizeEditorOpenFiles(
@@ -205,7 +203,7 @@ function normalizeEditorOpenFiles(
 ): readonly string[] {
   const out: string[] = [];
   const add = (path: string): void => {
-    const relative = normalizeEditorCfgPath(root, path);
+    const relative = editorCfgRelativePath(root, path);
     if (relative === null || relative.length === 0 || out.includes(relative)) return;
     out.push(relative);
   };
@@ -222,23 +220,11 @@ export function normalizeEditorWindowCfg(cfg: Cfg): Cfg {
   const root = typeof cfg.root === "string" ? cfg.root.trim() : "";
   const file = typeof cfg.file === "string" ? cfg.file.trim() : "";
   if (root.length === 0) return cfg;
-  const relativeFile = editorRelativePath(root, file);
+  const relativeFile = editorCfgRelativePath(root, file);
   const next: Cfg = { ...cfg, root };
-  const normalizedOpenFiles = normalizeEditorOpenFiles(
-    root,
-    cfg.openFiles,
-    relativeFile !== null ? relativeFile : file,
-  );
-  if (relativeFile === null) {
-    if (file.length > 0) next.file = file;
-    if (normalizedOpenFiles.length > 0) {
-      next.openFiles = normalizedOpenFiles;
-    } else {
-      delete next.openFiles;
-    }
-    return next;
-  }
-  if (relativeFile.length > 0) {
+  const normalizedOpenFiles = normalizeEditorOpenFiles(root, cfg.openFiles, relativeFile ?? "");
+  // A non-relativizable file id (absolute-outside or escaping) is dropped, never persisted (#1374).
+  if (relativeFile !== null && relativeFile.length > 0) {
     next.file = relativeFile;
   } else {
     delete next.file;
@@ -267,6 +253,7 @@ const TOOL_TYPES: readonly WindowType[] = [
   "notifications",
   "resources",
   "localKnowledge",
+  "governedGit",
   "figma",
   "quality",
   "promptEnhancer",
@@ -370,9 +357,13 @@ export function buildAppShellCommands(
 }
 
 function AppShellInner(): ReactNode {
+  const { t } = useI18n();
   const { theme, toggle: toggleTheme } = useTheme();
   const twin = useTwin();
   const session = useChatSession({ autoCreate: false });
+  // Issue #446 (ADR-0090) — the active task-workspace binding state machine. It is provided to the
+  // whole shell so the Header switcher and every window's render context read one source of truth.
+  const activeWorkspace = useActiveWorkspaceState();
   const wsRef = useRef<HTMLDivElement>(null);
   const wsWinsForBindingRef = useRef<readonly AppWindow[] | null>(null);
   // Operator-configurable grounding caps — fetched once on mount, fall back to compile-time
@@ -383,6 +374,14 @@ function AppShellInner(): ReactNode {
       .then((res) => setGroundingLimits(res.effectiveGroundingLimits))
       .catch(() => undefined);
   }, []);
+  // Issue #446 — load the task-workspace inventory + active binding for the launched project, and
+  // re-list whenever the active project changes. Best-effort: a server without the binding routes
+  // degrades to an empty inventory and an unbound state (the switcher then shows "no active workspace").
+  const refreshActiveWorkspace = activeWorkspace.refresh;
+  const activeProjectPath = session.activeProject?.path;
+  useEffect(() => {
+    void refreshActiveWorkspace(activeProjectPath);
+  }, [refreshActiveWorkspace, activeProjectPath]);
   // Release 0.2.0 — user-visible feedback when a connect gesture is rejected because the
   // per-chat source limit is reached. Cleared on the next accepted bind and auto-dismissed.
   const [sourceConnectionNotice, setSourceConnectionNotice] = useState<string | null>(null);
@@ -542,7 +541,21 @@ function AppShellInner(): ReactNode {
     },
     [chatForWindow, session],
   );
+  const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
+
+  useEffect(() => {
+    const onCameraSmoothness = (event: Event): void => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      setCameraSmoothness(typeof detail === "number" ? detail : 0);
+    };
+    window.addEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
+    return () => {
+      window.removeEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
+    };
+  }, []);
+
   const ws = useWorkspace(wsRef, {
+    cameraSmoothness,
     onScopeBind: handleScopeBind,
     onScopeUnbind: handleScopeUnbind,
     onConnectorBind: handleConnectorBind,
@@ -752,84 +765,87 @@ function AppShellInner(): ReactNode {
   ) : null;
 
   return (
-    <ChatSessionProvider value={session}>
-      <WsContext.Provider value={wsContextValue}>
-        <div className="app">
-          {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
+    <ActiveWorkspaceProvider value={activeWorkspace}>
+      <ChatSessionProvider value={session}>
+        <WsContext.Provider value={wsContextValue}>
+          <div className="app">
+            {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
               users past the header/rail straight to the workspace (design/accessibility.html §04). */}
-          <a className="skip-link" href="#main">
-            Skip to content
-          </a>
-          {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
-          <h1 className="visually-hidden">Keiko workspace</h1>
-          <Header
-            openPalette={openPalette}
-            openCommandPalette={openCmdk}
-            onTileAll={ws.api.tileAll}
-            onSplitFront={ws.api.splitFront}
-            onCascade={ws.api.cascade}
-          />
-          <div className="mid">
-            {needsGatewaySetup ? null : (
-              <LeftRail
-                openTools={openTools}
-                onTool={onTool}
-                onNewChat={onNewChat}
-                theme={theme}
-                onToggleTheme={toggleTheme}
+            <a className="skip-link" href="#main">
+              {t("app.skipToContent")}
+            </a>
+            {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
+            <h1 className="visually-hidden">{t("app.workspaceHeading")}</h1>
+            <Header
+              openPalette={openPalette}
+              openCommandPalette={openCmdk}
+              onTileAll={ws.api.tileAll}
+              onSplitFront={ws.api.splitFront}
+              onCascade={ws.api.cascade}
+              contextControl={<TaskWorkspaceSwitcher />}
+            />
+            <div className="mid">
+              {needsGatewaySetup ? null : (
+                <LeftRail
+                  openTools={openTools}
+                  onTool={onTool}
+                  onNewChat={onNewChat}
+                  theme={theme}
+                  onToggleTheme={toggleTheme}
+                />
+              )}
+              <div className="stage" id="main" tabIndex={-1}>
+                <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
+                {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
+                  AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
+                {sourceConnectionNotice !== null && (
+                  <div className="source-limit-alert" role="alert">
+                    <span>{sourceConnectionNotice}</span>
+                    <button
+                      type="button"
+                      className="source-limit-alert-dismiss"
+                      aria-label="Dismiss source connection notice"
+                      onClick={() => setSourceConnectionNotice(null)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+              </div>
+              {needsGatewaySetup ? null : <RightRail openTools={openTools} onTool={onTool} />}
+            </div>
+            <Footer
+              winCount={winCount}
+              windows={ws.wins ?? []}
+              windowPaletteOpen={windowPaletteOpen}
+              onToggleWindowPalette={toggleWindowPalette}
+              onSelectWindow={selectFooterWindow}
+              onCloseWindowPalette={closeWindowPalette}
+              mode={twin.mode}
+              selectedModel={session.selectedModel}
+              projectName={projectName}
+              branchLabel={branchLabel}
+              shellStatusLabel={footerShellStatusLabel}
+              evidenceStatusLabel={footerEvidenceStatusLabel}
+              statusRef={setStatusRef}
+            />
+
+            {pending !== null && (
+              <NewWindowDialog
+                type={pending}
+                types={WIN_TYPES}
+                filesContext={ws.api.currentFilesContext()}
+                onConfirm={confirmNew}
+                onClose={closeDialog}
               />
             )}
-            <div className="stage" id="main" tabIndex={-1}>
-              <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
-              {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
-                  AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
-              {sourceConnectionNotice !== null && (
-                <div className="source-limit-alert" role="alert">
-                  <span>{sourceConnectionNotice}</span>
-                  <button
-                    type="button"
-                    className="source-limit-alert-dismiss"
-                    aria-label="Dismiss source connection notice"
-                    onClick={() => setSourceConnectionNotice(null)}
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
-            </div>
-            {needsGatewaySetup ? null : <RightRail openTools={openTools} onTool={onTool} />}
+            {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
+            {needsGatewaySetup ? <GatewaySetupDialog /> : null}
+            <InstallBanner />
           </div>
-          <Footer
-            winCount={winCount}
-            windows={ws.wins ?? []}
-            windowPaletteOpen={windowPaletteOpen}
-            onToggleWindowPalette={toggleWindowPalette}
-            onSelectWindow={selectFooterWindow}
-            onCloseWindowPalette={closeWindowPalette}
-            mode={twin.mode}
-            selectedModel={session.selectedModel}
-            projectName={projectName}
-            branchLabel={branchLabel}
-            shellStatusLabel={footerShellStatusLabel}
-            evidenceStatusLabel={footerEvidenceStatusLabel}
-            statusRef={setStatusRef}
-          />
-
-          {pending !== null && (
-            <NewWindowDialog
-              type={pending}
-              types={WIN_TYPES}
-              filesContext={ws.api.currentFilesContext()}
-              onConfirm={confirmNew}
-              onClose={closeDialog}
-            />
-          )}
-          {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
-          {needsGatewaySetup ? <GatewaySetupDialog /> : null}
-          <InstallBanner />
-        </div>
-      </WsContext.Provider>
-    </ChatSessionProvider>
+        </WsContext.Provider>
+      </ChatSessionProvider>
+    </ActiveWorkspaceProvider>
   );
 }
 
@@ -868,8 +884,10 @@ export function AppShell(): ReactNode {
     );
   }
   return (
-    <TwinProvider>
-      <AppShellInner />
-    </TwinProvider>
+    <I18nProvider>
+      <TwinProvider>
+        <AppShellInner />
+      </TwinProvider>
+    </I18nProvider>
   );
 }

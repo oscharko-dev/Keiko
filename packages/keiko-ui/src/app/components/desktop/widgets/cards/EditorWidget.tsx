@@ -21,8 +21,9 @@ import {
   createEditorLayoutStateV2,
   editorLayoutOpenFiles,
   editorLayoutPaneIds,
-  editorLayoutPanes,
   editorLayoutReducer,
+  resolveWorkspaceFileIdentifier,
+  selectWorkspaceFileTarget,
   serializeEditorLayoutStateV2,
   type EditorDirtyCloseIntent,
   type EditorLayoutNode,
@@ -104,22 +105,17 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function normalizeComparablePath(path: string): string {
-  return path.trim().replace(/\\/gu, "/").replace(/\/+$/u, "");
-}
-
+// Root-relative file-identifier contract (Issue #1374): turn a configured/persisted file (which
+// may be absolute, e.g. from an older session or a symlink-aliased root) into the root-relative
+// identifier the BFF requires. An absolute path that does not live under `root` resolves to "" so
+// the editor renders its non-blocking empty state instead of sending an absolute path that the BFF
+// would reject with 400 BAD_PATH. This and the chat repository-reference open path
+// (workspaceActions) share the contract in @oscharko-dev/keiko-contracts; the editor window's
+// cfg-persistence normalizer (AppShell.normalizeEditorWindowCfg) is a separate layer that likewise
+// never persists an absolute file id.
 function normalizeEditorFile(root: string, file: string | undefined): string {
-  const rawFile = file?.trim() ?? "";
-  if (root.trim().length === 0 || rawFile.length === 0) return rawFile;
-  const normalizedRoot = normalizeComparablePath(root);
-  const normalizedFile = normalizeComparablePath(rawFile);
-  const rootCmp = normalizedRoot.toLowerCase();
-  const fileCmp = normalizedFile.toLowerCase();
-  if (fileCmp === rootCmp) return "";
-  if (fileCmp.startsWith(`${rootCmp}/`)) {
-    return normalizedFile.slice(normalizedRoot.length + 1).replace(/^\/+/u, "");
-  }
-  return rawFile;
+  const resolution = resolveWorkspaceFileIdentifier(root, file);
+  return resolution.kind === "relative" ? resolution.path : "";
 }
 
 function normalizeEditorOpenFiles(
@@ -458,6 +454,61 @@ function DirtyCloseDialog(props: {
   );
 }
 
+// The split controls rendered into each pane's toolbar. A pure function of the pane plus the stable
+// split/close callbacks, so it can be built inside the memoized per-pane binding without depending on
+// the live layout (the >1-pane condition is passed in as `showClose`).
+function renderPaneActions(
+  pane: EditorPaneStateV2,
+  showClose: boolean,
+  splitPane: (paneId: string, direction: EditorSplitDirection) => void,
+  closePane: (paneId: string) => void,
+): ReactNode {
+  return (
+    <span className="ed-pane-actions" aria-label="Editor split controls">
+      <button
+        type="button"
+        className="ed-icon-action ui-tip"
+        aria-label={`Split ${pane.activeFile || "editor"} right`}
+        data-tip="Split right"
+        onClick={() => splitPane(pane.id, "row")}
+      >
+        <Icons.split size={14} />
+      </button>
+      <button
+        type="button"
+        className="ed-icon-action ui-tip"
+        aria-label={`Split ${pane.activeFile || "editor"} down`}
+        data-tip="Split down"
+        onClick={() => splitPane(pane.id, "column")}
+      >
+        <Icons.panelDown size={14} />
+      </button>
+      {showClose ? (
+        <button
+          type="button"
+          className="ed-icon-action ui-tip"
+          aria-label={`Close split ${pane.activeFile || "editor"}`}
+          data-tip="Close split"
+          onClick={() => closePane(pane.id)}
+        >
+          <Icons.close size={14} />
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+// The stable per-pane prop bundle the memoized editor host receives, built once per pane set.
+interface PaneBinding {
+  readonly onSelectOpenFile: (file: string) => void;
+  readonly onCloseOpenFile: (path: string) => Promise<boolean> | boolean | void;
+  readonly onDirtyChange: (path: string, dirty: boolean) => void;
+  readonly onMoveTab: (fromPaneId: string, file: string, toPaneId: string) => void;
+  readonly onSplitPane: (paneId: string, direction: "row" | "column") => void;
+  readonly toolbarExtras: ReactNode;
+  readonly renderTabHandle: NonNullable<EditorRuntimeWidgetProps["renderTabHandle"]>;
+}
+
 export function EditorWidget({
   root,
   file,
@@ -481,9 +532,14 @@ export function EditorWidget({
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
   const [layout, setLayout] = useState<EditorLayoutStateV2>(initialLayout);
-  const [dirtyByPane, setDirtyByPane] = useState<
-    Readonly<Record<string, Readonly<Record<string, true>>>>
-  >({});
+  // The live layout, read by the pane callbacks so their identity stays stable across layout
+  // mutations (Wave 2 perf, the #1580 pattern). Without this every callback closes over `layout` and
+  // gets a new identity on each `setLayout`, which churns the per-pane props and defeats the
+  // `React.memo` on each pane's editor host — so a tab-select or split-resize in one pane re-renders
+  // every pane. Updated on each render (after both `commitLayout` and the prop-sync effect commit).
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const [dirtyByPane, setDirtyByPane] = useState<EditorDirtyByPane>({});
   const [pendingClose, setPendingClose] = useState<PendingDirtyClose | null>(null);
   const [heldTab, setHeldTab] = useState<DraggedTab | null>(null);
   const [draggedTab, setDraggedTab] = useState<DraggedTab | null>(null);
@@ -514,6 +570,10 @@ export function EditorWidget({
     (nextLayout: EditorLayoutStateV2, nextRoot = workspaceRoot): void => {
       const normalized = normalizeEditorLayoutStructure(nextRoot, nextLayout);
       setLayout(normalized);
+      // Re-home the per-pane dirty index onto the committed layout so a dirty tab
+      // keeps its marker and unsaved-changes prompt as it moves between panes and
+      // no orphaned flag survives on a collapsed pane (Issue #1375 AC3).
+      setDirtyByPane((current) => reconcileEditorDirtyByPane(current, normalized));
       if (nextRoot.length > 0) onWorkspaceChange?.(buildPatch(nextRoot, normalized));
     },
     [buildPatch, onWorkspaceChange, workspaceRoot],
@@ -582,24 +642,28 @@ export function EditorWidget({
     (paneId: string, path: string): Promise<boolean> => {
       saveSeqRef.current += 1;
       const id = saveSeqRef.current;
-      commitLayout(editorLayoutReducer(layout, { type: "select-file", paneId, file: path }));
+      commitLayout(
+        editorLayoutReducer(layoutRef.current, { type: "select-file", paneId, file: path }),
+      );
       setSaveRequest({ id, paneId, file: path });
       return new Promise<boolean>((resolve) => {
         saveResolversRef.current.set(id, resolve);
       });
     },
-    [commitLayout, layout],
+    [commitLayout],
   );
 
   const onExternalSaveComplete = useCallback(
     (requestId: number, paneId: string, path: string, ok: boolean): void => {
       const resolve = saveResolversRef.current.get(requestId);
       saveResolversRef.current.delete(requestId);
-      if (saveRequest?.id === requestId) setSaveRequest(null);
+      // Functional update (instead of reading `saveRequest` in deps) keeps this callback's identity
+      // stable across save lifecycle changes, so a save in one pane does not re-render the others.
+      setSaveRequest((current) => (current?.id === requestId ? null : current));
       if (ok) markDirty(paneId, path, false);
       resolve?.(ok);
     },
-    [markDirty, saveRequest?.id],
+    [markDirty],
   );
 
   const requestDirtyClose = useCallback(
@@ -662,10 +726,16 @@ export function EditorWidget({
       for (const [paneId, files] of Object.entries(dirtyByPane)) {
         if (files[path] === true) markDirty(paneId, path, false);
       }
+      // AC5: an explicit Discard must delete the hot-exit snapshot for the file, otherwise the
+      // discarded edits resurface as a recovery offer the next time the file is opened. The runtime
+      // widget's own clean-delete effect cannot be relied on here: applying the close unmounts that
+      // widget in the same React commit as the dirty flag is cleared, so the effect never runs.
+      // Deletion is scoped to the still-current workspace root (apply() may switch roots afterward).
+      void deleteEditorHotExitSnapshot(workspaceRoot, path);
     }
     pendingClose.apply();
     setPendingClose(null);
-  }, [dirtyByPane, markDirty, pendingClose]);
+  }, [dirtyByPane, markDirty, pendingClose, workspaceRoot]);
 
   const cancelPendingClose = useCallback((): void => {
     if (pendingClose?.saving === true) return;
@@ -677,16 +747,17 @@ export function EditorWidget({
       const normalizedRoot = nextRoot.trim();
       if (normalizedRoot.length === 0) return;
       const apply = (): void => {
-        const nextLayout = editorLayoutReducer(layout, {
+        const nextLayout = editorLayoutReducer(layoutRef.current, {
           type: "replace-root",
           root: normalizedRoot,
-          sidebarWidth: layout.sidebarWidth,
+          sidebarWidth: layoutRef.current.sidebarWidth,
         });
         setWorkspaceRoot(normalizedRoot);
         setDirtyByPane({});
         commitLayout(nextLayout, normalizedRoot);
       };
-      const firstPaneId = editorLayoutPaneIds(layout)[0] ?? layout.activePaneId;
+      const firstPaneId =
+        editorLayoutPaneIds(layoutRef.current)[0] ?? layoutRef.current.activePaneId;
       requestDirtyClose({
         paneId: firstPaneId,
         files: dirtyFileList,
@@ -694,33 +765,77 @@ export function EditorWidget({
         apply,
       });
     },
-    [commitLayout, dirtyFileList, layout, requestDirtyClose],
+    [commitLayout, dirtyFileList, requestDirtyClose],
   );
 
   const openFile = useCallback(
     (nextRoot: string, nextFile: string): void => {
-      const normalizedRoot = nextRoot.trim();
-      const normalizedFile = normalizeEditorFile(normalizedRoot, nextFile);
-      if (normalizedRoot.length === 0 || normalizedFile.length === 0) return;
-      const paneId = currentPane.id;
-      const nextLayout = editorLayoutReducer(layout, {
+      // Resolve to a {root, file} pair: a root-relative or absolute-inside-root candidate keeps
+      // `nextRoot`; a single absolute file outside it selects its containing directory as the root
+      // (AC3). An unresolvable candidate is dropped so the editor stays on its current usable state.
+      const target = selectWorkspaceFileTarget(nextRoot, nextFile);
+      if (target === null || target.file.length === 0) return;
+      const paneId = activeEditorPane(layoutRef.current).id;
+      const nextLayout = editorLayoutReducer(layoutRef.current, {
         type: "open-file",
         paneId,
-        file: normalizedFile,
+        file: target.file,
       });
-      setWorkspaceRoot(normalizedRoot);
-      commitLayout(nextLayout, normalizedRoot);
+      setWorkspaceRoot(target.root);
+      commitLayout(nextLayout, target.root);
     },
-    [commitLayout, currentPane.id, layout],
+    [commitLayout],
   );
 
   const selectOpenFile = useCallback(
     (paneId: string, nextFile: string): void => {
       if (workspaceRoot.length === 0 || nextFile.length === 0) return;
-      commitLayout(editorLayoutReducer(layout, { type: "select-file", paneId, file: nextFile }));
+      commitLayout(
+        editorLayoutReducer(layoutRef.current, { type: "select-file", paneId, file: nextFile }),
+      );
     },
-    [commitLayout, layout, workspaceRoot],
+    [commitLayout, workspaceRoot],
   );
+
+  // A file mutation from the sidebar tree: re-home (rename) or close (delete) any open tabs so they do
+  // not go stale and 404. A create needs no layout change — the new file is opened directly by the
+  // FilesWidget. The renamed tab reloads from disk (a clean buffer), so the stale dirty marker is
+  // pruned by `reconcileEditorDirtyByPane` inside `commitLayout`; the old hot-exit snapshot is dropped
+  // so discarded edits cannot resurface under the deleted/renamed path.
+  const handleFilesMutated = useCallback(
+    (event: FilesMutationEvent): void => {
+      const { op, mutation } = event;
+      if (
+        op === "rename" &&
+        mutation.previousPath !== undefined &&
+        mutation.previousPath !== mutation.path
+      ) {
+        commitLayout(
+          editorLayoutReducer(layoutRef.current, {
+            type: "rename-file",
+            from: mutation.previousPath,
+            to: mutation.path,
+          }),
+        );
+        void deleteEditorHotExitSnapshot(workspaceRoot, mutation.previousPath);
+      } else if (op === "delete") {
+        commitLayout(
+          editorLayoutReducer(layoutRef.current, { type: "remove-file", file: mutation.path }),
+        );
+        void deleteEditorHotExitSnapshot(workspaceRoot, mutation.path);
+      }
+    },
+    [commitLayout, workspaceRoot],
+  );
+
+  // Bounded MRU of closed (paneId, file) for the "Reopen Closed Editor" command. Deduped by file so a
+  // repeatedly closed file does not flood the stack; capped so it never grows unbounded.
+  const pushClosedTab = useCallback((paneId: string, file: string): void => {
+    if (file.length === 0) return;
+    const next = closedTabsRef.current.filter((entry) => entry.file !== file);
+    next.push({ paneId, file });
+    closedTabsRef.current = next.slice(-CLOSED_TAB_HISTORY_LIMIT);
+  }, []);
 
   const closeOpenFile = useCallback(
     async (paneId: string, path: string): Promise<boolean> =>
@@ -730,10 +845,13 @@ export function EditorWidget({
         reason: "tab-close",
         apply: () => {
           markDirty(paneId, path, false);
-          commitLayout(editorLayoutReducer(layout, { type: "close-tab", paneId, file: path }));
+          pushClosedTab(paneId, path);
+          commitLayout(
+            editorLayoutReducer(layoutRef.current, { type: "close-tab", paneId, file: path }),
+          );
         },
       }),
-    [commitLayout, layout, markDirty, requestDirtyClose],
+    [commitLayout, markDirty, pushClosedTab, requestDirtyClose],
   );
 
   const applyPanePreset = useCallback(
@@ -753,48 +871,59 @@ export function EditorWidget({
 
   const closePane = useCallback(
     (paneId: string): void => {
-      const pane = layout.panes[paneId];
+      const pane = layoutRef.current.panes[paneId];
       if (pane === undefined) return;
       requestDirtyClose({
         paneId,
         files: pane.openFiles,
         reason: "pane-close",
         apply: () => {
+          for (const file of pane.openFiles) pushClosedTab(paneId, file);
           setDirtyByPane((current) => {
             const { [paneId]: _removed, ...remaining } = current;
             return remaining;
           });
-          commitLayout(editorLayoutReducer(layout, { type: "close-pane", paneId }));
+          commitLayout(editorLayoutReducer(layoutRef.current, { type: "close-pane", paneId }));
         },
       });
     },
-    [commitLayout, layout, requestDirtyClose],
+    [commitLayout, pushClosedTab, requestDirtyClose],
   );
 
   const toggleSidebar = useCallback((): void => {
     commitLayout(
-      editorLayoutReducer(layout, {
+      editorLayoutReducer(layoutRef.current, {
         type: "set-sidebar",
-        collapsed: !layout.sidebarCollapsed,
+        collapsed: !layoutRef.current.sidebarCollapsed,
       }),
     );
-  }, [commitLayout, layout]);
+  }, [commitLayout]);
 
-  const resizeSidebarTo = useCallback(
-    (clientX: number): void => {
-      if (workspaceRef.current === null) return;
-      const rect = workspaceRef.current.getBoundingClientRect();
-      const nextWidth = clampNumber(clientX - rect.left, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
-      commitLayout(
-        editorLayoutReducer(layout, {
-          type: "set-sidebar",
-          width: nextWidth,
-          collapsed: false,
-        }),
-      );
-    },
-    [commitLayout, layout],
-  );
+  // Live-resize gesture state. During a pointer/mouse drag the split ratio or sidebar width is written
+  // straight to the CSS variable on the DOM, and the final value is committed to layout state only on
+  // release — so a drag is a pure style update with no per-frame React render or layout persistence
+  // (the #1580 transform-during-gesture + persistence-debounce wins). Keyboard resize still commits
+  // each discrete step immediately.
+  const splitGestureRef = useRef<{ readonly splitId: string; readonly ratio: number } | null>(null);
+  const sidebarGestureRef = useRef<number | null>(null);
+
+  const previewSidebarWidth = useCallback((clientX: number): void => {
+    const node = workspaceRef.current;
+    if (node === null) return;
+    const rect = node.getBoundingClientRect();
+    const width = clampNumber(clientX - rect.left, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+    node.style.setProperty("--ed-sidebar-width", `${String(width)}px`);
+    sidebarGestureRef.current = width;
+  }, []);
+
+  const commitSidebarGesture = useCallback((): void => {
+    const width = sidebarGestureRef.current;
+    sidebarGestureRef.current = null;
+    if (width === null) return;
+    commitLayout(
+      editorLayoutReducer(layoutRef.current, { type: "set-sidebar", width, collapsed: false }),
+    );
+  }, [commitLayout]);
 
   const isTabDragActive = useCallback(
     (): boolean => pointerTabDragRef.current !== null || draggedTab !== null,
@@ -813,54 +942,70 @@ export function EditorWidget({
   const resizeSidebarBy = useCallback(
     (delta: number): void => {
       commitLayout(
-        editorLayoutReducer(layout, {
+        editorLayoutReducer(layoutRef.current, {
           type: "set-sidebar",
-          width: clampNumber(layout.sidebarWidth + delta, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH),
+          width: clampNumber(
+            layoutRef.current.sidebarWidth + delta,
+            MIN_SIDEBAR_WIDTH,
+            MAX_SIDEBAR_WIDTH,
+          ),
           collapsed: false,
         }),
       );
     },
-    [commitLayout, layout],
+    [commitLayout],
   );
 
-  const resizeSplitTo = useCallback(
-    (split: EditorLayoutSplitNode, rect: DOMRect, clientX: number, clientY: number): void => {
+  const previewSplitRatio = useCallback(
+    (split: EditorLayoutSplitNode, parent: HTMLElement, clientX: number, clientY: number): void => {
+      const rect = parent.getBoundingClientRect();
       const raw =
         split.direction === "row"
           ? ((clientX - rect.left) / rect.width) * 100
           : ((clientY - rect.top) / rect.height) * 100;
-      commitLayout(
-        editorLayoutReducer(layout, {
-          type: "resize-split",
-          splitId: split.id,
-          ratio: clampNumber(raw, MIN_SPLIT_RATIO, MAX_SPLIT_RATIO),
-        }),
-      );
+      const ratio = clampNumber(raw, MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+      parent.style.setProperty("--ed-split-ratio", `${String(ratio)}%`);
+      splitGestureRef.current = { splitId: split.id, ratio };
     },
-    [commitLayout, layout],
+    [],
   );
+
+  const commitSplitGesture = useCallback((): void => {
+    const gesture = splitGestureRef.current;
+    splitGestureRef.current = null;
+    if (gesture === null) return;
+    commitLayout(
+      editorLayoutReducer(layoutRef.current, {
+        type: "resize-split",
+        splitId: gesture.splitId,
+        ratio: gesture.ratio,
+      }),
+    );
+  }, [commitLayout]);
 
   const resizeSplitBy = useCallback(
     (split: EditorLayoutSplitNode, delta: number): void => {
       commitLayout(
-        editorLayoutReducer(layout, {
+        editorLayoutReducer(layoutRef.current, {
           type: "resize-split",
           splitId: split.id,
           ratio: clampNumber(split.ratio + delta, MIN_SPLIT_RATIO, MAX_SPLIT_RATIO),
         }),
       );
     },
-    [commitLayout, layout],
+    [commitLayout],
   );
 
   const beginSidebarMouseResize = useCallback(
     (event: MouseEvent<HTMLButtonElement>): void => {
       if (isTabDragActive()) return;
       event.preventDefault();
-      const move = (moveEvent: globalThis.MouseEvent): void => resizeSidebarTo(moveEvent.clientX);
+      const move = (moveEvent: globalThis.MouseEvent): void =>
+        previewSidebarWidth(moveEvent.clientX);
       const up = (): void => {
         window.removeEventListener("mousemove", move);
         window.removeEventListener("mouseup", up);
+        commitSidebarGesture();
       };
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up, { once: true });
@@ -875,10 +1020,11 @@ export function EditorWidget({
       const parent = event.currentTarget.parentElement;
       if (parent === null) return;
       const move = (moveEvent: globalThis.MouseEvent): void =>
-        resizeSplitTo(split, parent.getBoundingClientRect(), moveEvent.clientX, moveEvent.clientY);
+        previewSplitRatio(split, parent, moveEvent.clientX, moveEvent.clientY);
       const up = (): void => {
         window.removeEventListener("mousemove", move);
         window.removeEventListener("mouseup", up);
+        commitSplitGesture();
       };
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up, { once: true });
@@ -929,18 +1075,18 @@ export function EditorWidget({
   const handleTabKeyDown = useCallback(
     (paneId: string, path: string, event: KeyboardEvent<HTMLButtonElement>): void => {
       if (!event.altKey) return;
-      const pane = layout.panes[paneId];
+      const pane = layoutRef.current.panes[paneId];
       if (pane === undefined) return;
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
-        const paneIds = editorLayoutPaneIds(layout);
+        const paneIds = editorLayoutPaneIds(layoutRef.current);
         if (event.shiftKey) {
           const paneIndex = paneIds.indexOf(paneId);
           const targetPaneId =
             event.key === "ArrowLeft" ? paneIds[paneIndex - 1] : paneIds[paneIndex + 1];
           if (targetPaneId !== undefined) {
             commitLayout(
-              editorLayoutReducer(layout, {
+              editorLayoutReducer(layoutRef.current, {
                 type: "move-tab",
                 fromPaneId: paneId,
                 toPaneId: targetPaneId,
@@ -953,7 +1099,7 @@ export function EditorWidget({
         const index = pane.tabOrder.indexOf(path);
         const nextIndex = event.key === "ArrowLeft" ? index - 1 : index + 1;
         commitLayout(
-          editorLayoutReducer(layout, {
+          editorLayoutReducer(layoutRef.current, {
             type: "reorder-tab",
             paneId,
             file: path,
@@ -962,7 +1108,7 @@ export function EditorWidget({
         );
       }
     },
-    [commitLayout, layout],
+    [commitLayout],
   );
 
   const beginTabPointerDrag = useCallback(
@@ -1080,7 +1226,7 @@ export function EditorWidget({
         return;
       }
       commitLayout(
-        editorLayoutReducer(layout, {
+        editorLayoutReducer(layoutRef.current, {
           type: "drop-tab",
           intent: {
             fromPaneId: dragged.paneId,
@@ -1092,8 +1238,178 @@ export function EditorWidget({
       );
       setDraggedTab(null);
     },
-    [commitLayout, draggedTab, layout],
+    [commitLayout, draggedTab],
   );
+
+  // Stable cross-pane tab move (used by the per-pane binding so it does not churn on every render).
+  const moveTabAction = useCallback(
+    (fromPaneId: string, toPaneId: string, file: string): void => {
+      commitLayout(
+        editorLayoutReducer(layoutRef.current, { type: "move-tab", fromPaneId, toPaneId, file }),
+      );
+    },
+    [commitLayout],
+  );
+
+  // ── Command/keybinding/palette actions (Wave 2 items 2.3/2.4/2.5) ──────────────────────────────
+  // All read the live layout from `layoutRef`, so they act on the active pane regardless of where
+  // focus is, and route through the existing close/select/split/save callbacks.
+  const closeActiveTab = useCallback((): void => {
+    const pane = activeEditorPane(layoutRef.current);
+    if (pane.activeFile.length > 0) void closeOpenFile(pane.id, pane.activeFile);
+  }, [closeOpenFile]);
+
+  const cycleActiveTab = useCallback(
+    (delta: number): void => {
+      const pane = activeEditorPane(layoutRef.current);
+      const order = pane.tabOrder;
+      if (order.length < 2) return;
+      const index = order.indexOf(pane.activeFile);
+      const next = order[(index + delta + order.length) % order.length];
+      if (next !== undefined) selectOpenFile(pane.id, next);
+    },
+    [selectOpenFile],
+  );
+
+  const reopenClosedTab = useCallback((): void => {
+    const last = closedTabsRef.current.pop();
+    if (last !== undefined) openFile(workspaceRoot, last.file);
+  }, [openFile, workspaceRoot]);
+
+  const saveAllDirty = useCallback((): void => {
+    for (const [paneId, files] of Object.entries(dirtyByPane)) {
+      for (const file of Object.keys(files)) void requestExternalSave(paneId, file);
+    }
+  }, [dirtyByPane, requestExternalSave]);
+
+  const splitActivePane = useCallback(
+    (direction: EditorSplitDirection): void =>
+      splitPane(activeEditorPane(layoutRef.current).id, direction),
+    [splitPane],
+  );
+
+  const closeActivePane = useCallback(
+    (): void => closePane(activeEditorPane(layoutRef.current).id),
+    [closePane],
+  );
+
+  const openQuickOpen = useCallback((): void => setPaletteState({ mode: "files" }), []);
+  const openCommandPalette = useCallback((): void => setPaletteState({ mode: "commands" }), []);
+
+  // Content-free host snapshot consumed by the palette + keybinding layer. Rebuilt each render and
+  // mirrored into a ref so the document-level keydown listener always dispatches against current state.
+  const commandHost: EditorPaletteHost = {
+    root: workspaceRoot,
+    activePaneId: layout.activePaneId,
+    paneCount: editorLayoutPaneIds(layout).length,
+    activeFile: activeFile.length > 0 ? activeFile : null,
+    closedTabCount: closedTabsRef.current.length,
+    dirtyCount: dirtyFileList.length,
+    openQuickOpen,
+    openCommandPalette,
+    splitActive: splitActivePane,
+    closeActiveSplit: closeActivePane,
+    closeActiveTab,
+    nextTab: () => cycleActiveTab(1),
+    prevTab: () => cycleActiveTab(-1),
+    reopenClosed: reopenClosedTab,
+    saveAll: saveAllDirty,
+  };
+  const commandHostRef = useRef(commandHost);
+  commandHostRef.current = commandHost;
+
+  // Container-level capturing keydown for editor-chrome chords (mirrors the on-mount save backstop,
+  // but scoped to the whole editor so it also fires from the sidebar/tab strip). Only browser-safe
+  // chords are bound — Cmd/Ctrl+W and Cmd/Ctrl+Shift+T are reserved and intentionally omitted.
+  useEffect(() => {
+    const node = workspaceRef.current;
+    if (node === null) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      const host = commandHostRef.current;
+      const key = event.key.toLowerCase();
+      if (key === "p" && !event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.shiftKey) host.openCommandPalette();
+        else host.openQuickOpen();
+        return;
+      }
+      if (!event.altKey) return;
+      const handled = (action: () => void): void => {
+        event.preventDefault();
+        event.stopPropagation();
+        action();
+      };
+      if (key === "arrowright") handled(host.nextTab);
+      else if (key === "arrowleft") handled(host.prevTab);
+      else if (key === "t") handled(host.reopenClosed);
+      else if (key === "\\") handled(() => host.splitActive("row"));
+      else if (key === "s") handled(host.saveAll);
+    };
+    node.addEventListener("keydown", onKeyDown, true);
+    return () => node.removeEventListener("keydown", onKeyDown, true);
+  }, [workspaceRoot]);
+
+  // Agent-pane snapshots, memoized by the pane SET. A split resize only changes a tree node's ratio,
+  // leaving `layout.panes` untouched, so this stays referentially stable across a resize and does not
+  // churn the per-pane editor-host props.
+  const layoutPaneSnapshots = useMemo<readonly EditorAgentPaneSnapshot[]>(
+    () =>
+      Object.values(layout.panes).map((entry) => ({
+        paneId: entry.id,
+        activeFile: entry.activeFile.length > 0 ? entry.activeFile : null,
+        openFiles: entry.openFiles,
+      })),
+    [layout.panes],
+  );
+
+  const paneCount = editorLayoutPaneIds(layout).length;
+
+  // Per-pane bound callbacks + split-control chrome + tab-drag handle, memoized by the pane set (and
+  // the now-stable underlying callbacks). A layout mutation that does not touch a given pane keeps its
+  // binding referentially identical, so the `React.memo`-wrapped editor host bails out of the
+  // re-render — the #1580 fan-out fix applied to editor panes.
+  const paneBindings = useMemo(() => {
+    const map = new Map<string, PaneBinding>();
+    for (const pane of Object.values(layout.panes)) {
+      const paneId = pane.id;
+      map.set(paneId, {
+        onSelectOpenFile: (file: string) => selectOpenFile(paneId, file),
+        onCloseOpenFile: (path: string) => closeOpenFile(paneId, path),
+        onDirtyChange: (path: string, dirty: boolean) => markDirty(paneId, path, dirty),
+        onMoveTab: (fromPaneId: string, file: string, toPaneId: string) =>
+          moveTabAction(fromPaneId, toPaneId, file),
+        onSplitPane: (targetPaneId: string, direction: "row" | "column") =>
+          splitPane(targetPaneId, direction),
+        toolbarExtras: renderPaneActions(pane, paneCount > 1, splitPane, closePane),
+        renderTabHandle: (path: string, active: boolean, tabDirty: boolean) => ({
+          draggable: true,
+          onDragStart: (event: DragEvent<HTMLButtonElement>) => {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", path);
+            setDraggedTab({ paneId, file: path });
+          },
+          onDragEnd: () => setDraggedTab(null),
+          onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) =>
+            handleTabKeyDown(paneId, path, event),
+          "data-active": active ? "true" : "false",
+          "data-dirty": tabDirty ? "true" : "false",
+        }),
+      });
+    }
+    return map;
+  }, [
+    layout.panes,
+    paneCount,
+    selectOpenFile,
+    closeOpenFile,
+    markDirty,
+    moveTabAction,
+    splitPane,
+    closePane,
+    handleTabKeyDown,
+  ]);
 
   if (workspaceRoot.length === 0) {
     return <EditorRuntimeWidget {...props} />;
@@ -1134,13 +1450,8 @@ export function EditorWidget({
   };
 
   const renderPane = (pane: EditorPaneStateV2): ReactNode => {
-    const layoutPaneSnapshots: readonly EditorAgentPaneSnapshot[] = editorLayoutPanes(layout).map(
-      (entry: EditorPaneStateV2) => ({
-        paneId: entry.id,
-        activeFile: entry.activeFile.length > 0 ? entry.activeFile : null,
-        openFiles: entry.openFiles,
-      }),
-    );
+    const binding = paneBindings.get(pane.id);
+    if (binding === undefined) return null;
     const runtimeProps: EditorRuntimeWidgetProps = {
       ...props,
       root: workspaceRoot,
@@ -1151,13 +1462,16 @@ export function EditorWidget({
       paneId: pane.id,
       layoutPanes: layoutPaneSnapshots,
       activePaneId: layout.activePaneId,
-      onSelectOpenFile: (nextFile) => selectOpenFile(pane.id, nextFile),
-      onCloseOpenFile: (path) => closeOpenFile(pane.id, path),
-      onDirtyChange: (path, dirty) => markDirty(pane.id, path, dirty),
-      toolbarExtras: paneActions(pane),
+      onSelectOpenFile: binding.onSelectOpenFile,
+      onSplitPane: binding.onSplitPane,
+      onMoveTab: binding.onMoveTab,
+      onCloseOpenFile: binding.onCloseOpenFile,
+      onDirtyChange: binding.onDirtyChange,
+      toolbarExtras: binding.toolbarExtras,
       externalSaveRequest:
         saveRequest !== null && saveRequest.paneId === pane.id ? saveRequest : undefined,
       onExternalSaveComplete,
+      renderTabHandle: binding.renderTabHandle,
     };
     return (
       <section
@@ -1236,11 +1550,17 @@ export function EditorWidget({
             if (isTabDragActive()) return;
             const parent = event.currentTarget.parentElement;
             if (parent !== null) {
-              resizeSplitTo(node, parent.getBoundingClientRect(), event.clientX, event.clientY);
+              previewSplitRatio(node, parent, event.clientX, event.clientY);
             }
           }}
-          onPointerUp={releasePointer}
-          onPointerCancel={releasePointer}
+          onPointerUp={(event) => {
+            releasePointer(event);
+            commitSplitGesture();
+          }}
+          onPointerCancel={(event) => {
+            releasePointer(event);
+            commitSplitGesture();
+          }}
           onMouseDown={(event) => beginSplitMouseResize(node, event)}
           onKeyDown={(event) => handleSplitResizerKeyDown(node, event)}
         />
@@ -1290,6 +1610,7 @@ export function EditorWidget({
               openFilesDirectly
               onRootChange={openRoot}
               onOpenFile={openFile}
+              onFilesMutated={handleFilesMutated}
             />
           </aside>
           <button
@@ -1301,8 +1622,14 @@ export function EditorWidget({
               capturePointer(event);
             }}
             onPointerMove={resizeSidebar}
-            onPointerUp={releasePointer}
-            onPointerCancel={releasePointer}
+            onPointerUp={(event) => {
+              releasePointer(event);
+              commitSidebarGesture();
+            }}
+            onPointerCancel={(event) => {
+              releasePointer(event);
+              commitSidebarGesture();
+            }}
             onMouseDown={beginSidebarMouseResize}
             onKeyDown={handleSidebarResizerKeyDown}
           />
@@ -1339,6 +1666,15 @@ export function EditorWidget({
           onSave={savePendingClose}
           onDiscard={discardPendingClose}
           onCancel={cancelPendingClose}
+        />
+      ) : null}
+      {paletteState !== null ? (
+        <EditorCommandPalette
+          mode={paletteState.mode}
+          root={workspaceRoot}
+          host={commandHost}
+          onOpenFile={openFile}
+          onClose={() => setPaletteState(null)}
         />
       ) : null}
     </div>

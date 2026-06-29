@@ -3,7 +3,7 @@
 // Issue #147 — Modality-aware attachment intake and UI validation.
 //
 // This module owns all client-side attachment UI:
-//   - AttachButton    : the paperclip button in the composer bar
+//   - AttachButton    : the add-attachment button in the composer bar
 //   - AttachDropZone  : drag-and-drop surface above the textarea
 //   - AttachmentChip  : one chip per pending attachment (thumbnail + name + remove)
 //   - AttachmentStrip : the horizontal chip row rendered below the textarea
@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Icons } from "./Icons";
+import { useI18n, type I18nTranslate } from "@/lib/i18n";
 import type {
   AttachmentRejectionReason,
   PendingAttachment,
@@ -23,17 +24,42 @@ import type { ModelCapability } from "@/lib/types";
 // ─── Human-readable rejection messages (AC #2) ────────────────────────────────
 
 export function rejectionMessage(reason: AttachmentRejectionReason, mimeType?: string): string {
+  return rejectionMessageFor(reason, undefined, mimeType);
+}
+
+function rejectionMessageFor(
+  reason: AttachmentRejectionReason,
+  t: I18nTranslate | undefined,
+  mimeType?: string,
+): string {
+  const tr: I18nTranslate =
+    t ??
+    ((key, values) => {
+      switch (key) {
+        case "attachment.rejection.textOnly":
+          return "The selected model can't accept this attachment type. Choose a model that supports images or documents.";
+        case "attachment.rejection.unsupported":
+          return `Unsupported file type${String(values?.mime ?? "")}. Supported types: images (image/*), PDF, plain text, markdown, JSON, YAML.`;
+        case "attachment.rejection.oversized":
+          return "File is larger than the 8 MiB limit. Choose a smaller file or summarize the content as text.";
+        case "attachment.rejection.empty":
+          return "Empty file. Add a file with content to attach.";
+        default:
+          return key;
+      }
+    });
+  const mime = mimeType !== undefined && mimeType.length > 0 ? `: ${mimeType}` : "";
   switch (reason) {
     case "text-only-model":
       // ATT-F3: a single accurate message covers both image and document
       // rejections (the prior copy always said "image input" even for documents).
-      return "The selected model can't accept this attachment type. Choose a model that supports images or documents.";
+      return tr("attachment.rejection.textOnly");
     case "unsupported-type":
-      return `Unsupported file type${mimeType !== undefined && mimeType.length > 0 ? `: ${mimeType}` : ""}. Supported types: images (image/*), PDF, plain text, markdown, JSON, YAML.`;
+      return tr("attachment.rejection.unsupported", { mime });
     case "oversized":
-      return "File is larger than the 8 MiB limit. Choose a smaller file or summarize the content as text.";
+      return tr("attachment.rejection.oversized");
     case "empty":
-      return "Empty file. Add a file with content to attach.";
+      return tr("attachment.rejection.empty");
   }
 }
 
@@ -73,7 +99,8 @@ interface AttachmentChipProps {
 }
 
 function AttachmentChip({ attachment, onRemove }: AttachmentChipProps): ReactNode {
-  const label = `Remove attachment ${attachment.name}`;
+  const { t } = useI18n();
+  const label = t("attachment.remove", { name: attachment.name });
   const displayName = truncateName(attachment.name);
 
   return (
@@ -119,9 +146,10 @@ interface AttachmentStripProps {
 }
 
 export function AttachmentStrip({ attachments, onRemove }: AttachmentStripProps): ReactNode {
+  const { t } = useI18n();
   if (attachments.length === 0) return null;
   return (
-    <div className="attach-strip" role="list" aria-label="Pending attachments">
+    <div className="attach-strip" role="list" aria-label={t("attachment.pending")}>
       {attachments.map((a) => (
         <AttachmentChip key={a.id} attachment={a} onRemove={onRemove} />
       ))}
@@ -137,6 +165,7 @@ interface AttachDropZoneProps {
 }
 
 export function AttachDropZone({ enabled, onFiles }: AttachDropZoneProps): ReactNode {
+  const { t } = useI18n();
   const [dragOver, setDragOver] = useState(false);
 
   // uiux-fix F040 C207 — the zone is revealed only while a file drag is in
@@ -218,7 +247,7 @@ export function AttachDropZone({ enabled, onFiles }: AttachDropZoneProps): React
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <span className="attach-drop-hint">Drop files here to attach</span>
+      <span className="attach-drop-hint">{t("attachment.drop")}</span>
     </div>
   );
 }
@@ -245,6 +274,7 @@ export function AttachButton({
   onFiles,
   anyModelSupportsAttachments = true,
 }: AttachButtonProps): ReactNode {
+  const { t } = useI18n();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const supportsAny =
@@ -271,8 +301,8 @@ export function AttachButton({
       {!supportsAny ? (
         <span id={ATTACH_DISABLED_HINT_ID} className="sr-only">
           {anyModelSupportsAttachments
-            ? "The selected model does not support image or document input. Choose a different model to attach files."
-            : "The selected model does not support image or document input. No configured model currently supports attachments."}
+            ? t("attachment.disabledDifferentModel")
+            : t("attachment.disabledNoModel")}
         </span>
       ) : null}
       {/* Hidden file input — triggered imperatively by the button */}
@@ -289,13 +319,13 @@ export function AttachButton({
       <button
         type="button"
         className="cmp-icon cmp-tip-start"
-        aria-label="Attach file"
+        aria-label={t("attachment.attachFile")}
         aria-disabled={!supportsAny ? "true" : undefined}
         aria-describedby={!supportsAny ? ATTACH_DISABLED_HINT_ID : undefined}
-        data-tip={supportsAny ? "Attach file" : "Attachments not supported"}
+        data-tip={supportsAny ? t("attachment.attachFile") : t("attachment.notSupported")}
         onClick={handleClick}
       >
-        <Icons.files size={16} />
+        <Icons.plus size={16} />
       </button>
     </>
   );
@@ -309,10 +339,11 @@ interface AttachRejectionAlertProps {
 }
 
 export function AttachRejectionAlert({ reason, mimeType }: AttachRejectionAlertProps): ReactNode {
+  const { t } = useI18n();
   if (reason === undefined) return null;
   return (
     <div role="alert" className="attach-rejection-alert">
-      {rejectionMessage(reason, mimeType)}
+      {rejectionMessageFor(reason, t, mimeType)}
     </div>
   );
 }
@@ -331,27 +362,28 @@ interface SentDocumentsNoteProps {
 }
 
 export function SentDocumentsNote({ documents }: SentDocumentsNoteProps): ReactNode {
+  const { t } = useI18n();
   if (documents.length === 0) return null;
   const anyTruncated = documents.some((doc) => doc.truncated);
   return (
-    <div role="note" className="sent-docs-note" aria-label="Documents included as context">
+    <div role="note" className="sent-docs-note" aria-label={t("attachment.docsContext")}>
       <span className="sent-docs-note-label">
         {documents.length === 1
-          ? "Document included as context:"
-          : "Documents included as context:"}
+          ? t("attachment.docContextLabel")
+          : t("attachment.docsContextLabel")}
       </span>
       <ul className="sent-docs-note-list">
         {documents.map((doc) => (
           <li key={doc.id} className="sent-docs-note-item">
             {doc.displayName}
-            {doc.truncated ? <span className="sent-docs-note-trunc"> (truncated)</span> : null}
+            {doc.truncated ? (
+              <span className="sent-docs-note-trunc">{t("attachment.truncated")}</span>
+            ) : null}
           </li>
         ))}
       </ul>
       {anyTruncated ? (
-        <span className="sent-docs-note-hint">
-          Some document text was truncated to fit the context limit.
-        </span>
+        <span className="sent-docs-note-hint">{t("attachment.truncatedHint")}</span>
       ) : null}
     </div>
   );

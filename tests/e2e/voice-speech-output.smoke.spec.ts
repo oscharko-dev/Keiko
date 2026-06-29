@@ -5,14 +5,17 @@
 //   2. STT-only deployment: capability advertises speech-to-text only → the dictation affordance is
 //      present but NO playback control — dictation does not imply the assistant can speak (AC1).
 //   3. Speech-output deployment: capability advertises speech output → the "Mute assistant voice" toggle
-//      is present, accessible, and operable, and the composer stays fully text-capable. No new TTS model
-//      is deployed; this proves the optional, capability-gated control renders without breaking text.
+//      is present, accessible, and operable, and the composer stays fully text-capable. This proves the
+//      optional, capability-gated control renders without breaking text in the real app.
 //
-// Tagged @smoke so the Studio browser quality gate exercises it. The required `ci` check does not run
-// Playwright; the executable AC coverage that runs in `ci` lives in the keiko-contracts + keiko-ui suites
-// (voice-playback contract, voice-playback-state controller, VoicePlayback component, ChatWindow voice
-// integration), which prove the lifecycle, the interruption → turn-manager boundary (AC2), and the
-// content-free / no-stored-audio invariants (AC3/AC4).
+// Issue #1558 added the production synthesis engine behind this control: when a complete assistant
+// message is visible, `useAssistantSpeech` synthesizes that exact text through the BFF `/api/voice/speak`
+// route and plays it. That engine's lifecycle, stop/mute/pause/resume, cleanup (object URL / buffer /
+// abort / unmount), the spoken-equals-visible binding (AC2), and the failure-degrades-to-text path (AC4)
+// are proven by the keiko-ui `useAssistantSpeech` suite and the keiko-server speak-route + adapter
+// suites, which run in the required `ci` check. A live provider is not deployed in CI (and no generated
+// audio is persisted), so this browser smoke proves the gated control renders and stays text-capable
+// rather than driving a real synthesized-audio round trip.
 
 import { expect, test, type Page } from "@playwright/test";
 

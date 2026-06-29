@@ -17,8 +17,12 @@ import {
   handleEvidenceList,
   handleEvidenceDetail,
 } from "./read-handlers.js";
-import { handleVoiceTranscribe } from "./voice-handlers.js";
-import { handleVoiceRecapBuild } from "./voice-recap.js";
+import { handleGetWorkspaceState, handlePutWorkspaceState } from "./workspace-state-handlers.js";
+import {
+  handleVoiceSpeak,
+  handleVoiceSpeakStream,
+  handleVoiceTranscribe,
+} from "./voice-handlers.js";
 import {
   handleCreateRun,
   handleRunEvents,
@@ -40,8 +44,13 @@ import {
   handleCreateRunSummaryPair,
   handleUpdateMessage,
 } from "./store-handlers.js";
-import { handleCreateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
+import {
+  handleAppendDesktopVoiceTurn,
+  handleCreateDesktopChat,
+  handleSendDesktopChat,
+} from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
+import { handleCloneRepository } from "./gitRepositoryRoutes.js";
 import {
   handleListMemories,
   handleMemoryReviewQueue,
@@ -69,6 +78,7 @@ import {
 } from "./memory-consolidation-handlers.js";
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
+import { handleRealtimeGroundedVoiceTool } from "./voice-realtime-grounded-tool.js";
 import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import {
@@ -78,14 +88,56 @@ import {
   handleTerminalEvents,
   handleTerminalPolicy,
 } from "./terminal-routes.js";
+import { handleRuntimeCapabilities } from "./runtime/capabilityRoutes.js";
+import {
+  handleCommandCatalog,
+  handleCommandEvents,
+  handleCreateCommandRun,
+  handleDeleteCommandRun,
+} from "./command-runner-routes.js";
+import {
+  handleActivateTaskWorkspace,
+  handleCleanupOrphanTaskWorkspaces,
+  handleCleanupTaskWorkspace,
+  handleClearActiveTaskWorkspace,
+  handleGetActiveTaskWorkspace,
+  handleGetTaskWorkspace,
+  handleGetTaskWorkspaceHealth,
+  handleGetTaskWorkspaceReconciliation,
+  handleHandoffTaskWorkspace,
+  handleListTaskWorkspaces,
+  handlePauseTaskWorkspace,
+  handleProvisionTaskWorkspace,
+  handleReconcileTaskWorkspaces,
+  handleRepairTaskWorkspace,
+  handleResumeTaskWorkspace,
+  handleSetActiveTaskWorkspace,
+} from "./task-workspace/routes.js";
+import {
+  handleContainerCapability,
+  handleContainerCatalog,
+  handleContainerEvents,
+  handleCreateContainerRun,
+  handleDeleteContainerRun,
+} from "./runtime/containerRoutes.js";
 import {
   handleFilesContent,
+  handleFilesCopy,
+  handleFilesCreate,
+  handleFilesDelete,
   handleFilesDirectories,
   handleFilesPreview,
+  handleFilesRename,
   handleFilesSearch,
   handleFilesTree,
 } from "./files.js";
-import { handleEditorLanguage, handleEditorLanguageCapabilities } from "./editor/languageRoutes.js";
+import { handleGitBranches, handleGitDiff, handleGitStatus } from "./gitRoutes.js";
+import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepositoryReads.js";
+import {
+  handleEditorLanguage,
+  handleEditorLanguageCapabilitiesForRoute,
+} from "./editor/languageRoutes.js";
+import { handleEditorLspStatus } from "./editor/lsp/lspStatusRoute.js";
 import {
   handleEditorContext,
   handleEditorLocalKnowledgeRetrieve,
@@ -100,6 +152,7 @@ import { handleEditorTestGeneration } from "./editor/testGenerationRoutes.js";
 import { handleEditorPatchApply } from "./editor/patchApplyRoutes.js";
 import {
   handleEditorAgentActions,
+  handleEditorAgentAudit,
   handleEditorAgentEvents,
   handleEditorAgentSessions,
   handleEditorAgentSnapshot,
@@ -128,6 +181,13 @@ import {
   handleStartLocalKnowledgeCapsuleIndexing,
   handleUpdateLocalKnowledgeCapsule,
 } from "./local-knowledge-handlers.js";
+import {
+  handleAuthorizePdfCitationPreview,
+  handleClosePdfCitationPreviewSession,
+  handleGetPdfCitationPreviewDocument,
+  handleGetPdfCitationPreviewStatus,
+  handleOpenPdfCitationPreviewSession,
+} from "./local-knowledge-preview-handlers.js";
 import {
   handleRelationshipCreate,
   handleRelationshipDelete,
@@ -172,6 +232,15 @@ import {
   handlePromptEnhancement,
   handlePromptEnhancementEvidence,
 } from "./promptEnhancer/index.js";
+import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
+import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
+import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
+import { GIT_DELIVERY_COMMIT_ROUTE_GROUP } from "./gitDelivery/commitRoutes.js";
+import { GIT_DELIVERY_PUSH_ROUTE_GROUP } from "./gitDelivery/pushRoutes.js";
+import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
+import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
+import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
+import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -224,11 +293,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // POST a short audio clip (base64 inside the JSON + CSRF envelope) and receive its transcript;
   // answers VOICE_UNAVAILABLE when no speech-to-text capability is configured/enabled.
   { method: "POST", pattern: "/api/voice/transcribe", handler: handleVoiceTranscribe },
-  // Issue #504 (Epic #491, ADR-0067) — optional, capability-gated, user-triggered voice session recap.
-  // POST the committed transcript text (content-free counts alongside) and derive memory candidates via
-  // the EXISTING governed capture path; candidates surface in the existing review queue as "proposed".
-  // Answers VOICE_UNAVAILABLE when the deployment is not voice-recap-capable (AC1).
-  { method: "POST", pattern: "/api/voice/recap/build", handler: handleVoiceRecapBuild },
+  // Issue #1558 (Epic #1556) — optional, capability-gated assistant speech output (ADR-0095). POST
+  // the visible assistant answer text (inside the JSON + CSRF envelope) and receive synthesized audio
+  // as base64; answers VOICE_UNAVAILABLE when no speech-output capability is configured/enabled.
+  { method: "POST", pattern: "/api/voice/speak", handler: handleVoiceSpeak },
+  { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
@@ -240,11 +309,14 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/evidence", handler: handleEvidenceList },
   { method: "GET", pattern: "/api/evidence/:runId", handler: handleEvidenceDetail },
   { method: "GET", pattern: "/api/workspace", handler: handleWorkspace },
+  { method: "GET", pattern: "/api/workspace/state", handler: handleGetWorkspaceState },
+  { method: "PUT", pattern: "/api/workspace/state", handler: handlePutWorkspaceState },
   // ADR-0013 D7 — UI-local persistence routes (additive).
   { method: "GET", pattern: "/api/projects", handler: handleListProjects },
   { method: "POST", pattern: "/api/projects", handler: handleCreateProject },
   { method: "PATCH", pattern: "/api/projects", handler: handleUpdateProject },
   { method: "DELETE", pattern: "/api/projects", handler: handleDeleteProject },
+  { method: "POST", pattern: "/api/repositories/clone", handler: handleCloneRepository },
   { method: "GET", pattern: "/api/chats", handler: handleListChats },
   { method: "POST", pattern: "/api/chats", handler: handleCreateChat },
   { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
@@ -261,10 +333,20 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
   // Issue #185 — grounded repository-aware Q&A. Composes #179-#183 behind the chat-scope binding.
   { method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },
+  {
+    method: "POST",
+    pattern: "/api/voice/realtime/grounded-tool",
+    handler: handleRealtimeGroundedVoiceTool,
+  },
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/stream", handler: handleSendDesktopChatStream },
+  {
+    method: "POST",
+    pattern: "/api/desktop/chat/voice-turn",
+    handler: handleAppendDesktopVoiceTurn,
+  },
   // ADR-0018 — bounded permitted-command execution. PTY routes (shells/sessions/WS upgrade) and
   // the WebSocket upgrade handler in server.ts are removed; commands run via synchronous POST.
   { method: "GET", pattern: "/api/terminal/policy", handler: handleTerminalPolicy },
@@ -276,6 +358,169 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: handleDeleteTerminalExecution,
   },
   { method: "GET", pattern: "/api/terminal/events", handler: handleTerminalEvents },
+  // Issue #1385 — read-only local runtime inventory. Metadata-only detection: no package manager,
+  // Git, language, or container command is executed; root-scoped command sources use contained
+  // manifest reads on a registered project.
+  {
+    method: "GET",
+    pattern: "/api/runtime/capabilities",
+    handler: (ctx, deps) =>
+      handleRuntimeCapabilities(ctx, deps, deps.runtimeCapabilityRouteOptions),
+  },
+  // Issue #1386 — read-only Git repository status/diff BFF. Git execution stays server-side with
+  // fixed args/env, selected-root containment, unsafe-owner surfacing, and bounded diff output.
+  {
+    method: "GET",
+    pattern: "/api/git/status",
+    handler: (ctx, deps) => handleGitStatus(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/diff",
+    handler: (ctx, deps) => handleGitDiff(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/branches",
+    handler: (ctx, deps) => handleGitBranches(ctx, deps, deps.gitRouteOptions),
+  },
+  // Issue #1573 — read-only Git repository summary, history, and remotes BFF. Reuses the hardened
+  // runner + selected-root containment from the #1386 reads; responses are content-free (counts,
+  // typed codes, branch/remote names, ISO dates) and pass through the live-payload redactor.
+  {
+    method: "GET",
+    pattern: "/api/git/summary",
+    handler: (ctx, deps) => handleGitSummary(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/history",
+    handler: (ctx, deps) => handleGitHistory(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/remotes",
+    handler: (ctx, deps) => handleGitRemotes(ctx, deps, deps.gitRouteOptions),
+  },
+  // Issue #1387 — controlled test/build/run command executor. Tasks are discovered from package
+  // scripts and run through the single governed spawn boundary (keiko-tools runCommand): allowlisted
+  // task ids only (never free-form argv), workspace-contained cwd, output cap, timeout, cancellation,
+  // and content-free evidence. Literal `catalog`/`events` paths register before the `:runId` route.
+  {
+    method: "GET",
+    pattern: "/api/commands/catalog",
+    handler: handleCommandCatalog,
+  },
+  {
+    method: "GET",
+    pattern: "/api/commands/events",
+    handler: handleCommandEvents,
+  },
+  { method: "POST", pattern: "/api/commands/runs", handler: handleCreateCommandRun },
+  {
+    method: "DELETE",
+    pattern: "/api/commands/runs/:runId",
+    handler: handleDeleteCommandRun,
+  },
+  // Issue #445 (Epic #443, ADR-0089) — governed managed task-workspace provisioning + activation.
+  // Provision creates a dedicated task branch + managed Git worktree from an approved base branch
+  // through the narrow worktree adapter (single governed spawn boundary; no generic git runner) and
+  // persists a WorkspaceInstance; activate yields the WorkspaceBinding surfaces bind to. CSRF is
+  // enforced by the server's state-changing gate for the POST routes.
+  { method: "POST", pattern: "/api/task-workspaces", handler: handleProvisionTaskWorkspace },
+  // Issue #446 (Epic #443, ADR-0090) — the shared ACTIVE task-workspace binding the Studio/editor/
+  // runtime/Git-Delivery surfaces consume. `matchRoute` resolves by literal specificity, so the
+  // literal `active` and the `?root` collection paths win over the `:workspaceId` param route
+  // regardless of registration order. CSRF is enforced by the state-changing gate for POST/DELETE.
+  { method: "GET", pattern: "/api/task-workspaces", handler: handleListTaskWorkspaces },
+  { method: "GET", pattern: "/api/task-workspaces/active", handler: handleGetActiveTaskWorkspace },
+  { method: "POST", pattern: "/api/task-workspaces/active", handler: handleSetActiveTaskWorkspace },
+  {
+    method: "DELETE",
+    pattern: "/api/task-workspaces/active",
+    handler: handleClearActiveTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/pause",
+    handler: handlePauseTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/resume",
+    handler: handleResumeTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/handoff",
+    handler: handleHandoffTaskWorkspace,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/activate",
+    handler: handleActivateTaskWorkspace,
+  },
+  // Issue #447 (Epic #443, ADR-0091) — startup reconciliation report (read-only, derived from the
+  // persisted content-free fields), an explicit live reconcile pass (CSRF-gated POST), and the
+  // controlled, operator-approval-gated repair. The literal `reconciliation` path wins over the
+  // `:workspaceId` GET by `matchRoute` specificity.
+  {
+    method: "GET",
+    pattern: "/api/task-workspaces/reconciliation",
+    handler: handleGetTaskWorkspaceReconciliation,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/reconciliation",
+    handler: handleReconcileTaskWorkspaces,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/repair",
+    handler: handleRepairTaskWorkspace,
+  },
+  // Issue #448 (Epic #443, ADR-0092) — operational health/drift/orphan report (read-only) plus the
+  // governed, operator-approval-gated cleanup controls. The literal `health` and `cleanup/orphans`
+  // paths win over the `:workspaceId` routes by `matchRoute` specificity.
+  { method: "GET", pattern: "/api/task-workspaces/health", handler: handleGetTaskWorkspaceHealth },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/cleanup/orphans",
+    handler: handleCleanupOrphanTaskWorkspaces,
+  },
+  {
+    method: "POST",
+    pattern: "/api/task-workspaces/:workspaceId/cleanup",
+    handler: handleCleanupTaskWorkspace,
+  },
+  { method: "GET", pattern: "/api/task-workspaces/:workspaceId", handler: handleGetTaskWorkspace },
+  // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. The capability
+  // route runs an opt-in ACTIVE daemon probe (distinct from the metadata-only #1385 detector); the
+  // catalog/run routes degrade to 503 CONTAINER_ENGINE_UNAVAILABLE when no engine is present. A run
+  // names a closed-catalog task id only (never a free-form image/argv/flag), executes a server-frozen
+  // hardened `docker run` argv through the single runCommand boundary, and writes content-free
+  // evidence. Literal `capability`/`catalog`/`events` paths register before the `:runId` route.
+  {
+    method: "GET",
+    pattern: "/api/containers/capability",
+    handler: handleContainerCapability,
+  },
+  {
+    method: "GET",
+    pattern: "/api/containers/catalog",
+    handler: handleContainerCatalog,
+  },
+  {
+    method: "GET",
+    pattern: "/api/containers/events",
+    handler: handleContainerEvents,
+  },
+  { method: "POST", pattern: "/api/containers/runs", handler: handleCreateContainerRun },
+  {
+    method: "DELETE",
+    pattern: "/api/containers/runs/:runId",
+    handler: handleDeleteContainerRun,
+  },
   // Desktop files — selected-root browser, preview, and editor control plane.
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
@@ -283,12 +528,20 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
   { method: "GET", pattern: "/api/files/content", handler: handleFilesContent },
   { method: "PATCH", pattern: "/api/files/content", handler: handleFilesContent },
+  // File-tree mutations (create / rename / delete). State-changing methods inherit the server CSRF +
+  // JSON gate; each handler re-resolves containment + deny inside the selected root and is
+  // non-destructive by default (atomic no-overwrite create, no-clobber rename, symlinks rejected).
+  { method: "POST", pattern: "/api/files/create", handler: handleFilesCreate },
+  { method: "POST", pattern: "/api/files/rename", handler: handleFilesRename },
+  { method: "POST", pattern: "/api/files/delete", handler: handleFilesDelete },
+  { method: "POST", pattern: "/api/files/copy", handler: handleFilesCopy },
   // Issue #1198 — deterministic, model-free language intelligence (completion, diagnostics, hover,
   // symbols) over an editor overlay (ADR-0042 D4). Capabilities advertises the registered providers.
   {
     method: "GET",
     pattern: "/api/editor/language/capabilities",
-    handler: handleEditorLanguageCapabilities,
+    handler: (ctx, deps) =>
+      handleEditorLanguageCapabilitiesForRoute(ctx, deps, deps.editorLanguageRouteOptions),
   },
   {
     method: "POST",
@@ -360,6 +613,19 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/editor/agent/events",
     handler: handleEditorAgentEvents,
   },
+  // Issue #1395 (ADR-0062) — read-only bounded audit feed of recent agent editor actions.
+  {
+    method: "GET",
+    pattern: "/api/editor/agent/audit",
+    handler: handleEditorAgentAudit,
+  },
+  // Issue #1381 (ADR-0069) — read-only, content-free LSP process lifecycle status feed. Env-gated
+  // default-OFF via KEIKO_EDITOR_LSP_STATUS (404 until an operator opts in). No CSP change needed.
+  {
+    method: "GET",
+    pattern: "/api/editor/lsp/status",
+    handler: (ctx, deps) => handleEditorLspStatus(ctx, { env: deps.env }),
+  },
   {
     method: "POST",
     pattern: "/api/editor/local-knowledge/retrieve",
@@ -425,6 +691,31 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
     handler: handleReindexLocalKnowledgeCapsule,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/citation-preview/status",
+    handler: handleGetPdfCitationPreviewStatus,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/citation-preview/authorize",
+    handler: handleAuthorizePdfCitationPreview,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/citation-preview/open",
+    handler: handleOpenPdfCitationPreviewSession,
+  },
+  {
+    method: "GET",
+    pattern: "/api/local-knowledge/citation-preview/sessions/:sessionHandle/document",
+    handler: handleGetPdfCitationPreviewDocument,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/local-knowledge/citation-preview/sessions/:sessionHandle",
+    handler: handleClosePdfCitationPreviewSession,
   },
   // Issues #209/#211 — MemoriaViva governance routes (Epic #204).
   { method: "GET", pattern: "/api/memory", handler: handleListMemories },
@@ -616,6 +907,34 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // envelope (refs only, no chat content). Registered as a sibling group so concurrent
   // QI epic merges (e.g. #280) stay mechanically merge-safe.
   ...QI_HANDOFF_ROUTE_GROUP,
+  // Issue #473 (Epic #470) — governed Git delivery action-sheet route group. Single READ-ONLY
+  // POST seam returning a UI-safe GitDeliveryActionSheet projection; never mutates the repo.
+  // Registered as a sibling group so concurrent #470 epic merges stay mechanically merge-safe.
+  ...GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP,
+  ...GIT_DELIVERY_EVIDENCE_ROUTE_GROUP,
+  // #475 governed local write flows: branch create/switch, staging, and commit preview/execute. These
+  // EXECUTE through the #472 kernel + #474 evidence ledger; gated by the same capability flag and CSRF.
+  ...GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP,
+  ...GIT_DELIVERY_COMMIT_ROUTE_GROUP,
+  // #476 governed remote publish: push preview (read-only) + execute through the SEPARATE publish
+  // gateway (dedicated push-only allowlist) + #474 evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_PUSH_ROUTE_GROUP,
+  // #477 governed GitHub pull request command center: PR preview (read-only metadata/readiness/
+  // recommendation) + execute through the SEPARATE PR gateway (dedicated `gh api` allowlist) + #474
+  // evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_PR_ROUTE_GROUP,
+  // #478 governed merge: merge preview (read-only readiness/eligible-strategies/recommendation) +
+  // execute through the SEPARATE merge gateway (dedicated `gh api` merge allowlist, readiness gate, final
+  // approval) + #474 evidence ledger; same capability flag and CSRF.
+  ...GIT_DELIVERY_MERGE_ROUTE_GROUP,
+  // #1573 governed fetch/pull sync: sync preview (read-only readiness + executable gate) + execute
+  // through a preflight-gated credential-capable runner (NOT the #472 kernel — fetch/pull have no
+  // GitDeliveryActionKind) + a dedicated content-free sync evidence ledger; same central CSRF + JSON
+  // content-type gate.
+  ...GIT_DELIVERY_SYNC_ROUTE_GROUP,
+  // #1577 agent repository operations: typed facade over existing Git read and governed delivery
+  // handlers. No shell/provider authority is introduced; command-shaped payloads are denied first.
+  ...GIT_AGENT_OPERATION_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

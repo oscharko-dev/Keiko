@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(resolve(here, "globals.css"), "utf8");
+const css = readFileSync(resolve(here, "globals.css"), "utf8").replace(/\r\n?/g, "\n");
 const currentCssSha256 = createHash("sha256").update(css).digest("hex");
 const evidenceHarness1297 = readFileSync(
   resolve(here, "../../../..", "docs/design-system/evidence/1297/equivalence-harness.mjs"),
@@ -675,7 +675,13 @@ describe("Fix 4 — dense desktop text clarity", () => {
   });
 
   it("keeps code and mono text free of programming-operator ligatures", () => {
-    const selectors = [".mono {", ".sm-inline-code", ".sm-pre", ".sm-pre code", ".sm-code-line-src"];
+    const selectors = [
+      ".mono {",
+      ".sm-inline-code",
+      ".sm-pre",
+      ".sm-pre code",
+      ".sm-code-line-src",
+    ];
     for (const selector of selectors) {
       const block = cssBlock(selector);
       expect(block).toContain("font-variant-ligatures: none");
@@ -816,28 +822,23 @@ describe("Fix 5 — mobile root toolbar compression", () => {
   });
 });
 
-// ─── uiux-fix F010 — context-budget indicator + scope-pill focus ring ─────────
+// ─── uiux-fix F010 — scope pressure badges + focus ring ───────────────────────
 
-describe("uiux-fix F010 — cmp-budget styling and scope-pill focus visibility", () => {
-  it("defines the cmp-budget layout and badge rules (C044/C081 — classes were orphaned)", () => {
-    expect(css).toContain(".cmp-budget-row");
+describe("uiux-fix F010 — scope pressure badge styling and focus visibility", () => {
+  it("defines shared scope pressure badge rules without restoring composer history controls", () => {
     expect(css).toContain(".cmp-budget-badge-exceeded");
-    expect(css).toContain(".cmp-budget-clear:focus-visible");
-    expect(css).toContain(".cmp-budget-clear:disabled");
-    // The flex row is what un-merges the inline text run ("tokensLowiClear history").
-    const rowIdx = css.lastIndexOf(".cmp-budget-row");
-    const rowBlock = css.slice(rowIdx, css.indexOf("}", rowIdx) + 1);
-    expect(rowBlock).toContain("display: flex");
-    expect(rowBlock).toContain("gap: 8px");
+    expect(css).not.toContain(".cmp-history-clear");
+    expect(css).not.toContain(".cmp-history-row");
   });
 
   it("light theme overrides the low-badge text to ink-inverse (raw accent ≈1.97:1 on the tint)", () => {
     expect(css).toContain('[data-theme="light"] .cmp-budget-badge-low');
   });
 
-  it("reveals the cmp-budget-info data-tip on focus-visible as well as hover (C321)", () => {
-    expect(css).toContain(".cmp-budget-info[data-tip]:focus-visible::after");
-    expect(css).toContain(".cmp-budget-info[data-tip]:hover::after");
+  it("styles the MemoriaViva request settings moved out of the chat window", () => {
+    expect(css).toContain(".memoria-window .mv-settings");
+    expect(css).toContain(".memoria-window .mv-setting-budget");
+    expect(css).toContain(".memoria-window .mv-budget-control input");
   });
 
   it("styles the connector pill modifier distinctly from folder pills (C326)", () => {
@@ -2865,6 +2866,62 @@ describe("Issue #1295 — high-traffic product-surface token migration", () => {
     expect(block).not.toMatch(/var\(--card\)|var\(--line-soft\)|var\(--fg\)/u);
   });
 
+  it("keeps the conversation log vertical-only and forces message content to wrap", () => {
+    const scroll = cssBlock("\n.chatw-scroll {");
+    expect(scroll).toContain("overflow-y: auto");
+    expect(scroll).toContain("overflow-x: hidden");
+
+    const message = cssBlock("\n.chat-msg {");
+    expect(message).toContain("min-width: 0");
+    expect(message).toContain("max-width: 100%");
+
+    const bubble = cssBlock("\n.chat-msg-bubble {");
+    expect(bubble).toContain("min-width: 0");
+    expect(bubble).toContain("box-sizing: border-box");
+    expect(bubble).toContain("overflow-wrap: anywhere");
+
+    const content = cssBlock("\n.chat-msg-content {");
+    expect(content).toContain("max-width: 100%");
+    expect(content).toContain("overflow-wrap: anywhere");
+
+    const markdownRoot = cssBlock("\n.sm-root {");
+    expect(markdownRoot).toContain("min-width: 0");
+    expect(markdownRoot).toContain("max-width: 100%");
+    expect(markdownRoot).toContain("overflow-wrap: anywhere");
+  });
+
+  it("keeps the question map wave to length-only marker changes", () => {
+    const mark = cssBlock("\n.chat-question-map-mark {");
+    expect(mark).toContain("width: var(--wave-width, 8px)");
+    expect(mark).toContain("height: 2px");
+    expect(mark).toContain("transition: width 0.12s ease");
+    expect(mark).not.toContain("color 0.16s");
+
+    const focusMark = cssBlock(
+      "\n.chat-question-map-button:focus-visible .chat-question-map-mark {",
+    );
+    expect(focusMark).toContain("width: 24px");
+
+    const peakCard = cssBlock(
+      '\n.chat-question-map-button[data-peak="true"] .chat-question-map-card,\n.chat-question-map-button:focus-visible .chat-question-map-card {',
+    );
+    expect(peakCard).toContain("opacity: 1");
+  });
+
+  it("keeps the chat log one-column unless the question map is rendered", () => {
+    const shell = cssBlock("\n.chatw-log-shell {");
+    expect(shell).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(shell).not.toContain("52px minmax(0, 1fr)");
+
+    const mappedShell = cssBlock("\n.chatw-log-shell-with-map {");
+    expect(mappedShell).toContain("grid-template-columns: 52px minmax(0, 1fr)");
+
+    expect(css).toContain("@container (max-width: 720px) {\n  .chatw-log-shell-with-map");
+    expect(css).toContain("@container (max-width: 480px) {\n  .chatw-log-shell-with-map");
+    expect(css).not.toContain("@container (max-width: 720px) {\n  .chatw-log-shell {\n");
+    expect(css).not.toContain("@container (max-width: 480px) {\n  .chatw-log-shell {\n");
+  });
+
   it("routes Quality-Intelligence candidate cards through --surface-primary / --border-default", () => {
     const block = cssBlock("\n.qi-cand-card {");
     expect(block).toContain("background: var(--surface-primary)");
@@ -4395,6 +4452,8 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     ]);
     expect(browserManifest.viewports).toEqual(["desktop", "tablet", "mobile"]);
     const expectedScenarios = [
+      "git-window-constrained",
+      "git-window-desktop",
       "shell",
       "workspace-chat-quality",
       "workspace-files-editor",
@@ -4403,8 +4462,10 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     expect(browserManifest.scenarios.map((scenario) => scenario.id).sort()).toEqual(
       expectedScenarios,
     );
-    expect(browserManifest.shotCount).toBe(72);
-    expect(browserManifest.manifest.length).toBe(72);
+    // 3 viewports x 6 modes x 6 scenarios. Issue #1574 (EV3) added the git-window-desktop and
+    // git-window-constrained scenarios, lifting the matrix from 72 to 108 captured cells.
+    expect(browserManifest.shotCount).toBe(108);
+    expect(browserManifest.manifest.length).toBe(108);
     const expectedCells = new Set(
       browserManifest.viewports.flatMap((viewport) =>
         browserManifest.modes.flatMap((mode) =>
@@ -4443,10 +4504,19 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
         `${shot.viewport}/${shot.mode}/${shot.scenario} must render every required selector`,
       ).toEqual([]);
       if (shot.scenario !== "shell") {
+        // Every seeded window must mount. Count the distinct window-frame selectors the scenario
+        // declares (a bare `[data-window-id="…"]` with no descendant combinator) rather than all
+        // required selectors, so scenarios that additionally assert in-window IA (e.g. the Git client
+        // shell's toolbar/tablist/changed-files structure) are not mistaken for extra seeded windows.
+        const seededWindowSelectors = new Set(
+          shot.requiredSelectors.filter((selector) =>
+            /^\[data-window-id="[^"]+"\]$/u.test(selector.trim()),
+          ),
+        );
         expect(
           shot.windowCount,
-          `${shot.viewport}/${shot.mode} high-traffic shot must render seeded windows`,
-        ).toBeGreaterThanOrEqual(shot.requiredSelectors.length);
+          `${shot.viewport}/${shot.mode}/${shot.scenario} high-traffic shot must render seeded windows`,
+        ).toBeGreaterThanOrEqual(seededWindowSelectors.size);
       }
     }
     expect([...seenCells].sort()).toEqual([...expectedCells].sort());

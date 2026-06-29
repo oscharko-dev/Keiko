@@ -25,12 +25,14 @@ import type {
   LocalKnowledgeEvidenceCitation,
   LocalKnowledgeGroundedAnswerContextSummary,
 } from "@/lib/types";
+import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 
 interface GroundedAnswerProps {
   readonly answer: GroundedAnswer | undefined;
   readonly busy: boolean;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
+  readonly citationPreview?: CitationPreviewController | undefined;
 }
 
 type ConnectedGroundedAnswer = Extract<
@@ -417,8 +419,10 @@ function GroundedEvidenceDisclosure({
 
 function LocalKnowledgeCitationList({
   citations,
+  citationPreview,
 }: {
   readonly citations: readonly LocalKnowledgeEvidenceCitation[];
+  readonly citationPreview: CitationPreviewController | undefined;
 }): ReactNode {
   const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
@@ -436,19 +440,11 @@ function LocalKnowledgeCitationList({
       <ul className="grounded-citations" aria-label="Knowledge citations">
         {visible.map((citation) => (
           <li key={citation.stableId} className="grounded-citations-item">
-            <span
-              className="grounded-citation"
-              title={
-                // uiux-fix F051 C306 — explain the trailing decimal (relevance score)
-                // in the tooltip, mirroring citationTitle above.
-                citation.source === undefined
-                  ? `${citation.label} — relevance ${citation.score.toFixed(2)}`
-                  : `${citation.source} · ${citation.label} — relevance ${citation.score.toFixed(2)}`
-              }
-            >
-              <span>{labelForCitation(citation)}</span>
-              <CitationScore score={citation.score} />
-            </span>
+            <KnowledgeCitationChip
+              citation={citation}
+              citationPreview={citationPreview}
+              label={labelForCitation(citation)}
+            />
           </li>
         ))}
       </ul>
@@ -460,6 +456,66 @@ function LocalKnowledgeCitationList({
         }}
       />
     </div>
+  );
+}
+
+function knowledgeCitationTitle(citation: LocalKnowledgeEvidenceCitation): string {
+  return citation.source === undefined
+    ? `${citation.label} — relevance ${citation.score.toFixed(2)}`
+    : `${citation.source} · ${citation.label} — relevance ${citation.score.toFixed(2)}`;
+}
+
+function KnowledgeCitationChip({
+  citation,
+  citationPreview,
+  label,
+}: {
+  readonly citation: LocalKnowledgeEvidenceCitation;
+  readonly citationPreview: CitationPreviewController | undefined;
+  readonly label: string;
+}): ReactNode {
+  const affordance = citationPreview?.forCitation(citation);
+  if (affordance === undefined) {
+    return (
+      <span className="grounded-citation" title={knowledgeCitationTitle(citation)}>
+        <span className="grounded-citation-range">{label}</span>
+        <CitationScore score={citation.score} />
+      </span>
+    );
+  }
+
+  const blocked = affordance.state === "blocked";
+  const opening = citationPreview?.isOpening(citation) ?? false;
+  const actionLabel =
+    affordance.state === "recoverable"
+      ? "Recover PDF"
+      : affordance.state === "blocked"
+        ? "PDF unavailable"
+        : "Open PDF";
+  const actionTitle =
+    affordance.state === "recoverable"
+      ? "Open PDF recovery"
+      : affordance.state === "blocked"
+        ? "PDF preview unavailable"
+        : "Open PDF preview";
+
+  return (
+    <button
+      type="button"
+      className={`grounded-citation grounded-citation-action grounded-citation-action--${affordance.state}`}
+      aria-disabled={blocked || opening ? "true" : undefined}
+      aria-label={`${label} · ${actionLabel}`}
+      data-tip={actionTitle}
+      title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
+      onClick={() => {
+        if (blocked || opening || citationPreview === undefined) return;
+        void citationPreview.openCitation(citation, "citation-chip");
+      }}
+    >
+      <span className="grounded-citation-range">{label}</span>
+      <span className="grounded-citation-action-label">{actionLabel}</span>
+      <CitationScore score={citation.score} />
+    </button>
   );
 }
 
@@ -647,6 +703,7 @@ export function GroundedAnswer({
   busy,
   repositoryRoots = [],
   openRepositoryReference,
+  citationPreview,
 }: GroundedAnswerProps): ReactNode {
   if (answer === undefined) {
     // uiux-fix F012 C163 — the panel also serves capsule/connector-only chats where no
@@ -664,7 +721,10 @@ export function GroundedAnswer({
           title="Knowledge evidence"
           summary={knowledgeEvidenceSummary(answer)}
         >
-          <LocalKnowledgeCitationList citations={answer.citations} />
+          <LocalKnowledgeCitationList
+            citations={answer.citations}
+            citationPreview={citationPreview}
+          />
           <UncertaintyLine markers={answer.uncertainty} />
           <LocalKnowledgeContextPackSummary contextPack={answer.contextPack} />
         </GroundedEvidenceDisclosure>
@@ -688,7 +748,10 @@ export function GroundedAnswer({
             openRepositoryReference={openRepositoryReference}
           />
           {/* Connector evidence (source-tagged) */}
-          <LocalKnowledgeCitationList citations={answer.knowledgeCitations} />
+          <LocalKnowledgeCitationList
+            citations={answer.knowledgeCitations}
+            citationPreview={citationPreview}
+          />
           <UncertaintyLine markers={answer.uncertainty} />
           <OmittedLine
             omittedCount={answer.omittedCount}

@@ -13,6 +13,20 @@ import {
 } from "./VoiceRealtime";
 import type { RealtimeVoiceController } from "./hooks/useRealtimeVoice";
 
+const IDLE_TURN_SNAPSHOT: RealtimeVoiceController["turnSnapshot"] = {
+  profile: "full-realtime",
+  active: true,
+  state: "idle",
+  floorHolder: "none",
+  turnIndex: 0,
+  interruptions: 0,
+  backchannels: 0,
+  pendingCommit: false,
+  recovering: false,
+  lastEndOfTurnAtMs: undefined,
+  lastInterruptAtMs: undefined,
+};
+
 describe("VoiceRealtimeButton", () => {
   it("renders a labelled start affordance when idle and starts on click", async () => {
     const onStart = vi.fn();
@@ -72,9 +86,7 @@ describe("VoiceRealtimeButton", () => {
   });
 
   it("has no axe violations in idle and connected states", async () => {
-    const idle = render(
-      <VoiceRealtimeButton phase="idle" onStart={vi.fn()} onStop={vi.fn()} />,
-    );
+    const idle = render(<VoiceRealtimeButton phase="idle" onStart={vi.fn()} onStop={vi.fn()} />);
     expect(await axe(idle.container)).toHaveNoViolations();
     idle.unmount();
     const connected = render(
@@ -99,12 +111,7 @@ describe("VoiceRealtimeButton", () => {
 describe("VoiceRealtimeStatus", () => {
   it("renders nothing when idle or requesting", () => {
     const { container } = render(
-      <VoiceRealtimeStatus
-        phase="idle"
-        error={undefined}
-        onRetry={vi.fn()}
-        onDismiss={vi.fn()}
-      />,
+      <VoiceRealtimeStatus phase="idle" error={undefined} onRetry={vi.fn()} onDismiss={vi.fn()} />,
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -217,22 +224,29 @@ describe("VoiceRealtimeStatusFromController", () => {
     return {
       phase: "connected",
       busy: true,
+      turnSnapshot: IDLE_TURN_SNAPSHOT,
+      listening: false,
+      speaking: false,
+      canInterrupt: false,
+      muted: false,
       error: undefined,
       start: vi.fn(),
       stop: vi.fn(),
       retry: vi.fn(),
+      interrupt: vi.fn(),
+      toggleMute: vi.fn(),
       ...overrides,
     };
   }
 
   it("wires status to the controller and calls stop + onAfterDismiss on dismiss", () => {
-    const controller = makeController({ phase: "error", error: { reason: "connection-failed", message: "x" } });
+    const controller = makeController({
+      phase: "error",
+      error: { reason: "connection-failed", message: "x" },
+    });
     const onAfterDismiss = vi.fn();
     render(
-      <VoiceRealtimeStatusFromController
-        controller={controller}
-        onAfterDismiss={onAfterDismiss}
-      />,
+      <VoiceRealtimeStatusFromController controller={controller} onAfterDismiss={onAfterDismiss} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(controller.stop).toHaveBeenCalledTimes(1);
@@ -240,13 +254,11 @@ describe("VoiceRealtimeStatusFromController", () => {
   });
 
   it("wires retry to the controller", () => {
-    const controller = makeController({ phase: "error", error: { reason: "unavailable", message: "x" } });
-    render(
-      <VoiceRealtimeStatusFromController
-        controller={controller}
-        onAfterDismiss={vi.fn()}
-      />,
-    );
+    const controller = makeController({
+      phase: "error",
+      error: { reason: "unavailable", message: "x" },
+    });
+    render(<VoiceRealtimeStatusFromController controller={controller} onAfterDismiss={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(controller.retry).toHaveBeenCalledTimes(1);
   });

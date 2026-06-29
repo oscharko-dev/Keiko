@@ -4,6 +4,7 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
 import {
   createInMemoryUiStore,
   UiStoreError,
@@ -187,6 +188,52 @@ describe("createMessage", () => {
       citations: [{ scopePath: "package-lock.json" }],
     });
     expect(reloaded?.groundedAnswer?.content).toBe("Answer includes [REDACTED].");
+  });
+
+  it("persists preview citations server-side without projecting them on chat messages", () => {
+    const assistant = store.createMessage({
+      chatId,
+      role: "assistant",
+      content: "Answer from package-lock.json.",
+      timestamp: 215,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const previewCitations: readonly StoredPdfCitationPreviewCitation[] = [
+      {
+        stableId: "preview-1",
+        marker: "[1]",
+        markerIndex: 1,
+        documentLabel: "policy.pdf",
+        sourceLabel: "Policy Capsule / Manual",
+        lineage: {
+          capsuleId: "cap-1" as never,
+          sourceId: "src-1" as never,
+          documentId: "doc-1" as never,
+          chunkId: "chunk-1" as never,
+        },
+        documentMediaType: "application/pdf",
+        documentContentHash: "hash-1",
+        pageNumber: 7,
+        pageLabel: "7",
+        characterStart: 0,
+        characterEnd: 32,
+      },
+    ];
+
+    const updated = store.attachGroundedAnswer(
+      assistant.id,
+      groundedAnswer({ assistantMessageId: assistant.id }),
+      previewCitations,
+    );
+    const reloaded = store.listMessages(chatId).find((message) => message.id === assistant.id);
+
+    expect(updated.groundedAnswer?.assistantMessageId).toBe(assistant.id);
+    expect(store.findGroundedPreviewCitations(assistant.id)).toEqual(previewCitations);
+    expect(reloaded).not.toHaveProperty("groundedPreviewCitations");
   });
 
   it("rejects grounded answer metadata on non-assistant messages", () => {

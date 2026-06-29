@@ -1,3 +1,33 @@
+/**
+ * Editor layout state and reducer for multi-tab, split-pane workspaces (Issue #1375, ADR-0064).
+ *
+ * The reducer is the single authority for layout structure: drag/keyboard intents in the UI are
+ * translated into EditorLayoutActions and applied here, never by mutating pane state directly.
+ * editorLayoutReducer is pure and total — it returns a structurally valid EditorLayoutStateV2 for
+ * every action and returns the input state unchanged for actions that target a missing pane, split,
+ * or file.
+ *
+ * Invariants maintained by every operation:
+ *
+ * 1. Tab order is stable and lossless. Within a pane openFiles and tabOrder are the same
+ *    de-duplicated, non-empty list; reorder/move only permute it. The order survives a
+ *    serialize -> parse round trip, so tabs never shuffle on reload (AC1).
+ * 2. Layout operations never read or write file content or dirty state. Files are identified by
+ *    path only, so reordering or moving a tab cannot alter a buffer or its dirty marker (AC2/AC3);
+ *    the dirty index is re-homed onto the layout by the UI layer.
+ * 3. Empty panes collapse predictably. Closing or moving the last tab out of a pane removes that
+ *    pane (when others remain) and promotes the sibling of its enclosing split, so the tree never
+ *    retains an empty pane alongside populated ones (AC4). The final remaining pane is kept even
+ *    when it holds no file.
+ * 4. Splits always have exactly two children and resize never restructures. resize-split only
+ *    clamps an existing split's ratio into [MIN_SPLIT_RATIO, MAX_SPLIT_RATIO]; it adds or removes
+ *    no pane, so nested splits resize without orphan panes or layout jumps (AC5).
+ * 5. Identifiers are unique. Pane ids (pane-N) and split ids (split-N) are allocated to avoid
+ *    collisions with existing nodes, and every tree pane node resolves to an entry in panes.
+ * 6. Persisted values are clamped on read and write. Split ratios and the sidebar width are
+ *    clamped, and unknown or malformed persisted state falls back to a fresh single-pane layout
+ *    rather than blocking the editor.
+ */
 export const EDITOR_LAYOUT_SCHEMA_VERSION = 2 as const;
 
 export type EditorSplitDirection = "row" | "column";
@@ -50,13 +80,44 @@ export type EditorLayoutAction =
   | { readonly type: "close-tab"; readonly paneId: string; readonly file: string }
   | { readonly type: "close-pane"; readonly paneId: string }
   | { readonly type: "set-active-pane"; readonly paneId: string }
-  | { readonly type: "reorder-tab"; readonly paneId: string; readonly file: string; readonly targetIndex: number }
-  | { readonly type: "move-tab"; readonly fromPaneId: string; readonly toPaneId: string; readonly file: string; readonly targetIndex?: number | undefined }
+  | {
+      readonly type: "reorder-tab";
+      readonly paneId: string;
+      readonly file: string;
+      readonly targetIndex: number;
+    }
+  | {
+      readonly type: "move-tab";
+      readonly fromPaneId: string;
+      readonly toPaneId: string;
+      readonly file: string;
+      readonly targetIndex?: number | undefined;
+    }
   | { readonly type: "drop-tab"; readonly intent: EditorTabDragIntent }
-  | { readonly type: "split-pane"; readonly paneId: string; readonly direction: EditorSplitDirection; readonly file?: string | undefined }
+  | {
+      readonly type: "split-pane";
+      readonly paneId: string;
+      readonly direction: EditorSplitDirection;
+      readonly file?: string | undefined;
+    }
   | { readonly type: "resize-split"; readonly splitId: string; readonly ratio: number }
-  | { readonly type: "set-sidebar"; readonly width?: number | undefined; readonly collapsed?: boolean | undefined }
-  | { readonly type: "replace-root"; readonly root: string; readonly sidebarWidth?: number | undefined };
+  | {
+      readonly type: "set-sidebar";
+      readonly width?: number | undefined;
+      readonly collapsed?: boolean | undefined;
+    }
+  | {
+      readonly type: "replace-root";
+      readonly root: string;
+      readonly sidebarWidth?: number | undefined;
+    }
+  // A file (or folder) moved on disk: re-home its identifier across every pane so open tabs follow
+  // the rename instead of going stale. `from`/`to` are matched as path prefixes so a folder rename
+  // (`src` -> `lib`) carries every open descendant (`src/app.ts` -> `lib/app.ts`) with it.
+  | { readonly type: "rename-file"; readonly from: string; readonly to: string }
+  // A file (or folder) was deleted on disk: close it — and every open descendant — across all panes,
+  // reusing the close-tab active-file fallback and empty-pane collapse so no orphaned tab survives.
+  | { readonly type: "remove-file"; readonly file: string };
 
 export interface CreateEditorLayoutStateV2Input {
   readonly root: string;
@@ -92,7 +153,11 @@ function stringArray(value: unknown): readonly string[] {
   return out;
 }
 
-function orderedFiles(activeFile: string, openFiles: readonly string[], tabOrder?: readonly string[]): readonly string[] {
+function orderedFiles(
+  activeFile: string,
+  openFiles: readonly string[],
+  tabOrder?: readonly string[],
+): readonly string[] {
   const out: string[] = [];
   const add = (file: string): void => {
     if (file.length > 0 && !out.includes(file)) out.push(file);
@@ -103,7 +168,11 @@ function orderedFiles(activeFile: string, openFiles: readonly string[], tabOrder
   return out;
 }
 
-function createPane(id: string, activeFile: string, openFiles: readonly string[]): EditorPaneStateV2 {
+function createPane(
+  id: string,
+  activeFile: string,
+  openFiles: readonly string[],
+): EditorPaneStateV2 {
   const tabOrder = orderedFiles(activeFile, openFiles);
   return {
     id,
@@ -146,7 +215,11 @@ function normalizePaneNode(
   value: Record<string, unknown>,
   panes: Readonly<Record<string, EditorPaneStateV2>>,
 ): EditorLayoutPaneNode | null {
-  if (value.type === "pane" && typeof value.paneId === "string" && panes[value.paneId] !== undefined) {
+  if (
+    value.type === "pane" &&
+    typeof value.paneId === "string" &&
+    panes[value.paneId] !== undefined
+  ) {
     return { type: "pane", paneId: value.paneId };
   }
   return null;
@@ -172,7 +245,10 @@ function normalizeSplitNode(
   };
 }
 
-function normalizeTree(value: unknown, panes: Readonly<Record<string, EditorPaneStateV2>>): EditorLayoutNode | null {
+function normalizeTree(
+  value: unknown,
+  panes: Readonly<Record<string, EditorPaneStateV2>>,
+): EditorLayoutNode | null {
   if (!isRecord(value)) return null;
   return normalizePaneNode(value, panes) ?? normalizeSplitNode(value, panes);
 }
@@ -194,7 +270,10 @@ function normalizePaneList(value: unknown): readonly EditorPaneStateV2[] {
     .filter((pane): pane is EditorPaneStateV2 => pane !== null);
 }
 
-function persistedSidebarWidth(record: Record<string, unknown>, input: CreateEditorLayoutStateV2Input): number {
+function persistedSidebarWidth(
+  record: Record<string, unknown>,
+  input: CreateEditorLayoutStateV2Input,
+): number {
   return typeof record.sidebarWidth === "number" && Number.isFinite(record.sidebarWidth)
     ? clampNumber(record.sidebarWidth, input.minSidebarWidth, input.maxSidebarWidth)
     : input.defaultSidebarWidth;
@@ -244,7 +323,11 @@ function parseV2(
   };
 }
 
-function v1Tree(first: EditorPaneStateV2, second: EditorPaneStateV2 | undefined, record: Record<string, unknown>): EditorLayoutNode {
+function v1Tree(
+  first: EditorPaneStateV2,
+  second: EditorPaneStateV2 | undefined,
+  record: Record<string, unknown>,
+): EditorLayoutNode {
   if (second === undefined) return { type: "pane", paneId: first.id };
   const ratio =
     typeof record.splitRatio === "number" && Number.isFinite(record.splitRatio)
@@ -303,7 +386,9 @@ function parsePersistedLayout(input: CreateEditorLayoutStateV2Input): EditorLayo
   return null;
 }
 
-export function createEditorLayoutStateV2(input: CreateEditorLayoutStateV2Input): EditorLayoutStateV2 {
+export function createEditorLayoutStateV2(
+  input: CreateEditorLayoutStateV2Input,
+): EditorLayoutStateV2 {
   const persisted = parsePersistedLayout(input);
   if (persisted !== null) return persisted;
   const activeFile = input.file.length > 0 ? input.file : (input.openFiles[0] ?? "");
@@ -342,7 +427,11 @@ export function editorLayoutPanes(layout: EditorLayoutStateV2): readonly EditorP
 }
 
 export function activeEditorPane(layout: EditorLayoutStateV2): EditorPaneStateV2 {
-  return layout.panes[layout.activePaneId] ?? editorLayoutPanes(layout)[0] ?? createPane("pane-1", "", []);
+  return (
+    layout.panes[layout.activePaneId] ??
+    editorLayoutPanes(layout)[0] ??
+    createPane("pane-1", "", [])
+  );
 }
 
 function updatePane(
@@ -371,7 +460,12 @@ function withPaneFiles(
   activeFile: string,
 ): EditorPaneStateV2 {
   const tabOrder = orderedFiles(activeFile, files);
-  return { ...pane, openFiles: tabOrder, tabOrder, activeFile: activeFile.length > 0 ? activeFile : (tabOrder[0] ?? "") };
+  return {
+    ...pane,
+    openFiles: tabOrder,
+    tabOrder,
+    activeFile: activeFile.length > 0 ? activeFile : (tabOrder[0] ?? ""),
+  };
 }
 
 function nextPaneId(layout: EditorLayoutStateV2): string {
@@ -467,7 +561,9 @@ function removePane(layout: EditorLayoutStateV2, paneId: string): EditorLayoutSt
     if (id !== paneId) panes[id] = pane;
   }
   const nextActivePaneId =
-    layout.activePaneId === paneId ? (paneIdsFromTree(nextTree)[0] ?? layout.activePaneId) : layout.activePaneId;
+    layout.activePaneId === paneId
+      ? (paneIdsFromTree(nextTree)[0] ?? layout.activePaneId)
+      : layout.activePaneId;
   return { ...layout, tree: nextTree, panes, activePaneId: nextActivePaneId };
 }
 
@@ -481,7 +577,9 @@ function closeTab(layout: EditorLayoutStateV2, paneId: string, file: string): Ed
     return updatePane(layout, paneId, (current) => withPaneFiles(current, [], ""));
   }
   const nextActive =
-    pane.activeFile === file ? (nextFiles[closingIndex] ?? nextFiles[closingIndex - 1] ?? nextFiles[0] ?? "") : pane.activeFile;
+    pane.activeFile === file
+      ? (nextFiles[closingIndex] ?? nextFiles[closingIndex - 1] ?? nextFiles[0] ?? "")
+      : pane.activeFile;
   return updatePane(layout, paneId, (current) => withPaneFiles(current, nextFiles, nextActive));
 }
 
@@ -493,15 +591,89 @@ function moveTab(
   targetIndex?: number,
 ): EditorLayoutStateV2 {
   if (fromPaneId === toPaneId) {
-    return updatePane(layout, toPaneId, (pane) => withPaneFiles(pane, insertFile(pane.tabOrder, file, targetIndex), file));
+    return updatePane(layout, toPaneId, (pane) =>
+      withPaneFiles(pane, insertFile(pane.tabOrder, file, targetIndex), file),
+    );
   }
   const fromPane = layout.panes[fromPaneId];
   const toPane = layout.panes[toPaneId];
-  if (fromPane === undefined || toPane === undefined || !fromPane.openFiles.includes(file)) return layout;
+  if (fromPane === undefined || toPane === undefined || !fromPane.openFiles.includes(file))
+    return layout;
   let next = closeTab(layout, fromPaneId, file);
   if (next.panes[toPaneId] === undefined) return next;
-  next = updatePane(next, toPaneId, (pane) => withPaneFiles(pane, insertFile(pane.tabOrder, file, targetIndex), file));
+  next = updatePane(next, toPaneId, (pane) =>
+    withPaneFiles(pane, insertFile(pane.tabOrder, file, targetIndex), file),
+  );
   return { ...next, activePaneId: toPaneId };
+}
+
+// Re-home one identifier under a prefix rename: an exact match becomes `to`; a descendant of the
+// renamed folder keeps its suffix (`src/app.ts` under `src` -> `lib` becomes `lib/app.ts`). Any
+// other path is unchanged. Folder boundaries use a trailing slash so `src` never matches `srcgen`.
+function renamePathUnderPrefix(file: string, from: string, to: string): string {
+  if (file === from) return to;
+  return file.startsWith(`${from}/`) ? `${to}${file.slice(from.length)}` : file;
+}
+
+function dedupeFiles(files: readonly string[]): readonly string[] {
+  const out: string[] = [];
+  for (const file of files) {
+    if (file.length > 0 && !out.includes(file)) out.push(file);
+  }
+  return out;
+}
+
+function renameFileInPane(pane: EditorPaneStateV2, from: string, to: string): EditorPaneStateV2 {
+  const swap = (file: string): string => renamePathUnderPrefix(file, from, to);
+  const openFiles = dedupeFiles(pane.openFiles.map(swap));
+  const tabOrder = dedupeFiles(pane.tabOrder.map(swap));
+  const activeFile = swap(pane.activeFile);
+  // Nothing in this pane referenced the renamed path; leave it byte-identical so React can bail out.
+  if (
+    openFiles.length === pane.openFiles.length &&
+    openFiles.every((file, index) => file === pane.openFiles[index]) &&
+    activeFile === pane.activeFile
+  ) {
+    return pane;
+  }
+  return {
+    ...pane,
+    openFiles,
+    tabOrder,
+    activeFile: activeFile.length > 0 ? activeFile : (tabOrder[0] ?? openFiles[0] ?? ""),
+  };
+}
+
+function renameFileEverywhere(
+  layout: EditorLayoutStateV2,
+  from: string,
+  to: string,
+): EditorLayoutStateV2 {
+  if (from.length === 0 || to.length === 0 || from === to) return layout;
+  const panes: Record<string, EditorPaneStateV2> = {};
+  let changed = false;
+  for (const [id, pane] of Object.entries(layout.panes)) {
+    const next = renameFileInPane(pane, from, to);
+    if (next !== pane) changed = true;
+    panes[id] = next;
+  }
+  // No pane referenced the renamed path: return the original layout so React can bail out of the
+  // re-render, matching the referential no-op contract of the other reducer branches.
+  return changed ? { ...layout, panes } : layout;
+}
+
+function removeFileEverywhere(layout: EditorLayoutStateV2, file: string): EditorLayoutStateV2 {
+  if (file.length === 0) return layout;
+  // Collect every (pane, openFile) pair the delete touches up front, then fold `closeTab` over them:
+  // `closeTab` already owns the active-file fallback and the single-tab pane collapse, and tolerates a
+  // pane that an earlier collapse removed, so a file open in several panes is closed in each.
+  const targets: (readonly [string, string])[] = [];
+  for (const pane of editorLayoutPanes(layout)) {
+    for (const open of pane.openFiles) {
+      if (open === file || open.startsWith(`${file}/`)) targets.push([pane.id, open]);
+    }
+  }
+  return targets.reduce((acc, [paneId, open]) => closeTab(acc, paneId, open), layout);
 }
 
 type PaneFileAction = Extract<
@@ -535,7 +707,10 @@ function isStructureAction(action: EditorLayoutAction): action is StructureActio
   return STRUCTURE_ACTION_TYPES.has(action.type);
 }
 
-function reducePaneFileAction(layout: EditorLayoutStateV2, action: PaneFileAction): EditorLayoutStateV2 {
+function reducePaneFileAction(
+  layout: EditorLayoutStateV2,
+  action: PaneFileAction,
+): EditorLayoutStateV2 {
   switch (action.type) {
     case "open-file":
       return updatePane(layout, action.paneId, (pane) =>
@@ -543,20 +718,29 @@ function reducePaneFileAction(layout: EditorLayoutStateV2, action: PaneFileActio
       );
     case "select-file":
       return updatePane({ ...layout, activePaneId: action.paneId }, action.paneId, (pane) =>
-        pane.openFiles.includes(action.file) ? withPaneFiles(pane, pane.openFiles, action.file) : pane,
+        pane.openFiles.includes(action.file)
+          ? withPaneFiles(pane, pane.openFiles, action.file)
+          : pane,
       );
     case "close-tab":
       return closeTab(layout, action.paneId, action.file);
     case "reorder-tab":
       return updatePane(layout, action.paneId, (pane) =>
         pane.openFiles.includes(action.file)
-          ? withPaneFiles(pane, insertFile(pane.tabOrder, action.file, action.targetIndex), action.file)
+          ? withPaneFiles(
+              pane,
+              insertFile(pane.tabOrder, action.file, action.targetIndex),
+              action.file,
+            )
           : pane,
       );
   }
 }
 
-function reduceDropTab(layout: EditorLayoutStateV2, intent: EditorTabDragIntent): EditorLayoutStateV2 {
+function reduceDropTab(
+  layout: EditorLayoutStateV2,
+  intent: EditorTabDragIntent,
+): EditorLayoutStateV2 {
   if (intent.zone === "center") {
     return moveTab(layout, intent.fromPaneId, intent.toPaneId, intent.file, intent.targetIndex);
   }
@@ -569,7 +753,10 @@ function reduceDropTab(layout: EditorLayoutStateV2, intent: EditorTabDragIntent)
   );
 }
 
-function reduceStructureAction(layout: EditorLayoutStateV2, action: StructureAction): EditorLayoutStateV2 {
+function reduceStructureAction(
+  layout: EditorLayoutStateV2,
+  action: StructureAction,
+): EditorLayoutStateV2 {
   switch (action.type) {
     case "close-pane":
       return removePane(layout, action.paneId);
@@ -582,7 +769,10 @@ function reduceStructureAction(layout: EditorLayoutStateV2, action: StructureAct
   }
 }
 
-function replaceRoot(layout: EditorLayoutStateV2, action: Extract<LayoutStateAction, { readonly type: "replace-root" }>): EditorLayoutStateV2 {
+function replaceRoot(
+  layout: EditorLayoutStateV2,
+  action: Extract<LayoutStateAction, { readonly type: "replace-root" }>,
+): EditorLayoutStateV2 {
   const pane = createPane("pane-1", "", []);
   return {
     schemaVersion: EDITOR_LAYOUT_SCHEMA_VERSION,
@@ -595,10 +785,15 @@ function replaceRoot(layout: EditorLayoutStateV2, action: Extract<LayoutStateAct
   };
 }
 
-function reduceLayoutStateAction(layout: EditorLayoutStateV2, action: LayoutStateAction): EditorLayoutStateV2 {
+function reduceLayoutStateAction(
+  layout: EditorLayoutStateV2,
+  action: LayoutStateAction,
+): EditorLayoutStateV2 {
   switch (action.type) {
     case "set-active-pane":
-      return layout.panes[action.paneId] === undefined ? layout : { ...layout, activePaneId: action.paneId };
+      return layout.panes[action.paneId] === undefined
+        ? layout
+        : { ...layout, activePaneId: action.paneId };
     case "resize-split":
       return { ...layout, tree: resizeSplitNode(layout.tree, action.splitId, action.ratio) };
     case "set-sidebar":
@@ -609,6 +804,10 @@ function reduceLayoutStateAction(layout: EditorLayoutStateV2, action: LayoutStat
       };
     case "replace-root":
       return replaceRoot(layout, action);
+    case "rename-file":
+      return renameFileEverywhere(layout, action.from, action.to);
+    case "remove-file":
+      return removeFileEverywhere(layout, action.file);
   }
 }
 
@@ -617,7 +816,9 @@ export function editorLayoutReducer(
   action: EditorLayoutAction,
 ): EditorLayoutStateV2 {
   if (isPaneFileAction(action)) return reducePaneFileAction(layout, action);
-  return isStructureAction(action) ? reduceStructureAction(layout, action) : reduceLayoutStateAction(layout, action);
+  return isStructureAction(action)
+    ? reduceStructureAction(layout, action)
+    : reduceLayoutStateAction(layout, action);
 }
 
 export function editorLayoutOpenFiles(layout: EditorLayoutStateV2): readonly string[] {

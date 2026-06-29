@@ -8,6 +8,7 @@ import type {
   ModelCapability,
   NormalizedResponse,
   GatewayRequest,
+  VoicePersona,
 } from "@oscharko-dev/keiko-contracts";
 import type { GroundingLimits } from "@oscharko-dev/keiko-contracts/bff-wire";
 
@@ -34,27 +35,53 @@ export type {
   StreamDelta,
   StreamEvent,
   VoiceProviderLocality,
+  VoicePersona,
   VoiceProfile,
   VoiceUnavailableReason,
   VoiceTransportPosture,
   VoiceCapabilityResolution,
+  VoiceProviderAvailability,
 } from "@oscharko-dev/keiko-contracts";
 export {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
   VOICE_PROVIDER_LOCALITIES,
+  VOICE_PERSONAS,
+  isConfiguredVoiceProvider,
+  describeVoiceProviderAvailability,
+  listVoicePersonas,
 } from "@oscharko-dev/keiko-contracts";
 
 // ─── Provider configuration (credential-bearing — STAYS local) ────────────────
+
+// The sensitive persona → provider-voice-id mapping (Issue #1557, ADR-0094 D2). `voiceId` is a
+// provider-sensitive string (ADR-0058 D6 treats provider voice identifiers as sensitive metadata),
+// so it sits beside `apiKey` on the credential tier and NEVER crosses to contracts. The browser only
+// ever learns which personas exist (the content-free `ModelCapability.supportedVoicePersonas` enum
+// derived from this mapping at parse time), never the voice id behind a persona.
+export interface VoicePersonaVoice {
+  readonly persona: VoicePersona;
+  readonly voiceId: string;
+}
+
+export type ProviderEndpointStyle = "openai-compatible" | "azure-openai-deployment";
+export type RealtimeAuthMode = "api-key" | "ephemeral-session";
 
 export interface ModelProviderConfig {
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string | undefined;
+  readonly endpointStyle?: ProviderEndpointStyle | undefined;
+  readonly apiVersion?: string | undefined;
+  readonly realtimeAuthMode?: RealtimeAuthMode | undefined;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
   readonly egress?: OutboundHttpEgressConfig | undefined;
+  // Persona → provider voice-id mapping for this voice provider (Issue #1557, ADR-0094 D2). Present
+  // only on voice providers that advertise speech output or realtime voice. Credential-tier: dropped
+  // by omission from `toSafeObject`'s allowlist and never serialised to the browser.
+  readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
 }
 
 export interface OutboundHttpEgressConfig {

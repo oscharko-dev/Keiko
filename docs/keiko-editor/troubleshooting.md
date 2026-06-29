@@ -135,9 +135,12 @@ This is enforced large-file and file-type policy, not a defect (ADR-0042 D3.6). 
 500 KB or more than 10,000 lines enter degraded mode: expensive Monaco features are disabled and
 `largeFileOptimizations` is on so per-keystroke work stays within budget. Files larger than 1,000,000
 bytes are rejected server-side and never instantiate Monaco. Binary and unsupported files are surfaced
-with a content-free note rather than a diff. Governed language intelligence is available only for
-TypeScript/JavaScript; other languages get Monaco editing only, with no governed completion, inline
-completion, diagnostics, hover, symbols, or formatting until their provider lands (#1213).
+with a content-free note rather than a diff. Governed language intelligence depends on the active
+provider capability record. TypeScript/JavaScript are built in; Java, Python, Go, Rust, and Shell
+require host tools described in the [host language provider guide](host-language-providers.md).
+Providers are disabled by default and require an explicit per-provider enable flag. Missing,
+disabled, or policy-blocked tools disable only governed language features for that language; editing
+remains available.
 
 **Diagnostic Steps**
 
@@ -159,7 +162,9 @@ explains the load rejection.
 - For files over `1,000,000` bytes, open them outside the editor; the limit protects responsiveness and
   is not configurable at run time.
 - For an unsupported language, expect Monaco editing only; governed completion and deterministic
-  language intelligence depend on a registered provider (TypeScript/JavaScript today).
+  language intelligence depend on a registered provider.
+- For a known language whose provider is unavailable, provision the required host tools outside the
+  workspace, set the provider enable flag, or adjust the host allowlist.
 
 ---
 

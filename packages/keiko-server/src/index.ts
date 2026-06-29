@@ -131,12 +131,72 @@ export {
   type TerminalEvidenceEntry,
 } from "./terminal-evidence.js";
 export {
+  DEFAULT_RUNTIME_CAPABILITY_DEADLINE_MS,
+  PathHostExecutableProbe,
+  RUNTIME_HOST_EXECUTABLE_SPECS,
+  detectRuntimeCapabilities,
+  type HostExecutableProbe,
+  type HostExecutableProbeResult,
+  type HostExecutableSpec,
+  type RuntimeCapabilityDetectorOptions,
+} from "./runtime/capabilityDetector.js";
+export {
+  handleRuntimeCapabilities,
+  type RuntimeCapabilityRouteOptions,
+} from "./runtime/capabilityRoutes.js";
+// Issue #1388 (ADR-0070) — governed container engine detection + execution pilot.
+export {
+  detectContainerEngines,
+  DEFAULT_CONTAINER_PROBE_DEADLINE_MS,
+  SUPPORTED_DOCKER_MAJOR,
+  KEIKO_CONTAINERS_DISABLED_ENV,
+  type ContainerProbeDeps,
+} from "./runtime/containerEngineDetector.js";
+export {
+  createContainerRunnerManager,
+  buildContainerRunArgv,
+  DEFAULT_CONTAINER_EXECUTION_POLICY,
+  DEFAULT_CONTAINER_RESOURCE_LIMITS,
+  DEFAULT_CONTAINER_TASKS,
+  type ContainerRunInput,
+  type ContainerRunnerEventEmitter,
+  type ContainerRunnerManager,
+  type ContainerRunnerManagerOptions,
+} from "./runtime/containerRunner.js";
+export {
+  handleContainerCapability,
+  handleContainerCatalog,
+  handleContainerEvents,
+  handleCreateContainerRun,
+  handleDeleteContainerRun,
+} from "./runtime/containerRoutes.js";
+export {
+  ContainerRunnerError,
+  CONTAINER_RUNNER_ERROR_CODES,
+  type ContainerRunnerErrorCode,
+} from "./runtime/containerRunner-errors.js";
+export {
+  appendContainerRunEvidence,
+  buildContainerRunEvidenceEntry,
+  CONTAINER_RUN_EVIDENCE_KIND,
+  type ContainerRunEvidenceEntry,
+  type ContainerRunEvidenceInput,
+} from "./runtime/containerRunner-evidence.js";
+export {
+  copyFilesEntry,
+  createFilesEntry,
+  deleteFilesEntry,
   handleFilesContent,
+  handleFilesCopy,
+  handleFilesCreate,
+  handleFilesDelete,
+  handleFilesRename,
   handleFilesSearch,
   listFilesDirectories,
   readFilesContent,
   readFilesPreview,
   readFilesTree,
+  renameFilesEntry,
   searchFiles,
   writeFilesContent,
   type FilesContentResponse,
@@ -144,6 +204,7 @@ export {
   type FilesDirectoryListing,
   type FilesDirectoryRoot,
   type FilesEntryKind,
+  type FilesMutationResponse,
   type FilesSearchFileRole,
   type FilesSearchMatchQuality,
   type FilesSearchResponse,

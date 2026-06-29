@@ -1,0 +1,40 @@
+{
+  "issue": "#476",
+  "epic": "#470",
+  "harness": "tests/e2e/config/playwright.issue-476-git-publish.config.ts",
+  "appPath": "packaged-cli-ui",
+  "route": "/",
+  "evidencePath": "docs/git-delivery/evidence/476",
+  "generatedAt": "2026-06-27T11:34:45.711Z",
+  "governedRoutes": [
+    "/api/git-delivery/push/preview",
+    "/api/git-delivery/push/execute"
+  ],
+  "windowRegistration": {
+    "kind": "governedGit",
+    "seededVia": "keiko.workspace.v4",
+    "renderedBy": "GovernedGitFlowCard (Publish section)"
+  },
+  "assertions": {
+    "packagedUiLoaded": true,
+    "governedWindowMountedFromRegistry": true,
+    "protectedTargetPreviewSurfacesPolicyBlock": true,
+    "publishPathSurfacesGovernedBlock": true,
+    "blockReasonIsPolicyPackBlocked": true,
+    "browserReachedGovernedPushExecuteRoute": true,
+    "safeNamespaceTargetReachesSucceeded": true
+  },
+  "requestLedger": {
+    "previewRequests": 1,
+    "executeRequests": 2
+  },
+  "notes": [
+    "Real packaged CLI UI; governedGit window rendered through the real WindowsRegistry.",
+    "Push routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/route/contract suites.",
+    "The UI exposes no force-publish escape: the Push button always routes through /push/execute and renders its governed response verbatim."
+  ],
+  "artifacts": [
+    "manifest.json",
+    "governed-publish-block.png"
+  ]
+}

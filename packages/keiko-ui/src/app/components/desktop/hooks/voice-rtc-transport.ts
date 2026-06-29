@@ -38,8 +38,12 @@ export class VoiceRtcError extends Error {
 export interface VoiceRtcSession {
   readonly offerSdp: string;
   applyAnswer(sdp: string): Promise<void>;
+  setInputMuted?(muted: boolean): void;
   onRemoteTrack(cb: (stream: MediaStream) => void): void;
   onConnectionStateChange(cb: (state: RTCPeerConnectionState) => void): void;
+  onDataChannelEvent?(cb: (event: unknown) => void): void;
+  onDataChannelStateChange?(cb: (state: RTCDataChannelState) => void): void;
+  sendDataChannelEvent?(event: unknown): boolean;
   close(): void;
 }
 
@@ -78,6 +82,32 @@ function classifyGetUserMediaError(error: unknown): VoiceRtcStartFailure {
 function stopTracks(stream: MediaStream): void {
   for (const track of stream.getTracks()) {
     track.stop();
+  }
+}
+
+// Full-duplex voice capture constraints. In a realtime dialogue the assistant's audio plays through
+// the user's speakers and would otherwise feed back into the microphone — the model then hears itself,
+// producing false barge-ins and garbled, "choppy" dialogue. Enabling the browser's echo canceller,
+// noise suppression, and auto gain control is the standard fix; mono is sufficient for speech and
+// halves the uplink. Bare `{ audio: true }` (the previous behavior) negotiates none of these.
+const FULL_DUPLEX_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+};
+
+// Acquire the microphone with the full-duplex constraints, falling back to the unconstrained mic only
+// when a device/driver cannot satisfy them (OverconstrainedError) — so a constrained-but-capable
+// device gets echo cancellation while an inflexible one still connects rather than failing the session.
+async function acquireMicrophone(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: FULL_DUPLEX_AUDIO_CONSTRAINTS });
+  } catch (error) {
+    if (error instanceof Error && error.name === "OverconstrainedError") {
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    throw error;
   }
 }
 
@@ -126,6 +156,8 @@ function buildSession(
 
   let remoteTrackCb: ((stream: MediaStream) => void) | undefined;
   let connectionStateCb: ((state: RTCPeerConnectionState) => void) | undefined;
+  let dataChannelEventCb: ((event: unknown) => void) | undefined;
+  let dataChannelStateCb: ((state: RTCDataChannelState) => void) | undefined;
 
   pc.ontrack = (event) => {
     const firstStream = event.streams[0];
@@ -140,16 +172,57 @@ function buildSession(
     }
   };
 
+  const emitDataChannelState = (): void => {
+    if (dataChannelStateCb !== undefined) {
+      dataChannelStateCb(dataChannel.readyState);
+    }
+  };
+  dataChannel.addEventListener("open", emitDataChannelState);
+  dataChannel.addEventListener("closing", emitDataChannelState);
+  dataChannel.addEventListener("close", emitDataChannelState);
+  dataChannel.addEventListener("error", emitDataChannelState);
+  dataChannel.addEventListener("message", (event: MessageEvent) => {
+    if (dataChannelEventCb === undefined) {
+      return;
+    }
+    const raw = typeof event.data === "string" ? event.data : String(event.data);
+    try {
+      dataChannelEventCb(JSON.parse(raw));
+    } catch {
+      dataChannelEventCb(raw);
+    }
+  });
+
   return {
     offerSdp,
     async applyAnswer(sdp: string): Promise<void> {
       await pc.setRemoteDescription({ type: "answer", sdp });
+    },
+    setInputMuted(muted: boolean): void {
+      const tracks =
+        typeof stream.getAudioTracks === "function" ? stream.getAudioTracks() : stream.getTracks();
+      for (const track of tracks) {
+        track.enabled = !muted;
+      }
     },
     onRemoteTrack(cb: (stream: MediaStream) => void): void {
       remoteTrackCb = cb;
     },
     onConnectionStateChange(cb: (state: RTCPeerConnectionState) => void): void {
       connectionStateCb = cb;
+    },
+    onDataChannelEvent(cb: (event: unknown) => void): void {
+      dataChannelEventCb = cb;
+    },
+    onDataChannelStateChange(cb: (state: RTCDataChannelState) => void): void {
+      dataChannelStateCb = cb;
+    },
+    sendDataChannelEvent(event: unknown): boolean {
+      if (dataChannel.readyState !== "open") {
+        return false;
+      }
+      dataChannel.send(JSON.stringify(event));
+      return true;
     },
     close(): void {
       // Stop all sender tracks so the OS-level "recording" indicator clears immediately.
@@ -175,7 +248,7 @@ export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
 
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await acquireMicrophone();
       } catch (error) {
         throw new VoiceRtcError(
           classifyGetUserMediaError(error),
@@ -190,8 +263,9 @@ export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
         for (const track of stream.getTracks()) {
           pc.addTrack(track, stream);
         }
-        // Optional low-latency RTCDataChannel as specified by the protocol (ADR-0058).
-        dataChannel = pc.createDataChannel("keiko-voice");
+        // OpenAI-compatible Realtime sideband channel. Provider lifecycle and transcript events arrive
+        // here; raw audio remains exclusively on the WebRTC media tracks.
+        dataChannel = pc.createDataChannel("oai-events");
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await waitForIceGathering(pc);

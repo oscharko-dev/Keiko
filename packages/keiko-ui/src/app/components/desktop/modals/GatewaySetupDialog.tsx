@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ApiError, setupGateway } from "@/lib/api";
-import type { ModelCapability } from "@/lib/types";
+import type { ModelCapability, VoiceProviderLocality } from "@/lib/types";
 import { Icons } from "../Icons";
 
 // Human-readable message first; the machine code (useful for support) is kept
@@ -31,12 +31,12 @@ function deploymentNamesFromInput(value: string): readonly string[] {
   );
 }
 
-function timeoutMsFromInput(value: string): number | undefined {
+function timeoutMsFromInput(value: string, label = "Request timeout"): number | undefined {
   const trimmed = value.trim();
   if (trimmed === "") return undefined;
   const parsed = Number(trimmed);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error("Request timeout must be a positive integer in milliseconds.");
+    throw new Error(`${label} must be a positive integer in milliseconds.`);
   }
   return parsed;
 }
@@ -55,6 +55,12 @@ function skippedModelSummary(skippedModelIds: readonly string[]): string {
   // (rate-limit, timeout, content-filter), so the wording must not over-claim a permanent capability
   // verdict the smoke cannot prove.
   return ` Could not verify deployment${skippedModelIds.length === 1 ? "" : "s"}: ${skippedModelIds.join(", ")}.`;
+}
+
+function storedVoiceModels(models: readonly ModelCapability[]): readonly string[] {
+  return models
+    .filter((model) => model.kind === "voice" && model.supportsSpeechInput === true)
+    .map((model) => model.id);
 }
 
 export function GatewaySetupDialog({
@@ -79,6 +85,13 @@ export function GatewaySetupDialog({
   const [timeoutMs, setTimeoutMs] = useState("");
   const [deploymentNames, setDeploymentNames] = useState("");
   const [imageInputModelIds, setImageInputModelIds] = useState("");
+  const [voiceBaseUrl, setVoiceBaseUrl] = useState("");
+  const [voiceApiKey, setVoiceApiKey] = useState("");
+  const [voiceApiKeyHeaderName, setVoiceApiKeyHeaderName] = useState("");
+  const [voiceModelId, setVoiceModelId] = useState("");
+  const [voiceProviderLocality, setVoiceProviderLocality] =
+    useState<VoiceProviderLocality>("azure-foundry");
+  const [voiceTimeoutMs, setVoiceTimeoutMs] = useState("");
   const [figmaAccessToken, setFigmaAccessToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
@@ -193,14 +206,22 @@ export function GatewaySetupDialog({
         return;
       }
       let parsedTimeoutMs: number | undefined;
+      let parsedVoiceTimeoutMs: number | undefined;
       try {
         parsedTimeoutMs = timeoutMsFromInput(timeoutMs);
+        parsedVoiceTimeoutMs = timeoutMsFromInput(voiceTimeoutMs, "Voice request timeout");
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : "Request timeout is invalid.");
         setBusy(false);
         return;
       }
       const parsedImageInputModelIds = deploymentNamesFromInput(imageInputModelIds);
+      const submittedVoiceCredential =
+        voiceBaseUrl.trim() !== "" ||
+        voiceApiKey.trim() !== "" ||
+        voiceApiKeyHeaderName.trim() !== "" ||
+        voiceModelId.trim() !== "" ||
+        voiceTimeoutMs.trim() !== "";
       const submittedGatewayCredentials =
         !preserveExisting ||
         baseUrl.trim() !== "" ||
@@ -221,26 +242,50 @@ export function GatewaySetupDialog({
         ...(parsedImageInputModelIds.length === 0
           ? {}
           : { imageInputModelIds: parsedImageInputModelIds }),
+        ...(submittedVoiceCredential
+          ? {
+              voiceBaseUrl: voiceBaseUrl.trim() === "" ? undefined : voiceBaseUrl.trim(),
+              voiceApiKey: voiceApiKey.trim() === "" ? undefined : voiceApiKey.trim(),
+              voiceApiKeyHeaderName:
+                voiceApiKeyHeaderName.trim() === "" ? undefined : voiceApiKeyHeaderName.trim(),
+              voiceModelId: voiceModelId.trim() === "" ? undefined : voiceModelId.trim(),
+              voiceProviderLocality,
+              ...(parsedVoiceTimeoutMs === undefined ? {} : { voiceTimeoutMs: parsedVoiceTimeoutMs }),
+            }
+          : {}),
         ...(figmaAccessToken.trim() === "" ? {} : { figmaAccessToken: figmaAccessToken.trim() }),
       });
       const count = result.testedModelIds.length;
       const skippedSummary = skippedModelSummary(result.skippedModelIds ?? []);
+      const verifiedModelSummary = `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}`;
       setBusy(false);
       if (submittedFigmaCredential && !submittedGatewaySettings) {
-        setSuccess("Verified Figma access token. Reloading Keiko…");
+        setSuccess(
+          submittedVoiceCredential
+            ? "Updated voice dictation credentials and verified Figma access token. Reloading Keiko…"
+            : "Verified Figma access token. Reloading Keiko…",
+        );
       } else if (submittedFigmaCredential && !submittedGatewayCredentials) {
         setSuccess(
-          "Updated model gateway settings and verified Figma access token. Reloading Keiko…",
+          submittedVoiceCredential
+            ? "Updated model gateway settings, voice dictation credentials, and verified Figma access token. Reloading Keiko…"
+            : "Updated model gateway settings and verified Figma access token. Reloading Keiko…",
         );
       } else if (!submittedFigmaCredential && !submittedGatewayCredentials) {
-        setSuccess("Updated model gateway settings. Reloading Keiko…");
+        setSuccess(
+          submittedVoiceCredential
+            ? "Updated voice dictation credentials. Reloading Keiko…"
+            : "Updated model gateway settings. Reloading Keiko…",
+        );
       } else if (submittedFigmaCredential) {
         setSuccess(
-          `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"} and Figma access token. Reloading Keiko…${skippedSummary}`,
+          submittedVoiceCredential
+            ? `${verifiedModelSummary}, updated voice dictation credentials, and verified Figma access token. Reloading Keiko…${skippedSummary}`
+            : `${verifiedModelSummary} and Figma access token. Reloading Keiko…${skippedSummary}`,
         );
       } else {
         setSuccess(
-          `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko…${skippedSummary}`,
+          `${verifiedModelSummary}${submittedVoiceCredential ? " and updated voice dictation credentials" : ""}. Reloading Keiko…${skippedSummary}`,
         );
       }
       reloadTimerRef.current = window.setTimeout(
@@ -264,6 +309,12 @@ export function GatewaySetupDialog({
   // regardless of where the dialog is mounted in the React tree.
   const parsedDeploymentNames = deploymentNamesFromInput(deploymentNames);
   const parsedImageInputModelIds = deploymentNamesFromInput(imageInputModelIds);
+  const voiceCredentialInput =
+    voiceBaseUrl.trim() !== "" ||
+    voiceApiKey.trim() !== "" ||
+    voiceApiKeyHeaderName.trim() !== "" ||
+    voiceModelId.trim() !== "" ||
+    voiceTimeoutMs.trim() !== "";
   const requiresGatewayCredentials = !preserveExisting;
   const hasGatewayCredentialInput =
     baseUrl.trim() !== "" ||
@@ -271,7 +322,8 @@ export function GatewaySetupDialog({
     apiKeyHeaderName.trim() !== "" ||
     timeoutMs.trim() !== "" ||
     parsedDeploymentNames.length > 0 ||
-    parsedImageInputModelIds.length > 0;
+    parsedImageInputModelIds.length > 0 ||
+    voiceCredentialInput;
   const hasFigmaCredentialInput = figmaAccessToken.trim() !== "";
   const canSubmit =
     !busy &&
@@ -291,6 +343,7 @@ export function GatewaySetupDialog({
   const modelNames = storedModels.map((model) => model.id);
   const visibleModelNames = modelNames.slice(0, 6);
   const hiddenModelCount = Math.max(0, modelNames.length - visibleModelNames.length);
+  const voiceModelNames = storedVoiceModels(storedModels);
   const gatewayFields = (
     <div className="gw-grid">
       <label className="gw-field gw-span-2">
@@ -383,6 +436,103 @@ export function GatewaySetupDialog({
     </div>
   );
 
+  const voiceFields = (
+    <div className="gw-grid">
+      <label className="gw-field">
+        <span>
+          STT model <span className="dlg-opt">optional</span>
+        </span>
+        <input
+          className="gw-input mono"
+          value={voiceModelId}
+          placeholder="keiko-stt"
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          onChange={(event) => setVoiceModelId(event.target.value)}
+        />
+      </label>
+      <label className="gw-field">
+        <span>
+          Provider locality <span className="dlg-opt">optional</span>
+        </span>
+        <select
+          className="gw-input mono"
+          value={voiceProviderLocality}
+          disabled={busy || success !== undefined}
+          onChange={(event) => setVoiceProviderLocality(event.target.value as VoiceProviderLocality)}
+        >
+          <option value="azure-foundry">Azure Foundry</option>
+          <option value="customer-hosted">Customer-hosted</option>
+          <option value="local-only">Local-only</option>
+        </select>
+      </label>
+      <label className="gw-field gw-span-2">
+        <span>
+          STT endpoint URL{" "}
+          {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
+        </span>
+        <input
+          className="gw-input mono"
+          value={voiceBaseUrl}
+          placeholder={
+            preserveExisting
+              ? "Only enter a value to replace the stored STT URL"
+              : "https://voice-gateway.example.com/openai/v1"
+          }
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          onChange={(event) => setVoiceBaseUrl(event.target.value)}
+        />
+      </label>
+      <label className="gw-field">
+        <span>
+          STT credential{" "}
+          {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
+        </span>
+        <input
+          className="gw-input mono"
+          type="password"
+          value={voiceApiKey}
+          placeholder={
+            preserveExisting
+              ? "Only enter a value to replace the stored STT credential"
+              : "Paste your STT credential"
+          }
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          onChange={(event) => setVoiceApiKey(event.target.value)}
+        />
+      </label>
+      <label className="gw-field">
+        <span>
+          STT auth header <span className="dlg-opt">optional</span>
+        </span>
+        <input
+          className="gw-input mono"
+          value={voiceApiKeyHeaderName}
+          placeholder={preserveExisting ? "Leave blank to keep stored header" : "api-key"}
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          onChange={(event) => setVoiceApiKeyHeaderName(event.target.value)}
+        />
+      </label>
+      <label className="gw-field">
+        <span>
+          STT timeout (ms) <span className="dlg-opt">optional</span>
+        </span>
+        <input
+          className="gw-input mono"
+          inputMode="numeric"
+          value={voiceTimeoutMs}
+          placeholder={preserveExisting ? "Leave blank to keep stored timeout" : "30000"}
+          autoComplete="off"
+          disabled={busy || success !== undefined}
+          onChange={(event) => setVoiceTimeoutMs(event.target.value)}
+        />
+      </label>
+    </div>
+  );
+
   const dialogTree = (
     <div className="gw-setup-backdrop" role="presentation">
       <div
@@ -458,6 +608,43 @@ export function GatewaySetupDialog({
               </>
             ) : (
               gatewayFields
+            )}
+          </section>
+
+          <section className="gw-section" aria-labelledby="gw-voice-section-title">
+            <div className="gw-section-head">
+              <div>
+                <h2 id="gw-voice-section-title">Voice dictation</h2>
+                <p>Optional speech-to-text provider for composer dictation.</p>
+              </div>
+            </div>
+            {preserveExisting ? (
+              <>
+                <div className="gw-current" aria-label="Stored voice dictation credentials">
+                  <div className="gw-current-row">
+                    <span>STT provider</span>
+                    <strong>{voiceModelNames.length > 0 ? "Stored" : "Not configured"}</strong>
+                  </div>
+                  {voiceModelNames.length > 0 ? (
+                    <div className="gw-current-models">
+                      <span>Voice models</span>
+                      <div className="gw-model-chips">
+                        {voiceModelNames.map((modelId) => (
+                          <strong key={modelId} className="mono">
+                            {modelId}
+                          </strong>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                <details className="gw-replace">
+                  <summary>Update voice dictation credentials</summary>
+                  {voiceFields}
+                </details>
+              </>
+            ) : (
+              voiceFields
             )}
           </section>
 

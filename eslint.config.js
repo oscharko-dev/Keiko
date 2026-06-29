@@ -27,6 +27,11 @@ export default tseslint.config(
       // globals and live outside any TypeScript program. They are committed evidence/repro artifacts,
       // not product code, so they are excluded from the strict typed lint (like the fixtures above).
       "docs/design-system/evidence/**/*.mjs",
+      // Real-subprocess LSP test fixture (Issue #1381): a standalone Node `.mjs` script spawned as an
+      // external language-server child in integration tests. It lives outside any TypeScript program
+      // (it is executed, not imported), so it is excluded from the strict typed lint like the
+      // evidence harnesses above — not product code.
+      "packages/keiko-server/src/editor/lsp/testing/*.mjs",
     ],
   },
   js.configs.recommended,

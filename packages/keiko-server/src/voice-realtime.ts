@@ -19,30 +19,46 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket as WsSocket } from "ws";
 import {
+  findConfiguredCapability,
   requestRealtimeNegotiation,
+  resolveRealtimeVoice,
   resolveVoiceCapability,
   selectRealtimeVoiceModel,
   type GatewayConfig,
   type ModelProviderConfig,
+  type RealtimeFunctionTool,
   type RealtimeNegotiationOutcome,
   type RealtimeNegotiationRequest,
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
+import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import {
+  DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   isVoiceReplayEligible,
   stripUnsafeFormatChars,
   validateVoiceControlMessage,
+  VOICE_PERSONAS,
   VOICE_PROFILE_NEGOTIATION_MODE,
   VOICE_PROTOCOL_VERSION,
   voiceMessageAllowedForProfile,
   type VoiceControlMessage,
+  type VoicePersona,
   type VoiceProfile,
   type VoiceProtocolErrorCode,
   type VoiceProviderLocality,
+  type VoiceSessionGroundingContext,
+  type VoiceSessionChatContext,
+  type VoiceSessionCreateMessage,
 } from "@oscharko-dev/keiko-contracts";
+import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import { isAllowedHost } from "./host-check.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
 import { isVoiceDisabledByPolicy, isVoiceRealtimeCapable } from "./read-handlers.js";
+import {
+  conversationMemoryScopes,
+  resolveConversationMemoryContext,
+} from "./memory-conversation-context.js";
+import { vaultAsQueryPort } from "./memory-conv-handlers.js";
 
 // The single loopback path the BFF WebSocket upgrade is re-opened for. Every other upgrade keeps the
 // hard 404 + socket.destroy() default (server.ts).
@@ -61,6 +77,8 @@ const MAX_REPLAY_EVENTS = 200;
 const SESSION_RESUME_TTL_MS = 60_000;
 // Bound the number of tracked sessions on the loopback control plane (single local user).
 const MAX_ACTIVE_SESSIONS = 64;
+const MAX_REALTIME_CONTEXT_MESSAGES = 12;
+const MAX_REALTIME_CONTEXT_CHARS = 12_000;
 // Bound the identifier length/charset before a client-chosen id may be tracked or logged, so a
 // hostile id cannot inject into a log/audit line (content-free redaction class, protocol §8).
 const MAX_ID_LENGTH = 200;
@@ -80,6 +98,47 @@ function isSafeIdentifier(value: unknown): value is string {
   );
 }
 
+function isVoicePersona(value: unknown): value is VoicePersona {
+  return typeof value === "string" && (VOICE_PERSONAS as readonly string[]).includes(value);
+}
+
+function isVoiceSessionChatContext(value: unknown): value is VoiceSessionChatContext {
+  if (!isRecord(value) || !isSafeIdentifier(value.chatId)) {
+    return false;
+  }
+  if (value.memory !== undefined && !isVoiceSessionMemoryContext(value.memory)) {
+    return false;
+  }
+  return value.grounding === undefined || isVoiceSessionGroundingContext(value.grounding);
+}
+
+function isVoiceSessionMemoryContext(value: unknown): value is VoiceSessionChatContext["memory"] {
+  if (!isRecord(value) || typeof value.enabled !== "boolean") {
+    return false;
+  }
+  const budgetTokens = value.budgetTokens;
+  return (
+    budgetTokens === undefined ||
+    (typeof budgetTokens === "number" && Number.isInteger(budgetTokens) && budgetTokens >= 0)
+  );
+}
+
+function isVoiceSessionGroundingContext(value: unknown): value is VoiceSessionGroundingContext {
+  if (!isRecord(value) || typeof value.enabled !== "boolean") {
+    return false;
+  }
+  const sourceCount = value.sourceCount;
+  if (typeof sourceCount !== "number" || !Number.isInteger(sourceCount) || sourceCount < 0) {
+    return false;
+  }
+  return (
+    value.kind === "files" ||
+    value.kind === "knowledge" ||
+    value.kind === "hybrid" ||
+    value.kind === "multi"
+  );
+}
+
 // The persistent per-session record. It outlives a single WebSocket so a reconnect (a new socket
 // presenting the same idempotency key) resumes the same session and replays the buffered events,
 // rather than creating a duplicate (protocol §7 idempotency + reconnect).
@@ -88,13 +147,22 @@ interface SessionState {
   readonly idempotencyKey: string;
   readonly profile: VoiceProfile;
   readonly providerLocality: VoiceProviderLocality | undefined;
+  // The client-selected product persona, validated at session.create. Drives the realtime voice id
+  // (resolved server-side). Undefined ⇒ the configured default voice.
+  readonly persona: VoicePersona | undefined;
+  readonly chatContext: VoiceSessionChatContext | undefined;
   hostSeq: number;
   lastClientSeq: number;
   readonly replay: VoiceControlMessage[];
   detachedAt: number | undefined;
 }
 
-type NegotiateFn = (offerSdp: string, signal: AbortSignal) => Promise<RealtimeNegotiationOutcome>;
+type NegotiateFn = (
+  offerSdp: string,
+  persona: VoicePersona | undefined,
+  chatContext: VoiceSessionChatContext | undefined,
+  signal: AbortSignal,
+) => Promise<RealtimeNegotiationOutcome>;
 
 // The per-kind payload an `emit` carries: the kind plus its fields, minus the shared envelope that
 // `emit` fills in. A distributive Omit preserves the discriminated per-kind fields.
@@ -123,9 +191,194 @@ function resolveRealtimeProvider(config: GatewayConfig): ModelProviderConfig | u
   return config.providers.find((provider) => provider.modelId === modelId);
 }
 
+// The spoken-dialogue persona for the realtime session. It is the SAME Keiko system persona the text
+// chat uses (CONVERSATION_SYSTEM_PROMPT) plus a short voice-delivery addendum, so spoken and written
+// Keiko cannot diverge. Setting it explicitly replaces the provider's default demo persona ("a helpful,
+// witty, and friendly AI … Talk quickly … knowledge cutoff 2023-10"), which would otherwise make the
+// realtime voice a separate, ungrounded assistant — a direct violation of the dialogue-mode invariant.
+const REALTIME_SPOKEN_ADDENDUM =
+  " You are speaking with the user by voice. Keep replies short, natural, and conversational. " +
+  "Do not read code, file paths, or long identifiers aloud verbatim; summarize them in words.";
+
+const REALTIME_GROUNDED_VOICE_ADDENDUM =
+  " This voice session is connected to Keiko grounding sources. For any substantive question about " +
+  "the connected repository, files, documents, knowledge capsules, or project context, call the " +
+  "search_keiko_grounding tool before giving the final answer. You may briefly say that you are " +
+  "checking, but do not state factual conclusions until the tool result is available. After the tool " +
+  "result arrives, speak the answer faithfully and do not add unsupported facts.";
+
+const REALTIME_GROUNDING_TOOL: RealtimeFunctionTool = {
+  type: "function",
+  name: "search_keiko_grounding",
+  description:
+    "Search Keiko's connected repository, file, document, and knowledge sources for the current chat and return a citation-backed answer.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      query: {
+        type: "string",
+        description: "The user's grounded question, rewritten only enough to preserve the intended meaning.",
+      },
+    },
+    required: ["query"],
+  },
+};
+
+// Whisper transcription enables input-audio transcripts so the chat transcript can capture what the
+// user said by voice (the dialogue-mode grounding/evidence path).
+const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "whisper-1";
+
+// Realtime SDP negotiation is interactive: a user is waiting with the microphone open. The generic
+// provider request timeout (commonly 30s) is far too long here — a hung provider would freeze the
+// session on "negotiating" for half a minute before surfacing an error. Clamp to a short interactive
+// bound so a stalled handshake fails fast and the composer can degrade to text.
+const REALTIME_NEGOTIATION_TIMEOUT_MS = 8_000;
+
+function trimContextText(text: string): string {
+  const safe = stripUnsafeFormatChars(text).trim();
+  return safe.length <= MAX_REALTIME_CONTEXT_CHARS
+    ? safe
+    : safe.slice(-MAX_REALTIME_CONTEXT_CHARS);
+}
+
+function recentChatContext(deps: UiHandlerDeps, chatId: string): string {
+  const messages = deps.store
+    .listMessages(chatId, MAX_REALTIME_CONTEXT_MESSAGES)
+    .filter((message) => message.role === "user" || message.role === "assistant");
+  const text = messages
+    .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
+    .join("\n");
+  return trimContextText(text);
+}
+
+function isRouteLikeResult(value: unknown): value is { readonly status: number } {
+  return isRecord(value) && typeof value.status === "number";
+}
+
+type RealtimeMemoryEnabledChatContext = VoiceSessionChatContext & {
+  readonly memory: NonNullable<VoiceSessionChatContext["memory"]> & { readonly enabled: true };
+};
+
+function shouldIncludeRealtimeMemory(
+  deps: UiHandlerDeps,
+  chatContext: VoiceSessionChatContext | undefined,
+): chatContext is RealtimeMemoryEnabledChatContext {
+  return (
+    chatContext?.memory?.enabled === true &&
+    deps.memoryVault !== undefined &&
+    chatContext.chatId.length > 0
+  );
+}
+
+function latestRealtimeMemoryQuery(deps: UiHandlerDeps, chatId: string, fallback: string): string {
+  return (
+    deps.store
+      .listMessages(chatId, MAX_REALTIME_CONTEXT_MESSAGES)
+      .filter((message) => message.role === "user")
+      .at(-1)?.content ?? fallback
+  );
+}
+
+function realtimeMemoryContext(
+  deps: UiHandlerDeps,
+  chatContext: VoiceSessionChatContext | undefined,
+): string {
+  if (!shouldIncludeRealtimeMemory(deps, chatContext)) {
+    return "";
+  }
+  const memoryVault = deps.memoryVault;
+  if (memoryVault === undefined) {
+    return "";
+  }
+  const chat = deps.store.findChatById(chatContext.chatId);
+  if (chat === undefined) {
+    return "";
+  }
+  const runtime = resolveConversationMemoryContext(deps, chat.projectPath, chat.id);
+  if (isRouteLikeResult(runtime)) {
+    return "";
+  }
+  const queryText = latestRealtimeMemoryQuery(deps, chat.id, chat.title);
+  try {
+    const retrieval = retrieveMemoryContext(
+      {
+        scopes: conversationMemoryScopes(runtime),
+        queryText,
+        ...(chatContext.memory.budgetTokens !== undefined
+          ? { budgetTokens: chatContext.memory.budgetTokens }
+          : {}),
+        nowMs: Date.now(),
+      },
+      vaultAsQueryPort(memoryVault),
+    );
+    return trimContextText(retrieval.contextBlock.text);
+  } catch {
+    return "";
+  }
+}
+
+function realtimeInstructions(
+  deps: UiHandlerDeps,
+  chatContext: VoiceSessionChatContext | undefined,
+): string {
+  const sections = [`${CONVERSATION_SYSTEM_PROMPT}${REALTIME_SPOKEN_ADDENDUM}`];
+  if (chatContext?.grounding?.enabled === true) {
+    sections.push(REALTIME_GROUNDED_VOICE_ADDENDUM);
+  }
+  if (chatContext !== undefined) {
+    const recent = recentChatContext(deps, chatContext.chatId);
+    if (recent.length > 0) {
+      sections.push(`Current Keiko chat context:\n${recent}`);
+    }
+    const memory = realtimeMemoryContext(deps, chatContext);
+    if (memory.length > 0) {
+      sections.push(`MemoriaViva context available for this voice session:\n${memory}`);
+    }
+  }
+  return sections.join("\n\n");
+}
+
+function realtimeGroundingEnabled(chatContext: VoiceSessionChatContext | undefined): boolean {
+  return chatContext?.grounding?.enabled === true;
+}
+
+function realtimeProviderSupportsTools(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+): boolean {
+  const capability = findConfiguredCapability(config, provider.modelId);
+  if (capability === undefined) {
+    return true;
+  }
+  return capability.toolCalling || capability.supportsRealtimeVoice === true;
+}
+
+// Resolves the realtime session voice from the provider's persona→voice mapping, guarded to a
+// realtime-valid id. Without an explicit voice the session would use the provider default; with a
+// TTS-only id (e.g. the operator-config `nova`) the realtime model rejects the session. The client's
+// selected persona wins when mapped; otherwise the neutral persona, then the first configured profile,
+// are the fallbacks — every result passes through `resolveRealtimeVoice` so it is always realtime-valid.
+function resolveRealtimeVoiceId(
+  provider: ModelProviderConfig,
+  persona: VoicePersona | undefined,
+): string {
+  const profiles = provider.voiceProfiles ?? [];
+  const selected =
+    persona !== undefined
+      ? profiles.find((profile) => profile.persona === persona)?.voiceId
+      : undefined;
+  const neutral = profiles.find((profile) => profile.persona === "neutral")?.voiceId;
+  return resolveRealtimeVoice(selected ?? neutral ?? profiles[0]?.voiceId);
+}
+
 function buildNegotiationRequest(
   provider: ModelProviderConfig,
   offerSdp: string,
+  persona: VoicePersona | undefined,
+  instructions: string,
+  groundingEnabled: boolean,
+  toolsSupported: boolean,
   deps: UiHandlerDeps,
   signal: AbortSignal,
 ): RealtimeNegotiationRequest {
@@ -136,10 +389,19 @@ function buildNegotiationRequest(
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
+    ...(provider.realtimeAuthMode !== undefined
+      ? { realtimeAuthMode: provider.realtimeAuthMode }
+      : {}),
     modelId: provider.modelId,
+    instructions,
+    voiceId: resolveRealtimeVoiceId(provider, persona),
+    transcriptionModel: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    ...(groundingEnabled && toolsSupported
+      ? { tools: [REALTIME_GROUNDING_TOOL], toolChoice: "auto" as const }
+      : {}),
     offerSdp,
     signal,
-    timeoutMs: provider.timeoutMs,
+    timeoutMs: Math.min(provider.timeoutMs, REALTIME_NEGOTIATION_TIMEOUT_MS),
     ...(egress !== undefined ? { egress } : {}),
   };
 }
@@ -305,7 +567,12 @@ export class VoiceControlConnection {
     this.negotiation = controller;
     let outcome: RealtimeNegotiationOutcome;
     try {
-      outcome = await this.negotiate(offerSdp, controller.signal);
+      outcome = await this.negotiate(
+        offerSdp,
+        this.session.persona,
+        this.session.chatContext,
+        controller.signal,
+      );
     } catch {
       outcome = { ok: false, kind: "transport" };
     }
@@ -334,7 +601,7 @@ export class VoiceControlConnection {
       return;
     }
     // reviewable-text: neutralise Trojan-source / bidi rendering before the text may enter the replay
-    // buffer, exactly as recap/session-state records are treated (protocol §8). Bounded length. A
+    // buffer (protocol §8). Bounded length. A
     // committed transcript the client relayed from the provider is recorded into the reconnect buffer
     // (it is `replayable`) but not echoed back to the client that already holds it.
     const safe = stripUnsafeFormatChars(text).slice(0, MAX_TRANSCRIPT_CHARS);
@@ -446,11 +713,95 @@ export interface VoiceControlPlaneDeps {
 // The realtime voice control plane bound to one server. `handleUpgrade` is the gated replacement for
 // server.ts's hard-reject upgrade handler; it accepts ONLY the voice control path, ONLY on a loopback
 // Host/Origin, and ONLY when the deployment is full-realtime capable.
+// The minimal liveness surface a control socket exposes for the heartbeat. `ws` sockets satisfy it
+// structurally (ping/terminate are native; `isAlive` is the standard `ws` heartbeat flag carried on the
+// socket). Modelled as an interface so the sweep is unit-testable with a fake socket.
+export interface AliveControlSocket {
+  isAlive?: boolean;
+  ping(): void;
+  terminate(): void;
+}
+
+// One heartbeat sweep over the live control sockets: a socket that did not answer the previous ping
+// (isAlive === false) is terminated so a half-open connection cannot linger and hold a session slot;
+// every other socket is re-armed (isAlive = false) and pinged. Pure over the iterable — no clock, no
+// timer — so it is directly unit-testable without a real WebSocket server.
+export function sweepControlHeartbeat(sockets: Iterable<AliveControlSocket>): void {
+  for (const socket of sockets) {
+    if (socket.isAlive === false) {
+      socket.terminate();
+      continue;
+    }
+    socket.isAlive = false;
+    socket.ping();
+  }
+}
+
+function readSessionCreateFrame(ws: WsSocket, raw: string): VoiceSessionCreateMessage | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    ws.close(1008, "invalid opening frame");
+    return undefined;
+  }
+  if (!validateVoiceControlMessage(parsed).ok || !isRecord(parsed) || parsed.kind !== "session.create") {
+    ws.close(1008, "expected session.create");
+    return undefined;
+  }
+  return parsed as unknown as VoiceSessionCreateMessage;
+}
+
+function sessionCreateMatchesVoiceProfile(
+  parsed: VoiceSessionCreateMessage,
+  voice: VoiceCapabilityResolution,
+): boolean {
+  return (
+    parsed.requestedProfile === voice.profile &&
+    parsed.negotiationMode === VOICE_PROFILE_NEGOTIATION_MODE[voice.profile]
+  );
+}
+
+function resolveSessionChatContext(
+  ws: WsSocket,
+  deps: UiHandlerDeps,
+  sessionId: string,
+  parsed: VoiceSessionCreateMessage,
+): VoiceSessionChatContext | undefined {
+  if (!isVoiceSessionChatContext(parsed.chatContext)) {
+    emitStandaloneError(ws, sessionId, "not-allowed-for-profile", deps.redactor);
+    ws.close(1008, "missing chat context");
+    return undefined;
+  }
+  const chatContext = parsed.chatContext;
+  if (deps.store.findChatById(chatContext.chatId) === undefined) {
+    emitStandaloneError(ws, sessionId, "not-allowed-for-profile", deps.redactor);
+    ws.close(1008, "unknown chat context");
+    return undefined;
+  }
+  return chatContext;
+}
+
 class VoiceControlPlaneImpl implements VoiceControlPlane {
   private readonly wss = new WebSocketServer({ noServer: true });
   private readonly sessions = new Map<string, SessionState>();
+  // Liveness sweep timer, started lazily on the first connection and cleared on closeAll (shutdown).
+  // A socket that misses a ping/pong cycle is terminated by the next sweep.
+  private heartbeat: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly planeDeps: VoiceControlPlaneDeps) {}
+
+  private startHeartbeat(): void {
+    if (this.heartbeat !== undefined) {
+      return;
+    }
+    const timer = setInterval(() => {
+      sweepControlHeartbeat(this.wss.clients as Set<AliveControlSocket>);
+    }, DEFAULT_VOICE_PROTOCOL_TIMEOUTS.heartbeatIntervalMs);
+    // Do not keep the Node process alive solely for the heartbeat.
+    timer.unref();
+    this.heartbeat = timer;
+  }
 
   handleUpgrade(req: IncomingMessage, sock: Duplex, head: Buffer): boolean {
     if (!isVoiceControlUpgrade(req)) {
@@ -476,6 +827,10 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
   }
 
   closeAll(): void {
+    if (this.heartbeat !== undefined) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = undefined;
+    }
     for (const client of this.wss.clients) {
       client.close(1001, "server shutting down");
     }
@@ -492,7 +847,12 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
   }
 
   private buildNegotiate(deps: UiHandlerDeps): NegotiateFn {
-    return async (offerSdp: string, signal: AbortSignal): Promise<RealtimeNegotiationOutcome> => {
+    return async (
+      offerSdp: string,
+      persona: VoicePersona | undefined,
+      chatContext: VoiceSessionChatContext | undefined,
+      signal: AbortSignal,
+    ): Promise<RealtimeNegotiationOutcome> => {
       const config = currentGatewayConfig(deps);
       if (config === undefined) {
         return { ok: false, kind: "unsupported-model" };
@@ -502,7 +862,24 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
         return { ok: false, kind: "unsupported-model" };
       }
       const negotiate = deps.voiceRealtimeNegotiationRequest ?? requestRealtimeNegotiation;
-      return negotiate(buildNegotiationRequest(provider, offerSdp, deps, signal));
+      const instructions = realtimeInstructions(deps, chatContext);
+      const groundingEnabled = realtimeGroundingEnabled(chatContext);
+      const toolsSupported = realtimeProviderSupportsTools(config, provider);
+      if (groundingEnabled && !toolsSupported) {
+        return { ok: false, kind: "unsupported-model" };
+      }
+      return negotiate(
+        buildNegotiationRequest(
+          provider,
+          offerSdp,
+          persona,
+          instructions,
+          groundingEnabled,
+          toolsSupported,
+          deps,
+          signal,
+        ),
+      );
     };
   }
 
@@ -515,35 +892,33 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
     voice: VoiceCapabilityResolution,
     raw: string,
   ): { state: SessionState; resume: boolean } | undefined {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      ws.close(1008, "invalid opening frame");
-      return undefined;
-    }
-    if (
-      !validateVoiceControlMessage(parsed).ok ||
-      !isRecord(parsed) ||
-      parsed.kind !== "session.create"
-    ) {
-      ws.close(1008, "expected session.create");
-      return undefined;
-    }
+    const parsed = readSessionCreateFrame(ws, raw);
+    if (parsed === undefined) return undefined;
     const sessionId = parsed.sessionId;
     if (!isSafeIdentifier(sessionId) || !isSafeIdentifier(parsed.idempotencyKey)) {
       ws.close(1008, "invalid session identifiers");
       return undefined;
     }
-    if (
-      parsed.requestedProfile !== voice.profile ||
-      parsed.negotiationMode !== VOICE_PROFILE_NEGOTIATION_MODE[voice.profile]
-    ) {
+    if (!sessionCreateMatchesVoiceProfile(parsed, voice)) {
       emitStandaloneError(ws, sessionId, "not-allowed-for-profile", deps.redactor);
       ws.close(1008, "profile/negotiation mismatch");
       return undefined;
     }
-    return this.createOrResumeSession(ws, voice, sessionId, parsed.idempotencyKey, deps.redactor);
+    // Optional, content-free persona: validated against the closed VOICE_PERSONAS set. An absent or
+    // malformed value is treated as "no preference" (undefined) rather than rejected, so a stale client
+    // can never break session creation; the voice then falls back to the configured default.
+    const persona = isVoicePersona(parsed.persona) ? parsed.persona : undefined;
+    const chatContext = resolveSessionChatContext(ws, deps, sessionId, parsed);
+    if (chatContext === undefined) return undefined;
+    return this.createOrResumeSession(
+      ws,
+      voice,
+      sessionId,
+      parsed.idempotencyKey,
+      persona,
+      chatContext,
+      deps.redactor,
+    );
   }
 
   private createOrResumeSession(
@@ -551,6 +926,8 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
     voice: VoiceCapabilityResolution,
     sessionId: string,
     idempotencyKey: string,
+    persona: VoicePersona | undefined,
+    chatContext: VoiceSessionChatContext | undefined,
     redact: (value: unknown) => unknown,
   ): { state: SessionState; resume: boolean } | undefined {
     this.sweepExpired(Date.now());
@@ -569,6 +946,8 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
       idempotencyKey,
       profile: voice.profile,
       providerLocality: voice.providerLocality,
+      persona,
+      chatContext,
       hostSeq: 0,
       lastClientSeq: 0,
       replay: [],
@@ -578,7 +957,19 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
     return { state, resume: false };
   }
 
+  // Heartbeat liveness for one socket: mark it alive, refresh on each pong, and ensure the sweep timer
+  // is running. A socket that stops answering pings is terminated by the next sweep (no half-open leaks).
+  private attachHeartbeat(ws: WsSocket): void {
+    const live = ws as AliveControlSocket;
+    live.isAlive = true;
+    ws.on("pong", () => {
+      live.isAlive = true;
+    });
+    this.startHeartbeat();
+  }
+
   private onConnection(ws: WsSocket, deps: UiHandlerDeps): void {
+    this.attachHeartbeat(ws);
     const voice = resolveVoiceCapability(currentGatewayConfig(deps) ?? { providers: [] }, {
       policyDisabled: isVoiceDisabledByPolicy(deps.env),
     });

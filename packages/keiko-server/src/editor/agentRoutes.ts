@@ -1,57 +1,107 @@
+// Issue #1392 — BFF routes for the editor-agent control plane: session discovery, snapshot read/write,
+// action queueing, browser result reporting, and the SSE event stream. The durable control-plane state
+// (session registry, live bridge tracking, bounded action queue, timeouts, fan-out) lives in
+// agentSessionRegistry.ts; this module is the HTTP edge that parses requests, enforces *preflight*
+// policy, and threads idempotency. The server only coordinates — it never executes an action or
+// mutates editor/React state (AC5); the browser bridge owns that.
+//
+// Preflight conflicts (status "conflict", HTTP 409) gate admission to the queue. The Issue #1391/#1394
+// structural gates (DIRTY / VERSION / HASH / OUT_OF_SCOPE / INVALID_EDITS / PRECONDITION_REQUIRED) run
+// first; the Issue #1392 liveness gate runs last: an otherwise-valid action for a session with no live
+// browser bridge is answered with NO_ACTIVE_BRIDGE (AC1). Past preflight, the registry can still return
+// a lifecycle failure: QUEUE_FULL (HTTP 429, the bounded queue is saturated) or, asynchronously,
+// TIMED_OUT when the bridge never acknowledges before the deadline (AC2).
+//
+// No raw source content (snapshot text, text edits, patch bodies) is logged anywhere in this path.
+
 import type { ServerResponse } from "node:http";
+import { createHash } from "node:crypto";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
+  classifyEditorAgentAction,
+  editorAgentWritePreconditionError,
+  isContainedAgentPath,
   isEditorAgentAction,
+  isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
+  validateAgentTextEdits,
   type EditorAgentAction,
+  type EditorAgentActionPolicyDecision,
   type EditorAgentActionResult,
+  type EditorAgentConflictCode,
   type EditorAgentEvent,
   type EditorAgentSessionSnapshot,
   type EditorAgentSnapshotTextMode,
+  type LanguageRange,
 } from "@oscharko-dev/keiko-contracts";
-import { errorBody, STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
+import {
+  computeFileContent,
+  validatePatch,
+  type PatchFileChange,
+  type PatchValidation,
+} from "@oscharko-dev/keiko-tools";
+import {
+  isDenied,
+  resolveWithinWorkspace,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  errorBody,
+  STREAMING,
+  type HandlerOutcome,
+  type RouteContext,
+  type RouteResult,
+} from "../routes.js";
 import { SSE_HEADERS, readyMessage } from "../sse.js";
 import { readJsonObject } from "../files.js";
+import { editorAgentRegistry } from "./agentSessionRegistry.js";
+import {
+  _resetEditorAgentAuditForTests,
+  listEditorAgentActionAudit,
+  recordEditorAgentActionAudit,
+} from "./agentActionAudit.js";
 
 const MAX_AGENT_BODY_BYTES = 1_048_576;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = 64 * 1024;
 
 interface QueuedRecord {
-  readonly requestBody: string;
+  readonly requestHash: string;
   readonly result: EditorAgentActionResult;
 }
 
-const sessions = new Map<string, EditorAgentSessionSnapshot>();
+// HTTP-level idempotency: a replayed Idempotency-Key returns the original outcome; a key reused with a
+// different action body is a 409. This is request de-duplication and stays at the route edge. The map
+// is bounded (FIFO eviction) and stores only a hash of the request body, so it cannot grow without
+// limit or retain raw action content (text edits, patch bodies) on a long-lived server.
+const MAX_IDEMPOTENCY_ENTRIES = 1024;
 const idempotency = new Map<string, QueuedRecord>();
-const subscribers = new Set<(event: EditorAgentEvent) => void>();
-let eventSeq = 0;
 
-type EditorAgentEventPayload =
-  | { readonly type: "session"; readonly snapshot: EditorAgentSessionSnapshot }
-  | { readonly type: "action"; readonly action: EditorAgentAction }
-  | { readonly type: "result"; readonly result: EditorAgentActionResult }
-  | { readonly type: "heartbeat"; readonly updatedAt: number };
+function hashRequest(body: string): string {
+  return createHash("sha256").update(body).digest("hex");
+}
+
+function rememberIdempotency(
+  key: string,
+  requestHash: string,
+  result: EditorAgentActionResult,
+): void {
+  if (!idempotency.has(key) && idempotency.size >= MAX_IDEMPOTENCY_ENTRIES) {
+    const oldest = idempotency.keys().next().value;
+    if (oldest !== undefined) idempotency.delete(oldest);
+  }
+  idempotency.set(key, { requestHash, result });
+}
 
 function isRouteResult(value: unknown): value is RouteResult {
   return typeof value === "object" && value !== null && "status" in value && "body" in value;
 }
 
-function nextEventId(): string {
-  eventSeq += 1;
-  return `editor-agent-${String(eventSeq)}`;
-}
-
-function emit(event: EditorAgentEventPayload): void {
-  const envelope: EditorAgentEvent = {
-    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-    eventId: nextEventId(),
-    ...event,
-  };
-  for (const subscriber of subscribers) subscriber(envelope);
-}
-
-function utf8Prefix(text: string, maxBytes: number): { readonly text: string; readonly truncated: boolean } {
+function utf8Prefix(
+  text: string,
+  maxBytes: number,
+): { readonly text: string; readonly truncated: boolean } {
   let bytes = 0;
   let end = 0;
   for (const char of text) {
@@ -98,7 +148,8 @@ function documentVersionConflict(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
 ): EditorAgentActionResult | null {
-  if (action.expectedDocumentVersion === undefined || snapshot.documentVersion === undefined) return null;
+  if (action.expectedDocumentVersion === undefined || snapshot.documentVersion === undefined)
+    return null;
   return action.expectedDocumentVersion.contentHash === snapshot.documentVersion.contentHash
     ? null
     : conflict(action, "VERSION_MISMATCH", "The active document version no longer matches.");
@@ -108,28 +159,215 @@ function contentHashConflict(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
 ): EditorAgentActionResult | null {
-  if (action.expectedContentHash === undefined || snapshot.activeFileContentHash === undefined) return null;
+  if (action.expectedContentHash === undefined || snapshot.activeFileContentHash === undefined)
+    return null;
   return action.expectedContentHash === snapshot.activeFileContentHash
     ? null
-    : conflict(action, "CONTENT_HASH_MISMATCH", "The active document content hash no longer matches.");
+    : conflict(
+        action,
+        "CONTENT_HASH_MISMATCH",
+        "The active document content hash no longer matches.",
+      );
 }
 
-function targetFile(action: EditorAgentAction, snapshot: EditorAgentSessionSnapshot): string | null {
+function containmentConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionResult | null {
+  const file = targetFile(action, snapshot);
+  if (file === null) return null;
+  return isContainedAgentPath(file)
+    ? null
+    : conflict(action, "OUT_OF_SCOPE", "The target file escapes the workspace root.");
+}
+
+// Issue #1395 (ADR-0062) — a write action whose target is a contained but always-on-deny-listed path
+// (.env, .ssh, .keiko, credentials, …) is denied by policy across ALL write action types. Previously
+// the deny-list was enforced only on the applyPatch path (via validatePatch); this closes the gap for
+// applyTextEdits/save/format. Surfaced as the existing OUT_OF_SCOPE conflict so no new wire code is
+// introduced; the fine-grained governance reason (denied-sensitive-path) lives in the audit record.
+function sensitivePathConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionResult | null {
+  const file = targetFile(action, snapshot);
+  if (file === null || !isContainedAgentPath(file)) return null;
+  return isDenied(file)
+    ? conflict(action, "OUT_OF_SCOPE", "The target file is a protected workspace path.")
+    : null;
+}
+
+function textEditsConflict(action: EditorAgentAction): EditorAgentActionResult | null {
+  if (action.type !== "applyTextEdits") return null;
+  const error = validateAgentTextEdits(action.textEdits ?? []);
+  return error === null ? null : conflict(action, "INVALID_EDITS", error);
+}
+
+function workspaceInfoFromRoot(root: string): WorkspaceInfo {
+  return {
+    root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+const OUT_OF_SCOPE_REJECTION_CODES = new Set(["path-unsafe", "path-denied", "binary"]);
+
+function mapPatchValidation(
+  action: EditorAgentAction,
+  validation: PatchValidation,
+): EditorAgentActionResult | null {
+  if (validation.files.length > 1) {
+    return conflict(
+      action,
+      "OUT_OF_SCOPE",
+      "Multi-file patches are not supported on the agent action path.",
+    );
+  }
+  const scopeRejection = validation.reasons.find((reason) =>
+    OUT_OF_SCOPE_REJECTION_CODES.has(reason.code),
+  );
+  if (scopeRejection !== undefined) {
+    return conflict(action, "OUT_OF_SCOPE", scopeRejection.message);
+  }
+  const firstReason = validation.reasons.at(0);
+  if (firstReason !== undefined) {
+    return conflict(action, "INVALID_EDITS", firstReason.message);
+  }
+  const firstConflict = validation.conflicts.at(0);
+  if (firstConflict !== undefined) {
+    return conflict(action, "INVALID_EDITS", firstConflict.reason);
+  }
+  if (validation.ok && validation.files.length === 0) {
+    return conflict(action, "INVALID_EDITS", "Patch contains no applicable file change.");
+  }
+  return null;
+}
+
+function patchValidationConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionResult | null {
+  if (action.type !== "applyPatch") return null;
+  const validation = validatePatch(
+    workspaceInfoFromRoot(snapshot.workspaceRoot),
+    action.patch ?? "",
+    {
+      fs: nodeWorkspaceFs,
+    },
+  );
+  return mapPatchValidation(action, validation);
+}
+
+interface AgentTextEdit {
+  readonly range: LanguageRange;
+  readonly newText: string;
+}
+
+function wholeDocumentReplaceEdit(currentContent: string, postImage: string): AgentTextEdit {
+  const currentLineCount = currentContent.split("\n").length;
+  return {
+    range: {
+      start: { line: 0, character: 0 },
+      end: { line: currentLineCount + 1, character: 0 },
+    },
+    newText: postImage,
+  };
+}
+
+function deriveSingleFilePostImage(
+  file: PatchFileChange,
+  snapshot: EditorAgentSessionSnapshot,
+): AgentTextEdit | null {
+  const absolute = resolveWithinWorkspace(snapshot.workspaceRoot, file.path);
+  const exists = nodeWorkspaceFs.exists(absolute);
+  const currentContent = exists ? nodeWorkspaceFs.readFileUtf8(absolute) : "";
+  const outcome = computeFileContent(file, exists ? currentContent : undefined);
+  if (outcome.content === null || outcome.conflicts.length > 0) return null;
+  return wholeDocumentReplaceEdit(currentContent, outcome.content);
+}
+
+// Translates a queued, preflight-validated single-file applyPatch into the contract textEdits the
+// browser reviews and applies. Computing the post-image with keiko-tools' tested single-file apply
+// logic against the current on-disk content guarantees the cross-cutting invariant
+// applyTextEditsToText(currentContent, edits) === patchedSingleFileContent. Returns null when the
+// patch is not the expected single-file shape or its post-image cannot be derived (including any
+// filesystem/path error), so the caller fails the action rather than emitting an un-appliable one.
+// keiko-tools strips a/ b/ git prefixes; both the patch path and snapshot.activeFile are
+// workspace-relative POSIX paths. Normalize a leading ./ and backslashes so a legitimately
+// matching same-file patch is not rejected on a cosmetic difference.
+function normalizeWorkspaceRelativePath(path: string): string {
+  return path.replace(/\\/gu, "/").replace(/^\.\//u, "");
+}
+
+function deriveAgentPatchTextEdits(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): readonly AgentTextEdit[] | null {
+  // Intentional re-validation: preflight already validated this patch, but validatePatch is
+  // deterministic and pure over (workspace, patch, fs), so deriving here keeps this function
+  // self-contained without threading mutable validation state through the queue path.
+  const validation = validatePatch(
+    workspaceInfoFromRoot(snapshot.workspaceRoot),
+    action.patch ?? "",
+    { fs: nodeWorkspaceFs },
+  );
+  const file = validation.files.at(0);
+  if (!validation.ok || validation.files.length !== 1 || file === undefined) return null;
+  // The post-image is derived from the patch's file content but the browser applies it to the
+  // open buffer. Refuse to apply a patch that targets a different file than the open buffer.
+  if (
+    snapshot.activeFile === null ||
+    normalizeWorkspaceRelativePath(file.path) !==
+      normalizeWorkspaceRelativePath(snapshot.activeFile)
+  ) {
+    return null;
+  }
+  try {
+    const edit = deriveSingleFilePostImage(file, snapshot);
+    return edit === null ? null : [edit];
+  } catch {
+    return null;
+  }
+}
+
+// Builds the action envelope to broadcast to the bridge. For applyPatch the contract textEdits are
+// derived (whole-document replace) so the browser reviews a concrete edit; null means the patch could
+// not be prepared and the action must be failed rather than queued. Every other action type is
+// broadcast unchanged.
+function buildEmitAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentAction | null {
+  if (action.type !== "applyPatch") return action;
+  const textEdits = deriveAgentPatchTextEdits(action, snapshot);
+  if (textEdits === null) return null;
+  return { ...action, textEdits };
+}
+
+function targetFile(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): string | null {
   return action.target?.file ?? snapshot.activeFile;
 }
 
-function writeAction(action: EditorAgentAction): boolean {
-  return (
-    action.type === "format" ||
-    action.type === "save" ||
-    action.type === "applyTextEdits" ||
-    action.type === "applyPatch"
-  );
+// Issue #1391 AC2 — reject a write action that does not pin the document revision it expects to write
+// against. The contract owns both "what is a write action" and "what counts as a precondition"; the
+// server only maps the missing-precondition rule onto the structured PRECONDITION_REQUIRED conflict.
+function preconditionConflict(action: EditorAgentAction): EditorAgentActionResult | null {
+  const error = editorAgentWritePreconditionError(action);
+  return error === null ? null : conflict(action, "PRECONDITION_REQUIRED", error);
 }
 
 function conflict(
   action: EditorAgentAction,
-  code: NonNullable<EditorAgentActionResult["conflict"]>["code"],
+  code: EditorAgentConflictCode,
   message: string,
 ): EditorAgentActionResult {
   return {
@@ -142,21 +380,48 @@ function conflict(
   };
 }
 
-function preflight(action: EditorAgentAction): EditorAgentActionResult | null {
-  const snapshot = sessions.get(action.sessionId);
-  if (snapshot === undefined) {
-    return conflict(action, "NO_ACTIVE_SESSION", "No active browser bridge is registered.");
-  }
-  if (!writeAction(action)) return null;
+// The Issue #1391/#1394 structural write gates, unchanged: a doubly-invalid write reports its most
+// specific failure. Non-write actions have no structural gate.
+function structuralWriteConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionResult | null {
+  if (!isEditorAgentWriteActionType(action.type)) return null;
   return (
     dirtyBufferConflict(action, snapshot) ??
     documentVersionConflict(action, snapshot) ??
-    contentHashConflict(action, snapshot)
+    contentHashConflict(action, snapshot) ??
+    containmentConflict(action, snapshot) ??
+    sensitivePathConflict(action, snapshot) ??
+    textEditsConflict(action) ??
+    patchValidationConflict(action, snapshot) ??
+    preconditionConflict(action)
   );
 }
 
+// Returns a structured conflict result when the action must not be admitted to the queue, or null when
+// it is clear to enqueue. The structural gates run first (above); the Issue #1392 liveness gate runs
+// last so any otherwise-valid action for a session with no live bridge is answered with the structured
+// NO_ACTIVE_BRIDGE conflict (AC1) rather than queued where it could never be executed.
+function preflight(action: EditorAgentAction): EditorAgentActionResult | null {
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  if (snapshot === undefined) {
+    return conflict(action, "NO_ACTIVE_SESSION", "No active browser bridge is registered.");
+  }
+  const structural = structuralWriteConflict(action, snapshot);
+  if (structural !== null) return structural;
+  if (!editorAgentRegistry.hasLiveBridge(action.sessionId)) {
+    return conflict(
+      action,
+      "NO_ACTIVE_BRIDGE",
+      "No live browser bridge is connected for this session.",
+    );
+  }
+  return null;
+}
+
 export function handleEditorAgentSessions(): RouteResult {
-  return { status: 200, body: { sessions: [...sessions.values()] } };
+  return { status: 200, body: { sessions: editorAgentRegistry.listSessions() } };
 }
 
 export async function handleEditorAgentSnapshot(ctx: RouteContext): Promise<RouteResult> {
@@ -167,20 +432,62 @@ export async function handleEditorAgentSnapshot(ctx: RouteContext): Promise<Rout
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
   if ("kind" in parsed.value) {
-    sessions.set(parsed.value.snapshot.sessionId, parsed.value.snapshot);
-    emit({ type: "session", snapshot: parsed.value.snapshot });
+    editorAgentRegistry.registerSnapshot(parsed.value.snapshot);
     return { status: 200, body: { snapshot: parsed.value.snapshot } };
   }
-  const selected =
-    parsed.value.sessionId === undefined
-      ? [...sessions.values()][0]
-      : sessions.get(parsed.value.sessionId);
+  const selected = editorAgentRegistry.selectSnapshot(parsed.value.sessionId);
   if (selected === undefined) return { status: 200, body: { snapshot: null } };
   const maxBytes = parsed.value.maxBytes ?? DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES;
   return {
     status: 200,
     body: { snapshot: shapeSnapshot(selected, parsed.value.textMode, maxBytes) },
   };
+}
+
+// Issue #1395 (ADR-0062) — the workspace-relative target path an action governs, or null when it has
+// no file target. Used both for the policy decision and the (content-free) audit record.
+function resolveActionTargetPath(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+): string | null {
+  return action.target?.file ?? snapshot?.activeFile ?? null;
+}
+
+// Deterministic policy classification (AC2). Containment reuses the contract guard; sensitivity reuses
+// the always-on workspace deny-list (a keiko-workspace concern the leaf classifier cannot reach, so
+// the boolean is resolved here). Only meaningful for write actions; navigation/layout always allow.
+function decideActionPolicy(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+): EditorAgentActionPolicyDecision {
+  const targetPath = resolveActionTargetPath(action, snapshot);
+  const targetSensitive =
+    targetPath !== null && isContainedAgentPath(targetPath) && isDenied(targetPath);
+  return classifyEditorAgentAction(action.type, { targetPath, targetSensitive });
+}
+
+// Issue #1395 (AC1) — record one content-free audit entry for this action at its admission decision.
+// Best-effort: the ledger filters to mutating/denied actions and never throws. `editCount`/
+// `patchByteLength` are counts only, never edit or patch content.
+function auditAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+  result: EditorAgentActionResult,
+): void {
+  recordEditorAgentActionAudit({
+    occurredAt: Date.now(),
+    sessionId: action.sessionId,
+    actionId: action.actionId,
+    actionType: action.type,
+    decision,
+    outcome: result.status,
+    conflictCode: result.conflict?.code,
+    failureCode: result.failure?.code,
+    targetPath: resolveActionTargetPath(action, snapshot),
+    editCount: action.type === "applyTextEdits" ? action.textEdits?.length : undefined,
+    patchByteLength: action.type === "applyPatch" ? action.patch?.length : undefined,
+  });
 }
 
 export async function handleEditorAgentActions(ctx: RouteContext): Promise<RouteResult> {
@@ -192,61 +499,104 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
   }
   if (!isEditorAgentAction(parsed.value)) {
     const result = parsed.value.result;
-    emit({ type: "result", result });
+    editorAgentRegistry.reportResult(result);
     return { status: 200, body: { result } };
   }
   const action = parsed.value;
-  const requestBody = JSON.stringify(action);
+  const requestHash = hashRequest(JSON.stringify(action));
   const replay = idempotency.get(action.idempotencyKey);
   if (replay !== undefined) {
-    if (replay.requestBody !== requestBody) {
+    if (replay.requestHash !== requestHash) {
       return {
         status: 409,
-        body: errorBody("IDEMPOTENCY_CONFLICT", "Idempotency-Key was reused with a different action."),
+        body: errorBody(
+          "IDEMPOTENCY_CONFLICT",
+          "Idempotency-Key was reused with a different action.",
+        ),
       };
     }
     return { status: 200, body: { result: replay.result } };
   }
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  const decision = decideActionPolicy(action, snapshot);
   const failed = preflight(action);
   if (failed !== null) {
-    idempotency.set(action.idempotencyKey, { requestBody, result: failed });
+    rememberIdempotency(action.idempotencyKey, requestHash, failed);
+    auditAction(action, snapshot, decision, failed);
+    editorAgentRegistry.reportResult(failed);
     return { status: 409, body: { result: failed } };
   }
-  const result: EditorAgentActionResult = {
+  return queueAndEmitAction(action, requestHash, snapshot, decision);
+}
+
+function failedResult(action: EditorAgentAction, message: string): EditorAgentActionResult {
+  return {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
     actionId: action.actionId,
     sessionId: action.sessionId,
-    status: "queued",
+    status: "failed",
+    message,
   };
-  idempotency.set(action.idempotencyKey, { requestBody, result });
-  emit({ type: "action", action });
-  return { status: 202, body: { result } };
+}
+
+function queueAndEmitAction(
+  action: EditorAgentAction,
+  requestHash: string,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+): RouteResult {
+  const emitAction = snapshot === undefined ? null : buildEmitAction(action, snapshot);
+  if (emitAction === null) {
+    const result = failedResult(action, "Patch could not be prepared for review.");
+    rememberIdempotency(action.idempotencyKey, requestHash, result);
+    auditAction(action, snapshot, decision, result);
+    return { status: 409, body: { result } };
+  }
+  const outcome = editorAgentRegistry.queueAction(action, emitAction);
+  rememberIdempotency(action.idempotencyKey, requestHash, outcome.result);
+  auditAction(action, snapshot, decision, outcome.result);
+  if (outcome.kind === "rejected") {
+    // QUEUE_FULL is backpressure (429); a duplicate in-flight actionId is a conflict (409).
+    const status = outcome.result.failure?.code === "QUEUE_FULL" ? 429 : 409;
+    return { status, body: { result: outcome.result } };
+  }
+  return { status: 202, body: { result: outcome.result } };
 }
 
 export function handleEditorAgentEvents(ctx: RouteContext): HandlerOutcome {
-  openAgentSseStream(ctx.res);
-  ctx.req.on("close", () => {
-    ctx.res.end();
-  });
+  const sessionId = ctx.url.searchParams.get("sessionId") ?? undefined;
+  openAgentSseStream(ctx, sessionId);
   return STREAMING;
 }
 
-function openAgentSseStream(res: ServerResponse): void {
+// Issue #1395 (ADR-0062, AC4) — read-only feed of the bounded audit ledger so users can inspect what
+// an agent changed or attempted. Scoped to the session when `?sessionId=` is present; otherwise a
+// bounded recent-activity view across sessions. Content-free records only (no raw source, no secrets).
+export function handleEditorAgentAudit(ctx: RouteContext): RouteResult {
+  const sessionId = ctx.url.searchParams.get("sessionId") ?? undefined;
+  return { status: 200, body: { records: listEditorAgentActionAudit(sessionId) } };
+}
+
+// Opens the SSE stream and registers the connection as either a session bridge (when `?sessionId=` is
+// present) or a global observer. The disposer drops the subscription — and thus the bridge-liveness
+// contribution — when the response closes (AC1: a dropped bridge makes the session unavailable again).
+function openAgentSseStream(ctx: RouteContext, sessionId: string | undefined): void {
+  const res: ServerResponse = ctx.res;
   res.writeHead(200, SSE_HEADERS);
   const subscriber = (event: EditorAgentEvent): void => {
     const frame = `id: ${event.eventId}\nevent: editor-agent:${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
     if (!res.write(frame)) res.destroy();
   };
-  subscribers.add(subscriber);
+  const dispose = editorAgentRegistry.connect(sessionId, subscriber);
   res.write(readyMessage());
-  res.on("close", () => {
-    subscribers.delete(subscriber);
+  ctx.req.on("close", () => {
+    res.end();
   });
+  res.on("close", dispose);
 }
 
 export function _resetEditorAgentStateForTests(): void {
-  sessions.clear();
   idempotency.clear();
-  subscribers.clear();
-  eventSeq = 0;
+  editorAgentRegistry.reset();
+  _resetEditorAgentAuditForTests();
 }

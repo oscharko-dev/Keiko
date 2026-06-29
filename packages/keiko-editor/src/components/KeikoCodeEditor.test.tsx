@@ -506,6 +506,25 @@ describe("KeikoCodeEditor — runtime errors", () => {
     expect(onRuntimeError).toHaveBeenCalled();
     expect(screen.getByLabelText("Editor: src/a.ts")).toBeInTheDocument();
   });
+
+  it("re-applies the theme on a theme-variant change without remounting (Issue 2.2)", async () => {
+    // A light/dark toggle must re-theme the SAME live editor (preserving the undo stack + view state),
+    // not remount it. The re-apply re-attempts theme registration; in jsdom that surfaces again
+    // through onRuntimeError — the observable that the re-theme path ran on the live instance.
+    const onRuntimeError = vi.fn();
+    const { rerender } = render(
+      <KeikoCodeEditor {...baseProps({ onRuntimeError, themeVariant: "dark" })} />,
+    );
+    await flushMount();
+    expect(onRuntimeError).toHaveBeenCalled();
+    onRuntimeError.mockClear();
+
+    rerender(<KeikoCodeEditor {...baseProps({ onRuntimeError, themeVariant: "light" })} />);
+    await flushMount();
+    expect(onRuntimeError).toHaveBeenCalled();
+    // Still the same mounted editor — no remount.
+    expect(screen.getByLabelText("Editor: src/a.ts")).toBeInTheDocument();
+  });
 });
 
 describe("KeikoCodeEditor — Monaco language", () => {

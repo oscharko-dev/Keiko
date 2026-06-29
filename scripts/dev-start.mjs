@@ -15,7 +15,8 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const scriptPath = fileURLToPath(import.meta.url);
+const repoRoot = resolve(dirname(scriptPath), "..");
 const stateDir = resolve(process.env.KEIKO_STATE_DIR ?? join(repoRoot, ".keiko", "dev"));
 const pidFile = join(stateDir, "dev-ui.pid.json");
 const logFile = join(stateDir, "dev-ui.log");
@@ -29,19 +30,29 @@ const gatewayConfigSeedCandidates = [
   join(repoRoot, "sandbox", ".keiko", "ui", "keiko.config.json"),
 ];
 
-function npmCommand() {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
+export function npmCommand(platform = process.platform) {
+  return platform === "win32" ? "npm.cmd" : "npm";
 }
 
-function run(command, args, cwd) {
+export function shouldShellNpmCommand(command, platform = process.platform) {
+  return platform === "win32" && /^(?:npm|npm\.cmd)$/i.test(command);
+}
+
+export function run(command, args, cwd, options = {}) {
+  const platform = options.platform ?? process.platform;
+  const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
   console.log(`[dev:start] ${command} ${args.join(" ")}`);
-  const result = spawnSync(command, args, {
+  const result = spawnSyncImpl(command, args, {
     cwd,
     stdio: "inherit",
+    shell: shouldShellNpmCommand(command, platform),
     env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
   });
+  if (result.error !== undefined) {
+    throw new Error(`${command} ${args.join(" ")} could not spawn: ${result.error.message}`);
+  }
   if (result.status !== 0) {
-    const code = result.status === null ? result.signal : result.status;
+    const code = result.status === null ? (result.signal ?? "unknown") : result.status;
     throw new Error(`${command} ${args.join(" ")} failed (${String(code)})`);
   }
 }
@@ -189,14 +200,17 @@ async function waitForHealth(port, child) {
   throw new Error(`development server did not become healthy: ${lastError}; see ${logFile}`);
 }
 
-if (!Number.isInteger(publicPort) || publicPort < 1 || publicPort > 65535) {
-  console.error(`Invalid KEIKO_DEV_UI_PORT/KEIKO_UI_PORT: ${String(publicPort)}`);
-  process.exit(2);
+function validatePublicPort() {
+  if (!Number.isInteger(publicPort) || publicPort < 1 || publicPort > 65535) {
+    console.error(`Invalid KEIKO_DEV_UI_PORT/KEIKO_UI_PORT: ${String(publicPort)}`);
+    process.exit(2);
+  }
 }
 
-let spawnedChild;
-const state = readState();
-if (state !== undefined && isAlive(state.runnerPid)) {
+async function restartExistingRunnerIfNeeded() {
+  const state = readState();
+  if (state === undefined || !isAlive(state.runnerPid)) return;
+
   const runningPort = state.publicPort ?? publicPort;
   const health = await devServerHealth(runningPort);
   if (health === "ok") {
@@ -207,17 +221,14 @@ if (state !== undefined && isAlive(state.runnerPid)) {
     );
     process.exit(0);
   }
+
   console.log(
     `[dev:start] existing runner ${String(state.runnerPid)} is unhealthy (${health}); restarting.`,
   );
   await stopUnhealthyRunner(state.runnerPid);
 }
-rmSync(pidFile, { force: true });
 
-try {
-  ensureDependencies();
-  ensureDevGatewayConfig();
-  run(npmCommand(), ["run", "build"], repoRoot);
+async function resolveDevPorts() {
   if (!(await checkPortAvailable(publicPort))) {
     if (explicitPublicPort !== undefined) {
       throw new Error(`Port ${host}:${String(publicPort)} is already in use.`);
@@ -230,12 +241,16 @@ try {
     );
     publicPort = fallbackPort;
   }
+
   const bffPort = await findAvailablePort(
     Number(process.env.KEIKO_DEV_BFF_PORT ?? String(publicPort + 1)),
   );
   const nextStart = Number(process.env.KEIKO_DEV_NEXT_PORT ?? String(publicPort + 2));
   const nextPort = await findAvailablePort(nextStart === bffPort ? bffPort + 1 : nextStart);
+  return { bffPort, nextPort };
+}
 
+function spawnDevelopmentRunner(bffPort, nextPort) {
   mkdirSync(stateDir, { recursive: true });
   const logFd = openSync(logFile, "a", 0o600);
   const child = spawn(process.execPath, [runnerScript], {
@@ -251,25 +266,56 @@ try {
       KEIKO_STATE_DIR: stateDir,
     },
   });
-  spawnedChild = child;
   closeSync(logFd);
   child.unref();
   if (child.pid === undefined) throw new Error("failed to spawn development runner");
-  await waitForHealth(publicPort, child);
+  return child;
+}
+
+function stopSpawnedChild(child) {
+  if (child?.pid === undefined || !isAlive(child.pid)) return;
+  try {
+    process.kill(child.pid, "SIGTERM");
+  } catch {
+    // Process already exited.
+  }
+}
+
+async function launchDevelopmentRunner() {
+  ensureDependencies();
+  ensureDevGatewayConfig();
+  run(npmCommand(), ["run", "build"], repoRoot);
+  const { bffPort, nextPort } = await resolveDevPorts();
+  const child = spawnDevelopmentRunner(bffPort, nextPort);
+
+  try {
+    await waitForHealth(publicPort, child);
+  } catch (error) {
+    stopSpawnedChild(child);
+    throw error;
+  }
+
   console.log(
     `Keiko dev UI running on http://${host}:${String(publicPort)} (pid ${String(child.pid)}).`,
   );
   console.log(`State: ${stateDir}`);
   console.log(`Logs: ${logFile}`);
   console.log(`Stop: npm run dev:stop`);
-} catch (error) {
-  if (spawnedChild?.pid !== undefined && isAlive(spawnedChild.pid)) {
-    try {
-      process.kill(spawnedChild.pid, "SIGTERM");
-    } catch {
-      // Process already exited.
-    }
+}
+
+export async function main() {
+  validatePublicPort();
+  await restartExistingRunnerIfNeeded();
+  rmSync(pidFile, { force: true });
+
+  try {
+    await launchDevelopmentRunner();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   }
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
+}
+
+if (process.argv[1] === scriptPath) {
+  await main();
 }

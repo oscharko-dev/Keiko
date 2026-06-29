@@ -107,6 +107,7 @@ Temporary Items
 
 /.claude/
 /.codex/
+/.air/
 /.playwright-mcp/
 /.idea/
 /AGENTS.md
@@ -123,6 +124,7 @@ playwright-report/
 .env.*
 !.env.example
 keiko.config.json
+/credentials/
 keiko-live-start.png
 
 # Versioned developer sandbox. Keep the sandbox sources committed, but never commit generated

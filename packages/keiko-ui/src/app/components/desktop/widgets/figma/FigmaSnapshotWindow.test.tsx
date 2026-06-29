@@ -760,6 +760,67 @@ describe("FigmaSnapshotWindow", () => {
     });
   });
 
+  // Issue #1399: PAT/credential failures surface an actionable alert that deep-links to the
+  // Figma access-token settings so the operator does not have to hunt for the setting.
+  describe("PAT/credential errors (issue #1399)", () => {
+    it.each([
+      "FIGMA_TOKEN_MISSING",
+      "FIGMA_TOKEN_INVALID",
+      "FIGMA_TOKEN_EXPIRED",
+      "FIGMA_TOKEN_REVOKED",
+      "FIGMA_INSUFFICIENT_SCOPE",
+    ])(
+      "renders %s as an actionable token-settings alert and the action calls back",
+      async (code) => {
+        const trigger = rejectingApiError(code, "Token problem.", 401);
+        const openTokenSettings = vi.fn();
+        const { updateCfg } = renderWindow({ triggerImpl: trigger, openTokenSettings });
+        const user = userEvent.setup();
+        await typeAndSubmit(user);
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Figma access token needs attention");
+        expect(alert).toHaveTextContent(code);
+        expect(alert.textContent).toMatch(/add or rotate/iu);
+        // No snapshot is stored on a credential failure.
+        expect(updateCfg).not.toHaveBeenCalled();
+
+        const action = within(alert).getByRole("button", {
+          name: /open figma access token settings/iu,
+        });
+        await user.click(action);
+        expect(openTokenSettings).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("omits the action button when openTokenSettings is not wired", async () => {
+      const trigger = rejectingApiError("FIGMA_TOKEN_MISSING", "No token stored.", 401);
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("Figma access token needs attention");
+      expect(
+        within(alert).queryByRole("button", { name: /open figma access token settings/iu }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not show the token-settings action for non-credential errors", async () => {
+      const trigger = rejectingApiError("FIGMA_UPSTREAM_UNAVAILABLE", "Figma is down.", 503);
+      const openTokenSettings = vi.fn();
+      renderWindow({ triggerImpl: trigger, openTokenSettings });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+
+      const alert = await screen.findByRole("alert");
+      expect(
+        within(alert).queryByRole("button", { name: /open figma access token settings/iu }),
+      ).not.toBeInTheDocument();
+      expect(openTokenSettings).not.toHaveBeenCalled();
+    });
+  });
+
   describe("re-snapshot", () => {
     it("renders Re-snapshot button after success", async () => {
       const trigger = resolvingTrigger();
@@ -1528,6 +1589,19 @@ describe("FigmaSnapshotWindow", () => {
       const user = userEvent.setup();
       await typeAndSubmit(user);
       await waitFor(() => expect(screen.getByText(/token invalid/iu)).toBeInTheDocument());
+      const results = await axe(container);
+      expect(results).toHaveNoViolations();
+    });
+
+    // Issue #1399: the PAT error state renders an action button INSIDE role="alert" — axe must
+    // scan that distinct structure (the generic error state above uses a non-PAT code, so the
+    // button is absent there).
+    it("has no axe violations in the PAT error state (action button inside the alert)", async () => {
+      const trigger = rejectingApiError("FIGMA_TOKEN_MISSING", "No token stored.", 401);
+      const { container } = renderWindow({ triggerImpl: trigger, openTokenSettings: vi.fn() });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await screen.findByRole("button", { name: /open figma access token settings/iu });
       const results = await axe(container);
       expect(results).toHaveNoViolations();
     });

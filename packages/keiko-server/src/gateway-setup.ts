@@ -11,10 +11,13 @@ import {
   Gateway,
   createDefaultChatCapability,
   listConfiguredCapabilities,
+  modelSupportsSpeechInput,
   normalizeApiKeyHeaderName,
   parseGatewayConfig,
+  selectSpeechToTextModel,
   toSafeObject,
   validateBaseUrl,
+  VOICE_PROVIDER_LOCALITIES,
 } from "@oscharko-dev/keiko-model-gateway";
 import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { redact } from "@oscharko-dev/keiko-security";
@@ -23,6 +26,7 @@ import type {
   GatewayConfig,
   ModelCapability,
   ModelProviderConfig,
+  VoiceProviderLocality,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -157,16 +161,34 @@ interface ProviderRawOptions {
   readonly embeddingModelIds?: readonly string[] | undefined;
 }
 
+function createDefaultSetupCapability(
+  modelId: string,
+  embeddingModelIds: readonly string[] | undefined,
+): ModelCapability {
+  if (embeddingModelIds?.includes(modelId) === true) {
+    return createDefaultEmbeddingCapabilityForSetup(modelId);
+  }
+  const capability = createDefaultChatCapability(modelId);
+  if (modelId.toLowerCase().includes("mistral")) {
+    return {
+      ...capability,
+      toolCalling: false,
+      knownLimitations: [
+        ...capability.knownLimitations,
+        "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it",
+      ],
+    };
+  }
+  return capability;
+}
+
 function providerRaw(
   modelId: string,
   baseUrl: string,
   apiKey: string,
   options: ProviderRawOptions = {},
 ): Record<string, unknown> {
-  const defaultCapability =
-    options.embeddingModelIds?.includes(modelId) === true
-      ? createDefaultEmbeddingCapabilityForSetup(modelId)
-      : createDefaultChatCapability(modelId);
+  const defaultCapability = createDefaultSetupCapability(modelId, options.embeddingModelIds);
   return {
     modelId,
     baseUrl,
@@ -179,6 +201,60 @@ function providerRaw(
     timeoutMs: options.timeoutMs ?? 30_000,
     maxRetries: options.maxRetries ?? 2,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
+  };
+}
+
+function createDefaultVoiceDictationCapabilityForSetup(
+  modelId: string,
+  providerLocality: VoiceProviderLocality,
+): ModelCapability {
+  return {
+    id: modelId,
+    kind: "voice",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    supportsSpeechInput: true,
+    voiceProviderLocality: providerLocality,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "runtime-configured speech-to-text endpoint",
+    preferredUseCases: ["Dictation"],
+    knownLimitations: [
+      "Speech-to-text only; dictation is verified when the first audio clip is transcribed",
+    ],
+  };
+}
+
+interface VoiceProviderRawOptions {
+  readonly apiKeyHeaderName?: string | undefined;
+  readonly timeoutMs?: number | undefined;
+  readonly providerLocality?: VoiceProviderLocality | undefined;
+}
+
+function voiceProviderRaw(
+  modelId: string,
+  baseUrl: string,
+  apiKey: string,
+  options: VoiceProviderRawOptions = {},
+): Record<string, unknown> {
+  return {
+    modelId,
+    baseUrl,
+    apiKey,
+    apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    capability: createDefaultVoiceDictationCapabilityForSetup(
+      modelId,
+      options.providerLocality ?? "azure-foundry",
+    ),
+    timeoutMs: options.timeoutMs ?? 30_000,
+    maxRetries: 1,
+    retryBaseDelayMs: 500,
   };
 }
 
@@ -314,7 +390,20 @@ function currentImageInputModelIds(config: GatewayConfig | undefined): readonly 
   );
 }
 
-function rawConfigFromCurrent(
+// `supportedVoicePersonas` is DERIVED at parse time from a provider's `voiceProfiles` (Issue #1557,
+// ADR-0094 D2 / HAZARD-3). It must NOT be persisted: the strict top-level `capabilities` parser
+// rejects it as an unrecognised input key, and re-deriving it on reload keeps a single source of
+// truth (the credential-tier `voiceProfiles`). Strip it so a save → reload round-trip re-derives.
+function stripDerivedVoicePersonas(capability: ModelCapability): ModelCapability {
+  const { supportedVoicePersonas, ...rest } = capability;
+  return supportedVoicePersonas === undefined ? capability : rest;
+}
+
+// Exported as a test seam (mirroring `smokeTestCandidates` / the discovery-normalization exports):
+// the preserve-existing save path round-trips a parsed config back to raw for persistence, and the
+// Issue #1557 voice-persona round-trip (voiceProfiles preserved, derived supportedVoicePersonas
+// stripped and re-derived on reload — ADR-0094 D2) is pinned directly against this function.
+export function rawConfigFromCurrent(
   config: GatewayConfig,
   figmaAccessToken: string | undefined,
   timeoutMs?: number,
@@ -330,14 +419,83 @@ function rawConfigFromCurrent(
         timeoutMs: timeoutMs ?? provider.timeoutMs,
         maxRetries: provider.maxRetries,
         retryBaseDelayMs: provider.retryBaseDelayMs,
-        ...(capability === undefined ? {} : { capability }),
+        // Persist the credential-tier persona → voice-id mapping so personas survive a save; the
+        // derived content-free `supportedVoicePersonas` is stripped and re-derived on reload.
+        ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
+        ...(capability === undefined ? {} : { capability: stripDerivedVoicePersonas(capability) }),
       };
     }),
     circuitBreaker: config.circuitBreaker,
-    ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
+    ...(config.capabilities === undefined
+      ? {}
+      : { capabilities: config.capabilities.map(stripDerivedVoicePersonas) }),
     ...(config.grounding === undefined ? {} : { grounding: config.grounding }),
     ...(figmaAccessToken === undefined ? {} : { figma: { accessToken: figmaAccessToken } }),
   };
+}
+
+function rawCapabilityIsSpeechInputVoice(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.kind === "voice" &&
+    (value.supportsSpeechInput === true || value.supportsRealtimeVoice === true)
+  );
+}
+
+function rawProviderIsSpeechInputVoice(value: unknown): boolean {
+  return isRecord(value) && rawCapabilityIsSpeechInputVoice(value.capability);
+}
+
+function setupVoiceProviderFromCurrent(
+  current: GatewayConfig | undefined,
+): SetupVoiceProvider | undefined {
+  const provider = currentSpeechInputProvider(current);
+  if (provider === undefined) {
+    return undefined;
+  }
+  const capability = currentSpeechInputCapability(current, provider.modelId);
+  return {
+    modelId: provider.modelId,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    timeoutMs: provider.timeoutMs,
+    providerLocality: capability?.voiceProviderLocality ?? "azure-foundry",
+  };
+}
+
+function applyVoiceProvider(
+  rawConfig: Record<string, unknown>,
+  voiceProvider: SetupVoiceProvider | undefined,
+): Record<string, unknown> {
+  if (voiceProvider === undefined) {
+    return rawConfig;
+  }
+  const providers: unknown[] = Array.isArray(rawConfig.providers) ? rawConfig.providers : [];
+  const nextProviders = providers.filter(
+    (provider) =>
+      !rawProviderIsSpeechInputVoice(provider) &&
+      (!isRecord(provider) || provider.modelId !== voiceProvider.modelId),
+  );
+  const nextConfig: Record<string, unknown> = {
+    ...rawConfig,
+    providers: [
+      ...nextProviders,
+      voiceProviderRaw(voiceProvider.modelId, voiceProvider.baseUrl, voiceProvider.apiKey, {
+        apiKeyHeaderName: voiceProvider.apiKeyHeaderName,
+        timeoutMs: voiceProvider.timeoutMs,
+        providerLocality: voiceProvider.providerLocality,
+      }),
+    ],
+  };
+  if (Array.isArray(rawConfig.capabilities)) {
+    nextConfig.capabilities = rawConfig.capabilities.filter(
+      (capability) =>
+        !rawCapabilityIsSpeechInputVoice(capability) &&
+        (!isRecord(capability) || capability.id !== voiceProvider.modelId),
+    );
+  }
+  return nextConfig;
 }
 
 function withInheritedEgress(
@@ -785,6 +943,7 @@ interface SetupRequest {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  readonly voiceProvider: SetupVoiceProvider | undefined;
   readonly figmaAccessToken: string | undefined;
   readonly verifyGateway: boolean;
   readonly verifyFigmaCredential: boolean;
@@ -799,6 +958,15 @@ interface SetupGatewayCredentials {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+}
+
+interface SetupVoiceProvider {
+  readonly modelId: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly apiKeyHeaderName: string;
+  readonly timeoutMs: number | undefined;
+  readonly providerLocality: VoiceProviderLocality;
 }
 
 function normalizeSetupApiKeyHeaderName(value: unknown): string | RouteResult {
@@ -835,10 +1003,7 @@ function optionalSetupSecret(value: unknown, path: string): string | RouteResult
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
-function optionalSetupPositiveInt(
-  value: unknown,
-  path: string,
-): number | RouteResult | undefined {
+function optionalSetupPositiveInt(value: unknown, path: string): number | RouteResult | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -846,6 +1011,25 @@ function optionalSetupPositiveInt(
     return { status: 400, body: errorBody("BAD_REQUEST", `${path} must be a positive integer.`) };
   }
   return value;
+}
+
+function parseVoiceProviderLocality(
+  value: unknown,
+  fallback: VoiceProviderLocality,
+): VoiceProviderLocality | RouteResult {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (
+    typeof value !== "string" ||
+    !VOICE_PROVIDER_LOCALITIES.includes(value as VoiceProviderLocality)
+  ) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "voiceProviderLocality is not supported."),
+    };
+  }
+  return value as VoiceProviderLocality;
 }
 
 function hasNonBlankStringField(raw: Record<string, unknown>, key: string): boolean {
@@ -861,6 +1045,17 @@ function hasNonEmptyListField(raw: Record<string, unknown>, key: string): boolea
   return Array.isArray(value) && value.some((item) => typeof item === "string" && item.trim());
 }
 
+function hasVoiceProviderInput(raw: Record<string, unknown>): boolean {
+  return (
+    hasNonBlankStringField(raw, "voiceBaseUrl") ||
+    hasNonBlankStringField(raw, "voiceApiKey") ||
+    hasNonBlankStringField(raw, "voiceApiKeyHeaderName") ||
+    hasNonBlankStringField(raw, "voiceModelId") ||
+    hasNonBlankStringField(raw, "voiceProviderLocality") ||
+    raw.voiceTimeoutMs !== undefined
+  );
+}
+
 function shouldPreserveExisting(
   raw: Record<string, unknown>,
   current: GatewayConfig | undefined,
@@ -870,6 +1065,31 @@ function shouldPreserveExisting(
 
 function firstProvider(current: GatewayConfig | undefined): ModelProviderConfig | undefined {
   return current?.providers[0];
+}
+
+function currentSpeechInputProvider(
+  current: GatewayConfig | undefined,
+): ModelProviderConfig | undefined {
+  if (current === undefined) {
+    return undefined;
+  }
+  const modelId = selectSpeechToTextModel(current);
+  if (modelId === undefined) {
+    return undefined;
+  }
+  return current.providers.find((provider) => provider.modelId === modelId);
+}
+
+function currentSpeechInputCapability(
+  current: GatewayConfig | undefined,
+  modelId: string | undefined,
+): ModelCapability | undefined {
+  if (current === undefined || modelId === undefined) {
+    return undefined;
+  }
+  return current.capabilities?.find(
+    (capability) => capability.id === modelId && modelSupportsSpeechInput(capability),
+  );
 }
 
 function trimmedSubmittedString(raw: Record<string, unknown>, key: string): string | undefined {
@@ -899,6 +1119,17 @@ function setupApiKeyHeaderSource(
   return provider?.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
 }
 
+function setupVoiceApiKeyHeaderSource(
+  raw: Record<string, unknown>,
+  provider: ModelProviderConfig | undefined,
+  preserveExisting: boolean,
+): unknown {
+  if (raw.voiceApiKeyHeaderName !== undefined || !preserveExisting) {
+    return raw.voiceApiKeyHeaderName;
+  }
+  return provider?.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
+}
+
 function readSetupGatewayCredentials(
   raw: Record<string, unknown>,
   env: EnvSource,
@@ -921,6 +1152,136 @@ function readSetupGatewayCredentials(
     return invalidConnection;
   }
   return { baseUrl, apiKey, apiKeyHeaderName };
+}
+
+function validateVoiceProviderConnection(
+  provider: SetupVoiceProvider,
+  env: EnvSource,
+): RouteResult | undefined {
+  try {
+    parseGatewayConfig(
+      {
+        providers: [
+          voiceProviderRaw(provider.modelId, provider.baseUrl, provider.apiKey, {
+            apiKeyHeaderName: provider.apiKeyHeaderName,
+            timeoutMs: provider.timeoutMs,
+            providerLocality: provider.providerLocality,
+          }),
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+      env,
+    );
+    return undefined;
+  } catch (error) {
+    if (error instanceof ConfigInvalidError) {
+      return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+    }
+    throw error;
+  }
+}
+
+function setupVoiceModelId(
+  raw: Record<string, unknown>,
+  existing: ModelProviderConfig | undefined,
+  preserveExisting: boolean,
+): string | RouteResult {
+  const modelId =
+    trimmedSubmittedString(raw, "voiceModelId") ??
+    (preserveExisting ? existing?.modelId : undefined) ??
+    "keiko-stt";
+  if (!isUsableModelId(modelId)) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "voiceModelId is invalid.") };
+  }
+  return modelId;
+}
+
+function setupVoiceConnection(
+  raw: Record<string, unknown>,
+  existing: ModelProviderConfig | undefined,
+  preserveExisting: boolean,
+): { readonly baseUrl: string; readonly apiKey: string } | RouteResult {
+  const baseUrl = submittedOrInheritedString(
+    raw,
+    "voiceBaseUrl",
+    existing?.baseUrl,
+    preserveExisting,
+  );
+  const apiKey = submittedOrInheritedString(raw, "voiceApiKey", existing?.apiKey, preserveExisting);
+  if (baseUrl.length === 0 || apiKey.length === 0) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "voiceBaseUrl and voiceApiKey are required for dictation."),
+    };
+  }
+  return { baseUrl, apiKey };
+}
+
+function setupVoiceApiKeyHeaderName(
+  raw: Record<string, unknown>,
+  existing: ModelProviderConfig | undefined,
+  preserveExisting: boolean,
+): string | RouteResult {
+  return normalizeSetupApiKeyHeaderName(
+    setupVoiceApiKeyHeaderSource(raw, existing, preserveExisting),
+  );
+}
+
+function setupVoiceProviderLocality(
+  raw: Record<string, unknown>,
+  existingCapability: ModelCapability | undefined,
+): VoiceProviderLocality | RouteResult {
+  return parseVoiceProviderLocality(
+    raw.voiceProviderLocality,
+    existingCapability?.voiceProviderLocality ?? "azure-foundry",
+  );
+}
+
+function firstRouteResult(values: readonly unknown[]): RouteResult | undefined {
+  return values.find(isRouteResult);
+}
+
+function readSetupVoiceProvider(
+  raw: Record<string, unknown>,
+  env: EnvSource,
+  current: GatewayConfig | undefined,
+  preserveExisting: boolean,
+): SetupVoiceProvider | RouteResult | undefined {
+  if (!hasVoiceProviderInput(raw)) {
+    return undefined;
+  }
+  const existing = preserveExisting ? currentSpeechInputProvider(current) : undefined;
+  const existingCapability = currentSpeechInputCapability(current, existing?.modelId);
+  const modelId = setupVoiceModelId(raw, existing, preserveExisting);
+  const connection = setupVoiceConnection(raw, existing, preserveExisting);
+  const apiKeyHeaderName = setupVoiceApiKeyHeaderName(raw, existing, preserveExisting);
+  const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
+  const providerLocality = setupVoiceProviderLocality(raw, existingCapability);
+  const routeError = firstRouteResult([
+    modelId,
+    connection,
+    apiKeyHeaderName,
+    timeoutMs,
+    providerLocality,
+  ]);
+  if (routeError !== undefined) {
+    return routeError;
+  }
+  const resolvedConnection = connection as { readonly baseUrl: string; readonly apiKey: string };
+  const resolvedTimeoutMs = timeoutMs as number | undefined;
+  const provider: SetupVoiceProvider = {
+    modelId: modelId as string,
+    baseUrl: resolvedConnection.baseUrl,
+    apiKey: resolvedConnection.apiKey,
+    apiKeyHeaderName: apiKeyHeaderName as string,
+    timeoutMs: resolvedTimeoutMs ?? existing?.timeoutMs,
+    providerLocality: providerLocality as VoiceProviderLocality,
+  };
+  const invalidConnection = validateVoiceProviderConnection(provider, env);
+  if (invalidConnection !== undefined) {
+    return invalidConnection;
+  }
+  return provider;
 }
 
 function resolveSetupModelLists(
@@ -980,12 +1341,17 @@ function readSetupRequest(
   if (isRouteResult(figmaAccessToken)) {
     return figmaAccessToken;
   }
+  const voiceProvider = readSetupVoiceProvider(raw, env, current, preserveExisting);
+  if (isRouteResult(voiceProvider)) {
+    return voiceProvider;
+  }
   const resolvedModelLists = resolveSetupModelLists(modelLists, current, preserveExisting);
   return {
     ...credentials,
     timeoutMs,
     deploymentNames: resolvedModelLists.deploymentNames,
     imageInputModelIds: resolvedModelLists.imageInputModelIds,
+    voiceProvider,
     figmaAccessToken: figmaAccessToken ?? current?.figma?.accessToken,
     verifyGateway: setupRequiresGatewayVerification(raw, preserveExisting),
     verifyFigmaCredential: figmaAccessToken !== undefined,
@@ -1014,6 +1380,7 @@ interface SetupVerificationInput {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  readonly voiceProvider: SetupVoiceProvider | undefined;
   readonly tester: GatewaySetupTester;
   readonly discovery: GatewayModelDiscovery;
   readonly env: EnvSource;
@@ -1147,13 +1514,17 @@ function finalRawConfigForSetup(
     embeddingModelIds,
     timeoutMs: input.timeoutMs,
   });
-  return {
+  const rawConfigWithOptionalBlocks = {
     ...rawConfig,
     ...(input.current?.grounding === undefined ? {} : { grounding: input.current.grounding }),
     ...(input.figmaAccessToken === undefined
       ? {}
       : { figma: { accessToken: input.figmaAccessToken } }),
   };
+  return applyVoiceProvider(
+    rawConfigWithOptionalBlocks,
+    input.voiceProvider ?? setupVoiceProviderFromCurrent(input.current),
+  );
 }
 
 function skippedModelIdsForSetup(
@@ -1290,7 +1661,13 @@ function figmaCredentialFailureResult(error: unknown, request: SetupRequest): Ro
     status: 502,
     body: errorBody(
       "FIGMA_EGRESS_FAILED",
-      safeError(error, [request.figmaAccessToken, request.apiKey, request.baseUrl]),
+      safeError(error, [
+        request.figmaAccessToken,
+        request.apiKey,
+        request.baseUrl,
+        request.voiceProvider?.apiKey,
+        request.voiceProvider?.baseUrl,
+      ]),
     ),
   };
 }
@@ -1368,6 +1745,7 @@ async function trySetupCandidate(
     timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
+    voiceProvider: request.voiceProvider,
     tester,
     discovery,
     env: deps.env,
@@ -1381,7 +1759,14 @@ async function trySetupCandidate(
 }
 
 function setupCandidateError(error: unknown, request: SetupRequest, baseUrl: string): string {
-  return safeError(error, [request.apiKey, request.baseUrl, baseUrl, request.figmaAccessToken]);
+  return safeError(error, [
+    request.apiKey,
+    request.baseUrl,
+    baseUrl,
+    request.figmaAccessToken,
+    request.voiceProvider?.apiKey,
+    request.voiceProvider?.baseUrl,
+  ]);
 }
 
 function saveExistingConfigUpdate(
@@ -1390,7 +1775,10 @@ function saveExistingConfigUpdate(
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
 ): RouteResult {
-  const rawConfig = rawConfigFromCurrent(current, request.figmaAccessToken, request.timeoutMs);
+  const rawConfig = applyVoiceProvider(
+    rawConfigFromCurrent(current, request.figmaAccessToken, request.timeoutMs),
+    request.voiceProvider,
+  );
   const config = parseGatewayConfig(
     withInheritedEgress(rawConfig, currentGatewayEgressConfig(deps)),
     deps.env,

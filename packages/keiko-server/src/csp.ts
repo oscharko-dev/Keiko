@@ -62,6 +62,9 @@ export function buildCspHeader(scriptHashes: readonly string[]): string {
     `script-src ${scriptSrc}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
+    // Generated assistant speech is played from a per-turn blob: object URL in the browser.
+    // Keep media playback local to same-origin/static assets and ephemeral object URLs only.
+    "media-src 'self' blob:",
     "connect-src 'self'",
     "font-src 'self'",
     // `manifest-src 'self'` is required for the PWA manifest at /manifest.webmanifest to load

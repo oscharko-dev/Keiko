@@ -5,13 +5,16 @@
 // handshake end to end. This is the security-critical gate (ADR-0058 D3/D6, AC1/AC3).
 
 import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { WebSocket } from "ws";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import type { Chat } from "./store/index.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 
 const ANSWER_SDP =
@@ -102,6 +105,14 @@ function depsWith(overrides: Partial<UiHandlerDeps>): UiHandlerDeps {
     store: createInMemoryUiStore(),
     ...overrides,
   };
+}
+
+function depsWithChat(overrides: Partial<UiHandlerDeps>): { deps: UiHandlerDeps; chat: Chat } {
+  const store = createInMemoryUiStore();
+  const projectPath = mkdtempSync(join(tmpdir(), "keiko-voice-control-"));
+  store.createProject(projectPath, "Voice control test");
+  const chat = store.createChat(projectPath, "Voice chat", "chat");
+  return { deps: depsWith({ store, ...overrides }), chat };
 }
 
 let server: Server | undefined;
@@ -214,7 +225,7 @@ function nextClose(ws: WebSocket): Promise<number> {
   });
 }
 
-function sessionCreate(extra: Record<string, unknown> = {}): string {
+function sessionCreate(chatId: string, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({
     protocolVersion: "1",
     sessionId: "sess-int-1",
@@ -224,6 +235,10 @@ function sessionCreate(extra: Record<string, unknown> = {}): string {
     idempotencyKey: "idem-int-1",
     requestedProfile: "full-realtime",
     negotiationMode: "proxied-sdp",
+    chatContext: {
+      chatId,
+      memory: { enabled: true, budgetTokens: 1200 },
+    },
     ...extra,
   });
 }
@@ -272,9 +287,10 @@ describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => 
   });
 
   it("accepts the upgrade for a full-realtime deployment and announces the session", async () => {
-    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const { deps, chat } = depsWithChat({ config: voiceConfig(true), configPresent: true });
+    const port = await boot(deps);
     const { ws, next } = expectOpen(await connect(port));
-    ws.send(sessionCreate());
+    ws.send(sessionCreate(chat.id));
     const created = await next();
     expect(created).toMatchObject({
       kind: "session.created",
@@ -291,19 +307,20 @@ describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => 
 
 describe("WebSocket voice control upgrade — protocol behavior", () => {
   it("performs a proxied-SDP exchange end to end", async () => {
+    const { deps, chat } = depsWithChat({
+      config: voiceConfig(true),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: () =>
+        Promise.resolve({
+          ok: true,
+          value: { answerSdp: ANSWER_SDP },
+        }),
+    });
     const port = await boot(
-      depsWith({
-        config: voiceConfig(true),
-        configPresent: true,
-        voiceRealtimeNegotiationRequest: () =>
-          Promise.resolve({
-            ok: true,
-            value: { answerSdp: ANSWER_SDP },
-          }),
-      }),
+      deps,
     );
     const { ws: socket, next } = expectOpen(await connect(port));
-    socket.send(sessionCreate());
+    socket.send(sessionCreate(chat.id));
     await next(); // session.created
     await next(); // capability.offer
     socket.send(
@@ -323,17 +340,19 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
   });
 
   it("rejects a session.create whose profile/negotiation is inconsistent", async () => {
-    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const { deps, chat } = depsWithChat({ config: voiceConfig(true), configPresent: true });
+    const port = await boot(deps);
     const { ws: socket, next } = expectOpen(await connect(port));
-    socket.send(sessionCreate({ requestedProfile: "speech-to-text" }));
+    socket.send(sessionCreate(chat.id, { requestedProfile: "speech-to-text" }));
     const message = await next();
     expect(message).toMatchObject({ kind: "error", code: "not-allowed-for-profile" });
   });
 
   it("closes the connection when a binary (raw audio) frame is sent on the control plane", async () => {
-    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const { deps, chat } = depsWithChat({ config: voiceConfig(true), configPresent: true });
+    const port = await boot(deps);
     const { ws: socket, next } = expectOpen(await connect(port));
-    socket.send(sessionCreate());
+    socket.send(sessionCreate(chat.id));
     await next(); // session.created
     await next(); // capability.offer
     socket.send(Buffer.from([0, 1, 2, 3]));

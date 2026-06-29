@@ -310,6 +310,53 @@ describe("GatewaySetupDialog", () => {
     });
   });
 
+  it("submits optional voice dictation credentials from update mode", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat", "keiko-stt"],
+      providerCount: 2,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedApiKeyHeaderName="authorization"
+        storedModels={[modelCapability("internal-chat")]}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("Update voice dictation credentials"));
+    await userEvent.type(
+      screen.getByLabelText(/stt endpoint url/i),
+      "https://voice-gateway.example.com/openai/v1",
+    );
+    await userEvent.type(screen.getByLabelText(/stt credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/stt model optional/i), "keiko-stt");
+    await userEvent.type(screen.getByLabelText(/stt auth header optional/i), "api-key");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith({
+      baseUrl: undefined,
+      apiKey: undefined,
+      apiKeyHeaderName: undefined,
+      deploymentNames: [],
+      preserveExisting: true,
+      voiceBaseUrl: "https://voice-gateway.example.com/openai/v1",
+      voiceApiKey: "voice-token",
+      voiceApiKeyHeaderName: "api-key",
+      voiceModelId: "keiko-stt",
+      voiceProviderLocality: "azure-foundry",
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      /updated voice dictation credentials/i,
+    );
+  });
+
   it("submits a Figma access token without requiring other fields in update mode", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,

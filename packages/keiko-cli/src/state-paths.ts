@@ -24,7 +24,7 @@ export const KEIKO_STATE_FILES = ["ui.pid", "ui.log", "launcher-state.json"] as 
 
 // `launcher-state.ts` writes ephemeral mkdtemp dirs with this prefix during atomic
 // state saves; a crash can leave one behind, so uninstall/repair sweep them by prefix.
-export const LAUNCHER_STATE_TMP_PREFIX = ".launcher-state-";
+const LAUNCHER_STATE_TMP_PREFIX = ".launcher-state-";
 
 // Resolves the state directory the same way `keiko start` does. An explicit
 // `--state-dir` argument wins, then `KEIKO_STATE_DIR`, then `<cwd>/.keiko`. Relative

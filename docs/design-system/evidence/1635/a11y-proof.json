@@ -1,0 +1,39 @@
+{
+  "issue": 1635,
+  "verdict": "PASS",
+  "cssSha256": "d347b966a36c684522f3c00ee8f59b782c2363d599cf05c25dcf4041e46280f9",
+  "scope": "Inline citation markers and Local Knowledge citation chips for PDF preview entry points.",
+  "checks": [
+    {
+      "surface": "inline-marker-available",
+      "result": "PASS",
+      "evidence": "Rendered as a native button with aria-label 'Open PDF preview for citation [n]' and keyboard focus via :focus-visible."
+    },
+    {
+      "surface": "inline-marker-mismatch",
+      "result": "PASS",
+      "evidence": "Rendered [n] text remains plain text when no matching structured citation affordance exists."
+    },
+    {
+      "surface": "inline-marker-blocked",
+      "result": "PASS",
+      "evidence": "Blocked marker is aria-disabled, exposes 'PDF preview unavailable', and does not call active authorization."
+    },
+    {
+      "surface": "citation-chip-available",
+      "result": "PASS",
+      "evidence": "Chip exposes an explicit 'Open PDF' label and opens through the shared verified preview controller."
+    },
+    {
+      "surface": "citation-chip-recoverable",
+      "result": "PASS",
+      "evidence": "Recoverable chip exposes 'Recover PDF' and still calls the active authorization/session flow."
+    },
+    {
+      "surface": "citation-chip-blocked",
+      "result": "PASS",
+      "evidence": "Blocked chip is aria-disabled, carries safe unavailable copy, and does not create a session."
+    }
+  ],
+  "gate": "Keyboard-discoverable controls, explicit non-color-only labels, visible focus token usage, and non-activatable blocked states covered by focused unit tests."
+}
