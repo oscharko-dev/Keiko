@@ -13,6 +13,11 @@ const MAX_FIGMA_SELECTED_SCREEN_IDS = 16;
 const MAX_FIGMA_SCREEN_NAME_LENGTH = 256;
 const MAX_EDITOR_OPEN_FILES = 64;
 const MAX_EDITOR_OPEN_FILE_LENGTH = 512;
+const MAX_PDF_PREVIEW_LABEL_LENGTH = 240;
+const MAX_PDF_PREVIEW_MESSAGE_LENGTH = 360;
+const MAX_PDF_PREVIEW_PAGE = 100_000;
+const MAX_PDF_PREVIEW_ZOOM = 2;
+const MIN_PDF_PREVIEW_ZOOM = 0.5;
 
 const CREDENTIAL_KEY_MARKERS = [
   "apikey",
@@ -53,6 +58,20 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   figmaView: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaJson: ["snapshotRunId", "screenId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaImage: ["snapshotRunId", "screenId", "selectedScreenName", "imageSrc"],
+  pdfCitationPreview: [
+    "anchorQuality",
+    "currentPage",
+    "documentLabel",
+    "failureMessage",
+    "failureRetryable",
+    "failureTitle",
+    "pageLabel",
+    "pageNumber",
+    "rotation",
+    "sourceLabel",
+    "zoomMode",
+    "zoomValue",
+  ],
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -134,6 +153,21 @@ function isSecretShapedString(value: string): boolean {
   );
 }
 
+function looksLikeLocalPath(value: string): boolean {
+  const trimmed = value.trim();
+  const normalized = trimmed.replace(/\\/gu, "/");
+  return (
+    /^file:/iu.test(trimmed) ||
+    /^[A-Za-z]:\//u.test(normalized) ||
+    normalized.startsWith("/") ||
+    normalized.startsWith("~/") ||
+    normalized.includes("/Users/") ||
+    normalized.includes("/home/") ||
+    normalized.includes("/Volumes/") ||
+    normalized.includes("../")
+  );
+}
+
 function isAllowedReferenceChar(char: string): boolean {
   const code = char.charCodeAt(0);
   const isDigit = code >= 48 && code <= 57;
@@ -210,6 +244,63 @@ function sanitizeFigmaConfigValue(key: string, value: unknown): JsonScalar | und
   return undefined;
 }
 
+function safePdfPreviewText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (
+    trimmed.length === 0 ||
+    trimmed.length > maxLength ||
+    isSecretShapedString(trimmed) ||
+    looksLikeLocalPath(trimmed)
+  ) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function safePdfPreviewPage(value: unknown): number | undefined {
+  if (!Number.isInteger(value) || typeof value !== "number") return undefined;
+  return value > 0 && value <= MAX_PDF_PREVIEW_PAGE ? value : undefined;
+}
+
+function safePdfPreviewRotation(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return (((Math.round(value / 90) * 90) % 360) + 360) % 360;
+}
+
+function safePdfPreviewZoom(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.min(
+    MAX_PDF_PREVIEW_ZOOM,
+    Math.max(MIN_PDF_PREVIEW_ZOOM, Math.round(value * 10) / 10),
+  );
+}
+
+function sanitizePdfCitationPreviewConfigValue(
+  key: string,
+  value: unknown,
+): JsonScalar | undefined {
+  if (key === "documentLabel" || key === "pageLabel" || key === "sourceLabel") {
+    return safePdfPreviewText(value, MAX_PDF_PREVIEW_LABEL_LENGTH);
+  }
+  if (key === "failureTitle" || key === "failureMessage") {
+    return safePdfPreviewText(value, MAX_PDF_PREVIEW_MESSAGE_LENGTH);
+  }
+  if (key === "currentPage" || key === "pageNumber") return safePdfPreviewPage(value);
+  if (key === "rotation") return safePdfPreviewRotation(value);
+  if (key === "zoomValue") return safePdfPreviewZoom(value);
+  if (key === "failureRetryable") return typeof value === "boolean" ? value : undefined;
+  if (key === "anchorQuality") {
+    return value === "page-only" || value === "approximate" || value === "unavailable"
+      ? value
+      : undefined;
+  }
+  if (key === "zoomMode") {
+    return value === "fit-width" || value === "fit-page" || value === "manual" ? value : undefined;
+  }
+  return undefined;
+}
+
 function sanitizeEditorOpenFiles(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined;
   const out: string[] = [];
@@ -248,8 +339,7 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
     > = {};
     for (const [paneId, pane] of Object.entries(rawPanes)) {
       if (!isRecord(pane)) continue;
-      const activeFile =
-        typeof pane["activeFile"] === "string" ? pane["activeFile"].trim() : "";
+      const activeFile = typeof pane["activeFile"] === "string" ? pane["activeFile"].trim() : "";
       const openFiles = sanitizeEditorOpenFiles(pane["openFiles"]);
       const tabOrder = sanitizeEditorOpenFiles(pane["tabOrder"]) ?? openFiles;
       if (openFiles === undefined && activeFile.length === 0) continue;
@@ -257,7 +347,8 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
       if (files === undefined) continue;
       panes[paneId.slice(0, 48)] = {
         id: paneId.slice(0, 48),
-        activeFile: activeFile.length > 0 ? activeFile.replace(/\\/gu, "/").replace(/^\/+/u, "") : files[0]!,
+        activeFile:
+          activeFile.length > 0 ? activeFile.replace(/\\/gu, "/").replace(/^\/+/u, "") : files[0]!,
         openFiles: files,
         tabOrder: tabOrder ?? files,
       };
@@ -265,7 +356,11 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
     const paneIds = new Set(Object.keys(panes));
     const sanitizeNode = (node: unknown): unknown => {
       if (!isRecord(node)) return null;
-      if (node["type"] === "pane" && typeof node["paneId"] === "string" && paneIds.has(node["paneId"])) {
+      if (
+        node["type"] === "pane" &&
+        typeof node["paneId"] === "string" &&
+        paneIds.has(node["paneId"])
+      ) {
         return { type: "pane", paneId: node["paneId"] };
       }
       if (node["type"] === "split") {
@@ -361,6 +456,9 @@ function sanitizeConfigValue(
 ): AppWindow["cfg"][string] {
   if (type === "editor" && key === "openFiles") return sanitizeEditorOpenFiles(value);
   if (type === "editor" && key === "layoutJson") return sanitizeEditorLayoutJson(value);
+  if (type === "pdfCitationPreview") {
+    return sanitizePdfCitationPreviewConfigValue(key, value);
+  }
   if (type === "figma" || type === "figmaView" || type === "figmaJson" || type === "figmaImage") {
     return sanitizeFigmaConfigValue(key, value);
   }

@@ -182,6 +182,13 @@ import {
   handleUpdateLocalKnowledgeCapsule,
 } from "./local-knowledge-handlers.js";
 import {
+  handleAuthorizePdfCitationPreview,
+  handleClosePdfCitationPreviewSession,
+  handleGetPdfCitationPreviewDocument,
+  handleGetPdfCitationPreviewStatus,
+  handleOpenPdfCitationPreviewSession,
+} from "./local-knowledge-preview-handlers.js";
+import {
   handleRelationshipCreate,
   handleRelationshipDelete,
   handleRelationshipDependencies,
@@ -684,6 +691,31 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
     handler: handleReindexLocalKnowledgeCapsule,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/citation-preview/status",
+    handler: handleGetPdfCitationPreviewStatus,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/citation-preview/authorize",
+    handler: handleAuthorizePdfCitationPreview,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/citation-preview/open",
+    handler: handleOpenPdfCitationPreviewSession,
+  },
+  {
+    method: "GET",
+    pattern: "/api/local-knowledge/citation-preview/sessions/:sessionHandle/document",
+    handler: handleGetPdfCitationPreviewDocument,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/local-knowledge/citation-preview/sessions/:sessionHandle",
+    handler: handleClosePdfCitationPreviewSession,
   },
   // Issues #209/#211 — MemoriaViva governance routes (Epic #204).
   { method: "GET", pattern: "/api/memory", handler: handleListMemories },

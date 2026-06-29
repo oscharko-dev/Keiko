@@ -24,6 +24,7 @@ import type {
   NewChatMessage,
   UpdateChatMessagePatch,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
 export type {
   Project,
   Chat,
@@ -38,6 +39,7 @@ export type {
   UpdateChatPatch,
   NewChatMessage,
   UpdateChatMessagePatch,
+  StoredPdfCitationPreviewCitation,
 };
 
 export interface UiStore {
@@ -62,7 +64,14 @@ export interface UiStore {
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
   readonly createMessages: (messages: readonly NewChatMessage[]) => readonly ChatMessage[];
   readonly updateMessage: (id: string, patch: UpdateChatMessagePatch) => ChatMessage;
-  readonly attachGroundedAnswer: (id: string, answer: GroundedAnswer) => ChatMessage;
+  readonly attachGroundedAnswer: (
+    id: string,
+    answer: GroundedAnswer,
+    previewCitations?: readonly StoredPdfCitationPreviewCitation[],
+  ) => ChatMessage;
+  readonly findGroundedPreviewCitations: (
+    id: string,
+  ) => readonly StoredPdfCitationPreviewCitation[] | undefined;
 
   readonly close: () => void;
 }

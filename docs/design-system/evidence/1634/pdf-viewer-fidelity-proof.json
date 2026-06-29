@@ -1,0 +1,116 @@
+{
+  "issue": 1634,
+  "verdict": "PASS",
+  "cssSha256": "07f9696f99a10eae38ea906419a21175428b6c2ba7fa0829d1a1d56b6281ad3a",
+  "captures": [
+    {
+      "file": "01-dark.png",
+      "theme": "dark",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "loaded",
+      "viewport": {
+        "width": 1280,
+        "height": 1160
+      },
+      "focusInput": false
+    },
+    {
+      "file": "02-light.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "loaded",
+      "viewport": {
+        "width": 1280,
+        "height": 1160
+      },
+      "focusInput": false
+    },
+    {
+      "file": "03-dark-hc.png",
+      "theme": "dark",
+      "hc": "more",
+      "forcedColors": "none",
+      "state": "loaded",
+      "viewport": {
+        "width": 1280,
+        "height": 1160
+      },
+      "focusInput": false
+    },
+    {
+      "file": "04-light-hc.png",
+      "theme": "light",
+      "hc": "more",
+      "forcedColors": "none",
+      "state": "loaded",
+      "viewport": {
+        "width": 1280,
+        "height": 1160
+      },
+      "focusInput": false
+    },
+    {
+      "file": "05-forced-colors.png",
+      "theme": "dark",
+      "hc": false,
+      "forcedColors": "active",
+      "state": "loaded",
+      "viewport": {
+        "width": 1280,
+        "height": 1160
+      },
+      "focusInput": false
+    },
+    {
+      "file": "06-responsive.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "loaded",
+      "viewport": {
+        "width": 430,
+        "height": 940
+      },
+      "focusInput": false
+    },
+    {
+      "file": "07-loading.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "loading",
+      "viewport": {
+        "width": 1280,
+        "height": 1160
+      },
+      "focusInput": false
+    },
+    {
+      "file": "08-error.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "error",
+      "viewport": {
+        "width": 1280,
+        "height": 1160
+      },
+      "focusInput": false
+    },
+    {
+      "file": "09-focus-visible.png",
+      "theme": "light",
+      "hc": false,
+      "forcedColors": "none",
+      "state": "loaded",
+      "viewport": {
+        "width": 1280,
+        "height": 1160
+      },
+      "focusInput": true
+    }
+  ],
+  "summary": "Component-level browser evidence for the passive PDF viewer window foundation: token-backed chrome, toolbar, page well, responsive mobile width, high-contrast, and forced-colors coverage."
+}

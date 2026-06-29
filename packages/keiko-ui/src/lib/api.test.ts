@@ -6,6 +6,7 @@ import {
   clearProjectRequestForTests,
   deleteChat,
   deleteProject,
+  closePdfCitationPreviewSession,
   fetchFilesContent,
   fetchFilesDirectories,
   fetchFilesPreview,
@@ -20,8 +21,10 @@ import {
   fetchGitSummary,
   fetchGitStatus,
   fetchModels,
+  fetchPdfCitationPreviewDocument,
   fetchProjects,
   fetchVoiceCapability,
+  openPdfCitationPreviewSession,
   runGatewayReadiness,
   requestEditorCompletion,
   requestEditorDiagnostics,
@@ -1261,5 +1264,108 @@ describe("synthesizeAssistantSpeech (Issue #1558)", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).code).toBe("VOICE_UNAVAILABLE");
     expect((error as ApiError).status).toBe(503);
+  });
+});
+
+describe("pdf citation preview api helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("opens a preview session through the local-knowledge BFF route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        outcome: "authorized",
+        display: {
+          documentLabel: "Policy wording.pdf",
+          sourceLabel: "Local capsule",
+          pageNumber: 7,
+          pageLabel: "Page 7",
+          anchorQuality: "page-only",
+        },
+        session: {
+          handle: "preview-session-1",
+          expiresAt: "2026-06-28T12:00:00.000Z",
+          reused: false,
+          byteLength: 4096,
+          contentType: "application/pdf",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await openPdfCitationPreviewSession({
+      chatId: "chat-1",
+      assistantMessageId: "msg-1",
+      marker: 3,
+      stableId: "stable-1",
+    });
+
+    expect(response.outcome).toBe("authorized");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/citation-preview/open",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          chatId: "chat-1",
+          assistantMessageId: "msg-1",
+          marker: 3,
+          stableId: "stable-1",
+        }),
+      }),
+    );
+  });
+
+  it("closes a preview session through the DELETE route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await closePdfCitationPreviewSession("preview/session#1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/citation-preview/sessions/preview%2Fsession%231",
+      expect.objectContaining({
+        method: "DELETE",
+        body: "{}",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
+  });
+
+  it("fetches preview PDF bytes without JSON headers and forwards an abort signal", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([9, 8, 7]), {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const bytes = await fetchPdfCitationPreviewDocument(
+      "preview/session#1",
+      controller.signal,
+    );
+
+    expect(Array.from(bytes)).toEqual([9, 8, 7]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/citation-preview/sessions/preview%2Fsession%231/document",
+      expect.objectContaining({
+        cache: "no-store",
+        signal: controller.signal,
+        headers: expect.objectContaining({
+          Accept: "application/pdf",
+        }),
+      }),
+    );
   });
 });

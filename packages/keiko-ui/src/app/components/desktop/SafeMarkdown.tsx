@@ -28,14 +28,17 @@ import {
   type OpenRepositoryReference,
   type RepositoryReferenceRoot,
 } from "./repositoryReferences";
+import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 
 export interface SafeMarkdownProps {
   readonly source: string;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
+  readonly citationPreview?: CitationPreviewController | undefined;
 }
 
 interface RenderOptions {
+  readonly citationPreview: CitationPreviewController | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
 }
@@ -336,19 +339,106 @@ function renderTableNode(
   }
 }
 
+const INLINE_CITATION_MARKER_PATTERN = /(\[\d+\]|【\d+】|［\d+］)/gu;
+const BLOCKED_CITATION_MESSAGE = "PDF preview unavailable";
+
+function markerButtonLabel(marker: string, state: "available" | "recoverable" | "blocked"): string {
+  if (state === "recoverable") {
+    return `Open PDF recovery for citation ${marker}`;
+  }
+  if (state === "blocked") {
+    return `Citation ${marker}. PDF preview unavailable.`;
+  }
+  return `Open PDF preview for citation ${marker}`;
+}
+
+function InlineCitationMarker({
+  marker,
+  preview,
+}: {
+  readonly marker: string;
+  readonly preview: CitationPreviewController;
+}): ReactNode {
+  const affordance = preview.forMarker(marker);
+  if (affordance === undefined) {
+    return marker;
+  }
+  const opening = preview.isOpening(affordance.citation);
+  const blocked = affordance.state === "blocked";
+  return (
+    <button
+      type="button"
+      className={`citation-inline-marker ui-tip citation-inline-marker--${affordance.state}`}
+      aria-disabled={blocked || opening ? "true" : undefined}
+      aria-label={markerButtonLabel(marker, affordance.state)}
+      data-tip={
+        blocked
+          ? BLOCKED_CITATION_MESSAGE
+          : affordance.state === "recoverable"
+            ? "Open PDF recovery"
+            : "Open PDF preview"
+      }
+      onClick={() => {
+        if (blocked || opening) return;
+        void preview.openCitation(affordance.citation, "inline-marker");
+      }}
+    >
+      {marker}
+    </button>
+  );
+}
+
+function renderCitationText(
+  text: string,
+  key: string,
+  citationPreview: CitationPreviewController | undefined,
+): ReactNode {
+  if (citationPreview === undefined) {
+    return <span key={key}>{text}</span>;
+  }
+  INLINE_CITATION_MARKER_PATTERN.lastIndex = 0;
+  const fragments: ReactNode[] = [];
+  let cursor = 0;
+  let match = INLINE_CITATION_MARKER_PATTERN.exec(text);
+  while (match !== null) {
+    const marker = match[0];
+    const index = match.index;
+    if (index > cursor) {
+      fragments.push(
+        <span key={`${key}-text-${String(cursor)}`}>{text.slice(cursor, index)}</span>,
+      );
+    }
+    fragments.push(
+      <InlineCitationMarker
+        key={`${key}-marker-${String(index)}`}
+        marker={marker}
+        preview={citationPreview}
+      />,
+    );
+    cursor = index + marker.length;
+    match = INLINE_CITATION_MARKER_PATTERN.exec(text);
+  }
+  if (cursor < text.length) {
+    fragments.push(<span key={`${key}-tail`}>{text.slice(cursor)}</span>);
+  }
+  return <span key={key}>{fragments.length === 0 ? text : fragments}</span>;
+}
+
 function renderRepositoryText(text: string, key: string, options: RenderOptions): ReactNode {
   const sanitizedText = sanitizeRepositoryEvidenceText(text);
   if (options.openRepositoryReference === undefined) {
-    return <span key={key}>{sanitizedText}</span>;
+    return renderCitationText(sanitizedText, key, options.citationPreview);
   }
   const parts = repositoryReferenceTextParts(sanitizedText);
   if (parts.length === 1 && parts[0]?.kind === "text")
-    return <span key={key}>{sanitizedText}</span>;
+    return renderCitationText(sanitizedText, key, options.citationPreview);
   return (
     <span key={key}>
       {parts.map((part, index) => {
         const partKey = `${key}-repo-${String(index)}`;
-        if (part.kind === "text") return <span key={partKey}>{part.text}</span>;
+        if (part.kind === "text") {
+          return renderCitationText(part.text ?? "", partKey, options.citationPreview);
+        }
         const reference = part.reference;
         if (reference === undefined) return null;
         return (
@@ -444,9 +534,10 @@ export function SafeMarkdown({
   source,
   repositoryRoots = [],
   openRepositoryReference,
+  citationPreview,
 }: SafeMarkdownProps): ReactNode {
   const tree = parseSafeMarkdown(source);
-  const options: RenderOptions = { repositoryRoots, openRepositoryReference };
+  const options: RenderOptions = { citationPreview, repositoryRoots, openRepositoryReference };
   return (
     <div className="sm-root">{tree.map((node, i) => renderNode(node, String(i), options))}</div>
   );
@@ -464,6 +555,7 @@ interface SafeMarkdownBoundaryProps {
   readonly source: string;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
+  readonly citationPreview?: CitationPreviewController | undefined;
 }
 
 interface SafeMarkdownBoundaryState {
@@ -493,6 +585,7 @@ export class SafeMarkdownBoundary extends Component<
         source={this.props.source}
         repositoryRoots={this.props.repositoryRoots}
         openRepositoryReference={this.props.openRepositoryReference}
+        citationPreview={this.props.citationPreview}
       />
     );
   }

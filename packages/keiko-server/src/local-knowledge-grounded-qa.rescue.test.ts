@@ -24,6 +24,7 @@ import {
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   buildLocalKnowledgeCitations,
   createEmbeddingAdapter,
@@ -349,6 +350,139 @@ describe("redactText fallback — non-string redactor output strips unsafe chars
     // mutation: reverting the fallback from stripUnsafeFormatChars(value) to value →
     //   userMessage.content contains RLO and this assertion fails
     expect(userMessage?.content).not.toContain(RLO);
+  });
+});
+
+describe("local-knowledge preview metadata persistence", () => {
+  it("persists rescued preview citation metadata alongside the assistant message", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Preview Metadata Capsule",
+      capsuleId: "cap-preview-metadata",
+      sourceId: "src-preview-metadata",
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "preview-metadata-project");
+    const created = rescueStore.createChat(project.path, "Preview metadata", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+
+    const fakeModel: ModelPort = {
+      call: () =>
+        Promise.resolve({
+          modelId: "chat-model",
+          content: "The answer is grounded in the capsule.",
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "preview-metadata",
+            promptTokens: 5,
+            completionTokens: 12,
+            latencyMs: 1,
+            costClass: "medium" as const,
+          },
+        }),
+    };
+
+    const adapter = scriptedAdapter();
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [
+          {
+            modelId: "chat-model",
+            baseUrl: "https://provider.example/v1",
+            apiKey: "test-api-key-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+          {
+            modelId: embeddingModelId,
+            baseUrl: "https://provider.example/v1",
+            apiKey: "test-api-key-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            id: "chat-model",
+            kind: "chat",
+            contextWindow: 64_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+          {
+            id: embeddingModelId,
+            kind: "embedding",
+            contextWindow: 8_191,
+            maxOutputTokens: 0,
+            toolCalling: false,
+            structuredOutput: false,
+            streaming: false,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "low",
+            latencyClass: "fast",
+            throughputHint: "test",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+        ],
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "What is in the capsule?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>;
+    expect(answer.citations.length).toBeGreaterThan(0);
+    expect(answer.citations[0]?.marker).toBe("[1]");
+    expect(rescueStore.findGroundedPreviewCitations(answer.assistantMessageId)).toMatchObject(
+      answer.citations.map((citation: (typeof answer.citations)[number]) => ({
+        marker: citation.marker,
+        lineage: { capsuleId: seeded.capsuleId },
+      })),
+    );
   });
 });
 

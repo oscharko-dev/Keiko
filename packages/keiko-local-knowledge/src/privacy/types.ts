@@ -10,7 +10,14 @@
 // of the field) means "retain indefinitely". This is enforced by `applyRetentionToCapsule`:
 // a missing field skips the corresponding DELETE entirely.
 
-import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
+import type {
+  PdfCitationPreviewAnchorQuality,
+  PdfCitationPreviewReasonCode,
+} from "@oscharko-dev/keiko-contracts/local-knowledge-preview";
 
 export interface CapsuleRetentionPolicy {
   readonly retainExtractedTextDays?: number;
@@ -40,7 +47,10 @@ export type CapsuleAuditEvent =
   | RetentionAppliedEvent
   | RetrievalPerformedEvent
   | AnswerContextAssembledEvent
-  | ModelContextSentEvent;
+  | ModelContextSentEvent
+  | CitationPreviewAuthorizedEvent
+  | CitationPreviewRecoverableEvent
+  | CitationPreviewBlockedEvent;
 
 export interface CapsuleCreatedEvent {
   readonly kind: "capsule-created";
@@ -133,6 +143,28 @@ export interface ModelContextSentEvent {
   readonly citationCount: number;
   readonly modelId: string;
   readonly occurredAt: number;
+}
+
+interface CitationPreviewEventBase {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
+  readonly chunkIds: readonly string[];
+  readonly targetQuality: PdfCitationPreviewAnchorQuality;
+  readonly occurredAt: number;
+}
+
+export interface CitationPreviewAuthorizedEvent extends CitationPreviewEventBase {
+  readonly kind: "citation-preview-authorized";
+}
+
+export interface CitationPreviewRecoverableEvent extends CitationPreviewEventBase {
+  readonly kind: "citation-preview-recoverable";
+  readonly reasonCode: PdfCitationPreviewReasonCode;
+}
+
+export interface CitationPreviewBlockedEvent extends CitationPreviewEventBase {
+  readonly kind: "citation-preview-blocked";
+  readonly reasonCode: PdfCitationPreviewReasonCode;
 }
 
 // AuditEventSink — injectable port. The default node-sqlite sink in `./audit-emitter.ts`

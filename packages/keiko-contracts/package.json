@@ -63,6 +63,10 @@
       "types": "./dist/memory-audit-events.d.ts",
       "import": "./dist/memory-audit-events.js"
     },
+    "./local-knowledge-preview": {
+      "types": "./dist/local-knowledge-preview.d.ts",
+      "import": "./dist/local-knowledge-preview.js"
+    },
     "./task-workspace": {
       "types": "./dist/task-workspace.d.ts",
       "import": "./dist/task-workspace.js"

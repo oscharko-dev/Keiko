@@ -48,6 +48,7 @@ import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
+import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 
 export const DEFAULT_REFERENCE_BUDGET = 16;
 export const MAX_EXCERPT_CHARS = 900;
@@ -775,6 +776,7 @@ function buildLocalKnowledgeAnswer(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   elapsedMs: number,
   assistantContent: string,
+  sourceLookup?: LocalKnowledgeCitationSourceLookup,
   redactLabel?: LabelRedactor,
 ): LocalKnowledgeGroundedAnswer {
   const [user, assistant] = persisted;
@@ -782,7 +784,7 @@ function buildLocalKnowledgeAnswer(
   const citations = buildLocalKnowledgeCitations(
     result,
     noEvidenceReason,
-    buildSelectedScopeSourceLookup(store, selected),
+    sourceLookup ?? buildSelectedScopeSourceLookup(store, selected),
     redactLabel,
   );
   return {
@@ -848,6 +850,47 @@ function redactText(deps: UiHandlerDeps, value: string): string {
 
 type ScopedGroundedResult = Awaited<ReturnType<typeof runGroundedAnswer>>;
 
+function buildPreviewCitationInputs(
+  deps: UiHandlerDeps,
+  result: ScopedGroundedResult,
+  sourceLookup: LocalKnowledgeCitationSourceLookup,
+): readonly {
+  readonly marker: string;
+  readonly sourceLabel?: string;
+  readonly reference: RetrievalReference;
+}[] {
+  const citedReferences =
+    result.citations.length > 0
+      ? result.citations.map((entry) => ({ reference: entry.reference, marker: entry.marker }))
+      : result.references.slice(0, MAX_PROMPT_REFERENCES).map((reference, index) => ({
+          reference,
+          marker: `[${String(index + 1)}]`,
+        }));
+  return citedReferences.map((entry) => {
+    const label = sourceLookup(entry.reference);
+    return {
+      marker: entry.marker,
+      ...(label === undefined ? {} : { sourceLabel: redactText(deps, label) }),
+      reference: entry.reference,
+    };
+  });
+}
+
+function attachGroundedAnswerWithPreviewCitations(
+  deps: UiHandlerDeps,
+  env: { readonly store: KnowledgeStore },
+  assistantMessageId: string,
+  answer: GroundedAnswer,
+  result: ScopedGroundedResult,
+  sourceLookup: LocalKnowledgeCitationSourceLookup,
+): void {
+  const previewCitations = buildStoredPreviewCitations(
+    env.store,
+    buildPreviewCitationInputs(deps, result, sourceLookup),
+  );
+  deps.store.attachGroundedAnswer(assistantMessageId, answer, previewCitations);
+}
+
 function persistScopedGroundedAnswer(
   chat: Chat,
   input: AskInput,
@@ -873,6 +916,7 @@ function persistScopedGroundedAnswer(
     redactedUserContent,
     redactedAssistantContent,
   );
+  const sourceLookup = buildSelectedScopeSourceLookup(env.store, selected);
   const answer = buildLocalKnowledgeAnswer(
     chat,
     env.store,
@@ -881,9 +925,17 @@ function persistScopedGroundedAnswer(
     result,
     elapsedMs,
     redactedAssistantContent,
+    sourceLookup,
     (value: string): string => redactText(deps, value),
   ) satisfies GroundedAnswer;
-  deps.store.attachGroundedAnswer(persisted[1].id, answer);
+  attachGroundedAnswerWithPreviewCitations(
+    deps,
+    env,
+    persisted[1].id,
+    answer,
+    result,
+    sourceLookup,
+  );
   return answer;
 }
 

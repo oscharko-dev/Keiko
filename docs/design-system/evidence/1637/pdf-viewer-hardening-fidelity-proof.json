@@ -1,0 +1,96 @@
+{
+  "issue": 1637,
+  "verdict": "PASS",
+  "cssSha256": "564fc757de97ba01fd7ad87d6dcdf6132b20fc1bc048472bd8da5d304d99a298",
+  "captures": [
+    {
+      "file": "01-restored-shell-dark.png",
+      "theme": "dark",
+      "forcedColors": "none",
+      "state": "restored-shell",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      },
+      "unsafeHits": []
+    },
+    {
+      "file": "02-restored-shell-light.png",
+      "theme": "light",
+      "forcedColors": "none",
+      "state": "restored-shell",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      },
+      "unsafeHits": []
+    },
+    {
+      "file": "03-transient-retry.png",
+      "theme": "light",
+      "forcedColors": "none",
+      "state": "transient-retry",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      },
+      "unsafeHits": []
+    },
+    {
+      "file": "04-hard-blocked.png",
+      "theme": "light",
+      "forcedColors": "none",
+      "state": "hard-blocked",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      },
+      "unsafeHits": []
+    },
+    {
+      "file": "05-safe-persistence.png",
+      "theme": "light",
+      "forcedColors": "none",
+      "state": "safe-persistence",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      },
+      "unsafeHits": []
+    },
+    {
+      "file": "06-large-slow.png",
+      "theme": "light",
+      "forcedColors": "none",
+      "state": "large-slow",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      },
+      "unsafeHits": []
+    },
+    {
+      "file": "07-responsive.png",
+      "theme": "light",
+      "forcedColors": "none",
+      "state": "restored-shell",
+      "viewport": {
+        "width": 430,
+        "height": 900
+      },
+      "unsafeHits": []
+    },
+    {
+      "file": "08-forced-colors.png",
+      "theme": "dark",
+      "forcedColors": "active",
+      "state": "restored-shell",
+      "viewport": {
+        "width": 1280,
+        "height": 980
+      },
+      "unsafeHits": []
+    }
+  ],
+  "summary": "Browser-rendered hardening evidence for restored safe shell, retry/no-retry recovery states, safe persistence, large/slow loading, responsive layout, and forced-colors coverage."
+}

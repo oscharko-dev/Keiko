@@ -1,0 +1,36 @@
+{
+  "issue": 1636,
+  "verdict": "PASS",
+  "cssSha256": "93baaa524d245b1e05a7b5bb7fc78ba3ee5ed68bb37acd969fd8cba1265083dd",
+  "captures": [
+    {
+      "file": "01-context-dark.png",
+      "violations": []
+    },
+    {
+      "file": "02-context-light.png",
+      "violations": []
+    },
+    {
+      "file": "03-sibling-active.png",
+      "violations": []
+    },
+    {
+      "file": "04-back-disabled.png",
+      "violations": []
+    },
+    {
+      "file": "05-chat-highlight.png",
+      "violations": []
+    },
+    {
+      "file": "06-responsive.png",
+      "violations": []
+    },
+    {
+      "file": "07-forced-colors.png",
+      "violations": []
+    }
+  ],
+  "gate": "zero serious/critical axe violations across captured citation-context and Back to chat states"
+}

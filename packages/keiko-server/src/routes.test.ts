@@ -113,7 +113,7 @@ describe("API route contract", () => {
     const localKnowledgeRoutes = API_ROUTES.filter((r) =>
       r.pattern.startsWith("/api/local-knowledge"),
     );
-    expect(localKnowledgeRoutes).toHaveLength(12);
+    expect(localKnowledgeRoutes).toHaveLength(17);
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules",
@@ -179,6 +179,36 @@ describe("API route contract", () => {
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "DELETE" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "POST" && r.pattern === "/api/local-knowledge/citation-preview/status",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "POST" && r.pattern === "/api/local-knowledge/citation-preview/authorize",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "POST" && r.pattern === "/api/local-knowledge/citation-preview/open",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "GET" &&
+          r.pattern === "/api/local-knowledge/citation-preview/sessions/:sessionHandle/document",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "DELETE" &&
+          r.pattern === "/api/local-knowledge/citation-preview/sessions/:sessionHandle",
       ),
     ).toBeDefined();
   });

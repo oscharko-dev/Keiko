@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 interface Migration {
   readonly version: number;
@@ -265,6 +265,14 @@ CREATE TABLE task_workspace_active_pointer (
 ) STRICT;
 `;
 
+// V9 (issue #1632) adds a server-only assistant-message metadata column for authoritative Local
+// Knowledge PDF preview citations. The browser-safe grounded_answer_json remains the public wire
+// payload; this sibling JSON stores only the minimum private lineage + content-hash metadata the
+// preview authorization contract needs and is never projected through ChatMessage.
+const V9_SQL = `
+ALTER TABLE chat_messages ADD COLUMN grounded_preview_citations_json TEXT;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
@@ -274,6 +282,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 6, sql: V6_SQL },
   { version: 7, sql: V7_SQL },
   { version: 8, sql: V8_SQL },
+  { version: 9, sql: V9_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

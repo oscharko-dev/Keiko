@@ -9441,6 +9441,282 @@ select.dlg-input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pdfv-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset)),
+      var(--surface-primary)
+    );
+  color: var(--text-primary);
+}
+.pdfv-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in oklch, var(--surface-primary) 78%, var(--surface-inset));
+}
+.pdfv-heading {
+  min-width: 0;
+}
+.pdfv-eyebrow {
+  margin: 0 0 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.pdfv-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 650;
+}
+.pdfv-meta {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.pdfv-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--button-secondary-border);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--surface-inset) 76%, transparent);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pdfv-context {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in oklch, var(--surface-primary) 76%, var(--surface-inset));
+}
+.pdfv-context-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+.pdfv-context-copy {
+  min-width: 0;
+}
+.pdfv-context-eyebrow {
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-strong);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.pdfv-context-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
+  font-weight: var(--weight-strong);
+}
+.pdfv-context-message {
+  margin: var(--space-3) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-normal);
+}
+.pdfv-context-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-3);
+  min-width: calc(var(--space-10) * 4);
+}
+.pdfv-back-to-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.pdfv-back-to-chat[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.pdfv-back-to-chat-hint {
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+  text-align: right;
+}
+.pdfv-context-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.pdfv-context-list {
+  gap: var(--space-4);
+}
+.pdfv-context-citation {
+  gap: var(--space-3);
+  max-width: min(100%, 34ch);
+}
+.pdfv-context-citation[data-active="true"] {
+  border-color: var(--border-accent);
+  background: color-mix(in oklch, var(--surface-accent-subtle) 72%, var(--surface-primary));
+}
+.pdfv-context-citation[data-active="true"] .grounded-citation-action-label {
+  color: var(--text-accent);
+}
+.pdfv-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in oklch, var(--surface-primary) 68%, var(--surface-inset));
+}
+.pdfv-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.pdfv-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.pdfv-page-field {
+  display: inline-flex;
+  align-items: center;
+}
+.pdfv-page-input {
+  width: 72px;
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  background: var(--input-surface);
+  color: var(--input-text);
+  font-size: 12.5px;
+  font-weight: 550;
+  text-align: right;
+}
+.pdfv-page-input:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+  border-color: var(--input-border-focus);
+}
+.pdfv-page-input:disabled {
+  opacity: 0.55;
+}
+.pdfv-page-count,
+.pdfv-zoom {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.pdfv-status {
+  margin: 20px;
+}
+.pdfv-retry {
+  margin-top: 8px;
+}
+.pdfv-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 18px 24px;
+  background:
+    radial-gradient(
+      circle at top,
+      color-mix(in oklch, var(--surface-inset) 72%, transparent),
+      transparent 52%
+    ),
+    var(--surface-inset);
+}
+.pdfv-page {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  margin: 0 auto 18px;
+}
+.pdfv-page-frame {
+  width: fit-content;
+  max-width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius-lg) + 2px);
+  background: color-mix(in oklch, var(--surface-primary) 88%, var(--surface-elevated));
+  box-shadow: var(--shadow-card);
+}
+.pdfv-page-meta {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.pdfv-page-canvas,
+.pdfv-page-skeleton {
+  display: block;
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  background: var(--surface-primary);
+}
+.pdfv-page-skeleton {
+  width: min(100%, 680px);
+  min-height: 460px;
+  border: 1px dashed var(--border-subtle);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in oklch, var(--surface-primary) 82%, var(--surface-elevated)),
+      color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset))
+    );
+}
+@media (max-width: 720px) {
+  .pdfv-header,
+  .pdfv-context,
+  .pdfv-toolbar,
+  .pdfv-scroll {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .pdfv-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .pdfv-chip {
+    min-height: 26px;
+  }
+  .pdfv-context-head {
+    flex-direction: column;
+  }
+  .pdfv-context-actions {
+    align-items: flex-start;
+    min-width: 0;
+  }
+  .pdfv-back-to-chat-hint {
+    text-align: left;
+  }
+  .pdfv-page-frame {
+    width: 100%;
+    padding: 10px;
+  }
+}
 
 /* placeholder stripes */
 .ph-stripes {
@@ -10714,6 +10990,49 @@ html[data-keiko-gateway-setup-open="true"] {
 .grounded-citation-open {
   font-family: inherit;
   font-size: inherit;
+}
+.grounded-citation-action {
+  gap: 6px;
+  max-width: 100%;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+.grounded-citation-action:hover:not([aria-disabled="true"]) {
+  border-color: var(--border-strong);
+  background: color-mix(in oklch, var(--ai-source-surface) 80%, var(--surface-secondary));
+}
+.grounded-citation-action:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.grounded-citation-action[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.grounded-citation-action[aria-disabled="true"]:hover {
+  border-color: var(--ai-source-border);
+  background: var(--ai-source-surface);
+}
+.grounded-citation-action-label {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.grounded-citation-action--recoverable .grounded-citation-action-label {
+  color: var(--feedback-info);
+}
+.grounded-citation-action--blocked .grounded-citation-action-label {
+  color: var(--feedback-danger);
+}
+.grounded-citation-action--blocked {
+  border-style: dashed;
+}
+.grounded-citation-action--recoverable {
+  border-style: dashed;
 }
 .grounded-uncertainty {
   font-size: 11px;
@@ -19535,6 +19854,62 @@ button.figma-view-preview {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.citation-inline-marker {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--text-accent);
+  background: transparent;
+  color: var(--text-accent);
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+.citation-inline-marker:hover:not([aria-disabled="true"]) {
+  color: var(--accent-on-tint);
+  border-bottom-color: var(--accent-on-tint);
+}
+.citation-inline-marker:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.citation-inline-marker[data-back-to-chat-highlighted="true"],
+.grounded-citation-action[data-back-to-chat-highlighted="true"] {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: var(--space-1);
+  box-shadow: 0 0 0 var(--space-2) color-mix(in oklch, var(--surface-accent-subtle) 78%, transparent);
+}
+.citation-inline-marker--recoverable {
+  border-bottom-style: dashed;
+}
+.citation-inline-marker--blocked {
+  border-bottom-style: dotted;
+  color: var(--text-secondary);
+  cursor: help;
+}
+.citation-inline-marker[aria-disabled="true"]:hover {
+  color: inherit;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .citation-inline-marker[data-back-to-chat-highlighted="true"],
+  .grounded-citation-action[data-back-to-chat-highlighted="true"] {
+    animation: citation-back-to-chat-pulse var(--dur-flow) var(--ease-standard);
+  }
+}
+@keyframes citation-back-to-chat-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--surface-accent-subtle) 90%, transparent);
+  }
+  45% {
+    box-shadow: 0 0 0 6px color-mix(in oklch, var(--surface-accent-subtle) 62%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--surface-accent-subtle) 0%, transparent);
+  }
 }
 /* C165 — HybridContextPackSummary nests two .grounded-context-pack sections inside
    an outer one: collapse the doubled padding / stacked border-tops into a border-left

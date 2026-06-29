@@ -294,6 +294,8 @@ export function subText(type: WindowType, cfg: Record<string, unknown> | undefin
       return cfgString("selectedScreenName");
     case "figmaJson":
       return cfgString("selectedScreenName") ?? cfgString("screenId");
+    case "pdfCitationPreview":
+      return cfgString("documentLabel") ?? cfgString("pageLabel");
     default:
       return null;
   }

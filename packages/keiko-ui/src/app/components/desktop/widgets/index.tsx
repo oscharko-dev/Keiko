@@ -31,6 +31,7 @@ import { IntegrationsWidget } from "./cards/IntegrationsWidget";
 import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
+import { PdfCitationPreviewWindow } from "./cards/PdfCitationPreviewWindow";
 import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
 import { FigmaJsonSourceWindow } from "./figma/FigmaJsonSourceWindow";
 import { FigmaImageSourceWindow } from "./figma/FigmaImageSourceWindow";
@@ -214,6 +215,7 @@ function ChatWindowSessionHost({
         <div className="lk-loading">Opening chat...</div>
       ) : (
         <ChatWindow
+          windowId={ctx.windowId}
           mini={ctx.mini === true}
           minimalChat={ctx.minimalChat === true}
           compact={ctx.compact === true}
@@ -223,6 +225,11 @@ function ChatWindowSessionHost({
           linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
           linkedRoots={ctx.linkedRoots}
           openEditorFile={ctx.openEditorFile}
+          previewWindows={{
+            add: ctx.openWindow,
+            focus: ctx.focusWindow,
+            update: ctx.updateWindow,
+          }}
           onOpenRunResult={openRunResult}
         />
       )}
@@ -257,6 +264,15 @@ registerWindowRender("activity", () => <TimelinePanel />);
 registerWindowRender("keiko", () => <KeikoTwinPanel />);
 registerWindowRender("settings", () => <SettingsPanel />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
+registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
+  <PdfCitationPreviewWindow
+    cfg={cfg}
+    focusWindow={ctx.focusWindow}
+    restoreWindow={ctx.restoreWindow}
+    updateCfg={ctx.updateCfg}
+    windowId={ctx.windowId}
+  />
+));
 
 // Epic #270 — Quality Intelligence. The hub is a singleton tool window; selecting/finishing a run
 // opens a `qiRun` result card on the canvas (one per run, keyed by cfg.runId).
