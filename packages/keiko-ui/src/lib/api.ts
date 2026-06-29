@@ -95,6 +95,10 @@ import type {
   GitDeliveryActionSheet,
   GitDeliveryActionSheetRequest,
   GitDeliveryApprovalRequirement,
+  PdfCitationPreviewOpenResponse,
+  PdfCitationPreviewSelection,
+  PdfCitationPreviewStatusRequest,
+  PdfCitationPreviewStatusResponse,
   VoicePersona,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -156,6 +160,36 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return res.json() as Promise<T>;
+}
+
+async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const isStateChanging = method !== "GET" && method !== "HEAD";
+  const res = await fetch(path, {
+    ...init,
+    cache: "no-store",
+    headers: {
+      Accept: "application/pdf",
+      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
+      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
+      ...(init?.headers ?? {}),
+    },
+  });
+
+  if (!res.ok) {
+    let code = "INTERNAL";
+    let message = `HTTP ${res.status.toString()}`;
+    try {
+      const envelope = (await res.json()) as BffError;
+      code = envelope.error.code;
+      message = envelope.error.message;
+    } catch {
+      // parse failure — keep generic message, never log body
+    }
+    throw new ApiError(code, message, res.status);
+  }
+
+  return new Uint8Array(await res.arrayBuffer());
 }
 
 // ---------------------------------------------------------------------------
@@ -1583,6 +1617,50 @@ export async function askGrounded(
     body: JSON.stringify(req),
     signal: signal ?? null,
   });
+}
+
+// ---------------------------------------------------------------------------
+// PDF citation preview
+// ---------------------------------------------------------------------------
+
+export async function fetchPdfCitationPreviewStatus(
+  input: PdfCitationPreviewStatusRequest,
+): Promise<PdfCitationPreviewStatusResponse> {
+  return fetchJson("/api/local-knowledge/citation-preview/status", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function openPdfCitationPreviewSession(
+  input: PdfCitationPreviewSelection,
+): Promise<PdfCitationPreviewOpenResponse> {
+  return fetchJson("/api/local-knowledge/citation-preview/open", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function closePdfCitationPreviewSession(
+  sessionHandle: string,
+): Promise<{ ok: true }> {
+  return fetchJson(
+    `/api/local-knowledge/citation-preview/sessions/${encodeURIComponent(sessionHandle)}`,
+    {
+      method: "DELETE",
+      body: "{}",
+    },
+  );
+}
+
+export async function fetchPdfCitationPreviewDocument(
+  sessionHandle: string,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  return fetchBinary(
+    `/api/local-knowledge/citation-preview/sessions/${encodeURIComponent(sessionHandle)}/document`,
+    signal === undefined ? undefined : { signal },
+  );
 }
 
 // ---------------------------------------------------------------------------

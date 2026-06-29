@@ -1,0 +1,44 @@
+{
+  "issue": 1634,
+  "verdict": "PASS",
+  "cssSha256": "07f9696f99a10eae38ea906419a21175428b6c2ba7fa0829d1a1d56b6281ad3a",
+  "captures": [
+    {
+      "file": "01-dark.png",
+      "violations": []
+    },
+    {
+      "file": "02-light.png",
+      "violations": []
+    },
+    {
+      "file": "03-dark-hc.png",
+      "violations": []
+    },
+    {
+      "file": "04-light-hc.png",
+      "violations": []
+    },
+    {
+      "file": "05-forced-colors.png",
+      "violations": []
+    },
+    {
+      "file": "06-responsive.png",
+      "violations": []
+    },
+    {
+      "file": "07-loading.png",
+      "violations": []
+    },
+    {
+      "file": "08-error.png",
+      "violations": []
+    },
+    {
+      "file": "09-focus-visible.png",
+      "violations": []
+    }
+  ],
+  "gate": "zero serious/critical axe violations across captured viewer states and modes"
+}

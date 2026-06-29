@@ -55,4 +55,10 @@ describe("descriptor meta table — production assertion (epic #518 #528 / ADR-0
     expect(WIN_META.notifications.authority).toBe("ui-only");
     expect(WIN_META.notifications.trustBoundary).toEqual(["ui"]);
   });
+
+  it("pdf preview restores only a durable UI shell and crosses only the network boundary for session fetch", () => {
+    expect(WIN_META.pdfCitationPreview.persistence).toBe("durable.ui");
+    expect(WIN_META.pdfCitationPreview.trustBoundary).toEqual(["ui", "network"]);
+    expect(WIN_META.pdfCitationPreview.authority).toBe("user-confirm");
+  });
 });

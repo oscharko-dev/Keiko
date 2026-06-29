@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko contracts. Not published independently.",
@@ -62,6 +62,10 @@
     "./memory-audit-events": {
       "types": "./dist/memory-audit-events.d.ts",
       "import": "./dist/memory-audit-events.js"
+    },
+    "./local-knowledge-preview": {
+      "types": "./dist/local-knowledge-preview.d.ts",
+      "import": "./dist/local-knowledge-preview.js"
     },
     "./task-workspace": {
       "types": "./dist/task-workspace.d.ts",

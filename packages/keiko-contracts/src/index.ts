@@ -23,7 +23,7 @@ export const KEIKO_CONTRACTS_VERSION = "0.12.0" as const;
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.9" as const;
+export const KEIKO_PRODUCT_VERSION = "0.2.10" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -1425,6 +1425,36 @@ export {
   validateCapsuleRowShape,
   redactPathInDiagnostic,
 } from "./local-knowledge-schema-validation.js";
+export type {
+  CurrentPdfCitationPreviewSnapshot,
+  PdfCitationPreviewAnchorQuality,
+  PdfCitationPreviewAuthorizationResponse,
+  PdfCitationPreviewAuthorized,
+  PdfCitationPreviewCitationStatus,
+  PdfCitationPreviewDisplay,
+  PdfCitationPreviewFailureState,
+  PdfCitationPreviewOpenAuthorized,
+  PdfCitationPreviewOpenResponse,
+  PdfCitationPreviewOrigin,
+  PdfCitationPreviewReasonCode,
+  PdfCitationPreviewRejected,
+  PdfCitationPreviewSelection,
+  PdfCitationPreviewSessionMetadata,
+  PdfCitationPreviewStatusRequest,
+  PdfCitationPreviewStatusResponse,
+  PdfCitationPreviewStatusState,
+  StoredPdfCitationPreviewCitation,
+  StoredPdfCitationPreviewLineage,
+} from "./local-knowledge-preview.js";
+export {
+  PDF_CITATION_PREVIEW_ANCHOR_QUALITIES,
+  PDF_CITATION_PREVIEW_FAILURE_STATES,
+  PDF_CITATION_PREVIEW_ORIGINS,
+  PDF_CITATION_PREVIEW_REASON_CODES,
+  PDF_CITATION_PREVIEW_STATUS_STATES,
+  pdfCitationPreviewAnchorQuality,
+  pdfCitationPreviewFailureState,
+} from "./local-knowledge-preview.js";
 
 // ─── Governed Enterprise Memory Vault (Issue #205 / Epic #204) ──────────────────
 // Pure contract surface for durable, scoped, governed memory: scopes, sensitivity,

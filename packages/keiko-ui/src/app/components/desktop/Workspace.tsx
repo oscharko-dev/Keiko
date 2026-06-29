@@ -52,6 +52,7 @@ import {
   type FigmaImageDragPayload,
   type FigmaImageDropDetail,
 } from "./figma-image-drag";
+import { syncPdfCitationPreviewWindowRegistry } from "./widgets/cards/pdf-citation-preview-session";
 
 interface WorkspaceProps {
   readonly ws: UseWorkspaceResult;
@@ -683,6 +684,10 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       window.removeEventListener(FIGMA_IMAGE_DROP_EVENT, handleFigmaImageDrop);
     };
   }, [addFigmaImageNode, wsRef]);
+
+  useEffect(() => {
+    syncPdfCitationPreviewWindowRegistry(ws.wins);
+  }, [ws.wins]);
 
   const onDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
     if (

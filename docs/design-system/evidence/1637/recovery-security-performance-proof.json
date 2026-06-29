@@ -1,0 +1,133 @@
+{
+  "issue": 1637,
+  "verdict": "PASS",
+  "recoveryMatrix": [
+    {
+      "reason": "document-not-ready",
+      "state": "recoverable-open-shell",
+      "retry": false,
+      "openCapsule": false
+    },
+    {
+      "reason": "preview-source-unreadable",
+      "state": "recoverable-open-shell",
+      "retry": false,
+      "openCapsule": false
+    },
+    {
+      "reason": "live-session-fetch-not-ready",
+      "state": "recoverable",
+      "retry": true,
+      "openCapsule": false
+    },
+    {
+      "reason": "live-session-fetch-unreadable",
+      "state": "recoverable",
+      "retry": true,
+      "openCapsule": false
+    },
+    {
+      "reason": "preview-metadata-missing",
+      "state": "recoverable-shell",
+      "retry": false,
+      "openCapsule": false
+    },
+    {
+      "reason": "document-content-mismatch",
+      "state": "recoverable-blocked",
+      "retry": false,
+      "openCapsule": false
+    },
+    {
+      "reason": "page-provenance-missing",
+      "state": "recoverable-blocked",
+      "retry": false,
+      "openCapsule": false
+    },
+    {
+      "reason": "preview-source-missing",
+      "state": "recoverable-blocked",
+      "retry": false,
+      "openCapsule": false
+    },
+    {
+      "reason": "preview-source-oversized",
+      "state": "recoverable-blocked",
+      "retry": false,
+      "openCapsule": false
+    },
+    {
+      "reason": "document-not-pdf",
+      "state": "blocked",
+      "retry": false,
+      "openCapsule": false
+    },
+    {
+      "reason": "missing-or-mismatched-lineage",
+      "state": "blocked",
+      "retry": false,
+      "openCapsule": false
+    },
+    {
+      "reason": "closed-expired-missing-session",
+      "state": "safe-shell",
+      "retry": false,
+      "openCapsule": false
+    }
+  ],
+  "sourceAssertions": [
+    {
+      "name": "PDF preview descriptor persists durable UI shell only",
+      "pass": true
+    },
+    {
+      "name": "Persistence sanitizer allows only explicit PDF preview scalar cfg keys",
+      "pass": true
+    },
+    {
+      "name": "Restored shell does not fetch PDF bytes without a registered session",
+      "pass": true
+    },
+    {
+      "name": "Only transient readiness/read failures expose retry",
+      "pass": true
+    },
+    {
+      "name": "Large and slow PDF behavior remains bounded",
+      "pass": true
+    },
+    {
+      "name": "Close cleanup and session TTL remain enforced",
+      "pass": true
+    },
+    {
+      "name": "Windows and macOS path behavior uses normalized containment instead of raw path trust",
+      "pass": true
+    }
+  ],
+  "unsafeDomEvidenceScan": {
+    "verdict": "PASS",
+    "forbiddenNeedles": [
+      "preview-session-",
+      "/Users/",
+      "file://",
+      "JVBER",
+      "capsuleId",
+      "documentId",
+      "chunkId",
+      "token=",
+      "Bearer "
+    ]
+  },
+  "platformEvidence": {
+    "windows": "Backslash and drive-shaped paths are normalized or rejected before persisted viewer cfg is accepted; server delivery uses contained realpath checks.",
+    "macos": "Realpath containment handles platform links and denied paths before PDF bytes are delivered."
+  },
+  "performanceEvidence": {
+    "renderRadius": 1,
+    "maxPdfPreviewBytes": "32 MiB",
+    "maxRangeBytes": "4 MiB",
+    "slowLoadStatusMs": 900,
+    "closeCleanup": "Preview sessions close on window removal and server TTL/sweep is the fail-safe."
+  }
+}
