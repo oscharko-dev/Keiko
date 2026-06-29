@@ -394,7 +394,50 @@ function providerOperationEnabled(
   );
 }
 
-export default function EditorRuntimeWidget({
+/**
+ * Build a minimal, synthetic {@link PatchPreviewModel} for an agent applyPatch pending review
+ * (Issue #1394, ADR-0058 D3). The model is not derived from a patch diff string; it is built
+ * directly from the pre-computed original and modified text so that the KeikoDiffEditor can render
+ * the diff without any browser-side patch parsing.
+ */
+function buildAgentPatchDiffModel(
+  original: string,
+  modified: string,
+  filePath: string | undefined,
+): PatchPreviewModel {
+  const uri = filePath ?? "agent-patch";
+  const language = inferMonacoLanguageId(filePath ?? "");
+  const hasChanges = original !== modified;
+  return {
+    patchId: "agent-patch-pending",
+    status: "previewed",
+    provenance: { origin: "applied-patch" },
+    files: [
+      {
+        uri,
+        displayPath: filePath ?? "Patch",
+        status: "modified",
+        diffable: true,
+        original,
+        modified,
+        language,
+        hasChanges,
+        truncated: false,
+      },
+    ],
+    fileCount: 1,
+    totalFileCount: 1,
+    omittedFileCount: 0,
+    createdCount: 0,
+    modifiedCount: 1,
+    deletedCount: 0,
+    binaryCount: 0,
+    unsupportedCount: 0,
+    truncated: false,
+  };
+}
+
+function EditorRuntimeWidget({
   windowId,
   paneId,
   activePaneId,
@@ -762,7 +805,8 @@ export default function EditorRuntimeWidget({
       setLoadState({ status: "loading" });
       setSaveStatus("idle");
       setSaveError(undefined);
-      void fetchFilesContent(root, file)
+      void Promise.resolve()
+        .then(() => fetchFilesContent(root, file))
         .then(async (response) => {
           if (signal.cancelled) return;
           const identity: EditorDocumentIdentity = {
@@ -1677,30 +1721,48 @@ export default function EditorRuntimeWidget({
     },
     [file, largeFileDegraded],
   );
-  const executeAgentActionRef = useRef(executeAgentAction);
 
-  useEffect(() => {
-    executeAgentActionRef.current = executeAgentAction;
-  }, [executeAgentAction]);
+  // Issue #1393 (ADR-0061 D2): the controller bundle the pure dispatcher calls. The two layout
+  // controllers (onSplitPane/onMoveTab) are injected by EditorWidget; they are undefined when this
+  // pane is rendered standalone, and the dispatcher then answers a structured provider-unavailable
+  // failure. The setSelection controller is owned by the bridge hook (it drives hook state), so it is
+  // left undefined here and merged in by the hook.
+  const agentControllers = useMemo<EditorAgentActionControllers>(
+    () => ({
+      paneId,
+      onSelectOpenFile,
+      formattingEnabled,
+      formatRequest: { increment: () => setFormatRequestNonce((value) => value + 1) },
+      persist,
+      currentText: () => contentRef.current,
+      applyTextEdits: applyAgentTextEditsAction,
+      applyPatch: applyAgentPatchAction,
+      onSplitPane,
+      onMoveTab,
+      onRequestSelectionReveal: undefined,
+    }),
+    [
+      applyAgentPatchAction,
+      applyAgentTextEditsAction,
+      formattingEnabled,
+      onMoveTab,
+      onSelectOpenFile,
+      onSplitPane,
+      paneId,
+      persist,
+    ],
+  );
 
-  useEffect(() => {
-    if (typeof EventSource === "undefined") return;
-    if (!shouldSubscribeToAgentActions) return;
-    const source = new EventSource("/api/editor/agent/events");
-    const onAction = (event: MessageEvent<string>): void => {
-      try {
-        const parsed = JSON.parse(event.data) as { readonly action?: EditorAgentAction };
-        if (parsed.action !== undefined) executeAgentActionRef.current(parsed.action);
-      } catch {
-        // Ignore malformed SSE frames; the server owns validation before enqueueing.
-      }
-    };
-    source.addEventListener("editor-agent:action", onAction);
-    return () => {
-      source.removeEventListener("editor-agent:action", onAction);
-      source.close();
-    };
-  }, [shouldSubscribeToAgentActions]);
+  // Issue #1395 — bump on any agent activity so the recent-actions audit panel re-fetches its feed.
+  const [auditRefreshNonce, setAuditRefreshNonce] = useState(0);
+  const { agentSelectionRequest, consumeSelectionRequest } = useEditorAgentBridge({
+    agentSessionId,
+    controllers: agentControllers,
+    enabled: shouldSubscribeToAgentActions,
+    registerSnapshot: registerAgentSnapshot,
+    onConflict: setAgentConflict,
+    onAgentActivity: () => setAuditRefreshNonce((nonce) => nonce + 1),
+  });
 
   const recoveryDiskChanged =
     recoverySnapshot !== null &&
@@ -2106,7 +2168,7 @@ export default function EditorRuntimeWidget({
             </button>
           ) : null}
           {hasTarget && saveStatus === "conflict" ? (
-            <button type="button" className="ed-reload" onClick={reload}>
+            <button type="button" className="ed-reload" onClick={requestReload}>
               Reload
             </button>
           ) : null}

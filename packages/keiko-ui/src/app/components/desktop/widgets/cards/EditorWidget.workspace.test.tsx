@@ -52,6 +52,9 @@ vi.mock("next/dynamic", () => ({
           <button type="button" onClick={() => props.onCloseOpenFile?.("src/a.ts")}>
             Close a
           </button>
+          <button type="button" onClick={() => props.onCloseOpenFile?.("src/b.ts")}>
+            Close b
+          </button>
           <button type="button" onClick={() => props.onDirtyChange?.(props.file ?? "", true)}>
             Mark dirty {props.paneId ?? "pane"}
           </button>
@@ -258,7 +261,7 @@ describe("EditorWidget workspace session", () => {
     fireEvent.click(splitRight);
 
     expect(screen.getAllByTestId("runtime-probe")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Resize editor split" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Resize editor split" })).toBeNull();
     expect(onWorkspaceChange).not.toHaveBeenCalled();
   });
 
@@ -287,7 +290,7 @@ describe("EditorWidget workspace session", () => {
       "src/a.ts",
       "src/b.ts|.editorconfig",
     ]);
-    expect(screen.getByRole("button", { name: "Resize editor split" })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "Resize editor split" })).toBeInTheDocument();
     expect(container.querySelector(".editor-workspace")).toHaveAttribute("data-pane-count", "2");
     const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
     expect(lastPatch).toEqual(
@@ -1049,7 +1052,7 @@ describe("EditorWidget workspace session", () => {
         clientY: 80,
       });
       expect(onWorkspaceChange).not.toHaveBeenCalled();
-      const splitResizer = screen.getByRole("button", { name: "Resize editor split" });
+      const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
       fireEvent.pointerMove(splitResizer, {
         pointerId: 1,
         buttons: 1,
@@ -1160,7 +1163,7 @@ describe("EditorWidget workspace session", () => {
           toJSON: () => ({}),
         }) as DOMRect,
     );
-    const splitResizer = screen.getByRole("button", { name: "Resize editor split" });
+    const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
     expect(splitResizer).not.toHaveClass("ui-tip");
     expect(splitResizer).not.toHaveAttribute("data-tip");
     expect(splitResizer).not.toHaveAttribute("title");
@@ -1380,21 +1383,26 @@ describe("EditorWidget — Issue #1375 layout regression hardening", () => {
   });
 
   it("does not raise a false unsaved-changes prompt on the pane a dirty tab left (AC3)", () => {
-    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+      />,
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
     fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
-    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" }), {
-      key: "ArrowRight",
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-2" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-2 src/b.ts" }), {
+      key: "ArrowLeft",
       altKey: true,
       shiftKey: true,
     });
 
-    // a.ts is dirty and now lives only in pane-2. Closing from the pane it LEFT (pane-1) must not
-    // consult an orphaned dirty flag and pop the unsaved-changes dialog. The first "Close a" button
-    // belongs to pane-1, which the layout renders before pane-2.
-    const closeFromPaneOne = screen.getAllByRole("button", { name: "Close a" })[0] as HTMLElement;
-    fireEvent.click(closeFromPaneOne);
+    // b.ts is dirty and now lives only in pane-1. Closing the stale b.ts command from the pane it
+    // LEFT (pane-2) must not consult an orphaned dirty flag and pop the unsaved-changes dialog.
+    const closeFromPaneTwo = screen.getAllByRole("button", { name: "Close b" })[1] as HTMLElement;
+    fireEvent.click(closeFromPaneTwo);
 
     expect(screen.queryByRole("dialog", { name: "Unsaved editor changes" })).toBeNull();
   });
@@ -1405,9 +1413,9 @@ describe("EditorWidget — Issue #1375 layout regression hardening", () => {
     fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
     expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
 
-    // pane-2 holds only a.ts; closing it leaves the pane empty and must collapse the split.
+    // pane-1 holds only a.ts; closing it leaves the pane empty and must collapse the split.
     const closeButtons = screen.getAllByRole("button", { name: "Close a" });
-    fireEvent.click(closeButtons[closeButtons.length - 1] as HTMLElement);
+    fireEvent.click(closeButtons[0] as HTMLElement);
 
     await waitFor(() => {
       expect(screen.getAllByTestId("runtime-probe")).toHaveLength(1);

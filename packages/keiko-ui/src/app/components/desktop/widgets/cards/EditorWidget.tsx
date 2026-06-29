@@ -21,6 +21,7 @@ import {
   createEditorLayoutStateV2,
   editorLayoutOpenFiles,
   editorLayoutPaneIds,
+  editorLayoutPanes,
   editorLayoutReducer,
   resolveWorkspaceFileIdentifier,
   selectWorkspaceFileTarget,
@@ -37,9 +38,13 @@ import {
 
 import { Icons } from "../../Icons";
 import { acquireGrabbingBodyStyle } from "../../interactionGuards";
+import { reconcileEditorDirtyByPane, type EditorDirtyByPane } from "./editorDirtyState";
+import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
-import { FilesWidget } from "./FilesWidget";
+import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
+import { EditorCommandPalette, type EditorPaletteMode } from "./EditorCommandPalette";
+import { type EditorPaletteHost } from "./editorCommands";
 import { FileIcon } from "../shared/projectTree";
 
 const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
@@ -100,6 +105,7 @@ const MAX_SIDEBAR_WIDTH = 440;
 const MIN_SPLIT_RATIO = 15;
 const MAX_SPLIT_RATIO = 85;
 const MAX_EDITOR_PANES = 2;
+const CLOSED_TAB_HISTORY_LIMIT = 20;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -467,18 +473,16 @@ function renderPaneActions(
     <span className="ed-pane-actions" aria-label="Editor split controls">
       <button
         type="button"
-        className="ed-icon-action ui-tip"
+        className="ed-icon-action"
         aria-label={`Split ${pane.activeFile || "editor"} right`}
-        data-tip="Split right"
         onClick={() => splitPane(pane.id, "row")}
       >
         <Icons.split size={14} />
       </button>
       <button
         type="button"
-        className="ed-icon-action ui-tip"
+        className="ed-icon-action"
         aria-label={`Split ${pane.activeFile || "editor"} down`}
-        data-tip="Split down"
         onClick={() => splitPane(pane.id, "column")}
       >
         <Icons.panelDown size={14} />
@@ -486,9 +490,8 @@ function renderPaneActions(
       {showClose ? (
         <button
           type="button"
-          className="ed-icon-action ui-tip"
+          className="ed-icon-action"
           aria-label={`Close split ${pane.activeFile || "editor"}`}
-          data-tip="Close split"
           onClick={() => closePane(pane.id)}
         >
           <Icons.close size={14} />
@@ -552,6 +555,11 @@ export function EditorWidget({
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const pointerTabDragRef = useRef<PointerTabDrag | null>(null);
   const suppressNextTabClickRef = useRef(false);
+  // Quick-Open / command-palette overlay (null = closed). Closed-tab MRU backs the reopen command.
+  const [paletteState, setPaletteState] = useState<{ readonly mode: EditorPaletteMode } | null>(
+    null,
+  );
+  const closedTabsRef = useRef<{ readonly paneId: string; readonly file: string }[]>([]);
 
   const buildPatch = useCallback(
     (nextRoot: string, nextLayout: EditorLayoutStateV2): EditorWidgetWorkspacePatch => {
@@ -869,6 +877,11 @@ export function EditorWidget({
     [commitLayout, layout, workspaceRoot],
   );
 
+  const splitPane = useCallback(
+    (paneId: string, direction: EditorSplitDirection): void => applyPanePreset(paneId, direction),
+    [applyPanePreset],
+  );
+
   const closePane = useCallback(
     (paneId: string): void => {
       const pane = layoutRef.current.panes[paneId];
@@ -934,9 +947,9 @@ export function EditorWidget({
     (event: PointerEvent<HTMLButtonElement>): void => {
       if (event.buttons !== 1) return;
       if (isTabDragActive()) return;
-      resizeSidebarTo(event.clientX);
+      previewSidebarWidth(event.clientX);
     },
-    [isTabDragActive, resizeSidebarTo],
+    [isTabDragActive, previewSidebarWidth],
   );
 
   const resizeSidebarBy = useCallback(
@@ -1010,7 +1023,7 @@ export function EditorWidget({
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up, { once: true });
     },
-    [isTabDragActive, resizeSidebarTo],
+    [commitSidebarGesture, isTabDragActive, previewSidebarWidth],
   );
 
   const beginSplitMouseResize = useCallback(
@@ -1029,7 +1042,7 @@ export function EditorWidget({
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up, { once: true });
     },
-    [isTabDragActive, resizeSplitTo],
+    [commitSplitGesture, isTabDragActive, previewSplitRatio],
   );
 
   const handleSidebarResizerKeyDown = useCallback(
@@ -1415,40 +1428,6 @@ export function EditorWidget({
     return <EditorRuntimeWidget {...props} />;
   }
 
-  const paneActions = (pane: EditorPaneStateV2): ReactNode => {
-    const paneCount = editorLayoutPaneIds(layout).length;
-    return (
-      <span className="ed-pane-actions" aria-label="Editor split controls">
-        <button
-          type="button"
-          className="ed-icon-action"
-          aria-label={`Split ${pane.activeFile || "editor"} right`}
-          onClick={() => applyPanePreset(pane.id, "row")}
-        >
-          <Icons.split size={14} />
-        </button>
-        <button
-          type="button"
-          className="ed-icon-action"
-          aria-label={`Split ${pane.activeFile || "editor"} down`}
-          onClick={() => applyPanePreset(pane.id, "column")}
-        >
-          <Icons.panelDown size={14} />
-        </button>
-        {paneCount > 1 ? (
-          <button
-            type="button"
-            className="ed-icon-action"
-            aria-label={`Close split ${pane.activeFile || "editor"}`}
-            onClick={() => closePane(pane.id)}
-          >
-            <Icons.close size={14} />
-          </button>
-        ) : null}
-      </span>
-    );
-  };
-
   const renderPane = (pane: EditorPaneStateV2): ReactNode => {
     const binding = paneBindings.get(pane.id);
     if (binding === undefined) return null;
@@ -1539,8 +1518,13 @@ export function EditorWidget({
         {renderNode(node.first)}
         <button
           type="button"
+          role="separator"
           className="ed-pane-resizer"
           aria-label="Resize editor split"
+          aria-orientation={node.direction === "row" ? "vertical" : "horizontal"}
+          aria-valuemin={MIN_SPLIT_RATIO}
+          aria-valuemax={MAX_SPLIT_RATIO}
+          aria-valuenow={Math.round(node.ratio)}
           onPointerDown={(event) => {
             if (isTabDragActive()) return;
             capturePointer(event);
@@ -1569,7 +1553,6 @@ export function EditorWidget({
     );
   };
 
-  const paneCount = editorLayoutPaneIds(layout).length;
   const singlePane = paneCount === 1;
 
   return (

@@ -3,12 +3,28 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { fetchFilesTree, fetchProjects } from "../../../../../lib/api";
-import type { FilesTreeEntry } from "../../../../../lib/types";
+import {
+  copyFilesEntry,
+  createFilesEntry,
+  deleteFilesEntry,
+  fetchFilesTree,
+  fetchGitDiff,
+  fetchGitStatus,
+  fetchProjects,
+  renameFilesEntry,
+} from "../../../../../lib/api";
+import type {
+  FilesMutationResponse,
+  FilesTreeEntry,
+  GitChangedFile,
+  GitRepositoryDiffResponse,
+  GitRepositoryStatusResponse,
+} from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
@@ -74,6 +90,32 @@ interface DirectoryState {
   readonly notice: "no-root" | null;
 }
 
+interface GitStatusState {
+  readonly loading: boolean;
+  readonly status: GitRepositoryStatusResponse | null;
+  readonly error: string | null;
+}
+
+interface GitDiffState {
+  readonly path: string;
+  readonly loading: boolean;
+  readonly response: GitRepositoryDiffResponse | null;
+  readonly error: string | null;
+}
+
+// The inline editor reused for all three create/rename flows. `parentPath` is the root-relative
+// directory the new entry lands in (null = root); `path`/`name` identify the entry being renamed.
+type PendingEntry =
+  | { readonly kind: "new-file" | "new-folder"; readonly parentPath: string | null }
+  | { readonly kind: "rename"; readonly path: string; readonly name: string };
+
+interface ContextMenuState {
+  readonly x: number;
+  readonly y: number;
+  // The row the menu was opened on, or null for the empty tree background (new file/folder at root).
+  readonly entry: FilesTreeEntry | null;
+}
+
 interface TreeTooltipState {
   readonly text: string;
   readonly x: number;
@@ -82,6 +124,39 @@ interface TreeTooltipState {
 
 const TREE_TOOLTIP_DELAY_MS = 650;
 const TREE_TOOLTIP_MAX_WIDTH = 240;
+
+// Parent directory (root-relative) of a tree entry, for scoping a new sibling or a rename target.
+function entryParent(path: string): string | null {
+  const idx = path.lastIndexOf("/");
+  return idx < 0 ? null : path.slice(0, idx);
+}
+
+function joinRelative(parent: string | null, name: string): string {
+  return parent === null || parent.length === 0 ? name : `${parent}/${name}`;
+}
+
+// A collision-free "<base> copy<.ext>" name for a duplicate, given the sibling names already present.
+function nextCopyName(name: string, existing: ReadonlySet<string>): string {
+  const dot = name.lastIndexOf(".");
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  let candidate = `${base} copy${ext}`;
+  let counter = 2;
+  while (existing.has(candidate)) {
+    candidate = `${base} copy ${String(counter)}${ext}`;
+    counter += 1;
+  }
+  return candidate;
+}
+
+// A new entry's name must be a single, safe path segment. The BFF enforces this too; rejecting early
+// keeps the inline editor responsive and the error message specific.
+function invalidEntryName(name: string): string | null {
+  if (name.length === 0) return "Enter a name.";
+  if (name === "." || name === "..") return "That name is reserved.";
+  if (/[/\\]/u.test(name)) return "A name cannot contain a slash.";
+  return null;
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unable to read this folder.";
@@ -839,6 +914,26 @@ export function FilesWidget({
               onPointerLeave={hideTreeTooltip}
               onBlur={hideTreeTooltip}
               onClick={() => enterDirectory(entry)}
+              onContextMenu={(event) => openContextMenu(event, entry)}
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", entry.path);
+                setDraggedPath(entry.path);
+              }}
+              onDragEnd={() => setDraggedPath(null)}
+              onDragOver={(event) => {
+                // A folder accepts a drop of any OTHER entry (move into it).
+                if (entry.readable && draggedPath !== null && draggedPath !== entry.path) {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const source = draggedPath;
+                setDraggedPath(null);
+                if (source !== null) void moveEntry(source, entry.path);
+              }}
             >
               <span className="fi-fallback" style={{ color: "var(--accent)" }}>
                 <Icons.folder size={14} />
@@ -855,44 +950,66 @@ export function FilesWidget({
     const activePath = selectedPath ?? activeFilePath ?? null;
     const change = gitChangeByPath.get(entry.path);
     return (
-      <button
-        className="tr-row tr-file"
-        role="treeitem"
-        aria-level={depth + 1}
-        aria-selected={activePath === entry.path}
-        data-active={activePath === entry.path}
-        data-readable={entry.readable}
-        data-path={entry.path}
-        key={entry.path}
-        style={{ paddingLeft: pad }}
-        type="button"
-        aria-disabled={entry.readable ? undefined : true}
-        aria-describedby={entry.readable ? undefined : unreadableReasonId}
-        onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
-        onPointerMove={moveTreeTooltip}
-        onPointerLeave={hideTreeTooltip}
-        onBlur={hideTreeTooltip}
-        onClick={() => {
-          if (!entry.readable) return;
-          const fileRoot = resolvedRoot ?? apiRoot;
-          if (openFilesDirectly && onOpenFile !== undefined) {
+      <div className="tr-row-wrap tr-file-wrap" key={entry.path}>
+        <button
+          className="tr-row tr-file"
+          onContextMenu={(event) => openContextMenu(event, entry)}
+          role="treeitem"
+          aria-level={depth + 1}
+          aria-selected={activePath === entry.path}
+          data-active={activePath === entry.path}
+          data-readable={entry.readable}
+          data-path={entry.path}
+          style={{ paddingLeft: pad }}
+          type="button"
+          draggable={mutationsEnabled && entry.readable}
+          aria-disabled={entry.readable ? undefined : true}
+          aria-describedby={entry.readable ? undefined : unreadableReasonId}
+          onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
+          onPointerMove={moveTreeTooltip}
+          onPointerLeave={hideTreeTooltip}
+          onBlur={hideTreeTooltip}
+          onDragStart={(event) => {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", entry.path);
+            setDraggedPath(entry.path);
+          }}
+          onDragEnd={() => setDraggedPath(null)}
+          onClick={() => {
+            if (!entry.readable) return;
+            const fileRoot = resolvedRoot ?? apiRoot;
+            if (openFilesDirectly && onOpenFile !== undefined) {
+              activeFileChangeRef.current?.(entry.path, fileRoot);
+              onOpenFile(fileRoot, entry.path);
+              return;
+            }
+            setSelectedPath(entry.path);
             activeFileChangeRef.current?.(entry.path, fileRoot);
-            onOpenFile(fileRoot, entry.path);
-            return;
-          }
-          setSelectedPath(entry.path);
-          activeFileChangeRef.current?.(entry.path, fileRoot);
-        }}
-      >
-        {/* invisible caret placeholder keeps file rows aligned with sibling folders (C216) */}
-        <span className="tr-caret tr-caret-ghost" aria-hidden="true">
-          <Icons.chevronR size={11} />
-        </span>
-        <FileIcon name={entry.name} />
-        <span className="tr-name">{entry.name}</span>
-        {entry.symlink ? <span className="tr-badge">link</span> : null}
-        <span className="tr-meta mono">{formatBytes(entry.sizeBytes)}</span>
-      </button>
+          }}
+        >
+          {/* invisible caret placeholder keeps file rows aligned with sibling folders (C216) */}
+          <span className="tr-caret tr-caret-ghost" aria-hidden="true">
+            <Icons.chevronR size={11} />
+          </span>
+          <FileIcon name={entry.name} />
+          <span className="tr-name">{entry.name}</span>
+          {entry.symlink ? <span className="tr-badge">link</span> : null}
+          {change !== undefined ? (
+            <span className="tr-badge tr-git">{gitChangeLabel(change)}</span>
+          ) : null}
+          <span className="tr-meta mono">{formatBytes(entry.sizeBytes)}</span>
+        </button>
+        {change !== undefined && entry.readable ? (
+          <button
+            className="tr-git-diff"
+            type="button"
+            onClick={() => openDiff(entry.path)}
+            aria-label={`View Git diff for ${entry.path}`}
+          >
+            <Icons.diff size={13} />
+          </button>
+        ) : null}
+      </div>
     );
   };
 
@@ -1164,6 +1281,140 @@ export function FilesWidget({
       >
         {renderDirectory(currentDirectoryPath ?? "", 0)}
       </div>
+      {menu !== null ? (
+        <div
+          role="menu"
+          aria-label="File actions"
+          // Positioned at the cursor and themed with the same popover tokens as `.edm-menu`, so the
+          // context menu needs no globals.css rule. Stopping pointerdown keeps the window-level
+          // outside-close listener from dismissing it before a menu item's click fires.
+          onPointerDown={(event) => event.stopPropagation()}
+          style={{
+            position: "fixed",
+            top: menu.y,
+            left: menu.x,
+            zIndex: 9700,
+            minWidth: 176,
+            padding: 6,
+            background: "var(--popover-surface)",
+            border: "1px solid var(--popover-border)",
+            borderRadius: "var(--radius)",
+            boxShadow: "var(--popover-shadow)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+          }}
+        >
+          {(() => {
+            const target = menu.entry !== null && menu.entry.readable ? menu.entry : null;
+            const parent =
+              menu.entry === null
+                ? currentDirectoryPath
+                : menu.entry.kind === "directory"
+                  ? menu.entry.path
+                  : entryParent(menu.entry.path);
+            return (
+              <>
+                {target !== null ? (
+                  <>
+                    <button
+                      type="button"
+                      className="edm-item"
+                      role="menuitem"
+                      onClick={() => startRename(target)}
+                    >
+                      <Icons.edit size={14} />
+                      <span>Rename…</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="edm-item"
+                      role="menuitem"
+                      onClick={() => void duplicateEntry(target)}
+                    >
+                      <Icons.copy size={14} />
+                      <span>Duplicate</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="edm-item"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenu(null);
+                        setOpError(null);
+                        setConfirmDelete(target);
+                      }}
+                    >
+                      <Icons.trash size={14} />
+                      <span>Delete…</span>
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  className="edm-item"
+                  role="menuitem"
+                  onClick={() => startNewEntry("new-file", parent)}
+                >
+                  <Icons.file size={14} />
+                  <span>New File…</span>
+                </button>
+                <button
+                  type="button"
+                  className="edm-item"
+                  role="menuitem"
+                  onClick={() => startNewEntry("new-folder", parent)}
+                >
+                  <Icons.folder size={14} />
+                  <span>New Folder…</span>
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      ) : null}
+      {confirmDelete !== null ? (
+        <div className="ed-dialog-backdrop" role="presentation">
+          <div
+            className="ed-dirty-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="files-delete-title"
+            tabIndex={-1}
+          >
+            <h2 id="files-delete-title">
+              Delete {confirmDelete.kind === "directory" ? "folder" : "file"}?
+            </h2>
+            <p>
+              "{confirmDelete.name}" will be permanently deleted
+              {confirmDelete.kind === "directory" ? ", including everything inside it" : ""}. This
+              cannot be undone.
+            </p>
+            {opError !== null ? <p role="alert">{opError}</p> : null}
+            <div className="ed-dialog-actions">
+              <button
+                type="button"
+                className="ed-reload"
+                onClick={() => void performDelete(confirmDelete)}
+                disabled={opBusy}
+              >
+                {opBusy ? "Deleting..." : "Delete"}
+              </button>
+              <button
+                type="button"
+                className="ed-icon-action"
+                onClick={() => {
+                  setConfirmDelete(null);
+                  setOpError(null);
+                }}
+                disabled={opBusy}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {treeTooltip !== null && typeof document !== "undefined"
         ? createPortal(
             <div

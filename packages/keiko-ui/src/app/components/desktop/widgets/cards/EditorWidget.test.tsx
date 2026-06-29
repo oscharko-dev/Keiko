@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { useEffect, type ReactElement } from "react";
@@ -14,6 +14,7 @@ import type {
 import {
   ApiError,
   fetchEditorLanguageCapabilities,
+  fetchEditorAgentAudit,
   fetchFilesContent,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
@@ -42,6 +43,7 @@ vi.mock("../../../../../lib/api", async () => {
   return {
     ...actual,
     fetchEditorLanguageCapabilities: vi.fn(),
+    fetchEditorAgentAudit: vi.fn(),
     fetchFilesContent: vi.fn(),
     postEditorAgentActionResult: vi.fn(),
     postEditorAgentSessionSnapshot: vi.fn(),
@@ -264,6 +266,9 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
+  vi.mocked(fetchEditorAgentAudit).mockResolvedValue({ records: [] });
+  vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse());
+  vi.mocked(saveFilesContent).mockResolvedValue(fileResponse());
   vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
   vi.mocked(postEditorAgentActionResult).mockResolvedValue({
     result: { schemaVersion: "1", actionId: "queued", sessionId: "queued", status: "queued" },
@@ -1733,12 +1738,9 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     await renderLoaded();
     expect(surface.props?.formatRequestNonce).toBe(0);
 
-    // The aria-label is dynamic (ADR-0068 D4); the stable locator is the constant data-tip.
-    const formatButton = document.querySelector<HTMLButtonElement>(
-      'button[data-tip="Format document"]',
-    );
-    expect(formatButton).not.toBeNull();
-    await userEvent.click(formatButton as HTMLButtonElement);
+    const formatButton = screen.getByRole("button", { name: "Format" });
+    expect(formatButton).not.toHaveAttribute("data-tip");
+    await userEvent.click(formatButton);
 
     await waitFor(() => {
       expect(surface.props?.formatRequestNonce).toBe(1);
@@ -2528,10 +2530,10 @@ describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
       surface.props?.onContentChange({ text: "dirty content\n", sizeBytes: 14 }, "human");
     });
     // Confirm dirty state: toolbar Save aria-disabled flips to "false".
-    // The toolbar Save has data-tip; the banner Save does not.
     await waitFor(() => {
-      const allSaves = screen.getAllByRole("button", { name: /^Save$/u });
-      const toolbarBtn = allSaves.find((btn) => btn.hasAttribute("data-tip"));
+      const toolbar = document.querySelector(".ed-toolbar-actions");
+      expect(toolbar).not.toBeNull();
+      const toolbarBtn = within(toolbar as HTMLElement).getByRole("button", { name: /^Save$/u });
       expect(toolbarBtn).toHaveAttribute("aria-disabled", "false");
     });
 
