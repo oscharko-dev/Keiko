@@ -183,6 +183,15 @@ describe("PdfCitationPreviewWindow", () => {
   });
 
   it("loads the verified PDF bytes, renders controls, supports page and zoom actions, and stays axe-clean", async () => {
+    const originalConsoleError = console.error;
+    const consoleError = vi.spyOn(console, "error").mockImplementation((...args) => {
+      if (
+        args.some((part) => String(part).includes("Encountered two children with the same key"))
+      ) {
+        return;
+      }
+      originalConsoleError(...args);
+    });
     const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
     const windowId = openPdfCitationPreviewWindow(add, PREVIEW, {
       context: {
@@ -191,6 +200,15 @@ describe("PdfCitationPreviewWindow", () => {
           {
             citation: { stableId: "stable-1", marker: "[1]", label: "Policy wording.pdf" },
             display: PREVIEW.display,
+          },
+          {
+            citation: { stableId: "stable-2", marker: "[2]", label: "Policy wording.pdf" },
+            display: {
+              ...PREVIEW.display,
+              pageNumber: 3,
+              pageLabel: "Page 3",
+              anchorQuality: "page-only",
+            },
           },
           {
             citation: { stableId: "stable-2", marker: "[2]", label: "Policy wording.pdf" },
@@ -270,16 +288,14 @@ describe("PdfCitationPreviewWindow", () => {
       );
     });
     expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
-    expect(screen.getByText("Answer-local citation context")).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /Keiko opened the verified source page near the cited passage\. Exact PDF highlights are not part of this viewer\./,
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Active citation")).toBeInTheDocument();
+    expect(screen.getByText("Same answer citations")).toBeInTheDocument();
+    expect(container.querySelectorAll(".pdfv-context-citation")).toHaveLength(2);
     expect(screen.getByRole("button", { name: /previous/i })).not.toHaveAttribute("disabled");
     expect(screen.getByDisplayValue("2")).toBeInTheDocument();
     expect(screen.getByText("/ 3")).toBeInTheDocument();
 
+    await userEvent.click(screen.getByText("Same answer citations"));
     await userEvent.click(screen.getByRole("button", { name: /\[2\] Policy wording\.pdf/i }));
     expect(updateCfg).toHaveBeenCalledWith({
       currentPage: 3,
@@ -312,6 +328,13 @@ describe("PdfCitationPreviewWindow", () => {
     expect(updateCfg).toHaveBeenCalledWith({ currentPage: 1 });
 
     expect(await axe(container)).toHaveNoViolations();
+    expect(
+      consoleError.mock.calls.some((call) =>
+        call.some((part) =>
+          String(part).includes("Encountered two children with the same key"),
+        ),
+      ),
+    ).toBe(false);
   });
 
   it("renders Back to chat as an explained disabled action when the source chat is unavailable", async () => {

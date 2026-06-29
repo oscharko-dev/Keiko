@@ -339,6 +339,7 @@ describe("usePdfCitationPreviewController", () => {
     const citations = [
       citation("[1]", "stable-1", "policy.pdf", "doc-shared"),
       citation("[2]", "stable-2", "policy appendix.pdf", "doc-shared"),
+      citation("[2]", "stable-2", "policy appendix.pdf", "doc-shared"),
       citation("[3]", "stable-3", "other.pdf", "doc-other"),
     ];
     const groundedAnswer = answer(citations);

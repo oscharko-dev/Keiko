@@ -151,8 +151,12 @@ function answerLocalPreviewContext(
   citations: readonly LocalKnowledgeEvidenceCitation[],
   affordances: Record<string, CitationPreviewAffordance>,
 ): readonly PdfCitationPreviewContextCitation[] {
+  const seenStableIds = new Set<string>();
   return citations.flatMap((citation) => {
     if (citation.lineage.documentId !== activeCitation.lineage.documentId) {
+      return [];
+    }
+    if (seenStableIds.has(citation.stableId)) {
       return [];
     }
     const affordance = affordances[citation.stableId];
@@ -160,6 +164,9 @@ function answerLocalPreviewContext(
       return [];
     }
     const contextItem = citationContextItem(citation, affordance);
+    if (contextItem !== undefined) {
+      seenStableIds.add(citation.stableId);
+    }
     return contextItem === undefined ? [] : [contextItem];
   });
 }

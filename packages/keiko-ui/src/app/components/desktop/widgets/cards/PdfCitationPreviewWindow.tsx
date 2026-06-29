@@ -20,6 +20,7 @@ import {
   getPdfCitationPreviewBackToChatAvailability,
   getPdfCitationPreviewSession,
   subscribePdfCitationPreviewRegistry,
+  type PdfCitationPreviewContextCitation,
   type PdfCitationPreviewSafeWindowCfg,
   type PdfCitationPreviewZoomMode,
 } from "./pdf-citation-preview-session";
@@ -114,17 +115,6 @@ function anchorQualityLabel(value: PdfCitationPreviewSafeWindowCfg["anchorQualit
   }
 }
 
-function anchorQualityDescription(value: PdfCitationPreviewSafeWindowCfg["anchorQuality"]): string {
-  switch (value) {
-    case "approximate":
-      return "Keiko opened the verified source page near the cited passage. Exact PDF highlights are not part of this viewer.";
-    case "unavailable":
-      return "Keiko verified this PDF source, but no trustworthy page anchor is available for this citation. The viewer stays on its current page.";
-    default:
-      return "Keiko opened the verified source page for this citation. No passage-level highlight is available in this viewer.";
-  }
-}
-
 function citationContextLabel(args: {
   readonly label: string;
   readonly marker: string;
@@ -141,6 +131,19 @@ function citationContextPageLabel(
   if (display.pageLabel !== undefined) return display.pageLabel;
   if (display.pageNumber !== undefined) return `Page ${String(display.pageNumber)}`;
   return display.anchorQuality === "unavailable" ? "No verified page" : "Verified PDF";
+}
+
+function uniqueContextCitations(
+  citations: readonly PdfCitationPreviewContextCitation[] | undefined,
+): readonly PdfCitationPreviewContextCitation[] {
+  if (citations === undefined) return [];
+  const seen = new Set<string>();
+  return citations.filter((citation) => {
+    const stableId = citation.citation.stableId;
+    if (seen.has(stableId)) return false;
+    seen.add(stableId);
+    return true;
+  });
 }
 
 function previewFailure(error: unknown): PreviewFailure {
@@ -340,14 +343,18 @@ export function PdfCitationPreviewWindow({
   const pageRefs = useRef(new Map<number, HTMLElement>());
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const citationContext = sessionEntry?.context;
+  const citationContextCitations = useMemo(
+    () => uniqueContextCitations(citationContext?.citations),
+    [citationContext?.citations],
+  );
   const backToChat =
     backToChatReason.length === 0
       ? { enabled: true as const }
       : { enabled: false as const, reason: backToChatReason };
   const activeCitation =
-    citationContext?.citations.find(
-      (citation) => citation.citation.stableId === citationContext.activeStableId,
-    ) ?? citationContext?.citations[0];
+    citationContextCitations.find(
+      (citation) => citation.citation.stableId === citationContext?.activeStableId,
+    ) ?? citationContextCitations[0];
 
   const display = useMemo((): Pick<
     PdfCitationPreviewSafeWindowCfg,
@@ -628,17 +635,17 @@ export function PdfCitationPreviewWindow({
         <section className="pdfv-context" aria-label="Citation context">
           <div className="pdfv-context-head">
             <div className="pdfv-context-copy">
-              <p className="pdfv-context-eyebrow">Answer-local citation context</p>
+              <p className="pdfv-context-eyebrow">Active citation</p>
               <h3 className="pdfv-context-title">
-                {citationContextLabel({
-                  label: activeCitation.citation.label,
-                  marker: activeCitation.citation.marker,
-                  source: activeCitation.citation.source,
-                })}
+                <span className="pdfv-context-marker">{activeCitation.citation.marker}</span>
+                <span className="pdfv-context-document">{activeCitation.display.documentLabel}</span>
+                <span className="pdfv-context-page">
+                  {citationContextPageLabel(activeCitation.display)}
+                </span>
               </h3>
-              <p className="pdfv-context-message">
-                {anchorQualityDescription(activeCitation.display.anchorQuality)}
-              </p>
+              {activeCitation.display.sourceLabel === undefined ? null : (
+                <p className="pdfv-context-message">{activeCitation.display.sourceLabel}</p>
+              )}
             </div>
             <div className="pdfv-context-actions">
               <button
@@ -666,33 +673,40 @@ export function PdfCitationPreviewWindow({
               )}
             </div>
           </div>
-          {citationContext !== undefined && citationContext.citations.length > 1 ? (
-            <div className="pdfv-context-rail">
-              <span className="grounded-citations-label">Same answer citations</span>
+          {citationContext !== undefined && citationContextCitations.length > 1 ? (
+            <details className="pdfv-context-details">
+              <summary className="pdfv-context-summary">
+                <span>Same answer citations</span>
+                <span className="pdfv-context-count">{citationContextCitations.length}</span>
+                <Icons.chevron size={13} />
+              </summary>
               <ul
                 className="grounded-citations pdfv-context-list"
                 aria-label="Same answer citations"
               >
-                {citationContext.citations.map((citation) => {
+                {citationContextCitations.map((citation) => {
                   const active = citation.citation.stableId === citationContext.activeStableId;
+                  const fullLabel = citationContextLabel({
+                    label: citation.citation.label,
+                    marker: citation.citation.marker,
+                    source: citation.citation.source,
+                  });
                   return (
                     <li key={citation.citation.stableId} className="grounded-citations-item">
                       <button
                         type="button"
                         className="grounded-citation grounded-citation-action pdfv-context-citation"
+                        aria-label={`${fullLabel} ${citationContextPageLabel(citation.display)}`}
                         aria-pressed={active}
                         data-active={active ? "true" : "false"}
+                        data-tip={fullLabel}
                         onClick={() => {
                           if (active) return;
                           activateContextCitation(citation.citation.stableId);
                         }}
                       >
                         <span className="grounded-citation-range">
-                          {citationContextLabel({
-                            label: citation.citation.label,
-                            marker: citation.citation.marker,
-                            source: citation.citation.source,
-                          })}
+                          {citation.citation.marker}
                         </span>
                         <span className="grounded-citation-action-label">
                           {active ? "Active" : citationContextPageLabel(citation.display)}
@@ -702,7 +716,7 @@ export function PdfCitationPreviewWindow({
                   );
                 })}
               </ul>
-            </div>
+            </details>
           ) : null}
         </section>
       ) : null}
