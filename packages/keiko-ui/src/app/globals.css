@@ -2975,76 +2975,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .chatw:has(.cmp-box[data-voice-aura="on"]) {
   --voice-aura-core: oklch(0.76 0.12 156);
-  --voice-aura-secondary: oklch(0.78 0.1 185);
-  --voice-aura-tertiary: oklch(0.7 0.09 145);
-  /* ready (active, no question): a calm but PERCEPTIBLE slow wave — "Keiko is awake and
-     ready" must read as alive, not off. Kept low-opacity so it stays quiet/enterprise. */
-  --voice-aura-composer-opacity: 0.24;
-  --voice-aura-edge-mix: 24%;
-  --voice-aura-speed: 14s;
-  --voice-aura-composer-lift: -5px;
-  --voice-aura-composer-scale-x: 1.01;
-  --voice-aura-composer-scale-y: 1.06;
+  --voice-aura-composer-opacity: 0.2;
+  --voice-aura-edge-mix: 28%;
   position: relative;
   isolation: isolate;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="listening"]) {
-  --voice-aura-core: oklch(0.83 0.15 154);
-  --voice-aura-secondary: oklch(0.8 0.13 190);
-  --voice-aura-tertiary: oklch(0.72 0.1 168);
-  --voice-aura-composer-opacity: 0.31;
-  --voice-aura-edge-mix: 36%;
-  --voice-aura-speed: 12s;
-  --voice-aura-composer-lift: -4px;
-  --voice-aura-composer-scale-x: 1.008;
-  --voice-aura-composer-scale-y: 1.05;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="thinking"]) {
-  --voice-aura-core: oklch(0.83 0.17 163);
-  --voice-aura-secondary: oklch(0.78 0.15 206);
-  --voice-aura-tertiary: oklch(0.72 0.13 257);
-  --voice-aura-composer-opacity: 0.48;
-  --voice-aura-edge-mix: 48%;
-  --voice-aura-speed: 7.2s;
-  --voice-aura-composer-lift: -7px;
-  --voice-aura-composer-scale-x: 1.014;
-  --voice-aura-composer-scale-y: 1.12;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="speaking"]) {
-  --voice-aura-core: oklch(0.85 0.1 164);
-  --voice-aura-secondary: oklch(0.82 0.09 205);
-  --voice-aura-tertiary: oklch(0.78 0.07 178);
-  --voice-aura-composer-opacity: 0.27;
-  --voice-aura-edge-mix: 30%;
-  --voice-aura-speed: 15s;
-  --voice-aura-composer-lift: -3px;
-  --voice-aura-composer-scale-x: 1.006;
-  --voice-aura-composer-scale-y: 1.04;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="muted"]),
-.chatw:has(.cmp-box[data-voice-aura-state="interrupted"]) {
-  --voice-aura-core: oklch(0.82 0.13 77);
-  --voice-aura-secondary: oklch(0.74 0.11 42);
-  --voice-aura-tertiary: oklch(0.72 0.08 68);
-  --voice-aura-edge-mix: 50%;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="pressure"]) {
-  --voice-aura-core: oklch(0.78 0.14 52);
-  --voice-aura-secondary: oklch(0.67 0.15 31);
-  --voice-aura-tertiary: oklch(0.72 0.1 70);
-  --voice-aura-edge-mix: 58%;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="error"]) {
-  --voice-aura-core: oklch(0.68 0.18 28);
-  --voice-aura-secondary: oklch(0.78 0.12 58);
-  --voice-aura-tertiary: oklch(0.62 0.12 18);
-  --voice-aura-edge-mix: 62%;
-}
-.chatw:has(.cmp-box[data-voice-aura-intensity="medium"]) {
-  --voice-aura-composer-opacity: max(var(--voice-aura-composer-opacity), 0.3);
-}
-.chatw:has(.cmp-box[data-voice-aura-intensity="high"]) {
-  --voice-aura-composer-opacity: max(var(--voice-aura-composer-opacity), 0.44);
 }
 .chatw:has(.cmp-box[data-voice-aura="on"])::before {
   display: none;
@@ -3055,10 +2989,11 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   z-index: 1;
 }
 .cmp-box[data-voice-aura="on"] {
-  border-color: color-mix(in oklch, var(--voice-aura-core) 42%, var(--border-default));
+  border-color: color-mix(in oklch, var(--voice-aura-core) 38%, var(--border-default));
   box-shadow:
     var(--card-shadow),
-    inset 0 0 30px -24px color-mix(in oklch, var(--voice-aura-core) 86%, #000),
+    inset 0 0 34px -26px color-mix(in oklch, var(--voice-aura-core) 82%, #000),
+    inset 0 -44px 86px -54px color-mix(in oklch, var(--voice-aura-core) 76%, #000),
     inset 0 -1px 0
       color-mix(in oklch, var(--voice-aura-core) var(--voice-aura-edge-mix), transparent);
   transition:
@@ -3080,51 +3015,29 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .cmp-box[data-voice-aura="on"]::before {
   background:
-    radial-gradient(
-      ellipse at 50% 100%,
-      color-mix(in oklch, var(--voice-aura-core) 36%, transparent) 0%,
-      transparent 62%
+    linear-gradient(
+      180deg,
+      transparent 0%,
+      color-mix(in oklch, var(--voice-aura-core) 5%, transparent) 48%,
+      color-mix(in oklch, var(--voice-aura-core) 16%, transparent) 100%
     ),
     radial-gradient(
-      ellipse at 18% 94%,
-      color-mix(in oklch, var(--voice-aura-secondary) 26%, transparent) 0%,
-      transparent 44%
-    ),
-    radial-gradient(
-      ellipse at 82% 94%,
-      color-mix(in oklch, var(--voice-aura-tertiary) 22%, transparent) 0%,
-      transparent 44%
+      ellipse 72% 64% at 50% 100%,
+      color-mix(in oklch, var(--voice-aura-core) 24%, transparent) 0%,
+      transparent 70%
     );
   box-shadow:
-    inset 0 -32px 68px -38px color-mix(in oklch, var(--voice-aura-core) 92%, #000),
-    inset 0 0 28px -20px color-mix(in oklch, var(--voice-aura-secondary) 82%, #000),
+    inset 0 -28px 70px -42px color-mix(in oklch, var(--voice-aura-core) 88%, #000),
     inset 0 -1px 0
       color-mix(in oklch, var(--voice-aura-core) var(--voice-aura-edge-mix), transparent);
   opacity: var(--voice-aura-composer-opacity);
-  transform-origin: 50% 100%;
+  transform: none;
   transition:
-    opacity 320ms ease,
-    transform 380ms ease;
+    opacity 320ms ease;
 }
-/* Second, slower depth layer. It drifts at a different rate from ::before so the two glows
-   move in and out of phase — an organic, non-repeating "living" motion (state-of-the-art
-   ambient feel) rather than one flat pulse. Kept subtle; screen blend keeps it additive on
-   the dark surface without muddying the controls (which sit above at z-index 1). */
 .cmp-box[data-voice-aura="on"]::after {
-  background:
-    radial-gradient(
-      ellipse 78% 92% at 50% 104%,
-      color-mix(in oklch, var(--voice-aura-secondary) 28%, transparent) 0%,
-      transparent 60%
-    ),
-    radial-gradient(
-      ellipse 120% 80% at 50% 100%,
-      color-mix(in oklch, var(--voice-aura-core) 18%, transparent) 0%,
-      transparent 72%
-    );
-  opacity: calc(var(--voice-aura-composer-opacity) * 0.55);
-  transform-origin: 50% 100%;
-  mix-blend-mode: screen;
+  display: none;
+  content: none;
 }
 :root[data-input-modality="keyboard"] .cmp-box[data-voice-aura="on"]:has(.cmp-input:focus) {
   border-color: var(--accent-line);
@@ -3139,53 +3052,12 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     var(--shadow-card),
     inset 0 0 26px -22px color-mix(in oklch, var(--voice-aura-core) 82%, #000);
 }
-/* The wave draws inward: it rests low and slightly contracted at the bottom edge (0%), then
-   is drawn up and expands into the composer (100%). With ease-in-out + alternate this reads
-   as a calm wave breathing inward and receding, not a one-way grow. Per-state vars scale the
-   amplitude/speed (calm for ready, larger and faster for thinking, softer for speaking). */
-@keyframes voice-aura-composer-breathe {
-  0% {
-    opacity: calc(var(--voice-aura-composer-opacity) * 0.62);
-    transform: translate3d(0, 3px, 0) scale3d(0.99, 0.965, 1);
-  }
-  100% {
-    opacity: var(--voice-aura-composer-opacity);
-    transform: translate3d(0, var(--voice-aura-composer-lift), 0)
-      scale3d(var(--voice-aura-composer-scale-x), var(--voice-aura-composer-scale-y), 1);
-  }
-}
-/* Depth layer: same idea, smaller amplitude, no horizontal scale — a slower undercurrent. */
-@keyframes voice-aura-composer-drift {
-  0% {
-    opacity: calc(var(--voice-aura-composer-opacity) * 0.3);
-    transform: translate3d(0, 2px, 0) scale3d(1, 0.98, 1);
-  }
-  100% {
-    opacity: calc(var(--voice-aura-composer-opacity) * 0.62);
-    transform: translate3d(0, calc(var(--voice-aura-composer-lift) * 0.6), 0)
-      scale3d(1, calc(1 + (var(--voice-aura-composer-scale-y) - 1) * 0.7), 1);
-  }
-}
-@media (prefers-reduced-motion: no-preference) {
-  .cmp-box[data-voice-aura="on"]::before {
-    animation: voice-aura-composer-breathe var(--voice-aura-speed) ease-in-out infinite alternate;
-  }
-  /* 1.55× period + a small negative delay keeps the two layers permanently out of phase. */
-  .cmp-box[data-voice-aura="on"]::after {
-    animation: voice-aura-composer-drift calc(var(--voice-aura-speed) * 1.55) -2.3s ease-in-out
-      infinite alternate;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
-  /* Static calm glow: both layers hold a steady state, no motion. */
   .chatw:has(.cmp-box[data-voice-aura="on"])::before,
   .cmp-box[data-voice-aura="on"]::before,
   .cmp-box[data-voice-aura="on"]::after {
     animation: none;
     transform: none;
-  }
-  .cmp-box[data-voice-aura="on"]::after {
-    opacity: calc(var(--voice-aura-composer-opacity) * 0.45);
   }
 }
 @media (forced-colors: active) {

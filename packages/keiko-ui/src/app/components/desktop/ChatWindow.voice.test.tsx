@@ -687,10 +687,8 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
       within(box).getByRole("button", { name: "Mute voice dialogue microphone" }),
     ).toBeInTheDocument();
     expect(within(box).queryByRole("button", { name: "Mute assistant voice" })).toBeNull();
-    expect(box.getAttribute("data-voice-aura-state")).toMatch(
-      /^(ready|listening|thinking|speaking|muted|interrupted|error)$/u,
-    );
-    expect(box.getAttribute("data-voice-aura-intensity")).toMatch(/^(low|medium|high)$/u);
+    expect(box).toHaveAttribute("data-voice-aura-state", "ready");
+    expect(box).toHaveAttribute("data-voice-aura-intensity", "low");
     expect(box.querySelector('.sr-only[role="status"][aria-live="polite"]')).not.toBeNull();
   });
 
