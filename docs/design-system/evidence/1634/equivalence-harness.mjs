@@ -1,5 +1,4 @@
 import { chromium } from "playwright";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -9,10 +8,6 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const AXE_PATH = resolve(REPO, "node_modules/axe-core/axe.min.js");
-
-function git(args) {
-  return execFileSync("git", ["-C", REPO, ...args], { encoding: "utf8" }).trim();
-}
 
 const cssText = readFileSync(resolve(REPO, CSS_PATH), "utf8");
 const cssSha256 = createHash("sha256").update(cssText).digest("hex");
