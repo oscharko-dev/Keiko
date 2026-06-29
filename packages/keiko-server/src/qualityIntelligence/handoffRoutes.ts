@@ -41,6 +41,7 @@ import {
 import { containsForbiddenSecretShape } from "./connectorErrors.js";
 import { executeQiRun } from "./runExecution.js";
 import { qiRunRegistry } from "./runRegistry.js";
+import { buildQiModelRoutingForRun } from "./modelPolicyRoutes.js";
 
 // ─── Body reading ──────────────────────────────────────────────────────────────
 
@@ -288,25 +289,35 @@ const startHandoffRun = (deps: UiHandlerDeps, roots: readonly string[]): string 
   const registeredAt = new Date().toISOString();
   const controller = qiRunRegistry.register(runId, registeredAt);
   const totals = { candidates: 0, findings: 0, exports: 0 };
-  void executeQiRun({
-    request: {
-      sources: roots.map((path) => ({
-        kind: "workspace",
-        label: "Conversation Center",
-        path,
-      })),
-    },
-    runId,
-    deps,
-    registeredAt,
-    signal: controller.signal,
-    onAccepted: () => undefined,
-    onEvent: (event: QualityIntelligence.QualityIntelligenceRunEvent) => {
-      if (event.payload.kind === "candidate:proposed") totals.candidates += 1;
-      if (event.payload.kind === "finding:recorded") totals.findings += 1;
-      qiRunRegistry.updateTotals(runId, totals);
-    },
-  })
+  const request = {
+    sources: roots.map((path) => ({
+      kind: "workspace" as const,
+      label: "Conversation Center",
+      path,
+    })),
+  };
+  const execute = (
+    modelRouting?: Awaited<ReturnType<typeof buildQiModelRoutingForRun>>,
+  ): ReturnType<typeof executeQiRun> =>
+    executeQiRun({
+      request,
+      ...(modelRouting !== undefined ? { modelRouting } : {}),
+      runId,
+      deps,
+      registeredAt,
+      signal: controller.signal,
+      onAccepted: () => undefined,
+      onEvent: (event: QualityIntelligence.QualityIntelligenceRunEvent) => {
+        if (event.payload.kind === "candidate:proposed") totals.candidates += 1;
+        if (event.payload.kind === "finding:recorded") totals.findings += 1;
+        qiRunRegistry.updateTotals(runId, totals);
+      },
+    });
+  const runPromise =
+    deps.config === undefined
+      ? execute()
+      : buildQiModelRoutingForRun(deps, {}).then((modelRouting) => execute(modelRouting));
+  void runPromise
     .then((summary) => {
       qiRunRegistry.complete(runId, summary.status);
     })

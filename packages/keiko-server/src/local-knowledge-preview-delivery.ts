@@ -89,9 +89,7 @@ function verifySourcePath(source: KnowledgeSource, documentPath: string): string
   return contained.path;
 }
 
-function statSafeSource(
-  absolutePath: string,
-): ReturnType<typeof nodeWorkspaceFs.stat> | undefined {
+function statSafeSource(absolutePath: string): ReturnType<typeof nodeWorkspaceFs.stat> | undefined {
   let stat: ReturnType<typeof nodeWorkspaceFs.stat>;
   try {
     stat = nodeWorkspaceFs.stat(absolutePath);
@@ -286,12 +284,8 @@ export async function readPdfPreviewSourceRange(
   length: number,
 ): Promise<Uint8Array | undefined> {
   const boundedLength = Math.min(length, PDF_PREVIEW_STREAM_CHUNK_BYTES);
-  const bytes = await nodeWorkspaceFs.readFileRange?.(
-    source.absolutePath,
-    start,
-    boundedLength,
-  );
-  if (bytes === undefined || bytes.byteLength !== boundedLength) {
+  const bytes = await nodeWorkspaceFs.readFileRange?.(source.absolutePath, start, boundedLength);
+  if (bytes?.byteLength !== boundedLength) {
     return undefined;
   }
   return bytes;

@@ -3032,8 +3032,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
       color-mix(in oklch, var(--voice-aura-core) var(--voice-aura-edge-mix), transparent);
   opacity: var(--voice-aura-composer-opacity);
   transform: none;
-  transition:
-    opacity 320ms ease;
+  transition: opacity 320ms ease;
 }
 .cmp-box[data-voice-aura="on"]::after {
   display: none;
@@ -9321,12 +9320,11 @@ select.dlg-input {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset)),
-      var(--surface-primary)
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset)),
+    var(--surface-primary)
+  );
   color: var(--text-primary);
 }
 .pdfv-header {
@@ -9635,12 +9633,11 @@ select.dlg-input {
   width: min(100%, 680px);
   min-height: 460px;
   border: 1px dashed var(--border-subtle);
-  background:
-    linear-gradient(
-      135deg,
-      color-mix(in oklch, var(--surface-primary) 82%, var(--surface-elevated)),
-      color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset))
-    );
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--surface-primary) 82%, var(--surface-elevated)),
+    color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset))
+  );
 }
 @media (max-width: 720px) {
   .pdfv-header,
@@ -16491,6 +16488,85 @@ html[data-keiko-gateway-setup-open="true"] {
   gap: 10px;
   padding: 12px 16px 16px;
 }
+.qi-workflow-bar {
+  display: grid;
+  grid-template-columns:
+    minmax(88px, 0.85fr) minmax(160px, 1.45fr) minmax(160px, 1.45fr) repeat(3, minmax(84px, 0.85fr))
+    auto;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--surface-primary) 84%, var(--accent) 5%);
+}
+.qi-workflow-stage {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in oklab, var(--border-default) 86%, transparent);
+  border-radius: var(--radius-xs);
+  background: var(--surface-primary);
+}
+.qi-workflow-stage-model {
+  background: color-mix(in oklab, var(--accent) 8%, var(--surface-primary));
+}
+.qi-workflow-stage-label {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.qi-workflow-stage-badge,
+.qi-preflight-status {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qi-model-select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.qi-model-menu .ksel-option-label {
+  font-size: 11px;
+}
+.qi-model-menu .ksel-option-desc {
+  font-size: 10px;
+}
+.qi-preflight-status {
+  align-self: center;
+  justify-self: end;
+  padding: 5px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--surface-primary);
+  text-transform: uppercase;
+}
+.qi-preflight-status[data-status="checking"] {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border-default));
+}
+.qi-preflight-status[data-status="failed"],
+.qi-preflight-status[data-status="unavailable"] {
+  color: var(--feedback-danger);
+  border-color: color-mix(in oklab, var(--feedback-danger) 55%, var(--border-default));
+}
 /* Connected-source banner (Epic #270 Slice 1): shown when a Files window is bound to the QI hub. */
 .qi-connected-source {
   display: flex;
@@ -16895,11 +16971,20 @@ select.qi-select {
   line-height: 1.45;
 }
 @media (max-width: 900px) {
+  .qi-workflow-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .qi-preflight-status {
+    justify-self: stretch;
+  }
   .qi-source-kind-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 @media (max-width: 640px) {
+  .qi-workflow-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .qi-source-kind-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -19837,7 +19922,8 @@ button.figma-view-preview {
 .grounded-citation-action[data-back-to-chat-highlighted="true"] {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: var(--space-1);
-  box-shadow: 0 0 0 var(--space-2) color-mix(in oklch, var(--surface-accent-subtle) 78%, transparent);
+  box-shadow: 0 0 0 var(--space-2)
+    color-mix(in oklch, var(--surface-accent-subtle) 78%, transparent);
 }
 .citation-inline-marker--recoverable {
   border-bottom-style: dashed;

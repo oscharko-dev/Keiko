@@ -77,6 +77,9 @@ const buildTitle = (
   const indexLabel = `#${String(index + 1).padStart(3, "0")}`;
   const sourceSubject = atomText === undefined ? undefined : conciseText(atomText, 90);
   if (sourceSubject !== undefined) {
+    if (sourceSubject.startsWith("doc:") || /(?:^|\s)doc:[^\s]+/u.test(sourceSubject)) {
+      return `Baseline requirement check ${indexLabel}`;
+    }
     return `${indexLabel} Prüfe ${sourceSubject}`;
   }
   const themes = intent.themes.slice(0, 2).join(" / ");

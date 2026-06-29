@@ -29,6 +29,7 @@ import type {
 } from "./testCaseCandidate.js";
 import type { QualityIntelligenceReviewState } from "./reviewRecord.js";
 import type { TestQualityRubricDimension } from "./testQualityRubric.js";
+import type { ModelCapability } from "../gateway.js";
 
 /** Counts-only totals carried on both the list-view and the detail view. */
 export interface QualityIntelligenceUiRunTotals {
@@ -353,6 +354,95 @@ export type QualityIntelligenceInlineSource =
   | QualityIntelligenceFigmaSnapshotSource
   | QualityIntelligenceImageSource;
 
+export interface QualityIntelligenceModelPolicy {
+  readonly policyVersion: 1;
+  readonly testDesignModelId?: string;
+  readonly judgeModelId?: string;
+  readonly updatedAt?: string;
+}
+
+export interface QualityIntelligenceResolvedModelPolicy {
+  readonly testDesignModelId?: string;
+  readonly judgeModelId?: string;
+  readonly judgeUnavailableReason?: "no-compatible-model";
+}
+
+export type QualityIntelligenceModelPolicyValidationIssueCode =
+  | "model-not-configured"
+  | "model-not-chat"
+  | "model-not-structured";
+
+export interface QualityIntelligenceModelPolicyValidationIssue {
+  readonly field: "testDesignModelId" | "judgeModelId";
+  readonly code: QualityIntelligenceModelPolicyValidationIssueCode;
+  readonly message: string;
+}
+
+export interface QualityIntelligenceModelPolicyValidation {
+  readonly ok: boolean;
+  readonly issues: readonly QualityIntelligenceModelPolicyValidationIssue[];
+}
+
+export type QualityIntelligenceModelPreflightStatus =
+  | "not-run"
+  | "passed"
+  | "failed"
+  | "unavailable";
+
+export type QualityIntelligenceModelPreflightErrorCategory =
+  | "timeout"
+  | "auth"
+  | "rate-limit"
+  | "context"
+  | "transport"
+  | "provider-http"
+  | "unavailable";
+
+export interface QualityIntelligenceModelPreflightStageResult {
+  readonly stage: "generate" | "judge";
+  readonly status: QualityIntelligenceModelPreflightStatus;
+  readonly modelId?: string;
+  readonly category?: QualityIntelligenceModelPreflightErrorCategory;
+  readonly message?: string;
+}
+
+export interface QualityIntelligenceModelPreflightSummary {
+  readonly status: QualityIntelligenceModelPreflightStatus;
+  readonly generation?: QualityIntelligenceModelPreflightStageResult;
+  readonly judge?: QualityIntelligenceModelPreflightStageResult;
+}
+
+export interface QualityIntelligenceModelStageFailure {
+  readonly stage: "generate" | "judge";
+  readonly reasonSummary: string;
+}
+
+export interface QualityIntelligenceModelRouting {
+  readonly policyVersion: 1;
+  readonly requested: QualityIntelligenceModelPolicy;
+  readonly resolved: QualityIntelligenceResolvedModelPolicy;
+  readonly preflight: QualityIntelligenceModelPreflightSummary;
+  readonly stageFailures?: readonly QualityIntelligenceModelStageFailure[];
+}
+
+export interface QualityIntelligenceModelPolicyResponse {
+  readonly policy: QualityIntelligenceModelPolicy;
+  readonly recommendedPolicy: QualityIntelligenceModelPolicy;
+  readonly resolved: QualityIntelligenceResolvedModelPolicy;
+  readonly models: readonly ModelCapability[];
+  readonly validation: QualityIntelligenceModelPolicyValidation;
+  readonly repaired: boolean;
+}
+
+export interface QualityIntelligenceModelPolicyPreflightRequest {
+  readonly modelPolicy?: QualityIntelligenceModelPolicy;
+  readonly modelId?: string;
+}
+
+export interface QualityIntelligenceModelPolicyPreflightResponse {
+  readonly modelRouting: QualityIntelligenceModelRouting;
+}
+
 /** Body of `POST /api/quality-intelligence/runs`. */
 export interface QualityIntelligenceStartRunRequest {
   readonly sources: readonly QualityIntelligenceInlineSource[];
@@ -360,6 +450,8 @@ export interface QualityIntelligenceStartRunRequest {
   readonly profileId?: string;
   /** Preferred chat model id; the server may degrade to another compatible chat model or baseline. */
   readonly modelId?: string;
+  /** Explicit QI model routing policy. When omitted, `modelId` remains the legacy generation hint. */
+  readonly modelPolicy?: QualityIntelligenceModelPolicy;
   /** Optional non-negative deterministic sampling seed for models that advertise seed support. */
   readonly seed?: number;
 }
@@ -386,6 +478,7 @@ export interface QualityIntelligenceRunStreamAccepted {
   readonly requestedAt: string;
   readonly sourceCount: number;
   readonly atomCount: number;
+  readonly modelRouting?: Pick<QualityIntelligenceModelRouting, "resolved" | "preflight">;
   /**
    * Sources dropped because the request exceeded the 16-source cap (Epic #729). Present and > 0 only
    * when sources were dropped; the UI surfaces a coverage notice. Additive on the wire.
@@ -414,6 +507,7 @@ export interface QualityIntelligenceRunStreamDone {
   readonly runId: string;
   readonly status: "succeeded" | "failed" | "cancelled";
   readonly totals: QualityIntelligenceUiRunTotals;
+  readonly modelRouting?: Pick<QualityIntelligenceModelRouting, "resolved" | "preflight">;
   /**
    * Redaction-safe reason for terminal failed runs AND for succeeded-but-degraded runs (see
    * `degraded`). This mirrors the bounded reasonSummary emitted by stage/run failure events so

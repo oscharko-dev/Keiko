@@ -74,16 +74,13 @@ function parseBaseBody(body: Record<string, unknown>): {
   readonly stableId?: string;
 } {
   if (typeof body.chatId !== "string" || body.chatId.trim().length === 0) {
-    throw new InvalidRequest("Field \"chatId\" must be a non-empty string.");
+    throw new InvalidRequest('Field "chatId" must be a non-empty string.');
   }
-  if (
-    typeof body.assistantMessageId !== "string" ||
-    body.assistantMessageId.trim().length === 0
-  ) {
-    throw new InvalidRequest("Field \"assistantMessageId\" must be a non-empty string.");
+  if (typeof body.assistantMessageId !== "string" || body.assistantMessageId.trim().length === 0) {
+    throw new InvalidRequest('Field "assistantMessageId" must be a non-empty string.');
   }
   if (body.stableId !== undefined && typeof body.stableId !== "string") {
-    throw new InvalidRequest("Field \"stableId\" must be a string when present.");
+    throw new InvalidRequest('Field "stableId" must be a string when present.');
   }
   return {
     chatId: body.chatId,
@@ -92,19 +89,22 @@ function parseBaseBody(body: Record<string, unknown>): {
   };
 }
 
-function parseMarker(body: Record<string, unknown>, required: boolean): string | number | undefined {
+function parseMarker(
+  body: Record<string, unknown>,
+  required: boolean,
+): string | number | undefined {
   if (!("marker" in body)) {
     if (required) {
-      throw new InvalidRequest("Field \"marker\" is required.");
+      throw new InvalidRequest('Field "marker" is required.');
     }
     return undefined;
   }
   const marker = body.marker;
   if (typeof marker !== "string" && typeof marker !== "number") {
-    throw new InvalidRequest("Field \"marker\" must be a string or number.");
+    throw new InvalidRequest('Field "marker" must be a string or number.');
   }
   if (normalizePreviewMarkerIndex(marker) === undefined) {
-    throw new InvalidRequest("Field \"marker\" must resolve to a positive citation index.");
+    throw new InvalidRequest('Field "marker" must resolve to a positive citation index.');
   }
   return marker;
 }
@@ -123,22 +123,34 @@ function previewSourceError(reason: string): RouteResult {
     case "document-content-mismatch":
       return {
         status: 409,
-        body: errorBody("PREVIEW_SOURCE_CHANGED", "The verified PDF bytes no longer match the citation."),
+        body: errorBody(
+          "PREVIEW_SOURCE_CHANGED",
+          "The verified PDF bytes no longer match the citation.",
+        ),
       };
     case "document-not-pdf":
       return {
         status: 409,
-        body: errorBody("PREVIEW_SOURCE_NOT_PDF", "The verified citation source is no longer a PDF."),
+        body: errorBody(
+          "PREVIEW_SOURCE_NOT_PDF",
+          "The verified citation source is no longer a PDF.",
+        ),
       };
     case "document-not-ready":
       return {
         status: 409,
-        body: errorBody("PREVIEW_SOURCE_NOT_READY", "The verified citation source is not ready for preview."),
+        body: errorBody(
+          "PREVIEW_SOURCE_NOT_READY",
+          "The verified citation source is not ready for preview.",
+        ),
       };
     case "preview-source-oversized":
       return {
         status: 413,
-        body: errorBody("PREVIEW_SOURCE_TOO_LARGE", "The verified PDF exceeds the preview size limit."),
+        body: errorBody(
+          "PREVIEW_SOURCE_TOO_LARGE",
+          "The verified PDF exceeds the preview size limit.",
+        ),
       };
     case "preview-source-unreadable":
       return {
@@ -148,7 +160,10 @@ function previewSourceError(reason: string): RouteResult {
     default:
       return {
         status: 410,
-        body: errorBody("PREVIEW_SOURCE_MISSING", "The verified PDF source is no longer available."),
+        body: errorBody(
+          "PREVIEW_SOURCE_MISSING",
+          "The verified PDF source is no longer available.",
+        ),
       };
   }
 }
@@ -222,7 +237,13 @@ function validatedRange(
   end: number,
   totalBytes: number,
 ): { readonly end: number; readonly start: number } | RouteResult {
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= totalBytes) {
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= totalBytes
+  ) {
     return invalidRangeResult("The requested byte range is invalid.");
   }
   const boundedEnd = Math.min(end, totalBytes - 1);
@@ -402,18 +423,16 @@ function isRouteResult(value: unknown): value is RouteResult {
   return typeof value === "object" && value !== null && "status" in value;
 }
 
-async function writeResponseChunk(
-  ctx: RouteContext,
-  chunk: Uint8Array,
-): Promise<boolean> {
-  if (ctx.res.destroyed || ctx.req.destroyed) return false;
+async function writeResponseChunk(ctx: RouteContext, chunk: Uint8Array): Promise<boolean> {
+  const isConnectionDestroyed = (): boolean => ctx.res.destroyed || ctx.req.destroyed;
+  if (isConnectionDestroyed()) return false;
   if (ctx.res.write(Buffer.from(chunk))) {
     return true;
   }
   await new Promise<void>((resolve) => {
     ctx.res.once("drain", resolve);
   });
-  return !ctx.res.destroyed && !ctx.req.destroyed;
+  return !isConnectionDestroyed();
 }
 
 async function streamPdfPreview(
@@ -429,7 +448,9 @@ async function streamPdfPreview(
     "Content-Length": String(contentLength),
     "Content-Type": "application/pdf",
     ...(isPartial
-      ? { "Content-Range": `bytes ${String(range.start)}-${String(range.end)}/${String(source.byteLength)}` }
+      ? {
+          "Content-Range": `bytes ${String(range.start)}-${String(range.end)}/${String(source.byteLength)}`,
+        }
       : {}),
     "X-Content-Type-Options": "nosniff",
   });

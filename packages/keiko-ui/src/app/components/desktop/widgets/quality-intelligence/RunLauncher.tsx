@@ -23,6 +23,10 @@ import type {
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceStartRunRequest,
+  QualityIntelligenceModelPolicy,
+  QualityIntelligenceModelPolicyResponse,
+  QualityIntelligenceModelPreflightSummary,
+  ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
 import { fetchFilesTree, fetchProjects } from "@/lib/api";
 import {
@@ -31,7 +35,12 @@ import {
   LocalFileBrowserDialog,
 } from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
-import { startQiRun } from "@/lib/quality-intelligence-api";
+import {
+  fetchQiModelPolicy,
+  preflightQiModelPolicy,
+  saveQiModelPolicy,
+  startQiRun,
+} from "@/lib/quality-intelligence-api";
 import {
   fetchCapsules,
   fetchCapsuleSets,
@@ -55,6 +64,11 @@ type FetchCapsulesFn = typeof fetchCapsules;
 type FetchCapsuleSetsFn = typeof fetchCapsuleSets;
 type FetchProjectsFn = typeof fetchProjects;
 type FetchFilesTreeFn = typeof fetchFilesTree;
+type FetchQiModelPolicyFn = typeof fetchQiModelPolicy;
+type SaveQiModelPolicyFn = typeof saveQiModelPolicy;
+type PreflightQiModelPolicyFn = typeof preflightQiModelPolicy;
+
+type QiPreflightUiStatus = "working" | "checking" | "failed" | "unavailable" | "passed";
 
 const SOURCE_KIND_OPTIONS: ReadonlyArray<{ id: ManualSourceKind; label: string; hint: string }> = [
   { id: "requirements", label: "Requirements", hint: "Paste text" },
@@ -232,6 +246,9 @@ export interface RunLauncherProps {
     | ((runId: string, recheckableSources: readonly QualityIntelligenceInlineSource[]) => void)
     | undefined;
   readonly startImpl?: typeof startQiRun;
+  readonly fetchQiModelPolicyImpl?: FetchQiModelPolicyFn;
+  readonly saveQiModelPolicyImpl?: SaveQiModelPolicyFn;
+  readonly preflightQiModelPolicyImpl?: PreflightQiModelPolicyFn;
   readonly fetchCapsulesImpl?: FetchCapsulesFn;
   readonly fetchCapsuleSetsImpl?: FetchCapsuleSetsFn;
   readonly fetchProjectsImpl?: FetchProjectsFn;
@@ -330,9 +347,59 @@ function recheckableSourcesForWindow(
   return sources.filter((source) => source.kind !== "requirements");
 }
 
+function compactTokenCount(value: number): string {
+  if (value >= 1000) return `${Math.round(value / 1000).toString()}k`;
+  return value > 0 ? value.toString() : "n/a";
+}
+
+function modelOption(
+  model: ModelCapability,
+  recommendedId: string | undefined,
+): {
+  readonly value: string;
+  readonly label: string;
+  readonly description: string;
+  readonly badge?: string;
+} {
+  const features = [
+    model.structuredOutput ? "JSON" : null,
+    model.supportsResponseFormat === true ? "response_format" : null,
+    `ctx ${compactTokenCount(model.contextWindow)}`,
+    model.latencyClass,
+    model.costClass,
+  ].filter((part): part is string => part !== null);
+  return {
+    value: model.id,
+    label: model.id,
+    description: features.join(" · "),
+    ...(model.id === recommendedId ? { badge: "Recommended" } : {}),
+  };
+}
+
+function preflightStatusFromSummary(
+  summary: QualityIntelligenceModelPreflightSummary | undefined,
+): QiPreflightUiStatus {
+  if (summary === undefined) return "working";
+  if (summary.status === "failed") return "failed";
+  if (summary.status === "unavailable") return "unavailable";
+  if (summary.status === "passed") return "passed";
+  return "working";
+}
+
+function preflightStatusLabel(status: QiPreflightUiStatus): string {
+  if (status === "checking") return "checking";
+  if (status === "failed") return "failed";
+  if (status === "unavailable") return "unavailable";
+  if (status === "passed") return "working";
+  return "working";
+}
+
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
+  fetchQiModelPolicyImpl = fetchQiModelPolicy,
+  saveQiModelPolicyImpl = saveQiModelPolicy,
+  preflightQiModelPolicyImpl = preflightQiModelPolicy,
   fetchCapsulesImpl = fetchCapsules,
   fetchCapsuleSetsImpl = fetchCapsuleSets,
   fetchProjectsImpl = fetchProjects,
@@ -358,6 +425,15 @@ export function RunLauncher({
   const [connectorLoading, setConnectorLoading] = useState(false);
   const [connectorError, setConnectorError] = useState<string | null>(null);
   const [profileId, setProfileId] = useState("regression-default");
+  const [modelPolicy, setModelPolicy] = useState<QualityIntelligenceModelPolicy>({
+    policyVersion: 1,
+  });
+  const [modelPolicyResponse, setModelPolicyResponse] =
+    useState<QualityIntelligenceModelPolicyResponse | null>(null);
+  const [modelPolicyLoading, setModelPolicyLoading] = useState(false);
+  const [modelPolicySaving, setModelPolicySaving] = useState(false);
+  const [modelPolicyError, setModelPolicyError] = useState<string | null>(null);
+  const [preflightStatus, setPreflightStatus] = useState<QiPreflightUiStatus>("working");
   const [seed, setSeed] = useState("");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<Progress>(INITIAL_PROGRESS);
@@ -404,6 +480,15 @@ export function RunLauncher({
         ? !pathReady
         : false;
   const ready = manualReady || (connectedFallbackAllowed && hasConnected);
+  const qiModels = modelPolicyResponse?.models ?? [];
+  const generationModels = qiModels.filter((model) => model.kind === "chat");
+  const judgeModels = generationModels.filter((model) => model.structuredOutput === true);
+  const recommendedGenerationId = modelPolicyResponse?.recommendedPolicy.testDesignModelId;
+  const recommendedJudgeId = modelPolicyResponse?.recommendedPolicy.judgeModelId;
+  const selectedGenerationModelId =
+    modelPolicy.testDesignModelId ?? recommendedGenerationId ?? generationModels[0]?.id ?? "";
+  const selectedJudgeModelId =
+    modelPolicy.judgeModelId ?? recommendedJudgeId ?? judgeModels[0]?.id ?? "";
   const trimmedSeed = seed.trim();
   const parsedSeed =
     trimmedSeed.length === 0
@@ -514,6 +599,58 @@ export function RunLauncher({
     setProgress((prev) => reduceProgress(prev, msg));
   }, []);
 
+  const applyModelPolicyResponse = useCallback(
+    (response: QualityIntelligenceModelPolicyResponse): void => {
+      setModelPolicyResponse(response);
+      setModelPolicy(response.policy);
+      setPreflightStatus(preflightStatusFromSummary(undefined));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPolicy(): Promise<void> {
+      setModelPolicyLoading(true);
+      setModelPolicyError(null);
+      try {
+        const response = await fetchQiModelPolicyImpl();
+        if (!cancelled) applyModelPolicyResponse(response);
+      } catch (err) {
+        if (!cancelled) setModelPolicyError(formatError(err));
+      } finally {
+        if (!cancelled) setModelPolicyLoading(false);
+      }
+    }
+    void loadPolicy();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyModelPolicyResponse, fetchQiModelPolicyImpl]);
+
+  const updateModelPolicy = useCallback(
+    async (patch: Partial<QualityIntelligenceModelPolicy>): Promise<void> => {
+      const next: QualityIntelligenceModelPolicy = {
+        ...modelPolicy,
+        ...patch,
+        policyVersion: 1,
+      };
+      setModelPolicy(next);
+      setModelPolicySaving(true);
+      setModelPolicyError(null);
+      setPreflightStatus("working");
+      try {
+        const response = await saveQiModelPolicyImpl(next);
+        applyModelPolicyResponse(response);
+      } catch (err) {
+        setModelPolicyError(formatError(err));
+      } finally {
+        setModelPolicySaving(false);
+      }
+    },
+    [applyModelPolicyResponse, modelPolicy, saveQiModelPolicyImpl],
+  );
+
   const needsConnectorList = sourceKind === "capsule" || sourceKind === "capsule-set";
 
   useEffect(() => {
@@ -619,9 +756,27 @@ export function RunLauncher({
     const request: QualityIntelligenceStartRunRequest = {
       sources,
       profileId,
+      ...(modelPolicyResponse !== null ? { modelPolicy } : {}),
       ...(parsedSeed !== undefined ? { seed: parsedSeed } : {}),
     };
     try {
+      if (modelPolicyResponse !== null) {
+        setPreflightStatus("checking");
+        const preflight = await preflightQiModelPolicyImpl(modelPolicy);
+        const status = preflightStatusFromSummary(preflight.modelRouting.preflight);
+        setPreflightStatus(status);
+        if (
+          status === "failed" ||
+          (status === "unavailable" &&
+            preflight.modelRouting.resolved.testDesignModelId !== undefined)
+        ) {
+          setError(
+            preflight.modelRouting.preflight.generation?.message ??
+              "The selected Quality Intelligence model is unavailable.",
+          );
+          return;
+        }
+      }
       await startImpl(request, controller.signal, onMessage);
       const runId = completedRunIdRef.current;
       if (runId !== null) onRunCompleted?.(runId, recheckableSourcesForWindow(sources));
@@ -635,12 +790,15 @@ export function RunLauncher({
   }, [
     ready,
     profileId,
+    modelPolicy,
+    modelPolicyResponse,
     running,
     connectedSources,
     buildManualSources,
     onMessage,
     onRunCompleted,
     parsedSeed,
+    preflightQiModelPolicyImpl,
     seedValid,
     startImpl,
   ]);
@@ -648,6 +806,71 @@ export function RunLauncher({
   const handleCancel = useCallback((): void => {
     abortRef.current?.abort();
   }, []);
+
+  function renderWorkflowBar(): ReactNode {
+    const controlsDisabled = running || modelPolicyLoading || modelPolicySaving;
+    return (
+      <div className="qi-workflow-bar" aria-label="Quality Intelligence workflow">
+        <div className="qi-workflow-stage qi-workflow-stage-static">
+          <span className="qi-workflow-stage-label">Source</span>
+          <span className="qi-workflow-stage-badge">deterministic</span>
+        </div>
+        <div className="qi-workflow-stage qi-workflow-stage-model">
+          <span className="qi-workflow-stage-label">Generate</span>
+          <KeikoSelect
+            triggerClassName="qi-model-select"
+            value={selectedGenerationModelId}
+            ariaLabel="Quality Intelligence generation model"
+            disabled={controlsDisabled || generationModels.length === 0}
+            placeholder="No chat model"
+            menuTitle="Generation model"
+            menuClassName="qi-model-menu"
+            mono
+            sections={[
+              {
+                options: generationModels.map((model) =>
+                  modelOption(model, recommendedGenerationId),
+                ),
+              },
+            ]}
+            onValueChange={(next) => {
+              void updateModelPolicy({ testDesignModelId: next });
+            }}
+          />
+        </div>
+        <div className="qi-workflow-stage qi-workflow-stage-model">
+          <span className="qi-workflow-stage-label">Judge</span>
+          <KeikoSelect
+            triggerClassName="qi-model-select"
+            value={selectedJudgeModelId}
+            ariaLabel="Quality Intelligence judge model"
+            disabled={controlsDisabled || judgeModels.length === 0}
+            placeholder="No judge model"
+            menuTitle="Judge model"
+            menuClassName="qi-model-menu"
+            mono
+            sections={[
+              {
+                options: judgeModels.map((model) => modelOption(model, recommendedJudgeId)),
+              },
+            ]}
+            onValueChange={(next) => {
+              void updateModelPolicy({ judgeModelId: next });
+            }}
+          />
+        </div>
+        {(["Coverage", "Validate", "Finalize"] as const).map((stage) => (
+          <div key={stage} className="qi-workflow-stage qi-workflow-stage-static">
+            <span className="qi-workflow-stage-label">{stage}</span>
+            <span className="qi-workflow-stage-badge">deterministic</span>
+          </div>
+        ))}
+        <span className="qi-preflight-status" data-status={preflightStatus}>
+          {preflightStatusLabel(preflightStatus)}
+        </span>
+      </div>
+    );
+  }
 
   function renderSourceInput(): ReactNode {
     if (sourceKind === "requirements") {
@@ -753,6 +976,12 @@ export function RunLauncher({
         <h2 className="qi-col-title">New run</h2>
       </header>
       <div className="qi-launcher-body">
+        {renderWorkflowBar()}
+        {modelPolicyError !== null ? (
+          <p className="lk-alert" role="alert" data-testid="qi-model-policy-error">
+            {modelPolicyError}
+          </p>
+        ) : null}
         {connectedSources.length === 1 && connectedSources[0] !== undefined ? (
           <div className="qi-connected-source" data-testid="qi-connected-source">
             <span className="qi-connected-kind">

@@ -422,6 +422,8 @@ export interface QualityIntelligenceRecordInput {
   readonly modelId?: string;
   /** Optional redaction-safe request parameter scalars (Epic #761). */
   readonly modelParameters?: Record<string, unknown>;
+  /** Optional explicit QI model policy/routing provenance. */
+  readonly modelRouting?: QualityIntelligenceEvidenceManifest["modelRouting"];
   /** Optional seed used for deterministic sampling (Epic #761). */
   readonly seedUsed?: number | null;
 }
@@ -502,6 +504,7 @@ function resolveStore(
 interface RedactedOptionalManifestFields {
   readonly coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"];
   readonly modelParameters?: QualityIntelligenceEvidenceManifest["modelParameters"];
+  readonly modelRouting?: QualityIntelligenceEvidenceManifest["modelRouting"];
 }
 
 /** Optional manifest fields that are only present when supplied (exactOptionalPropertyTypes). */
@@ -517,6 +520,7 @@ function optionalManifestFields(
     | "atomFingerprints"
     | "modelId"
     | "modelParameters"
+    | "modelRouting"
     | "seedUsed"
   >
 > {
@@ -533,6 +537,7 @@ function optionalManifestFields(
     ...(redacted.modelParameters !== undefined
       ? { modelParameters: redacted.modelParameters }
       : {}),
+    ...(redacted.modelRouting !== undefined ? { modelRouting: redacted.modelRouting } : {}),
     ...(input.seedUsed !== undefined ? { seedUsed: input.seedUsed } : {}),
   };
 }
@@ -603,6 +608,7 @@ export function recordQualityIntelligenceRun(
       // fail-closed backstop as findings/evidenceRefs (#273 audit — AC#3 audit-storage safety).
       coverageMatrix: input.coverageMatrix,
       modelParameters: input.modelParameters,
+      modelRouting: input.modelRouting,
     },
     options.redaction ?? {},
   );
@@ -617,6 +623,7 @@ export function recordQualityIntelligenceRun(
   const manifest = buildRunManifest(input, redacted, summary, integrityHashes, {
     coverageMatrix: redacted.coverageMatrix,
     modelParameters: redacted.modelParameters,
+    modelRouting: redacted.modelRouting,
   });
   return { manifest, location: store.record(manifest) };
 }

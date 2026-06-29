@@ -208,6 +208,7 @@ import {
   handleQiSourceSelect,
   handleListQiRuns,
   handleGetQiRun,
+  QI_MODEL_POLICY_ROUTE_GROUP,
   QI_HANDOFF_ROUTE_GROUP,
   QI_RUN_EXECUTION_ROUTE_GROUP,
   QI_REVIEW_ROUTE_GROUP,
@@ -837,6 +838,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // keiko-evidence UNCHANGED (ADR-0023 D8).
   { method: "GET", pattern: "/api/quality-intelligence/runs", handler: handleListQiRuns },
   { method: "GET", pattern: "/api/quality-intelligence/runs/:id", handler: handleGetQiRun },
+  // QI model orchestration policy: local persisted defaults + preflight.
+  ...QI_MODEL_POLICY_ROUTE_GROUP,
   // Issue #273/#280 (Epic #270) — Quality Intelligence run execution: start (SSE progress stream)
   // + cancel. The model-routed test-design workflow runs through the Keiko Model Gateway and
   // persists the manifest + candidate artifact through Keiko Evidence.

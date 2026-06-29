@@ -1414,7 +1414,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — generation gateway-cal
     // QI-DEG-01: the degradation must be visible on the SUMMARY (which the BFF surfaces on the wire
     // `done` frame as degraded+reasonSummary), not buried only in the offline manifest. Without this a
     // provider failure looks like a fully successful model-backed run.
-    expect(summary.reasonSummary).toBe("qi-run-error");
+    expect(summary.reasonSummary).toBe("qi-gateway-provider-http");
     expect(summary.modelGatewayCallCount).toBeGreaterThanOrEqual(1);
     expect(recorded).toHaveLength(2);
     for (const candidate of recorded) {
@@ -1425,7 +1425,9 @@ describe("runQualityIntelligenceModelRoutedTestDesign — generation gateway-cal
     expect(manifest?.status).toBe("succeeded");
     expect(manifest?.totals.candidates).toBe(2);
     expect(manifest?.modelGatewayCallCount).toBeGreaterThanOrEqual(1);
-    expect(manifest?.modelParameters).toEqual({ generationFallbackReason: "qi-run-error" });
+    expect(manifest?.modelParameters).toEqual({
+      generationFallbackReason: "qi-gateway-provider-http",
+    });
     // The raw provider message must never leak into the persisted/summary reason.
     expect(JSON.stringify(manifest)).not.toContain("503");
   });
