@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const PROJECT_ROOT = process.cwd();
-const LONG_FILE = "vitest.coverage.packages.config.ts";
+const LONG_FILE = ".dependency-cruiser.cjs";
 const SHORT_FILE = "NOTICE";
 const ACTIVE_FILE = LONG_FILE;
 
