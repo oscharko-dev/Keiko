@@ -1249,12 +1249,14 @@ export function EditorWidget({
     );
   };
 
-  const singlePane = editorLayoutPaneIds(layout).length === 1;
+  const paneCount = editorLayoutPaneIds(layout).length;
+  const singlePane = paneCount === 1;
 
   return (
     <div
       className={`editor-workspace${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}`}
       data-tab-dragging={draggedTab === null ? "false" : "true"}
+      data-pane-count={paneCount}
       ref={workspaceRef}
       style={{ "--ed-sidebar-width": `${String(layout.sidebarWidth)}px` } as CSSProperties}
     >

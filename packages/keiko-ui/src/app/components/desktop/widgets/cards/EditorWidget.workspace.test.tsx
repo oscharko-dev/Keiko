@@ -231,7 +231,9 @@ describe("EditorWidget workspace session", () => {
 
   it("does not split a single open file into a duplicate editor pane", () => {
     const onWorkspaceChange = vi.fn();
-    render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
+    const { container } = render(
+      <EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />,
+    );
 
     const splitRight = screen.getByRole("button", { name: "Split src/a.ts right" });
     expect(splitRight).not.toHaveAttribute("data-tip");
@@ -246,7 +248,7 @@ describe("EditorWidget workspace session", () => {
 
   it("splits open files into two equal side-by-side editor panes", () => {
     const onWorkspaceChange = vi.fn();
-    render(
+    const { container } = render(
       <EditorWidget
         root="/repo"
         file="src/a.ts"
@@ -270,6 +272,7 @@ describe("EditorWidget workspace session", () => {
       "src/b.ts|.editorconfig",
     ]);
     expect(screen.getByRole("button", { name: "Resize editor split" })).toBeInTheDocument();
+    expect(container.querySelector(".editor-workspace")).toHaveAttribute("data-pane-count", "2");
     const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
     expect(lastPatch).toEqual(
       expect.objectContaining({

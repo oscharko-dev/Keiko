@@ -1931,9 +1931,60 @@ describe("Issue #1205 — editor tab truncation", () => {
     expect(motionBlock).toContain(".ed-tab-drag-ghost");
     expect(motionBlock).toContain("animation: ed-tab-drag-lift 120ms ease-out both");
   });
+
+  it("gives four-pane minimum editors enough horizontal room for visible panes", () => {
+    expect(cssBlock(".editor-workspace {")).toContain("container-type: inline-size");
+
+    const editorSectionStart = css.indexOf("/* ---------- WIDGET: EDITOR ---------- */");
+    expect(editorSectionStart).toBeGreaterThan(-1);
+    const denseSplitBlock = cssRuleFrom(css, "@container (max-width: 720px)", {
+      fromIndex: editorSectionStart,
+    });
+    expect(denseSplitBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-sidebar',
+    );
+    expect(denseSplitBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-sidebar-resizer',
+    );
+    expect(denseSplitBlock).toContain("display: none");
+    expect(denseSplitBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-main',
+    );
+    expect(denseSplitBlock).toContain("grid-column: 1 / -1");
+
+    const denseChromeBlock = cssRuleFrom(css, "@container (max-width: 820px)", {
+      fromIndex: editorSectionStart,
+    });
+    expect(denseChromeBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-tabs',
+    );
+    expect(denseChromeBlock).toContain("flex-wrap: nowrap");
+    expect(denseChromeBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-toolbar-actions',
+    );
+    expect(denseChromeBlock).toContain("padding: 4px 6px");
+    expect(denseChromeBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-statusbar',
+    );
+    expect(denseChromeBlock).toContain("padding: 2px 6px");
+  });
 });
 
 describe("Issue #1424 — editor Monaco hover chrome", () => {
+  it("keeps Monaco diagnostic ruler marks inside the scrollbar-width rail", () => {
+    const verticalScrollbarBlock = cssBlock(".ed-host .monaco-editor .scrollbar.vertical {");
+    expect(verticalScrollbarBlock).toContain("background: var(--ed-bg)");
+
+    const verticalSliderBlock = cssBlock(".monaco-editor .scrollbar.vertical .slider {");
+    expect(verticalSliderBlock).toContain("min-width: 8px !important");
+
+    const overviewRulerBlock = cssBlock(
+      ".ed-host .monaco-editor canvas.decorationsOverviewRuler {",
+    );
+    expect(overviewRulerBlock).toContain("z-index: 12");
+    expect(overviewRulerBlock).toContain("pointer-events: none");
+  });
+
   it("skins diagnostic hovers with Keiko popover tokens inside an editor container query", () => {
     const hostBlock = cssBlock(".ed-host {");
     expect(hostBlock).toContain("container-type: inline-size");

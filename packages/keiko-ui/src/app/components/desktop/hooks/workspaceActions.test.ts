@@ -484,6 +484,24 @@ describe("layout and snap actions", () => {
     expect("prev" in store.value[0]!).toBe(false);
   });
 
+  it("does not commit a second tile layout when geometry is already settled", () => {
+    const store = {
+      value: [win("editor", {}, "editor-1")] as AppWindow[],
+    };
+    const actions = makeLayoutActions({
+      setWins: (update) => applyState(store, update),
+      worldVP: () => layoutViewport,
+    });
+
+    actions.tileAll();
+    const first = store.value;
+
+    actions.tileAll();
+
+    expect(store.value).toBe(first);
+    expect(store.value[0]).toBe(first[0]);
+  });
+
   it("splits the two frontmost visible windows and leaves minimized windows untouched", () => {
     const minimized = { ...win("terminal", {}, "terminal-1"), minimized: true, z: 20 };
     const store = {
@@ -514,6 +532,44 @@ describe("layout and snap actions", () => {
       h: layoutViewport.h,
     });
     expect(store.value.find((w) => w.id === "terminal-1")).toBe(minimized);
+  });
+
+  it("leaves a single visible window alone when split front has no second window", () => {
+    const editor = win("editor", {}, "editor-1");
+    const store = {
+      value: [editor] as AppWindow[],
+    };
+    const actions = makeLayoutActions({
+      setWins: (update) => applyState(store, update),
+      worldVP: () => layoutViewport,
+    });
+
+    actions.splitFront();
+
+    expect(store.value).toEqual([editor]);
+    expect(store.value[0]).toBe(editor);
+  });
+
+  it("does not commit a second split layout when geometry is already settled", () => {
+    const store = {
+      value: [
+        { ...win("files", {}, "files-1"), z: 5 },
+        { ...win("editor", {}, "editor-1"), z: 10 },
+      ] as AppWindow[],
+    };
+    const actions = makeLayoutActions({
+      setWins: (update) => applyState(store, update),
+      worldVP: () => layoutViewport,
+    });
+
+    actions.splitFront();
+    const first = store.value;
+
+    actions.splitFront();
+
+    expect(store.value).toBe(first);
+    expect(store.value[0]).toBe(first[0]);
+    expect(store.value[1]).toBe(first[1]);
   });
 
   it("cascades floating windows inside the current viewport with increasing z-order", () => {
@@ -1257,6 +1313,69 @@ describe("linkedImageSources — standalone image sources", () => {
   });
 });
 
+describe("makeMutations.update", () => {
+  it("treats equal serializable cfg patches as no-ops even when arrays are re-created", () => {
+    const editor = win(
+      "editor",
+      {
+        root: "/repo",
+        file: "src/a.ts",
+        openFiles: ["src/a.ts", "src/b.ts"],
+        layoutJson: editorLayoutJson("/repo", "src/a.ts", ["src/a.ts", "src/b.ts"]),
+      },
+      "editor-1",
+    );
+    const store = { value: [editor] as AppWindow[] };
+    const { update } = makeMutations({
+      setWins: (next) => applyState(store, next),
+      zc: { current: 1 },
+      worldVP: () => layoutViewport,
+    });
+    const before = store.value;
+
+    update("editor-1", {
+      cfg: {
+        root: "/repo",
+        file: "src/a.ts",
+        openFiles: ["src/a.ts", "src/b.ts"],
+        layoutJson: editorLayoutJson("/repo", "src/a.ts", ["src/a.ts", "src/b.ts"]),
+      },
+    });
+
+    expect(store.value).toBe(before);
+    expect(store.value[0]).toBe(editor);
+  });
+
+  it("still applies changed nested cfg values", () => {
+    const editor = win(
+      "editor",
+      {
+        root: "/repo",
+        file: "src/a.ts",
+        openFiles: ["src/a.ts"],
+        layoutJson: editorLayoutJson("/repo", "src/a.ts", ["src/a.ts"]),
+      },
+      "editor-1",
+    );
+    const store = { value: [editor] as AppWindow[] };
+    const { update } = makeMutations({
+      setWins: (next) => applyState(store, next),
+      zc: { current: 1 },
+      worldVP: () => layoutViewport,
+    });
+
+    update("editor-1", {
+      cfg: {
+        ...editor.cfg,
+        openFiles: ["src/a.ts", "src/b.ts"],
+      },
+    });
+
+    expect(store.value[0]).not.toBe(editor);
+    expect(store.value[0]?.cfg["openFiles"]).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+});
+
 describe("makeMutations.add — QI run-card dedup (#270)", () => {
   function harness(): {
     add: ReturnType<typeof makeMutations>["add"];
@@ -1331,7 +1450,10 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
 });
 
 describe("makeMutations.openEditorFile", () => {
-  function harness(initial: readonly AppWindow[] = [], vp: typeof layoutViewport | null = layoutViewport): {
+  function harness(
+    initial: readonly AppWindow[] = [],
+    vp: typeof layoutViewport | null = layoutViewport,
+  ): {
     readonly openEditorFile: ReturnType<typeof makeMutations>["openEditorFile"];
     readonly wins: () => readonly AppWindow[];
   } {
@@ -1422,7 +1544,8 @@ describe("makeMutations.openEditorFile", () => {
       root: "/repo",
       file: String(editor.cfg["file"] ?? ""),
       openFiles: Array.isArray(openFiles) ? openFiles : [],
-      layoutJson: typeof editor.cfg["layoutJson"] === "string" ? editor.cfg["layoutJson"] : undefined,
+      layoutJson:
+        typeof editor.cfg["layoutJson"] === "string" ? editor.cfg["layoutJson"] : undefined,
       defaultSidebarWidth: 260,
       minSidebarWidth: 180,
       maxSidebarWidth: 440,

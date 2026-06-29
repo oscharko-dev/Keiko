@@ -1742,6 +1742,39 @@ describe("EditorWidget — agent bridge", () => {
     expect(source.close).toHaveBeenCalled();
   });
 
+  it("keeps the agent event stream stable when action callback props change", async () => {
+    const firstSelect = vi.fn();
+    const secondSelect = vi.fn();
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    const props = {
+      windowId: "agent-window",
+      root: "/repo",
+      file: "src/app.ts",
+      openFiles: ["src/app.ts", "README.md"],
+    } as const;
+    const view = render(<EditorRuntimeWidget {...props} onSelectOpenFile={firstSelect} />);
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
+      expect(FakeSource.instances).toHaveLength(1);
+    });
+    const source = FakeSource.instances[0] as FakeEventSource;
+    const sessionId = String(
+      vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
+    );
+
+    view.rerender(<EditorRuntimeWidget {...props} onSelectOpenFile={secondSelect} />);
+
+    expect(FakeSource.instances).toHaveLength(1);
+    expect(source.close).not.toHaveBeenCalled();
+    act(() => {
+      source.emitAction(agentAction(sessionId, "focusTab", { target: { file: "README.md" } }));
+    });
+    expect(firstSelect).not.toHaveBeenCalled();
+    expect(secondSelect).toHaveBeenCalledWith("README.md");
+  });
+
   it("reports agent format actions as unavailable for unsupported languages", async () => {
     const FakeSource = installFakeEventSource();
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(

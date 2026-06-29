@@ -132,6 +132,26 @@ function revealCfg(
   };
 }
 
+function sameWorkspaceValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => sameWorkspaceValue(value, right[index]));
+  }
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  return leftKeys.every((key) =>
+    sameWorkspaceValue(
+      (left as Readonly<Record<string, unknown>>)[key],
+      (right as Readonly<Record<string, unknown>>)[key],
+    ),
+  );
+}
+
 function makeUpdate(setWins: MutateArgs["setWins"]): WorkspaceApi["update"] {
   return (id, patch) =>
     setWins((ws) => {
@@ -140,7 +160,7 @@ function makeUpdate(setWins: MutateArgs["setWins"]): WorkspaceApi["update"] {
       const next = ws.map((w) => {
         if (w.id !== id) return w;
         for (const [key, value] of Object.entries(patch)) {
-          if (w[key as keyof AppWindow] !== value) {
+          if (!sameWorkspaceValue(w[key as keyof AppWindow], value)) {
             changed = true;
             return { ...w, ...patch };
           }
@@ -451,6 +471,17 @@ function stripPrev(w: AppWindow): Omit<AppWindow, "prev"> {
   return rest;
 }
 
+function hasPrev(w: AppWindow): boolean {
+  return "prev" in w;
+}
+
+function hasLayoutGeometry(
+  w: AppWindow,
+  next: Pick<AppWindow, "x" | "y" | "w" | "h">,
+): boolean {
+  return w.x === next.x && w.y === next.y && w.w === next.w && w.h === next.h;
+}
+
 function makeTileAll({ setWins, worldVP }: LayoutArgs): WorkspaceApi["tileAll"] {
   return () =>
     setWins((ws) => {
@@ -463,19 +494,33 @@ function makeTileAll({ setWins, worldVP }: LayoutArgs): WorkspaceApi["tileAll"] 
       const g = 12;
       const cw = (vp.w - g * (cols + 1)) / cols;
       const ch = (vp.h - g * (rows + 1)) / rows;
-      return ws.map((w, i) => {
+      let changed = false;
+      const next = ws.map((w, i) => {
         const c = i % cols;
         const rr = Math.floor(i / cols);
-        return {
-          ...stripPrev(w),
-          max: false,
-          minimized: false,
+        const geometry = {
           x: vp.x + g + c * (cw + g),
           y: vp.y + g + rr * (ch + g),
           w: cw,
           h: ch,
         };
+        if (
+          w.max === false &&
+          w.minimized === false &&
+          !hasPrev(w) &&
+          hasLayoutGeometry(w, geometry)
+        ) {
+          return w;
+        }
+        changed = true;
+        return {
+          ...stripPrev(w),
+          max: false,
+          minimized: false,
+          ...geometry,
+        };
       });
+      return changed ? next : ws;
     });
 }
 
@@ -490,32 +535,59 @@ function makeSplitFront({ setWins, worldVP }: LayoutArgs): WorkspaceApi["splitFr
         .sort((a, b) => b.z - a.z)
         .slice(0, 2)
         .map((s) => s.id);
-      return ws.map((w) => {
+      if (ids.length < 2) return ws;
+      let changed = false;
+      const next = ws.map((w) => {
         const i = ids.indexOf(w.id);
         if (i === 0) {
-          return {
-            ...stripPrev(w),
-            max: false,
-            minimized: false,
+          const geometry = {
             x: vp.x,
             y: vp.y,
             w: vp.w / 2,
             h: vp.h,
           };
-        }
-        if (i === 1) {
+          if (
+            w.max === false &&
+            w.minimized === false &&
+            !hasPrev(w) &&
+            hasLayoutGeometry(w, geometry)
+          ) {
+            return w;
+          }
+          changed = true;
           return {
             ...stripPrev(w),
             max: false,
             minimized: false,
+            ...geometry,
+          };
+        }
+        if (i === 1) {
+          const geometry = {
             x: vp.x + vp.w / 2,
             y: vp.y,
             w: vp.w / 2,
             h: vp.h,
           };
+          if (
+            w.max === false &&
+            w.minimized === false &&
+            !hasPrev(w) &&
+            hasLayoutGeometry(w, geometry)
+          ) {
+            return w;
+          }
+          changed = true;
+          return {
+            ...stripPrev(w),
+            max: false,
+            minimized: false,
+            ...geometry,
+          };
         }
         return w;
       });
+      return changed ? next : ws;
     });
 }
 

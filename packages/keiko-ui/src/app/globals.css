@@ -6518,6 +6518,7 @@ select.dlg-input {
 .editor-workspace {
   display: grid;
   grid-template-columns: var(--ed-sidebar-width, 260px) 6px minmax(0, 1fr);
+  container-type: inline-size;
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -7300,6 +7301,68 @@ select.dlg-input {
   white-space: nowrap;
   overflow: hidden;
 }
+@container (max-width: 820px) {
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-tabs {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 2px;
+    padding: 3px 5px 0;
+  }
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-tablist {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 1px;
+  }
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-tab {
+    max-width: 112px;
+    font-size: 10.5px;
+  }
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-tab-hit {
+    gap: 4px;
+    padding: 4px 5px;
+  }
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-tab-close {
+    flex-basis: 18px;
+    width: 18px;
+    height: 18px;
+    margin-right: 2px;
+  }
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-toolbar-actions {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 2px;
+  }
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-pane-actions {
+    gap: 1px;
+    margin-right: 2px;
+  }
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-icon-action {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+  }
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-save,
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-reload {
+    padding: 4px 6px;
+    margin-right: 0;
+    border-radius: 6px;
+    font-size: 10.5px;
+  }
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-statusbar {
+    gap: 6px;
+    padding: 2px 6px;
+    font-size: 10px;
+  }
+}
+@container (max-width: 720px) {
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-sidebar,
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-sidebar-resizer {
+    display: none;
+  }
+  .editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-main {
+    grid-column: 1 / -1;
+  }
+}
 .ed-sb-field {
   flex: 0 0 auto;
   min-width: 0;
@@ -7498,6 +7561,10 @@ select.dlg-input {
   font-size: var(--text-caption);
   font-weight: 400;
   line-height: var(--leading-tight);
+}
+.ed-host .monaco-editor canvas.decorationsOverviewRuler {
+  z-index: 12;
+  pointer-events: none;
 }
 .ed-host .monaco-editor .monaco-resizable-hover,
 .ed-host .monaco-editor .monaco-hover {
