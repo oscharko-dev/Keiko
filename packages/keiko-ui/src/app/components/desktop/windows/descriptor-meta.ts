@@ -242,6 +242,15 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "evidence-reference",
   },
+  // Epic #1631, Issue #1634 — passive PDF preview window. It consumes only the server-issued opaque
+  // preview session over the local BFF. Issue #1637 allows browser-local restoration of a safe shell:
+  // only scalar UI intent survives reload, never session handles, lineage, paths, bytes, or rendered pages.
+  pdfCitationPreview: {
+    lifecycle: ["idle", "connecting", "connected", "degraded", "blocked", "error"],
+    trustBoundary: ["ui", "network"],
+    authority: "user-confirm",
+    persistence: "durable.ui",
+  },
   // Epic #470, Issue #475 — Governed local Git flow. Drives the governed mutation kernel (preflight +
   // policy + approval + execute) over the local repository and records evidence; every mutation is a
   // user-confirmed action. Trust spans the git tool boundary and the evidence ledger.

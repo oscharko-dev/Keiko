@@ -1,0 +1,56 @@
+{
+  "issue": 1635,
+  "verdict": "PASS",
+  "cssSha256": "d347b966a36c684522f3c00ee8f59b782c2363d599cf05c25dcf4041e46280f9",
+  "componentFamilies": [
+    {
+      "family": "AI response",
+      "selectors": [
+        ".citation-inline-marker",
+        ".citation-inline-marker--recoverable",
+        ".citation-inline-marker--blocked"
+      ],
+      "states": [
+        "default",
+        "hover",
+        "focus",
+        "recoverable",
+        "blocked"
+      ],
+      "tokens": [
+        "--accent-bright",
+        "--accent",
+        "--focus-ring",
+        "--text-secondary"
+      ],
+      "result": "PASS"
+    },
+    {
+      "family": "Local Knowledge citation chip",
+      "selectors": [
+        ".grounded-citation-action",
+        ".grounded-citation-action--recoverable",
+        ".grounded-citation-action--blocked"
+      ],
+      "states": [
+        "default",
+        "hover",
+        "focus",
+        "disabled",
+        "recoverable",
+        "blocked"
+      ],
+      "tokens": [
+        "--ai-source-surface",
+        "--ai-source-border",
+        "--border-strong",
+        "--surface-secondary",
+        "--focus-ring",
+        "--feedback-info",
+        "--feedback-danger"
+      ],
+      "result": "PASS"
+    }
+  ],
+  "summary": "Citation entry points reuse existing grounded-answer and SafeMarkdown patterns, consume semantic/component tokens, and encode recoverable/blocked states through explicit text plus line style rather than color alone."
+}

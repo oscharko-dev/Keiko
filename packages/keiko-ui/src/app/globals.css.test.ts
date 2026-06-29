@@ -2460,6 +2460,20 @@ describe("Issue #1295 — high-traffic product-surface token migration", () => {
     expect(peakCard).toContain("opacity: 1");
   });
 
+  it("keeps the chat log one-column unless the question map is rendered", () => {
+    const shell = cssBlock("\n.chatw-log-shell {");
+    expect(shell).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(shell).not.toContain("52px minmax(0, 1fr)");
+
+    const mappedShell = cssBlock("\n.chatw-log-shell-with-map {");
+    expect(mappedShell).toContain("grid-template-columns: 52px minmax(0, 1fr)");
+
+    expect(css).toContain("@container (max-width: 720px) {\n  .chatw-log-shell-with-map");
+    expect(css).toContain("@container (max-width: 480px) {\n  .chatw-log-shell-with-map");
+    expect(css).not.toContain("@container (max-width: 720px) {\n  .chatw-log-shell {\n");
+    expect(css).not.toContain("@container (max-width: 480px) {\n  .chatw-log-shell {\n");
+  });
+
   it("routes Quality-Intelligence candidate cards through --surface-primary / --border-default", () => {
     const block = cssBlock("\n.qi-cand-card {");
     expect(block).toContain("background: var(--surface-primary)");

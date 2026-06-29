@@ -1893,6 +1893,48 @@ describe("ChatWindow message copy", () => {
     scrollSpy.mockRestore();
   });
 
+  it("keeps a single-question chat in the full-width log column", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m1",
+            chatId: "chat-1",
+            role: "user",
+            content: "Guten Morgen",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Guten Morgen! Wie kann ich dir helfen?",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    const shell = document.querySelector<HTMLElement>(".chatw-log-shell");
+    if (shell === null) throw new Error("chat log shell missing");
+
+    expect(screen.queryByRole("navigation", { name: "Conversation questions" })).toBeNull();
+    expect(shell).not.toHaveClass("chatw-log-shell-with-map");
+    expect(shell.firstElementChild).toHaveClass("chatw-log");
+    expect(screen.getByText("Guten Morgen! Wie kann ich dir helfen?")).toBeInTheDocument();
+  });
+
   it("renders assistant identity as the Keiko logo without the visible wordmark", () => {
     renderWindow(
       makeSession({

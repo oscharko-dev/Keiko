@@ -124,6 +124,10 @@ export * from "./retrieval/index.js";
 export * from "./evaluations/index.js";
 export * from "./conversation/index.js";
 export { readCitationExcerpt } from "./conversation/citation-excerpts.js";
+export {
+  lookupCitationPreviewSnapshot,
+  type CitationPreviewSnapshotLookup,
+} from "./citation-preview-snapshot.js";
 export * from "./privacy/index.js";
 // Slice 4 (Issue #189) — non-destructive capsule-set composition exposed to the BFF.
 export {

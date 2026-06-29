@@ -4,6 +4,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { GroundedAnswer } from "./GroundedAnswer";
+import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import type {
   GroundedAnswer as GroundedAnswerType,
   GroundedAnswerContextPackSummary,
@@ -110,6 +111,51 @@ function answer(overrides: Partial<GroundedAnswerType> = {}): GroundedAnswerType
     contextPack: contextPack(),
   };
   return { ...base, ...overrides } as GroundedAnswerType;
+}
+
+function localKnowledgeAnswer(
+  citations: readonly LocalKnowledgeEvidenceCitation[] = [knowledgeCitation()],
+): GroundedAnswerType {
+  return {
+    groundingKind: "local-knowledge",
+    userMessageId: "lk-u",
+    assistantMessageId: "lk-a",
+    content: "Answer [1].",
+    citations,
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 5,
+    noEvidence: false,
+    contextPack: {
+      kind: "local-knowledge",
+      scopeKind: "capsule",
+      scopeId: "lk-1",
+      scopeLabel: "Caps",
+      capsuleCount: 1,
+      sourceCount: 1,
+      citationCount: citations.length,
+      referenceBudget: 10,
+      referencesUsed: citations.length,
+    },
+  };
+}
+
+function citationPreviewController(
+  state: "available" | "recoverable" | "blocked",
+  citationValue: LocalKnowledgeEvidenceCitation,
+): CitationPreviewController {
+  return {
+    forCitation: vi.fn((citationValueCandidate) =>
+      citationValueCandidate.stableId === citationValue.stableId
+        ? { citation: citationValueCandidate, state }
+        : undefined,
+    ),
+    forMarker: vi.fn(() => undefined),
+    isOpening: vi.fn(() => false),
+    openCitation: vi
+      .fn<CitationPreviewController["openCitation"]>()
+      .mockResolvedValue("pdf-window-1"),
+  };
 }
 
 function openEvidenceDisclosure(container: HTMLElement): HTMLDetailsElement {
@@ -791,6 +837,60 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText(/\[2\] strong\.md/)).toBeInTheDocument();
     expect(screen.getByText(/\[3\] unique\.md/)).toBeInTheDocument();
     expect(screen.queryByText(/\[1\] weak\.md/)).not.toBeInTheDocument();
+  });
+
+  it("opens an eligible PDF citation chip through the shared verified preview controller", () => {
+    const pdfCitation = knowledgeCitation({ label: "policy.pdf" });
+    const citationPreview = citationPreviewController("available", pdfCitation);
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([pdfCitation])}
+        busy={false}
+        citationPreview={citationPreview}
+      />,
+    );
+
+    openEvidenceDisclosure(container);
+    fireEvent.click(screen.getByRole("button", { name: "[1] policy.pdf · Open PDF" }));
+
+    expect(citationPreview.openCitation).toHaveBeenCalledWith(pdfCitation, "citation-chip");
+  });
+
+  it("opens a recoverable PDF citation chip through active authorization", () => {
+    const pdfCitation = knowledgeCitation({ label: "policy.pdf" });
+    const citationPreview = citationPreviewController("recoverable", pdfCitation);
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([pdfCitation])}
+        busy={false}
+        citationPreview={citationPreview}
+      />,
+    );
+
+    openEvidenceDisclosure(container);
+    fireEvent.click(screen.getByRole("button", { name: "[1] policy.pdf · Recover PDF" }));
+
+    expect(citationPreview.openCitation).toHaveBeenCalledWith(pdfCitation, "citation-chip");
+  });
+
+  it("renders blocked PDF citation chips as non-activatable safe affordances", () => {
+    const pdfCitation = knowledgeCitation({ label: "policy.pdf" });
+    const citationPreview = citationPreviewController("blocked", pdfCitation);
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([pdfCitation])}
+        busy={false}
+        citationPreview={citationPreview}
+      />,
+    );
+
+    openEvidenceDisclosure(container);
+    const chip = screen.getByRole("button", { name: "[1] policy.pdf · PDF unavailable" });
+    expect(chip).toHaveAttribute("aria-disabled", "true");
+
+    fireEvent.click(chip);
+
+    expect(citationPreview.openCitation).not.toHaveBeenCalled();
   });
 
   it("never renders answer.content into the panel — neither as text nor as markup", () => {

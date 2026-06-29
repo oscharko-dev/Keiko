@@ -65,6 +65,7 @@ const ALLOWED_CHAT_MESSAGES_COLUMNS = new Set([
   "short_result",
   "task_type",
   "grounded_answer_json",
+  "grounded_preview_citations_json",
 ]);
 
 // ── Forbidden substring patterns (case-insensitive) ─────────────────────────

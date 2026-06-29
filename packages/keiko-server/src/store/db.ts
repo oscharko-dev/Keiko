@@ -39,6 +39,7 @@ import {
 import {
   findMessageById as sqlFindMessageById,
   attachGroundedAnswer as sqlAttachGroundedAnswer,
+  findGroundedPreviewCitations as sqlFindGroundedPreviewCitations,
   insertMessage as sqlInsertMessage,
   listMessages as sqlListMessages,
   listMessagesLimited as sqlListMessagesLimited,
@@ -196,8 +197,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       createMessageBatch(db, options, messages),
     updateMessage: (id: string, patch: UpdateChatMessagePatch): ChatMessage =>
       sqlUpdateMessage(db, id, patch, options.redactString),
-    attachGroundedAnswer: (id: string, answer): ChatMessage =>
-      sqlAttachGroundedAnswer(db, id, answer, options.redactString),
+    attachGroundedAnswer: (id: string, answer, previewCitations): ChatMessage =>
+      sqlAttachGroundedAnswer(db, id, answer, previewCitations, options.redactString),
+    findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
     close: (): void => {
       db.close();
     },
