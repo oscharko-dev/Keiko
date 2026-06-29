@@ -3131,6 +3131,7 @@ export function ChatWindow({
         time: timeLabel(message.timestamp),
       }));
   }, [visible]);
+  const showQuestionMap = questionMapItems.length >= 2;
   const registerQuestionAnchor = useCallback(
     (messageId: string, node: HTMLDivElement | null): void => {
       if (node === null) {
@@ -3209,8 +3210,10 @@ export function ChatWindow({
             <NoChatState />
           )
         ) : (
-          <div className="chatw-log-shell">
-            <ConversationQuestionMap items={questionMapItems} onJump={scrollToQuestion} />
+          <div className={`chatw-log-shell${showQuestionMap ? " chatw-log-shell-with-map" : ""}`}>
+            {showQuestionMap ? (
+              <ConversationQuestionMap items={questionMapItems} onJump={scrollToQuestion} />
+            ) : null}
             <div className="chatw-log">
               <ConversationThread
                 messages={visible}
