@@ -416,7 +416,7 @@ describe("local-knowledge preview handlers", () => {
         chatId: fixture.chatId,
         assistantMessageId: fixture.assistantMessageId,
         marker: "[1]",
-        stableId: fixture.previewCitation.stableId,
+        stableId: "answer-stable-drifted",
       }),
       deps(),
     );
@@ -430,7 +430,7 @@ describe("local-knowledge preview handlers", () => {
     expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-authorized"]);
   });
 
-  it("rejects a stable-id mismatch and records a blocked audit event", async () => {
+  it("authorizes a unique marker when the UI citation id drifted", async () => {
     const fixture = await seedPreviewFixture();
 
     const result = await handleAuthorizePdfCitationPreview(
@@ -445,11 +445,38 @@ describe("local-knowledge preview handlers", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
-      outcome: "rejected",
-      state: "blocked",
-      reason: "stable-id-mismatch",
+      outcome: "authorized",
+      display: { documentLabel: "policy.pdf", pageNumber: 7, anchorQuality: "approximate" },
     });
-    expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-blocked"]);
+    expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-authorized"]);
+  });
+
+  it("deduplicates repeated identical preview citations before authorizing", async () => {
+    const fixture = await seedPreviewFixture();
+    const message = store.findMessageById(fixture.assistantMessageId);
+    if (message?.groundedAnswer === undefined) {
+      throw new Error("expected grounded answer");
+    }
+    store.attachGroundedAnswer(fixture.assistantMessageId, message.groundedAnswer, [
+      fixture.previewCitation,
+      fixture.previewCitation,
+    ]);
+
+    const result = await handleAuthorizePdfCitationPreview(
+      ctx("/api/local-knowledge/citation-preview/authorize", {
+        chatId: fixture.chatId,
+        assistantMessageId: fixture.assistantMessageId,
+        marker: "[1]",
+        stableId: fixture.previewCitation.stableId,
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      outcome: "authorized",
+      display: { documentLabel: "policy.pdf", pageNumber: 7, anchorQuality: "approximate" },
+    });
   });
 
   it("preserves duplicate markers as distinct stored citations and rejects ambiguous authorization", async () => {

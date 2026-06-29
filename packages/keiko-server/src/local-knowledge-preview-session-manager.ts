@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { UiHandlerDeps } from "./deps.js";
 import type { PdfCitationPreviewAuthority } from "./local-knowledge-preview-service.js";
+import type { PdfCitationPreviewSource } from "./local-knowledge-preview-delivery.js";
 
 const DEFAULT_TTL_MS = 5 * 60_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
@@ -19,6 +20,7 @@ export interface PdfCitationPreviewSession {
   readonly documentKey: string;
   readonly expiresAt: string;
   readonly handle: string;
+  readonly source: PdfCitationPreviewSource;
   readonly state: "closed" | "expired" | "open";
 }
 
@@ -37,7 +39,10 @@ export interface PdfCitationPreviewSessionManager {
   closeSession(handle: string): boolean;
   dispose(): void;
   lookupSession(handle: string): PdfCitationPreviewSessionLookup;
-  openSession(authority: PdfCitationPreviewAuthority): OpenPdfCitationPreviewSessionResult;
+  openSession(
+    authority: PdfCitationPreviewAuthority,
+    source: PdfCitationPreviewSource,
+  ): OpenPdfCitationPreviewSessionResult;
   sweep(): void;
 }
 
@@ -47,6 +52,7 @@ interface MutableSessionRecord {
   expiresAtMs: number;
   handle: string;
   settledAtMs?: number;
+  source: PdfCitationPreviewSource;
   state: "closed" | "expired" | "open";
 }
 
@@ -81,6 +87,7 @@ function toSession(record: MutableSessionRecord): PdfCitationPreviewSession {
     documentKey: record.documentKey,
     expiresAt: new Date(record.expiresAtMs).toISOString(),
     handle: record.handle,
+    source: record.source,
     state: record.state,
   };
 }
@@ -161,6 +168,7 @@ function closeSessionRecord(state: ManagerState, handle: string): boolean {
 function openSessionRecord(
   state: ManagerState,
   authority: PdfCitationPreviewAuthority,
+  source: PdfCitationPreviewSource,
 ): OpenPdfCitationPreviewSessionResult {
   sweepRecords(state);
   const existing = lookupOpenRecord(state, authority);
@@ -168,6 +176,7 @@ function openSessionRecord(
   if (existing !== undefined) {
     existing.authority = authority;
     existing.expiresAtMs = expiresAtMs;
+    existing.source = source;
     return { reused: true, session: toSession(existing) };
   }
   const record: MutableSessionRecord = {
@@ -175,6 +184,7 @@ function openSessionRecord(
     documentKey: documentKey(authority),
     expiresAtMs,
     handle: randomUUID(),
+    source,
     state: "open",
   };
   state.byHandle.set(record.handle, record);
@@ -205,7 +215,8 @@ export function createPdfCitationPreviewSessionManager(
       state.byHandle.clear();
     },
     lookupSession: (handle): PdfCitationPreviewSessionLookup => lookupSessionResult(state, handle),
-    openSession: (authority): OpenPdfCitationPreviewSessionResult => openSessionRecord(state, authority),
+    openSession: (authority, source): OpenPdfCitationPreviewSessionResult =>
+      openSessionRecord(state, authority, source),
     sweep(): void {
       sweepRecords(state);
     },

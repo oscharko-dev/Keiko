@@ -185,6 +185,7 @@ async function seedPreviewFixture(options?: {
   readonly bytes?: Buffer;
   readonly mediaType?: string;
   readonly contentHash?: string;
+  readonly documentSizeBytes?: number;
 }): Promise<{
   readonly chatId: string;
   readonly assistantMessageId: string;
@@ -229,7 +230,7 @@ async function seedPreviewFixture(options?: {
       documentPath: relativePath,
       mediaType: options?.mediaType ?? "application/pdf",
       contentHash,
-      sizeBytes: fileBytes.byteLength,
+      sizeBytes: options?.documentSizeBytes ?? fileBytes.byteLength,
       capsuleId: String(seeded.capsuleId),
       documentId: String(seeded.documentId),
     });
@@ -650,13 +651,10 @@ describe("local-knowledge preview session handlers", () => {
     });
   });
 
-  it("rejects oversized PDFs before creating a session", async () => {
-    const tooLarge = Buffer.alloc(MAX_PDF_PREVIEW_BYTES + 1, 0x20);
-    tooLarge[0] = 0x25;
-    tooLarge[1] = 0x50;
-    tooLarge[2] = 0x44;
-    tooLarge[3] = 0x46;
-    const fixture = await seedPreviewFixture({ bytes: tooLarge });
+  it("rejects PDFs above the preview size ceiling before creating a session", async () => {
+    const fixture = await seedPreviewFixture({
+      documentSizeBytes: MAX_PDF_PREVIEW_BYTES + 1,
+    });
 
     const result = await handleOpenPdfCitationPreviewSession(
       ctx("/api/local-knowledge/citation-preview/open", {

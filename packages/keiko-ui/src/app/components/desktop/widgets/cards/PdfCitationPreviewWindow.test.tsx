@@ -2,7 +2,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, fetchPdfCitationPreviewDocument } from "@/lib/api";
+import { pdfCitationPreviewDocumentUrl } from "@/lib/api";
+import { getDocument } from "pdfjs-dist";
 import {
   getPdfCitationPreviewBackToChatAvailability,
   clearPdfCitationPreviewWindowRegistryForTests,
@@ -48,7 +49,10 @@ vi.mock("@/lib/api", () => ({
     }
   },
   closePdfCitationPreviewSession: vi.fn().mockResolvedValue({ ok: true }),
-  fetchPdfCitationPreviewDocument: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3, 4])),
+  pdfCitationPreviewDocumentUrl: vi.fn(
+    (sessionHandle: string) =>
+      `/api/local-knowledge/citation-preview/sessions/${encodeURIComponent(sessionHandle)}/document`,
+  ),
 }));
 
 vi.mock("pdfjs-dist", () => ({
@@ -108,7 +112,7 @@ describe("PdfCitationPreviewWindow", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       /restored without an active verified preview session/i,
     );
-    expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
+    expect(pdfCitationPreviewDocumentUrl).not.toHaveBeenCalled();
   });
 
   it("restores a safe shell without rendering bytes and allows only scalar intent controls", async () => {
@@ -132,7 +136,7 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/requires re-verification/i);
-    expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
+    expect(pdfCitationPreviewDocumentUrl).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /previous/i })).toBeDisabled();
     expect(screen.getByLabelText(/current page/i)).toBeDisabled();
 
@@ -147,9 +151,10 @@ describe("PdfCitationPreviewWindow", () => {
   });
 
   it("allows retry when a live verified session document fetch fails transiently", async () => {
-    vi.mocked(fetchPdfCitationPreviewDocument).mockRejectedValueOnce(
-      new ApiError("PREVIEW_SOURCE_UNREADABLE", "source unreadable", 503),
-    );
+    vi.mocked(getDocument).mockReturnValueOnce({
+      promise: Promise.reject(new Error("source unreadable")),
+      destroy: vi.fn(async () => {}),
+    } as never);
     const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
     const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
     const firstCall = add.mock.calls[0];
@@ -167,17 +172,26 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /could not read the verified PDF safely/i,
+      /could not load the verified PDF preview/i,
     );
     await userEvent.click(screen.getByRole("button", { name: /retry preview/i }));
 
     await waitFor(() => {
-      expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledTimes(2);
+      expect(getDocument).toHaveBeenCalledTimes(2);
     });
     expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
   });
 
   it("loads the verified PDF bytes, renders controls, supports page and zoom actions, and stays axe-clean", async () => {
+    const originalConsoleError = console.error;
+    const consoleError = vi.spyOn(console, "error").mockImplementation((...args) => {
+      if (
+        args.some((part) => String(part).includes("Encountered two children with the same key"))
+      ) {
+        return;
+      }
+      originalConsoleError(...args);
+    });
     const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
     const windowId = openPdfCitationPreviewWindow(add, PREVIEW, {
       context: {
@@ -186,6 +200,15 @@ describe("PdfCitationPreviewWindow", () => {
           {
             citation: { stableId: "stable-1", marker: "[1]", label: "Policy wording.pdf" },
             display: PREVIEW.display,
+          },
+          {
+            citation: { stableId: "stable-2", marker: "[2]", label: "Policy wording.pdf" },
+            display: {
+              ...PREVIEW.display,
+              pageNumber: 3,
+              pageLabel: "Page 3",
+              anchorQuality: "page-only",
+            },
           },
           {
             citation: { stableId: "stable-2", marker: "[2]", label: "Policy wording.pdf" },
@@ -255,22 +278,24 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     await waitFor(() => {
-      expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledWith(
-        "preview-session-1",
-        expect.any(AbortSignal),
+      expect(getDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          disableRange: false,
+          disableStream: true,
+          rangeChunkSize: 1024 * 1024,
+          url: "/api/local-knowledge/citation-preview/sessions/preview-session-1/document",
+        }),
       );
     });
     expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
-    expect(screen.getByText("Answer-local citation context")).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /Keiko opened the verified source page near the cited passage\. Exact PDF highlights are not part of this viewer\./,
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Active citation")).toBeInTheDocument();
+    expect(screen.getByText("Same answer citations")).toBeInTheDocument();
+    expect(container.querySelectorAll(".pdfv-context-citation")).toHaveLength(2);
     expect(screen.getByRole("button", { name: /previous/i })).not.toHaveAttribute("disabled");
     expect(screen.getByDisplayValue("2")).toBeInTheDocument();
     expect(screen.getByText("/ 3")).toBeInTheDocument();
 
+    await userEvent.click(screen.getByText("Same answer citations"));
     await userEvent.click(screen.getByRole("button", { name: /\[2\] Policy wording\.pdf/i }));
     expect(updateCfg).toHaveBeenCalledWith({
       currentPage: 3,
@@ -303,6 +328,13 @@ describe("PdfCitationPreviewWindow", () => {
     expect(updateCfg).toHaveBeenCalledWith({ currentPage: 1 });
 
     expect(await axe(container)).toHaveNoViolations();
+    expect(
+      consoleError.mock.calls.some((call) =>
+        call.some((part) =>
+          String(part).includes("Encountered two children with the same key"),
+        ),
+      ),
+    ).toBe(false);
   });
 
   it("renders Back to chat as an explained disabled action when the source chat is unavailable", async () => {
