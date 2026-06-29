@@ -47,6 +47,12 @@ export {
 export { QI_RUN_EXECUTION_ROUTE_GROUP, handleStartQiRun, handleCancelQiRun } from "./runRoutes.js";
 export { qiRunRegistry, QiRunRegistry } from "./runRegistry.js";
 export { executeQiRun, QiIngestionError, QiGenerationError } from "./runExecution.js";
+export {
+  QI_MODEL_POLICY_ROUTE_GROUP,
+  handleGetQiModelPolicy,
+  handlePutQiModelPolicy,
+  handlePreflightQiModelPolicy,
+} from "./modelPolicyRoutes.js";
 // Issue #282 — review-state companion store (read + mutation seams).
 export {
   applyReviewDecision,

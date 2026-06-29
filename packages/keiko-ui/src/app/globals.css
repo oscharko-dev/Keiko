@@ -2975,76 +2975,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .chatw:has(.cmp-box[data-voice-aura="on"]) {
   --voice-aura-core: oklch(0.76 0.12 156);
-  --voice-aura-secondary: oklch(0.78 0.1 185);
-  --voice-aura-tertiary: oklch(0.7 0.09 145);
-  /* ready (active, no question): a calm but PERCEPTIBLE slow wave — "Keiko is awake and
-     ready" must read as alive, not off. Kept low-opacity so it stays quiet/enterprise. */
-  --voice-aura-composer-opacity: 0.24;
-  --voice-aura-edge-mix: 24%;
-  --voice-aura-speed: 14s;
-  --voice-aura-composer-lift: -5px;
-  --voice-aura-composer-scale-x: 1.01;
-  --voice-aura-composer-scale-y: 1.06;
+  --voice-aura-composer-opacity: 0.2;
+  --voice-aura-edge-mix: 28%;
   position: relative;
   isolation: isolate;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="listening"]) {
-  --voice-aura-core: oklch(0.83 0.15 154);
-  --voice-aura-secondary: oklch(0.8 0.13 190);
-  --voice-aura-tertiary: oklch(0.72 0.1 168);
-  --voice-aura-composer-opacity: 0.31;
-  --voice-aura-edge-mix: 36%;
-  --voice-aura-speed: 12s;
-  --voice-aura-composer-lift: -4px;
-  --voice-aura-composer-scale-x: 1.008;
-  --voice-aura-composer-scale-y: 1.05;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="thinking"]) {
-  --voice-aura-core: oklch(0.83 0.17 163);
-  --voice-aura-secondary: oklch(0.78 0.15 206);
-  --voice-aura-tertiary: oklch(0.72 0.13 257);
-  --voice-aura-composer-opacity: 0.48;
-  --voice-aura-edge-mix: 48%;
-  --voice-aura-speed: 7.2s;
-  --voice-aura-composer-lift: -7px;
-  --voice-aura-composer-scale-x: 1.014;
-  --voice-aura-composer-scale-y: 1.12;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="speaking"]) {
-  --voice-aura-core: oklch(0.85 0.1 164);
-  --voice-aura-secondary: oklch(0.82 0.09 205);
-  --voice-aura-tertiary: oklch(0.78 0.07 178);
-  --voice-aura-composer-opacity: 0.27;
-  --voice-aura-edge-mix: 30%;
-  --voice-aura-speed: 15s;
-  --voice-aura-composer-lift: -3px;
-  --voice-aura-composer-scale-x: 1.006;
-  --voice-aura-composer-scale-y: 1.04;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="muted"]),
-.chatw:has(.cmp-box[data-voice-aura-state="interrupted"]) {
-  --voice-aura-core: oklch(0.82 0.13 77);
-  --voice-aura-secondary: oklch(0.74 0.11 42);
-  --voice-aura-tertiary: oklch(0.72 0.08 68);
-  --voice-aura-edge-mix: 50%;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="pressure"]) {
-  --voice-aura-core: oklch(0.78 0.14 52);
-  --voice-aura-secondary: oklch(0.67 0.15 31);
-  --voice-aura-tertiary: oklch(0.72 0.1 70);
-  --voice-aura-edge-mix: 58%;
-}
-.chatw:has(.cmp-box[data-voice-aura-state="error"]) {
-  --voice-aura-core: oklch(0.68 0.18 28);
-  --voice-aura-secondary: oklch(0.78 0.12 58);
-  --voice-aura-tertiary: oklch(0.62 0.12 18);
-  --voice-aura-edge-mix: 62%;
-}
-.chatw:has(.cmp-box[data-voice-aura-intensity="medium"]) {
-  --voice-aura-composer-opacity: max(var(--voice-aura-composer-opacity), 0.3);
-}
-.chatw:has(.cmp-box[data-voice-aura-intensity="high"]) {
-  --voice-aura-composer-opacity: max(var(--voice-aura-composer-opacity), 0.44);
 }
 .chatw:has(.cmp-box[data-voice-aura="on"])::before {
   display: none;
@@ -3055,10 +2989,11 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   z-index: 1;
 }
 .cmp-box[data-voice-aura="on"] {
-  border-color: color-mix(in oklch, var(--voice-aura-core) 42%, var(--border-default));
+  border-color: color-mix(in oklch, var(--voice-aura-core) 38%, var(--border-default));
   box-shadow:
     var(--card-shadow),
-    inset 0 0 30px -24px color-mix(in oklch, var(--voice-aura-core) 86%, #000),
+    inset 0 0 34px -26px color-mix(in oklch, var(--voice-aura-core) 82%, #000),
+    inset 0 -44px 86px -54px color-mix(in oklch, var(--voice-aura-core) 76%, #000),
     inset 0 -1px 0
       color-mix(in oklch, var(--voice-aura-core) var(--voice-aura-edge-mix), transparent);
   transition:
@@ -3080,51 +3015,28 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .cmp-box[data-voice-aura="on"]::before {
   background:
-    radial-gradient(
-      ellipse at 50% 100%,
-      color-mix(in oklch, var(--voice-aura-core) 36%, transparent) 0%,
-      transparent 62%
+    linear-gradient(
+      180deg,
+      transparent 0%,
+      color-mix(in oklch, var(--voice-aura-core) 5%, transparent) 48%,
+      color-mix(in oklch, var(--voice-aura-core) 16%, transparent) 100%
     ),
     radial-gradient(
-      ellipse at 18% 94%,
-      color-mix(in oklch, var(--voice-aura-secondary) 26%, transparent) 0%,
-      transparent 44%
-    ),
-    radial-gradient(
-      ellipse at 82% 94%,
-      color-mix(in oklch, var(--voice-aura-tertiary) 22%, transparent) 0%,
-      transparent 44%
+      ellipse 72% 64% at 50% 100%,
+      color-mix(in oklch, var(--voice-aura-core) 24%, transparent) 0%,
+      transparent 70%
     );
   box-shadow:
-    inset 0 -32px 68px -38px color-mix(in oklch, var(--voice-aura-core) 92%, #000),
-    inset 0 0 28px -20px color-mix(in oklch, var(--voice-aura-secondary) 82%, #000),
+    inset 0 -28px 70px -42px color-mix(in oklch, var(--voice-aura-core) 88%, #000),
     inset 0 -1px 0
       color-mix(in oklch, var(--voice-aura-core) var(--voice-aura-edge-mix), transparent);
   opacity: var(--voice-aura-composer-opacity);
-  transform-origin: 50% 100%;
-  transition:
-    opacity 320ms ease,
-    transform 380ms ease;
+  transform: none;
+  transition: opacity 320ms ease;
 }
-/* Second, slower depth layer. It drifts at a different rate from ::before so the two glows
-   move in and out of phase — an organic, non-repeating "living" motion (state-of-the-art
-   ambient feel) rather than one flat pulse. Kept subtle; screen blend keeps it additive on
-   the dark surface without muddying the controls (which sit above at z-index 1). */
 .cmp-box[data-voice-aura="on"]::after {
-  background:
-    radial-gradient(
-      ellipse 78% 92% at 50% 104%,
-      color-mix(in oklch, var(--voice-aura-secondary) 28%, transparent) 0%,
-      transparent 60%
-    ),
-    radial-gradient(
-      ellipse 120% 80% at 50% 100%,
-      color-mix(in oklch, var(--voice-aura-core) 18%, transparent) 0%,
-      transparent 72%
-    );
-  opacity: calc(var(--voice-aura-composer-opacity) * 0.55);
-  transform-origin: 50% 100%;
-  mix-blend-mode: screen;
+  display: none;
+  content: none;
 }
 :root[data-input-modality="keyboard"] .cmp-box[data-voice-aura="on"]:has(.cmp-input:focus) {
   border-color: var(--accent-line);
@@ -3139,53 +3051,12 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
     var(--shadow-card),
     inset 0 0 26px -22px color-mix(in oklch, var(--voice-aura-core) 82%, #000);
 }
-/* The wave draws inward: it rests low and slightly contracted at the bottom edge (0%), then
-   is drawn up and expands into the composer (100%). With ease-in-out + alternate this reads
-   as a calm wave breathing inward and receding, not a one-way grow. Per-state vars scale the
-   amplitude/speed (calm for ready, larger and faster for thinking, softer for speaking). */
-@keyframes voice-aura-composer-breathe {
-  0% {
-    opacity: calc(var(--voice-aura-composer-opacity) * 0.62);
-    transform: translate3d(0, 3px, 0) scale3d(0.99, 0.965, 1);
-  }
-  100% {
-    opacity: var(--voice-aura-composer-opacity);
-    transform: translate3d(0, var(--voice-aura-composer-lift), 0)
-      scale3d(var(--voice-aura-composer-scale-x), var(--voice-aura-composer-scale-y), 1);
-  }
-}
-/* Depth layer: same idea, smaller amplitude, no horizontal scale — a slower undercurrent. */
-@keyframes voice-aura-composer-drift {
-  0% {
-    opacity: calc(var(--voice-aura-composer-opacity) * 0.3);
-    transform: translate3d(0, 2px, 0) scale3d(1, 0.98, 1);
-  }
-  100% {
-    opacity: calc(var(--voice-aura-composer-opacity) * 0.62);
-    transform: translate3d(0, calc(var(--voice-aura-composer-lift) * 0.6), 0)
-      scale3d(1, calc(1 + (var(--voice-aura-composer-scale-y) - 1) * 0.7), 1);
-  }
-}
-@media (prefers-reduced-motion: no-preference) {
-  .cmp-box[data-voice-aura="on"]::before {
-    animation: voice-aura-composer-breathe var(--voice-aura-speed) ease-in-out infinite alternate;
-  }
-  /* 1.55× period + a small negative delay keeps the two layers permanently out of phase. */
-  .cmp-box[data-voice-aura="on"]::after {
-    animation: voice-aura-composer-drift calc(var(--voice-aura-speed) * 1.55) -2.3s ease-in-out
-      infinite alternate;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
-  /* Static calm glow: both layers hold a steady state, no motion. */
   .chatw:has(.cmp-box[data-voice-aura="on"])::before,
   .cmp-box[data-voice-aura="on"]::before,
   .cmp-box[data-voice-aura="on"]::after {
     animation: none;
     transform: none;
-  }
-  .cmp-box[data-voice-aura="on"]::after {
-    opacity: calc(var(--voice-aura-composer-opacity) * 0.45);
   }
 }
 @media (forced-colors: active) {
@@ -9449,12 +9320,11 @@ select.dlg-input {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset)),
-      var(--surface-primary)
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset)),
+    var(--surface-primary)
+  );
   color: var(--text-primary);
 }
 .pdfv-header {
@@ -9462,7 +9332,7 @@ select.dlg-input {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px 12px;
+  padding: 10px 14px 8px;
   border-bottom: 1px solid var(--border-subtle);
   background: color-mix(in oklch, var(--surface-primary) 78%, var(--surface-inset));
 }
@@ -9470,7 +9340,7 @@ select.dlg-input {
   min-width: 0;
 }
 .pdfv-eyebrow {
-  margin: 0 0 4px;
+  margin: 0 0 3px;
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 700;
@@ -9480,78 +9350,103 @@ select.dlg-input {
 .pdfv-title {
   margin: 0;
   color: var(--text-primary);
-  font-size: 18px;
+  font-size: 16.5px;
   line-height: 1.25;
   font-weight: 650;
 }
 .pdfv-meta {
-  margin: 6px 0 0;
+  margin: 3px 0 0;
   color: var(--text-secondary);
   font-size: 12.5px;
-  line-height: 1.5;
+  line-height: 1.35;
 }
 .pdfv-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
+  min-height: 24px;
+  padding: 0 9px;
   border: 1px solid var(--button-secondary-border);
   border-radius: 999px;
   background: color-mix(in oklch, var(--surface-inset) 76%, transparent);
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
 }
 .pdfv-context {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding: var(--space-5) var(--space-6);
+  gap: var(--space-3);
+  padding: 8px 14px;
   border-bottom: 1px solid var(--border-subtle);
-  background: color-mix(in oklch, var(--surface-primary) 76%, var(--surface-inset));
+  background: color-mix(in oklch, var(--surface-primary) 84%, var(--surface-inset));
 }
 .pdfv-context-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: var(--space-6);
+  gap: var(--space-5);
 }
 .pdfv-context-copy {
   min-width: 0;
 }
 .pdfv-context-eyebrow {
-  margin: 0 0 var(--space-2);
+  margin: 0 0 2px;
   color: var(--text-secondary);
   font-size: var(--text-caption);
   font-weight: var(--weight-strong);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 .pdfv-context-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   margin: 0;
   color: var(--text-primary);
-  font-size: var(--text-body);
-  line-height: var(--leading-normal);
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-snug);
   font-weight: var(--weight-strong);
 }
-.pdfv-context-message {
-  margin: var(--space-3) 0 0;
+.pdfv-context-marker {
+  flex: none;
+  color: var(--text-accent);
+  font-family: var(--font-mono);
+}
+.pdfv-context-document {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pdfv-context-page {
+  flex: none;
   color: var(--text-secondary);
-  font-size: var(--text-body-sm);
-  line-height: var(--leading-normal);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.pdfv-context-message {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: var(--leading-snug);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pdfv-context-actions {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: flex-end;
-  gap: var(--space-3);
-  min-width: calc(var(--space-10) * 4);
+  gap: var(--space-2);
+  flex: none;
 }
 .pdfv-back-to-chat {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: 0 10px;
 }
 .pdfv-back-to-chat[aria-disabled="true"] {
   cursor: not-allowed;
@@ -9562,17 +9457,65 @@ select.dlg-input {
   line-height: var(--leading-normal);
   text-align: right;
 }
-.pdfv-context-rail {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+.pdfv-context-details {
+  border-top: 1px solid color-mix(in oklch, var(--border-subtle) 70%, transparent);
+  padding-top: var(--space-2);
+}
+.pdfv-context-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 24px;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-strong);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.pdfv-context-summary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.pdfv-context-summary::-webkit-details-marker {
+  display: none;
+}
+.pdfv-context-summary svg {
+  transition: transform var(--dur-fast, 120ms) var(--ease-standard, ease);
+}
+.pdfv-context-details[open] .pdfv-context-summary svg {
+  transform: rotate(180deg);
+}
+.pdfv-context-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  min-height: 18px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill, 999px);
+  background: color-mix(in oklch, var(--surface-inset) 74%, transparent);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0;
 }
 .pdfv-context-list {
-  gap: var(--space-4);
+  gap: var(--space-2);
+  max-height: 92px;
+  overflow: auto;
+  padding-top: var(--space-2);
 }
 .pdfv-context-citation {
-  gap: var(--space-3);
-  max-width: min(100%, 34ch);
+  gap: var(--space-2);
+  min-height: 22px;
+  max-width: min(100%, 16ch);
+  padding: 2px 6px;
+  border-radius: var(--radius-control, 8px);
+  font-size: 10px;
 }
 .pdfv-context-citation[data-active="true"] {
   border-color: var(--border-accent);
@@ -9581,13 +9524,20 @@ select.dlg-input {
 .pdfv-context-citation[data-active="true"] .grounded-citation-action-label {
   color: var(--text-accent);
 }
+.pdfv-context-citation .grounded-citation-range {
+  max-width: 5ch;
+}
+.pdfv-context-citation .grounded-citation-action-label {
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
 .pdfv-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px 14px;
-  padding: 10px 16px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--border-subtle);
   background: color-mix(in oklch, var(--surface-primary) 68%, var(--surface-inset));
 }
@@ -9683,12 +9633,11 @@ select.dlg-input {
   width: min(100%, 680px);
   min-height: 460px;
   border: 1px dashed var(--border-subtle);
-  background:
-    linear-gradient(
-      135deg,
-      color-mix(in oklch, var(--surface-primary) 82%, var(--surface-elevated)),
-      color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset))
-    );
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--surface-primary) 82%, var(--surface-elevated)),
+    color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset))
+  );
 }
 @media (max-width: 720px) {
   .pdfv-header,
@@ -9707,6 +9656,7 @@ select.dlg-input {
   }
   .pdfv-context-head {
     flex-direction: column;
+    align-items: flex-start;
   }
   .pdfv-context-actions {
     align-items: flex-start;
@@ -16538,6 +16488,85 @@ html[data-keiko-gateway-setup-open="true"] {
   gap: 10px;
   padding: 12px 16px 16px;
 }
+.qi-workflow-bar {
+  display: grid;
+  grid-template-columns:
+    minmax(88px, 0.85fr) minmax(160px, 1.45fr) minmax(160px, 1.45fr) repeat(3, minmax(84px, 0.85fr))
+    auto;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--surface-primary) 84%, var(--accent) 5%);
+}
+.qi-workflow-stage {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in oklab, var(--border-default) 86%, transparent);
+  border-radius: var(--radius-xs);
+  background: var(--surface-primary);
+}
+.qi-workflow-stage-model {
+  background: color-mix(in oklab, var(--accent) 8%, var(--surface-primary));
+}
+.qi-workflow-stage-label {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.qi-workflow-stage-badge,
+.qi-preflight-status {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qi-model-select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.qi-model-menu .ksel-option-label {
+  font-size: 11px;
+}
+.qi-model-menu .ksel-option-desc {
+  font-size: 10px;
+}
+.qi-preflight-status {
+  align-self: center;
+  justify-self: end;
+  padding: 5px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--surface-primary);
+  text-transform: uppercase;
+}
+.qi-preflight-status[data-status="checking"] {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border-default));
+}
+.qi-preflight-status[data-status="failed"],
+.qi-preflight-status[data-status="unavailable"] {
+  color: var(--feedback-danger);
+  border-color: color-mix(in oklab, var(--feedback-danger) 55%, var(--border-default));
+}
 /* Connected-source banner (Epic #270 Slice 1): shown when a Files window is bound to the QI hub. */
 .qi-connected-source {
   display: flex;
@@ -16942,11 +16971,20 @@ select.qi-select {
   line-height: 1.45;
 }
 @media (max-width: 900px) {
+  .qi-workflow-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .qi-preflight-status {
+    justify-self: stretch;
+  }
   .qi-source-kind-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 @media (max-width: 640px) {
+  .qi-workflow-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .qi-source-kind-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -19884,7 +19922,8 @@ button.figma-view-preview {
 .grounded-citation-action[data-back-to-chat-highlighted="true"] {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: var(--space-1);
-  box-shadow: 0 0 0 var(--space-2) color-mix(in oklch, var(--surface-accent-subtle) 78%, transparent);
+  box-shadow: 0 0 0 var(--space-2)
+    color-mix(in oklch, var(--surface-accent-subtle) 78%, transparent);
 }
 .citation-inline-marker--recoverable {
   border-bottom-style: dashed;

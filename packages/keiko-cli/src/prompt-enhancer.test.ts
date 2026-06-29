@@ -57,57 +57,58 @@ function configWithProvider(modelId: string): GatewayConfig {
         throughputHint: "local endpoint",
         preferredUseCases: ["Local coding workflow"],
         knownLimitations: [],
+        supportsResponseFormat: true,
       },
     ],
   };
 }
 
 describe("runPromptEnhancerCli", () => {
-  it("prints usage and exits 0 for --help", () => {
+  it("prints usage and exits 0 for --help", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(["--help"], c.io, {});
+    const code = await runPromptEnhancerCli(["--help"], c.io, {});
     expect(code).toBe(0);
     expect(c.out()).toContain("keiko prompt-enhancer");
   });
 
-  it("exits 2 with usage when --input is missing", () => {
+  it("exits 2 with usage when --input is missing", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli([], c.io, {});
+    const code = await runPromptEnhancerCli([], c.io, {});
     expect(code).toBe(2);
     expect(c.err()).toContain("--input is required");
   });
 
-  it("exits 2 for an unknown flag", () => {
+  it("exits 2 for an unknown flag", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(["--input", "x", "--bogus"], c.io, {});
+    const code = await runPromptEnhancerCli(["--input", "x", "--bogus"], c.io, {});
     expect(code).toBe(2);
     expect(c.err()).toContain("unknown flag --bogus");
   });
 
-  it("exits 2 when a value flag is missing its value", () => {
+  it("exits 2 when a value flag is missing its value", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(["--input"], c.io, {});
+    const code = await runPromptEnhancerCli(["--input"], c.io, {});
     expect(code).toBe(2);
     expect(c.err()).toContain("missing value for --input");
   });
 
-  it("exits 2 for an invalid profile (wire validation)", () => {
+  it("exits 2 for an invalid profile (wire validation)", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(["--input", "Hello", "--profile", "turbo"], c.io, {});
+    const code = await runPromptEnhancerCli(["--input", "Hello", "--profile", "turbo"], c.io, {});
     expect(code).toBe(2);
     expect(c.err()).toContain("profilePreference");
   });
 
-  it("exits 2 for a whitespace-only input (wire validation)", () => {
+  it("exits 2 for a whitespace-only input (wire validation)", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(["--input", "   "], c.io, {});
+    const code = await runPromptEnhancerCli(["--input", "   "], c.io, {});
     expect(code).toBe(2);
     expect(c.err()).toContain("invalid request");
   });
 
-  it("enhances a prompt deterministically and exits 0", () => {
+  it("enhances a prompt deterministically and exits 0", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(
+    const code = await runPromptEnhancerCli(
       ["--input", "Summarize the quarterly report into three bullets."],
       c.io,
       {},
@@ -120,25 +121,25 @@ describe("runPromptEnhancerCli", () => {
     expect(out).toContain("## Role");
   });
 
-  it("accepts raw prompt input that starts with --", () => {
+  it("accepts raw prompt input that starts with --", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(["--input", "-- compare these options"], c.io, {});
+    const code = await runPromptEnhancerCli(["--input", "-- compare these options"], c.io, {});
     expect(code).toBe(0);
     expect(c.out()).toContain("Enhanced prompt");
   });
 
-  it("emits valid JSON with --json", () => {
+  it("emits valid JSON with --json", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(["--input", "Write a haiku.", "--json"], c.io, {});
+    const code = await runPromptEnhancerCli(["--input", "Write a haiku.", "--json"], c.io, {});
     expect(code).toBe(0);
     const parsed = JSON.parse(c.out()) as { schemaVersion: string; enhancedPrompt: unknown };
     expect(parsed.schemaVersion).toBe("1");
     expect(parsed.enhancedPrompt).toBeDefined();
   });
 
-  it("fails gracefully with exit 1 when --model is set but no config is available", () => {
+  it("fails gracefully with exit 1 when --model is set but no config is available", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(
+    const code = await runPromptEnhancerCli(
       ["--input", "Hello", "--model", "example-chat-model"],
       c.io,
       {},
@@ -147,21 +148,22 @@ describe("runPromptEnhancerCli", () => {
     expect(c.err()).toContain("--model requires a gateway config");
   });
 
-  it("resolves model routing as available when a config is provided", () => {
+  it("reports deterministic fallback when a config is provided but no model port is available", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(
+    const code = await runPromptEnhancerCli(
       ["--input", "Hello", "--model", "m", "--config", "/cfg"],
       c.io,
       {},
-      { loadConfig: () => configWithProvider("m") },
+      { loadConfig: () => configWithProvider("m"), modelPortFactory: () => undefined },
     );
     expect(code).toBe(0);
-    expect(c.out()).toContain("Model routing: available");
+    expect(c.out()).toContain("Model routing: unavailable (model-port-unavailable)");
+    expect(c.out()).toContain("fallback: model-port-unavailable");
   });
 
-  it("maps a gateway config error to exit 1 with redacted guidance", () => {
+  it("maps a gateway config error to exit 1 with redacted guidance", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(
+    const code = await runPromptEnhancerCli(
       ["--input", "Hello", "--model", "m", "--config", "/cfg"],
       c.io,
       {},
@@ -175,9 +177,9 @@ describe("runPromptEnhancerCli", () => {
     expect(c.err()).toContain("model gateway configuration problem");
   });
 
-  it("prints a redacted, integrity-hashed evidence manifest with --evidence", () => {
+  it("prints a redacted, integrity-hashed evidence manifest with --evidence", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(["--input", "Design an API.", "--evidence"], c.io, {});
+    const code = await runPromptEnhancerCli(["--input", "Design an API.", "--evidence"], c.io, {});
     expect(code).toBe(0);
     const out = c.out();
     expect(out).toContain("Redacted evidence manifest");
@@ -192,7 +194,7 @@ describe("runPromptEnhancerCli", () => {
     expect(manifest.integrityHashes.enhancedOutput).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("redacts loaded config secrets and topology from result and evidence output", () => {
+  it("redacts loaded config secrets and topology from result and evidence output", async () => {
     const c = makeIo();
     const apiKey = "config-only-secret-literal";
     const baseUrl = "https://private-provider.example/v1";
@@ -211,7 +213,7 @@ describe("runPromptEnhancerCli", () => {
       },
       figma: { accessToken: "figma-config-secret" },
     };
-    const code = runPromptEnhancerCli(
+    const code = await runPromptEnhancerCli(
       [
         "--input",
         `Use ${apiKey} at ${baseUrl} through http://proxy-secret.local:8080.`,
@@ -224,7 +226,7 @@ describe("runPromptEnhancerCli", () => {
       ],
       c.io,
       {},
-      { loadConfig: () => config },
+      { loadConfig: () => config, modelPortFactory: () => undefined },
     );
     expect(code).toBe(0);
     const out = c.out();
@@ -234,10 +236,10 @@ describe("runPromptEnhancerCli", () => {
     expect(out).toContain("[REDACTED]");
   });
 
-  it("redacts secret-shaped substrings from all output (AC4)", () => {
+  it("redacts secret-shaped substrings from all output (AC4)", async () => {
     const c = makeIo();
     const secret = "ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789";
-    const code = runPromptEnhancerCli(
+    const code = await runPromptEnhancerCli(
       ["--input", `Push using my token ${secret} please.`, "--json", "--evidence"],
       c.io,
       {},
@@ -247,9 +249,9 @@ describe("runPromptEnhancerCli", () => {
     expect(c.out()).toContain("[REDACTED]");
   });
 
-  it("accepts the assume strategy and a bounded candidate count", () => {
+  it("accepts the assume strategy and a bounded candidate count", async () => {
     const c = makeIo();
-    const code = runPromptEnhancerCli(
+    const code = await runPromptEnhancerCli(
       ["--input", "Build a thing.", "--strategy", "assume", "--candidates", "4"],
       c.io,
       {},

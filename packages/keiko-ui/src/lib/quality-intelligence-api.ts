@@ -13,6 +13,9 @@ import type {
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceUiStalenessReport,
   QualityIntelligenceUiRegenerateResult,
+  QualityIntelligenceModelPolicy,
+  QualityIntelligenceModelPolicyPreflightResponse,
+  QualityIntelligenceModelPolicyResponse,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -184,6 +187,40 @@ export async function cancelQiRun(id: string): Promise<void> {
   await fetchJson<{ cancelled: boolean }>(
     `/api/quality-intelligence/runs/${encodeURIComponent(id)}/cancel`,
     { method: "POST", body: "{}" },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GET/PUT/POST /api/quality-intelligence/model-policy
+// ---------------------------------------------------------------------------
+
+export async function fetchQiModelPolicy(): Promise<QualityIntelligenceModelPolicyResponse> {
+  return fetchJson<QualityIntelligenceModelPolicyResponse>(
+    "/api/quality-intelligence/model-policy",
+  );
+}
+
+export async function saveQiModelPolicy(
+  modelPolicy: QualityIntelligenceModelPolicy,
+): Promise<QualityIntelligenceModelPolicyResponse> {
+  return fetchJson<QualityIntelligenceModelPolicyResponse>(
+    "/api/quality-intelligence/model-policy",
+    {
+      method: "PUT",
+      body: JSON.stringify({ modelPolicy }),
+    },
+  );
+}
+
+export async function preflightQiModelPolicy(
+  modelPolicy: QualityIntelligenceModelPolicy,
+): Promise<QualityIntelligenceModelPolicyPreflightResponse> {
+  return fetchJson<QualityIntelligenceModelPolicyPreflightResponse>(
+    "/api/quality-intelligence/model-policy/preflight",
+    {
+      method: "POST",
+      body: JSON.stringify({ modelPolicy }),
+    },
   );
 }
 

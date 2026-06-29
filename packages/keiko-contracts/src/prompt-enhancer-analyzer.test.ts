@@ -88,6 +88,11 @@ const TASK_CLASS_CASES: readonly ClassCase[] = [
     expected: "code-debugging",
   },
   {
+    label: "bugfix notes",
+    text: "PDF Preview kaputt\n- große PDFs bis 1GB\n- Citations direkt anspringen",
+    expected: "code-debugging",
+  },
+  {
     label: "architecture",
     text: "Help me with the software architecture for a payment service.",
     expected: "code-architecture",
@@ -162,6 +167,18 @@ describe("analyzePrompt task classification (AC2)", () => {
     const migration = analyze("Erstelle eine SQL-Migrationsstrategie fuer Kundendaten.");
     expect(migration.taskClass).toBe("code-architecture");
     expect(migration.domain).toBe("software");
+
+    const pdfPreview = analyze(
+      "PDF Preview kaputt\n- große PDFs bis 1GB\n- Citations direkt anspringen",
+    );
+    expect(pdfPreview.taskClass).toBe("code-debugging");
+    expect(pdfPreview.domain).toBe("software");
+
+    const regressionTests = analyze(
+      "Schreibe Regressionstestfälle\n- Login sporadisch 500\n- API und UI prüfen",
+    );
+    expect(regressionTests.taskClass).toBe("code-generation");
+    expect(regressionTests.domain).toBe("software");
   });
 });
 

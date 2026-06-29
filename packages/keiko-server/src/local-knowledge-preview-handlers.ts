@@ -17,7 +17,14 @@ import {
   projectPdfCitationPreviewAuthorizationResponse,
 } from "./local-knowledge-preview-service.js";
 import { normalizePreviewMarkerIndex } from "./local-knowledge-preview-authority.js";
-import { loadVerifiedPdfPreviewSource, MAX_PDF_PREVIEW_RANGE_BYTES } from "./local-knowledge-preview-delivery.js";
+import {
+  loadPdfPreviewSourceForSession,
+  loadVerifiedPdfPreviewSource,
+  MAX_PDF_PREVIEW_RANGE_BYTES,
+  pdfPreviewStreamChunkBytes,
+  readPdfPreviewSourceRange,
+  type PdfCitationPreviewSource,
+} from "./local-knowledge-preview-delivery.js";
 import { previewSessionManagerFor } from "./local-knowledge-preview-session-manager.js";
 
 const MAX_BODY_BYTES = 16_000;
@@ -67,16 +74,13 @@ function parseBaseBody(body: Record<string, unknown>): {
   readonly stableId?: string;
 } {
   if (typeof body.chatId !== "string" || body.chatId.trim().length === 0) {
-    throw new InvalidRequest("Field \"chatId\" must be a non-empty string.");
+    throw new InvalidRequest('Field "chatId" must be a non-empty string.');
   }
-  if (
-    typeof body.assistantMessageId !== "string" ||
-    body.assistantMessageId.trim().length === 0
-  ) {
-    throw new InvalidRequest("Field \"assistantMessageId\" must be a non-empty string.");
+  if (typeof body.assistantMessageId !== "string" || body.assistantMessageId.trim().length === 0) {
+    throw new InvalidRequest('Field "assistantMessageId" must be a non-empty string.');
   }
   if (body.stableId !== undefined && typeof body.stableId !== "string") {
-    throw new InvalidRequest("Field \"stableId\" must be a string when present.");
+    throw new InvalidRequest('Field "stableId" must be a string when present.');
   }
   return {
     chatId: body.chatId,
@@ -85,19 +89,22 @@ function parseBaseBody(body: Record<string, unknown>): {
   };
 }
 
-function parseMarker(body: Record<string, unknown>, required: boolean): string | number | undefined {
+function parseMarker(
+  body: Record<string, unknown>,
+  required: boolean,
+): string | number | undefined {
   if (!("marker" in body)) {
     if (required) {
-      throw new InvalidRequest("Field \"marker\" is required.");
+      throw new InvalidRequest('Field "marker" is required.');
     }
     return undefined;
   }
   const marker = body.marker;
   if (typeof marker !== "string" && typeof marker !== "number") {
-    throw new InvalidRequest("Field \"marker\" must be a string or number.");
+    throw new InvalidRequest('Field "marker" must be a string or number.');
   }
   if (normalizePreviewMarkerIndex(marker) === undefined) {
-    throw new InvalidRequest("Field \"marker\" must resolve to a positive citation index.");
+    throw new InvalidRequest('Field "marker" must resolve to a positive citation index.');
   }
   return marker;
 }
@@ -116,22 +123,34 @@ function previewSourceError(reason: string): RouteResult {
     case "document-content-mismatch":
       return {
         status: 409,
-        body: errorBody("PREVIEW_SOURCE_CHANGED", "The verified PDF bytes no longer match the citation."),
+        body: errorBody(
+          "PREVIEW_SOURCE_CHANGED",
+          "The verified PDF bytes no longer match the citation.",
+        ),
       };
     case "document-not-pdf":
       return {
         status: 409,
-        body: errorBody("PREVIEW_SOURCE_NOT_PDF", "The verified citation source is no longer a PDF."),
+        body: errorBody(
+          "PREVIEW_SOURCE_NOT_PDF",
+          "The verified citation source is no longer a PDF.",
+        ),
       };
     case "document-not-ready":
       return {
         status: 409,
-        body: errorBody("PREVIEW_SOURCE_NOT_READY", "The verified citation source is not ready for preview."),
+        body: errorBody(
+          "PREVIEW_SOURCE_NOT_READY",
+          "The verified citation source is not ready for preview.",
+        ),
       };
     case "preview-source-oversized":
       return {
         status: 413,
-        body: errorBody("PREVIEW_SOURCE_TOO_LARGE", "The verified PDF exceeds the preview size limit."),
+        body: errorBody(
+          "PREVIEW_SOURCE_TOO_LARGE",
+          "The verified PDF exceeds the preview size limit.",
+        ),
       };
     case "preview-source-unreadable":
       return {
@@ -141,7 +160,10 @@ function previewSourceError(reason: string): RouteResult {
     default:
       return {
         status: 410,
-        body: errorBody("PREVIEW_SOURCE_MISSING", "The verified PDF source is no longer available."),
+        body: errorBody(
+          "PREVIEW_SOURCE_MISSING",
+          "The verified PDF source is no longer available.",
+        ),
       };
   }
 }
@@ -215,7 +237,13 @@ function validatedRange(
   end: number,
   totalBytes: number,
 ): { readonly end: number; readonly start: number } | RouteResult {
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= totalBytes) {
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= totalBytes
+  ) {
     return invalidRangeResult("The requested byte range is invalid.");
   }
   const boundedEnd = Math.min(end, totalBytes - 1);
@@ -230,6 +258,9 @@ function parseRangeHeader(
   totalBytes: number,
 ): { readonly end: number; readonly start: number } | RouteResult {
   if (header === undefined) {
+    if (totalBytes <= 0) {
+      return invalidRangeResult("The requested byte range is invalid.");
+    }
     return { start: 0, end: totalBytes - 1 };
   }
   const match = /^bytes=(\d*)-(\d*)$/u.exec(header.trim());
@@ -300,8 +331,11 @@ export async function handleOpenPdfCitationPreviewSession(
     if (verified.kind !== "ok") {
       return rejectedOpenResult(verified.reason, authorized.display);
     }
-    const opened = previewSessionManagerFor(deps).openSession(authorized.authority);
-    return openSessionResult(authorized.display, opened, verified.bytes.byteLength);
+    const opened = previewSessionManagerFor(deps).openSession(
+      authorized.authority,
+      verified.source,
+    );
+    return openSessionResult(authorized.display, opened, verified.source.byteLength);
   } catch (error) {
     if (error instanceof InvalidRequest) {
       return invalidRequestResult(error.message);
@@ -389,24 +423,48 @@ function isRouteResult(value: unknown): value is RouteResult {
   return typeof value === "object" && value !== null && "status" in value;
 }
 
-function streamPdfPreview(
+async function writeResponseChunk(ctx: RouteContext, chunk: Uint8Array): Promise<boolean> {
+  const isConnectionDestroyed = (): boolean => ctx.res.destroyed || ctx.req.destroyed;
+  if (isConnectionDestroyed()) return false;
+  if (ctx.res.write(Buffer.from(chunk))) {
+    return true;
+  }
+  await new Promise<void>((resolve) => {
+    ctx.res.once("drain", resolve);
+  });
+  return !isConnectionDestroyed();
+}
+
+async function streamPdfPreview(
   ctx: RouteContext,
-  bytes: Uint8Array,
+  source: PdfCitationPreviewSource,
   range: { readonly end: number; readonly start: number },
-): HandlerOutcome {
-  const isPartial = range.start !== 0 || range.end !== bytes.byteLength - 1;
-  const chunk = bytes.subarray(range.start, range.end + 1);
+): Promise<HandlerOutcome> {
+  const isPartial = range.start !== 0 || range.end !== source.byteLength - 1;
+  const contentLength = range.end - range.start + 1;
   ctx.res.writeHead(isPartial ? 206 : 200, {
     "Accept-Ranges": "bytes",
     "Cache-Control": "no-store",
-    "Content-Length": String(chunk.byteLength),
+    "Content-Length": String(contentLength),
     "Content-Type": "application/pdf",
     ...(isPartial
-      ? { "Content-Range": `bytes ${String(range.start)}-${String(range.end)}/${String(bytes.byteLength)}` }
+      ? {
+          "Content-Range": `bytes ${String(range.start)}-${String(range.end)}/${String(source.byteLength)}`,
+        }
       : {}),
     "X-Content-Type-Options": "nosniff",
   });
-  ctx.res.end(Buffer.from(chunk));
+  for (let offset = range.start; offset <= range.end; offset += pdfPreviewStreamChunkBytes()) {
+    const length = Math.min(pdfPreviewStreamChunkBytes(), range.end - offset + 1);
+    const chunk = await readPdfPreviewSourceRange(source, offset, length);
+    if (chunk === undefined) {
+      ctx.res.destroy(new Error("Verified PDF preview source could not be read."));
+      return STREAMING;
+    }
+    const keepGoing = await writeResponseChunk(ctx, chunk);
+    if (!keepGoing) return STREAMING;
+  }
+  ctx.res.end();
   return STREAMING;
 }
 
@@ -422,19 +480,23 @@ export async function handleGetPdfCitationPreviewDocument(
   if (isRouteResult(lookup)) {
     return lookup;
   }
-  const verified = await loadVerifiedPdfPreviewSource(deps, lookup.session.authority);
+  const verified = loadPdfPreviewSourceForSession(
+    deps,
+    lookup.session.authority,
+    lookup.session.source,
+  );
   if (verified.kind !== "ok") {
     return previewSourceError(verified.reason);
   }
   const rangeHeader = ctx.req.headers.range;
   const parsedRange = parseRangeHeader(
     typeof rangeHeader === "string" ? rangeHeader : rangeHeader?.[0],
-    verified.bytes.byteLength,
+    verified.source.byteLength,
   );
   if ("status" in parsedRange) {
     return parsedRange;
   }
-  return streamPdfPreview(ctx, verified.bytes, parsedRange);
+  return streamPdfPreview(ctx, verified.source, parsedRange);
 }
 
 export function handleClosePdfCitationPreviewSession(

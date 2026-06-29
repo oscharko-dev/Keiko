@@ -5,7 +5,7 @@
 // (the Conversation Center path proves this in keiko-server `conversation-audit.test.ts`). That raw
 // message MUST NOT reach the run/stage `reasonSummary` that is streamed over SSE. These tests lock
 // `safeReasonSummary` to a fail-closed taxonomy: known QI errors surface a static code, everything
-// else collapses to a generic code with no message echo. Mutation-robust — reverting the guard to
+// else collapses to a redacted static code with no message echo. Mutation-robust — reverting the guard to
 // the old `error.message.slice(0, 200)` passthrough makes the leak assertions fail.
 
 import { describe, expect, it } from "vitest";
@@ -68,9 +68,9 @@ describe("safeReasonSummary — fail-closed taxonomy", () => {
     expect(safeReasonSummary(error)).toBe("qi-error: EmptyEvidenceError");
   });
 
-  it("collapses a gateway/provider error to a generic code and never echoes its message", () => {
+  it("collapses a gateway/provider error to a redacted class and never echoes its message", () => {
     const summary = safeReasonSummary(gatewayLikeError());
-    expect(summary).toBe("qi-run-error");
+    expect(summary).toBe("qi-gateway-auth");
     assertNoLeak(summary);
   });
 
@@ -81,7 +81,7 @@ describe("safeReasonSummary — fail-closed taxonomy", () => {
     error.name = "GatewayError";
     (error as { code?: string }).code = FAKE_BEARER;
     const summary = safeReasonSummary(error);
-    expect(summary).toBe("qi-run-error");
+    expect(summary).toBe("qi-gateway-auth");
     assertNoLeak(summary);
   });
 
@@ -147,7 +147,7 @@ describe("QI run failure events — no provider-error leak (#279 AC3)", () => {
     const summaries = reasonSummariesOf(cap.events);
     expect(summaries.length).toBeGreaterThan(0);
     for (const summary of summaries) {
-      expect(summary).toBe("qi-run-error");
+      expect(summary).toBe("qi-gateway-auth");
       assertNoLeak(summary);
     }
   });
@@ -159,7 +159,7 @@ describe("QI run failure events — no provider-error leak (#279 AC3)", () => {
     const summary = finaliseFailureOrCancellation(ctx, gatewayLikeError(), finaliseArgs());
 
     expect(summary.status).toBe("failed");
-    expect(summary.reasonSummary).toBe("qi-run-error");
+    expect(summary.reasonSummary).toBe("qi-gateway-auth");
     assertNoLeak(summary.reasonSummary ?? "");
     for (const reason of reasonSummariesOf(cap.events)) {
       assertNoLeak(reason);

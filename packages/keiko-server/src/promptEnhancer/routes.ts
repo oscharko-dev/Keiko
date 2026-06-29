@@ -5,7 +5,8 @@
 // and does not modify any sibling handler. The deterministic enhancement is assembled by
 // `runPromptEnhancement` (orchestrate.ts); this file owns only the HTTP envelope: bounded body read,
 // JSON parsing, wire validation, cancellation, Model-Gateway config hand-off, redaction, and safe error
-// shaping. No provider SDK import, no outbound network request, no model dispatch.
+// shaping. No provider SDK import lives here; optional model-assisted enhancement routes through the
+// existing ModelPort factory so provider credentials stay behind the server boundary.
 
 import type { IncomingMessage } from "node:http";
 import { validatePromptEnhancementWireRequest } from "@oscharko-dev/keiko-contracts";
@@ -194,8 +195,9 @@ export const handlePromptEnhancement = async (
   if (!validated.ok) return validated.result;
 
   try {
-    const result = runPromptEnhancement(validated.value, {
+    const result = await runPromptEnhancement(validated.value, {
       gatewayRoutingConfig: promptEnhancementGatewayRoutingConfig(currentGatewayConfig(deps)),
+      modelPortFactory: deps.modelPortFactory,
       signal,
     });
     const body: PromptEnhancementWireResponse = {

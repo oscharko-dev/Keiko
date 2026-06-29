@@ -1,9 +1,8 @@
 // Public barrel for the Prompt Enhancer sub-module of the model gateway
 // (Epic #1307, Issues #1310/#1312; ADR-0044 §1). Exposes the generation-profile execution catalog, the
 // deterministic planner, the structured generator, the provider-neutral renderers, and the
-// deterministic candidate critic + bounded optimization loop (#1312). Mirrors the
-// `qualityIntelligence/index.ts` barrel layout. A model-assisted candidate/critic dispatch stage is an
-// explicit later option; the #1312 MVP is fully deterministic for reproducible CI coverage.
+// deterministic candidate critic + bounded optimization loop (#1312). The workflow layer composes
+// these safe primitives with an optional model-assisted refinement stage.
 
 // ─── Execution-profile catalog ───────────────────────────────────────────────
 export type {

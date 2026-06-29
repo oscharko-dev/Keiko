@@ -11,9 +11,13 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import {
+  recommendQiModelPolicy,
+  repairQiModelPolicy,
   resolveQiMultimodalSelection,
+  resolveQiModelPolicy,
   resolveQiTestDesignSelection,
   selectModelForQiCapability,
+  validateQiModelPolicy,
 } from "../modelSelection.js";
 import { QiGenerationError } from "../generationPort.js";
 
@@ -141,6 +145,108 @@ describe("resolveQiTestDesignSelection", () => {
     if (selection.kind === "model") {
       expect(selection.modelId).toBe("chat-fallback");
     }
+  });
+});
+
+describe("Quality Intelligence model policy defaults", () => {
+  it("selects durable generation and judge defaults from configured chat capabilities", () => {
+    const deps = depsWith(
+      configWith([
+        capability("legacy-chat-large", {
+          structuredOutput: false,
+          supportsResponseFormat: false,
+          contextWindow: 1_000_000,
+          maxOutputTokens: 32_000,
+          latencyClass: "fast",
+          costClass: "low",
+        }),
+        capability("json-large-no-response-format", {
+          structuredOutput: true,
+          supportsResponseFormat: false,
+          contextWindow: 256_000,
+          maxOutputTokens: 8_192,
+          latencyClass: "fast",
+          costClass: "low",
+        }),
+        capability("json-response-smaller", {
+          structuredOutput: true,
+          supportsResponseFormat: true,
+          contextWindow: 64_000,
+          maxOutputTokens: 4_096,
+          latencyClass: "slow",
+          costClass: "high",
+        }),
+      ]),
+    );
+
+    expect(recommendQiModelPolicy(deps)).toEqual({
+      policyVersion: 1,
+      testDesignModelId: "json-response-smaller",
+      judgeModelId: "json-response-smaller",
+    });
+  });
+
+  it("keeps generation available when no structured judge model exists", () => {
+    const deps = depsWith(
+      configWith([
+        capability("chat-only-a", { structuredOutput: false, contextWindow: 16_000 }),
+        capability("chat-only-b", { structuredOutput: false, contextWindow: 32_000 }),
+      ]),
+    );
+
+    expect(recommendQiModelPolicy(deps)).toEqual({
+      policyVersion: 1,
+      testDesignModelId: "chat-only-b",
+    });
+    expect(resolveQiModelPolicy(deps, {}).resolved).toEqual({
+      testDesignModelId: "chat-only-b",
+      judgeUnavailableReason: "no-compatible-model",
+    });
+  });
+
+  it("rejects judge models that are chat-capable but lack structured output", () => {
+    const deps = depsWith(
+      configWith([
+        capability("chat-only", { structuredOutput: false }),
+        capability("json-judge", { structuredOutput: true }),
+      ]),
+    );
+
+    expect(
+      validateQiModelPolicy(deps, {
+        policyVersion: 1,
+        testDesignModelId: "chat-only",
+        judgeModelId: "chat-only",
+      }),
+    ).toEqual({
+      ok: false,
+      issues: [
+        {
+          field: "judgeModelId",
+          code: "model-not-structured",
+          message: "The selected judge model does not advertise structured output.",
+        },
+      ],
+    });
+  });
+
+  it("repairs stale persisted policies to recommended defaults", () => {
+    const deps = depsWith(configWith([capability("current-json", { structuredOutput: true })]));
+
+    expect(
+      repairQiModelPolicy(deps, {
+        policyVersion: 1,
+        testDesignModelId: "removed-generation",
+        judgeModelId: "removed-judge",
+      }),
+    ).toEqual({
+      repaired: true,
+      policy: {
+        policyVersion: 1,
+        testDesignModelId: "current-json",
+        judgeModelId: "current-json",
+      },
+    });
   });
 });
 

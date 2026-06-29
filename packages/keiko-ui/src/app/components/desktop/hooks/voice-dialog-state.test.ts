@@ -156,84 +156,32 @@ describe("deriveVoiceAuraState", () => {
     });
   });
 
-  it("surfaces unavailable sessions, session errors, and dialog errors as error", () => {
-    for (const patch of [
+  it("keeps the active aura visually reduced to the low-intensity ready state", () => {
+    const patches: readonly Partial<VoiceAuraStateInputs>[] = [
+      {},
       { voiceDialogAvailable: false },
       { hasSessionError: true },
-      { voiceDialogState: "error" as const },
-    ]) {
+      { voiceDialogState: "error" },
+      { voiceDialogState: "interrupted" },
+      { voiceDialogState: "muted" },
+      { voiceDialogState: "speaking" },
+      { voiceDialogState: "listening" },
+      { voiceDialogState: "thinking" },
+      { voiceDialogState: "connecting" },
+      { listening: true },
+      { speaking: true },
+      { sending: true },
+      { sendStatus: "queued" },
+      { sendStatus: "contacting" },
+      { sendStatus: "streaming" },
+    ];
+    for (const patch of patches) {
       expect(deriveVoiceAuraState({ ...AURA_BASE, ...patch })).toEqual({
         active: true,
-        state: "error",
-        intensity: "high",
+        state: "ready",
+        intensity: "low",
       });
     }
-  });
-
-  it("maps active voice floor states onto the visual aura language", () => {
-    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "listening" })).toEqual({
-      active: true,
-      state: "listening",
-      intensity: "medium",
-    });
-    expect(deriveVoiceAuraState({ ...AURA_BASE, listening: true })).toEqual({
-      active: true,
-      state: "listening",
-      intensity: "medium",
-    });
-    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "thinking" })).toEqual({
-      active: true,
-      state: "thinking",
-      intensity: "high",
-    });
-    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "speaking" })).toEqual({
-      active: true,
-      state: "speaking",
-      intensity: "medium",
-    });
-    expect(deriveVoiceAuraState({ ...AURA_BASE, speaking: true })).toEqual({
-      active: true,
-      state: "speaking",
-      intensity: "medium",
-    });
-    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "muted" })).toEqual({
-      active: true,
-      state: "muted",
-      intensity: "medium",
-    });
-    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "interrupted" })).toEqual({
-      active: true,
-      state: "interrupted",
-      intensity: "medium",
-    });
-  });
-
-  it("uses chat in-flight state as a thinking fallback only after voice state precedence", () => {
-    expect(deriveVoiceAuraState({ ...AURA_BASE, sending: true })).toEqual({
-      active: true,
-      state: "thinking",
-      intensity: "high",
-    });
-    expect(deriveVoiceAuraState({ ...AURA_BASE, sendStatus: "streaming" })).toEqual({
-      active: true,
-      state: "thinking",
-      intensity: "high",
-    });
-    expect(
-      deriveVoiceAuraState({
-        ...AURA_BASE,
-        voiceDialogState: "speaking",
-        sending: true,
-      }),
-    ).toEqual({ active: true, state: "speaking", intensity: "medium" });
-  });
-
-  it("falls back to a low-intensity ready aura while active and idle", () => {
-    expect(deriveVoiceAuraState(AURA_BASE)).toEqual({
-      active: true,
-      state: "ready",
-      intensity: "low",
-    });
   });
 });
 

@@ -51,7 +51,7 @@ export type WindowType =
   // Epic #1307, Issue #1314 — Prompt Enhancer: a singleton tool window. Enter a raw prompt, choose a
   // profile + missing-info strategy, and review the governed Enhanced Prompt (sections, grounding
   // plan, safety rules, output schema, quality criteria, candidate scorecards) before any downstream
-  // use. Deterministic and provider-neutral; routed through the Model Gateway for readiness only.
+  // use. Deterministic by default; an optional enhancement model is routed through the Model Gateway.
   | "promptEnhancer"
   // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
   // view captured screens + IR summaries. Connects to the QI hub as a figma-snapshot source.

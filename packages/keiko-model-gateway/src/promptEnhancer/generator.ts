@@ -182,6 +182,64 @@ const countMatches = (haystack: string, needles: readonly string[]): number => {
 
 const INTENT_FRAMES: readonly PromptIntentRule[] = [
   {
+    id: "software-quality-audit",
+    strong: [
+      "codequalitat",
+      "code quality",
+      "qualitat vom projekt",
+      "qualitaet vom projekt",
+      "project quality",
+      "code audit",
+      "technical audit",
+      "audit this project",
+      "analysiere die codequalitat",
+      "analyze code quality",
+    ],
+    weak: [
+      "projekt",
+      "project",
+      "repository",
+      "repo",
+      "wartbarkeit",
+      "maintainability",
+      "architecture",
+      "architektur",
+      "bugs",
+      "risiken",
+      "risks",
+      "tests",
+      "test coverage",
+    ],
+    taskClasses: ["code-debugging", "code-architecture", "prompt-optimization"],
+    domains: ["software"],
+    role: "You are a senior software quality and architecture reviewer.",
+    goal: "Assess the supplied project context for code quality, maintainability, correctness risks, architecture concerns, and verification coverage.",
+    context: [
+      "Task lens: software quality audit.",
+      "Assess only supplied repository, diff, test, log, documentation, or architecture context; keep unsupported conclusions out of the findings.",
+    ],
+    taskDecomposition: [
+      "Identify the repository scope, relevant modules, runtime assumptions, and available evidence.",
+      "Inspect architecture, correctness risks, maintainability, complexity, security posture, performance hot spots, and test coverage.",
+      "Prioritize findings by severity and confidence, separating confirmed defects from risks and style preferences.",
+      "For each material finding, cite the supporting file, test, log, or documented behavior and explain impact.",
+      "Propose focused remediation steps and verification commands without broad unrelated rewrites.",
+    ],
+    constraints: [
+      "Do not invent files, dependencies, test results, runtime behavior, or architectural constraints that are not supplied.",
+      "Do not turn preference-only observations into defects; tie each finding to impact and evidence.",
+      "Keep remediation scoped, reviewable, and compatible with the existing project style.",
+    ],
+    qualityCriteria: [
+      "Audit usefulness: findings are prioritized, evidence-backed, and actionable.",
+      "Engineering rigor: assumptions, confidence, affected areas, and verification steps are explicit.",
+      "Coverage: architecture, correctness, maintainability, security, performance, and tests are considered when evidence exists.",
+    ],
+    uncertaintyHandling: [
+      "If repository files, test output, runtime context, or architectural goals are missing, ask for them before making definitive quality claims.",
+    ],
+  },
+  {
     id: "software-review-optimization",
     strong: [
       "code-review",
@@ -196,9 +254,8 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     weak: ["optimierung", "optimization", "repository", "repo", "tests", "test coverage"],
     taskClasses: ["code-debugging", "code-architecture", "prompt-optimization"],
     domains: ["software"],
-    role: "You are a senior software review and optimization prompt designer.",
-    goal:
-      "Produce a review-ready prompt that guides a model through code review, defect discovery, optimization, and test recommendations.",
+    role: "You are a senior software reviewer and optimization engineer.",
+    goal: "Review the supplied code context for defects, maintainability, optimization opportunities, and test recommendations.",
     context: [
       "Task lens: software review and optimization.",
       "Use repository, file, diff, test, or log context as evidence; do not infer code behavior beyond supplied context.",
@@ -223,6 +280,134 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     ],
   },
   {
+    id: "software-bugfix-investigation",
+    strong: [
+      "bugfix",
+      "bug fix",
+      "kaputt",
+      "fehler beheben",
+      "fix das",
+      "fix this",
+      "preview kaputt",
+      "pdf preview",
+      "pdf-preview",
+      "citation",
+      "citations",
+      "springen",
+      "anspringen",
+      "performance",
+    ],
+    weak: [
+      "ui",
+      "ux",
+      "api",
+      "frontend",
+      "backend",
+      "pdf",
+      "large files",
+      "grosse dateien",
+      "grosse pdfs",
+      "1gb",
+      "1 gb",
+      "professionell",
+      "test",
+      "tests",
+    ],
+    taskClasses: ["code-debugging", "code-architecture", "code-generation", "factual-qa"],
+    domains: ["software"],
+    role: "You are a senior software debugging and product-quality engineer.",
+    goal: "Diagnose and resolve the supplied software defect, covering investigation, implementation, UX, performance, and verification.",
+    context: [
+      "Task lens: production software defect and product-quality fix.",
+      "Use supplied UI observations, logs, files, traces, test output, and repository context as the evidence boundary.",
+      "When the notes mention preview, documents, citations, navigation, large files, or performance, treat those as explicit acceptance areas to verify.",
+    ],
+    taskDecomposition: [
+      "Restate the observed defect, affected workflow, acceptance criteria, and likely user impact.",
+      "Identify the components, data flow, rendering path, API contracts, and persistence points that need inspection.",
+      "Form hypotheses, then describe the smallest evidence-driven fix that avoids unrelated regressions.",
+      "Cover UX states, loading/error handling, performance limits, accessibility, and edge cases relevant to the defect.",
+      "Specify regression tests, fixtures, browser smoke checks, and performance verification needed before release.",
+    ],
+    constraints: [
+      "Do not invent files, routes, limits, logs, or provider behavior that are not supplied.",
+      "Keep fixes scoped to the failing workflow and explicitly call out unrelated refactors as out of scope.",
+      "Do not claim the defect is solved until the verification steps exercise the affected UI and backend paths.",
+    ],
+    qualityCriteria: [
+      "Defect focus: the prompt preserves the user's concrete failing workflow and acceptance criteria.",
+      "Regression safety: the prompt asks for targeted tests and browser verification around the affected path.",
+      "Product quality: UX, performance, accessibility, and failure states are considered when relevant.",
+    ],
+    uncertaintyHandling: [
+      "If reproduction steps, affected files, browser errors, logs, payload shape, or performance targets are missing, ask for them before prescribing a definitive fix.",
+    ],
+  },
+  {
+    id: "software-test-design",
+    strong: [
+      "regressionstest",
+      "regressionstests",
+      "regressionstestfalle",
+      "regressionstestfaelle",
+      "regression test",
+      "regression tests",
+      "testfalle",
+      "testfaelle",
+      "test cases",
+      "test case",
+      "schreibe tests",
+      "write tests",
+      "unit test plan",
+      "test plan",
+    ],
+    weak: [
+      "preconditions",
+      "vorbedingungen",
+      "steps",
+      "expected",
+      "erwartetes ergebnis",
+      "api",
+      "ui",
+      "roles",
+      "rollen",
+      "admin",
+      "sachbearbeiter",
+      "500",
+      "sporadisch",
+      "edge cases",
+    ],
+    taskClasses: ["code-generation", "code-debugging", "code-architecture", "factual-qa"],
+    domains: ["software"],
+    role: "You are a senior QA engineer and regression-test designer.",
+    goal: "Design executable, evidence-grounded regression test cases from the supplied notes with clear scope, steps, expected results, and traceability.",
+    context: [
+      "Task lens: software regression test design.",
+      "Use only supplied requirements, defects, roles, APIs, UI flows, logs, and system behavior as the evidence boundary.",
+      "Represent missing acceptance criteria as questions or explicit assumptions rather than fabricated behavior.",
+    ],
+    taskDecomposition: [
+      "Identify the feature, defect, risk, roles, interfaces, and environments under test.",
+      "Derive positive, negative, boundary, permission, integration, and regression scenarios from supplied evidence.",
+      "For each case, state preconditions, test data, steps, expected results, and traceability to the source notes.",
+      "Separate API-level, UI-level, and end-to-end checks when the workflow spans multiple surfaces.",
+      "Define fixtures, mocks, cleanup, and automation candidates needed to make the tests repeatable.",
+    ],
+    constraints: [
+      "Do not invent business rules, roles, endpoints, selectors, or error semantics that are not supplied.",
+      "Keep test cases specific enough to execute but mark unknown values as placeholders or clarification questions.",
+      "Do not collapse intermittent failures into a single happy-path test; include observability and retry diagnostics when relevant.",
+    ],
+    qualityCriteria: [
+      "Executable specificity: each test has preconditions, steps, expected results, and traceability.",
+      "Risk coverage: role, error, boundary, regression, and integration risks are covered when evidence exists.",
+      "Automation readiness: fixtures, data setup, assertions, and cleanup are clear enough for implementation.",
+    ],
+    uncertaintyHandling: [
+      "If endpoints, UI flows, roles, test data, expected status codes, or acceptance criteria are missing, ask for them or mark them as assumptions.",
+    ],
+  },
+  {
     id: "database-migration",
     strong: [
       "database migration",
@@ -236,9 +421,8 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     weak: ["sql", "database", "datenbank", "migration", "schema", "rollback"],
     taskClasses: ["code-architecture", "data-analysis"],
     domains: ["software", "data-science", "business"],
-    role: "You are a data-migration architecture prompt designer.",
-    goal:
-      "Produce a migration-planning prompt that covers source and target data, transformation rules, rollout, rollback, and validation evidence.",
+    role: "You are a senior data-migration architect.",
+    goal: "Plan a safe data migration covering source and target data, transformation rules, rollout, rollback, and validation evidence.",
     context: [
       "Task lens: database and customer-data migration.",
       "Treat data mappings, schemas, constraints, and operational requirements as the evidence boundary.",
@@ -291,9 +475,8 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     ],
     taskClasses: ["code-generation", "code-debugging", "code-architecture"],
     domains: ["software"],
-    role: "You are a senior software implementation prompt designer.",
-    goal:
-      "Produce an implementation prompt that turns the request into a maintainable, testable software change with clear constraints and verification.",
+    role: "You are a senior software engineer.",
+    goal: "Implement the requested software change in a maintainable, testable way with clear constraints and verification.",
     context: [
       "Task lens: software implementation.",
       "Use repository or API context only as supplied; keep assumptions about frameworks and runtime explicit.",
@@ -321,9 +504,8 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     id: "recipe-baking",
     strong: ["backe", "kuchen", "rezept", "bake", "cake", "recipe", "cook", "kochen"],
     weak: ["zutaten", "ofen", "dessert", "meal", "servings", "portionen"],
-    role: "You are a practical culinary instruction prompt designer.",
-    goal:
-      "Produce a complete baking or cooking prompt that yields a usable recipe with ingredients, equipment, timing, method, and serving guidance.",
+    role: "You are a practical culinary instructor.",
+    goal: "Create a usable recipe with ingredients, equipment, timing, method, serving guidance, and troubleshooting notes.",
     context: [
       "Task lens: recipe and baking guidance.",
       "Treat personal preferences, dietary needs, equipment, and serving count as required context when they matter.",
@@ -352,9 +534,8 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     strong: ["reise", "urlaub", "itinerary", "travel", "trip", "japan", "hotel", "flug"],
     weak: ["oktober", "route", "budget", "transport", "unterkunft", "sightseeing"],
     taskClasses: ["decision-support", "research"],
-    role: "You are a travel-planning prompt designer.",
-    goal:
-      "Produce a travel-planning prompt that creates an itinerary with timing, route logic, budget assumptions, logistics, and tradeoffs.",
+    role: "You are an expert travel planner.",
+    goal: "Create a realistic itinerary with timing, route logic, budget assumptions, logistics, tradeoffs, and open questions.",
     context: [
       "Task lens: travel itinerary planning.",
       "Current prices, schedules, visa rules, and venue availability require fresh verification when not supplied.",
@@ -393,9 +574,8 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     weak: ["vertrag", "brief", "email", "anschreiben", "formuliere", "recipient", "frist"],
     taskClasses: ["writing-editing"],
     domains: ["legal", "business"],
-    role: "You are a formal administrative writing prompt designer.",
-    goal:
-      "Produce a drafting prompt for a clear, complete administrative letter with recipient details, contract references, dates, requested action, and tone.",
+    role: "You are a formal administrative writing assistant.",
+    goal: "Draft a clear, complete administrative letter with recipient details, contract references, dates, requested action, and appropriate tone.",
     context: [
       "Task lens: formal letter and contract communication.",
       "Legal or contractual claims must remain cautious unless the relevant terms and jurisdiction are supplied.",
@@ -425,9 +605,8 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     weak: ["beispiel", "example", "einfach", "step by step", "schritt fur schritt"],
     taskClasses: ["factual-qa"],
     domains: ["education"],
-    role: "You are an instructional explanation prompt designer.",
-    goal:
-      "Produce a teaching prompt that explains the topic at the right level with examples, checks for understanding, and clear boundaries.",
+    role: "You are an instructional explanation specialist.",
+    goal: "Explain the topic at the right level with examples, checks for understanding, and clear boundaries.",
     context: [
       "Task lens: learning and explanation.",
       "The learner's background, goal, and desired depth determine the best explanation style.",
@@ -456,9 +635,8 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     weak: ["fiction", "character", "plot", "tone", "voice", "scene"],
     taskClasses: ["creative-writing"],
     domains: ["creative"],
-    role: "You are a creative-writing prompt designer.",
-    goal:
-      "Produce a creative prompt that captures premise, voice, audience, structure, constraints, and revision criteria.",
+    role: "You are a creative writing specialist.",
+    goal: "Create original writing that respects the premise, voice, audience, structure, constraints, and revision criteria.",
     context: [
       "Task lens: creative writing.",
       "Tone, genre, point of view, length, and audience shape the output more than factual grounding.",
@@ -486,9 +664,8 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     strong: ["research", "recherchiere", "state of the art", "literature review", "cite sources"],
     weak: ["compare", "vergleich", "quellen", "sources", "background", "uberblick"],
     taskClasses: ["research", "rag-question-answering"],
-    role: "You are a research-synthesis prompt designer.",
-    goal:
-      "Produce a research prompt that defines scope, evidence standards, source priority, synthesis method, and uncertainty reporting.",
+    role: "You are a research synthesis analyst.",
+    goal: "Answer the research question by defining scope, applying evidence standards, prioritizing sources, synthesizing findings, and reporting uncertainty.",
     context: [
       "Task lens: research synthesis.",
       "Evidence quality, recency, source priority, and citation discipline are central to the answer.",
@@ -517,9 +694,8 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     strong: ["should i", "soll ich", "pros and cons", "vor- und nachteile", "help me decide"],
     weak: ["recommend", "empfehlung", "option", "tradeoff", "vergleich", "compare"],
     taskClasses: ["decision-support"],
-    role: "You are a decision-support prompt designer.",
-    goal:
-      "Produce a decision prompt that compares options against explicit criteria, risks, constraints, and recommendation logic.",
+    role: "You are a decision-support analyst.",
+    goal: "Compare options against explicit criteria, risks, constraints, and recommendation logic so the user can make a grounded decision.",
     context: [
       "Task lens: decision support.",
       "Decision quality depends on criteria, priorities, constraints, and uncertainty rather than a one-size-fits-all answer.",
@@ -632,10 +808,13 @@ function buildTaskDecomposition(
   plan: PromptEnhancementPlan,
   intentFrame: PromptIntentFrame | undefined,
 ): string[] {
-  const steps = appendUnique(
-    [...(intentFrame?.taskDecomposition ?? [])],
-    DECOMPOSITION_BY_STRATEGY[plan.reasoningStrategy],
-  );
+  if (intentFrame !== undefined) {
+    return [...intentFrame.taskDecomposition].slice(
+      0,
+      Math.max(1, plan.executionProfile.maxTaskDecompositionSteps),
+    );
+  }
+  const steps = appendUnique([], DECOMPOSITION_BY_STRATEGY[plan.reasoningStrategy]);
   return steps.slice(0, Math.max(1, plan.executionProfile.maxTaskDecompositionSteps));
 }
 

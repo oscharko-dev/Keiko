@@ -98,47 +98,9 @@ export function deriveVoiceDialogState(inputs: VoiceDialogStateInputs): VoiceDia
 }
 
 export function deriveVoiceAuraState(inputs: VoiceAuraStateInputs): VoiceAuraStateSnapshot {
-  const {
-    voiceDialogActive,
-    voiceDialogAvailable,
-    voiceDialogState,
-    listening,
-    speaking,
-    sending,
-    sendStatus,
-    hasSessionError,
-  } = inputs;
-
-  if (!voiceDialogActive) {
+  if (!inputs.voiceDialogActive) {
     return { active: false, state: "ready", intensity: "low" };
   }
-  if (!voiceDialogAvailable || hasSessionError || voiceDialogState === "error") {
-    return { active: true, state: "error", intensity: "high" };
-  }
-  if (voiceDialogState === "interrupted") {
-    return { active: true, state: "interrupted", intensity: "medium" };
-  }
-  if (voiceDialogState === "muted") {
-    return { active: true, state: "muted", intensity: "medium" };
-  }
-  if (speaking || voiceDialogState === "speaking") {
-    return { active: true, state: "speaking", intensity: "medium" };
-  }
-  if (listening || voiceDialogState === "listening") {
-    return { active: true, state: "listening", intensity: "medium" };
-  }
-  if (voiceDialogState === "thinking" || voiceDialogState === "connecting") {
-    return { active: true, state: "thinking", intensity: "high" };
-  }
-  if (
-    sending ||
-    sendStatus === "queued" ||
-    sendStatus === "contacting" ||
-    sendStatus === "streaming"
-  ) {
-    return { active: true, state: "thinking", intensity: "high" };
-  }
-
   return { active: true, state: "ready", intensity: "low" };
 }
 

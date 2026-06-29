@@ -128,6 +128,112 @@ describe("usePdfCitationPreviewController", () => {
     expect(result.current?.forCitation(citations[1]!)).toBeUndefined();
   });
 
+  it("maps passive status by marker when the stored preview id differs from the answer citation id", async () => {
+    const citations = [citation("[1]", "answer-stable-1")];
+    const groundedAnswer = answer(citations);
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "stored-preview-stable-1",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "available",
+          display: { documentLabel: "policy.pdf", pageNumber: 3, anchorQuality: "page-only" },
+        },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      usePdfCitationPreviewController({
+        answer: groundedAnswer,
+        chatId: "chat-1",
+        windows: {
+          add: vi.fn(),
+          focus: vi.fn(),
+          update: vi.fn(),
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current?.forCitation(citations[0]!)?.state).toBe("available");
+    });
+    expect(result.current?.forMarker("[1]")?.citation.stableId).toBe("answer-stable-1");
+  });
+
+  it("marker-maps repeated identical answer citations as one candidate", async () => {
+    const citations = [
+      citation("[1]", "answer-stable-1"),
+      citation("[1]", "answer-stable-1"),
+    ];
+    const groundedAnswer = answer(citations);
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "stored-preview-stable-1",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "available",
+          display: { documentLabel: "policy.pdf", pageNumber: 3, anchorQuality: "page-only" },
+        },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      usePdfCitationPreviewController({
+        answer: groundedAnswer,
+        chatId: "chat-1",
+        windows: {
+          add: vi.fn(),
+          focus: vi.fn(),
+          update: vi.fn(),
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current?.forMarker("[1]")?.state).toBe("available");
+    });
+  });
+
+  it("does not marker-map passive status when the answer marker is ambiguous", async () => {
+    const citations = [
+      citation("[1]", "answer-stable-1", "policy-a.pdf", "doc-1"),
+      citation("[1]", "answer-stable-2", "policy-b.pdf", "doc-2"),
+    ];
+    const groundedAnswer = answer(citations);
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "stored-preview-stable-1",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "available",
+          display: { documentLabel: "policy.pdf", pageNumber: 3, anchorQuality: "page-only" },
+        },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      usePdfCitationPreviewController({
+        answer: groundedAnswer,
+        chatId: "chat-1",
+        windows: {
+          add: vi.fn(),
+          focus: vi.fn(),
+          update: vi.fn(),
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(fetchPdfCitationPreviewStatus).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(result.current?.forMarker("[1]")).toBeUndefined();
+    });
+  });
+
   it("leaves citations normal when passive status fails", async () => {
     const citations = [citation("[1]", "stable-1")];
     const groundedAnswer = answer(citations);
@@ -232,6 +338,7 @@ describe("usePdfCitationPreviewController", () => {
   it("passes answer-local same-document context and source-chat provenance to the viewer result", async () => {
     const citations = [
       citation("[1]", "stable-1", "policy.pdf", "doc-shared"),
+      citation("[2]", "stable-2", "policy appendix.pdf", "doc-shared"),
       citation("[2]", "stable-2", "policy appendix.pdf", "doc-shared"),
       citation("[3]", "stable-3", "other.pdf", "doc-other"),
     ];

@@ -1653,12 +1653,16 @@ export async function closePdfCitationPreviewSession(
   );
 }
 
+export function pdfCitationPreviewDocumentUrl(sessionHandle: string): string {
+  return `/api/local-knowledge/citation-preview/sessions/${encodeURIComponent(sessionHandle)}/document`;
+}
+
 export async function fetchPdfCitationPreviewDocument(
   sessionHandle: string,
   signal?: AbortSignal,
 ): Promise<Uint8Array> {
   return fetchBinary(
-    `/api/local-knowledge/citation-preview/sessions/${encodeURIComponent(sessionHandle)}/document`,
+    pdfCitationPreviewDocumentUrl(sessionHandle),
     signal === undefined ? undefined : { signal },
   );
 }

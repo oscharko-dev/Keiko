@@ -20,6 +20,8 @@ import type {
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceStartRunRequest,
+  QualityIntelligenceModelPolicy,
+  QualityIntelligenceModelRouting,
 } from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { SSE_HEADERS } from "../sse.js";
@@ -41,6 +43,7 @@ import {
 import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
 import type { QiSkippedSource } from "./runIngestion.js";
 import { qiRunRegistry } from "./runRegistry.js";
+import { buildQiModelRoutingForRun, QiModelPolicyError } from "./modelPolicyRoutes.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -240,16 +243,34 @@ function parseOptionalSeed(value: unknown): number | null | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
+function parseOptionalModelPolicy(
+  value: unknown,
+): QualityIntelligenceModelPolicy | null | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) return null;
+  if (value.policyVersion !== 1) return null;
+  return {
+    policyVersion: 1,
+    ...(typeof value.testDesignModelId === "string"
+      ? { testDesignModelId: value.testDesignModelId }
+      : {}),
+    ...(typeof value.judgeModelId === "string" ? { judgeModelId: value.judgeModelId } : {}),
+    ...(typeof value.updatedAt === "string" ? { updatedAt: value.updatedAt } : {}),
+  };
+}
+
 function buildStartRequest(
   sources: QualityIntelligenceInlineSource[],
   profileId: string | undefined,
   modelId: string | undefined,
+  modelPolicy: QualityIntelligenceModelPolicy | undefined,
   seed: number | undefined,
 ): QualityIntelligenceStartRunRequest {
   return {
     sources,
     ...(profileId ? { profileId } : {}),
     ...(modelId ? { modelId } : {}),
+    ...(modelPolicy !== undefined ? { modelPolicy } : {}),
     ...(seed !== undefined ? { seed } : {}),
   };
 }
@@ -265,6 +286,17 @@ function validateRequest(parsed: unknown): ParseOutcome {
   if (!collected.ok) return collected;
   const profileId = typeof parsed.profileId === "string" ? parsed.profileId : undefined;
   const modelId = typeof parsed.modelId === "string" ? parsed.modelId : undefined;
+  const modelPolicy = parseOptionalModelPolicy(parsed.modelPolicy);
+  if (modelPolicy === null) {
+    return {
+      ok: false,
+      result: errorResult(
+        400,
+        "QI_BAD_MODEL_POLICY",
+        "The Quality Intelligence model policy is malformed.",
+      ),
+    };
+  }
   const seed = parseOptionalSeed(parsed.seed);
   if (seed === null) {
     return {
@@ -278,7 +310,7 @@ function validateRequest(parsed: unknown): ParseOutcome {
   }
   return {
     ok: true,
-    request: buildStartRequest(collected.sources, profileId, modelId, seed),
+    request: buildStartRequest(collected.sources, profileId, modelId, modelPolicy, seed),
   };
 }
 
@@ -362,6 +394,14 @@ function writeAcceptedFrame(write: WriteFn, accepted: QiRunAccepted): void {
     requestedAt: accepted.requestedAt,
     sourceCount: accepted.sourceCount,
     atomCount: accepted.atomCount,
+    ...(accepted.modelRouting !== undefined
+      ? {
+          modelRouting: {
+            resolved: accepted.modelRouting.resolved,
+            preflight: accepted.modelRouting.preflight,
+          },
+        }
+      : {}),
     ...(accepted.droppedSourceCount > 0 ? { droppedSourceCount: accepted.droppedSourceCount } : {}),
     ...(accepted.skippedSources.length > 0
       ? { skippedSources: toWireSkippedSources(accepted.skippedSources) }
@@ -374,6 +414,7 @@ export function doneFrameForSummary(
   runId: string,
   summary: QiExecutionSummary,
   totals: StreamTotals,
+  modelRouting?: QualityIntelligenceModelRouting,
 ): QualityIntelligenceRunStreamMessage {
   // Surface the bounded reasonSummary for BOTH a terminal failed run and a succeeded-but-degraded run
   // (model/parser fell back to the deterministic baseline). The reason is already safeReasonSummary-
@@ -388,6 +429,9 @@ export function doneFrameForSummary(
     runId,
     status: summary.status,
     totals,
+    ...(modelRouting !== undefined
+      ? { modelRouting: { resolved: modelRouting.resolved, preflight: modelRouting.preflight } }
+      : {}),
     ...(reasonSummary !== undefined ? { reasonSummary } : {}),
     ...(degraded !== undefined ? { degraded } : {}),
   };
@@ -396,6 +440,7 @@ export function doneFrameForSummary(
 async function streamRunExecution(
   deps: UiHandlerDeps,
   request: QualityIntelligenceStartRunRequest,
+  modelRouting: QualityIntelligenceModelRouting,
   runId: string,
   registeredAt: string,
   signal: AbortSignal,
@@ -406,6 +451,7 @@ async function streamRunExecution(
   try {
     const summary = await executeQiRun({
       request,
+      modelRouting,
       runId,
       deps,
       registeredAt,
@@ -421,7 +467,7 @@ async function streamRunExecution(
       },
     });
     terminal = summary.status;
-    write(doneFrameForSummary(deps, runId, summary, totals));
+    write(doneFrameForSummary(deps, runId, summary, totals, modelRouting));
   } catch (error) {
     const { code, message } = classifyStartError(error);
     write({ type: "error", code, message });
@@ -436,6 +482,19 @@ export async function handleStartQiRun(
 ): Promise<HandlerOutcome> {
   const parsed = await parseStartBody(ctx.req);
   if (!parsed.ok) return parsed.result;
+  let modelRouting: QualityIntelligenceModelRouting;
+  try {
+    modelRouting = await buildQiModelRoutingForRun(deps, parsed.request);
+  } catch (error) {
+    if (error instanceof QiModelPolicyError) {
+      return errorResult(400, error.code, error.message);
+    }
+    return errorResult(
+      500,
+      "QI_MODEL_PREFLIGHT_FAILED",
+      "The Quality Intelligence model preflight failed.",
+    );
+  }
 
   const runId = `qi-run-${randomUUID()}`;
   const registeredAt = new Date().toISOString();
@@ -450,7 +509,15 @@ export async function handleStartQiRun(
     writeOrDestroy(ctx.res, `data: ${JSON.stringify(message)}\n\n`, controller);
   };
 
-  await streamRunExecution(deps, parsed.request, runId, registeredAt, controller.signal, write);
+  await streamRunExecution(
+    deps,
+    parsed.request,
+    modelRouting,
+    runId,
+    registeredAt,
+    controller.signal,
+    write,
+  );
   ctx.res.end();
   return STREAMING;
 }

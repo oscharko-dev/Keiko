@@ -13,6 +13,7 @@ import {
   regressionDefault,
   type PolicyProfile,
 } from "@oscharko-dev/keiko-quality-intelligence";
+import { findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
 import {
   createNodeQualityIntelligenceLocalStore,
   recordQualityIntelligenceCandidates,
@@ -23,6 +24,7 @@ import {
   type QualityIntelligenceModelRoutedTestDesignDeps,
 } from "@oscharko-dev/keiko-workflows";
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligenceModelRouting } from "@oscharko-dev/keiko-contracts";
 import { currentRedactionSecrets, type UiHandlerDeps } from "../deps.js";
 import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
 import type { QiSkippedSource } from "./runIngestion.js";
@@ -30,7 +32,7 @@ import { makeCapsuleResolver } from "./capsuleAdapter.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort, QiJudgeError } from "./judgePort.js";
-import { resolveModelForQiCapability, resolveQiTestDesignSelection } from "./modelSelection.js";
+import { resolveQiModelPolicy } from "./modelSelection.js";
 
 // Mirrors the stages the model-routed workflow actually emits (descriptors.ts stageNames), so the
 // run plan the UI renders matches the live stage:started/completed events — including the
@@ -55,6 +57,7 @@ export interface QiRunAccepted {
   readonly sourceCount: number;
   readonly atomCount: number;
   readonly modelId?: string | undefined;
+  readonly modelRouting?: QualityIntelligenceModelRouting | undefined;
   /** Sources dropped because the request exceeded the 16-source cap (Epic #729). */
   readonly droppedSourceCount: number;
   /** Connected sources skipped because they ingested to nothing usable (Epic #729 N+1 resilience). */
@@ -63,6 +66,7 @@ export interface QiRunAccepted {
 
 export interface ExecuteQiRunInput {
   readonly request: QualityIntelligenceStartRunRequest;
+  readonly modelRouting?: QualityIntelligenceModelRouting | undefined;
   readonly runId: string;
   readonly deps: UiHandlerDeps;
   readonly registeredAt: string;
@@ -78,36 +82,104 @@ interface ResolvedExecutionStrategy {
 
 type QiIngestion = Awaited<ReturnType<typeof ingestInlineSourcesAsync>>;
 
+function shouldUseBaselineGeneration(args: {
+  readonly request: QualityIntelligenceStartRunRequest;
+  readonly modelRouting: QualityIntelligenceModelRouting;
+  readonly capabilitySupportsSeeding: boolean | undefined;
+}): boolean {
+  const selectedByDefault =
+    args.request.modelId === undefined &&
+    args.request.modelPolicy?.testDesignModelId === undefined &&
+    args.modelRouting.requested.testDesignModelId === undefined;
+  return (
+    args.modelRouting.resolved.testDesignModelId === undefined ||
+    (args.request.seed !== undefined &&
+      selectedByDefault &&
+      args.capabilitySupportsSeeding !== true)
+  );
+}
+
 function resolveExecutionStrategy(
   deps: UiHandlerDeps,
   request: QualityIntelligenceStartRunRequest,
+  modelRouting: QualityIntelligenceModelRouting,
 ): ResolvedExecutionStrategy {
-  const selection = resolveQiTestDesignSelection(deps, request.modelId);
+  const modelId = modelRouting.resolved.testDesignModelId;
+  const capability =
+    deps.config !== undefined && modelId !== undefined
+      ? findConfiguredCapability(deps.config, modelId)
+      : undefined;
   // Seeded runs without an explicit model are release evidence. If automatic routing would pick a
   // model that cannot apply the seed, prefer the deterministic structural baseline over
   // nondeterministic model/judge augmentation. Explicit model requests keep their existing
   // attribution contract and persist `seedUsed: null` when the model cannot apply the seed.
+  if (modelId === undefined) {
+    return {
+      generate: createQiGenerationPort(deps, { kind: "baseline" }),
+    };
+  }
   if (
-    request.modelId === undefined &&
-    request.seed !== undefined &&
-    (selection.kind === "baseline" || selection.capability.supportsSeeding !== true)
+    shouldUseBaselineGeneration({
+      request,
+      modelRouting,
+      capabilitySupportsSeeding: capability?.supportsSeeding,
+    })
   ) {
     return {
       generate: createQiGenerationPort(deps, { kind: "baseline" }),
     };
   }
-  if (selection.kind === "model") {
-    return {
-      modelId: selection.modelId,
-      generate: createQiGenerationPort(deps, {
-        kind: "model",
-        modelId: selection.modelId,
-        requestedSeed: request.seed,
-      }),
-    };
-  }
   return {
-    generate: createQiGenerationPort(deps, { kind: "baseline" }),
+    modelId,
+    generate: createQiGenerationPort(deps, {
+      kind: "model",
+      modelId,
+      requestedSeed: request.seed,
+    }),
+  };
+}
+
+function buildExecutionRouting(input: ExecuteQiRunInput): QualityIntelligenceModelRouting {
+  if (input.modelRouting !== undefined) return input.modelRouting;
+  const resolution = resolveQiModelPolicy(input.deps, {
+    ...(input.request.modelId !== undefined ? { modelId: input.request.modelId } : {}),
+    ...(input.request.modelPolicy !== undefined ? { modelPolicy: input.request.modelPolicy } : {}),
+  });
+  const generation =
+    resolution.resolved.testDesignModelId === undefined
+      ? {
+          stage: "generate" as const,
+          status: "unavailable" as const,
+          category: "unavailable" as const,
+          message: "No compatible model is available for this stage.",
+        }
+      : {
+          stage: "generate" as const,
+          modelId: resolution.resolved.testDesignModelId,
+          status: "passed" as const,
+        };
+  const judge =
+    resolution.resolved.judgeModelId === undefined
+      ? {
+          stage: "judge" as const,
+          status: "unavailable" as const,
+          category: "unavailable" as const,
+          message: "No compatible model is available for this stage.",
+        }
+      : {
+          stage: "judge" as const,
+          modelId: resolution.resolved.judgeModelId,
+          status: "passed" as const,
+        };
+  return {
+    policyVersion: 1,
+    requested: resolution.requested,
+    resolved: resolution.resolved,
+    preflight: {
+      status: generation.status === "unavailable" ? "unavailable" : "passed",
+      generation,
+      judge,
+    },
   };
 }
 
@@ -115,6 +187,7 @@ function buildAccepted(
   input: ExecuteQiRunInput,
   ingestion: QiIngestion,
   modelId: string | undefined,
+  modelRouting: QualityIntelligenceModelRouting,
 ): QiRunAccepted {
   return {
     runId: input.runId,
@@ -122,6 +195,7 @@ function buildAccepted(
     sourceCount: ingestion.sourceSummaries.length,
     atomCount: ingestion.ingestedAtoms.length,
     ...(modelId !== undefined ? { modelId } : {}),
+    modelRouting,
     droppedSourceCount: ingestion.droppedSourceCount,
     skippedSources: ingestion.skippedSources,
   };
@@ -165,6 +239,7 @@ async function runResolvedQi(
   capsuleResolver: ReturnType<typeof makeCapsuleResolver>,
 ): Promise<QualityIntelligenceRunSummary> {
   const { deps, runId, request } = input;
+  const modelRouting = buildExecutionRouting(input);
   let ingestionModelGatewayCallCount = 0;
   const ingestion = await ingestInlineSourcesAsync({
     request,
@@ -178,11 +253,11 @@ async function runResolvedQi(
       },
     }),
   });
-  const { modelId, generate } = resolveExecutionStrategy(deps, request);
-  const judge = buildJudgePortForModelRun(deps, modelId, request.modelId);
+  const { modelId, generate } = resolveExecutionStrategy(deps, request, modelRouting);
+  const judge = buildJudgePortForModelRun(deps, modelRouting.resolved.judgeModelId);
   const profile = resolveProfile(request.profileId);
 
-  input.onAccepted(buildAccepted(input, ingestion, modelId));
+  input.onAccepted(buildAccepted(input, ingestion, modelId, modelRouting));
 
   return await runQualityIntelligenceModelRoutedTestDesign(
     {
@@ -197,6 +272,7 @@ async function runResolvedQi(
       runId,
       evidenceDir,
       modelId,
+      modelRouting,
       initialModelGatewayCallCount: ingestionModelGatewayCallCount,
       generate,
       judge,
@@ -211,6 +287,7 @@ interface WorkflowDepsInput {
   readonly runId: string;
   readonly evidenceDir: string;
   readonly modelId?: string | undefined;
+  readonly modelRouting?: QualityIntelligenceModelRouting | undefined;
   readonly initialModelGatewayCallCount?: number | undefined;
   readonly generate: ReturnType<typeof createQiGenerationPort>;
   readonly judge?: ReturnType<typeof createQiJudgePort> | undefined;
@@ -220,14 +297,11 @@ interface WorkflowDepsInput {
 
 function buildJudgePortForModelRun(
   deps: UiHandlerDeps,
-  modelId: string | undefined,
-  requestedModelId: string | undefined,
+  judgeModelId: string | undefined,
 ): ReturnType<typeof createQiJudgePort> | undefined {
-  if (modelId === undefined) return undefined;
-  const judgeSelection = resolveModelForQiCapability(deps, "qi:judge-logic", requestedModelId);
-  if (judgeSelection.kind === "unavailable") return undefined;
+  if (judgeModelId === undefined) return undefined;
   try {
-    return createQiJudgePort(deps, judgeSelection.modelId);
+    return createQiJudgePort(deps, judgeModelId);
   } catch (error) {
     if (error instanceof QiJudgeError) {
       throw new QiGenerationError(error.code, error.message);
@@ -243,6 +317,7 @@ function buildWorkflowDeps(args: WorkflowDepsInput): QualityIntelligenceModelRou
     sink: { emit: args.onEvent },
     evidenceStore: createNodeQualityIntelligenceLocalStore(evidenceDir),
     initialModelGatewayCallCount: args.initialModelGatewayCallCount,
+    modelRouting: args.modelRouting,
     candidatesSink: {
       record: (candidates, generatedAt): void => {
         recordQualityIntelligenceCandidates({
