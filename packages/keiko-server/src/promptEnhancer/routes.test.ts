@@ -222,25 +222,27 @@ describe("POST /api/prompt-enhancement", () => {
 
   it("applies the selected enhancement model through the server ModelPort", async () => {
     const calls: GatewayRequest[] = [];
-    const patch = JSON.stringify({
-      role: "You are a route-level prompt enhancement specialist.",
-      goal: "Produce a server route model enhancement prompt with concrete review steps.",
-      context: ["The server test injected a fake ModelPort and expects a model-refined prompt."],
-      taskDecomposition: ["Analyze the draft.", "Refine the prompt.", "Preserve safety rules."],
-      constraints: ["Do not invent provider credentials.", "Keep the prompt reviewable."],
-      groundingRules: ["Treat supplied context as the evidence boundary."],
-      qualityCriteria: ["The prompt is specific.", "The prompt is safely reviewable."],
-      uncertaintyHandling: ["State gaps instead of guessing."],
-    });
+    const modelText = [
+      "## Role",
+      "You are a route-level prompt enhancement specialist.",
+      "",
+      "## Objective",
+      "Produce a server route model enhancement prompt with concrete review steps.",
+      "",
+      "## Steps",
+      "- Analyze the draft.",
+      "- Refine the prompt.",
+      "- Preserve safety rules.",
+    ].join("\n");
     await closeServer();
-    await startBound({ modelPortFactory: () => modelPort(patch, calls) });
+    await startBound({ modelPortFactory: () => modelPort(modelText, calls) });
 
     const res = await post({ text: "Improve this prompt.", modelId: CHAT_MODEL });
     expect(res.status).toBe(200);
     const body = (await res.json()) as PromptEnhancementWireResponse;
     expect(calls).toHaveLength(1);
     expect(calls[0]?.modelId).toBe(CHAT_MODEL);
-    expect(calls[0]?.responseFormat?.type).toBe("json_schema");
+    expect(calls[0]?.responseFormat).toBeUndefined();
     expect(body.modelRouting.availability).toBe("available");
     expect(body.modelRouting.executionStatus).toBe("model-applied");
     expect(body.renderedPrompt).toContain("server route model enhancement");

@@ -163,6 +163,56 @@ describe("runPromptEnhancement", () => {
     expect(result.renderedPrompt).toMatch(/software quality audit/i);
     expect(result.renderedPrompt).toMatch(/maintainability|architecture|test coverage/i);
     expect(result.renderedPrompt).toMatch(/prioritized|evidence-backed|verification/i);
+    expect(result.enhancedPrompt.role).toMatch(/reviewer/i);
+    expect(result.enhancedPrompt.role).not.toMatch(/prompt designer|prompt engineer/i);
+    expect(result.enhancedPrompt.goal).not.toMatch(
+      /\b(produce|create|write|design)\b.*\bprompt\b/i,
+    );
+  });
+
+  it("recognizes product bugfix notes instead of using a generic Q&A prompt", async () => {
+    const result = await run({
+      text: [
+        "PDF Preview kaputt",
+        "- große PDFs bis 1GB",
+        "- Citations direkt anspringen",
+        "- UI soll professionell werden",
+      ].join("\n"),
+    });
+    expect(result.renderedPrompt).toMatch(/software defect|product-quality fix/i);
+    expect(result.renderedPrompt).toMatch(/preview|documents|citations|navigation/i);
+    expect(result.renderedPrompt).toMatch(
+      /browser smoke|performance verification|regression tests/i,
+    );
+    expect(result.analysis.taskClass).toBe("code-debugging");
+    expect(result.analysis.domain).toBe("software");
+    expect(result.enhancedPrompt.role).toBe(
+      "You are a senior software debugging and product-quality engineer.",
+    );
+    expect(result.enhancedPrompt.role).not.toMatch(/prompt designer|prompt engineer/i);
+    expect(result.enhancedPrompt.goal).not.toMatch(
+      /\b(produce|create|write|design)\b.*\bprompt\b/i,
+    );
+  });
+
+  it("recognizes regression test design requests instead of using an implementation prompt", async () => {
+    const result = await run({
+      text: [
+        "Schreibe Regressionstestfälle",
+        "- Login sporadisch 500",
+        "- Rollen Admin und Sachbearbeiter",
+        "- API und UI prüfen",
+      ].join("\n"),
+    });
+    expect(result.renderedPrompt).toMatch(/QA engineer|software regression test design/i);
+    expect(result.renderedPrompt).toMatch(/preconditions|steps|expected results|traceability/i);
+    expect(result.renderedPrompt).toMatch(/API-level|UI-level|end-to-end/i);
+    expect(result.analysis.taskClass).toBe("code-generation");
+    expect(result.analysis.domain).toBe("software");
+    expect(result.enhancedPrompt.role).not.toMatch(/prompt designer|prompt engineer/i);
+    expect(result.enhancedPrompt.goal).not.toMatch(
+      /\b(produce|create|write|design)\b.*\bprompt\b/i,
+    );
   });
 
   it("is deterministic: identical requests produce identical results", async () => {
@@ -260,35 +310,19 @@ describe("runPromptEnhancement", () => {
     });
 
     it("uses the selected chat model as a real enhancement stage", async () => {
-      const modelPatch = JSON.stringify({
-        role: "You are a principal engineer designing a repository quality audit prompt.",
-        goal: "Create a precise audit prompt for assessing project code quality with evidence-backed findings and verification steps.",
-        context: [
-          "Focus on repository-level quality, architecture, maintainability, correctness risk, and test evidence.",
-          "Treat missing files, tests, logs, and runtime assumptions as explicit gaps rather than making claims.",
-        ],
-        taskDecomposition: [
-          "Map the supplied project structure, critical modules, and available evidence.",
-          "Assess correctness, architecture, maintainability, security, performance, and test coverage.",
-          "Prioritize confirmed findings separately from risks and improvement opportunities.",
-          "Attach each finding to evidence, impact, and a verification path.",
-        ],
-        constraints: [
-          "Do not invent repository files, dependencies, test results, or production behavior.",
-          "Keep remediation proposals small, reviewable, and aligned with the existing codebase.",
-        ],
-        groundingRules: [
-          "Use supplied repository, diff, documentation, test, or log context as the evidence boundary.",
-        ],
-        qualityCriteria: [
-          "Findings are prioritized by severity, confidence, and affected area.",
-          "Each recommendation includes verification commands or concrete review evidence.",
-        ],
-        uncertaintyHandling: [
-          "Ask for missing repository context, tests, logs, or architecture goals before making definitive claims.",
-        ],
-      });
-      const { factory, calls } = recordingModelPort(modelPatch);
+      const modelText = [
+        "## Role",
+        "You are a senior software quality and architecture reviewer.",
+        "",
+        "## Objective",
+        "Assess repository-level quality, architecture, maintainability, correctness risk, and test evidence.",
+        "",
+        "## Steps",
+        "- Map the supplied project structure, critical modules, and available evidence.",
+        "- Prioritize confirmed findings separately from risks and improvement opportunities.",
+        "- Attach each finding to evidence, impact, and verification commands.",
+      ].join("\n");
+      const { factory, calls } = recordingModelPort(modelText);
       const request = {
         text: "Analysiere die Codequalität vom Projekt.",
         modelId: "example-chat-model",
@@ -299,42 +333,102 @@ describe("runPromptEnhancement", () => {
 
       expect(calls).toHaveLength(1);
       expect(calls[0]?.modelId).toBe("example-chat-model");
-      expect(calls[0]?.responseFormat?.type).toBe("json_schema");
+      expect(calls[0]?.responseFormat).toBeUndefined();
       expect(result.modelRouting.executionStatus).toBe("model-applied");
       expect(result.modelRouting.availability).toBe("available");
       expect(result.renderedPrompt).not.toBe(deterministic.renderedPrompt);
-      expect(result.renderedPrompt).toContain("repository quality audit");
+      expect(result.enhancedPrompt.role).not.toMatch(/prompt designer|prompt engineer/i);
+      expect(result.enhancedPrompt.goal).not.toMatch(
+        /\b(produce|create|write|design)\b.*\bprompt\b/i,
+      );
+      expect(result.renderedPrompt).toContain("repository-level quality");
       expect(result.renderedPrompt).toContain("verification commands");
       expect(result.promptId).toBe(result.candidates.winnerCandidateId);
       expect(result.candidates.scorecards[0]?.candidateId).toBe(result.promptId);
     });
 
-    it("falls back deterministically when model output is not valid JSON", async () => {
-      const { factory } = recordingModelPort("not-json");
+    it("falls back deterministically when the model still returns JSON", async () => {
+      const { factory } = recordingModelPort(
+        JSON.stringify({ role: "You are a JSON patch.", steps: ["Do not use this."] }),
+      );
       const result = await run(
         { text: "Plan a migration.", modelId: "example-chat-model" },
         configWithProvider("example-chat-model"),
         factory,
       );
       expect(result.modelRouting.executionStatus).toBe("model-fallback");
-      expect(result.modelRouting.fallbackReason).toBe("model-invalid-json");
+      expect(result.modelRouting.fallbackReason).toBe("model-invalid-prompt");
       expect(result.enhancedPrompt.role.length).toBeGreaterThan(0);
+    });
+
+    it("accepts plain Markdown from open chat models", async () => {
+      const markdown = [
+        "## Role",
+        "You are a senior QA engineer for production regression testing.",
+        "",
+        "## Objective",
+        "Create executable regression test cases for a sporadic login failure across API and UI surfaces.",
+        "",
+        "## Steps",
+        "- Identify roles and affected login paths.",
+        "- Derive API, UI, and end-to-end regression cases.",
+        "- Specify preconditions, data, steps, expected results, and traceability.",
+      ].join("\n");
+      const { factory } = recordingModelPort(markdown);
+
+      const result = await run(
+        {
+          text: "Schreibe Regressionstestfälle\n- Login sporadisch 500\n- API und UI prüfen",
+          modelId: "example-chat-model",
+        },
+        configWithProvider("example-chat-model"),
+        factory,
+      );
+
+      expect(result.modelRouting.executionStatus).toBe("model-applied");
+      expect(result.enhancedPrompt.role).not.toMatch(/prompt designer|prompt engineer/i);
+      expect(result.renderedPrompt).toMatch(/executable regression test cases/i);
+      expect(result.renderedPrompt).toMatch(/API, UI, and end-to-end regression cases/i);
+    });
+
+    it("strips an outer Markdown fence without requiring JSON parsing", async () => {
+      const fencedMarkdown = [
+        "```markdown",
+        "## Role",
+        "You are a senior software debugging and product-quality engineer.",
+        "",
+        "## Objective",
+        "Fix document preview performance, citation navigation, and UI polish.",
+        "",
+        "## Steps",
+        "- Map the preview rendering and citation navigation workflow.",
+        "- Specify regression, browser, and performance verification.",
+        "```",
+      ].join("\n");
+      const { factory } = recordingModelPort(fencedMarkdown);
+
+      const result = await run(
+        {
+          text: "PDF Preview kaputt\n- große PDFs bis 1GB\n- Citations direkt anspringen",
+          modelId: "example-chat-model",
+        },
+        configWithProvider("example-chat-model"),
+        factory,
+      );
+
+      expect(result.modelRouting.executionStatus).toBe("model-applied");
+      expect(result.enhancedPrompt.role).not.toMatch(/prompt designer|prompt engineer/i);
+      expect(result.enhancedPrompt.goal).not.toMatch(
+        /\b(produce|create|write|design)\b.*\bprompt\b/i,
+      );
+      expect(result.renderedPrompt).toMatch(/citation navigation/i);
+      expect(result.renderedPrompt).not.toMatch(/^```/u);
     });
 
     it("does not claim model application when the model returns no effective change", async () => {
       const text = "Plan a migration.";
       const deterministic = await run({ text });
-      const samePatch = JSON.stringify({
-        role: deterministic.enhancedPrompt.role,
-        goal: deterministic.enhancedPrompt.goal,
-        context: deterministic.enhancedPrompt.context,
-        taskDecomposition: deterministic.enhancedPrompt.taskDecomposition,
-        constraints: deterministic.enhancedPrompt.constraints,
-        groundingRules: deterministic.enhancedPrompt.groundingRules,
-        qualityCriteria: deterministic.enhancedPrompt.qualityCriteria,
-        uncertaintyHandling: deterministic.enhancedPrompt.uncertaintyHandling,
-      });
-      const { factory } = recordingModelPort(samePatch);
+      const { factory } = recordingModelPort(deterministic.renderedPrompt);
 
       const result = await run(
         { text, modelId: "example-chat-model" },
