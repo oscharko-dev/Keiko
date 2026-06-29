@@ -336,7 +336,7 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
     const onOverviewMarkers = vi.fn();
-    const { resolver } = register(model, editor, { onOverviewMarkers });
+    const { resolver } = register(editor, { onOverviewMarkers });
     resolver.calls[0]?.settle([
       diagnostic(),
       diagnostic({
@@ -385,7 +385,7 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
     const onOverviewMarkers = vi.fn();
-    const { markers, resolver, scheduler } = register(model, editor, { onOverviewMarkers });
+    const { markers, resolver, scheduler } = register(editor, { onOverviewMarkers });
     resolver.calls[0]?.settle([diagnostic()]);
     await tick();
     model.edit("const x: number = 1;\n");

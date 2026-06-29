@@ -418,11 +418,13 @@ interface MountRuntimeArgs {
 function mountEditorRuntime(args: MountRuntimeArgs): void {
   const mountMonaco = args.monaco as MountMonaco;
   args.refs.editorRef.current = args.editor;
+  args.refs.monacoRef.current = mountMonaco;
+  args.refs.containerRef.current = args.editor.getContainerDomNode();
   applyViewState(args.editor, args.refs.viewStateRef.current);
   args.refs.disposeRef.current = wireEditorOnMount({
     editor: args.editor,
     monaco: mountMonaco,
-    container: args.editor.getContainerDomNode(),
+    container: args.refs.containerRef.current,
     themeVariant: args.themeVariant ?? "dark",
     autoFocus: args.autoFocus ?? false,
     onSave: args.emitSave,
@@ -563,5 +565,6 @@ export function useEditorHandlers(
   );
   useUnmountDisposal(refs);
   useRevealRequest(props, refs);
+  useThemeReapply(props, refs);
   return { onChange, onMount, formatDocument, revealDiagnosticMarker: revealDiagnostic };
 }

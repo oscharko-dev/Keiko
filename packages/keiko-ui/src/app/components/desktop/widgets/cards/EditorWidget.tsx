@@ -1027,7 +1027,7 @@ export function EditorWidget({
   );
 
   const beginSplitMouseResize = useCallback(
-    (split: EditorLayoutSplitNode, event: MouseEvent<HTMLButtonElement>): void => {
+    (split: EditorLayoutSplitNode, event: MouseEvent<HTMLElement>): void => {
       if (isTabDragActive()) return;
       event.preventDefault();
       const parent = event.currentTarget.parentElement;
@@ -1060,7 +1060,7 @@ export function EditorWidget({
   );
 
   const handleSplitResizerKeyDown = useCallback(
-    (split: EditorLayoutSplitNode, event: KeyboardEvent<HTMLButtonElement>): void => {
+    (split: EditorLayoutSplitNode, event: KeyboardEvent<HTMLElement>): void => {
       const step = event.shiftKey ? 10 : 2;
       const decrementKey = split.direction === "row" ? "ArrowLeft" : "ArrowUp";
       const incrementKey = split.direction === "row" ? "ArrowRight" : "ArrowDown";
@@ -1075,11 +1075,11 @@ export function EditorWidget({
     [resizeSplitBy],
   );
 
-  const capturePointer = useCallback((event: PointerEvent<HTMLButtonElement>): void => {
+  const capturePointer = useCallback((event: PointerEvent<HTMLElement>): void => {
     event.currentTarget.setPointerCapture(event.pointerId);
   }, []);
 
-  const releasePointer = useCallback((event: PointerEvent<HTMLButtonElement>): void => {
+  const releasePointer = useCallback((event: PointerEvent<HTMLElement>): void => {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -1229,7 +1229,7 @@ export function EditorWidget({
       event.preventDefault();
       const dragged = draggedTab ?? draggedTabFromEvent(event);
       if (dragged === null) return;
-      const paneCount = editorLayoutPaneIds(layout).length;
+      const paneCount = editorLayoutPaneIds(layoutRef.current).length;
       const effectiveZone =
         zone !== "center" && paneCount >= MAX_EDITOR_PANES && dragged.paneId !== paneId
           ? "center"
@@ -1516,9 +1516,10 @@ export function EditorWidget({
         style={{ "--ed-split-ratio": `${String(node.ratio)}%` } as CSSProperties}
       >
         {renderNode(node.first)}
-        <button
-          type="button"
+        {/* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- WAI-ARIA window-splitter pattern: focusable role=separator exposes keyboard resizing through aria-valuenow. */}
+        <div
           role="separator"
+          tabIndex={0}
           className="ed-pane-resizer"
           aria-label="Resize editor split"
           aria-orientation={node.direction === "row" ? "vertical" : "horizontal"}
@@ -1548,6 +1549,7 @@ export function EditorWidget({
           onMouseDown={(event) => beginSplitMouseResize(node, event)}
           onKeyDown={(event) => handleSplitResizerKeyDown(node, event)}
         />
+        {/* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
         {renderNode(node.second)}
       </div>
     );
