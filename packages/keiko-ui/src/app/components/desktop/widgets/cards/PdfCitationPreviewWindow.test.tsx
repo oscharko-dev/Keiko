@@ -2,7 +2,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, fetchPdfCitationPreviewDocument } from "@/lib/api";
+import { pdfCitationPreviewDocumentUrl } from "@/lib/api";
+import { getDocument } from "pdfjs-dist";
 import {
   getPdfCitationPreviewBackToChatAvailability,
   clearPdfCitationPreviewWindowRegistryForTests,
@@ -48,7 +49,10 @@ vi.mock("@/lib/api", () => ({
     }
   },
   closePdfCitationPreviewSession: vi.fn().mockResolvedValue({ ok: true }),
-  fetchPdfCitationPreviewDocument: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3, 4])),
+  pdfCitationPreviewDocumentUrl: vi.fn(
+    (sessionHandle: string) =>
+      `/api/local-knowledge/citation-preview/sessions/${encodeURIComponent(sessionHandle)}/document`,
+  ),
 }));
 
 vi.mock("pdfjs-dist", () => ({
@@ -108,7 +112,7 @@ describe("PdfCitationPreviewWindow", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       /restored without an active verified preview session/i,
     );
-    expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
+    expect(pdfCitationPreviewDocumentUrl).not.toHaveBeenCalled();
   });
 
   it("restores a safe shell without rendering bytes and allows only scalar intent controls", async () => {
@@ -132,7 +136,7 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/requires re-verification/i);
-    expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
+    expect(pdfCitationPreviewDocumentUrl).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: /previous/i })).toBeDisabled();
     expect(screen.getByLabelText(/current page/i)).toBeDisabled();
 
@@ -147,9 +151,10 @@ describe("PdfCitationPreviewWindow", () => {
   });
 
   it("allows retry when a live verified session document fetch fails transiently", async () => {
-    vi.mocked(fetchPdfCitationPreviewDocument).mockRejectedValueOnce(
-      new ApiError("PREVIEW_SOURCE_UNREADABLE", "source unreadable", 503),
-    );
+    vi.mocked(getDocument).mockReturnValueOnce({
+      promise: Promise.reject(new Error("source unreadable")),
+      destroy: vi.fn(async () => {}),
+    } as never);
     const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
     const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
     const firstCall = add.mock.calls[0];
@@ -167,12 +172,12 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /could not read the verified PDF safely/i,
+      /could not load the verified PDF preview/i,
     );
     await userEvent.click(screen.getByRole("button", { name: /retry preview/i }));
 
     await waitFor(() => {
-      expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledTimes(2);
+      expect(getDocument).toHaveBeenCalledTimes(2);
     });
     expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
   });
@@ -255,9 +260,13 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     await waitFor(() => {
-      expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledWith(
-        "preview-session-1",
-        expect.any(AbortSignal),
+      expect(getDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          disableRange: false,
+          disableStream: true,
+          rangeChunkSize: 1024 * 1024,
+          url: "/api/local-knowledge/citation-preview/sessions/preview-session-1/document",
+        }),
       );
     });
     expect(await screen.findByText("Near cited passage")).toBeInTheDocument();

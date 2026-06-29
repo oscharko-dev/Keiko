@@ -25,6 +25,7 @@ import {
   fetchProjects,
   fetchVoiceCapability,
   openPdfCitationPreviewSession,
+  pdfCitationPreviewDocumentUrl,
   runGatewayReadiness,
   requestEditorCompletion,
   requestEditorDiagnostics,
@@ -1366,6 +1367,12 @@ describe("pdf citation preview api helpers", () => {
           Accept: "application/pdf",
         }),
       }),
+    );
+  });
+
+  it("builds an encoded preview PDF document URL for PDF.js range loading", () => {
+    expect(pdfCitationPreviewDocumentUrl("preview/session#1")).toBe(
+      "/api/local-knowledge/citation-preview/sessions/preview%2Fsession%231/document",
     );
   });
 });

@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import type { PDFDocumentProxy as PdfJsDocumentProxy } from "pdfjs-dist";
-import { ApiError, fetchPdfCitationPreviewDocument } from "@/lib/api";
+import { ApiError, pdfCitationPreviewDocumentUrl } from "@/lib/api";
 import { Icons } from "../../Icons";
 import type { WorkspaceApi } from "../../hooks/useWorkspace.types";
 import type { AppWindow } from "../../windows/types";
@@ -30,6 +30,7 @@ const PAGE_FRAME_PX = 32;
 const RENDER_RADIUS = 1;
 const SLOW_LOAD_MS = 900;
 const ZOOM_STEP = 0.1;
+const PDF_RANGE_CHUNK_SIZE = 1024 * 1024;
 
 interface PageSize {
   readonly height: number;
@@ -449,7 +450,6 @@ export function PdfCitationPreviewWindow({
 
     let disposed = false;
     let loadingTask: PdfDocumentLoadingTask | null = null;
-    const controller = new AbortController();
 
     setFailure(null);
     setShowSlowLoad(false);
@@ -461,12 +461,17 @@ export function PdfCitationPreviewWindow({
 
     const slowTimer = window.setTimeout(() => setShowSlowLoad(true), SLOW_LOAD_MS);
 
-    void fetchPdfCitationPreviewDocument(sessionHandle, controller.signal)
-      .then(async (bytes) => {
+    void loadPdfJs()
+      .then((pdfjs) => {
         if (disposed) return null;
-        const pdfjs = await loadPdfJs();
-        if (disposed) return null;
-        loadingTask = pdfjs.getDocument({ data: bytes }) as PdfDocumentLoadingTask;
+        loadingTask = pdfjs.getDocument({
+          disableRange: false,
+          disableStream: true,
+          httpHeaders: { Accept: "application/pdf" },
+          rangeChunkSize: PDF_RANGE_CHUNK_SIZE,
+          url: pdfCitationPreviewDocumentUrl(sessionHandle),
+          withCredentials: false,
+        }) as PdfDocumentLoadingTask;
         return loadingTask.promise;
       })
       .then(async (pdf) => {
@@ -493,7 +498,6 @@ export function PdfCitationPreviewWindow({
 
     return () => {
       disposed = true;
-      controller.abort();
       void loadingTask?.destroy();
       window.clearTimeout(slowTimer);
     };

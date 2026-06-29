@@ -14,19 +14,29 @@ import type { UiHandlerDeps } from "./deps.js";
 import { openStoreForDeps } from "./local-knowledge-grounded-qa.js";
 import type { PdfCitationPreviewAuthority } from "./local-knowledge-preview-service.js";
 
-export const MAX_PDF_PREVIEW_BYTES = 32 * 1024 * 1024;
+export const MAX_PDF_PREVIEW_BYTES = 1024 * 1024 * 1024;
 export const MAX_PDF_PREVIEW_RANGE_BYTES = 4 * 1024 * 1024;
+const PDF_PREVIEW_HASH_CHUNK_BYTES = 8 * 1024 * 1024;
+const PDF_PREVIEW_STREAM_CHUNK_BYTES = 512 * 1024;
 
 type PreviewSourceResult =
   | {
       readonly kind: "ok";
-      readonly bytes: Uint8Array;
       readonly fileName: string;
+      readonly source: PdfCitationPreviewSource;
     }
   | {
       readonly kind: "rejected";
       readonly reason: PdfCitationPreviewReasonCode;
     };
+
+export interface PdfCitationPreviewSource {
+  readonly absolutePath: string;
+  readonly byteLength: number;
+  readonly contentHash: string;
+  readonly fileName: string;
+  readonly mtimeMs?: number | undefined;
+}
 
 interface ExistingDocumentRow {
   readonly content_hash: string;
@@ -36,10 +46,6 @@ interface ExistingDocumentRow {
   readonly size_bytes: number;
   readonly source_id: string;
   readonly status: string;
-}
-
-function sha256Hex(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
 }
 
 function sourceRoot(scope: KnowledgeSourceScope): string {
@@ -83,10 +89,9 @@ function verifySourcePath(source: KnowledgeSource, documentPath: string): string
   return contained.path;
 }
 
-async function readSourceBytes(
+function statSafeSource(
   absolutePath: string,
-  maxBytes: number,
-): Promise<Uint8Array | undefined> {
+): ReturnType<typeof nodeWorkspaceFs.stat> | undefined {
   let stat: ReturnType<typeof nodeWorkspaceFs.stat>;
   try {
     stat = nodeWorkspaceFs.stat(absolutePath);
@@ -96,11 +101,23 @@ async function readSourceBytes(
   if (!stat.isFile || stat.isSymbolicLink || (stat.hardLinkCount ?? 1) > 1) {
     return undefined;
   }
-  if (stat.size > maxBytes) {
-    return new Uint8Array(maxBytes + 1);
+  return stat;
+}
+
+async function sha256SourceHex(
+  absolutePath: string,
+  byteLength: number,
+): Promise<string | undefined> {
+  const readRange = nodeWorkspaceFs.readFileRange;
+  if (readRange === undefined) return undefined;
+  const hash = createHash("sha256");
+  for (let offset = 0; offset < byteLength; offset += PDF_PREVIEW_HASH_CHUNK_BYTES) {
+    const length = Math.min(PDF_PREVIEW_HASH_CHUNK_BYTES, byteLength - offset);
+    const bytes = await readRange(absolutePath, offset, length);
+    if (bytes.byteLength !== length) return undefined;
+    hash.update(bytes);
   }
-  const bytes = await nodeWorkspaceFs.readFileBytes?.(absolutePath, stat.size);
-  return bytes;
+  return hash.digest("hex");
 }
 
 function loadCurrentDocument(
@@ -142,14 +159,20 @@ function validateDocumentMetadata(
   if (document.media_type !== "application/pdf") {
     return "document-not-pdf";
   }
+  if (document.content_hash !== citation.documentContentHash) {
+    return "document-content-mismatch";
+  }
+  if (document.size_bytes > MAX_PDF_PREVIEW_BYTES) {
+    return "preview-source-oversized";
+  }
   return undefined;
 }
 
-async function loadVerifiedSourceBytes(
+function resolveCurrentSource(
   authority: PdfCitationPreviewAuthority,
   document: ExistingDocumentRow,
   sources: readonly KnowledgeSource[],
-): Promise<PreviewSourceResult> {
+): PreviewSourceResult {
   const source = resolveSource(sources, authority.citation.lineage.sourceId);
   if (source === undefined) {
     return { kind: "rejected", reason: "preview-source-missing" };
@@ -158,18 +181,47 @@ async function loadVerifiedSourceBytes(
   if (absolutePath === undefined || !nodeWorkspaceFs.exists(absolutePath)) {
     return { kind: "rejected", reason: "preview-source-missing" };
   }
-  const bytes = await readSourceBytes(absolutePath, MAX_PDF_PREVIEW_BYTES);
-  if (bytes === undefined) {
+  const stat = statSafeSource(absolutePath);
+  if (stat === undefined) {
     return { kind: "rejected", reason: "preview-source-unreadable" };
   }
-  if (bytes.byteLength > MAX_PDF_PREVIEW_BYTES) {
+  if (stat.size > MAX_PDF_PREVIEW_BYTES) {
     return { kind: "rejected", reason: "preview-source-oversized" };
   }
-  const expectedHash = authority.citation.documentContentHash;
-  if (document.content_hash !== expectedHash || sha256Hex(bytes) !== expectedHash) {
+  if (stat.size !== document.size_bytes) {
     return { kind: "rejected", reason: "document-content-mismatch" };
   }
-  return { kind: "ok", bytes, fileName: document.safe_display_name };
+  return {
+    kind: "ok",
+    fileName: document.safe_display_name,
+    source: {
+      absolutePath,
+      byteLength: stat.size,
+      contentHash: document.content_hash,
+      fileName: document.safe_display_name,
+      ...(stat.mtimeMs === undefined ? {} : { mtimeMs: stat.mtimeMs }),
+    },
+  };
+}
+
+async function loadVerifiedSource(
+  authority: PdfCitationPreviewAuthority,
+  document: ExistingDocumentRow,
+  sources: readonly KnowledgeSource[],
+): Promise<PreviewSourceResult> {
+  const resolved = resolveCurrentSource(authority, document, sources);
+  if (resolved.kind !== "ok") return resolved;
+  const actualHash = await sha256SourceHex(
+    resolved.source.absolutePath,
+    resolved.source.byteLength,
+  );
+  if (actualHash === undefined) {
+    return { kind: "rejected", reason: "preview-source-unreadable" };
+  }
+  if (actualHash !== resolved.source.contentHash) {
+    return { kind: "rejected", reason: "document-content-mismatch" };
+  }
+  return resolved;
 }
 
 export async function loadVerifiedPdfPreviewSource(
@@ -185,8 +237,66 @@ export async function loadVerifiedPdfPreviewSource(
     if (current.document === undefined) {
       return { kind: "rejected", reason: "preview-source-missing" };
     }
-    return await loadVerifiedSourceBytes(authority, current.document, current.sources);
+    return await loadVerifiedSource(authority, current.document, current.sources);
   } finally {
     current.close();
   }
+}
+
+function sourceMatchesSession(
+  current: PdfCitationPreviewSource,
+  expected: PdfCitationPreviewSource,
+): boolean {
+  return (
+    current.absolutePath === expected.absolutePath &&
+    current.byteLength === expected.byteLength &&
+    current.contentHash === expected.contentHash &&
+    current.mtimeMs === expected.mtimeMs
+  );
+}
+
+export function loadPdfPreviewSourceForSession(
+  deps: UiHandlerDeps,
+  authority: PdfCitationPreviewAuthority,
+  expected: PdfCitationPreviewSource,
+): PreviewSourceResult {
+  const current = loadCurrentDocument(deps, authority);
+  try {
+    const metadataFailure = validateDocumentMetadata(authority, current.document);
+    if (metadataFailure !== undefined) {
+      return { kind: "rejected", reason: metadataFailure };
+    }
+    if (current.document === undefined) {
+      return { kind: "rejected", reason: "preview-source-missing" };
+    }
+    const resolved = resolveCurrentSource(authority, current.document, current.sources);
+    if (resolved.kind !== "ok") return resolved;
+    if (!sourceMatchesSession(resolved.source, expected)) {
+      return { kind: "rejected", reason: "document-content-mismatch" };
+    }
+    return resolved;
+  } finally {
+    current.close();
+  }
+}
+
+export async function readPdfPreviewSourceRange(
+  source: PdfCitationPreviewSource,
+  start: number,
+  length: number,
+): Promise<Uint8Array | undefined> {
+  const boundedLength = Math.min(length, PDF_PREVIEW_STREAM_CHUNK_BYTES);
+  const bytes = await nodeWorkspaceFs.readFileRange?.(
+    source.absolutePath,
+    start,
+    boundedLength,
+  );
+  if (bytes === undefined || bytes.byteLength !== boundedLength) {
+    return undefined;
+  }
+  return bytes;
+}
+
+export function pdfPreviewStreamChunkBytes(): number {
+  return PDF_PREVIEW_STREAM_CHUNK_BYTES;
 }

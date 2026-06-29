@@ -134,9 +134,13 @@ function selectedCitations(
       return reject("citation-not-found");
     }
   }
-  if (stableId !== undefined && selected.length === 1) {
+  selected = uniqueSelectedCitations(selected);
+  if (stableId !== undefined) {
     const stableMatches = selected.filter((citation) => citation.stableId === stableId);
     if (stableMatches.length === 0) {
+      if (selected.length === 1) {
+        return { kind: "selected", citations: selected };
+      }
       return reject(
         "stable-id-mismatch",
         selected[0] === undefined ? undefined : citationDisplay(selected[0]),
@@ -146,6 +150,27 @@ function selectedCitations(
     selected = stableMatches;
   }
   return { kind: "selected", citations: selected };
+}
+
+function citationSelectionKey(citation: StoredPdfCitationPreviewCitation): string {
+  return JSON.stringify({
+    stableId: citation.stableId,
+    markerIndex: citation.markerIndex,
+    capsuleId: citation.lineage.capsuleId,
+    sourceId: citation.lineage.sourceId,
+    documentId: citation.lineage.documentId,
+    chunkId: citation.lineage.chunkId,
+  });
+}
+
+function uniqueSelectedCitations(
+  citations: readonly StoredPdfCitationPreviewCitation[],
+): readonly StoredPdfCitationPreviewCitation[] {
+  const byKey = new Map<string, StoredPdfCitationPreviewCitation>();
+  for (const citation of citations) {
+    byKey.set(citationSelectionKey(citation), citation);
+  }
+  return Array.from(byKey.values());
 }
 
 function currentDisplayForLookup(
