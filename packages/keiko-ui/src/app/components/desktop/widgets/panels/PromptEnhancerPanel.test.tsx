@@ -304,6 +304,7 @@ describe("PromptEnhancerPanel", () => {
         reason: "model-available",
         requestedModelId: "m1",
         resolvedModelId: "m1",
+        executionStatus: "model-applied",
       },
     });
     render(
@@ -315,7 +316,7 @@ describe("PromptEnhancerPanel", () => {
     typeDraft("x");
     fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
     await screen.findByTestId("pe-result");
-    expect(screen.getByTestId("pe-model-routing")).toHaveTextContent(/Model ready: m1/);
+    expect(screen.getByTestId("pe-model-routing")).toHaveTextContent(/Model enhanced: m1/);
     expect(screen.getByTestId("pe-model-routing")).toHaveAttribute("role", "status");
   });
 
@@ -342,7 +343,9 @@ describe("PromptEnhancerPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
     await screen.findByTestId("pe-result");
     expect(screen.getByTestId("pe-grounding-readiness")).toHaveTextContent(/unavailable/);
-    expect(screen.getByTestId("pe-grounding-readiness")).toHaveTextContent(/connect a Files window/);
+    expect(screen.getByTestId("pe-grounding-readiness")).toHaveTextContent(
+      /connect a Files window/,
+    );
     expect(screen.getByTestId("pe-grounding-readiness")).toHaveAttribute("role", "status");
     expect(screen.getByRole("link", { name: /pe-run-1/ })).toHaveAttribute(
       "href",
@@ -477,7 +480,7 @@ describe("PromptEnhancerPanel", () => {
     });
   });
 
-  it("populates the readiness model picker from the gateway (chat models only)", async () => {
+  it("populates the enhancement model picker from the gateway (chat models only)", async () => {
     const fetchModelsImpl = vi
       .fn()
       .mockResolvedValue({ models: [chatModel("m1"), { ...chatModel("e1"), kind: "embedding" }] });
@@ -485,7 +488,7 @@ describe("PromptEnhancerPanel", () => {
     await waitFor(() => {
       expect(fetchModelsImpl).toHaveBeenCalled();
     });
-    fireEvent.click(screen.getByRole("combobox", { name: "Readiness model" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Enhancement model" }));
     expect(await screen.findByRole("option", { name: "m1" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "e1" })).not.toBeInTheDocument();
   });
@@ -615,7 +618,7 @@ describe("PromptEnhancerPanel", () => {
     });
   });
 
-  it("sends the selected readiness model id to the gateway (AC3)", async () => {
+  it("sends the selected enhancement model id to the gateway (AC3)", async () => {
     const enhanceImpl = vi.fn().mockResolvedValue(makeResponse());
     const fetchModelsImpl = vi.fn().mockResolvedValue({ models: [chatModel("m1")] });
     render(<PromptEnhancerPanel enhanceImpl={enhanceImpl} fetchModelsImpl={fetchModelsImpl} />);
@@ -623,7 +626,7 @@ describe("PromptEnhancerPanel", () => {
     await waitFor(() => {
       expect(fetchModelsImpl).toHaveBeenCalled();
     });
-    fireEvent.click(screen.getByRole("combobox", { name: "Readiness model" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Enhancement model" }));
     fireEvent.click(await screen.findByRole("option", { name: "m1" }));
     fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
     await screen.findByTestId("pe-result");

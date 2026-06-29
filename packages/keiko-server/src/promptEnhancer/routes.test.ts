@@ -1,7 +1,7 @@
 // HTTP route tests for POST /api/prompt-enhancement (Issue #1314). Exercises validation, Model-Gateway
 // routing, safe error shaping, the payload cap, and the AC4 redaction guarantee through the real
 // createUiServer dispatch (CSP + SECURITY_HEADERS surface), with an in-memory store so the FS is never
-// touched and no model is ever dispatched.
+// touched unless an individual test injects a fake ModelPort.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,11 +9,16 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayConfig,
+  GatewayRequest,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 import type {
   PromptEnhancementWireResponse,
   PromptEnhancementWireRequest,
 } from "@oscharko-dev/keiko-contracts";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createUiServer, UI_HOST } from "../server.js";
@@ -61,8 +66,35 @@ function configWithProvider(modelId = CHAT_MODEL): GatewayConfig {
         throughputHint: "local endpoint",
         preferredUseCases: ["Local coding workflow"],
         knownLimitations: [],
+        supportsResponseFormat: true,
       },
     ],
+  };
+}
+
+function modelResponse(content: string): NormalizedResponse {
+  return {
+    modelId: CHAT_MODEL,
+    content,
+    toolCalls: [],
+    structuredOutput: null,
+    finishReason: "stop",
+    usage: {
+      requestId: "pe-route-model-call",
+      promptTokens: 10,
+      completionTokens: 5,
+      latencyMs: 7,
+      costClass: "medium",
+    },
+  };
+}
+
+function modelPort(content: string, calls: GatewayRequest[]): ModelPort {
+  return {
+    call: (request): Promise<NormalizedResponse> => {
+      calls.push(request);
+      return Promise.resolve(modelResponse(content));
+    },
   };
 }
 
@@ -177,12 +209,41 @@ describe("POST /api/prompt-enhancement", () => {
     }
   });
 
-  it("resolves model routing as available for a configured provider", async () => {
+  it("falls back deterministically when a configured provider has no model port", async () => {
     const res = await post({ text: "Hello.", modelId: CHAT_MODEL });
     expect(res.status).toBe(200);
     const body = (await res.json()) as PromptEnhancementWireResponse;
-    expect(body.modelRouting.availability).toBe("available");
+    expect(body.modelRouting.availability).toBe("unavailable");
+    expect(body.modelRouting.reason).toBe("model-port-unavailable");
+    expect(body.modelRouting.executionStatus).toBe("model-fallback");
+    expect(body.modelRouting.fallbackReason).toBe("model-port-unavailable");
     expect(body.modelRouting.resolvedModelId).toBe(CHAT_MODEL);
+  });
+
+  it("applies the selected enhancement model through the server ModelPort", async () => {
+    const calls: GatewayRequest[] = [];
+    const patch = JSON.stringify({
+      role: "You are a route-level prompt enhancement specialist.",
+      goal: "Produce a server route model enhancement prompt with concrete review steps.",
+      context: ["The server test injected a fake ModelPort and expects a model-refined prompt."],
+      taskDecomposition: ["Analyze the draft.", "Refine the prompt.", "Preserve safety rules."],
+      constraints: ["Do not invent provider credentials.", "Keep the prompt reviewable."],
+      groundingRules: ["Treat supplied context as the evidence boundary."],
+      qualityCriteria: ["The prompt is specific.", "The prompt is safely reviewable."],
+      uncertaintyHandling: ["State gaps instead of guessing."],
+    });
+    await closeServer();
+    await startBound({ modelPortFactory: () => modelPort(patch, calls) });
+
+    const res = await post({ text: "Improve this prompt.", modelId: CHAT_MODEL });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PromptEnhancementWireResponse;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.modelId).toBe(CHAT_MODEL);
+    expect(calls[0]?.responseFormat?.type).toBe("json_schema");
+    expect(body.modelRouting.availability).toBe("available");
+    expect(body.modelRouting.executionStatus).toBe("model-applied");
+    expect(body.renderedPrompt).toContain("server route model enhancement");
   });
 
   it("degrades gracefully (200 + unavailable) when no gateway config is present", async () => {

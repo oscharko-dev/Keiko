@@ -182,6 +182,64 @@ const countMatches = (haystack: string, needles: readonly string[]): number => {
 
 const INTENT_FRAMES: readonly PromptIntentRule[] = [
   {
+    id: "software-quality-audit",
+    strong: [
+      "codequalitat",
+      "code quality",
+      "qualitat vom projekt",
+      "qualitaet vom projekt",
+      "project quality",
+      "code audit",
+      "technical audit",
+      "audit this project",
+      "analysiere die codequalitat",
+      "analyze code quality",
+    ],
+    weak: [
+      "projekt",
+      "project",
+      "repository",
+      "repo",
+      "wartbarkeit",
+      "maintainability",
+      "architecture",
+      "architektur",
+      "bugs",
+      "risiken",
+      "risks",
+      "tests",
+      "test coverage",
+    ],
+    taskClasses: ["code-debugging", "code-architecture", "prompt-optimization"],
+    domains: ["software"],
+    role: "You are a senior software quality and architecture audit prompt designer.",
+    goal: "Produce an audit-ready prompt that guides a model through a grounded assessment of project code quality, maintainability, risks, and verification coverage.",
+    context: [
+      "Task lens: software quality audit.",
+      "Assess only supplied repository, diff, test, log, documentation, or architecture context; keep unsupported conclusions out of the findings.",
+    ],
+    taskDecomposition: [
+      "Identify the repository scope, relevant modules, runtime assumptions, and available evidence.",
+      "Inspect architecture, correctness risks, maintainability, complexity, security posture, performance hot spots, and test coverage.",
+      "Prioritize findings by severity and confidence, separating confirmed defects from risks and style preferences.",
+      "For each material finding, cite the supporting file, test, log, or documented behavior and explain impact.",
+      "Propose focused remediation steps and verification commands without broad unrelated rewrites.",
+    ],
+    constraints: [
+      "Do not invent files, dependencies, test results, runtime behavior, or architectural constraints that are not supplied.",
+      "Do not turn preference-only observations into defects; tie each finding to impact and evidence.",
+      "Keep remediation scoped, reviewable, and compatible with the existing project style.",
+    ],
+    qualityCriteria: [
+      "Audit usefulness: findings are prioritized, evidence-backed, and actionable.",
+      "Engineering rigor: assumptions, confidence, affected areas, and verification steps are explicit.",
+      "Coverage: architecture, correctness, maintainability, security, performance, and tests are considered when evidence exists.",
+    ],
+    uncertaintyHandling: [
+      "If repository files, test output, runtime context, or architectural goals are missing, ask for them before making definitive quality claims.",
+    ],
+  },
+  {
     id: "software-review-optimization",
     strong: [
       "code-review",
@@ -197,8 +255,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     taskClasses: ["code-debugging", "code-architecture", "prompt-optimization"],
     domains: ["software"],
     role: "You are a senior software review and optimization prompt designer.",
-    goal:
-      "Produce a review-ready prompt that guides a model through code review, defect discovery, optimization, and test recommendations.",
+    goal: "Produce a review-ready prompt that guides a model through code review, defect discovery, optimization, and test recommendations.",
     context: [
       "Task lens: software review and optimization.",
       "Use repository, file, diff, test, or log context as evidence; do not infer code behavior beyond supplied context.",
@@ -237,8 +294,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     taskClasses: ["code-architecture", "data-analysis"],
     domains: ["software", "data-science", "business"],
     role: "You are a data-migration architecture prompt designer.",
-    goal:
-      "Produce a migration-planning prompt that covers source and target data, transformation rules, rollout, rollback, and validation evidence.",
+    goal: "Produce a migration-planning prompt that covers source and target data, transformation rules, rollout, rollback, and validation evidence.",
     context: [
       "Task lens: database and customer-data migration.",
       "Treat data mappings, schemas, constraints, and operational requirements as the evidence boundary.",
@@ -292,8 +348,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     taskClasses: ["code-generation", "code-debugging", "code-architecture"],
     domains: ["software"],
     role: "You are a senior software implementation prompt designer.",
-    goal:
-      "Produce an implementation prompt that turns the request into a maintainable, testable software change with clear constraints and verification.",
+    goal: "Produce an implementation prompt that turns the request into a maintainable, testable software change with clear constraints and verification.",
     context: [
       "Task lens: software implementation.",
       "Use repository or API context only as supplied; keep assumptions about frameworks and runtime explicit.",
@@ -322,8 +377,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     strong: ["backe", "kuchen", "rezept", "bake", "cake", "recipe", "cook", "kochen"],
     weak: ["zutaten", "ofen", "dessert", "meal", "servings", "portionen"],
     role: "You are a practical culinary instruction prompt designer.",
-    goal:
-      "Produce a complete baking or cooking prompt that yields a usable recipe with ingredients, equipment, timing, method, and serving guidance.",
+    goal: "Produce a complete baking or cooking prompt that yields a usable recipe with ingredients, equipment, timing, method, and serving guidance.",
     context: [
       "Task lens: recipe and baking guidance.",
       "Treat personal preferences, dietary needs, equipment, and serving count as required context when they matter.",
@@ -353,8 +407,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     weak: ["oktober", "route", "budget", "transport", "unterkunft", "sightseeing"],
     taskClasses: ["decision-support", "research"],
     role: "You are a travel-planning prompt designer.",
-    goal:
-      "Produce a travel-planning prompt that creates an itinerary with timing, route logic, budget assumptions, logistics, and tradeoffs.",
+    goal: "Produce a travel-planning prompt that creates an itinerary with timing, route logic, budget assumptions, logistics, and tradeoffs.",
     context: [
       "Task lens: travel itinerary planning.",
       "Current prices, schedules, visa rules, and venue availability require fresh verification when not supplied.",
@@ -394,8 +447,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     taskClasses: ["writing-editing"],
     domains: ["legal", "business"],
     role: "You are a formal administrative writing prompt designer.",
-    goal:
-      "Produce a drafting prompt for a clear, complete administrative letter with recipient details, contract references, dates, requested action, and tone.",
+    goal: "Produce a drafting prompt for a clear, complete administrative letter with recipient details, contract references, dates, requested action, and tone.",
     context: [
       "Task lens: formal letter and contract communication.",
       "Legal or contractual claims must remain cautious unless the relevant terms and jurisdiction are supplied.",
@@ -426,8 +478,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     taskClasses: ["factual-qa"],
     domains: ["education"],
     role: "You are an instructional explanation prompt designer.",
-    goal:
-      "Produce a teaching prompt that explains the topic at the right level with examples, checks for understanding, and clear boundaries.",
+    goal: "Produce a teaching prompt that explains the topic at the right level with examples, checks for understanding, and clear boundaries.",
     context: [
       "Task lens: learning and explanation.",
       "The learner's background, goal, and desired depth determine the best explanation style.",
@@ -457,8 +508,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     taskClasses: ["creative-writing"],
     domains: ["creative"],
     role: "You are a creative-writing prompt designer.",
-    goal:
-      "Produce a creative prompt that captures premise, voice, audience, structure, constraints, and revision criteria.",
+    goal: "Produce a creative prompt that captures premise, voice, audience, structure, constraints, and revision criteria.",
     context: [
       "Task lens: creative writing.",
       "Tone, genre, point of view, length, and audience shape the output more than factual grounding.",
@@ -487,8 +537,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     weak: ["compare", "vergleich", "quellen", "sources", "background", "uberblick"],
     taskClasses: ["research", "rag-question-answering"],
     role: "You are a research-synthesis prompt designer.",
-    goal:
-      "Produce a research prompt that defines scope, evidence standards, source priority, synthesis method, and uncertainty reporting.",
+    goal: "Produce a research prompt that defines scope, evidence standards, source priority, synthesis method, and uncertainty reporting.",
     context: [
       "Task lens: research synthesis.",
       "Evidence quality, recency, source priority, and citation discipline are central to the answer.",
@@ -518,8 +567,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
     weak: ["recommend", "empfehlung", "option", "tradeoff", "vergleich", "compare"],
     taskClasses: ["decision-support"],
     role: "You are a decision-support prompt designer.",
-    goal:
-      "Produce a decision prompt that compares options against explicit criteria, risks, constraints, and recommendation logic.",
+    goal: "Produce a decision prompt that compares options against explicit criteria, risks, constraints, and recommendation logic.",
     context: [
       "Task lens: decision support.",
       "Decision quality depends on criteria, priorities, constraints, and uncertainty rather than a one-size-fits-all answer.",

@@ -82,15 +82,17 @@ information disclosure** → `no-secret-or-system-prompt-disclosure` / `secret-r
 
 ## Governed surfaces and architecture authority
 
-- **Workflow authority.** The governed `analyze → plan → optimize → validate → evidence-record-input`
+- **Workflow authority.** The governed `analyze → plan → optimize → validate → optional model refine → evidence-record-input`
   lifecycle lives in `keiko-workflows/src/promptEnhancer/index.ts` (`runPromptEnhancement`). The server
   `orchestrate.ts` is a thin compatibility barrel; both the BFF route and the CLI call the **same**
   authority — no parallel model client exists on any surface.
-- **Model Gateway.** The MVP is fully deterministic and dispatches no live model. The optional
-  downstream-dispatch model id is resolved through the Model Gateway (`findConfiguredCapability`), and
-  `modelRouting` reports a graceful degraded state when no gateway config is present. The routing
+- **Model Gateway.** The default path is deterministic-only. When a caller supplies an enhancement
+  `modelId`, the workflow resolves chat capability through the Model Gateway and routes the bounded
+  refinement through a `ModelPort`. Invalid JSON, unsafe model output, unavailable ports, and gateway
+  failures degrade to deterministic output with browser-safe `modelRouting` metadata. The routing
   projection is credential-free (#1357): `runPromptEnhancement` receives a `ConfiguredCapabilitySource`
-  (`{ providers: [{ modelId }], capabilities? }`), never the credential-bearing `GatewayConfig`.
+  (`{ providers: [{ modelId }], capabilities? }`) plus a ModelPort factory, never raw provider
+  credentials in the wire response.
 - **API / CLI / UI.** BFF route `POST /api/prompt-enhancement` (`keiko-server/src/promptEnhancer/routes.ts`,
   CSRF-guarded); CLI command (`keiko-cli/src/prompt-enhancer.ts`); UI `PromptEnhancerPanel.tsx` with
   jest-axe WCAG 2.2 AA coverage on the empty form and a populated result. A `@smoke` Playwright e2e

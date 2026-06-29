@@ -1911,6 +1911,8 @@ export type {
   PromptEnhancementWireRequest,
   PromptEnhancementModelAvailability,
   PromptEnhancementModelRoutingReason,
+  PromptEnhancementExecutionStatus,
+  PromptEnhancementModelFallbackReason,
   PromptEnhancementModelRouting,
   PromptEnhancementCandidateComparison,
   PromptEnhancementGroundingReadiness,

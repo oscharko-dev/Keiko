@@ -1,19 +1,20 @@
 // `keiko prompt-enhancer` — the developer-facing surface for the Prompt Enhancer (Epic #1307, Issue
-// #1314; ADR-0044 §1 "CLI command"). It drives the EXACT SAME deterministic workflow as the BFF
-// route (`runPromptEnhancement` from keiko-workflows), so the product and developer surfaces produce
-// byte-identical enhancements (AC1). The command never dispatches a model: enhancement is deterministic
-// and provider-neutral; an optional `--model` only resolves dispatch readiness through the Model
-// Gateway (AC3). All printed output is redacted (AC4); `--evidence` emits a redact-by-construction
-// audit manifest reusing the #1313 keiko-evidence promptEnhancement store.
+// #1314; ADR-0044 §1 "CLI command"). It drives the same governed workflow as the BFF route
+// (`runPromptEnhancement` from keiko-workflows). Without `--model` it runs deterministic-only; with
+// `--model` it may route a bounded model-assisted refinement through the Model Gateway. All printed
+// output is redacted (AC4); `--evidence` emits a redact-by-construction audit manifest reusing the
+// #1313 keiko-evidence promptEnhancement store.
 
 import {
   ConfigInvalidError,
   GatewayError,
+  Gateway,
   loadConfigFromFile,
   redact,
   type EnvSource,
   type GatewayConfig,
 } from "@oscharko-dev/keiko-model-gateway";
+import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   PromptEnhancementInputError,
   buildPromptEnhancementRecordInput,
@@ -38,12 +39,13 @@ import type { CliIo } from "./runner.js";
 export interface PromptEnhancerCliDeps {
   readonly run?: typeof runPromptEnhancement;
   readonly loadConfig?: (path: string, env: EnvSource) => GatewayConfig;
+  readonly modelPortFactory?: ((modelId: string) => ModelPort | undefined) | undefined;
 }
 
 const USAGE = `Usage: keiko prompt-enhancer --input "<raw prompt>" [OPTIONS]
 
-Generate a governed, reviewable Enhanced Prompt from a raw draft. Deterministic and provider-neutral;
-the result is data for review, never executed.
+Generate a governed, reviewable Enhanced Prompt from a raw draft. Without --model this is
+deterministic-only; with --model Keiko may use that chat model to refine the prompt.
 
 Options:
   --input TEXT       The raw prompt draft to enhance (required).
@@ -51,7 +53,7 @@ Options:
                      safety-critical | agentic. Safety criticality may still escalate it.
   --strategy MODE    How to handle missing information: clarify (default) | assume.
   --candidates N     Number of candidate variants to score (1-7).
-  --model ID         Resolve dispatch readiness for this model through the Model Gateway. Requires a
+  --model ID         Use this chat model for model-assisted refinement through the Model Gateway. Requires a
                      gateway config (--config PATH or KEIKO_CONFIG_FILE).
   --config PATH      Gateway config file (also honored via KEIKO_CONFIG_FILE).
   --evidence         Also print a redacted, content-light audit evidence manifest.
@@ -147,15 +149,15 @@ function resolveGatewayConfig(
   io: CliIo,
   deps: PromptEnhancerCliDeps,
 ): { ok: true; config: GatewayConfig | undefined } | { ok: false; code: number } {
-  // A model is only checked for downstream-dispatch readiness when --model is given. Without it,
-  // enhancement is fully deterministic and needs no config.
+  // A model is only used for refinement when --model is given. Without it, enhancement is fully
+  // deterministic and needs no config.
   if (flags.values["--model"] === undefined) {
     return { ok: true, config: undefined };
   }
   const path = flags.values["--config"] ?? env.KEIKO_CONFIG_FILE;
   if (path === undefined) {
     io.err(
-      "Error: --model requires a gateway config to resolve readiness; pass --config PATH or set KEIKO_CONFIG_FILE.\n",
+      "Error: --model requires a gateway config; pass --config PATH or set KEIKO_CONFIG_FILE.\n",
     );
     return { ok: false, code: 1 };
   }
@@ -268,6 +270,10 @@ function renderHuman(result: PromptEnhancementWireResponse, io: CliIo): void {
   );
   io.out(
     `Model routing: ${result.modelRouting.availability} (${result.modelRouting.reason})` +
+      ` · ${result.modelRouting.executionStatus ?? "deterministic"}` +
+      (result.modelRouting.fallbackReason === undefined
+        ? ""
+        : ` · fallback: ${result.modelRouting.fallbackReason}`) +
       (result.modelRouting.resolvedModelId === undefined
         ? "\n"
         : ` → ${result.modelRouting.resolvedModelId}\n`),
@@ -290,45 +296,70 @@ function renderHuman(result: PromptEnhancementWireResponse, io: CliIo): void {
   io.out(`${result.renderedPrompt}\n`);
 }
 
-/**
- * `keiko prompt-enhancer` entrypoint. Returns 0 on success, 1 on a runtime/config error, 2 on usage
- * error. Pure apart from optional config-file reads; never dispatches a model.
- */
-export function runPromptEnhancerCli(
+type PromptEnhancerCliPreparation =
+  | {
+      readonly ok: true;
+      readonly flags: ParsedFlags;
+      readonly rawInput: string;
+      readonly request: PromptEnhancementWireRequest;
+      readonly config: GatewayConfig | undefined;
+    }
+  | { readonly ok: false; readonly code: number };
+
+function preparePromptEnhancerCliRun(
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
-  deps: PromptEnhancerCliDeps = {},
-): number {
+  deps: PromptEnhancerCliDeps,
+): PromptEnhancerCliPreparation {
   const parsed = parseArgs(args);
   if (!parsed.ok) {
     io.err(`Error: ${parsed.error}\n\n${USAGE}`);
-    return 2;
+    return { ok: false, code: 2 };
   }
   if (parsed.flags.help) {
     io.out(USAGE);
-    return 0;
+    return { ok: false, code: 0 };
   }
   const rawInput = parsed.flags.values["--input"];
   if (rawInput === undefined) {
     io.err(`Error: --input is required.\n\n${USAGE}`);
-    return 2;
+    return { ok: false, code: 2 };
   }
   const wire = buildWireRequest(parsed.flags);
   if (!wire.ok) {
     io.err(`Error: invalid request:\n  - ${wire.errors.join("\n  - ")}\n`);
-    return 2;
+    return { ok: false, code: 2 };
   }
   const config = resolveGatewayConfig(parsed.flags, env, io, deps);
-  if (!config.ok) {
-    return config.code;
-  }
+  if (!config.ok) return { ok: false, code: config.code };
+  return {
+    ok: true,
+    flags: parsed.flags,
+    rawInput,
+    request: wire.request,
+    config: config.config,
+  };
+}
 
+/**
+ * `keiko prompt-enhancer` entrypoint. Returns 0 on success, 1 on a runtime/config error, 2 on usage
+ * error. Pure apart from optional config-file reads and optional model-assisted refinement.
+ */
+export async function runPromptEnhancerCli(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+  deps: PromptEnhancerCliDeps = {},
+): Promise<number> {
+  const prepared = preparePromptEnhancerCliRun(args, io, env, deps);
+  if (!prepared.ok) return prepared.code;
   const run = deps.run ?? runPromptEnhancement;
   let result: PromptEnhancementWireResponse;
   try {
-    result = run(wire.request, {
-      gatewayRoutingConfig: promptEnhancementGatewayRoutingConfig(config.config),
+    result = await run(prepared.request, {
+      gatewayRoutingConfig: promptEnhancementGatewayRoutingConfig(prepared.config),
+      modelPortFactory: deps.modelPortFactory ?? promptEnhancerModelPortFactory(prepared.config),
     });
   } catch (error) {
     if (error instanceof PromptEnhancementInputError) {
@@ -338,8 +369,18 @@ export function runPromptEnhancerCli(
     throw error;
   }
 
-  emitResult(parsed.flags, result, rawInput, env, config.config, io);
+  emitResult(prepared.flags, result, prepared.rawInput, env, prepared.config, io);
   return 0;
+}
+
+function promptEnhancerModelPortFactory(
+  config: GatewayConfig | undefined,
+): ((modelId: string) => ModelPort | undefined) | undefined {
+  if (config === undefined) return undefined;
+  const gateway = new Gateway(config);
+  const port = new GatewayModelPort(gateway);
+  return (modelId: string): ModelPort | undefined =>
+    config.providers.some((provider) => provider.modelId === modelId) ? port : undefined;
 }
 
 // Redact and print the enhancement result. AC4: deep-redact every string leaf before printing so a
