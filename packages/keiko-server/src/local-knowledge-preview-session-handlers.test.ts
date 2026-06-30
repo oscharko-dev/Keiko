@@ -429,7 +429,10 @@ function updatePreviewFixtureSourceRoot(
 function updatePreviewFixtureDocument(
   fixture: Awaited<ReturnType<typeof seedPreviewFixture>>,
   patch: {
+    readonly blobRef?: string | null;
+    readonly contentHash?: string;
     readonly documentPath?: string;
+    readonly sizeBytes?: number;
     readonly status?: string;
   },
 ): void {
@@ -442,6 +445,24 @@ function updatePreviewFixtureDocument(
         .prepare("UPDATE documents SET document_path = :documentPath WHERE capsule_id = :capsuleId")
         .run({
           documentPath: patch.documentPath,
+          capsuleId: String(fixture.previewCitation.lineage.capsuleId),
+        });
+    }
+    if (patch.contentHash !== undefined || patch.sizeBytes !== undefined || "blobRef" in patch) {
+      knowledgeStore._internal.db
+        .prepare(
+          [
+            "UPDATE documents SET",
+            "  content_hash = COALESCE(:contentHash, content_hash),",
+            "  size_bytes = COALESCE(:sizeBytes, size_bytes),",
+            "  blob_ref = :blobRef",
+            "WHERE capsule_id = :capsuleId",
+          ].join(" "),
+        )
+        .run({
+          contentHash: patch.contentHash ?? null,
+          sizeBytes: patch.sizeBytes ?? null,
+          blobRef: patch.blobRef ?? null,
           capsuleId: String(fixture.previewCitation.lineage.capsuleId),
         });
     }
@@ -531,6 +552,45 @@ describe("local-knowledge preview session handlers", () => {
     expect((result.body as Record<string, unknown>).session).toHaveProperty("expiresAt");
     expect((result.body as Record<string, unknown>).authority).toBeUndefined();
     expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-authorized"]);
+  });
+
+  it("serves the cited historical blob after the current document hash drifts", async () => {
+    const fixture = await seedPreviewFixture();
+    writePreviewFixtureBlob(fixture);
+    const changedBytes = Buffer.from("%PDF-1.4\nchanged after answer\n%%EOF\n", "utf8");
+    updatePreviewFixtureDocument(fixture, {
+      blobRef: null,
+      contentHash: sha256Hex(changedBytes),
+      sizeBytes: changedBytes.byteLength,
+    });
+    unlinkSync(fixture.pdfPath);
+    const sessionManager = createPdfCitationPreviewSessionManager();
+
+    const opened = await handleOpenPdfCitationPreviewSession(
+      ctx("/api/local-knowledge/citation-preview/open", {
+        chatId: fixture.chatId,
+        assistantMessageId: fixture.assistantMessageId,
+        marker: "[1]",
+        stableId: fixture.previewCitation.stableId,
+      }),
+      deps(sessionManager),
+    );
+
+    expect(opened.status).toBe(200);
+    expect(opened.body).toMatchObject({
+      outcome: "authorized",
+      session: { byteLength: PDF_BYTES.byteLength },
+    });
+    const handle = (opened.body as { readonly session: { readonly handle: string } }).session
+      .handle;
+    const response = captureResponse();
+    const streamed = await handleGetPdfCitationPreviewDocument(
+      documentContext(handle, emptyRequest(), response.res),
+      deps(sessionManager),
+    );
+    expect(streamed).toBe(STREAMING);
+    expect(response.statusCode()).toBe(200);
+    expect(Buffer.from(await response.body()).equals(PDF_BYTES)).toBe(true);
   });
 
   it("re-runs authorization and safely reuses the live document session on duplicate open", async () => {
@@ -939,6 +999,24 @@ describe("local-knowledge preview session handlers", () => {
     }
   });
 
+  it("maps source drift after session open through delivery instead of access denial", async () => {
+    const fixture = await seedPreviewFixture();
+    disableLazyPdfBlobBackfill();
+    const sessionManager = createPdfCitationPreviewSessionManager();
+    const handle = await openPreviewSessionHandle(fixture, sessionManager);
+    updatePreviewFixtureDocument(fixture, { contentHash: "hash-drifted" });
+
+    const result = await handleGetPdfCitationPreviewDocument(
+      documentContext(handle, emptyRequest(), {} as ServerResponse),
+      deps(sessionManager),
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "PREVIEW_SOURCE_CHANGED" } },
+    });
+  });
+
   it("supports bounded single-range delivery for later PDF.js consumption", async () => {
     const fixture = await seedPreviewFixture();
     const sessionManager = createPdfCitationPreviewSessionManager();
@@ -1119,7 +1197,7 @@ describe("local-knowledge preview session handlers", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("aborts and cleans up when a later stream read is short after headers were committed", async () => {
+  it("returns a retryable error when a later bounded range read is short", async () => {
     const largeBytes = Buffer.concat([PDF_BYTES, Buffer.alloc(1024 * 1024, 0x20)]);
     const fixture = await seedPreviewFixture({ bytes: largeBytes });
     const sessionManager = createPdfCitationPreviewSessionManager();
@@ -1138,20 +1216,19 @@ describe("local-knowledge preview session handlers", () => {
       readRange,
       close,
     });
-    const captured = captureResponse();
-    captured.res.on("error", () => undefined);
-
-    const outcome = await handleGetPdfCitationPreviewDocument(
+    const result = await handleGetPdfCitationPreviewDocument(
       documentContext(
         handle,
         emptyRequest({ range: `bytes=0-${String(largeBytes.byteLength - 1)}` }),
-        captured.res,
+        captureResponse().res,
       ),
       deps(sessionManager),
     );
 
-    expect(outcome).toBe(STREAMING);
-    expect(captured.statusCode()).toBe(206);
+    expect(result).toMatchObject({
+      status: 503,
+      body: { error: { code: "PREVIEW_SOURCE_DEHYDRATED" } },
+    });
     expect(readRange).toHaveBeenCalledTimes(2);
     expect(close).toHaveBeenCalledTimes(1);
   });
@@ -1316,9 +1393,9 @@ describe("local-knowledge preview session handlers", () => {
       }),
       deps(sessionManager),
     );
-    expect((reopened.body as { readonly session: { readonly handle: string } }).session.handle).toBe(
-      handle,
-    );
+    expect(
+      (reopened.body as { readonly session: { readonly handle: string } }).session.handle,
+    ).toBe(handle);
 
     const closed = await handleClosePdfCitationPreviewSession(
       {

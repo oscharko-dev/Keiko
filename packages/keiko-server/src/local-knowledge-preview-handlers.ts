@@ -316,10 +316,7 @@ function parsedOpenEndedRange(
   return validatedRange(start, totalBytes - 1, totalBytes, true);
 }
 
-function parsedSuffixRange(
-  endRaw: string,
-  totalBytes: number,
-): ParsedPreviewRange | RouteResult {
+function parsedSuffixRange(endRaw: string, totalBytes: number): ParsedPreviewRange | RouteResult {
   const suffixLength = parseSafeDecimal(endRaw);
   if (suffixLength === undefined || suffixLength <= 0) {
     return invalidRangeResult("The requested byte range is invalid.");
@@ -623,7 +620,9 @@ async function writeResponseChunk(ctx: RouteContext, chunk: Uint8Array): Promise
     return true;
   }
   const drained = await new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => { finish(false); }, PDF_PREVIEW_DRAIN_TIMEOUT_MS);
+    const timer = setTimeout(() => {
+      finish(false);
+    }, PDF_PREVIEW_DRAIN_TIMEOUT_MS);
     const finish = (value: boolean): void => {
       clearTimeout(timer);
       ctx.res.off("drain", onDrain);
@@ -632,8 +631,12 @@ async function writeResponseChunk(ctx: RouteContext, chunk: Uint8Array): Promise
       ctx.req.off("close", onClose);
       resolve(value);
     };
-    const onDrain = (): void => { finish(true); };
-    const onClose = (): void => { finish(false); };
+    const onDrain = (): void => {
+      finish(true);
+    };
+    const onClose = (): void => {
+      finish(false);
+    };
     timer.unref();
     ctx.res.once("drain", onDrain);
     ctx.res.once("close", onClose);
@@ -694,26 +697,17 @@ async function streamPdfPreview(
     if (reader === undefined) {
       return previewSourceError("preview-source-unreadable");
     }
-    const firstLength = Math.min(pdfPreviewStreamChunkBytes(), contentLength);
-    const firstChunk = await readExpectedChunk(reader, range.start, firstLength);
-    if (firstChunk === undefined) {
-      return previewSourceError("source-dehydrated");
-    }
-    ctx.res.writeHead(range.status, previewResponseHeaders(source, range, contentLength));
-    const firstWriteComplete = await writeResponseChunk(ctx, firstChunk);
-    if (!firstWriteComplete) return STREAMING;
-
-    for (
-      let offset = range.start + firstLength;
-      offset <= range.end;
-      offset += pdfPreviewStreamChunkBytes()
-    ) {
+    const chunks: Uint8Array[] = [];
+    for (let offset = range.start; offset <= range.end; offset += pdfPreviewStreamChunkBytes()) {
       const length = Math.min(pdfPreviewStreamChunkBytes(), range.end - offset + 1);
       const chunk = await readExpectedChunk(reader, offset, length);
       if (chunk === undefined) {
-        ctx.res.destroy(new Error("Verified PDF preview source could not be read."));
-        return STREAMING;
+        return previewSourceError("source-dehydrated");
       }
+      chunks.push(chunk);
+    }
+    ctx.res.writeHead(range.status, previewResponseHeaders(source, range, contentLength));
+    for (const chunk of chunks) {
       const keepGoing = await writeResponseChunk(ctx, chunk);
       if (!keepGoing) return STREAMING;
     }

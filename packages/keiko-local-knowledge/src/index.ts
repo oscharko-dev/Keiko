@@ -28,6 +28,7 @@ export {
   PDF_DOCUMENT_BLOB_MEDIA_TYPE,
   persistPdfDocumentBlobInTransaction,
   readPdfDocumentBlob,
+  readPdfDocumentBlobByContentHash,
   writePdfDocumentBlob,
   type PdfDocumentBlobInput,
   type PdfDocumentBlobMetadata,
