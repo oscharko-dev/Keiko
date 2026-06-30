@@ -68,10 +68,7 @@ export interface TerminalExecutionResult {
 }
 
 export type TerminalEventKind =
-  | "execution-started"
-  | "execution-completed"
-  | "execution-failed"
-  | "execution-cancelled";
+  "execution-started" | "execution-completed" | "execution-failed" | "execution-cancelled";
 
 export interface TerminalEventEnvelope {
   readonly kind: TerminalEventKind;

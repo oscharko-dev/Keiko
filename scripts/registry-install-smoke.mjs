@@ -76,7 +76,9 @@ function npmSmoke() {
 
 function yarnSmoke() {
   if (skipYarn) {
-    console.log("registry-install-smoke: yarn check skipped by KEIKO_REGISTRY_INSTALL_SKIP_YARN=1.");
+    console.log(
+      "registry-install-smoke: yarn check skipped by KEIKO_REGISTRY_INSTALL_SKIP_YARN=1.",
+    );
     return;
   }
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));

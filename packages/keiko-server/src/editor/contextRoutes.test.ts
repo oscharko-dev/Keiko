@@ -333,10 +333,7 @@ describe("POST /api/editor/local-knowledge/retrieve", () => {
   it("rejects a not-ready capsule before query-only retrieval", async () => {
     const capsuleId = seedIndexingCapsule();
     const result = await handleEditorLocalKnowledgeRetrieve(
-      postContext(
-        { queryText: "q", capsuleId },
-        "/api/editor/local-knowledge/retrieve",
-      ),
+      postContext({ queryText: "q", capsuleId }, "/api/editor/local-knowledge/retrieve"),
       depsWithLocalKnowledge(),
     );
     expect(result.status).toBe(409);

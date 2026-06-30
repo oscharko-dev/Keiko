@@ -80,8 +80,7 @@ export interface EditorStatusBarInput {
    * never disagree. Omitted when the host does not wire formatting state.
    */
   readonly formatting?:
-    | { readonly available: boolean; readonly source: EditorBuiltinFormattingSource }
-    | undefined;
+    { readonly available: boolean; readonly source: EditorBuiltinFormattingSource } | undefined;
   readonly run?: EditorStatusRun | undefined;
   readonly readOnly?: boolean | undefined;
 }

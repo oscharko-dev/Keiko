@@ -131,8 +131,7 @@ function parseArgs(args: readonly string[]): EvaluateArgs | null {
 }
 
 type Selection =
-  | { readonly fixtures: readonly EvaluationFixture[] }
-  | { readonly usageError: string };
+  { readonly fixtures: readonly EvaluationFixture[] } | { readonly usageError: string };
 
 // Resolves the fixture set from --suite / --fixture, enforcing mutual exclusion and name validity.
 function selectFixtures(parsed: EvaluateArgs): Selection {

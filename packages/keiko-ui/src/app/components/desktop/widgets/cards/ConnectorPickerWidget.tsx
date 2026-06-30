@@ -192,9 +192,7 @@ function KnowledgeConnectorNode({
         <h2 className="connector-node-title" title={label}>
           {label}
         </h2>
-        <p className="connector-node-meta">
-          Local Knowledge capsule
-        </p>
+        <p className="connector-node-meta">Local Knowledge capsule</p>
       </div>
       <button type="button" className="connector-node-manage" onClick={onManageConnectors}>
         Manage

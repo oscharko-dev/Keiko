@@ -42,8 +42,7 @@ interface MetaRow {
 
 function readSchemaMeta(db: DatabaseSync, key: string): string | undefined {
   const row = db.prepare("SELECT value FROM schema_meta WHERE key = :k").get({ k: key }) as
-    | MetaRow
-    | undefined;
+    MetaRow | undefined;
   return row?.value;
 }
 

@@ -41,11 +41,7 @@ function outcomeOf(passed: boolean): DialogueEvalOutcome {
 // shape (full-realtime capability WITHOUT browser WebRTC media); `realtime-capable` is the only shape
 // that may offer Voice Dialogue.
 export type DialogueProfileKey =
-  | "no-voice"
-  | "stt-only"
-  | "speech-output-only"
-  | "stt-tts"
-  | "realtime-capable";
+  "no-voice" | "stt-only" | "speech-output-only" | "stt-tts" | "realtime-capable";
 
 export const DIALOGUE_PROFILE_KEYS: readonly DialogueProfileKey[] = [
   "no-voice",
@@ -180,10 +176,7 @@ export function evaluateDialogueProfiles(
 
 // ─── AC2: latency / interruption budgets ──────────────────────────────────────────────
 export type DialogueLatencyLeg =
-  | "start-latency"
-  | "end-of-turn-latency"
-  | "interruption-latency"
-  | "time-to-first-audio";
+  "start-latency" | "end-of-turn-latency" | "interruption-latency" | "time-to-first-audio";
 
 // Canonical order follows the dialogue turn flow: arm capture → settle the user turn → first audio →
 // barge-in. Consumers that map a turn onto these legs emit observations in this order.

@@ -98,8 +98,7 @@ export function countChunksForDocument(
   documentId: DocumentId,
 ): number {
   const row = db.prepare(COUNT_CHUNKS_FOR_DOCUMENT_SQL).get({ c: capsuleId, d: documentId }) as
-    | CountRow
-    | undefined;
+    CountRow | undefined;
   return typeof row?.n === "number" ? row.n : 0;
 }
 

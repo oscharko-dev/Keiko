@@ -474,7 +474,10 @@ describe("local-knowledge preview metadata persistence", () => {
     );
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>;
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
     expect(answer.citations.length).toBeGreaterThan(0);
     expect(answer.citations[0]?.marker).toBe("[1]");
     expect(rescueStore.findGroundedPreviewCitations(answer.assistantMessageId)).toMatchObject(

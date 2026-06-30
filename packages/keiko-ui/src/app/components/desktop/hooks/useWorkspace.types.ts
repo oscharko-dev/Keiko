@@ -62,12 +62,10 @@ export interface WorkspaceApi {
   readonly linkedFigmaSnapshotRunIds: (id: string) => readonly string[];
   /** Figma Snapshot sources, optionally scoped to selected screen ids. */
   readonly linkedFigmaSnapshotSources?:
-    | ((id: string) => readonly QualityIntelligenceFigmaSnapshotSource[])
-    | undefined;
+    ((id: string) => readonly QualityIntelligenceFigmaSnapshotSource[]) | undefined;
   /** Image-only sources from connected Figma Image windows. */
   readonly linkedImageSources?:
-    | ((id: string) => readonly QualityIntelligenceImageSource[])
-    | undefined;
+    ((id: string) => readonly QualityIntelligenceImageSource[]) | undefined;
   readonly currentFilesContext: () => FilesWindowContext | null;
   /**
    * Live snapshot of the pan/zoom view, read through a ref so window children can

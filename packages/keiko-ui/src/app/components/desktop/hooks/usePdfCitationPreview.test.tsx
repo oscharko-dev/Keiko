@@ -162,10 +162,7 @@ describe("usePdfCitationPreviewController", () => {
   });
 
   it("marker-maps repeated identical answer citations as one candidate", async () => {
-    const citations = [
-      citation("[1]", "answer-stable-1"),
-      citation("[1]", "answer-stable-1"),
-    ];
+    const citations = [citation("[1]", "answer-stable-1"), citation("[1]", "answer-stable-1")];
     const groundedAnswer = answer(citations);
     vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
       citations: [

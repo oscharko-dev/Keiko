@@ -79,8 +79,7 @@ export function pcmBytesToInt16(
 }
 
 export function createBrowserAssistantSpeechStreamingSink():
-  | AssistantSpeechStreamingSink
-  | undefined {
+  AssistantSpeechStreamingSink | undefined {
   if (!streamingSupported()) {
     return undefined;
   }

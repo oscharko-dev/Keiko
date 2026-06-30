@@ -50,12 +50,7 @@ export interface CommandTaskCatalog {
 // Why a run did not finish cleanly. `truncated`/`timedOut` are SEPARATE result fields (a clean exit
 // can still be truncated); this enum names the dominant terminal cause for the result and audit.
 export type CommandFailureReason =
-  | "none"
-  | "non-zero-exit"
-  | "timed-out"
-  | "cancelled"
-  | "denied"
-  | "spawn-error";
+  "none" | "non-zero-exit" | "timed-out" | "cancelled" | "denied" | "spawn-error";
 
 export const COMMAND_FAILURE_REASONS: readonly CommandFailureReason[] = Object.freeze([
   "none",
@@ -93,10 +88,7 @@ export interface CommandTaskRunResult {
 }
 
 export type CommandRunnerEventKind =
-  | "run-started"
-  | "run-completed"
-  | "run-failed"
-  | "run-cancelled";
+  "run-started" | "run-completed" | "run-failed" | "run-cancelled";
 
 export const COMMAND_RUNNER_EVENT_KINDS: readonly CommandRunnerEventKind[] = Object.freeze([
   "run-started",
@@ -147,8 +139,7 @@ export interface CommandTaskRunRequestParseFail {
 }
 
 export type CommandTaskRunRequestParse =
-  | CommandTaskRunRequestParseOk
-  | CommandTaskRunRequestParseFail;
+  CommandTaskRunRequestParseOk | CommandTaskRunRequestParseFail;
 
 export interface CommandTaskCatalogParseOk {
   readonly ok: true;

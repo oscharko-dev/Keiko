@@ -19,7 +19,10 @@ interface NewBranchDialogProps {
   readonly currentBranch: string;
   readonly busy: boolean;
   readonly error: string | null;
-  readonly onCreate: (input: { readonly branchName: string; readonly baseBranchName: string }) => void;
+  readonly onCreate: (input: {
+    readonly branchName: string;
+    readonly baseBranchName: string;
+  }) => void;
   readonly onClose: () => void;
 }
 
@@ -31,7 +34,8 @@ export function NewBranchDialog({
   onCreate,
   onClose,
 }: NewBranchDialogProps): ReactNode {
-  const initialBase = branches.find((branch) => branch.name === currentBranch)?.name ?? branches[0]?.name ?? "";
+  const initialBase =
+    branches.find((branch) => branch.name === currentBranch)?.name ?? branches[0]?.name ?? "";
   const [branchName, setBranchName] = useState("");
   const [baseBranchName, setBaseBranchName] = useState(initialBase);
   const formRef = useRef<HTMLFormElement | null>(null);

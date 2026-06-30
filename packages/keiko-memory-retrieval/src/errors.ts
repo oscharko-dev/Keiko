@@ -6,11 +6,7 @@
 // (`port-failure`) carrying the underlying error in `cause`.
 
 export type RetrievalErrorCode =
-  | "empty-scopes"
-  | "invalid-budget"
-  | "invalid-threshold"
-  | "invalid-weight"
-  | "port-failure";
+  "empty-scopes" | "invalid-budget" | "invalid-threshold" | "invalid-weight" | "port-failure";
 
 export class RetrievalError extends Error {
   public override readonly name = "RetrievalError";

@@ -50,13 +50,7 @@ export function isVoiceTranscriptSchemaVersionSupported(version: unknown): boole
 // `redacted`       — the reviewable text was redacted out (privacy). Content-free; excluded downstream.
 // `provider-error` — the provider failed to transcribe this segment. Content-free; excluded downstream.
 export type VoiceTranscriptSegmentState =
-  | "partial"
-  | "stable"
-  | "committed"
-  | "corrected"
-  | "discarded"
-  | "redacted"
-  | "provider-error";
+  "partial" | "stable" | "committed" | "corrected" | "discarded" | "redacted" | "provider-error";
 
 export const VOICE_TRANSCRIPT_SEGMENT_STATES: readonly VoiceTranscriptSegmentState[] = [
   "partial",
@@ -82,11 +76,7 @@ export const VOICE_TRANSCRIPT_CONSUMABLE_STATES: readonly VoiceTranscriptSegment
 // adapter can map `VOICE_RATE_LIMITED`/`VOICE_TIMEOUT`/`VOICE_PROVIDER_ERROR`/`VOICE_UNAVAILABLE` onto
 // these without a lossy round-trip.
 export type VoiceTranscriptProviderErrorKind =
-  | "rate-limited"
-  | "timeout"
-  | "provider-error"
-  | "unavailable"
-  | "internal";
+  "rate-limited" | "timeout" | "provider-error" | "unavailable" | "internal";
 
 export const VOICE_TRANSCRIPT_PROVIDER_ERROR_KINDS: readonly VoiceTranscriptProviderErrorKind[] = [
   "rate-limited",

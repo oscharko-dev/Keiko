@@ -111,11 +111,7 @@ function isHtmlShellRequest(request, url) {
 
 function isActivateWaitingMessage(event) {
   const data = event.data;
-  return (
-    data !== null &&
-    typeof data === "object" &&
-    data.type === ACTIVATE_WAITING_MESSAGE_TYPE
-  );
+  return data !== null && typeof data === "object" && data.type === ACTIVATE_WAITING_MESSAGE_TYPE;
 }
 
 async function putIfCacheable(request, response) {

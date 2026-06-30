@@ -299,7 +299,10 @@ async function runParser(
     now: options.now,
   });
   try {
-    return await Promise.race([binding.parser.parseAsync(selection, parserOptions), timeout.expired]);
+    return await Promise.race([
+      binding.parser.parseAsync(selection, parserOptions),
+      timeout.expired,
+    ]);
   } catch {
     if (timeout.signal.aborted) {
       return "timed-out";

@@ -308,8 +308,7 @@ describe("VoiceControlConnection transcripts, replay & teardown", () => {
     expect(socket.sent).toHaveLength(0);
     // ...but recorded (sanitised) into the reconnect replay buffer.
     const recorded = session.replay.find((m) => m.kind === "transcript.committed") as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     expect(recorded).toBeDefined();
     expect(recorded?.text).toBe("oktext done");
   });

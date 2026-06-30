@@ -92,12 +92,7 @@ export interface ProgressiveExtractionSink {
 }
 
 export type ProgressiveStopReason =
-  | "completed"
-  | "cancelled"
-  | "extracted-text-limit"
-  | "object-limit"
-  | "unit-limit"
-  | "timeout";
+  "completed" | "cancelled" | "extracted-text-limit" | "object-limit" | "unit-limit" | "timeout";
 
 export interface ProgressiveExtractionSummary {
   readonly pageCount: number;

@@ -1098,11 +1098,7 @@ describe("htmlCssAdapter — spacing/radius token var references", () => {
   });
 
   it("emits var(--radius-1) for border-radius when cornerRadius exactly matches radius token", () => {
-    const s = screen(
-      "s-rad",
-      "Rad",
-      node("card", "container", { cornerRadius: 4 }),
-    );
+    const s = screen("s-rad", "Rad", node("card", "container", { cornerRadius: 4 }));
     const artifact = emitCode(
       { screens: [s], tokens: spaceRadiusTokens, hints: [] },
       htmlCssAdapter,
@@ -1161,7 +1157,10 @@ describe("htmlCssAdapter — spacing/radius token var references", () => {
 
 describe("htmlCssAdapter — no false lang attribute (WCAG 3.1.1)", () => {
   it("per-screen HTML does not declare lang and still emits an <html> wrapper", () => {
-    const artifact = emitCode({ screens: [loginScreen()], tokens: NO_TOKENS, hints: [] }, htmlCssAdapter);
+    const artifact = emitCode(
+      { screens: [loginScreen()], tokens: NO_TOKENS, hints: [] },
+      htmlCssAdapter,
+    );
     const html = fileByPath(artifact, "screens/s-login.html");
     expect(html).not.toContain('lang="en"');
     expect(html).toMatch(/<html[^>]*>/u);

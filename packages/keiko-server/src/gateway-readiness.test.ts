@@ -1,10 +1,7 @@
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
-import {
-  createDefaultChatCapability,
-  type GatewayConfig,
-} from "@oscharko-dev/keiko-model-gateway";
+import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { handleGatewayReadiness, runGatewayReadiness } from "./gateway-readiness.js";
@@ -169,12 +166,17 @@ describe("gateway readiness route", () => {
 
     await expect(handleGatewayReadiness(rawCtx("{"), deps)).resolves.toEqual({
       status: 400,
-      body: { error: { code: "BAD_REQUEST", message: "The readiness request body must be valid JSON." } },
+      body: {
+        error: { code: "BAD_REQUEST", message: "The readiness request body must be valid JSON." },
+      },
     });
     await expect(handleGatewayReadiness(rawCtx("[]"), deps)).resolves.toEqual({
       status: 400,
       body: {
-        error: { code: "BAD_REQUEST", message: "The readiness request body must be a JSON object." },
+        error: {
+          code: "BAD_REQUEST",
+          message: "The readiness request body must be a JSON object.",
+        },
       },
     });
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -188,7 +190,10 @@ describe("gateway readiness route", () => {
     await expect(runGatewayReadiness({ modelId: "missing-model" }, deps)).resolves.toEqual({
       status: 400,
       body: {
-        error: { code: "NO_MODEL", message: "Select a configured chat model before running readiness checks." },
+        error: {
+          code: "NO_MODEL",
+          message: "Select a configured chat model before running readiness checks.",
+        },
       },
     });
 
@@ -202,7 +207,10 @@ describe("gateway readiness route", () => {
     ).resolves.toEqual({
       status: 400,
       body: {
-        error: { code: "NO_MODEL", message: "Select a conversation-capable model before running readiness checks." },
+        error: {
+          code: "NO_MODEL",
+          message: "Select a conversation-capable model before running readiness checks.",
+        },
       },
     });
 
@@ -268,7 +276,9 @@ describe("gateway readiness route", () => {
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(jsonResponse({ error: { message: "stream unsupported" } }, 501))
-      .mockResolvedValueOnce(jsonResponse({ error: { message: "schema failed" } }, 500)) as typeof fetch;
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { message: "schema failed" } }, 500),
+      ) as typeof fetch;
     const deps = depsWith(gatewayConfig(), fetchImpl);
     const report = await runGatewayReadiness(
       { options: { probes: ["streaming", "json_schema"] } },
@@ -382,7 +392,9 @@ describe("gateway readiness route", () => {
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("red")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("KEIKO PDF READINESS PROBE")))
-      .mockResolvedValueOnce(jsonResponse(chatPayload("KEIKO_LONG_CONTEXT_SENTINEL"))) as typeof fetch;
+      .mockResolvedValueOnce(
+        jsonResponse(chatPayload("KEIKO_LONG_CONTEXT_SENTINEL")),
+      ) as typeof fetch;
     const config: GatewayConfig = {
       ...gatewayConfig(),
       capabilities: [
@@ -424,7 +436,12 @@ describe("gateway readiness route", () => {
       .mockResolvedValueOnce(jsonResponse(chatPayload("missing sentinel"))) as typeof fetch;
     const deps = depsWith(gatewayConfig(), fetchImpl);
     const report = await runGatewayReadiness(
-      { options: { probes: ["image_input", "document_input", "long_context"], maxContextTokens: 128_000 } },
+      {
+        options: {
+          probes: ["image_input", "document_input", "long_context"],
+          maxContextTokens: 128_000,
+        },
+      },
       deps,
     );
 

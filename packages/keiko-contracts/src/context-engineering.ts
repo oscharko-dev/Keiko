@@ -35,10 +35,7 @@ export const CONTEXT_LANE_IDS: readonly ContextLaneId[] = [
 
 // Eviction policy per lane. "none" => non-evictable (reserved off the top).
 export type ContextEvictionPolicy =
-  | "none"
-  | "summarize-then-drop"
-  | "drop-oldest"
-  | "drop-lowest-score";
+  "none" | "summarize-then-drop" | "drop-oldest" | "drop-lowest-score";
 
 export const CONTEXT_EVICTION_POLICIES: readonly ContextEvictionPolicy[] = [
   "none",

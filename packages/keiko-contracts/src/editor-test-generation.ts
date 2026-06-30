@@ -54,11 +54,7 @@ export const EDITOR_TEST_GENERATION_STABILITY_RUNS = 5 as const;
 // The five governed test-generation target modes, mirroring the browser-side EditorTestGenerationContext
 // owned by @oscharko-dev/keiko-editor (this package never imports the editor package — wrong tier).
 export type EditorTestGenerationTargetKind =
-  | "file"
-  | "selection"
-  | "symbol"
-  | "changed-file-set"
-  | "frontend-component";
+  "file" | "selection" | "symbol" | "changed-file-set" | "frontend-component";
 
 export const EDITOR_TEST_GENERATION_TARGET_KINDS: readonly EditorTestGenerationTargetKind[] = [
   "file",

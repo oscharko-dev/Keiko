@@ -107,7 +107,9 @@ function isRouteResult(value: unknown): value is RouteResult {
   return isRecord(value) && typeof value.status === "number" && "body" in value;
 }
 
-async function readJsonObject(req: IncomingMessage): Promise<Record<string, unknown> | RouteResult> {
+async function readJsonObject(
+  req: IncomingMessage,
+): Promise<Record<string, unknown> | RouteResult> {
   let raw: string;
   try {
     raw = await readBody(req);
@@ -147,10 +149,16 @@ function readRequiredString(
   return value;
 }
 
-function readOptionalText(body: Record<string, unknown>, key: string): string | RouteResult | undefined {
+function readOptionalText(
+  body: Record<string, unknown>,
+  key: string,
+): string | RouteResult | undefined {
   if (body[key] === undefined) return undefined;
   if (typeof body[key] !== "string") {
-    return { status: 400, body: errorBody("BAD_REQUEST", `${key} must be a string when provided.`) };
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", `${key} must be a string when provided.`),
+    };
   }
   const value = body[key].trim();
   if (value.length === 0 || value.length > MAX_TEXT_CHARS) {
@@ -271,9 +279,7 @@ function summarizeKnowledgeCitation(
   };
 }
 
-function summarizeCitations(
-  answer: GroundedAnswer,
-): RealtimeGroundedToolOutput["citations"] {
+function summarizeCitations(answer: GroundedAnswer): RealtimeGroundedToolOutput["citations"] {
   if (answer.groundingKind === "local-knowledge") {
     return answer.citations.slice(0, 8).map(summarizeKnowledgeCitation);
   }
@@ -313,7 +319,10 @@ function isGroundedAnswer(value: unknown): value is GroundedAnswer {
   );
 }
 
-function messagesForAnswer(deps: UiHandlerDeps, answer: GroundedAnswer): readonly ChatMessage[] | RouteResult {
+function messagesForAnswer(
+  deps: UiHandlerDeps,
+  answer: GroundedAnswer,
+): readonly ChatMessage[] | RouteResult {
   const user = deps.store.findMessageById(answer.userMessageId);
   const assistant = deps.store.findMessageById(answer.assistantMessageId);
   if (user === undefined || assistant === undefined) {

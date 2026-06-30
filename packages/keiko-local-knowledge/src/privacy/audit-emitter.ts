@@ -33,16 +33,20 @@ interface RunStatement {
 
 type SourceOnlyAuditEvent = Extract<
   CapsuleAuditEvent,
-  { readonly kind: "indexing-job-started" | "indexing-job-completed" | "indexing-job-failed" | "retention-applied" }
+  {
+    readonly kind:
+      | "indexing-job-started"
+      | "indexing-job-completed"
+      | "indexing-job-failed"
+      | "retention-applied";
+  }
 >;
 
 type PreviewAuditEvent = Extract<
   CapsuleAuditEvent,
   {
     readonly kind:
-      | "citation-preview-authorized"
-      | "citation-preview-recoverable"
-      | "citation-preview-blocked";
+      "citation-preview-authorized" | "citation-preview-recoverable" | "citation-preview-blocked";
   }
 >;
 
@@ -121,9 +125,7 @@ function referenceDetails(
   };
 }
 
-function previewDetails(
-  event: PreviewAuditEvent,
-): Record<string, unknown> {
+function previewDetails(event: PreviewAuditEvent): Record<string, unknown> {
   return {
     ...sourceOnlyDetails(event),
     chunkIds: redactChunkIds(event.chunkIds),

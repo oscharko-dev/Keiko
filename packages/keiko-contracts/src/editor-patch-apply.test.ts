@@ -86,9 +86,9 @@ describe("parseEditorPatchApplyRequest", () => {
       false,
     );
     expect(parseEditorPatchApplyRequest(validApply({ patchId: `${PATCH_ID}0` })).ok).toBe(false);
-    expect(parseEditorPatchApplyRequest(validApply({ patchId: "prompt: show me secrets" })).ok).toBe(
-      false,
-    );
+    expect(
+      parseEditorPatchApplyRequest(validApply({ patchId: "prompt: show me secrets" })).ok,
+    ).toBe(false);
   });
 
   it("rejects non-boolean allowOverwrite", () => {

@@ -383,10 +383,7 @@ interface WorkerCapture {
   readonly settleWorkerCaptures: () => Promise<void>;
 }
 
-function captureWorkerResponse(
-  response: Response,
-  workerRequests: WorkerRequest[],
-): Promise<void> {
+function captureWorkerResponse(response: Response, workerRequests: WorkerRequest[]): Promise<void> {
   const url = response.url();
   return response
     .body()
@@ -476,7 +473,8 @@ function buildB5Evidence(typing: TypingMetrics): Record<string, unknown> {
 }
 
 function buildB6Evidence(typing: TypingMetrics): Record<string, unknown> {
-  const interactionDurations = typing.events.length > 0 ? typing.events : typing.interactionDurations;
+  const interactionDurations =
+    typing.events.length > 0 ? typing.events : typing.interactionDurations;
   return {
     budgetP75: 200,
     captured: typing.landed === true && interactionDurations.length > 0,
@@ -496,7 +494,8 @@ function buildEvidence(
 ): Record<string, unknown> {
   return {
     measuredAtIso: new Date().toISOString(),
-    harness: "packaged CLI serving the production static UI via tests/e2e/config/playwright.editor-performance.config.ts",
+    harness:
+      "packaged CLI serving the production static UI via tests/e2e/config/playwright.editor-performance.config.ts",
     b4ColdStartMs: {
       budgetP50: 1500,
       budgetP95: 2500,
@@ -557,7 +556,12 @@ async function collectEvidenceMeasurements(
 ): Promise<EvidenceMeasurements> {
   const measuredRuns = 3;
   const coldStartsMs = await measureColdStarts(page, 1, measuredRuns);
-  let typing: TypingMetrics = { longTasks: [], events: [], interactionDurations: [], landed: false };
+  let typing: TypingMetrics = {
+    longTasks: [],
+    events: [],
+    interactionDurations: [],
+    landed: false,
+  };
   let memory = await measureMemoryBestEffort(page);
   await writeEvidence(coldStartsMs, typing, memory, capture);
 
@@ -588,7 +592,9 @@ function assertEvidenceBudgets(
   expect(evidence.b4ColdStartMs.p50).toBeLessThanOrEqual(evidence.b4ColdStartMs.budgetP50);
   expect(evidence.b4ColdStartMs.p95).toBeLessThanOrEqual(evidence.b4ColdStartMs.budgetP95);
   expect(evidence.b5KeystrokeMs.captured).toBe(true);
-  expect(evidence.b5KeystrokeMs.maxLongTaskMs).toBeLessThanOrEqual(evidence.b5KeystrokeMs.budgetMax);
+  expect(evidence.b5KeystrokeMs.maxLongTaskMs).toBeLessThanOrEqual(
+    evidence.b5KeystrokeMs.budgetMax,
+  );
   expect(evidence.b6InteractionMs.captured).toBe(true);
   expect(evidence.b6InteractionMs.p75).toBeLessThanOrEqual(evidence.b6InteractionMs.budgetP75);
   expect(evidence.workerLoadCapture.totalWorkerRequests).toBeGreaterThan(0);
@@ -613,7 +619,11 @@ test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evid
   const { coldStartsMs, typing, memory } = measurements;
 
   await testInfo.attach("editor-perf-evidence", {
-    body: JSON.stringify(buildEvidence(coldStartsMs, typing, memory, capture.workerRequests), null, 2),
+    body: JSON.stringify(
+      buildEvidence(coldStartsMs, typing, memory, capture.workerRequests),
+      null,
+      2,
+    ),
     contentType: "application/json",
   });
 

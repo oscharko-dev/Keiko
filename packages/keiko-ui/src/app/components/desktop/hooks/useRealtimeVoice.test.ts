@@ -145,8 +145,13 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
   it("gates connected on data-channel open, session.updated, and mic warm-up", async () => {
     vi.useFakeTimers();
     try {
-      const { session, fireConnectionState, fireDataChannelState, fireDataChannelEvent, sendDataChannelEvent } =
-        makeFakeSession("v=0\r\nfake-offer", { exposeDataChannelState: true });
+      const {
+        session,
+        fireConnectionState,
+        fireDataChannelState,
+        fireDataChannelEvent,
+        sendDataChannelEvent,
+      } = makeFakeSession("v=0\r\nfake-offer", { exposeDataChannelState: true });
       const transport = makeFakeTransport({ session });
       const { client } = makeFakeControl({ negotiateResult: "v=0\r\nfake-answer" });
 

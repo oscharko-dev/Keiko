@@ -498,8 +498,7 @@ describe("AppShell grounding connections", () => {
     await renderMounted();
 
     const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
-      | { readonly dispatch?: (commandId: string) => void }
-      | undefined;
+      { readonly dispatch?: (commandId: string) => void } | undefined;
     expect(keyboardProps?.dispatch).toBeTypeOf("function");
 
     const statusSpy = vi.spyOn(HTMLElement.prototype, "focus");

@@ -71,11 +71,7 @@ function writeProviderVault(stateDir, content) {
     typeof content === "string"
       ? content
       : JSON.stringify(Object.hasOwn(content, "version") ? content : { version: 1, ...content });
-  writeFileSync(
-    join(dir, "provider-credentials.vault"),
-    payload,
-    { mode: 0o600 },
-  );
+  writeFileSync(join(dir, "provider-credentials.vault"), payload, { mode: 0o600 });
 }
 
 // Assembles a provider-shaped secret string at runtime from fragments. No contiguous secret literal

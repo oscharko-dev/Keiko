@@ -44,10 +44,7 @@ export const GIT_REPOSITORY_AGENT_OPERATION_KINDS: readonly GitRepositoryAgentOp
 ] as const;
 
 export type GitRepositoryAgentDenialReason =
-  | "unsupported-direct-shell"
-  | "unsupported-operation"
-  | "idempotency-conflict"
-  | "bad-request";
+  "unsupported-direct-shell" | "unsupported-operation" | "idempotency-conflict" | "bad-request";
 
 export const GIT_REPOSITORY_AGENT_DENIAL_REASONS: readonly GitRepositoryAgentDenialReason[] = [
   "unsupported-direct-shell",
@@ -85,8 +82,7 @@ export interface GitRepositoryAgentOperationDeniedResponse {
 }
 
 export type GitRepositoryAgentOperationResponse =
-  | GitRepositoryAgentOperationDelegatedResponse
-  | GitRepositoryAgentOperationDeniedResponse;
+  GitRepositoryAgentOperationDelegatedResponse | GitRepositoryAgentOperationDeniedResponse;
 
 export interface GitRepositoryAgentParseOk {
   readonly ok: true;
@@ -99,9 +95,7 @@ export interface GitRepositoryAgentParseFail {
   readonly message: string;
 }
 
-export type GitRepositoryAgentParseResult =
-  | GitRepositoryAgentParseOk
-  | GitRepositoryAgentParseFail;
+export type GitRepositoryAgentParseResult = GitRepositoryAgentParseOk | GitRepositoryAgentParseFail;
 
 const TOP_LEVEL_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
@@ -191,7 +185,9 @@ function parseFail(
 
 function validateEnvelope(
   input: unknown,
-): { readonly ok: true; readonly value: Readonly<Record<string, unknown>> } | GitRepositoryAgentParseFail {
+):
+  | { readonly ok: true; readonly value: Readonly<Record<string, unknown>> }
+  | GitRepositoryAgentParseFail {
   if (!isRecord(input)) return parseFail("bad-request", "Request body must be an object.");
   if (containsDirectShellShape(input)) {
     return parseFail(
@@ -200,7 +196,8 @@ function validateEnvelope(
     );
   }
   for (const key of Object.keys(input)) {
-    if (!TOP_LEVEL_KEYS.has(key)) return parseFail("bad-request", "Request contains an extra field.");
+    if (!TOP_LEVEL_KEYS.has(key))
+      return parseFail("bad-request", "Request contains an extra field.");
   }
   if (input.schemaVersion !== GIT_REPOSITORY_AGENT_SCHEMA_VERSION) {
     return parseFail("bad-request", "schemaVersion is invalid.");
@@ -208,7 +205,9 @@ function validateEnvelope(
   return { ok: true, value: input };
 }
 
-function parseOperation(value: unknown): GitRepositoryAgentOperationKind | GitRepositoryAgentParseFail {
+function parseOperation(
+  value: unknown,
+): GitRepositoryAgentOperationKind | GitRepositoryAgentParseFail {
   if (isOperation(value)) return value;
   return parseFail("unsupported-operation", "Operation is not supported by the repository facade.");
 }
@@ -285,7 +284,9 @@ export function isGitRepositoryAgentOperationResponse(
   if (!isRecord(input)) return false;
   if (input.schemaVersion !== GIT_REPOSITORY_AGENT_SCHEMA_VERSION) return false;
   if (input.status === "delegated") {
-    return isOperation(input.operation) && isMode(input.mode) && typeof input.routeStatus === "number";
+    return (
+      isOperation(input.operation) && isMode(input.mode) && typeof input.routeStatus === "number"
+    );
   }
   if (input.status === "denied") {
     return (

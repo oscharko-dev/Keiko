@@ -374,7 +374,10 @@ async function interceptReadRoutes(page: Page): Promise<void> {
 }
 
 // /api/projects (the fixture repo) + governed staging/commit-preview routes (deterministic success).
-async function interceptProjectAndMutationRoutes(page: Page, browserProjectPath: string): Promise<void> {
+async function interceptProjectAndMutationRoutes(
+  page: Page,
+  browserProjectPath: string,
+): Promise<void> {
   await page.route("**/api/projects**", async (route) => {
     if (route.request().method() !== "GET") {
       await route.continue();

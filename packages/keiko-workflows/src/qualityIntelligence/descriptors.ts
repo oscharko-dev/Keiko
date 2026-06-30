@@ -19,10 +19,7 @@
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 
 export type QualityIntelligenceWorkflowId =
-  | "qi:test-design"
-  | "qi:coverage-review"
-  | "qi:validation"
-  | "qi:artifact-refinement";
+  "qi:test-design" | "qi:coverage-review" | "qi:validation" | "qi:artifact-refinement";
 
 export interface QualityIntelligenceWorkflowLimits {
   /** Wall-clock soft limit per stage (advisory, used to bound dispatcher waits). */

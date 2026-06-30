@@ -62,8 +62,7 @@ const DEFAULT_REEMBED_LIMIT = 200;
 export interface MemoryCliDeps {
   readonly vault?: MemoryVaultStore | undefined;
   readonly openVault?:
-    | ((memoryDir: string | undefined, env: EnvSource) => MemoryVaultStore)
-    | undefined;
+    ((memoryDir: string | undefined, env: EnvSource) => MemoryVaultStore) | undefined;
   readonly evidenceStore?: EvidenceStore | undefined;
   readonly redactString?: ((input: string) => string) | undefined;
   readonly embedText?: MemoryEmbedder | null | undefined;

@@ -156,9 +156,15 @@ function checkStateDirPerms(stateDir: string, dryRun: boolean): CheckResult {
 
 function stateRootRefusal(root: StateRootInspection): CheckResult | undefined {
   if (root.status === "symlink")
-    return action("State directory", `refusing to inspect symlinked state directory: ${root.absPath}`);
+    return action(
+      "State directory",
+      `refusing to inspect symlinked state directory: ${root.absPath}`,
+    );
   if (root.status === "not-directory")
-    return action("State directory", `refusing to inspect non-directory state path: ${root.absPath}`);
+    return action(
+      "State directory",
+      `refusing to inspect non-directory state path: ${root.absPath}`,
+    );
   return undefined;
 }
 

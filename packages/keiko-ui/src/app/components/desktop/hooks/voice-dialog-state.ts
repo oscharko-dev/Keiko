@@ -19,23 +19,10 @@ import type { VoicePlaybackPhase } from "./voice-playback-state";
 // 'recovering', and 'disabled' are internal turn-manager states that map onto these via the precedence
 // below (recovering ⇒ connecting; yielding/disabled ⇒ idle), so the UI never surfaces a raw turn state.
 export type VoiceDialogState =
-  | "idle"
-  | "connecting"
-  | "listening"
-  | "thinking"
-  | "speaking"
-  | "muted"
-  | "interrupted"
-  | "error";
+  "idle" | "connecting" | "listening" | "thinking" | "speaking" | "muted" | "interrupted" | "error";
 
 export type VoiceAuraState =
-  | "ready"
-  | "listening"
-  | "thinking"
-  | "speaking"
-  | "muted"
-  | "interrupted"
-  | "error";
+  "ready" | "listening" | "thinking" | "speaking" | "muted" | "interrupted" | "error";
 
 export type VoiceAuraIntensity = "low" | "medium" | "high";
 

@@ -357,8 +357,7 @@ export interface ConnectedContextPackStableIdInput {
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
 export type ValidationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reasons: readonly string[] };
+  { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
 export interface IsValidScopePathOptions {
   // Only `true` is supported today; `false` returns `false` (defensive contract boundary).

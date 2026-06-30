@@ -3,7 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <script>
+      try {
+        var t = localStorage.getItem("keiko-ds-theme");
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        var c = localStorage.getItem("keiko-ds-contrast");
+        if (c === "more") document.documentElement.dataset.hc = "more";
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
     <title>Editor · Gutter · Keiko Design System</title>
     <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
@@ -12,15 +21,49 @@
     <link rel="stylesheet" href="ds.css" />
     <link rel="stylesheet" href="keiko-editor-views.css" />
     <style>
-      .gx { display: grid; grid-template-columns: 24px 34px 6px 16px 1fr; align-items: center; height: 1.7em; font: 400 13px/1.7 var(--font-mono); }
-      .gx .bpm { display: grid; place-items: center; }
-      .gx .gnum { text-align: right; padding-right: 8px; color: var(--ed-gutter-fg); }
-      .gx.cur .gnum { color: var(--ed-gutter-fg-active); }
-      .gx .gv { display: grid; place-items: center; }
-      .gx .gf { display: grid; place-items: center; color: var(--ed-fold-arrow); }
-      .gx .gc { white-space: pre; color: var(--ed-fg); padding-left: 8px; }
-      .gx.cur .gc { background: var(--ed-line-active); box-shadow: inset 2px 0 0 var(--ed-bracket-match); margin-left: -8px; padding-left: 16px; }
-      .gwell { background: var(--ed-bg); padding: 10px 14px 10px 0; }
+      .gx {
+        display: grid;
+        grid-template-columns: 24px 34px 6px 16px 1fr;
+        align-items: center;
+        height: 1.7em;
+        font: 400 13px/1.7 var(--font-mono);
+      }
+      .gx .bpm {
+        display: grid;
+        place-items: center;
+      }
+      .gx .gnum {
+        text-align: right;
+        padding-right: 8px;
+        color: var(--ed-gutter-fg);
+      }
+      .gx.cur .gnum {
+        color: var(--ed-gutter-fg-active);
+      }
+      .gx .gv {
+        display: grid;
+        place-items: center;
+      }
+      .gx .gf {
+        display: grid;
+        place-items: center;
+        color: var(--ed-fold-arrow);
+      }
+      .gx .gc {
+        white-space: pre;
+        color: var(--ed-fg);
+        padding-left: 8px;
+      }
+      .gx.cur .gc {
+        background: var(--ed-line-active);
+        box-shadow: inset 2px 0 0 var(--ed-bracket-match);
+        margin-left: -8px;
+        padding-left: 16px;
+      }
+      .gwell {
+        background: var(--ed-bg);
+        padding: 10px 14px 10px 0;
+      }
     </style>
   </head>
   <body class="ds">
@@ -32,131 +75,530 @@
       <header class="phero">
         <div class="ey">Guidelines · 11 · Editor</div>
         <h1>The gutter</h1>
-        <p class="lead">The narrow margin left of the code carries more signal per pixel than any other strip in the IDE: run arrows, breakpoints, version-control change bars, folding, inlay hints and blame. This page defines every column, its order, its glyph and its token — so the left edge reads instantly and never turns to noise.</p>
+        <p class="lead">
+          The narrow margin left of the code carries more signal per pixel than any other strip in
+          the IDE: run arrows, breakpoints, version-control change bars, folding, inlay hints and
+          blame. This page defines every column, its order, its glyph and its token — so the left
+          edge reads instantly and never turns to noise.
+        </p>
       </header>
 
       <!-- 01 ANATOMY -->
       <section class="sec" id="anatomy">
-        <div class="sec-head"><div class="num">01 — ANATOMY</div><h2>Four columns, fixed order</h2><p>The gutter is read left-to-right as <b style="color:var(--fg)">action → location → change → structure</b>. Order is fixed so muscle memory holds across files and languages.</p></div>
-        <div class="ev-anat" style="padding-top:36px">
-          <div class="ev-frame flat gwell" style="position:relative">
-            <div class="gx"><span class="bpm"></span><span class="gnum">10</span><span class="gv"></span><span class="gf"></span><span class="gc"><span class="t-key">import</span> <span class="t-pun">{</span> <span class="t-var">z</span> <span class="t-pun">}</span> <span class="t-key">from</span> <span class="t-str">"zod"</span><span class="t-pun">;</span></span></div>
-            <div class="gx"><span class="bpm"><span class="ev-run"><span class="ico" data-licon="run" data-size="14"></span></span></span><span class="gnum">11</span><span class="gv"></span><span class="gf"><span class="ico" data-licon="chevron" data-size="13"></span></span><span class="gc"><span class="t-key">export</span> <span class="t-key">function</span> <span class="t-fn">main</span><span class="t-pun">()</span> <span class="t-pun">{</span></span></div>
-            <div class="gx"><span class="bpm"><span class="ev-bp"></span></span><span class="gnum">12</span><span class="gv"><span class="ev-vcs mod"></span></span><span class="gf"></span><span class="gc">  <span class="t-key">const</span> <span class="t-var">a</span> <span class="t-op">=</span> <span class="t-fn">load</span><span class="t-pun">();</span></span></div>
-            <div class="gx cur"><span class="bpm"></span><span class="gnum">13</span><span class="gv"><span class="ev-vcs add"></span></span><span class="gf"></span><span class="gc">  <span class="t-key">return</span> <span class="t-var">a</span><span class="t-op">.</span><span class="t-prop">id</span><span class="t-pun">;</span></span></div>
-            <div class="gx"><span class="bpm"></span><span class="gnum">14</span><span class="gv"></span><span class="gf"></span><span class="gc"><span class="t-pun">}</span></span></div>
-            <span class="ev-callout" style="left:8px;top:-30px">1</span>
-            <span class="ev-callout" style="left:42px;top:-30px">2</span>
-            <span class="ev-callout" style="left:74px;top:-30px">3</span>
-            <span class="ev-callout" style="left:104px;top:-30px">4</span>
+        <div class="sec-head">
+          <div class="num">01 — ANATOMY</div>
+          <h2>Four columns, fixed order</h2>
+          <p>
+            The gutter is read left-to-right as
+            <b style="color: var(--fg)">action → location → change → structure</b>. Order is fixed
+            so muscle memory holds across files and languages.
+          </p>
+        </div>
+        <div class="ev-anat" style="padding-top: 36px">
+          <div class="ev-frame flat gwell" style="position: relative">
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">10</span><span class="gv"></span
+              ><span class="gf"></span
+              ><span class="gc"
+                ><span class="t-key">import</span> <span class="t-pun">{</span>
+                <span class="t-var">z</span> <span class="t-pun">}</span>
+                <span class="t-key">from</span> <span class="t-str">"zod"</span
+                ><span class="t-pun">;</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"
+                ><span class="ev-run"
+                  ><span class="ico" data-licon="run" data-size="14"></span></span></span
+              ><span class="gnum">11</span><span class="gv"></span
+              ><span class="gf"><span class="ico" data-licon="chevron" data-size="13"></span></span
+              ><span class="gc"
+                ><span class="t-key">export</span> <span class="t-key">function</span>
+                <span class="t-fn">main</span><span class="t-pun">()</span>
+                <span class="t-pun">{</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"><span class="ev-bp"></span></span><span class="gnum">12</span
+              ><span class="gv"><span class="ev-vcs mod"></span></span><span class="gf"></span
+              ><span class="gc">
+                <span class="t-key">const</span> <span class="t-var">a</span>
+                <span class="t-op">=</span> <span class="t-fn">load</span
+                ><span class="t-pun">();</span></span
+              >
+            </div>
+            <div class="gx cur">
+              <span class="bpm"></span><span class="gnum">13</span
+              ><span class="gv"><span class="ev-vcs add"></span></span><span class="gf"></span
+              ><span class="gc">
+                <span class="t-key">return</span> <span class="t-var">a</span
+                ><span class="t-op">.</span><span class="t-prop">id</span
+                ><span class="t-pun">;</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">14</span><span class="gv"></span
+              ><span class="gf"></span><span class="gc"><span class="t-pun">}</span></span>
+            </div>
+            <span class="ev-callout" style="left: 8px; top: -30px">1</span>
+            <span class="ev-callout" style="left: 42px; top: -30px">2</span>
+            <span class="ev-callout" style="left: 74px; top: -30px">3</span>
+            <span class="ev-callout" style="left: 104px; top: -30px">4</span>
           </div>
         </div>
         <div class="ev-legend">
-          <div class="li"><span class="n">1</span><div><b>Icon margin</b> — run/debug arrows + breakpoints. Click toggles a breakpoint; hover reveals run. <code>--ed-run-glyph · --ed-breakpoint</code></div></div>
-          <div class="li"><span class="n">2</span><div><b>Line number</b> — current line lifts to <code>--ed-gutter-fg-active</code>; all others sit at 38% of <code>--fg</code>.</div></div>
-          <div class="li"><span class="n">3</span><div><b>VCS change bar</b> — 3&nbsp;px bar: added / modified / staged; a caret marks a deletion. <code>--ed-vcs-*</code></div></div>
-          <div class="li"><span class="n">4</span><div><b>Folding</b> — chevrons appear on hover at block starts; collapsed ranges show a placeholder. <code>--ed-fold-arrow</code></div></div>
+          <div class="li">
+            <span class="n">1</span>
+            <div>
+              <b>Icon margin</b> — run/debug arrows + breakpoints. Click toggles a breakpoint; hover
+              reveals run. <code>--ed-run-glyph · --ed-breakpoint</code>
+            </div>
+          </div>
+          <div class="li">
+            <span class="n">2</span>
+            <div>
+              <b>Line number</b> — current line lifts to <code>--ed-gutter-fg-active</code>; all
+              others sit at 38% of <code>--fg</code>.
+            </div>
+          </div>
+          <div class="li">
+            <span class="n">3</span>
+            <div>
+              <b>VCS change bar</b> — 3&nbsp;px bar: added / modified / staged; a caret marks a
+              deletion. <code>--ed-vcs-*</code>
+            </div>
+          </div>
+          <div class="li">
+            <span class="n">4</span>
+            <div>
+              <b>Folding</b> — chevrons appear on hover at block starts; collapsed ranges show a
+              placeholder. <code>--ed-fold-arrow</code>
+            </div>
+          </div>
         </div>
       </section>
 
       <!-- 02 RUN / DEBUG -->
       <section class="sec" id="run">
-        <div class="sec-head"><div class="num">02 — RUN &amp; DEBUG</div><h2>Runnable lines</h2><p>Functions, tests and scripts that Keiko can execute show a play arrow in the icon margin. The arrow is the one place brand green enters the gutter — running code <em>is</em> the product.</p></div>
+        <div class="sec-head">
+          <div class="num">02 — RUN &amp; DEBUG</div>
+          <h2>Runnable lines</h2>
+          <p>
+            Functions, tests and scripts that Keiko can execute show a play arrow in the icon
+            margin. The arrow is the one place brand green enters the gutter — running code
+            <em>is</em> the product.
+          </p>
+        </div>
         <div class="ev-grid2">
-          <div class="ev-frame flat gwell" style="position:relative">
-            <div class="gx"><span class="bpm"><span class="ev-run"><span class="ico" data-licon="run" data-size="14"></span></span></span><span class="gnum">3</span><span class="gv"></span><span class="gf"></span><span class="gc"><span class="t-fn">describe</span><span class="t-pun">(</span><span class="t-str">"client"</span><span class="t-pun">,</span> <span class="t-pun">()</span> <span class="t-op">=&gt;</span> <span class="t-pun">{</span></span></div>
-            <div class="gx"><span class="bpm"><span class="ev-run"><span class="ico" data-licon="run" data-size="14"></span></span></span><span class="gnum">4</span><span class="gv"></span><span class="gf"></span><span class="gc">  <span class="t-fn">test</span><span class="t-pun">(</span><span class="t-str">"fetches"</span><span class="t-pun">,</span> <span class="t-key">async</span> <span class="t-pun">()</span> <span class="t-op">=&gt;</span> <span class="t-pun">{</span></span></div>
-            <div class="gx"><span class="bpm"></span><span class="gnum">5</span><span class="gv"></span><span class="gf"></span><span class="gc">    <span class="t-key">const</span> <span class="t-var">a</span> <span class="t-op">=</span> <span class="t-key">await</span> <span class="t-fn">fetchAgents</span><span class="t-pun">();</span></span></div>
-            <div class="gx"><span class="bpm"></span><span class="gnum">6</span><span class="gv"></span><span class="gf"></span><span class="gc">    <span class="t-fn">expect</span><span class="t-pun">(</span><span class="t-var">a</span><span class="t-pun">)</span><span class="t-op">.</span><span class="t-fn">toHaveLength</span><span class="t-pun">(</span><span class="t-num">2</span><span class="t-pun">);</span></span></div>
-            <div style="position:absolute;left:30px;top:8px;z-index:6">
-              <div class="ev-menu" style="min-width:188px">
-                <div class="ev-mi on"><span class="mic" style="color:var(--ed-run-glyph)"><span class="ico" data-licon="run" data-size="14"></span></span><span class="mt">Run 'client'</span><span class="key">⌃⇧R</span></div>
-                <div class="ev-mi"><span class="mic"><span class="ico" data-licon="debug" data-size="14"></span></span><span class="mt">Debug 'client'</span><span class="key">⌃⇧D</span></div>
-                <div class="ev-mi"><span class="mic"><span class="ico" data-licon="coverage" data-size="14"></span></span><span class="mt">Run with Coverage</span></div>
+          <div class="ev-frame flat gwell" style="position: relative">
+            <div class="gx">
+              <span class="bpm"
+                ><span class="ev-run"
+                  ><span class="ico" data-licon="run" data-size="14"></span></span></span
+              ><span class="gnum">3</span><span class="gv"></span><span class="gf"></span
+              ><span class="gc"
+                ><span class="t-fn">describe</span><span class="t-pun">(</span
+                ><span class="t-str">"client"</span><span class="t-pun">,</span>
+                <span class="t-pun">()</span> <span class="t-op">=&gt;</span>
+                <span class="t-pun">{</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"
+                ><span class="ev-run"
+                  ><span class="ico" data-licon="run" data-size="14"></span></span></span
+              ><span class="gnum">4</span><span class="gv"></span><span class="gf"></span
+              ><span class="gc">
+                <span class="t-fn">test</span><span class="t-pun">(</span
+                ><span class="t-str">"fetches"</span><span class="t-pun">,</span>
+                <span class="t-key">async</span> <span class="t-pun">()</span>
+                <span class="t-op">=&gt;</span> <span class="t-pun">{</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">5</span><span class="gv"></span
+              ><span class="gf"></span
+              ><span class="gc">
+                <span class="t-key">const</span> <span class="t-var">a</span>
+                <span class="t-op">=</span> <span class="t-key">await</span>
+                <span class="t-fn">fetchAgents</span><span class="t-pun">();</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">6</span><span class="gv"></span
+              ><span class="gf"></span
+              ><span class="gc">
+                <span class="t-fn">expect</span><span class="t-pun">(</span
+                ><span class="t-var">a</span><span class="t-pun">)</span><span class="t-op">.</span
+                ><span class="t-fn">toHaveLength</span><span class="t-pun">(</span
+                ><span class="t-num">2</span><span class="t-pun">);</span></span
+              >
+            </div>
+            <div style="position: absolute; left: 30px; top: 8px; z-index: 6">
+              <div class="ev-menu" style="min-width: 188px">
+                <div class="ev-mi on">
+                  <span class="mic" style="color: var(--ed-run-glyph)"
+                    ><span class="ico" data-licon="run" data-size="14"></span></span
+                  ><span class="mt">Run 'client'</span><span class="key">⌃⇧R</span>
+                </div>
+                <div class="ev-mi">
+                  <span class="mic"
+                    ><span class="ico" data-licon="debug" data-size="14"></span></span
+                  ><span class="mt">Debug 'client'</span><span class="key">⌃⇧D</span>
+                </div>
+                <div class="ev-mi">
+                  <span class="mic"
+                    ><span class="ico" data-licon="coverage" data-size="14"></span></span
+                  ><span class="mt">Run with Coverage</span>
+                </div>
               </div>
             </div>
           </div>
           <div class="stack">
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Glyph</span><div>The arrow is the Lift <code>run</code> glyph in <code>--ed-run-glyph</code> (= <code>--accent-text</code>). On a passing run it stays green; a failed last-run tints it <b style="color:var(--ed-error)">--ed-error</b>.</div></div>
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Click</span><div>Click the arrow → the run popup (left): Run, Debug, Coverage. The same actions Keiko exposes in the toolbar and command palette — one vocabulary, three entry points.</div></div>
-            <div class="note flag"><span class="tag">Restraint</span><div>Only <b>directly runnable</b> declarations get an arrow. Nesting every callable would turn the margin into a forest — we mark entry points, not every function.</div></div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Glyph</span>
+              <div>
+                The arrow is the Lift <code>run</code> glyph in <code>--ed-run-glyph</code> (=
+                <code>--accent-text</code>). On a passing run it stays green; a failed last-run
+                tints it <b style="color: var(--ed-error)">--ed-error</b>.
+              </div>
+            </div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Click</span>
+              <div>
+                Click the arrow → the run popup (left): Run, Debug, Coverage. The same actions Keiko
+                exposes in the toolbar and command palette — one vocabulary, three entry points.
+              </div>
+            </div>
+            <div class="note flag">
+              <span class="tag">Restraint</span>
+              <div>
+                Only <b>directly runnable</b> declarations get an arrow. Nesting every callable
+                would turn the margin into a forest — we mark entry points, not every function.
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- 03 BREAKPOINTS -->
       <section class="sec" id="breakpoints">
-        <div class="sec-head"><div class="num">03 — BREAKPOINTS</div><h2>Breakpoint states</h2><p>Breakpoints differ by <b style="color:var(--fg)">shape</b> as well as colour, so they survive the high-contrast and colour-blind paths: a filled disc for a line stop, a notched disc for conditional, a square for a logpoint, a hollow ring when unverified.</p></div>
-        <div class="ev-states">
-          <div class="ev-st"><div class="pv"><span class="ev-bp"></span></div><div class="lb"><div class="nm">Verified line</div><div class="tk">--ed-breakpoint · filled disc</div></div></div>
-          <div class="ev-st"><div class="pv"><span class="ev-bp cond"></span></div><div class="lb"><div class="nm">Conditional</div><div class="tk">notched disc</div></div></div>
-          <div class="ev-st"><div class="pv"><span class="ev-bp log"></span></div><div class="lb"><div class="nm">Logpoint</div><div class="tk">--ed-logpoint · square</div></div></div>
-          <div class="ev-st"><div class="pv"><span class="ev-bp disabled"></span></div><div class="lb"><div class="nm">Disabled</div><div class="tk">--ed-breakpoint-disabled</div></div></div>
-          <div class="ev-st"><div class="pv"><span class="ev-bp unverified"></span></div><div class="lb"><div class="nm">Unverified</div><div class="tk">hollow dashed ring</div></div></div>
-          <div class="ev-st"><div class="pv"><span class="ev-bp" style="box-shadow:0 0 0 3px var(--ed-breakpoint-ring),0 0 0 6px color-mix(in oklch,var(--danger) 20%,transparent)"></span></div><div class="lb"><div class="nm">Hit (paused here)</div><div class="tk">double ring</div></div></div>
+        <div class="sec-head">
+          <div class="num">03 — BREAKPOINTS</div>
+          <h2>Breakpoint states</h2>
+          <p>
+            Breakpoints differ by <b style="color: var(--fg)">shape</b> as well as colour, so they
+            survive the high-contrast and colour-blind paths: a filled disc for a line stop, a
+            notched disc for conditional, a square for a logpoint, a hollow ring when unverified.
+          </p>
         </div>
-        <div class="note" style="margin-top:18px"><span class="tag" style="color:var(--fg-faint)">Ring</span><div>The 3&nbsp;px halo (<code>--ed-breakpoint-ring</code>) keeps the disc legible where it overlaps a line number, and grows to a second ring on the line the debugger is paused at.</div></div>
+        <div class="ev-states">
+          <div class="ev-st">
+            <div class="pv"><span class="ev-bp"></span></div>
+            <div class="lb">
+              <div class="nm">Verified line</div>
+              <div class="tk">--ed-breakpoint · filled disc</div>
+            </div>
+          </div>
+          <div class="ev-st">
+            <div class="pv"><span class="ev-bp cond"></span></div>
+            <div class="lb">
+              <div class="nm">Conditional</div>
+              <div class="tk">notched disc</div>
+            </div>
+          </div>
+          <div class="ev-st">
+            <div class="pv"><span class="ev-bp log"></span></div>
+            <div class="lb">
+              <div class="nm">Logpoint</div>
+              <div class="tk">--ed-logpoint · square</div>
+            </div>
+          </div>
+          <div class="ev-st">
+            <div class="pv"><span class="ev-bp disabled"></span></div>
+            <div class="lb">
+              <div class="nm">Disabled</div>
+              <div class="tk">--ed-breakpoint-disabled</div>
+            </div>
+          </div>
+          <div class="ev-st">
+            <div class="pv"><span class="ev-bp unverified"></span></div>
+            <div class="lb">
+              <div class="nm">Unverified</div>
+              <div class="tk">hollow dashed ring</div>
+            </div>
+          </div>
+          <div class="ev-st">
+            <div class="pv">
+              <span
+                class="ev-bp"
+                style="
+                  box-shadow:
+                    0 0 0 3px var(--ed-breakpoint-ring),
+                    0 0 0 6px color-mix(in oklch, var(--danger) 20%, transparent);
+                "
+              ></span>
+            </div>
+            <div class="lb">
+              <div class="nm">Hit (paused here)</div>
+              <div class="tk">double ring</div>
+            </div>
+          </div>
+        </div>
+        <div class="note" style="margin-top: 18px">
+          <span class="tag" style="color: var(--fg-faint)">Ring</span>
+          <div>
+            The 3&nbsp;px halo (<code>--ed-breakpoint-ring</code>) keeps the disc legible where it
+            overlaps a line number, and grows to a second ring on the line the debugger is paused
+            at.
+          </div>
+        </div>
       </section>
 
       <!-- 04 VCS -->
       <section class="sec" id="vcs">
-        <div class="sec-head"><div class="num">04 — VERSION CONTROL</div><h2>Change bars</h2><p>A 3&nbsp;px bar between line number and code shows the uncommitted state of every line against HEAD. Hovering a bar opens the inline change popup — diff the hunk, roll it back, or stage it, without leaving the line.</p></div>
+        <div class="sec-head">
+          <div class="num">04 — VERSION CONTROL</div>
+          <h2>Change bars</h2>
+          <p>
+            A 3&nbsp;px bar between line number and code shows the uncommitted state of every line
+            against HEAD. Hovering a bar opens the inline change popup — diff the hunk, roll it
+            back, or stage it, without leaving the line.
+          </p>
+        </div>
         <div class="ev-grid2">
-          <div class="ev-frame flat gwell" style="position:relative">
-            <div class="gx"><span class="bpm"></span><span class="gnum">20</span><span class="gv"><span class="ev-vcs add"></span></span><span class="gf"></span><span class="gc">  <span class="t-key">const</span> <span class="t-var">v2</span> <span class="t-op">=</span> <span class="t-str">"/api/v2"</span><span class="t-pun">;</span></span></div>
-            <div class="gx"><span class="bpm"></span><span class="gnum">21</span><span class="gv"><span class="ev-vcs mod"></span></span><span class="gf"></span><span class="gc">  <span class="t-key">const</span> <span class="t-var">url</span> <span class="t-op">=</span> <span class="t-var">v2</span> <span class="t-op">+</span> <span class="t-var">path</span><span class="t-pun">;</span></span></div>
-            <div class="gx"><span class="bpm"></span><span class="gnum">22</span><span class="gv"><span class="ev-vcs-rem"></span></span><span class="gf"></span><span class="gc">  <span class="t-key">return</span> <span class="t-fn">fetch</span><span class="t-pun">(</span><span class="t-var">url</span><span class="t-pun">);</span></span></div>
-            <div class="gx"><span class="bpm"></span><span class="gnum">23</span><span class="gv"><span class="ev-vcs stg"></span></span><span class="gf"></span><span class="gc">  <span class="t-com">// staged</span></span></div>
+          <div class="ev-frame flat gwell" style="position: relative">
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">20</span
+              ><span class="gv"><span class="ev-vcs add"></span></span><span class="gf"></span
+              ><span class="gc">
+                <span class="t-key">const</span> <span class="t-var">v2</span>
+                <span class="t-op">=</span> <span class="t-str">"/api/v2"</span
+                ><span class="t-pun">;</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">21</span
+              ><span class="gv"><span class="ev-vcs mod"></span></span><span class="gf"></span
+              ><span class="gc">
+                <span class="t-key">const</span> <span class="t-var">url</span>
+                <span class="t-op">=</span> <span class="t-var">v2</span>
+                <span class="t-op">+</span> <span class="t-var">path</span
+                ><span class="t-pun">;</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">22</span
+              ><span class="gv"><span class="ev-vcs-rem"></span></span><span class="gf"></span
+              ><span class="gc">
+                <span class="t-key">return</span> <span class="t-fn">fetch</span
+                ><span class="t-pun">(</span><span class="t-var">url</span
+                ><span class="t-pun">);</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">23</span
+              ><span class="gv"><span class="ev-vcs stg"></span></span><span class="gf"></span
+              ><span class="gc"> <span class="t-com">// staged</span></span>
+            </div>
           </div>
           <div class="stack">
             <table class="ev-spec">
-              <thead><tr><th>State</th><th>Token</th><th>Mark</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>State</th>
+                  <th>Token</th>
+                  <th>Mark</th>
+                </tr>
+              </thead>
               <tbody>
-                <tr><td class="tok">added</td><td class="scope">--ed-vcs-added</td><td><span class="ev-vcs add" style="display:inline-block;height:14px"></span> bar (diff green)</td></tr>
-                <tr><td class="tok">modified</td><td class="scope">--ed-vcs-modified</td><td><span class="ev-vcs mod" style="display:inline-block;height:14px"></span> bar (info)</td></tr>
-                <tr><td class="tok">removed</td><td class="scope">--ed-vcs-removed</td><td><span class="ev-vcs-rem" style="display:inline-block"></span> caret (danger)</td></tr>
-                <tr><td class="tok">staged</td><td class="scope">--ed-vcs-staged</td><td><span class="ev-vcs stg" style="display:inline-block;height:14px"></span> bar (accent)</td></tr>
+                <tr>
+                  <td class="tok">added</td>
+                  <td class="scope">--ed-vcs-added</td>
+                  <td>
+                    <span class="ev-vcs add" style="display: inline-block; height: 14px"></span> bar
+                    (diff green)
+                  </td>
+                </tr>
+                <tr>
+                  <td class="tok">modified</td>
+                  <td class="scope">--ed-vcs-modified</td>
+                  <td>
+                    <span class="ev-vcs mod" style="display: inline-block; height: 14px"></span> bar
+                    (info)
+                  </td>
+                </tr>
+                <tr>
+                  <td class="tok">removed</td>
+                  <td class="scope">--ed-vcs-removed</td>
+                  <td>
+                    <span class="ev-vcs-rem" style="display: inline-block"></span> caret (danger)
+                  </td>
+                </tr>
+                <tr>
+                  <td class="tok">staged</td>
+                  <td class="scope">--ed-vcs-staged</td>
+                  <td>
+                    <span class="ev-vcs stg" style="display: inline-block; height: 14px"></span> bar
+                    (accent)
+                  </td>
+                </tr>
               </tbody>
             </table>
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Reuse</span><div>Added reuses the diff-insert green; removed reuses <code>--danger</code>. The gutter and the <a href="editor-theme.html" style="color:var(--accent-text)">diff surface</a> speak one colour language.</div></div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Reuse</span>
+              <div>
+                Added reuses the diff-insert green; removed reuses <code>--danger</code>. The gutter
+                and the
+                <a href="editor-theme.html" style="color: var(--accent-text)">diff surface</a> speak
+                one colour language.
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- 05 FOLDING -->
       <section class="sec" id="folding">
-        <div class="sec-head"><div class="num">05 — CODE FOLDING</div><h2>Folding &amp; placeholders</h2><p>Fold controls stay hidden until you hover the gutter — structure on demand, not permanent clutter. A collapsed range leaves a quiet inline placeholder so nothing feels lost.</p></div>
-        <div class="ev-frame flat gwell">
-          <div class="gx"><span class="bpm"></span><span class="gnum">1</span><span class="gv"></span><span class="gf"><span class="ico" data-licon="chevron" data-size="13"></span></span><span class="gc"><span class="t-key">interface</span> <span class="t-typ">Agent</span> <span class="t-pun">{</span></span></div>
-          <div class="gx"><span class="bpm"></span><span class="gnum">2</span><span class="gv"></span><span class="gf"></span><span class="gc">  <span class="t-prop">id</span><span class="t-op">:</span> <span class="t-typ">string</span><span class="t-pun">;</span></span></div>
-          <div class="gx"><span class="bpm"></span><span class="gnum">3</span><span class="gv"></span><span class="gf"></span><span class="gc">  <span class="t-prop">status</span><span class="t-op">:</span> <span class="t-typ">Status</span><span class="t-pun">;</span></span></div>
-          <div class="gx"><span class="bpm"></span><span class="gnum">4</span><span class="gv"></span><span class="gf"></span><span class="gc"><span class="t-pun">}</span></span></div>
-          <div class="gx"><span class="bpm"></span><span class="gnum">5</span><span class="gv"></span><span class="gf"></span><span class="gc"> </span></div>
-          <div class="gx"><span class="bpm"></span><span class="gnum">6</span><span class="gv"></span><span class="gf"><span class="ico" data-licon="chevronR" data-size="13"></span></span><span class="gc"><span class="t-key">function</span> <span class="t-fn">serialize</span><span class="t-pun">(</span><span class="t-var">a</span><span class="t-pun">)</span> <span class="ev-folded">{ … }</span></span></div>
+        <div class="sec-head">
+          <div class="num">05 — CODE FOLDING</div>
+          <h2>Folding &amp; placeholders</h2>
+          <p>
+            Fold controls stay hidden until you hover the gutter — structure on demand, not
+            permanent clutter. A collapsed range leaves a quiet inline placeholder so nothing feels
+            lost.
+          </p>
         </div>
-        <p class="muted-cap" style="margin-top:14px">Line 1 is an expanded block (down chevron); line 6 is collapsed (right chevron) with the <code>{ … }</code> placeholder in <code>--ed-fold-placeholder</code>. Hovering a folded placeholder previews its content in a popup.</p>
+        <div class="ev-frame flat gwell">
+          <div class="gx">
+            <span class="bpm"></span><span class="gnum">1</span><span class="gv"></span
+            ><span class="gf"><span class="ico" data-licon="chevron" data-size="13"></span></span
+            ><span class="gc"
+              ><span class="t-key">interface</span> <span class="t-typ">Agent</span>
+              <span class="t-pun">{</span></span
+            >
+          </div>
+          <div class="gx">
+            <span class="bpm"></span><span class="gnum">2</span><span class="gv"></span
+            ><span class="gf"></span
+            ><span class="gc">
+              <span class="t-prop">id</span><span class="t-op">:</span>
+              <span class="t-typ">string</span><span class="t-pun">;</span></span
+            >
+          </div>
+          <div class="gx">
+            <span class="bpm"></span><span class="gnum">3</span><span class="gv"></span
+            ><span class="gf"></span
+            ><span class="gc">
+              <span class="t-prop">status</span><span class="t-op">:</span>
+              <span class="t-typ">Status</span><span class="t-pun">;</span></span
+            >
+          </div>
+          <div class="gx">
+            <span class="bpm"></span><span class="gnum">4</span><span class="gv"></span
+            ><span class="gf"></span><span class="gc"><span class="t-pun">}</span></span>
+          </div>
+          <div class="gx">
+            <span class="bpm"></span><span class="gnum">5</span><span class="gv"></span
+            ><span class="gf"></span><span class="gc"> </span>
+          </div>
+          <div class="gx">
+            <span class="bpm"></span><span class="gnum">6</span><span class="gv"></span
+            ><span class="gf"><span class="ico" data-licon="chevronR" data-size="13"></span></span
+            ><span class="gc"
+              ><span class="t-key">function</span> <span class="t-fn">serialize</span
+              ><span class="t-pun">(</span><span class="t-var">a</span><span class="t-pun">)</span>
+              <span class="ev-folded">{ … }</span></span
+            >
+          </div>
+        </div>
+        <p class="muted-cap" style="margin-top: 14px">
+          Line 1 is an expanded block (down chevron); line 6 is collapsed (right chevron) with the
+          <code>{ … }</code> placeholder in <code>--ed-fold-placeholder</code>. Hovering a folded
+          placeholder previews its content in a popup.
+        </p>
       </section>
 
       <!-- 06 INLAY HINTS -->
       <section class="sec" id="inlay">
-        <div class="sec-head"><div class="num">06 — INLAY HINTS</div><h2>Inlay &amp; inline values</h2><p>Compiler-derived facts shown <em>in</em> the code without editing it: parameter names at call sites, inferred types, and — while debugging — live values at the end of the line. Hints read as chips, clearly distinct from real tokens.</p></div>
+        <div class="sec-head">
+          <div class="num">06 — INLAY HINTS</div>
+          <h2>Inlay &amp; inline values</h2>
+          <p>
+            Compiler-derived facts shown <em>in</em> the code without editing it: parameter names at
+            call sites, inferred types, and — while debugging — live values at the end of the line.
+            Hints read as chips, clearly distinct from real tokens.
+          </p>
+        </div>
         <div class="ev-grid2">
           <div class="ev-frame flat gwell">
-            <div class="gx"><span class="bpm"></span><span class="gnum">8</span><span class="gv"></span><span class="gf"></span><span class="gc"><span class="t-key">const</span> <span class="t-var">items</span><span class="ev-inlay">: Agent[]</span> <span class="t-op">=</span> <span class="t-fn">load</span><span class="t-pun">();</span></span></div>
-            <div class="gx"><span class="bpm"></span><span class="gnum">9</span><span class="gv"></span><span class="gf"></span><span class="gc"><span class="t-fn">slice</span><span class="t-pun">(</span><span class="ev-inlay">start:</span> <span class="t-num">0</span><span class="t-pun">,</span> <span class="ev-inlay">end:</span> <span class="t-num">5</span><span class="t-pun">);</span></span></div>
-            <div class="gx"><span class="bpm"></span><span class="gnum">10</span><span class="gv"></span><span class="gf"></span><span class="gc">  <span class="t-key">return</span> <span class="t-var">items</span><span class="t-op">.</span><span class="t-prop">length</span><span class="t-pun">;</span><span class="ev-ival">items = 12</span></span></div>
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">8</span><span class="gv"></span
+              ><span class="gf"></span
+              ><span class="gc"
+                ><span class="t-key">const</span> <span class="t-var">items</span
+                ><span class="ev-inlay">: Agent[]</span> <span class="t-op">=</span>
+                <span class="t-fn">load</span><span class="t-pun">();</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">9</span><span class="gv"></span
+              ><span class="gf"></span
+              ><span class="gc"
+                ><span class="t-fn">slice</span><span class="t-pun">(</span
+                ><span class="ev-inlay">start:</span> <span class="t-num">0</span
+                ><span class="t-pun">,</span> <span class="ev-inlay">end:</span>
+                <span class="t-num">5</span><span class="t-pun">);</span></span
+              >
+            </div>
+            <div class="gx">
+              <span class="bpm"></span><span class="gnum">10</span><span class="gv"></span
+              ><span class="gf"></span
+              ><span class="gc">
+                <span class="t-key">return</span> <span class="t-var">items</span
+                ><span class="t-op">.</span><span class="t-prop">length</span
+                ><span class="t-pun">;</span><span class="ev-ival">items = 12</span></span
+              >
+            </div>
           </div>
           <div class="stack">
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Inlay</span><div>Type + parameter hints use <code>--ed-inlay-fg</code> on a faint <code>--ed-inlay-bg</code> pill — present but never mistaken for code you can edit.</div></div>
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Inline value</span><div>Debug values sit at the line end in the info hue (<code>--ed-inlay-value-*</code>), matching the debugger's variable colour so the eye links them.</div></div>
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Inline completion</span><div>AI ghost-text is a related but distinct surface — italic, dimmed, accepted with Tab. It lives in <a href="editor-agent.html" style="color:var(--accent-text)">Agent in Editor</a>.</div></div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Inlay</span>
+              <div>
+                Type + parameter hints use <code>--ed-inlay-fg</code> on a faint
+                <code>--ed-inlay-bg</code> pill — present but never mistaken for code you can edit.
+              </div>
+            </div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Inline value</span>
+              <div>
+                Debug values sit at the line end in the info hue (<code>--ed-inlay-value-*</code>),
+                matching the debugger's variable colour so the eye links them.
+              </div>
+            </div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Inline completion</span>
+              <div>
+                AI ghost-text is a related but distinct surface — italic, dimmed, accepted with Tab.
+                It lives in
+                <a href="editor-agent.html" style="color: var(--accent-text)">Agent in Editor</a>.
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- 07 BLAME -->
       <section class="sec" id="blame">
-        <div class="sec-head"><div class="num">07 — ANNOTATIONS</div><h2>Blame annotations</h2><p>An optional left-of-gutter column attributes every line to its last commit — author and relative date. Quietest text on the surface; the line under the cursor lifts so you can read who last touched it.</p></div>
+        <div class="sec-head">
+          <div class="num">07 — ANNOTATIONS</div>
+          <h2>Blame annotations</h2>
+          <p>
+            An optional left-of-gutter column attributes every line to its last commit — author and
+            relative date. Quietest text on the surface; the line under the cursor lifts so you can
+            read who last touched it.
+          </p>
+        </div>
         <div class="ev-frame flat">
           <div class="ev-main">
             <div class="ev-blame">
@@ -165,30 +607,98 @@
               <span class="b hl">l.weber · 4h</span>
               <span class="b">o.scharko · 2d</span>
             </div>
-            <div class="ev-code" style="padding:10px 0">
-              <div class="ev-gutter"><span class="ev-gln">40</span><span class="ev-gln">41</span><span class="ev-gln cur">42</span><span class="ev-gln">43</span></div>
-              <div class="ev-lines"><span class="ev-line"><span class="t-key">export</span> <span class="t-key">function</span> <span class="t-fn">pause</span><span class="t-pun">(</span><span class="t-var">id</span><span class="t-pun">)</span> <span class="t-pun">{</span></span><span class="ev-line">  <span class="t-key">return</span> <span class="t-fn">post</span><span class="t-pun">(</span><span class="t-str">`/pause`</span><span class="t-pun">,</span> <span class="t-pun">{</span> <span class="t-prop">id</span> <span class="t-pun">});</span></span><span class="ev-line active">  <span class="t-com">// TODO: optimistic update</span><span class="ev-caret"></span></span><span class="ev-line"><span class="t-pun">}</span></span></div>
+            <div class="ev-code" style="padding: 10px 0">
+              <div class="ev-gutter">
+                <span class="ev-gln">40</span><span class="ev-gln">41</span
+                ><span class="ev-gln cur">42</span><span class="ev-gln">43</span>
+              </div>
+              <div class="ev-lines">
+                <span class="ev-line"
+                  ><span class="t-key">export</span> <span class="t-key">function</span>
+                  <span class="t-fn">pause</span><span class="t-pun">(</span
+                  ><span class="t-var">id</span><span class="t-pun">)</span>
+                  <span class="t-pun">{</span></span
+                ><span class="ev-line">
+                  <span class="t-key">return</span> <span class="t-fn">post</span
+                  ><span class="t-pun">(</span><span class="t-str">`/pause`</span
+                  ><span class="t-pun">,</span> <span class="t-pun">{</span>
+                  <span class="t-prop">id</span> <span class="t-pun">});</span></span
+                ><span class="ev-line active">
+                  <span class="t-com">// TODO: optimistic update</span
+                  ><span class="ev-caret"></span></span
+                ><span class="ev-line"><span class="t-pun">}</span></span>
+              </div>
             </div>
           </div>
         </div>
-        <p class="muted-cap" style="margin-top:14px">Blame uses <code>--ed-blame-fg</code> (= <code>--fg-faint</code>) on the shell surface, hovered/current rows lift to <code>--fg-muted</code>. Click a row → the commit opens in the Git tool window (see <a href="editor-panels.html" style="color:var(--accent-text)">Tool Windows</a>).</p>
+        <p class="muted-cap" style="margin-top: 14px">
+          Blame uses <code>--ed-blame-fg</code> (= <code>--fg-faint</code>) on the shell surface,
+          hovered/current rows lift to <code>--fg-muted</code>. Click a row → the commit opens in
+          the Git tool window (see
+          <a href="editor-panels.html" style="color: var(--accent-text)">Tool Windows</a>).
+        </p>
       </section>
 
       <!-- 08 TOKENS -->
       <section class="sec" id="tokens">
-        <div class="sec-head"><div class="num">08 — TOKENS</div><h2>Gutter token map</h2><p>All gutter signals are net-new editor tokens, every one derived from a base token so the three appearances track automatically.</p></div>
-        <div class="card" style="padding:8px 22px">
+        <div class="sec-head">
+          <div class="num">08 — TOKENS</div>
+          <h2>Gutter token map</h2>
+          <p>
+            All gutter signals are net-new editor tokens, every one derived from a base token so the
+            three appearances track automatically.
+          </p>
+        </div>
+        <div class="card" style="padding: 8px 22px">
           <table class="ev-spec">
-            <thead><tr><th>Signal</th><th>Token</th><th>Derives from</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Signal</th>
+                <th>Token</th>
+                <th>Derives from</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr><td class="tok">run arrow</td><td class="scope">--ed-run-glyph</td><td>--accent-text</td></tr>
-              <tr><td class="tok">breakpoint</td><td class="scope">--ed-breakpoint · -ring · -disabled</td><td>--danger</td></tr>
-              <tr><td class="tok">logpoint</td><td class="scope">--ed-logpoint</td><td>--info</td></tr>
-              <tr><td class="tok">vcs added / staged</td><td class="scope">--ed-vcs-added · -staged</td><td>diff green · --accent-text</td></tr>
-              <tr><td class="tok">vcs modified / removed</td><td class="scope">--ed-vcs-modified · -removed</td><td>--info · --danger</td></tr>
-              <tr><td class="tok">fold</td><td class="scope">--ed-fold-arrow · -placeholder</td><td>--fg-faint</td></tr>
-              <tr><td class="tok">inlay / inline value</td><td class="scope">--ed-inlay-* · --ed-inlay-value-*</td><td>--fg-dim · --info</td></tr>
-              <tr><td class="tok">blame</td><td class="scope">--ed-blame-fg · -bg</td><td>--fg-faint · --surface</td></tr>
+              <tr>
+                <td class="tok">run arrow</td>
+                <td class="scope">--ed-run-glyph</td>
+                <td>--accent-text</td>
+              </tr>
+              <tr>
+                <td class="tok">breakpoint</td>
+                <td class="scope">--ed-breakpoint · -ring · -disabled</td>
+                <td>--danger</td>
+              </tr>
+              <tr>
+                <td class="tok">logpoint</td>
+                <td class="scope">--ed-logpoint</td>
+                <td>--info</td>
+              </tr>
+              <tr>
+                <td class="tok">vcs added / staged</td>
+                <td class="scope">--ed-vcs-added · -staged</td>
+                <td>diff green · --accent-text</td>
+              </tr>
+              <tr>
+                <td class="tok">vcs modified / removed</td>
+                <td class="scope">--ed-vcs-modified · -removed</td>
+                <td>--info · --danger</td>
+              </tr>
+              <tr>
+                <td class="tok">fold</td>
+                <td class="scope">--ed-fold-arrow · -placeholder</td>
+                <td>--fg-faint</td>
+              </tr>
+              <tr>
+                <td class="tok">inlay / inline value</td>
+                <td class="scope">--ed-inlay-* · --ed-inlay-value-*</td>
+                <td>--fg-dim · --info</td>
+              </tr>
+              <tr>
+                <td class="tok">blame</td>
+                <td class="scope">--ed-blame-fg · -bg</td>
+                <td>--fg-faint · --surface</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -196,7 +706,7 @@
     </main>
 
     <script src="lift-glyphs.js"></script>
-    
+
     <script src="theme-control.js"></script>
   </body>
 </html>

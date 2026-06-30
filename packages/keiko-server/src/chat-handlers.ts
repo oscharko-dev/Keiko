@@ -1245,7 +1245,9 @@ function parseOptionalVoiceTurnModelId(
   return modelId;
 }
 
-function parseVoiceTurnAppendMessages(value: unknown): readonly VoiceTurnAppendMessage[] | RouteResult {
+function parseVoiceTurnAppendMessages(
+  value: unknown,
+): readonly VoiceTurnAppendMessage[] | RouteResult {
   if (!Array.isArray(value) || value.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "messages must be a non-empty array.") };
   }
@@ -1291,10 +1293,16 @@ function sanitizeVoiceTurnText(text: string, deps: UiHandlerDeps): string {
 }
 
 function voiceTurnCombinedText(messages: readonly VoiceTurnAppendMessage[]): string {
-  return messages.map((message) => message.content).join("\n").trim();
+  return messages
+    .map((message) => message.content)
+    .join("\n")
+    .trim();
 }
 
-function voiceTurnAsSendRequest(request: VoiceTurnAppendRequest, content: string): SendDesktopChatRequest {
+function voiceTurnAsSendRequest(
+  request: VoiceTurnAppendRequest,
+  content: string,
+): SendDesktopChatRequest {
   return {
     chatId: request.chatId,
     projectPath: request.projectPath,
@@ -1394,13 +1402,18 @@ export async function buildVoiceTurnMemoryResult(
     return emptyMemoryResult(false);
   }
   const content = voiceTurnCombinedText(request.messages);
-  const memory = await buildMemoryResult(voiceTurnAsSendRequest(request, content), deps, memoryContext);
-  const actions = await collectVoiceTurnLocalMemoryActions(
+  const memory = await buildMemoryResult(
+    voiceTurnAsSendRequest(request, content),
+    deps,
+    memoryContext,
+  );
+  const actions = await collectVoiceTurnLocalMemoryActions(deps, request, memoryContext);
+  scheduleVoiceTurnSalienceCapture(
     deps,
     request,
     memoryContext,
+    request.modelId ?? chat.selectedModel,
   );
-  scheduleVoiceTurnSalienceCapture(deps, request, memoryContext, request.modelId ?? chat.selectedModel);
   return { ...memory, actions };
 }
 

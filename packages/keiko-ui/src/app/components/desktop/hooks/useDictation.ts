@@ -29,12 +29,7 @@ const MAX_DICTATION_MS = 120_000;
 
 // The lifecycle phase the composer renders from.
 export type DictationPhase =
-  | "idle"
-  | "requesting"
-  | "recording"
-  | "transcribing"
-  | "preview"
-  | "error";
+  "idle" | "requesting" | "recording" | "transcribing" | "preview" | "error";
 
 // Why dictation could not complete. Recorder failures plus the two transcription outcomes.
 export type DictationErrorReason =
@@ -105,8 +100,7 @@ export interface UseDictationOptions {
   // recorder and the BFF client.
   readonly createRecorder?: (() => DictationRecorder) | undefined;
   readonly transcribe?:
-    | ((input: VoiceTranscriptionRequest) => Promise<VoiceTranscriptionResult>)
-    | undefined;
+    ((input: VoiceTranscriptionRequest) => Promise<VoiceTranscriptionResult>) | undefined;
 }
 
 export interface DictationController {

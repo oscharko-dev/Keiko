@@ -71,8 +71,7 @@ const errResult = (status: number, code: GitDeliveryLocalErrorCode): RouteResult
 // are shared; the command-specific fields are validated in `parse`.
 
 type ParsedCommand =
-  | { readonly ok: true; readonly command: GitMutationCommand }
-  | { readonly ok: false };
+  { readonly ok: true; readonly command: GitMutationCommand } | { readonly ok: false };
 
 interface LocalMutationSpec {
   readonly pattern: string;

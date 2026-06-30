@@ -1040,20 +1040,16 @@ function combinedSourceCandidates(
   connectors: readonly ChatLocalKnowledgeScope[],
 ): readonly CapCandidate[] {
   return [
-    ...folders.map(
-      (scope, index): CapCandidate => ({
-        kind: "folder",
-        index,
-        connectedAtMs: scope.connectedAtMs,
-      }),
-    ),
-    ...connectors.map(
-      (scope, index): CapCandidate => ({
-        kind: "connector",
-        index,
-        connectedAtMs: scope.connectedAtMs,
-      }),
-    ),
+    ...folders.map((scope, index): CapCandidate => ({
+      kind: "folder",
+      index,
+      connectedAtMs: scope.connectedAtMs,
+    })),
+    ...connectors.map((scope, index): CapCandidate => ({
+      kind: "connector",
+      index,
+      connectedAtMs: scope.connectedAtMs,
+    })),
   ].sort((a, b) => {
     if (a.connectedAtMs !== b.connectedAtMs) return a.connectedAtMs - b.connectedAtMs;
     if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
@@ -1099,13 +1095,11 @@ function skippedFoldersForCaps(
             },
           ],
     ),
-    ...all.slice(limits.maxConnectedSources).map(
-      (cs, i): SkippedConnector => ({
-        label: sourceLabels([cs])[0] ?? `folder-${String(limits.maxConnectedSources + i)}`,
-        reason: "source-skipped",
-        message: "Exceeded maxConnectedSources limit.",
-      }),
-    ),
+    ...all.slice(limits.maxConnectedSources).map((cs, i): SkippedConnector => ({
+      label: sourceLabels([cs])[0] ?? `folder-${String(limits.maxConnectedSources + i)}`,
+      reason: "source-skipped",
+      message: "Exceeded maxConnectedSources limit.",
+    })),
   ];
 }
 
@@ -1127,13 +1121,11 @@ function skippedConnectorsForCaps(
             },
           ],
     ),
-    ...allConnectors.slice(limits.maxLocalKnowledgeSources).map(
-      (_cs, i): SkippedConnector => ({
-        label: `connector-${String(limits.maxLocalKnowledgeSources + i)}`,
-        reason: "source-skipped",
-        message: "Exceeded maxLocalKnowledgeSources limit.",
-      }),
-    ),
+    ...allConnectors.slice(limits.maxLocalKnowledgeSources).map((_cs, i): SkippedConnector => ({
+      label: `connector-${String(limits.maxLocalKnowledgeSources + i)}`,
+      reason: "source-skipped",
+      message: "Exceeded maxLocalKnowledgeSources limit.",
+    })),
   ];
 }
 

@@ -670,9 +670,9 @@ function looksLikeLegacyRequirementsFallback(
   staleIds: ReadonlySet<string>,
 ): boolean {
   if (staleIds.size === 0 || drift.manifest.atomFingerprints !== undefined) return false;
-  if (
-    !(drift.sources.length > 0 && drift.sources.every((source) => source.kind === "requirements"))
-  ) {
+  if (!(
+    drift.sources.length > 0 && drift.sources.every((source) => source.kind === "requirements")
+  )) {
     return false;
   }
   const evidenceRefMap = new Map(
@@ -1075,8 +1075,7 @@ function buildScopedRegenPlan(newRunId: string, requestedAt: string): QiRunPlan 
 async function executeScopedWorkflow(args: {
   readonly deps: UiHandlerDeps;
   readonly target:
-    | { readonly kind: "baseline" }
-    | { readonly kind: "model"; readonly modelId: string };
+    { readonly kind: "baseline" } | { readonly kind: "model"; readonly modelId: string };
   readonly evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>;
   readonly capture: (cands: readonly QiTestCaseCandidate[], generatedAt: string) => void;
   readonly plan: QiRunPlan;
@@ -1140,8 +1139,7 @@ function finalizeScopedWorkflow(
 async function runScopedEphemeral(args: {
   readonly deps: UiHandlerDeps;
   readonly target:
-    | { readonly kind: "baseline" }
-    | { readonly kind: "model"; readonly modelId: string };
+    { readonly kind: "baseline" } | { readonly kind: "model"; readonly modelId: string };
   readonly newRunId: string;
   readonly requestedAt: string;
   readonly ingestion: QiIngestion;

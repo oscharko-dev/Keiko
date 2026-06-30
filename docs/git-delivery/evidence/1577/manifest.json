@@ -35,8 +35,5 @@
     "localPathsRendered": false,
     "externalCredentialsUsed": false
   },
-  "artifacts": [
-    "manifest.json",
-    "git-pr-merge-agent-ops.png"
-  ]
+  "artifacts": ["manifest.json", "git-pr-merge-agent-ops.png"]
 }

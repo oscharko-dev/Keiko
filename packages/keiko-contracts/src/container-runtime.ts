@@ -165,10 +165,7 @@ export interface ContainerRunResult {
 }
 
 export type ContainerRunnerEventKind =
-  | "run-started"
-  | "run-completed"
-  | "run-failed"
-  | "run-cancelled";
+  "run-started" | "run-completed" | "run-failed" | "run-cancelled";
 
 export const CONTAINER_RUNNER_EVENT_KINDS: readonly ContainerRunnerEventKind[] = Object.freeze([
   "run-started",
@@ -245,8 +242,7 @@ export interface ContainerCapabilityResponseParseFail {
 }
 
 export type ContainerCapabilityResponseParse =
-  | ContainerCapabilityResponseParseOk
-  | ContainerCapabilityResponseParseFail;
+  ContainerCapabilityResponseParseOk | ContainerCapabilityResponseParseFail;
 
 export interface ContainerTaskCatalogParseOk {
   readonly ok: true;

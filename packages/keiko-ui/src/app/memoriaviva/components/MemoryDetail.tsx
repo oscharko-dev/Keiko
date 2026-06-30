@@ -140,9 +140,7 @@ function BackToMemoriaControl({
   children = "Back to MemoriaViva",
 }: {
   readonly onBack?: (() => void) | undefined;
-  readonly controlRef?:
-    | ((node: HTMLAnchorElement | HTMLButtonElement | null) => void)
-    | undefined;
+  readonly controlRef?: ((node: HTMLAnchorElement | HTMLButtonElement | null) => void) | undefined;
   readonly children?: ReactNode;
 }): ReactNode {
   if (onBack !== undefined) {

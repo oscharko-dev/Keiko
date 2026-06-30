@@ -116,8 +116,7 @@ export interface KeikoCodeEditorProps {
    * forwards them to the governed telemetry route. Never receives buffer text or ghost text.
    */
   readonly onInlineCompletionTelemetry?:
-    | ((snapshot: InlineCompletionTelemetrySnapshot) => void)
-    | undefined;
+    ((snapshot: InlineCompletionTelemetrySnapshot) => void) | undefined;
   /**
    * Host-injected diagnostics resolver (Issue #1201). When present, the editor drives Monaco markers
    * for the governed languages from buffer-change events through this resolver; the host owns the BFF

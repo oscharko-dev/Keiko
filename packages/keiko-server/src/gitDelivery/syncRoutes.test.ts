@@ -362,7 +362,10 @@ describe("fetch execute — outcomes", () => {
     const handler = createHandleSyncExecute("fetch", {
       execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
     });
-    const res = await handler(ctxFor(FETCH_EXECUTE, syncBody()), deps({ evidenceStore: cap.store }));
+    const res = await handler(
+      ctxFor(FETCH_EXECUTE, syncBody()),
+      deps({ evidenceStore: cap.store }),
+    );
     const body = res.body as GitSyncExecuteResponse;
     expect(body.status).toBe("no-remote");
     expect(scripted.calls()).toEqual(["status", "remote"]);

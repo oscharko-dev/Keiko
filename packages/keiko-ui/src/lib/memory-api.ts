@@ -41,12 +41,7 @@ export interface MemoryActionResponse {
 }
 
 export type MemoryConsolidationJobState =
-  | "queued"
-  | "running"
-  | "completed"
-  | "failed"
-  | "canceled"
-  | "skipped";
+  "queued" | "running" | "completed" | "failed" | "canceled" | "skipped";
 
 export type MemoryConsolidationStaleReason = "expired" | "low-confidence" | "aged-out";
 

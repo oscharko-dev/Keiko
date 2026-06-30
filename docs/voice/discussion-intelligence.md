@@ -44,13 +44,13 @@ Each mode is a named colleague-like behavior that shapes how Keiko frames its re
 is turn-local: it is sent as an optional field on the chat request and has no effect on other turns or
 on compacted history.
 
-| Mode             | Core behavior                                                                                | `challengesAssumptions` | `producesDecisionRecommendation` | Citation discipline                      |
-| ---------------- | -------------------------------------------------------------------------------------------- | ----------------------- | -------------------------------- | ---------------------------------------- |
-| `challenge`      | States a position with evidence; identifies assumptions the stated position rests on; surfaces counter-evidence. | yes | no | `require-citations-or-state-no-evidence` |
-| `review`         | Verifies every claim against available evidence; lists explicit assumptions; identifies gaps. | yes                     | no                               | `require-citations-or-state-no-evidence` |
-| `decide`         | Lists assumptions; offers a recommended next action with trade-offs; discloses confidence; defers to the user when a contradiction cannot be resolved. | yes | **yes** | `require-citations-or-state-no-evidence` |
-| `brainstorm`     | Expands the range of options before converging; labels assumptions; uses best-effort citation. | no                     | no                               | `best-effort`                            |
-| `evidence-check` | Strictly cites evidence for each claim or states that none is available; flags unsupported claims; does not fabricate sources. | yes | no | `require-citations`              |
+| Mode             | Core behavior                                                                                                                                          | `challengesAssumptions` | `producesDecisionRecommendation` | Citation discipline                      |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- | -------------------------------- | ---------------------------------------- |
+| `challenge`      | States a position with evidence; identifies assumptions the stated position rests on; surfaces counter-evidence.                                       | yes                     | no                               | `require-citations-or-state-no-evidence` |
+| `review`         | Verifies every claim against available evidence; lists explicit assumptions; identifies gaps.                                                          | yes                     | no                               | `require-citations-or-state-no-evidence` |
+| `decide`         | Lists assumptions; offers a recommended next action with trade-offs; discloses confidence; defers to the user when a contradiction cannot be resolved. | yes                     | **yes**                          | `require-citations-or-state-no-evidence` |
+| `brainstorm`     | Expands the range of options before converging; labels assumptions; uses best-effort citation.                                                         | no                      | no                               | `best-effort`                            |
+| `evidence-check` | Strictly cites evidence for each claim or states that none is available; flags unsupported claims; does not fabricate sources.                         | yes                     | no                               | `require-citations`                      |
 
 ### When each mode is appropriate
 
@@ -82,11 +82,11 @@ to the current behavior.
 The four disagreement-capable modes (`challenge`, `review`, `decide`, `evidence-check`) mandate that
 every professional disagreement covers all three facets:
 
-| Facet           | What it covers                                                                                |
-| --------------- | --------------------------------------------------------------------------------------------- |
-| `evidence`      | The observable facts, sources, or measurements that support or challenge the position.        |
-| `assumptions`   | The premises the position rests on, stated explicitly so they can be evaluated independently. |
-| `uncertainty`   | The residual confidence and the unresolved unknowns, disclosed openly.                        |
+| Facet         | What it covers                                                                                |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| `evidence`    | The observable facts, sources, or measurements that support or challenge the position.        |
+| `assumptions` | The premises the position rests on, stated explicitly so they can be evaluated independently. |
+| `uncertainty` | The residual confidence and the unresolved unknowns, disclosed openly.                        |
 
 These three facets are encoded as `DISAGREEMENT_FACETS` — a closed constant array — and the
 `DiscussionModePlan.mandatedFacets` field declares which facets the mode requires. The contract test
@@ -119,18 +119,18 @@ The server renders the mode's directive set as a labeled block by looking up eac
 `DISCUSSION_DIRECTIVE_TEMPLATES`, a frozen record keyed by `DiscussionDirective`. There are ten
 directives in the closed vocabulary:
 
-| Directive                                   | Purpose                                                                                      |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `state-position-then-evidence`              | State the position first, then the evidence that supports it.                                |
-| `challenge-stated-assumptions`              | Identify and challenge the assumptions the stated position depends on.                       |
-| `surface-counter-evidence`                  | Surface evidence that weighs against the position, not only evidence for it.                 |
-| `list-explicit-assumptions`                 | List the explicit assumptions made before drawing a conclusion.                              |
-| `disclose-uncertainty-and-confidence`       | Disclose remaining uncertainty and the confidence level for each claim.                      |
-| `cite-evidence-or-state-none`               | Cite the evidence for each claim, or state plainly that none is available.                   |
-| `offer-decision-with-tradeoffs`             | Offer a recommended next action and lay out the trade-offs of each option.                   |
-| `expand-option-space-before-converging`     | Expand the range of options before converging on a single recommendation.                    |
-| `verify-claims-against-evidence`            | Verify each claim against the available evidence before accepting it.                        |
-| `defer-to-user-on-unresolved-contradiction` | When a contradiction cannot be resolved from evidence, defer the decision to the user.       |
+| Directive                                   | Purpose                                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `state-position-then-evidence`              | State the position first, then the evidence that supports it.                          |
+| `challenge-stated-assumptions`              | Identify and challenge the assumptions the stated position depends on.                 |
+| `surface-counter-evidence`                  | Surface evidence that weighs against the position, not only evidence for it.           |
+| `list-explicit-assumptions`                 | List the explicit assumptions made before drawing a conclusion.                        |
+| `disclose-uncertainty-and-confidence`       | Disclose remaining uncertainty and the confidence level for each claim.                |
+| `cite-evidence-or-state-none`               | Cite the evidence for each claim, or state plainly that none is available.             |
+| `offer-decision-with-tradeoffs`             | Offer a recommended next action and lay out the trade-offs of each option.             |
+| `expand-option-space-before-converging`     | Expand the range of options before converging on a single recommendation.              |
+| `verify-claims-against-evidence`            | Verify each claim against the available evidence before accepting it.                  |
+| `defer-to-user-on-unresolved-contradiction` | When a contradiction cannot be resolved from evidence, defer the decision to the user. |
 
 Every template is a bounded, fixed string. No template echoes raw input, encodes a credential, names a
 provider URL, or grants tool authority. The evaluation suite verifies this by scanning each template
@@ -146,13 +146,13 @@ specifically: the `mode`, `topicId`, and `turnIndex` from before the interruptio
 
 `DiscussionTurnContext` is the content-free turn identity:
 
-| Field           | Type                          | Meaning                                                                            |
-| --------------- | ----------------------------- | ---------------------------------------------------------------------------------- |
-| `schemaVersion` | `"1"`                         | Schema version for this context record.                                            |
-| `mode`          | `DiscussionMode`              | The active discussion mode.                                                        |
-| `topicId`       | `string` (opaque, <=256 chars) | Opaque identity of the open question or decision. Never raw text.                 |
-| `turnIndex`     | `number` (non-negative int)   | Monotonic turn position; used for deduplication.                                   |
-| `status`        | `DiscussionTurnStatus`        | Current lifecycle status of the turn.                                              |
+| Field           | Type                           | Meaning                                                           |
+| --------------- | ------------------------------ | ----------------------------------------------------------------- |
+| `schemaVersion` | `"1"`                          | Schema version for this context record.                           |
+| `mode`          | `DiscussionMode`               | The active discussion mode.                                       |
+| `topicId`       | `string` (opaque, <=256 chars) | Opaque identity of the open question or decision. Never raw text. |
+| `turnIndex`     | `number` (non-negative int)    | Monotonic turn position; used for deduplication.                  |
+| `status`        | `DiscussionTurnStatus`         | Current lifecycle status of the turn.                             |
 
 `topicId` is validated as a non-empty, trimmed, NFKC-normalized, control-character-free, path-fragment-free
 string of at most 256 characters. It is an opaque identifier — the discussion context knows that a
@@ -162,12 +162,12 @@ topic exists and can be matched, but never what the topic text says.
 
 Four statuses form the recovery lifecycle:
 
-| Status        | Meaning                                                                                        | Legal transitions              |
-| ------------- | ---------------------------------------------------------------------------------------------- | ------------------------------ |
-| `active`      | The discussion turn is in progress.                                                            | `interrupted`, `resolved`      |
-| `interrupted` | A barge-in or disconnect interrupted the spoken turn; context is preserved.                    | `recovered`, `resolved`        |
-| `recovered`   | Recovery restored the same `mode`/`topicId`/`turnIndex` — the no-context-loss proof.          | `interrupted`, `resolved`      |
-| `resolved`    | The turn reached its end. Terminal.                                                            | _(none)_                       |
+| Status        | Meaning                                                                              | Legal transitions         |
+| ------------- | ------------------------------------------------------------------------------------ | ------------------------- |
+| `active`      | The discussion turn is in progress.                                                  | `interrupted`, `resolved` |
+| `interrupted` | A barge-in or disconnect interrupted the spoken turn; context is preserved.          | `recovered`, `resolved`   |
+| `recovered`   | Recovery restored the same `mode`/`topicId`/`turnIndex` — the no-context-loss proof. | `interrupted`, `resolved` |
+| `resolved`    | The turn reached its end. Terminal.                                                  | _(none)_                  |
 
 `recovered` may transition back to `interrupted` to handle repeated barge-ins, which is the normal
 pattern in full-duplex voice conversation. `resolved` is terminal.
@@ -210,7 +210,7 @@ input arrives by text or voice.
 - **`decide` mode**: A `decide`-mode recommendation is informational text in the assistant's reply. The
   user reads it and decides whether to act. If the user wants Keiko to execute the recommendation, they
   trigger it through the standard send flow, which routes through the existing `WorkflowHandoffRequest`
-  + `userApprovalToken` governed path (Issue #503). There is no voice shortcut past that gate.
+  - `userApprovalToken` governed path (Issue #503). There is no voice shortcut past that gate.
 
 This no-authority guarantee is identical to the one documented for ADR-0062 D7 (the turn manager's
 media-floor-only effect vocabulary).
@@ -221,20 +221,20 @@ When voice drives a discussion turn, the only admissible input is the committed 
 projection from ADR-0063:
 
 ```typescript
-selectCommittedVoiceTranscript(segments).text
+selectCommittedVoiceTranscript(segments).text;
 ```
 
 This projection contains only `committed` and `corrected` segments — segments the user explicitly
 confirmed or that the provider finalized and the turn manager accepted. The following segment states
 are **structurally excluded** from this projection and can never become discussion input:
 
-| Excluded state   | Reason                                                                |
-| ---------------- | --------------------------------------------------------------------- |
-| `partial`        | In-flight; provider is still refining; user has not confirmed.        |
-| `stable`         | Provider marked final; user has not yet committed.                    |
-| `discarded`      | User or turn manager explicitly discarded this text.                  |
-| `redacted`       | Reviewable text was redacted for privacy reasons.                     |
-| `provider-error` | Provider failed to transcribe; no reliable text is available.         |
+| Excluded state   | Reason                                                         |
+| ---------------- | -------------------------------------------------------------- |
+| `partial`        | In-flight; provider is still refining; user has not confirmed. |
+| `stable`         | Provider marked final; user has not yet committed.             |
+| `discarded`      | User or turn manager explicitly discarded this text.           |
+| `redacted`       | Reviewable text was redacted for privacy reasons.              |
+| `provider-error` | Provider failed to transcribe; no reliable text is available.  |
 
 This means:
 
@@ -282,18 +282,18 @@ The scorer covers seven dimensions:
 | `uncertainty-discipline`       | Uncertainty is disclosed when the mode requires it.                                    |
 | `evidence-citation-discipline` | Citations or explicit no-evidence statements match the mode's citation discipline.     |
 | `correction-handling`          | Provider corrections do not introduce duplicate or stale text.                         |
-| `interruption-recovery`        | A barge-in followed by recovery leaves `mode`/`topicId`/`turnIndex` unchanged.        |
-| `capability-gating`            | Voice-driven discussion is dormant in `none`/`speech-output` profiles.                |
+| `interruption-recovery`        | A barge-in followed by recovery leaves `mode`/`topicId`/`turnIndex` unchanged.         |
+| `capability-gating`            | Voice-driven discussion is dormant in `none`/`speech-output` profiles.                 |
 
 Fixtures cover both no-voice and voice-capable deployment profiles:
 
-| Fixture                            | Profile              | Scenario                                                    |
-| ---------------------------------- | -------------------- | ----------------------------------------------------------- |
-| `no-voice-challenge`               | `none`               | Text-only challenge-mode turn.                              |
-| `no-voice-decide`                  | `none`               | Text-only decide-mode turn producing a recommendation.      |
-| `voice-stt-review`                 | `speech-to-text`     | STT-driven review-mode turn using committed transcript.     |
-| `voice-realtime-barge-in-recovery` | `full-realtime`      | Barge-in mid-decide-mode; recovery restores context.        |
-| `evidence-check-correction`        | `speech-to-text`     | Provider correction handled without duplication.            |
+| Fixture                            | Profile          | Scenario                                                |
+| ---------------------------------- | ---------------- | ------------------------------------------------------- |
+| `no-voice-challenge`               | `none`           | Text-only challenge-mode turn.                          |
+| `no-voice-decide`                  | `none`           | Text-only decide-mode turn producing a recommendation.  |
+| `voice-stt-review`                 | `speech-to-text` | STT-driven review-mode turn using committed transcript. |
+| `voice-realtime-barge-in-recovery` | `full-realtime`  | Barge-in mid-decide-mode; recovery restores context.    |
+| `evidence-check-correction`        | `speech-to-text` | Provider correction handled without duplication.        |
 
 The suite produces a GO/NO-GO scorecard mirroring `PromptEnhancerScorecard`.
 
@@ -336,14 +336,14 @@ uncommitted, discarded, or failed text.
 
 ## 11. Acceptance criteria summary
 
-| AC                                                               | Satisfied by                                                                                                                 | Evidence                                                                                           |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| AC1 Text-only discussion works with no voice model               | `voiceCanDriveDiscussion("none") === false`; discussion contract and server path require no voice capability.                | No-voice evaluation fixtures + server tests                                                        |
-| AC2 Voice reuses the same intelligence (no parallel stack)       | `discussion-voice.ts` reads `DISCUSSION_MODE_PLANS` from the shared contract; no mode re-encoding in `keiko-ui`.            | Test: voice binding uses the same plan table as the text path                                      |
-| AC3 Disagree with evidence + assumptions + uncertainty           | `mandatedFacets` invariant in `DISCUSSION_MODE_PLANS` for all disagreement-capable modes; `DISAGREEMENT_FACETS` closed.     | Contract test: every disagreement-capable mode mandates all three facets                           |
-| AC4 Interrupted spoken discussion recovers without context loss  | `applyDiscussionInterruption`/`applyDiscussionRecovery` preserve `mode`/`topicId`/`turnIndex`; voice binding wires it.      | Test: barge-in then recover produces identical `mode`, `topicId`, `turnIndex`; eval fixture        |
-| AC5 No uncommitted transcript as durable memory or authority     | Committed-only input via `selectCommittedVoiceTranscript`; no write path in the binding; `WorkflowHandoffRequest` untouched. | Test: binding never reads raw segments; content-free invariant; no handoff emitted                |
-| AC6 Evaluation covers no-voice and voice-capable profiles        | Five evaluation fixtures parameterized by `VoiceProfile` covering `none`, `speech-to-text`, and `full-realtime`.            | `keiko-evaluations/src/discussion/` suite; GO scorecard                                            |
+| AC                                                              | Satisfied by                                                                                                                 | Evidence                                                                                    |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| AC1 Text-only discussion works with no voice model              | `voiceCanDriveDiscussion("none") === false`; discussion contract and server path require no voice capability.                | No-voice evaluation fixtures + server tests                                                 |
+| AC2 Voice reuses the same intelligence (no parallel stack)      | `discussion-voice.ts` reads `DISCUSSION_MODE_PLANS` from the shared contract; no mode re-encoding in `keiko-ui`.             | Test: voice binding uses the same plan table as the text path                               |
+| AC3 Disagree with evidence + assumptions + uncertainty          | `mandatedFacets` invariant in `DISCUSSION_MODE_PLANS` for all disagreement-capable modes; `DISAGREEMENT_FACETS` closed.      | Contract test: every disagreement-capable mode mandates all three facets                    |
+| AC4 Interrupted spoken discussion recovers without context loss | `applyDiscussionInterruption`/`applyDiscussionRecovery` preserve `mode`/`topicId`/`turnIndex`; voice binding wires it.       | Test: barge-in then recover produces identical `mode`, `topicId`, `turnIndex`; eval fixture |
+| AC5 No uncommitted transcript as durable memory or authority    | Committed-only input via `selectCommittedVoiceTranscript`; no write path in the binding; `WorkflowHandoffRequest` untouched. | Test: binding never reads raw segments; content-free invariant; no handoff emitted          |
+| AC6 Evaluation covers no-voice and voice-capable profiles       | Five evaluation fixtures parameterized by `VoiceProfile` covering `none`, `speech-to-text`, and `full-realtime`.             | `keiko-evaluations/src/discussion/` suite; GO scorecard                                     |
 
 ## Related
 

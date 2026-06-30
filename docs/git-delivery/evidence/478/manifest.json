@@ -6,10 +6,7 @@
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/478",
   "generatedAt": "2026-06-27T11:39:46.534Z",
-  "governedRoutes": [
-    "/api/git-delivery/merge/preview",
-    "/api/git-delivery/merge/execute"
-  ],
+  "governedRoutes": ["/api/git-delivery/merge/preview", "/api/git-delivery/merge/execute"],
   "windowRegistration": {
     "kind": "governedMerge",
     "seededVia": "keiko.workspace.v4",
@@ -35,8 +32,5 @@
     "Merge routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/route/contract suites.",
     "The UI exposes no merge-anyway escape: the Merge button is disabled when not mergeable, and gated behind the eligible-strategy + high-risk confirmation otherwise; it always routes through /merge/execute and renders its governed response verbatim."
   ],
-  "artifacts": [
-    "manifest.json",
-    "governed-merge-block.png"
-  ]
+  "artifacts": ["manifest.json", "governed-merge-block.png"]
 }

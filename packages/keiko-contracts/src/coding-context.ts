@@ -26,11 +26,7 @@ export const CODING_CONTEXT_SCHEMA_VERSION = "1" as const;
 // Drives provider eligibility and the latency/cost budget. `inline` (as-you-type ghost text) and
 // `diagnostic` are keystroke-sensitive and forbid embedding-cost providers (see CODING_CONTEXT_BUDGETS).
 export type CodingContextPurpose =
-  | "inline"
-  | "completion"
-  | "test-generation"
-  | "explain"
-  | "diagnostic";
+  "inline" | "completion" | "test-generation" | "explain" | "diagnostic";
 
 export const CODING_CONTEXT_PURPOSES: readonly CodingContextPurpose[] = [
   "inline",
@@ -63,10 +59,7 @@ export const CODING_CONTEXT_SOURCE_KINDS: readonly CodingContextSourceKind[] = [
 // OWASP LLM08/LLM01 trust tier. The tier is a provenance label for audit and consumer policy; it is
 // never an authority grant. No tier permits a model-privileged outcome.
 export type CodingContextSourceTier =
-  | "first-party-workspace"
-  | "indexed-knowledge"
-  | "retained-memory"
-  | "derived-evidence";
+  "first-party-workspace" | "indexed-knowledge" | "retained-memory" | "derived-evidence";
 
 export const CODING_CONTEXT_SOURCE_TIERS: readonly CodingContextSourceTier[] = [
   "first-party-workspace",
@@ -91,11 +84,7 @@ export const CODING_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
 
 // ─── Omission ─────────────────────────────────────────────────────────────────────
 export type CodingContextOmissionReason =
-  | "unavailable"
-  | "not-ready"
-  | "denied"
-  | "too-expensive"
-  | "out-of-budget";
+  "unavailable" | "not-ready" | "denied" | "too-expensive" | "out-of-budget";
 
 export const CODING_CONTEXT_OMISSION_REASONS: readonly CodingContextOmissionReason[] = [
   "unavailable",
@@ -197,8 +186,7 @@ export interface CodingContextRequest {
 
 // ─── Validation result (shared shape with connected-context) ────────────────────────
 export type CodingContextValidationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reasons: readonly string[] };
+  { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 function isRecord(value: unknown): value is Record<string, unknown> {

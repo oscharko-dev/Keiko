@@ -87,11 +87,14 @@ describe("relLabel — files ↔ quality (#270)", () => {
   it("is honest when no folder is configured instead of fabricating 'src'", () => {
     expect(relLabel(snap("files"), snap("chat"))).toBe("no folder selected");
     expect(relLabel(snap("files", { root: "" }), snap("quality"))).toBe("no folder selected");
-    expect(relLabel(snap("files", { root: "/repo", activeFilePath: "src/app.ts" }), snap("editor"))).toBe(
-      "uses app.ts",
-    );
     expect(
-      relLabel(snap("files", { resolvedRoot: "/Users/oscharko-dev/Projects/Keiko" }), snap("promptEnhancer")),
+      relLabel(snap("files", { root: "/repo", activeFilePath: "src/app.ts" }), snap("editor")),
+    ).toBe("uses app.ts");
+    expect(
+      relLabel(
+        snap("files", { resolvedRoot: "/Users/oscharko-dev/Projects/Keiko" }),
+        snap("promptEnhancer"),
+      ),
     ).toBe("uses Keiko/");
   });
 });

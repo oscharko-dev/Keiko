@@ -23,11 +23,7 @@ import type {
 } from "./ids.js";
 
 export type QualityIntelligenceEvidenceAtomKind =
-  | "requirement"
-  | "design-fragment"
-  | "code-fragment"
-  | "document-excerpt"
-  | "human-statement";
+  "requirement" | "design-fragment" | "code-fragment" | "document-excerpt" | "human-statement";
 
 export const QUALITY_INTELLIGENCE_EVIDENCE_ATOM_KINDS: readonly QualityIntelligenceEvidenceAtomKind[] =
   [

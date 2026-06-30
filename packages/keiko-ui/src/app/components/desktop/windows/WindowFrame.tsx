@@ -426,8 +426,7 @@ interface LinkedContext {
   readonly linkedCapsuleSetIds: readonly string[];
   readonly linkedFigmaSnapshotRunIds: readonly string[];
   readonly linkedFigmaSnapshotSources:
-    | readonly QualityIntelligenceFigmaSnapshotSource[]
-    | undefined;
+    readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   readonly linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined;
 }
 

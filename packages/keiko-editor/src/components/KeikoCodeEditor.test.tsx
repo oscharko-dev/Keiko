@@ -721,9 +721,7 @@ describe("KeikoCodeEditor — diagnostic overview markers", () => {
       background: "var(--ed-error, var(--feedback-danger, var(--danger)))",
       pointerEvents: "auto",
     });
-    expect(screen.getByText("Type error")).toHaveClass(
-      "keiko-editor-diagnostic-tooltip-message",
-    );
+    expect(screen.getByText("Type error")).toHaveClass("keiko-editor-diagnostic-tooltip-message");
     expect(screen.getByText("Line 2 · typescript(2322)")).toHaveClass(
       "keiko-editor-diagnostic-tooltip-meta",
     );

@@ -9,10 +9,7 @@
     "kind": "local-bare-repository",
     "worktree": "temporary-local-worktree",
     "remote": "temporary-local-bare-remote",
-    "branches": [
-      "main",
-      "feature/local"
-    ]
+    "branches": ["main", "feature/local"]
   },
   "routesIntercepted": [
     "/api/projects",
@@ -51,8 +48,5 @@
     "Read and mutation routes are intercepted for deterministic browser assertions.",
     "Branch create uses headRefHash internally; the UI assertions verify hashes are not rendered."
   ],
-  "artifacts": [
-    "manifest.json",
-    "git-branch-history-sync.png"
-  ]
+  "artifacts": ["manifest.json", "git-branch-history-sync.png"]
 }

@@ -67,7 +67,11 @@ function buildSessionCreatePayload(
   };
 }
 
-function buildSdpOfferPayload(sessionId: string, seq: number, sdp: string): Record<string, unknown> {
+function buildSdpOfferPayload(
+  sessionId: string,
+  seq: number,
+  sdp: string,
+): Record<string, unknown> {
   return {
     protocolVersion: VOICE_PROTOCOL_VERSION,
     sessionId,
@@ -172,7 +176,9 @@ export function createBrowserVoiceControlClient(
         ws.addEventListener("open", () => {
           opened = true;
           ws?.send(
-            JSON.stringify(buildSessionCreatePayload(sessionId, idempotencyKey, persona, chatContext)),
+            JSON.stringify(
+              buildSessionCreatePayload(sessionId, idempotencyKey, persona, chatContext),
+            ),
           );
         });
 

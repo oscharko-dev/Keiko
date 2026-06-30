@@ -266,9 +266,7 @@ describe("MemoryList — populated state", () => {
       />,
     );
 
-    await user.click(
-      await screen.findByRole("switch", { name: "Enable MemoriaViva policy" }),
-    );
+    await user.click(await screen.findByRole("switch", { name: "Enable MemoriaViva policy" }));
 
     expect(onPolicyEnabledChange).toHaveBeenCalledWith(false);
   });

@@ -78,8 +78,7 @@ export function updateProject(
   const nameParam = patch.name ?? null;
   const favoriteParam = patch.favorite === undefined ? null : patch.favorite ? 1 : 0;
   const row = db.prepare(SQL_UPDATE).get(nameParam, favoriteParam, now, path) as unknown as
-    | ProjectRow
-    | undefined;
+    ProjectRow | undefined;
   if (row === undefined) throw notFound("Project");
   return rowToProject(row);
 }

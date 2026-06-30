@@ -88,7 +88,7 @@ function isAlpha(code: number): boolean {
 }
 
 function isNameChar(code: number): boolean {
-  return isAlpha(code) || (code >= 0x30 && code <= 0x39) || code === 0x2d /* - */;
+  return isAlpha(code) || (code >= 0x30 && code <= 0x39) || code === 0x2d; /* - */
 }
 
 function readTagName(

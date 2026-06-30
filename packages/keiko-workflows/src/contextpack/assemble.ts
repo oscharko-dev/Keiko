@@ -270,11 +270,7 @@ interface ProcessContext {
 
 type ProcessOutcome = "continue" | "budget-clipped";
 
-function recordBudgetClip(
-  plan: BuildPlan,
-  candidate: CandidateFile,
-  nowMs: number,
-): void {
+function recordBudgetClip(plan: BuildPlan, candidate: CandidateFile, nowMs: number): void {
   plan.uncertainty.push({
     kind: "budget-clipped",
     claim: `context pack truncated at ${candidate.scopePath}`,

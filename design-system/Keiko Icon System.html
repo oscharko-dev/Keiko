@@ -6,8 +6,12 @@
     <script>
       try {
         var t = localStorage.getItem("keiko-ds-theme");
-        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more";
-      } catch (e) { document.documentElement.dataset.theme = "dark"; }
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        var c = localStorage.getItem("keiko-ds-contrast");
+        if (c === "more") document.documentElement.dataset.hc = "more";
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
     </script>
     <title>Keiko Icon System · Lift</title>
     <link rel="stylesheet" href="keiko-fonts.css" />
@@ -15,9 +19,21 @@
     <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="lift-doc.css" />
     <link rel="stylesheet" href="ds.css" />
-    <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
-    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
-    <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+    <script
+      src="https://unpkg.com/react@18.3.1/umd/react.development.js"
+      integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"
+      integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+      integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y"
+      crossorigin="anonymous"
+    ></script>
   </head>
   <body class="ds">
     <a class="skip-link" href="#main">Skip to content</a>
@@ -39,11 +55,25 @@
         }
         return (
           <svg width={size} height={size} viewBox="-0.5 -0.5 25 25" fill="none">
-            <g stroke="var(--line-soft)" strokeWidth="0.06">{lines}</g>
+            <g stroke="var(--line-soft)" strokeWidth="0.06">
+              {lines}
+            </g>
             {live && (
-              <rect x="2" y="2" width="20" height="20" fill="none" stroke="var(--accent-line)" strokeWidth="0.12" strokeDasharray="0.7 0.7" rx="0.5" />
+              <rect
+                x="2"
+                y="2"
+                width="20"
+                height="20"
+                fill="none"
+                stroke="var(--accent-line)"
+                strokeWidth="0.12"
+                strokeDasharray="0.7 0.7"
+                rx="0.5"
+              />
             )}
-            <g stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{children}</g>
+            <g stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              {children}
+            </g>
           </svg>
         );
       }
@@ -55,16 +85,26 @@
         return (
           <header className="hero">
             <div className="hero-eyebrow">Keiko · Icon Signature</div>
-            <h1>Lift <span className="dim">— the lifted pen.</span></h1>
+            <h1>
+              Lift <span className="dim">— the lifted pen.</span>
+            </h1>
             <p>
-              A monochrome stroke language with a single, unmistakable rule: every closed contour has
-              <b style={{ color: "var(--fg)" }}> exactly one fine seam</b> — as if the pen briefly lifted.
-              Calm, precise, distinct. This page is the binding spec — today and in four years.
+              A monochrome stroke language with a single, unmistakable rule: every closed contour
+              has
+              <b style={{ color: "var(--fg)" }}> exactly one fine seam</b> — as if the pen briefly
+              lifted. Calm, precise, distinct. This page is the binding spec — today and in four
+              years.
             </p>
             <div className="hero-controls">
-              <div className="pill"><LCtl act="min" /> Minimize</div>
-              <div className="pill"><LCtl act="max" /> Full screen</div>
-              <div className="pill"><LCtl act="close" /> Close</div>
+              <div className="pill">
+                <LCtl act="min" /> Minimize
+              </div>
+              <div className="pill">
+                <LCtl act="max" /> Full screen
+              </div>
+              <div className="pill">
+                <LCtl act="close" /> Close
+              </div>
             </div>
           </header>
         );
@@ -72,19 +112,55 @@
 
       function Rule() {
         const specs = [
-          ["Grid", <span>A <b>24 × 24</b> unit field. Everything visible lives in the <b>20-unit clear area</b> (2-unit margin).</span>],
-          ["Stroke", <span><b>1.6</b> units, constant. <b>Round</b> caps, <b>round</b> joins. No fills.</span>],
-          ["Colour", <span>Always <b>currentColor</b> — monochrome (grey-white). Green/red only on interaction.</span>],
-          ["The lift", <span>One closed contour = <b>one</b> seam of ≈ 2 units (≈ 34° on a ring), at the natural pen-start point.</span>],
-          ["Open glyphs", <span>Gestures such as +, ✓, send carry <b>no</b> forced seam — they belong through stroke quality.</span>],
-          ["Corner radius", <span><b>2–2.5</b> units on framed shapes.</span>],
+          [
+            "Grid",
+            <span>
+              A <b>24 × 24</b> unit field. Everything visible lives in the <b>20-unit clear area</b>{" "}
+              (2-unit margin).
+            </span>,
+          ],
+          [
+            "Stroke",
+            <span>
+              <b>1.6</b> units, constant. <b>Round</b> caps, <b>round</b> joins. No fills.
+            </span>,
+          ],
+          [
+            "Colour",
+            <span>
+              Always <b>currentColor</b> — monochrome (grey-white). Green/red only on interaction.
+            </span>,
+          ],
+          [
+            "The lift",
+            <span>
+              One closed contour = <b>one</b> seam of ≈ 2 units (≈ 34° on a ring), at the natural
+              pen-start point.
+            </span>,
+          ],
+          [
+            "Open glyphs",
+            <span>
+              Gestures such as +, ✓, send carry <b>no</b> forced seam — they belong through stroke
+              quality.
+            </span>,
+          ],
+          [
+            "Corner radius",
+            <span>
+              <b>2–2.5</b> units on framed shapes.
+            </span>,
+          ],
         ];
         return (
           <section id="rule">
             <div className="sec-head">
               <div className="sec-num">01 — GRAMMAR</div>
               <h2>The rule</h2>
-              <p>Six sentences. Follow them and you draw a Keiko icon automatically — whoever you are, whenever it is.</p>
+              <p>
+                Six sentences. Follow them and you draw a Keiko icon automatically — whoever you
+                are, whenever it is.
+              </p>
             </div>
             <div className="rule-wrap">
               <div className="card spec-list">
@@ -125,7 +201,10 @@
                   </GridSvg>
                 </div>
                 <h3>Build on the grid</h3>
-                <p>Construct the geometry closed on the 24-unit grid, inside the 20-unit clear area. Still ordinary.</p>
+                <p>
+                  Construct the geometry closed on the 24-unit grid, inside the 20-unit clear area.
+                  Still ordinary.
+                </p>
               </div>
               <div className="card step">
                 <div className="num">2</div>
@@ -137,7 +216,10 @@
                   </GridSvg>
                 </div>
                 <h3>Lift one pen</h3>
-                <p>Open exactly one seam of ≈ 2 units — at the pen-start (top / “12 o’clock”). Never two.</p>
+                <p>
+                  Open exactly one seam of ≈ 2 units — at the pen-start (top / “12 o’clock”). Never
+                  two.
+                </p>
               </div>
               <div className="card step">
                 <div className="num">3</div>
@@ -148,7 +230,10 @@
                   </GridSvg>
                 </div>
                 <h3>Round caps, monochrome</h3>
-                <p>Stroke 1.6, round caps, currentColor. No fill, no colour. Done — and it belongs to the family.</p>
+                <p>
+                  Stroke 1.6, round caps, currentColor. No fill, no colour. Done — and it belongs to
+                  the family.
+                </p>
               </div>
             </div>
           </section>
@@ -168,8 +253,9 @@
               <div className="sec-num">03 — WINDOW CONTROLS</div>
               <h2>The control glyphs</h2>
               <p>
-                Your three “traffic lights” — now in the Lift hand instead of borrowed Apple dots. Monochrome at
-                rest; the meaning only whispers on touch: the open seam is the gesture.
+                Your three “traffic lights” — now in the Lift hand instead of borrowed Apple dots.
+                Monochrome at rest; the meaning only whispers on touch: the open seam is the
+                gesture.
               </p>
             </div>
 
@@ -183,34 +269,98 @@
                   const last = i === rows.length - 1 ? " last" : "";
                   return (
                     <React.Fragment key={act}>
-                      <div className={"row-h" + last}><b>{t}</b><span>{sub}</span></div>
-                      <div className={"cell" + last}><LCtl act={act} big /></div>
-                      <div className={"cell" + last}><LCtl act={act} big force="hover" /></div>
-                      <div className={"cell" + last}><LCtl act={act} big force="active" /></div>
+                      <div className={"row-h" + last}>
+                        <b>{t}</b>
+                        <span>{sub}</span>
+                      </div>
+                      <div className={"cell" + last}>
+                        <LCtl act={act} big />
+                      </div>
+                      <div className={"cell" + last}>
+                        <LCtl act={act} big force="hover" />
+                      </div>
+                      <div className={"cell" + last}>
+                        <LCtl act={act} big force="active" />
+                      </div>
                     </React.Fragment>
                   );
                 })}
               </div>
-              <div style={{ borderTop: "1px solid var(--line-soft)", display: "flex", flexWrap: "wrap" }}>
-                <div className="ctl-note"><span className="swatch" style={{ background: "var(--fg-faint)" }} />Minimize stays neutral.</div>
-                <div className="ctl-note"><span className="swatch" style={{ background: "var(--accent)" }} />Full screen whispers green.</div>
-                <div className="ctl-note"><span className="swatch" style={{ background: "var(--danger)" }} />Close whispers red.</div>
+              <div
+                style={{
+                  borderTop: "1px solid var(--line-soft)",
+                  display: "flex",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div className="ctl-note">
+                  <span className="swatch" style={{ background: "var(--fg-faint)" }} />
+                  Minimize stays neutral.
+                </div>
+                <div className="ctl-note">
+                  <span className="swatch" style={{ background: "var(--accent)" }} />
+                  Full screen whispers green.
+                </div>
+                <div className="ctl-note">
+                  <span className="swatch" style={{ background: "var(--danger)" }} />
+                  Close whispers red.
+                </div>
               </div>
             </div>
 
             <div className="card win-demo">
-              <div style={{ width: 460, border: "1px solid var(--line)", borderRadius: "var(--radius)", background: "var(--card)", overflow: "hidden", boxShadow: "0 8px 24px -14px rgba(0,0,0,.6)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, height: 38, padding: "0 6px 0 12px", borderBottom: "1px solid var(--line-soft)" }}>
-                  <span style={{ color: "var(--fg-dim)", display: "grid", placeItems: "center" }}><LIcon name="terminal" size={18} /></span>
+              <div
+                style={{
+                  width: 460,
+                  border: "1px solid var(--line)",
+                  borderRadius: "var(--radius)",
+                  background: "var(--card)",
+                  overflow: "hidden",
+                  boxShadow: "0 8px 24px -14px rgba(0,0,0,.6)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    height: 38,
+                    padding: "0 6px 0 12px",
+                    borderBottom: "1px solid var(--line-soft)",
+                  }}
+                >
+                  <span style={{ color: "var(--fg-dim)", display: "grid", placeItems: "center" }}>
+                    <LIcon name="terminal" size={18} />
+                  </span>
                   <span style={{ fontSize: 13.5, fontWeight: 650 }}>Chat</span>
-                  <span style={{ fontSize: 11, color: "var(--fg-muted)", background: "var(--inset)", padding: "2px 7px", borderRadius: 6 }}>Keiko</span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "var(--fg-muted)",
+                      background: "var(--inset)",
+                      padding: "2px 7px",
+                      borderRadius: 6,
+                    }}
+                  >
+                    Keiko
+                  </span>
                   <span style={{ flex: 1 }} />
-                  <div className="kx-controls"><LCtl act="min" /><LCtl act="max" /><LCtl act="close" /></div>
+                  <div className="kx-controls">
+                    <LCtl act="min" />
+                    <LCtl act="max" />
+                    <LCtl act="close" />
+                  </div>
                 </div>
                 <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 9 }}>
-                  <div style={{ height: 8, borderRadius: 5, background: "var(--inset)", width: "86%" }} />
-                  <div style={{ height: 8, borderRadius: 5, background: "var(--inset)", width: "62%" }} />
-                  <div style={{ height: 8, borderRadius: 5, background: "var(--inset)", width: "40%" }} />
+                  <div
+                    style={{ height: 8, borderRadius: 5, background: "var(--inset)", width: "86%" }}
+                  />
+                  <div
+                    style={{ height: 8, borderRadius: 5, background: "var(--inset)", width: "62%" }}
+                  />
+                  <div
+                    style={{ height: 8, borderRadius: 5, background: "var(--inset)", width: "40%" }}
+                  />
                 </div>
               </div>
             </div>
@@ -220,16 +370,151 @@
 
       function Library() {
         const CATS = [
-          ["Core & navigation", ["search", "compose", "plus", "check", "chevron", "send", "folder", "files", "terminal", "branch", "server", "sidebar", "panelRight", "split", "tile", "layers", "settings"]],
-          ["AI · models & reasoning", ["llm", "modelLarge", "modelSmall", "embedding", "brain", "brainHalf", "tokens", "agent", "twin", "memory", "spark", "bolt"]],
-          ["Voice & speech", ["mic", "micOff", "speak", "waveform", "speaker", "mute", "headphones", "textToSpeech", "speechToText", "translate"]],
-          ["Governance & security", ["shield", "shieldCheck", "shieldAlert", "lock", "unlock", "key", "policy", "eval", "auditTrail", "permission", "user"]],
-          ["AI control & feedback", ["regenerate", "stop", "play", "pause", "thumbsUp", "thumbsDown", "clock"]],
-          ["Editor · run & debug", ["run", "debug", "bug", "breakpoint", "resume", "stepOver", "stepInto", "stepOut", "restart", "rollback", "build", "coverage", "profiler"]],
-          ["Editor · tools & VCS", ["project", "structure", "hierarchy", "endpoints", "bookmark", "bookmarks", "todo", "problems", "inspect", "learn", "commit", "pullRequest", "merge", "compare"]],
+          [
+            "Core & navigation",
+            [
+              "search",
+              "compose",
+              "plus",
+              "check",
+              "chevron",
+              "send",
+              "folder",
+              "files",
+              "terminal",
+              "branch",
+              "server",
+              "sidebar",
+              "panelRight",
+              "split",
+              "tile",
+              "layers",
+              "settings",
+            ],
+          ],
+          [
+            "AI · models & reasoning",
+            [
+              "llm",
+              "modelLarge",
+              "modelSmall",
+              "embedding",
+              "brain",
+              "brainHalf",
+              "tokens",
+              "agent",
+              "twin",
+              "memory",
+              "spark",
+              "bolt",
+            ],
+          ],
+          [
+            "Voice & speech",
+            [
+              "mic",
+              "micOff",
+              "speak",
+              "waveform",
+              "speaker",
+              "mute",
+              "headphones",
+              "textToSpeech",
+              "speechToText",
+              "translate",
+            ],
+          ],
+          [
+            "Governance & security",
+            [
+              "shield",
+              "shieldCheck",
+              "shieldAlert",
+              "lock",
+              "unlock",
+              "key",
+              "policy",
+              "eval",
+              "auditTrail",
+              "permission",
+              "user",
+            ],
+          ],
+          [
+            "AI control & feedback",
+            ["regenerate", "stop", "play", "pause", "thumbsUp", "thumbsDown", "clock"],
+          ],
+          [
+            "Editor · run & debug",
+            [
+              "run",
+              "debug",
+              "bug",
+              "breakpoint",
+              "resume",
+              "stepOver",
+              "stepInto",
+              "stepOut",
+              "restart",
+              "rollback",
+              "build",
+              "coverage",
+              "profiler",
+            ],
+          ],
+          [
+            "Editor · tools & VCS",
+            [
+              "project",
+              "structure",
+              "hierarchy",
+              "endpoints",
+              "bookmark",
+              "bookmarks",
+              "todo",
+              "problems",
+              "inspect",
+              "learn",
+              "commit",
+              "pullRequest",
+              "merge",
+              "compare",
+            ],
+          ],
           ["Status & messaging", ["error", "alert", "info", "success", "bell", "archive"]],
-          ["Connectivity & data", ["plug", "puzzle", "link", "globe", "cloud", "database", "barChart", "lineChart", "pieChart", "activity"]],
-          ["Utility", ["eye", "eyeOff", "copy", "trash", "edit", "download", "upload", "filter", "ellipsis", "external", "code", "sun", "moon"]],
+          [
+            "Connectivity & data",
+            [
+              "plug",
+              "puzzle",
+              "link",
+              "globe",
+              "cloud",
+              "database",
+              "barChart",
+              "lineChart",
+              "pieChart",
+              "activity",
+            ],
+          ],
+          [
+            "Utility",
+            [
+              "eye",
+              "eyeOff",
+              "copy",
+              "trash",
+              "edit",
+              "download",
+              "upload",
+              "filter",
+              "ellipsis",
+              "external",
+              "code",
+              "sun",
+              "moon",
+            ],
+          ],
           ["Window controls", ["min", "max", "restore", "close"]],
         ];
         const seen = new Set(CATS.flatMap(([, ns]) => ns));
@@ -241,11 +526,25 @@
             <div className="sec-head">
               <div className="sec-num">04 — LIBRARY</div>
               <h2>The library — {total} glyphs</h2>
-              <p>One monochrome hand across the whole product: workspace, the digital twin, model types, voice, governance and data. Names match the keys in <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>lift-glyphs.js</span> / <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>Icons.tsx</span>, so they’re 1:1 swappable in code.</p>
+              <p>
+                One monochrome hand across the whole product: workspace, the digital twin, model
+                types, voice, governance and data. Names match the keys in{" "}
+                <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>
+                  lift-glyphs.js
+                </span>{" "}
+                /{" "}
+                <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>
+                  Icons.tsx
+                </span>
+                , so they’re 1:1 swappable in code.
+              </p>
             </div>
             {CATS.map(([title, names]) => (
               <div className="lib-group" key={title}>
-                <div className="lib-cat">{title}<span className="lib-count">{names.length}</span></div>
+                <div className="lib-cat">
+                  {title}
+                  <span className="lib-count">{names.length}</span>
+                </div>
                 <div className="lib">
                   {names.map((n) => (
                     <div className="lib-cell" key={n}>
@@ -270,16 +569,84 @@
             </div>
             <div className="dd">
               <div className="card dd-col dd-do">
-                <div className="dd-tag"><LIcon name="check" size={15} /> Do</div>
-                <div className="dd-row"><span className="dd-ico"><LIcon name="search" size={24} /></span><p><b style={{ color: "var(--fg)" }}>One</b> seam per contour, at the top pen-start.</p></div>
-                <div className="dd-row"><span className="dd-ico"><LIcon name="terminal" size={24} /></span><p>Round caps, constant <b style={{ color: "var(--fg)" }}>1.6</b> stroke.</p></div>
-                <div className="dd-row"><span className="dd-ico"><LIcon name="settings" size={24} /></span><p>Monochrome — <b style={{ color: "var(--fg)" }}>currentColor</b>, colour only on interaction.</p></div>
+                <div className="dd-tag">
+                  <LIcon name="check" size={15} /> Do
+                </div>
+                <div className="dd-row">
+                  <span className="dd-ico">
+                    <LIcon name="search" size={24} />
+                  </span>
+                  <p>
+                    <b style={{ color: "var(--fg)" }}>One</b> seam per contour, at the top
+                    pen-start.
+                  </p>
+                </div>
+                <div className="dd-row">
+                  <span className="dd-ico">
+                    <LIcon name="terminal" size={24} />
+                  </span>
+                  <p>
+                    Round caps, constant <b style={{ color: "var(--fg)" }}>1.6</b> stroke.
+                  </p>
+                </div>
+                <div className="dd-row">
+                  <span className="dd-ico">
+                    <LIcon name="settings" size={24} />
+                  </span>
+                  <p>
+                    Monochrome — <b style={{ color: "var(--fg)" }}>currentColor</b>, colour only on
+                    interaction.
+                  </p>
+                </div>
               </div>
               <div className="card dd-col dd-dont">
-                <div className="dd-tag"><LIcon name="close" size={15} /> Don’t</div>
-                <div className="dd-row"><span className="dd-ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={wrongRing} /><path d={HANDLE} /></svg></span><p>No two (or more) seams — the lift loses its calm.</p></div>
-                <div className="dd-row"><span className="dd-ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="butt" strokeLinejoin="miter"><rect x="4" y="5" width="16" height="14" rx="2.5" /><path d="M8 9.6 L11 12.6 L8 15.6 M12.8 15.6 H16.4" /></svg></span><p>No flat/sharp caps and no closed frames without a seam.</p></div>
-                <div className="dd-row"><span className="dd-ico"><span style={{ color: "var(--accent)" }}><LIcon name="settings" size={24} /></span></span><p>No permanent green and no filled areas.</p></div>
+                <div className="dd-tag">
+                  <LIcon name="close" size={15} /> Don’t
+                </div>
+                <div className="dd-row">
+                  <span className="dd-ico">
+                    <svg
+                      width="24"
+                      height="24"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d={wrongRing} />
+                      <path d={HANDLE} />
+                    </svg>
+                  </span>
+                  <p>No two (or more) seams — the lift loses its calm.</p>
+                </div>
+                <div className="dd-row">
+                  <span className="dd-ico">
+                    <svg
+                      width="24"
+                      height="24"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="butt"
+                      strokeLinejoin="miter"
+                    >
+                      <rect x="4" y="5" width="16" height="14" rx="2.5" />
+                      <path d="M8 9.6 L11 12.6 L8 15.6 M12.8 15.6 H16.4" />
+                    </svg>
+                  </span>
+                  <p>No flat/sharp caps and no closed frames without a seam.</p>
+                </div>
+                <div className="dd-row">
+                  <span className="dd-ico">
+                    <span style={{ color: "var(--accent)" }}>
+                      <LIcon name="settings" size={24} />
+                    </span>
+                  </span>
+                  <p>No permanent green and no filled areas.</p>
+                </div>
               </div>
             </div>
           </section>
@@ -320,9 +687,16 @@ export const maximize = (
             <div className="sec-head">
               <div className="sec-num">06 — IMPLEMENTATION</div>
               <h2>How it lands in code</h2>
-              <p>The same <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>Ico</span> wrapper as today — only the paths carry the seam. Every glyph above is copyable, currentColor SVG.</p>
+              <p>
+                The same{" "}
+                <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)" }}>Ico</span>{" "}
+                wrapper as today — only the paths carry the seam. Every glyph above is copyable,
+                currentColor SVG.
+              </p>
             </div>
-            <div className="code"><pre>{CODE}</pre></div>
+            <div className="code">
+              <pre>{CODE}</pre>
+            </div>
           </section>
         );
       }
@@ -343,7 +717,7 @@ export const maximize = (
 
       ReactDOM.createRoot(document.getElementById("root")).render(<App />);
     </script>
-    
-      <script src="theme-control.js"></script>
-</body>
+
+    <script src="theme-control.js"></script>
+  </body>
 </html>

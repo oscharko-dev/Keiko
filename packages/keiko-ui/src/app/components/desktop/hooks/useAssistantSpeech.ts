@@ -61,8 +61,7 @@ export interface UseAssistantSpeechOptions {
   readonly turnManager?: VoiceTurnManagerEngine | undefined;
   // Test seams. Production uses the BFF synthesis client, `new Audio()`, and the URL object-store.
   readonly synthesize?:
-    | ((text: string, signal: AbortSignal) => Promise<VoiceSpeechResult>)
-    | undefined;
+    ((text: string, signal: AbortSignal) => Promise<VoiceSpeechResult>) | undefined;
   readonly createAudio?: (() => AssistantSpeechAudioElement) | undefined;
   readonly createObjectUrl?: ((blob: Blob) => string) | undefined;
   readonly revokeObjectUrl?: ((url: string) => void) | undefined;

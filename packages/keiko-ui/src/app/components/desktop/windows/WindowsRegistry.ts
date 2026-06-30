@@ -116,8 +116,7 @@ export interface WindowRenderContext {
   readonly linkedFigmaSnapshotRunIds: readonly string[];
   /** Figma Snapshot sources, optionally scoped to selected screen ids. */
   readonly linkedFigmaSnapshotSources?:
-    | readonly QualityIntelligenceFigmaSnapshotSource[]
-    | undefined;
+    readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   /** Image-only sources connected to Quality Intelligence. */
   readonly linkedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
   /**

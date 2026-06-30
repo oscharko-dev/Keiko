@@ -174,9 +174,7 @@ const ICE_GATHER_TIMEOUT_MS = 2_000;
 const MAX_QUEUED_DATA_CHANNEL_EVENTS = 50;
 const INPUT_MUTE_RAMP_SECONDS = 0.035;
 
-type BrowserAudioContextConstructor = new (
-  contextOptions?: AudioContextOptions,
-) => AudioContext;
+type BrowserAudioContextConstructor = new (contextOptions?: AudioContextOptions) => AudioContext;
 
 interface VoiceInputPipeline {
   readonly senderStream: MediaStream;
@@ -436,7 +434,9 @@ function buildSession(
 // so a no-voice / unsupported environment never touches the media APIs.
 export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
   return {
-    async connect(options?: { readonly signal?: AbortSignal | undefined }): Promise<VoiceRtcSession> {
+    async connect(options?: {
+      readonly signal?: AbortSignal | undefined;
+    }): Promise<VoiceRtcSession> {
       const signal = options?.signal;
       if (!realtimeVoiceTransportSupported()) {
         throw new VoiceRtcError("unsupported", "This browser does not support real-time voice.");

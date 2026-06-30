@@ -319,8 +319,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
   private readonly redactor: (input: string) => string;
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly detect:
-    | ((projectId: string) => Promise<ContainerCapabilityResponse>)
-    | undefined;
+    ((projectId: string) => Promise<ContainerCapabilityResponse>) | undefined;
   private readonly now: () => number;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<ContainerRunnerEventEmitter>();

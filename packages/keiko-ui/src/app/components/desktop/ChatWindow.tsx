@@ -348,7 +348,13 @@ function ChatBubbleImpl({
       chatWindowId: windowId,
       element: bubbleRef.current,
     });
-  }, [activeChat?.id, message.groundedAnswer?.assistantMessageId, message.id, message.role, windowId]);
+  }, [
+    activeChat?.id,
+    message.groundedAnswer?.assistantMessageId,
+    message.id,
+    message.role,
+    windowId,
+  ]);
 
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
   // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat

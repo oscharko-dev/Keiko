@@ -693,10 +693,7 @@ export interface SearchOutcome {
   // Set when the search produced no references for a reason the runner needs to
   // discriminate. `noEvidence` mirrors `RetrievalResult` (same vocabulary).
   readonly noEvidenceReason?:
-    | "no-vectors"
-    | "incompatible-embedding-identity"
-    | "below-min-score"
-    | "embedding-failed";
+    "no-vectors" | "incompatible-embedding-identity" | "below-min-score" | "embedding-failed";
   // True when the embedding adapter failed for at least one capsule but lexical
   // candidates kept the result non-empty. Observability signal only — does not
   // change which references are returned.
@@ -785,10 +782,7 @@ async function ensureQueryEmbedded(
 // alias so `selectTopCandidates` can return either the surviving list or one of these
 // reasons without the loose RetrievalReference shape leaking.
 type EmptyReason =
-  | "no-vectors"
-  | "incompatible-embedding-identity"
-  | "below-min-score"
-  | "embedding-failed";
+  "no-vectors" | "incompatible-embedding-identity" | "below-min-score" | "embedding-failed";
 
 type CandidateSelection =
   | { readonly ok: true; readonly top: readonly ScoredCandidate[] }

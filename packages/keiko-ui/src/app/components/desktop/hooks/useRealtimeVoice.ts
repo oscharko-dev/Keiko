@@ -57,7 +57,8 @@ function realtimeGroundingToolDefinition(): Record<string, unknown> {
       properties: {
         query: {
           type: "string",
-          description: "The user's grounded question, rewritten only enough to preserve the intended meaning.",
+          description:
+            "The user's grounded question, rewritten only enough to preserve the intended meaning.",
         },
       },
       required: ["query"],
@@ -225,8 +226,7 @@ export interface UseRealtimeVoiceOptions {
   readonly createControl?: (() => VoiceControlClient) | undefined;
   readonly createAudioSink?: (() => RealtimeAudioSink) | undefined;
   readonly onVoiceTurnCommitted?:
-    | ((messages: readonly RealtimeVoiceTurnMessage[]) => void | Promise<void>)
-    | undefined;
+    ((messages: readonly RealtimeVoiceTurnMessage[]) => void | Promise<void>) | undefined;
   readonly onUserTranscriptCommitted?: ((text: string) => void | Promise<void>) | undefined;
   readonly onAssistantTranscriptCommitted?: ((text: string) => void | Promise<void>) | undefined;
   readonly onGroundedToolCall?:
@@ -711,21 +711,15 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   );
 
   const appendFunctionCallArguments = useCallback(
-    (
-      event: Extract<ParsedRealtimeVoiceEvent, { kind: "function-call-arguments-delta" }>,
-    ): void => {
+    (event: Extract<ParsedRealtimeVoiceEvent, { kind: "function-call-arguments-delta" }>): void => {
       const existing = functionCallBuffersRef.current.get(event.callId);
       functionCallBuffersRef.current.set(event.callId, {
         argumentsText: `${existing?.argumentsText ?? ""}${event.delta}`,
-        ...(event.name ?? existing?.name
-          ? { name: event.name ?? existing?.name }
-          : {}),
-        ...(event.responseId ?? existing?.responseId
+        ...((event.name ?? existing?.name) ? { name: event.name ?? existing?.name } : {}),
+        ...((event.responseId ?? existing?.responseId)
           ? { responseId: event.responseId ?? existing?.responseId }
           : {}),
-        ...(event.itemId ?? existing?.itemId
-          ? { itemId: event.itemId ?? existing?.itemId }
-          : {}),
+        ...((event.itemId ?? existing?.itemId) ? { itemId: event.itemId ?? existing?.itemId } : {}),
       });
     },
     [],
@@ -754,7 +748,9 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         return;
       }
       const query = queryFromFunctionArguments(
-        event.argumentsText.trim().length > 0 ? event.argumentsText : (buffered?.argumentsText ?? ""),
+        event.argumentsText.trim().length > 0
+          ? event.argumentsText
+          : (buffered?.argumentsText ?? ""),
       );
       if (query === undefined) {
         return;
@@ -784,10 +780,12 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           callId: event.callId,
           query,
           ...(turn.userText === undefined ? {} : { userTranscript: turn.userText }),
-          ...(event.responseId ?? buffered?.responseId
+          ...((event.responseId ?? buffered?.responseId)
             ? { responseId: event.responseId ?? buffered?.responseId }
             : {}),
-          ...(event.itemId ?? buffered?.itemId ? { itemId: event.itemId ?? buffered?.itemId } : {}),
+          ...((event.itemId ?? buffered?.itemId)
+            ? { itemId: event.itemId ?? buffered?.itemId }
+            : {}),
         },
         controller.signal,
       )
@@ -1010,35 +1008,38 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     }, INPUT_UNMUTE_REARM_MS);
   }, [clearInputRearmTimer]);
 
-  const cleanupRefs = useCallback((options: { readonly discardControl?: boolean } = {}): void => {
-    const discardControl = options.discardControl ?? true;
-    startupAbortRef.current?.abort();
-    startupAbortRef.current = undefined;
-    if (graceTimerRef.current !== undefined) {
-      clearTimeout(graceTimerRef.current);
-      graceTimerRef.current = undefined;
-    }
-    promoteUserTranscriptFallback();
-    flushVoiceTurn({ allowAssistantFallback: true });
-    clearInputRearmTimer();
-    setInputRearming(false);
-    audioSinkRef.current?.release();
-    audioSinkRef.current = undefined;
-    sessionRef.current?.close();
-    sessionRef.current = undefined;
-    controlRef.current?.close();
-    if (discardControl) {
-      controlRef.current = undefined;
-    }
-    resetTurnState();
-    resetSessionReadiness();
-  }, [
-    clearInputRearmTimer,
-    flushVoiceTurn,
-    promoteUserTranscriptFallback,
-    resetSessionReadiness,
-    resetTurnState,
-  ]);
+  const cleanupRefs = useCallback(
+    (options: { readonly discardControl?: boolean } = {}): void => {
+      const discardControl = options.discardControl ?? true;
+      startupAbortRef.current?.abort();
+      startupAbortRef.current = undefined;
+      if (graceTimerRef.current !== undefined) {
+        clearTimeout(graceTimerRef.current);
+        graceTimerRef.current = undefined;
+      }
+      promoteUserTranscriptFallback();
+      flushVoiceTurn({ allowAssistantFallback: true });
+      clearInputRearmTimer();
+      setInputRearming(false);
+      audioSinkRef.current?.release();
+      audioSinkRef.current = undefined;
+      sessionRef.current?.close();
+      sessionRef.current = undefined;
+      controlRef.current?.close();
+      if (discardControl) {
+        controlRef.current = undefined;
+      }
+      resetTurnState();
+      resetSessionReadiness();
+    },
+    [
+      clearInputRearmTimer,
+      flushVoiceTurn,
+      promoteUserTranscriptFallback,
+      resetSessionReadiness,
+      resetTurnState,
+    ],
+  );
 
   useEffect(() => {
     sessionRef.current?.setInputMuted?.(muted);

@@ -348,7 +348,9 @@ describe("scanRuntimeState — runtime-state manifest", () => {
   it("retains customer lookalikes in known evidence, QI, and vault directories", () => {
     const stateDir = seedRuntimeState(makeRoot());
     touch(join(stateDir, "evidence", "manual export.json"));
-    touch(join(stateDir, "evidence", "manual export.json.123e4567-e89b-12d3-a456-426614174000.tmp"));
+    touch(
+      join(stateDir, "evidence", "manual export.json.123e4567-e89b-12d3-a456-426614174000.tmp"),
+    );
     touch(join(stateDir, "evidence", "manual export.lock"));
     touch(join(stateDir, "evidence", "qi", "debug dump.json"));
     touch(

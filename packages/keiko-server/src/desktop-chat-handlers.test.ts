@@ -892,9 +892,9 @@ describe("desktop chat routes", () => {
         expect(memoryVault.getMemory(action.proposalId as MemoryId)?.status).toBe("proposed");
       }
     }
-    expect(seenRequests.some((request) => request.messages.at(-1)?.content.includes("Oliver"))).toBe(
-      true,
-    );
+    expect(
+      seenRequests.some((request) => request.messages.at(-1)?.content.includes("Oliver")),
+    ).toBe(true);
     memoryVault.close();
   });
 

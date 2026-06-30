@@ -77,11 +77,7 @@ describe("createBrowserAssistantSpeechStreamingSink", () => {
         readonly port = { postMessage: vi.fn(), close: vi.fn() };
         readonly connect = vi.fn();
         readonly disconnect = vi.fn();
-        constructor(
-          _context: AudioContext,
-          _name: string,
-          _options?: AudioWorkletNodeOptions,
-        ) {
+        constructor(_context: AudioContext, _name: string, _options?: AudioWorkletNodeOptions) {
           nodes.push({ disconnect: this.disconnect, port: this.port });
         }
       },

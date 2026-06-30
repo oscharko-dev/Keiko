@@ -137,7 +137,9 @@ function buildInternalRequest(body: Record<string, unknown>): CodingContextReque
   };
 }
 
-function sanitizeCodingContextRequest(request: CodingContextRequest): CodingContextRequest | RouteResult {
+function sanitizeCodingContextRequest(
+  request: CodingContextRequest,
+): CodingContextRequest | RouteResult {
   if (request.capsuleId !== undefined && request.capsuleSetId !== undefined) {
     return invalidRequest("At most one of capsuleId or capsuleSetId may be provided.");
   }
@@ -344,7 +346,10 @@ function parseRepoSearchInput(body: Record<string, unknown>): RepoSearchInput | 
 }
 
 function repoSearchErrorResult(error: unknown): RouteResult | undefined {
-  if (error instanceof RepoSearchInvalidQueryError || error instanceof RepoSearchInvalidRangeError) {
+  if (
+    error instanceof RepoSearchInvalidQueryError ||
+    error instanceof RepoSearchInvalidRangeError
+  ) {
     return invalidRequest(error.message);
   }
   if (error instanceof RepoSearchUnsupportedFileError) {
@@ -353,7 +358,10 @@ function repoSearchErrorResult(error: unknown): RouteResult | undefined {
   return undefined;
 }
 
-function validateRepoSearchPaths(realRoot: string, input: RepoSearchInput): RouteResult | undefined {
+function validateRepoSearchPaths(
+  realRoot: string,
+  input: RepoSearchInput,
+): RouteResult | undefined {
   for (const path of input.paths) {
     assertContained(realRoot, path);
     const invalid = validateRelativePathShape("paths", path);
@@ -384,7 +392,7 @@ function buildRepoSearchQuery(input: RepoSearchQueryInput, nowMs: number): Retri
         : input.symbol !== undefined
           ? "exact-symbol"
           : "natural-language",
-    text: input.operation === "findFiles" ? input.queryText : input.symbol ?? input.queryText,
+    text: input.operation === "findFiles" ? input.queryText : (input.symbol ?? input.queryText),
     caseSensitive: false,
     maxResults: input.maxResults,
     emittedAtMs: nowMs,
