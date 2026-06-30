@@ -184,7 +184,11 @@ function buildRequest(request: OpenAIEmbeddingRequest): BuiltRequest {
     "content-type": "application/json",
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
-  const body = JSON.stringify({ model: request.modelId, input: request.input });
+  const body = JSON.stringify({
+    model: request.modelId,
+    input: request.input,
+    encoding_format: "float",
+  });
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
@@ -273,7 +277,11 @@ function buildBatchRequest(request: OpenAIEmbeddingBatchRequest): BuiltRequest {
   };
   // OpenAI-compatible body: `input` is the array. Identical envelope to the scalar path
   // except the array value, so the same gateway/TLS/egress handling applies.
-  const body = JSON.stringify({ model: request.modelId, input: request.inputs });
+  const body = JSON.stringify({
+    model: request.modelId,
+    input: request.inputs,
+    encoding_format: "float",
+  });
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;

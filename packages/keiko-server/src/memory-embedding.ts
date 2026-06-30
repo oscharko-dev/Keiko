@@ -3,8 +3,8 @@
 // Mirrors the proven Local Knowledge embedding pipeline (selectEmbeddingModelId +
 // createEmbeddingAdapter + requestOpenAIEmbedding) but for governed memory records. Two public
 // surfaces:
-//   embedMemoryText(deps, text)        — embed an arbitrary string, returning a vault-ready
-//                                        MemoryEmbeddingInput or null. NEVER throws.
+//   embedMemoryText(deps, text, kind)  — embed an arbitrary query/document string, returning a
+//                                        vault-ready MemoryEmbeddingInput or null. NEVER throws.
 //   embedAndStoreMemory(deps, vault,…) — best-effort embed-on-capture: store the embedding if it
 //                                        and the vault accept it; swallow every failure so the
 //                                        capture path is never broken.
@@ -15,6 +15,7 @@
 // its pre-semantic behaviour byte-for-byte.
 
 import {
+  assertCompatibleEmbeddingIdentity,
   requestOpenAIEmbedding,
   type GatewayConfig,
   type ModelProviderConfig,
@@ -22,7 +23,8 @@ import {
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 import type {
   MemoryEdgeId,
   MemoryId,
@@ -41,6 +43,11 @@ import {
 } from "./local-knowledge-handlers.js";
 
 const MEMORY_VECTOR_METRIC = "cosine" as const;
+export type MemoryEmbeddingKind = "query" | "document";
+
+const QWEN3_MEMORY_QUERY_INSTRUCTION =
+  "Given a user conversation query, retrieve the most relevant durable memories for assisting the user.";
+
 export function selectMemoryEmbeddingModelId(
   config: GatewayConfig | undefined,
 ): string | undefined {
@@ -78,6 +85,27 @@ function buildAdapter(
   };
 }
 
+function normalizedEndpointFingerprint(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/+$/u, "");
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+}
+
+export function memoryEmbeddingProviderIdentity(provider: ModelProviderConfig): string {
+  return `openai-compatible:${normalizedEndpointFingerprint(provider.baseUrl)}`;
+}
+
+function isQwen3EmbeddingModel(modelId: string): boolean {
+  const normalized = modelId.toLocaleLowerCase("en-US");
+  return normalized.includes("qwen3") && normalized.includes("embedding");
+}
+
+function formatEmbeddingInput(modelId: string, text: string, kind: MemoryEmbeddingKind): string {
+  if (kind !== "query" || !isQwen3EmbeddingModel(modelId)) {
+    return text;
+  }
+  return `Instruct: ${QWEN3_MEMORY_QUERY_INSTRUCTION}\nQuery: ${text}`;
+}
+
 function toEmbeddingInput(
   provider: string,
   outcome: Extract<OpenAIEmbeddingOutcome, { ok: true }>,
@@ -95,7 +123,10 @@ function toEmbeddingInput(
 
 // A bound embedder: embeds an arbitrary string against a fixed model/provider, returning a
 // vault-ready input or null on any failure. Never throws.
-export type MemoryEmbedder = (text: string) => Promise<MemoryEmbeddingInput | null>;
+export type MemoryEmbedder = (
+  text: string,
+  kind?: MemoryEmbeddingKind,
+) => Promise<MemoryEmbeddingInput | null>;
 
 // Builds an embedder from a gateway config, or returns null when no embedding-capable model is
 // configured (or its provider is absent). The CLI backfill and the conversation paths both compose
@@ -110,7 +141,10 @@ export function createMemoryEmbedder(
     provider,
     adapter: buildAdapter(provider, requestImpl),
   }));
-  return async (text: string): Promise<MemoryEmbeddingInput | null> => {
+  return async (
+    text: string,
+    kind: MemoryEmbeddingKind = "document",
+  ): Promise<MemoryEmbeddingInput | null> => {
     if (text.length === 0) return null;
     for (const { provider, adapter } of candidates) {
       try {
@@ -118,10 +152,10 @@ export function createMemoryEmbedder(
           endpoint: provider.baseUrl,
           apiKey: provider.apiKey,
           modelId: provider.modelId,
-          input: text,
+          input: formatEmbeddingInput(provider.modelId, text, kind),
           ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
         });
-        if (outcome.ok) return toEmbeddingInput("openai", outcome);
+        if (outcome.ok) return toEmbeddingInput(memoryEmbeddingProviderIdentity(provider), outcome);
       } catch {
         // Model/transport boundary: a thrown adapter degrades to the next embedding provider.
       }
@@ -136,10 +170,11 @@ export function createMemoryEmbedder(
 export async function embedMemoryText(
   deps: UiHandlerDeps,
   text: string,
+  kind: MemoryEmbeddingKind = "document",
 ): Promise<MemoryEmbeddingInput | null> {
   const embedder = createMemoryEmbedder(currentGatewayConfig(deps), requestEmbeddingImpl(deps));
   if (embedder === null) return null;
-  return embedder(text);
+  return embedder(text, kind);
 }
 
 // Best-effort embed-on-capture. Embeds the memory body and upserts the vector. A null embedding
@@ -151,12 +186,39 @@ export async function embedAndStoreMemory(
   memoryId: MemoryId,
   text: string,
 ): Promise<void> {
-  const input = await embedMemoryText(deps, text);
+  const input = await embedMemoryText(deps, text, "document");
   if (input === null) return;
   try {
     vault.upsertEmbedding(memoryId, input);
   } catch {
     // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
+  }
+}
+
+export async function refreshMemoryEmbeddingAfterBodyEdit(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  memoryId: MemoryId,
+  text: string,
+): Promise<void> {
+  const input = await embedMemoryText(deps, text, "document");
+  if (input === null) {
+    try {
+      vault.deleteEmbedding(memoryId);
+    } catch {
+      // Missing memory / no existing row / storage rejection: the edit already succeeded, and the
+      // important invariant is that we never keep using a known stale vector when refresh fails.
+    }
+    return;
+  }
+  try {
+    vault.upsertEmbedding(memoryId, input);
+  } catch {
+    try {
+      vault.deleteEmbedding(memoryId);
+    } catch {
+      // Same best-effort invalidation boundary as above.
+    }
   }
 }
 
@@ -187,16 +249,78 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
 // to the in-scope stored vectors, and if it is NEAR-IDENTICAL to an existing memory, reinforce that
 // canonical memory instead of duplicating it.
 //
-// SAFETY: the threshold is deliberately HIGH (0.95) and the gate is applied ONLY to the low-stakes
+// SAFETY: the default threshold is deliberately HIGH and the gate is applied ONLY to the low-stakes
 // salience firehose — NOT to explicit user instructions. A pure cosine signal cannot tell a
 // paraphrase ("uses PostgreSQL") from a value-change ("region is eu-central-1" vs "us-east-1"), so a
-// lower threshold could merge a contradicting update. At 0.95 only near-verbatim restatements merge;
-// value-changes (differing entities/numbers) stay below it and are inserted normally, where
-// consolidation's conflict detection backstops them. Merging reinforces the canonical rather than
-// deleting, so even a false merge loses no stored fact. Graceful: with no embedder the candidate
-// embedding is null and the gate is inert (prior lexical-only behaviour, byte-for-byte).
+// lower threshold could merge a contradicting update. Model-specific cosine geometry can be
+// calibrated through KEIKO_MEMORY_EMBEDDING_CALIBRATION; without calibration only near-verbatim
+// restatements merge. Merging reinforces the canonical rather than deleting, so even a false merge
+// loses no stored fact. Graceful: with no embedder the candidate embedding is null and the gate is
+// inert (prior lexical-only behaviour, byte-for-byte).
 
 export const SEMANTIC_DEDUP_COSINE_THRESHOLD = 0.95;
+export const RELATED_LINK_COSINE_THRESHOLD = 0.82;
+
+export interface MemoryEmbeddingCalibration {
+  readonly semanticDedupThreshold?: number;
+  readonly relatedLinkThreshold?: number;
+  readonly mmrLambda?: number;
+}
+
+interface EmbeddingCalibrationIdentity {
+  readonly provider: string;
+  readonly modelId: string;
+  readonly modelRevision?: string;
+}
+
+function isUnit(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function parseCalibrationEntry(value: unknown): MemoryEmbeddingCalibration | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const out: {
+    semanticDedupThreshold?: number;
+    relatedLinkThreshold?: number;
+    mmrLambda?: number;
+  } = {};
+  if (isUnit(raw.semanticDedupThreshold)) out.semanticDedupThreshold = raw.semanticDedupThreshold;
+  if (isUnit(raw.relatedLinkThreshold)) out.relatedLinkThreshold = raw.relatedLinkThreshold;
+  if (isUnit(raw.mmrLambda)) out.mmrLambda = raw.mmrLambda;
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
+function calibrationKeys(identity: EmbeddingCalibrationIdentity): readonly string[] {
+  const revision = identity.modelRevision;
+  return [
+    ...(revision !== undefined ? [`${identity.provider}/${identity.modelId}@${revision}`] : []),
+    `${identity.provider}/${identity.modelId}`,
+    ...(revision !== undefined ? [`${identity.modelId}@${revision}`] : []),
+    identity.modelId,
+  ];
+}
+
+export function memoryEmbeddingCalibrationFor(
+  env: Readonly<Record<string, string | undefined>>,
+  identity: EmbeddingCalibrationIdentity,
+): MemoryEmbeddingCalibration {
+  const raw = env.KEIKO_MEMORY_EMBEDDING_CALIBRATION;
+  if (raw === undefined || raw.trim().length === 0) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+  const table = parsed as Record<string, unknown>;
+  for (const key of calibrationKeys(identity)) {
+    const entry = parseCalibrationEntry(table[key]);
+    if (entry !== undefined) return entry;
+  }
+  return {};
+}
 
 // Pure: the id of the nearest in-scope memory whose cosine to the candidate is at/above the
 // threshold, or null (no candidate embedding, no neighbours, or none similar enough). First-max wins
@@ -210,6 +334,7 @@ export function findSemanticDuplicate(
   let bestId: MemoryId | null = null;
   let bestSim = -1;
   for (const [id, row] of neighbors) {
+    if (!embeddingIdentitiesCompatible(candidate, row)) continue;
     const sim = cosineSimilarity(candidate.vector, row.vector);
     if (sim > bestSim) {
       bestSim = sim;
@@ -230,9 +355,8 @@ export function findSemanticDuplicate(
 // call, no non-determinism — a pure cosine band over vectors already in hand.
 
 // Lower bound of the related band. Above this two memory bodies are topically associated; below it
-// the link would be noise. Conservative starting point for text-embedding-3-large; tunable per the
-// opt-in flag before it is switched on by default.
-export const RELATED_LINK_COSINE_THRESHOLD = 0.82;
+// the link would be noise. Conservative default; model/provider-specific cosine bands can be
+// configured through KEIKO_MEMORY_EMBEDDING_CALIBRATION before auto-linking is enabled.
 
 // At most this many associations per capture, so the graph stays sparse and traversal stays cheap.
 export const MAX_AUTO_LINKS = 3;
@@ -251,6 +375,7 @@ export function findRelatedNeighbors(
   if (candidate === null) return [];
   const scored: { readonly id: MemoryId; readonly similarity: number }[] = [];
   for (const [id, row] of neighbors) {
+    if (!embeddingIdentitiesCompatible(candidate, row)) continue;
     const similarity = cosineSimilarity(candidate.vector, row.vector);
     if (similarity >= lower && similarity < upper) scored.push({ id, similarity });
   }
@@ -258,6 +383,33 @@ export function findRelatedNeighbors(
     a.similarity !== b.similarity ? b.similarity - a.similarity : a.id.localeCompare(b.id),
   );
   return scored.slice(0, maxLinks).map((n) => n.id);
+}
+
+function inputIdentity(input: MemoryEmbeddingInput): EmbeddingModelIdentity {
+  return {
+    provider: input.provider,
+    modelId: input.modelId,
+    ...(input.modelRevision !== undefined ? { modelRevision: input.modelRevision } : {}),
+    vectorDimensions: input.vector.length,
+    vectorMetric: input.metric,
+  };
+}
+
+function rowIdentity(row: MemoryEmbeddingRow): EmbeddingModelIdentity {
+  return {
+    provider: row.provider,
+    modelId: row.modelId,
+    ...(row.modelRevision !== undefined ? { modelRevision: row.modelRevision } : {}),
+    vectorDimensions: row.dimensions,
+    vectorMetric: row.metric,
+  };
+}
+
+function embeddingIdentitiesCompatible(
+  candidate: MemoryEmbeddingInput,
+  row: MemoryEmbeddingRow,
+): boolean {
+  return assertCompatibleEmbeddingIdentity(rowIdentity(row), inputIdentity(candidate)).ok;
 }
 
 // Opt-in (KEIKO_MEMORY_AUTO_LINK=1, default off => byte-identical: no edges, no behaviour change).
@@ -268,9 +420,15 @@ function autoLinkRelatedMemories(
   fromId: MemoryId,
   embedding: MemoryEmbeddingInput,
   neighbors: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
+  calibration: MemoryEmbeddingCalibration,
 ): void {
   if (deps.env.KEIKO_MEMORY_AUTO_LINK !== "1") return;
-  const relatedIds = findRelatedNeighbors(embedding, neighbors);
+  const relatedIds = findRelatedNeighbors(
+    embedding,
+    neighbors,
+    calibration.relatedLinkThreshold ?? RELATED_LINK_COSINE_THRESHOLD,
+    calibration.semanticDedupThreshold ?? SEMANTIC_DEDUP_COSINE_THRESHOLD,
+  );
   if (relatedIds.length === 0) return;
   const nowMs = Date.now();
   for (const toId of relatedIds) {
@@ -299,7 +457,7 @@ function gatherScopeEmbeddings(
   scope: MemoryScope,
 ): ReadonlyMap<MemoryId, MemoryEmbeddingRow> {
   const ids = vault
-    .listMemoriesByScope(scope)
+    .listMemoriesByScope(scope, { status: ["accepted"] })
     .slice(0, MAX_DEDUP_NEIGHBORS)
     .map((record) => record.id);
   return ids.length === 0 ? new Map() : vault.getEmbeddings(ids);
@@ -322,9 +480,15 @@ export async function insertSalienceMemoryWithNoveltyGate(
   vault: MemoryVaultStore,
   record: MemoryRecord,
 ): Promise<NoveltyInsertResult> {
-  const embedding = await embedMemoryText(deps, record.body);
+  const embedding = await embedMemoryText(deps, record.body, "document");
   const neighbors = gatherScopeEmbeddings(vault, record.scope);
-  const duplicateOf = findSemanticDuplicate(embedding, neighbors);
+  const calibration =
+    embedding === null ? {} : memoryEmbeddingCalibrationFor(deps.env, embedding);
+  const duplicateOf = findSemanticDuplicate(
+    embedding,
+    neighbors,
+    calibration.semanticDedupThreshold ?? SEMANTIC_DEDUP_COSINE_THRESHOLD,
+  );
   if (duplicateOf !== null) {
     vault.recordAccess([duplicateOf], Date.now());
     return { inserted: null, mergedInto: duplicateOf };
@@ -338,7 +502,7 @@ export async function insertSalienceMemoryWithNoveltyGate(
     }
     // A-MEM-style associative linking (#204, O-P4). Reuses the neighbour set already fetched for the
     // novelty gate — no extra IO. Opt-in (default off => no edges, byte-identical).
-    autoLinkRelatedMemories(deps, vault, inserted.id, embedding, neighbors);
+    autoLinkRelatedMemories(deps, vault, inserted.id, embedding, neighbors, calibration);
   }
   return { inserted, mergedInto: null };
 }

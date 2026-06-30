@@ -17,6 +17,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { randomUUID } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket as WsSocket } from "ws";
 import {
   DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
@@ -32,7 +33,11 @@ import {
   type RealtimeNegotiationRequest,
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
-import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
+import type { MemoryAuditEvent, MemoryId } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  CONVERSATION_MEMORY_BLOCK_HEADER,
+  CONVERSATION_SYSTEM_PROMPT,
+} from "./conversation-prompt.js";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   isVoiceReplayEligible,
@@ -58,8 +63,18 @@ import { isVoiceDisabledByPolicy, isVoiceRealtimeCapable } from "./read-handlers
 import {
   conversationMemoryScopes,
   resolveConversationMemoryContext,
+  type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
+import {
+  buildConversationRetrievalSignals,
+  conversationFusionMode,
+  semanticRetrievalGateForText,
+} from "./memory-retrieval-signals.js";
+import { reinforcementAccessIds } from "./memory-reinforcement.js";
+import { memoryCapturePolicyForDeps } from "./memory-capture-policy.js";
+import { recordMemoryAudit } from "./memory-audit-handler.js";
+import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 // The single loopback path the BFF WebSocket upgrade is re-opened for. Every other upgrade keeps the
 // hard 404 + socket.destroy() default (server.ts).
@@ -270,58 +285,124 @@ function shouldIncludeRealtimeMemory(
   );
 }
 
-function latestRealtimeMemoryQuery(deps: UiHandlerDeps, chatId: string, fallback: string): string {
-  return (
-    deps.store
-      .listMessages(chatId, MAX_REALTIME_CONTEXT_MESSAGES)
-      .filter((message) => message.role === "user")
-      .at(-1)?.content ?? fallback
-  );
+function latestRealtimeMemoryQuery(deps: UiHandlerDeps, chatId: string): string | undefined {
+  return deps.store
+    .listMessages(chatId, MAX_REALTIME_CONTEXT_MESSAGES)
+    .filter((message) => message.role === "user")
+    .at(-1)?.content;
 }
 
-function realtimeMemoryContext(
+interface RealtimeMemoryRuntime {
+  readonly memoryVault: MemoryVaultStore;
+  readonly runtime: ConversationMemoryRuntimeContext;
+  readonly queryText: string;
+  readonly budgetTokens?: number;
+}
+
+function resolveRealtimeMemoryRuntime(
   deps: UiHandlerDeps,
   chatContext: VoiceSessionChatContext | undefined,
-): string {
-  if (!shouldIncludeRealtimeMemory(deps, chatContext)) {
-    return "";
-  }
+): RealtimeMemoryRuntime | null {
+  if (!shouldIncludeRealtimeMemory(deps, chatContext)) return null;
   const memoryVault = deps.memoryVault;
-  if (memoryVault === undefined) {
-    return "";
-  }
+  if (memoryVault === undefined) return null;
   const chat = deps.store.findChatById(chatContext.chatId);
-  if (chat === undefined) {
-    return "";
-  }
+  if (chat === undefined) return null;
   const runtime = resolveConversationMemoryContext(deps, chat.projectPath, chat.id);
-  if (isRouteLikeResult(runtime)) {
-    return "";
-  }
-  const queryText = latestRealtimeMemoryQuery(deps, chat.id, chat.title);
+  if (isRouteLikeResult(runtime)) return null;
+  const queryText = latestRealtimeMemoryQuery(deps, chat.id);
+  if (queryText === undefined || queryText.trim().length === 0) return null;
+  return {
+    memoryVault,
+    runtime,
+    queryText,
+    ...(chatContext.memory.budgetTokens !== undefined
+      ? { budgetTokens: chatContext.memory.budgetTokens }
+      : {}),
+  };
+}
+
+function realtimeRetrievalAuditEvent(
+  scopes: readonly ReturnType<typeof conversationMemoryScopes>[number][],
+  accessedIds: readonly MemoryId[],
+): MemoryAuditEvent {
+  return {
+    schemaVersion: "1",
+    kind: "memory:retrieved",
+    eventId: randomUUID(),
+    occurredAt: Date.now(),
+    initiatorSurface: "system",
+    summary:
+      accessedIds.length === 1
+        ? "Retrieved 1 memory for a realtime voice session."
+        : `Retrieved ${String(accessedIds.length)} memories for a realtime voice session.`,
+    scopes,
+    matchedMemoryIds: accessedIds,
+  };
+}
+
+function recordRealtimeMemoryAccess(
+  deps: UiHandlerDeps,
+  memoryVault: MemoryVaultStore,
+  scopes: readonly ReturnType<typeof conversationMemoryScopes>[number][],
+  accessedIds: readonly MemoryId[],
+): void {
+  if (accessedIds.length === 0) return;
+  memoryVault.recordAccess(accessedIds, Date.now());
+  recordMemoryAudit({ evidenceStore: deps.evidenceStore }, realtimeRetrievalAuditEvent(scopes, accessedIds));
+}
+
+async function realtimeMemoryContext(
+  deps: UiHandlerDeps,
+  chatContext: VoiceSessionChatContext | undefined,
+): Promise<string> {
+  const runtime = resolveRealtimeMemoryRuntime(deps, chatContext);
+  if (runtime === null) return "";
   try {
+    const nowMs = Date.now();
+    const scopes = conversationMemoryScopes(runtime.runtime);
+    const semanticGate = semanticRetrievalGateForText(
+      deps,
+      runtime.queryText,
+      memoryCapturePolicyForDeps(deps),
+    );
+    const signals = await buildConversationRetrievalSignals(
+      deps,
+      runtime.memoryVault,
+      runtime.queryText,
+      scopes,
+      nowMs,
+      semanticGate,
+    );
     const retrieval = retrieveMemoryContext(
       {
-        scopes: conversationMemoryScopes(runtime),
-        queryText,
-        ...(chatContext.memory.budgetTokens !== undefined
-          ? { budgetTokens: chatContext.memory.budgetTokens }
-          : {}),
-        nowMs: Date.now(),
+        scopes,
+        queryText: runtime.queryText,
+        ...(runtime.budgetTokens !== undefined ? { budgetTokens: runtime.budgetTokens } : {}),
+        ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
+        ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
+        ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
+        ...(signals.mmrLambda !== undefined ? { mmrLambda: signals.mmrLambda } : {}),
+        fusion: conversationFusionMode(deps),
+        nowMs,
       },
-      vaultAsQueryPort(memoryVault),
+      vaultAsQueryPort(runtime.memoryVault),
     );
+    const accessedIds = reinforcementAccessIds(retrieval.included);
+    recordRealtimeMemoryAccess(deps, runtime.memoryVault, scopes, accessedIds);
     return trimContextText(retrieval.contextBlock.text);
   } catch {
     return "";
   }
 }
 
-function realtimeInstructions(
+export const _realtimeMemoryContextForTests = realtimeMemoryContext;
+
+async function realtimeInstructions(
   deps: UiHandlerDeps,
   chatContext: VoiceSessionChatContext | undefined,
   groundingToolEnabled: boolean,
-): string {
+): Promise<string> {
   const sections = [`${CONVERSATION_SYSTEM_PROMPT}${REALTIME_SPOKEN_ADDENDUM}`];
   if (chatContext?.grounding?.enabled === true && groundingToolEnabled) {
     sections.push(REALTIME_GROUNDED_VOICE_ADDENDUM);
@@ -331,13 +412,15 @@ function realtimeInstructions(
     if (recent.length > 0) {
       sections.push(`Current Keiko chat context:\n${recent}`);
     }
-    const memory = realtimeMemoryContext(deps, chatContext);
+    const memory = await realtimeMemoryContext(deps, chatContext);
     if (memory.length > 0) {
-      sections.push(`MemoriaViva context available for this voice session:\n${memory}`);
+      sections.push(`${CONVERSATION_MEMORY_BLOCK_HEADER}\n${memory}`);
     }
   }
   return sections.join("\n\n");
 }
+
+export const _realtimeInstructionsForTests = realtimeInstructions;
 
 function realtimeGroundingEnabled(chatContext: VoiceSessionChatContext | undefined): boolean {
   return chatContext?.grounding?.enabled === true;
@@ -883,7 +966,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
       const negotiate = deps.voiceRealtimeNegotiationRequest ?? requestRealtimeNegotiation;
       const groundingEnabled = realtimeGroundingEnabled(chatContext);
       const toolsSupported = realtimeProviderSupportsTools(config, provider);
-      const instructions = realtimeInstructions(
+      const instructions = await realtimeInstructions(
         deps,
         chatContext,
         groundingEnabled && toolsSupported,

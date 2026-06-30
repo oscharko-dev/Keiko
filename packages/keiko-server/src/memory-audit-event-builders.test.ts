@@ -104,6 +104,14 @@ describe("buildInsertedEvent", () => {
     );
   });
 
+  it("keeps raw memory ids out of audit summaries", () => {
+    const record = makeRecord({ id: brandedMemoryId("mem-raw-id") });
+    const proposed = buildInsertedEvent({ ...record, status: "proposed" }, makeContext());
+    const updated = buildUpdatedEvent(record, "accepted", false, makeContext());
+    expect(proposed?.summary).not.toContain("mem-raw-id");
+    expect(updated.summary).not.toContain("mem-raw-id");
+  });
+
   it("drops terminal-status inserts that are audited through the producing operation", () => {
     for (const status of [
       "rejected",

@@ -51,6 +51,19 @@ ON CONFLICT(memory_id) DO UPDATE SET
 `;
 
 const SELECT_SQL = "SELECT * FROM memory_embeddings WHERE memory_id = ?";
+const DELETE_SQL = "DELETE FROM memory_embeddings WHERE memory_id = ?";
+const EXISTING_DIMENSIONS_FOR_IDENTITY_SQL = `
+SELECT vector_dimensions
+FROM memory_embeddings
+WHERE provider = ?
+  AND model_id = ?
+  AND vector_metric = ?
+  AND (
+    (model_revision IS NULL AND ? IS NULL)
+    OR model_revision = ?
+  )
+LIMIT 1
+`;
 const BULK_SELECT_CHUNK_SIZE = 500;
 
 const BYTES_PER_FLOAT32 = 4;
@@ -76,6 +89,25 @@ function decodeVectorLE(bytes: Uint8Array, dimensions: number): Float32Array {
   return out;
 }
 
+function assertConsistentDimensionsForIdentity(
+  db: DatabaseSync,
+  embedding: MemoryEmbeddingInput,
+): void {
+  const revision = embedding.modelRevision ?? null;
+  const row = db
+    .prepare(EXISTING_DIMENSIONS_FOR_IDENTITY_SQL)
+    .get(embedding.provider, embedding.modelId, embedding.metric, revision, revision) as
+    | { vector_dimensions?: number }
+    | undefined;
+  if (row === undefined || row.vector_dimensions === embedding.vector.length) {
+    return;
+  }
+  throw new MemoryStorageError(
+    "schema-mismatch",
+    "Embedding dimensions differ from existing rows for the same model identity.",
+  );
+}
+
 export function upsertEmbeddingRow(
   db: DatabaseSync,
   memoryId: MemoryId,
@@ -83,6 +115,7 @@ export function upsertEmbeddingRow(
   nowMs: number,
   cipher: MemoryContentCipher,
 ): void {
+  assertConsistentDimensionsForIdentity(db, embedding);
   // The vector is memory CONTENT (ADR-0035), so the packed LE bytes are sealed before they touch
   // the BLOB column. vector_dimensions / vector_metric stay cleartext for retrieval-side dispatch.
   const bytes = cipher.sealBytes(encodeVectorLE(embedding.vector));
@@ -169,4 +202,9 @@ export function getEmbeddingRows(
     }
   }
   return out;
+}
+
+export function deleteEmbeddingRow(db: DatabaseSync, memoryId: MemoryId): boolean {
+  const result = db.prepare(DELETE_SQL).run(memoryId);
+  return result.changes > 0;
 }

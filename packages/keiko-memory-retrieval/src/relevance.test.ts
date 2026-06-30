@@ -12,6 +12,17 @@ describe("tokenize", () => {
     expect(tokenize("apple Apple apple")).toEqual(["apple"]);
   });
 
+  it("folds German umlauts, ß, and common function words", () => {
+    expect(tokenize("Was ist die Größe der Straße?")).toEqual(["grosse", "strasse"]);
+  });
+
+  it("normalizes simple German inflection suffixes deterministically", () => {
+    expect(tokenize("Datenbank-Konfigurationen und Konfiguration")).toEqual([
+      "datenbank",
+      "konfiguration",
+    ]);
+  });
+
   it("returns an empty array for empty input", () => {
     expect(tokenize("")).toEqual([]);
     expect(tokenize("   ,;.")).toEqual([]);
@@ -43,6 +54,13 @@ describe("lexicalRelevance", () => {
     const record = buildRecord({ body: "alpha beta gamma" });
     // query={alpha,delta}, record={alpha,beta,gamma}; intersection=1, union=4
     expect(lexicalRelevance("alpha delta", record)).toBeCloseTo(0.25);
+  });
+
+  it("matches German query and memory pairs despite umlauts and stopwords", () => {
+    const record = buildRecord({ body: "Die Datenbank-Konfiguration liegt in München." });
+    expect(lexicalRelevance("Was ist die Datenbank Konfiguration fuer Muenchen?", record)).toBeGreaterThan(
+      0,
+    );
   });
 
   it("includes tags in the record token set", () => {

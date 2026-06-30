@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { deleteMemory, forgetMemory } from "@/lib/memory-api";
+import { useI18n } from "@/lib/i18n";
 import { formatError } from "./format-error";
 
 const FOCUSABLE_SELECTOR =
@@ -32,6 +33,7 @@ export function ForgetConfirmDialog({
   forgetMemoryImpl = forgetMemory,
   deleteMemoryImpl = deleteMemory,
 }: ForgetConfirmDialogProps): ReactNode {
+  const { t } = useI18n();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -126,24 +128,14 @@ export function ForgetConfirmDialog({
         onKeyDown={handleKeyDown}
       >
         <h2 id="forget-dialog-title" className="mc-dialog-title">
-          {isDeleteMode ? "Delete this memory?" : "Forget this memory?"}
+          {isDeleteMode ? t("memoria.delete.title") : t("memoria.forget.title")}
         </h2>
 
         <p id="forget-dialog-desc" className="mc-dialog-body">
-          {isDeleteMode ? (
-            <>
-              This action is <strong>permanent</strong>. The memory will be removed and a tombstone
-              audit record will be created. You cannot undo this.
-            </>
-          ) : (
-            <>
-              This action is <strong>permanent</strong>. The memory will be removed and a tombstone
-              audit record will be created. You cannot undo this.
-            </>
-          )}
+          {isDeleteMode ? t("memoria.delete.body") : t("memoria.forget.body")}
         </p>
 
-        <blockquote className="mc-dialog-quote" aria-label="Memory content to be removed">
+        <blockquote className="mc-dialog-quote" aria-label={t("memoria.contentToRemove")}>
           {record.body.length > 120 ? `${record.body.slice(0, 120)}…` : record.body}
         </blockquote>
 
@@ -161,7 +153,7 @@ export function ForgetConfirmDialog({
             onClick={onClose}
             disabled={submitting}
           >
-            Cancel
+            {t("memoria.cancel")}
           </button>
           <button
             type="button"
@@ -174,11 +166,11 @@ export function ForgetConfirmDialog({
           >
             {submitting
               ? isDeleteMode
-                ? "Deleting…"
-                : "Forgetting…"
+                ? t("memoria.deleting")
+                : t("memoria.forgetting")
               : isDeleteMode
-                ? "Delete permanently"
-                : "Forget permanently"}
+                ? t("memoria.deleteRecord")
+                : t("memoria.forgetMemory")}
           </button>
         </div>
       </div>

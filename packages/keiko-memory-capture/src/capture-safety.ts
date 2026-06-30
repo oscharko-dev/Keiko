@@ -21,3 +21,14 @@ export function memoryTextEgressRejectionReason(
   const sensitivity = classifySensitivity(trimmed, policy.defaultSensitivity);
   return sensitivity === "public" ? null : "sensitive-memory-requires-approval";
 }
+
+export function memoryTextSecretEgressRejectionReason(
+  text: string,
+  policy: CapturePolicyOptions = {},
+): RejectionReason | null {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return scanForSecrets(trimmed, policy.customerIdentifierMatchers ?? []);
+}

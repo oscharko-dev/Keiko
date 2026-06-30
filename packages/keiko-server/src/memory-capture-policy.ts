@@ -8,6 +8,8 @@ import { currentRedactionSecrets } from "./deps.js";
 
 export const SENSITIVE_MEMORY_REJECTION_REASON: RejectionReason =
   "sensitive-memory-requires-approval";
+export const FORGOTTEN_MEMORY_SUPPRESSION_REASON: RejectionReason = "suppressed-by-forget";
+export const SENSITIVE_MEMORY_ACTION_BODY = "Sensitive memory pending review.";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -50,11 +52,7 @@ export function memoryCapturePolicyForDeps(
 export function isPersistableMemoryCandidate(
   outcome: CaptureOutcome,
 ): outcome is Extract<CaptureOutcome, { readonly kind: "candidate" }> {
-  return (
-    outcome.kind === "candidate" &&
-    !outcome.requiresApproval &&
-    outcome.proposal.provenance.sensitivity === "public"
-  );
+  return outcome.kind === "candidate" && outcome.proposal.provenance.sensitivity !== "restricted";
 }
 
 export function enforcePersistableMemoryOutcome(outcome: CaptureOutcome): CaptureOutcome {

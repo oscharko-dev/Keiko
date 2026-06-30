@@ -273,7 +273,7 @@ describe("createWorkflowMemoryPort", () => {
     vault.close();
   });
 
-  it("does not persist confidential workflow candidates before explicit approval", () => {
+  it("persists confidential workflow candidates as proposed review records", () => {
     const { dir, vault } = createVault();
     cleanup.push(dir);
     const evidenceStore = createEvidenceStore();
@@ -294,12 +294,17 @@ describe("createWorkflowMemoryPort", () => {
       source: "workflow-correction",
     });
 
-    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    const proposed = vault
+      .listMemories({ includeExpired: true })
+      .find((record) => record.status === "proposed");
+    expect(proposed).toBeDefined();
+    expect(proposed?.body).toBe("the private support email is developer@example.com");
+    expect(proposed?.provenance.sensitivity).toBe("confidential");
     const events = readAuditEvents(evidenceStore, 1_710_000_000_000);
     expect(events[0]).toMatchObject({
       kind: "memory:workflow-write-candidate",
       workflowRunId: "wr-4",
-      proposedMemoryIds: [],
+      proposedMemoryIds: [proposed?.id],
     });
     expect(JSON.stringify(events)).not.toContain("developer@example.com");
     vault.close();

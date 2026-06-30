@@ -10,10 +10,12 @@ import type {
   MemoryReviewerId,
   ProjectId,
   UserId,
+  WorkflowDefinitionId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import {
   createMemoryVault,
+  memoryBodySuppressionHash,
   MemoryStorageError,
   MemoryStorageValidationError,
   type MemoryEvent,
@@ -386,6 +388,7 @@ describe("deterministic now/newTombstoneId", () => {
         type: "preference",
         forgottenAt: 1_700_000_001_000,
         forgetterSurface: "test",
+        bodyHash: memoryBodySuppressionHash("prefers dark mode"),
         reviewerId: "reviewer-1",
         originalStatus: "accepted",
       },
@@ -444,6 +447,98 @@ describe("list filters", () => {
         .map((m) => m.id)
         .sort(),
     ).toEqual(["m2", "m3"]);
+    v.close();
+  });
+
+  it("lists scope metadata with the same filters without returning memory content", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(
+      makeMemory({
+        id: "m1" as MemoryId,
+        type: "semantic-fact",
+        body: "sensitive remembered body",
+        tags: ["private-tag"],
+        pinned: true,
+      }),
+    );
+    v.insertMemory(
+      makeMemory({
+        id: "m2" as MemoryId,
+        type: "semantic-fact",
+        status: "archived",
+        body: "archived body",
+      }),
+    );
+    const userScope = { kind: "user" as const, userId: "u-1" as UserId };
+    const metadata = v.listMemoryMetadataByScope(userScope, {
+      type: ["semantic-fact"],
+      status: ["accepted"],
+    });
+    expect(metadata).toEqual([
+      {
+        id: "m1",
+        schemaVersion: "1",
+        scope: userScope,
+        type: "semantic-fact",
+        status: "accepted",
+        sensitivity: "confidential",
+        pinned: true,
+        confidence: 0.9,
+        validity: { validFrom: 1_700_000_000_000 },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      },
+    ]);
+    expect(JSON.stringify(metadata)).not.toContain("sensitive remembered body");
+    expect(JSON.stringify(metadata)).not.toContain("private-tag");
+    v.close();
+  });
+
+  it("lists metadata for every supported scope kind", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    const userScope = { kind: "user" as const, userId: "u-1" as UserId };
+    const workspaceScope = {
+      kind: "workspace" as const,
+      workspaceId: "w-1" as WorkspaceId,
+    };
+    const projectScope = { kind: "project" as const, projectId: "p-1" as ProjectId };
+    const workflowScope = {
+      kind: "workflow" as const,
+      workflowDefinitionId: "wf-1" as WorkflowDefinitionId,
+    };
+    const globalScope = { kind: "global" as const };
+    v.insertMemory(makeMemory({ id: "m-user" as MemoryId, scope: userScope }));
+    v.insertMemory(makeMemory({ id: "m-workspace" as MemoryId, scope: workspaceScope }));
+    v.insertMemory(makeMemory({ id: "m-project" as MemoryId, scope: projectScope }));
+    v.insertMemory(makeMemory({ id: "m-workflow" as MemoryId, scope: workflowScope }));
+    v.insertMemory(makeMemory({ id: "m-global" as MemoryId, scope: globalScope }));
+
+    expect(v.listMemoryMetadataByScope(userScope)[0]?.scope).toEqual(userScope);
+    expect(v.listMemoryMetadataByScope(workspaceScope)[0]?.scope).toEqual(workspaceScope);
+    expect(v.listMemoryMetadataByScope(projectScope)[0]?.scope).toEqual(projectScope);
+    expect(v.listMemoryMetadataByScope(workflowScope)[0]?.scope).toEqual(workflowScope);
+    expect(v.listMemoryMetadataByScope(globalScope)[0]?.scope).toEqual(globalScope);
+    v.close();
+  });
+
+  it("supports root listing order, limit, and offset options", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId, createdAt: 100, updatedAt: 100 }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId, createdAt: 200, updatedAt: 200 }));
+    v.insertMemory(makeMemory({ id: "m3" as MemoryId, createdAt: 300, updatedAt: 300 }));
+
+    expect(
+      v.listMemories({
+        includeExpired: true,
+        limit: 1,
+        offset: 1,
+        orderBy: "updatedAt",
+        orderDir: "asc",
+      }).map((memory) => memory.id),
+    ).toEqual(["m2"]);
     v.close();
   });
 });

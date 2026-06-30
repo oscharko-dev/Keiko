@@ -30,6 +30,12 @@ describe("openMemoryDatabase", () => {
     expect(journal.journal_mode).toBe("wal");
     const fk = db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number };
     expect(fk.foreign_keys).toBe(1);
+    const busy = db.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
+      timeout: number;
+    }[];
+    expect(busy[0]?.timeout).toBe(5000);
+    const synchronous = db.prepare("PRAGMA synchronous").get() as { synchronous: number };
+    expect(synchronous.synchronous).toBe(1);
     const v = db.prepare("PRAGMA user_version").get() as { user_version: number };
     expect(v.user_version).toBe(MEMORY_VAULT_SCHEMA_VERSION);
     db.close();

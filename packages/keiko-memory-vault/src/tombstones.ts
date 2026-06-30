@@ -25,6 +25,7 @@ interface TombstoneRow {
   readonly type: string;
   readonly forgotten_at: number;
   readonly forgetter_surface: string;
+  readonly body_hash: string | null;
   readonly reviewer_id: string | null;
   readonly original_status: string | null;
   readonly reason: string | null;
@@ -33,8 +34,8 @@ interface TombstoneRow {
 const INSERT_SQL = `
 INSERT INTO memory_tombstones (
   id, memory_id, scope_kind, scope_coordinate, type, forgotten_at,
-  forgetter_surface, reviewer_id, original_status, reason
-) VALUES (?,?,?,?,?,?,?,?,?,?)
+  forgetter_surface, body_hash, reviewer_id, original_status, reason
+) VALUES (?,?,?,?,?,?,?,?,?,?,?)
 `;
 
 const LIST_BY_SCOPE_SQL = `
@@ -61,6 +62,7 @@ function rowToTombstone(row: TombstoneRow, cipher: MemoryContentCipher): MemoryT
   };
   return {
     ...base,
+    ...(row.body_hash === null ? {} : { bodyHash: row.body_hash }),
     ...(row.reviewer_id === null ? {} : { reviewerId: row.reviewer_id as MemoryReviewerId }),
     ...(row.original_status === null
       ? {}
@@ -83,6 +85,7 @@ export function insertTombstoneRow(
     tombstone.type,
     tombstone.forgottenAt,
     tombstone.forgetterSurface,
+    tombstone.bodyHash ?? null,
     tombstone.reviewerId ?? null,
     tombstone.originalStatus ?? null,
     reason,

@@ -120,7 +120,7 @@ describe("rankMemories — basic ordering", () => {
     const [first] = rankMemories([r], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
     expect(first?.score).toBeGreaterThanOrEqual(0);
     expect(first?.score).toBeLessThanOrEqual(1);
-    expect(first?.score).toBeCloseTo((0.2 + 0.16 + 0.3) / 1.15);
+    expect(first?.score).toBeCloseTo((0.12 + 0.096 + 0.3 + 0.1) / 1.09);
   });
 });
 
@@ -217,10 +217,10 @@ describe("rankMemories — semantic similarity signal (#204)", () => {
 
   it("zeroes the semantic weight (not just the subscore) when scores are absent", () => {
     // Proves the byte-identity comes from weight-zeroing: a record's score with no semanticById
-    // must equal the score computed with the documented 1.15 lexical denominator, NOT 1.40.
+    // must equal the score computed without the semantic denominator.
     const r = buildRecord({ id: "x", pinned: true, updatedAt: now });
     const [first] = rankMemories([r], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
-    expect(first?.score).toBeCloseTo((0.2 + 0.16 + 0.3) / 1.15);
+    expect(first?.score).toBeCloseTo((0.12 + 0.096 + 0.3 + 0.1) / 1.09);
   });
 });
 
@@ -229,9 +229,10 @@ describe("rankMemories — reinforcement strength subscore (#204 plasticity)", (
     const r = buildRecord({ id: "x", pinned: true, updatedAt: now });
     const [first] = rankMemories([r], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
     expect(first?.subscores.strength).toBe(0);
-    // The strength weight is zeroed alongside semantic, so the denominator stays the documented 1.15
+    // The strength weight is zeroed alongside semantic, so the denominator stays the documented
+    // non-semantic/non-strength default.
     // — supplying no strengthById must not perturb any legacy score.
-    expect(first?.score).toBeCloseTo((0.2 + 0.16 + 0.3) / 1.15);
+    expect(first?.score).toBeCloseTo((0.12 + 0.096 + 0.3 + 0.1) / 1.09);
   });
 
   it("ranks a reused memory above an otherwise-identical never-accessed one", () => {
@@ -280,16 +281,15 @@ describe("sourceImportance (#204, O-F5)", () => {
 });
 
 describe("rankMemories — source-authority importance subscore (#204, O-F5)", () => {
-  it("computes importance from provenance but defaults its weight to 0 (byte-identical)", () => {
+  it("computes importance from provenance and contributes by default", () => {
     const r = buildRecord({ id: "x", pinned: true, updatedAt: now });
     const [first] = rankMemories([r], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
     expect(first?.subscores.importance).toBe(1);
-    // importance weight is 0 by default, so it leaves the documented 1.15 lexical denominator intact.
-    expect(first?.score).toBeCloseTo((0.2 + 0.16 + 0.3) / 1.15);
+    expect(first?.score).toBeCloseTo((0.12 + 0.096 + 0.3 + 0.1) / 1.09);
   });
 
-  it("ranks a more-authoritative source above a passive one when importance is opted in", () => {
-    // ids chosen so the default id-tiebreak would put the LESS authoritative record first.
+  it("ranks a more-authoritative source above a passive one by default", () => {
+    // ids chosen so a zero-importance control would put the LESS authoritative record first.
     const explicit = buildRecord({
       id: "zzz-explicit",
       sourceKind: "explicit-user-instruction",
@@ -302,15 +302,15 @@ describe("rankMemories — source-authority importance subscore (#204, O-F5)", (
     });
     const ranked = rankMemories([inferred, explicit], {
       nowMs: now,
-      weights: { ...DEFAULT_RANKING_WEIGHTS, importance: 0.5 },
+      weights: DEFAULT_RANKING_WEIGHTS,
     });
     expect(ranked[0]?.memoryId).toBe(memoryId("zzz-explicit"));
     expect(ranked[0]?.subscores.importance).toBe(1);
-    // CONTROL: at the default importance weight 0 the two tie and fall back to the id order,
-    // surfacing the inferred record first — proving the re-order above is the importance signal.
+    // CONTROL: at importance weight 0 the two tie and fall back to the id order, surfacing the
+    // inferred record first — proving the re-order above is the importance signal.
     const control = rankMemories([inferred, explicit], {
       nowMs: now,
-      weights: DEFAULT_RANKING_WEIGHTS,
+      weights: { ...DEFAULT_RANKING_WEIGHTS, importance: 0 },
     });
     expect(control[0]?.memoryId).toBe(memoryId("aaa-inferred"));
   });

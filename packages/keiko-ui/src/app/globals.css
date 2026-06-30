@@ -14776,6 +14776,12 @@ html[data-keiko-gateway-setup-open="true"] {
   align-items: start;
   gap: 6px 10px;
 }
+.memoria-window .mc-filter-search {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 10px;
+}
 .memoria-window .mc-filter-label {
   min-width: 0;
   padding-top: 5px;
@@ -14784,6 +14790,16 @@ html[data-keiko-gateway-setup-open="true"] {
 }
 .memoria-window .mc-filter-chips {
   gap: 5px;
+}
+.memoria-window .mc-filter-search input {
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--surface-primary) 88%, transparent);
+  color: var(--text-primary);
+  font: inherit;
 }
 .memoria-window .mc-chip {
   height: 23px;
@@ -15792,6 +15808,13 @@ html[data-keiko-gateway-setup-open="true"] {
   flex-wrap: wrap;
 }
 
+.mc-filter-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 /* --fg-muted: --fg-faint was 2.7:1 on --bg, WCAG 1.4.3 fail (uiux-fix F005) */
 .mc-filter-label {
   font-size: 11px;
@@ -15807,6 +15830,17 @@ html[data-keiko-gateway-setup-open="true"] {
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
+}
+
+.mc-filter-search input {
+  min-width: min(280px, 100%);
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  font: inherit;
 }
 
 /* Filter toggle chip — aria-pressed reflects state */

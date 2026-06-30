@@ -9,6 +9,7 @@ import {
   startMemoryConsolidation,
   type MemoryConsolidationJobEnvelope,
   type MemoryConsolidationJob,
+  type MemoryConsolidationResult,
   type MemoryConsolidationReviewItem,
   type MemoryConsolidationStaleFlag,
   type StartMemoryConsolidationInput,
@@ -132,6 +133,43 @@ function StaleFlagEntry({
     <>
       <MemoryIdLink id={flag.memoryId} onOpenDetail={onOpenDetail} /> — {flag.reason}
     </>
+  );
+}
+
+function SummaryStatusNotice({
+  result,
+}: {
+  readonly result: MemoryConsolidationResult;
+}): ReactNode {
+  if (result.summaryStatus.kind === "not-configured") {
+    if (result.summaryStatus.updatesProposed > 0) {
+      return (
+        <p style={{ margin: 0, color: "var(--fg-muted)" }}>
+          Model-assisted summaries were not configured; deterministic union fallback proposed{" "}
+          {plural(result.summaryStatus.updatesProposed, "body update")} for review.
+        </p>
+      );
+    }
+    return (
+      <p style={{ margin: 0, color: "var(--fg-muted)" }}>
+        Model-assisted summaries were not configured for this run; no body updates were proposed.
+      </p>
+    );
+  }
+  if (result.summaryStatus.updatesProposed === 0) {
+    return (
+      <p style={{ margin: 0, color: "var(--fg-muted)" }}>
+        Model-assisted summaries were configured; no merge clusters needed body updates.
+      </p>
+    );
+  }
+  return (
+    <p style={{ margin: 0, color: "var(--fg-muted)" }}>
+      Model-assisted summaries proposed {plural(result.summaryStatus.updatesProposed, "body update")}
+      {result.summaryStatus.fallbacksUsed > 0
+        ? `; ${plural(result.summaryStatus.fallbacksUsed, "fallback")} preserved source text.`
+        : "."}
+    </p>
   );
 }
 
@@ -259,6 +297,7 @@ export function MemoryConsolidation({
       reviewCount: result?.reviewItems.length ?? 0,
       staleCount: result?.staleFlags.length ?? 0,
       edgeCount: result?.edgesProposed.length ?? 0,
+      updateCount: result?.updatesProposed.length ?? 0,
     };
   }, [activeJob]);
 
@@ -590,7 +629,13 @@ export function MemoryConsolidation({
                   <span className="mc-badge mc-badge-default">
                     {plural(summary.edgeCount, "proposed edge")}
                   </span>
+                  <span className="mc-badge mc-badge-default">
+                    {plural(summary.updateCount, "proposed body update")}
+                  </span>
                 </div>
+              ) : null}
+              {activeJob.result !== undefined ? (
+                <SummaryStatusNotice result={activeJob.result} />
               ) : null}
             </>
           )}

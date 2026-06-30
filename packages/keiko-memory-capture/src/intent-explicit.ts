@@ -20,16 +20,18 @@ import type { CaptureContext, CaptureOutcome, CapturePolicyOptions } from "./typ
 // All patterns are anchored and use a single open or bounded quantifier. The phrase trailing
 // the imperative is captured greedily ON A SINGLE LINE (no `s` flag) so embedded newlines
 // terminate the match — this prevents a multi-line paste from being absorbed into one body.
-const REMEMBER_RE = /^\s*remember(?:\s+that)?\s+(.+?)\s*$/i;
+const REMEMBER_RE =
+  /^\s*(?:remember(?:\s+that)?|(?:merk|merke)\s+dir(?:\s+bitte)?(?:,?\s+dass)?|speicher(?:e)?(?:\s+bitte)?(?:,?\s+dass)?|notier(?:e)?(?:\s+bitte)?(?:,?\s+dass)?)\s+(.+?)\s*$/iu;
 const REMEMBER_ABOUT_RE =
-  /^\s*remember\s+about\s+(?:this\s+(?:project|workspace)[:,\s]+)?(.+?)\s*$/i;
-const FORGET_RE = /^\s*forget(?:\s+about)?\s+(.+?)\s*$/i;
+  /^\s*(?:remember\s+about|merk(?:e)?\s+dir\s+(?:zu|über|ueber)|speicher(?:e)?\s+(?:zu|über|ueber))\s+(?:this\s+(?:project|workspace)[:,\s]+)?(.+?)\s*$/iu;
+const FORGET_RE =
+  /^\s*(?:forget(?:\s+about)?|vergiss(?:\s+bitte)?(?:\s+(?:alles\s+)?(?:über|ueber|zu|an))?|lösche(?:\s+bitte)?(?:\s+die\s+erinnerung\s+(?:an|zu|über|ueber))?)\s+(.+?)\s*$/iu;
 const UPDATE_RE =
-  /^\s*update\s+(?:memory|the\s+memory)\s+about\s+(.+?)\s+(?:to\s+be|with|:)\s+(.+?)\s*$/i;
-const ACTUALLY_RE = /^\s*actually,?\s+(.+?)\s*$/i;
-const CORRECTION_LABEL_RE = /^\s*correction:\s*(.+?)\s*$/i;
+  /^\s*(?:update\s+(?:memory|the\s+memory)\s+about|aktualisiere(?:\s+bitte)?\s+(?:die\s+)?(?:erinnerung|speicher(?:eintrag)?)\s+(?:zu|zum|zur|über|ueber))\s+(.+?)\s+(?:to\s+be|with|auf|mit|zu|:)\s+(.+?)\s*$/iu;
+const ACTUALLY_RE = /^\s*(?:actually|eigentlich),?\s+(.+?)\s*$/iu;
+const CORRECTION_LABEL_RE = /^\s*(?:correction|korrektur):\s*(.+?)\s*$/iu;
 const THATS_WRONG_RE =
-  /^\s*that(?:'s|\s+is)\s+wrong[,.]?\s+(.+?)\s+(?:is|are|should\s+be)\s+(.+?)\s*$/i;
+  /^\s*(?:that(?:'s|\s+is)\s+wrong|das\s+stimmt\s+nicht|falsch)[,.]?\s+(.+?)\s+(is|are|should\s+be|ist|sind|sollte\s+sein)\s+(.+?)\s*$/iu;
 
 // Helper: secret scan + reject the body if it fires. Length enforcement happens in capture.ts
 // preflight before the explicit extractors run.
@@ -218,8 +220,12 @@ function extractCorrectionBody(text: string): string | null {
     return labelMatch[1];
   }
   const wrongMatch = THATS_WRONG_RE.exec(text);
-  if (wrongMatch?.[1] !== undefined && wrongMatch[2] !== undefined) {
-    return `${wrongMatch[1]} is ${wrongMatch[2]}`;
+  if (
+    wrongMatch?.[1] !== undefined &&
+    wrongMatch[2] !== undefined &&
+    wrongMatch[3] !== undefined
+  ) {
+    return `${wrongMatch[1]} ${wrongMatch[2]} ${wrongMatch[3]}`;
   }
   return null;
 }

@@ -235,7 +235,7 @@ export function MemoryActions({
             setNotice(null);
             setShowForget(true);
           }}
-          aria-label="Forget this memory permanently"
+          aria-label="Forget this memory"
         >
           Forget
         </button>

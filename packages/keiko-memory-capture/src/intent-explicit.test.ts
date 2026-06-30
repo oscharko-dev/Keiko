@@ -94,6 +94,27 @@ describe("tryExtractRemember", () => {
     const outcome = tryExtractRemember("remember that X", ctx(), { scopeKind: "workspace" });
     expect(outcome).toEqual({ kind: "rejected", reason: "scope-not-resolvable" });
   });
+
+  it("extracts German explicit remember intents without translating the body", () => {
+    const outcome = tryExtractRemember("Merk dir bitte, dass ich Dark Mode bevorzuge", ctx());
+    expect(outcome?.kind).toBe("candidate");
+    if (outcome?.kind !== "candidate") return;
+    expect(outcome.proposal.body).toBe("ich Dark Mode bevorzuge");
+    expect(outcome.proposal.provenance.sourceKind).toBe("explicit-user-instruction");
+  });
+
+  it("extracts German speichern/notieren remember variants", () => {
+    const saved = tryExtractRemember("Speichere bitte, dass das Projekt Vitest nutzt", ctx());
+    const noted = tryExtractRemember("Notiere dass Deployments dienstags stattfinden", ctx());
+    expect(saved?.kind).toBe("candidate");
+    expect(noted?.kind).toBe("candidate");
+    if (saved?.kind === "candidate") {
+      expect(saved.proposal.body).toBe("das Projekt Vitest nutzt");
+    }
+    if (noted?.kind === "candidate") {
+      expect(noted.proposal.body).toBe("Deployments dienstags stattfinden");
+    }
+  });
 });
 
 describe("tryExtractForget", () => {
@@ -126,6 +147,16 @@ describe("tryExtractForget", () => {
 
   it("returns null for non-forget text (mutation witness on regex)", () => {
     expect(tryExtractForget("remember about X", ctx(), { resolver: () => [] })).toBeNull();
+  });
+
+  it("extracts German forget intents", () => {
+    const outcome = tryExtractForget("Vergiss bitte die Dark-Mode-Präferenz", ctx(), {
+      resolver: (target) => (target.includes("Dark-Mode") ? ["m-9" as MemoryId] : []),
+    });
+    expect(outcome?.kind).toBe("forget");
+    if (outcome?.kind !== "forget") return;
+    expect(outcome.operation.memoryId).toBe("m-9");
+    expect(outcome.requiresConfirmation).toBe(true);
   });
 });
 
@@ -161,6 +192,18 @@ describe("tryExtractUpdate", () => {
 
   it("returns null for non-update text", () => {
     expect(tryExtractUpdate("remember that X", ctx(), { resolver: () => [] })).toBeNull();
+  });
+
+  it("extracts German update intents", () => {
+    const outcome = tryExtractUpdate(
+      "Aktualisiere die Erinnerung zum Test Runner auf vitest",
+      ctx(),
+      { resolver: () => ["m-4" as MemoryId] },
+    );
+    expect(outcome?.kind).toBe("update");
+    if (outcome?.kind !== "update") return;
+    expect(outcome.operation.memoryId).toBe("m-4");
+    expect(outcome.operation.bodyPatch).toBe("vitest");
   });
 });
 
@@ -210,5 +253,19 @@ describe("tryExtractCorrection", () => {
       kind: "rejected",
       reason: "raw-log-content",
     });
+  });
+
+  it("extracts German correction labels and wrong-shapes", () => {
+    const labeled = tryExtractCorrection("Korrektur: der Runner ist vitest", ctx());
+    expect(labeled?.kind).toBe("candidate");
+    if (labeled?.kind === "candidate") {
+      expect(labeled.proposal.body).toBe("der Runner ist vitest");
+    }
+
+    const wrong = tryExtractCorrection("Das stimmt nicht, der Runner ist vitest", ctx());
+    expect(wrong?.kind).toBe("candidate");
+    if (wrong?.kind === "candidate") {
+      expect(wrong.proposal.body).toBe("der Runner ist vitest");
+    }
   });
 });

@@ -133,15 +133,166 @@ describe("runConsolidation - multi-way duplicate (3+ members)", () => {
         .proposedEdges?.map((edge) => edge.kind)
         .sort(),
     ).toEqual(["derived-from", "derived-from", "related", "related", "supersedes", "supersedes"]);
+    expect(result.updatesProposed).toHaveLength(1);
+    expect(must(result.updatesProposed[0])).toMatchObject({
+      memoryId: "m-c",
+      bodyPatch: "x",
+    });
+    expect(result.summaryStatus).toMatchObject({
+      kind: "not-configured",
+      updatesProposed: 1,
+      fallbacksUsed: 1,
+      skippedMergeClusters: 0,
+    });
+  });
+
+  it("uses deterministic union body updates when no summaryGenerator is configured", () => {
+    const a = makeRecord({ id: "m-a", body: "use tabs", createdAt: 100 });
+    const b = makeRecord({ id: "m-b", body: "prefer compact diffs", createdAt: 200 });
+    const c = makeRecord({ id: "m-c", body: "keep PR titles short", createdAt: 300 });
+    const result = runConsolidation([a, b, c], baseOptions({ jaccardThreshold: 0 }));
+    expect(result.updatesProposed).toHaveLength(1);
+    const update = must(result.updatesProposed[0]);
+    expect(update.bodyPatch).toBe(
+      "- use tabs\n- prefer compact diffs\n- keep PR titles short",
+    );
+    expect(update.reviewerNote).toContain("Deterministic union fallback");
+    expect(result.summaryStatus).toMatchObject({
+      kind: "not-configured",
+      updatesProposed: 1,
+      fallbacksUsed: 1,
+    });
+  });
+
+  it("proposes a source-preserving body update when summaryGenerator is configured", () => {
+    const a = makeRecord({ id: "m-a", body: "use tabs", createdAt: 100 });
+    const b = makeRecord({ id: "m-b", body: "prefer compact diffs", createdAt: 200 });
+    const c = makeRecord({ id: "m-c", body: "keep PR titles short", createdAt: 300 });
+    const result = runConsolidation(
+      [a, b, c],
+      baseOptions({
+        jaccardThreshold: 0,
+        summaryGenerator: ({ sourceBodies }) => sourceBodies.join("; "),
+      }),
+    );
+    expect(result.reviewItems).toHaveLength(1);
+    expect(must(result.reviewItems[0]).sourceMemoryIds).toEqual(["m-a", "m-b", "m-c"]);
+    expect(result.updatesProposed).toHaveLength(1);
+    expect(must(result.updatesProposed[0])).toMatchObject({
+      memoryId: "m-c",
+      bodyPatch: "use tabs; prefer compact diffs; keep PR titles short",
+    });
+    expect(must(result.updatesProposed[0]).reviewerNote).toContain("m-a, m-b, m-c");
+    expect(result.summaryStatus).toMatchObject({
+      kind: "configured",
+      updatesProposed: 1,
+      fallbacksUsed: 0,
+    });
+  });
+
+  it("preserves reviewer notes returned by an object summary", () => {
+    const a = makeRecord({ id: "m-a", body: "use tabs", createdAt: 100 });
+    const b = makeRecord({ id: "m-b", body: "prefer compact diffs", createdAt: 200 });
+    const c = makeRecord({ id: "m-c", body: "keep PR titles short", createdAt: 300 });
+    const result = runConsolidation(
+      [a, b, c],
+      baseOptions({
+        jaccardThreshold: 0,
+        summaryGenerator: ({ sourceBodies }) => ({
+          body: sourceBodies.join("; "),
+          reviewerNote: "model preserved all source claims",
+        }),
+      }),
+    );
+    const update = must(result.updatesProposed[0]);
+    expect(update.bodyPatch).toBe("use tabs; prefer compact diffs; keep PR titles short");
+    expect(update.reviewerNote).toContain("model preserved all source claims");
+    expect(result.summaryStatus.fallbacksUsed).toBe(0);
+  });
+
+  it("falls back to deterministic union text when a generated summary drops source content", () => {
+    const a = makeRecord({ id: "m-a", body: "use tabs", createdAt: 100 });
+    const b = makeRecord({ id: "m-b", body: "prefer compact diffs", createdAt: 200 });
+    const c = makeRecord({ id: "m-c", body: "keep PR titles short", createdAt: 300 });
+    const result = runConsolidation(
+      [a, b, c],
+      baseOptions({
+        jaccardThreshold: 0,
+        summaryGenerator: () => "use tabs",
+      }),
+    );
+    const update = must(result.updatesProposed[0]);
+    expect(update.bodyPatch).toContain("prefer compact diffs");
+    expect(update.bodyPatch).toContain("keep PR titles short");
+    expect(update.reviewerNote).toContain("Deterministic union fallback");
+    expect(result.summaryStatus.fallbacksUsed).toBe(1);
+  });
+
+  it("falls back when the summaryGenerator returns null", () => {
+    const a = makeRecord({ id: "m-a", body: "use tabs", createdAt: 100 });
+    const b = makeRecord({ id: "m-b", body: "prefer compact diffs", createdAt: 200 });
+    const c = makeRecord({ id: "m-c", body: "keep PR titles short", createdAt: 300 });
+    const result = runConsolidation(
+      [a, b, c],
+      baseOptions({
+        jaccardThreshold: 0,
+        summaryGenerator: () => null,
+      }),
+    );
+    const update = must(result.updatesProposed[0]);
+    expect(update.bodyPatch).toContain("prefer compact diffs");
+    expect(update.reviewerNote).toContain("Deterministic union fallback");
+    expect(result.summaryStatus.fallbacksUsed).toBe(1);
+  });
+
+  it("falls back when the summaryGenerator throws", () => {
+    const a = makeRecord({ id: "m-a", body: "use tabs", createdAt: 100 });
+    const b = makeRecord({ id: "m-b", body: "prefer compact diffs", createdAt: 200 });
+    const c = makeRecord({ id: "m-c", body: "keep PR titles short", createdAt: 300 });
+    const result = runConsolidation(
+      [a, b, c],
+      baseOptions({
+        jaccardThreshold: 0,
+        summaryGenerator: () => {
+          throw new Error("summary unavailable");
+        },
+      }),
+    );
+    const update = must(result.updatesProposed[0]);
+    expect(update.bodyPatch).toContain("keep PR titles short");
+    expect(update.reviewerNote).toContain("Deterministic union fallback");
+    expect(result.summaryStatus.fallbacksUsed).toBe(1);
   });
 });
 
-describe("runConsolidation - updatesProposed reserved for v1", () => {
-  it("never emits MemoryUpdate envelopes in v1 (port-only design)", () => {
+describe("runConsolidation - updatesProposed without merge summary", () => {
+  it("does not emit MemoryUpdate envelopes for two-member auto-edge duplicates", () => {
     const older = makeRecord({ id: "m-old", body: "same", createdAt: 100 });
     const newer = makeRecord({ id: "m-new", body: "same", createdAt: 200 });
-    const result = runConsolidation([older, newer], baseOptions());
+    const result = runConsolidation([
+      older,
+      newer,
+    ], baseOptions({
+      summaryGenerator: () => "same",
+    }));
     expect(result.updatesProposed).toEqual([]);
+  });
+});
+
+describe("runConsolidation - explicit status scope", () => {
+  it("includes proposed/conflicted records by default but routes them to review instead of auto edges", () => {
+    const accepted = makeRecord({ id: "m-a", body: "same body", createdAt: 100 });
+    const proposed = makeRecord({
+      id: "m-p",
+      body: "same body",
+      status: "proposed",
+      createdAt: 200,
+    });
+    const result = runConsolidation([accepted, proposed], baseOptions());
+    expect(result.state).toBe("completed");
+    expect(result.edgesProposed).toEqual([]);
+    expect(result.reviewItems).toHaveLength(1);
+    expect(must(result.reviewItems[0]).reason).toBe("duplicate-review");
   });
 });
 
@@ -286,7 +437,7 @@ describe("runConsolidation - elapsedMs is always 0 (pure layer)", () => {
 });
 
 describe("runConsolidation - reserved summaryGenerator seam", () => {
-  it("does not invoke summaryGenerator in v1", () => {
+  it("does not invoke summaryGenerator for two-member auto-edge duplicates", () => {
     let calls = 0;
     const older = makeRecord({ id: "m-old", body: "use tabs", createdAt: 100 });
     const newer = makeRecord({ id: "m-new", body: "use tabs", createdAt: 200 });
@@ -295,7 +446,7 @@ describe("runConsolidation - reserved summaryGenerator seam", () => {
       baseOptions({
         summaryGenerator: () => {
           calls += 1;
-          return Promise.resolve("summary");
+          return "summary";
         },
       }),
     );

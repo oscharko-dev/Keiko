@@ -214,6 +214,7 @@ describe("memory BFF boundary helpers", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await fetchMemories({
+      query: "atlas rust",
       scope: ["global", "workspace"],
       type: ["preference", "semantic-fact"],
       status: ["accepted"],
@@ -237,7 +238,7 @@ describe("memory BFF boundary helpers", () => {
     await rejectMemoryProposal("proposal 1", "not applicable");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/memory?scope=global%2Cworkspace&type=preference%2Csemantic-fact&status=accepted&sensitivity=public%2Cconfidential&limit=25&offset=50",
+      "/api/memory?q=atlas+rust&scope=global%2Cworkspace&type=preference%2Csemantic-fact&status=accepted&sensitivity=public%2Cconfidential&limit=25&offset=50",
       expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
     );
     expect(fetchMock).toHaveBeenCalledWith(

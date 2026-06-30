@@ -174,11 +174,11 @@ describe("handleRunMaintenance", () => {
     expect(vault.getMemory(mid("m"))?.status).toBe("archived");
   });
 
-  it("forgets an expired memory and writes a tombstone", () => {
+  it("forgets an expired non-accepted, non-archived memory and writes a tombstone", () => {
     const vault = makeVault();
     insert(vault, {
       id: "m",
-      status: "accepted",
+      status: "proposed",
       confidence: 0.9,
       createdAt: Date.now() - DAY,
       validUntil: Date.now() - 1,
@@ -189,6 +189,23 @@ describe("handleRunMaintenance", () => {
     expect(
       vault.listTombstonesByScope({ kind: "user", userId: "u-1" as unknown as MemoryUserId }),
     ).toHaveLength(1);
+  });
+
+  it("does not hard-delete expired archived memories during retention", () => {
+    const vault = makeVault();
+    insert(vault, {
+      id: "m",
+      status: "archived",
+      confidence: 0.1,
+      createdAt: Date.now() - 60 * DAY,
+      validUntil: Date.now() - 1,
+    });
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(counts(result).forgotten).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("archived");
+    expect(
+      vault.listTombstonesByScope({ kind: "user", userId: "u-1" as unknown as MemoryUserId }),
+    ).toHaveLength(0);
   });
 
   it("returns a review item instead of auto-superseding a pairwise correction conflict", () => {
@@ -323,14 +340,14 @@ describe("maybeRunAutoMaintenance (O-V4)", () => {
 
   it("runs once when due, advances the cursor, then rate-limits until the interval elapses", () => {
     const vault = makeVault();
-    // A validity-expired memory is forgotten by the pass.
+    // Accepted memories are never hard-deleted by autonomous maintenance.
     insert(vault, { id: "m", status: "accepted", validUntil: NOW - 1, createdAt: NOW - DAY });
     const state: AutoMaintenanceState = {};
 
     const first = maybeRunAutoMaintenance(vault, undefined, state, { nowMs: NOW, enabled: true });
-    expect(first?.forgotten).toBe(1);
+    expect(first?.forgotten).toBe(0);
     expect(state.lastRunAtMs).toBe(NOW);
-    expect(vault.getMemory(mid("m"))).toBeUndefined();
+    expect(vault.getMemory(mid("m"))).toBeDefined();
 
     // Second call within the interval is a no-op.
     expect(
@@ -369,13 +386,13 @@ describe("runMemoryMaintenance — injected clock (O-V4 determinism)", () => {
     // Date.now() would forget it, while the injected clock must keep it.
     insert(vault, {
       id: "future",
-      status: "accepted",
+      status: "conflicted",
       validUntil: 1_700_000_000_000,
       createdAt: 1_500_000_000_000,
     });
     insert(vault, {
       id: "expired",
-      status: "accepted",
+      status: "conflicted",
       validUntil: 1_500_000_000_001,
       createdAt: 1_500_000_000_000,
     });

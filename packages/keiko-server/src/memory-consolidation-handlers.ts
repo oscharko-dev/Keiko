@@ -4,6 +4,7 @@ import {
   buildConsolidationJob,
   runConsolidation,
   transitionJob,
+  type ConsolidationEmbedding,
   type ConsolidationResult,
 } from "@oscharko-dev/keiko-memory-consolidation";
 import {
@@ -11,6 +12,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_TYPES,
   type MemoryEdgeId,
+  type MemoryId,
   type MemoryRecord,
   type MemoryScope,
   type MemoryScopeKind,
@@ -41,6 +43,11 @@ const DEFAULT_MAX_CLUSTERS_PER_RUN = 100;
 const DEFAULT_MAX_RECORDS_PER_RUN = 1_000;
 const MAX_CLUSTERS_PER_RUN_LIMIT = 1_000;
 const MAX_RECORDS_PER_RUN_LIMIT = 1_000;
+const DEFAULT_CONSOLIDATION_STATUSES: readonly MemoryStatus[] = [
+  "accepted",
+  "proposed",
+  "conflicted",
+];
 
 class BodyTooLargeError extends Error {
   public constructor() {
@@ -334,7 +341,7 @@ function loadSelectedMemories(
   maxRecords: number,
 ): LoadedMemories {
   const seen = new Map<string, MemoryRecord>();
-  const statuses = selection.statuses?.filter((status) => status === "accepted") ?? ["accepted"];
+  const statuses = selection.statuses ?? DEFAULT_CONSOLIDATION_STATUSES;
   if (statuses.length === 0 || maxRecords <= 0) return { records: [], truncated: false };
   const detectionLimit = maxRecords + 1;
   for (const scope of selection.scopes) {
@@ -388,8 +395,15 @@ function newMemoryEdgeId(): MemoryEdgeId {
 function buildRunOptions(
   scheduledRecord: ConsolidationJobRecord | undefined,
   createdAt: number,
+  vault: MemoryVaultStore,
+  memories: readonly MemoryRecord[],
+  selection: ConsolidationJobSelection,
   settings: ConsolidationJobSettings,
 ): Parameters<typeof runConsolidation>[1] {
+  const memoryIds = memories.map((memory) => memory.id);
+  const embeddings = vault.getEmbeddings(memoryIds);
+  const accessStats = vault.getAccessStats(memoryIds);
+  const includeStatuses = selection.statuses ?? DEFAULT_CONSOLIDATION_STATUSES;
   return {
     nowMs: createdAt,
     newEdgeId: newMemoryEdgeId,
@@ -399,6 +413,19 @@ function buildRunOptions(
     maxAgeMs: settings.maxAgeMs,
     maxClustersPerRun: settings.maxClustersPerRun,
     maxRecordsPerRun: settings.maxRecordsPerRun,
+    includeStatuses,
+    embeddingFor: (memoryId: MemoryId): ConsolidationEmbedding | undefined => {
+      const row = embeddings.get(memoryId);
+      if (row === undefined) return undefined;
+      return {
+        vector: row.vector,
+        provider: row.provider,
+        modelId: row.modelId,
+        metric: row.metric,
+        ...(row.modelRevision !== undefined ? { modelRevision: row.modelRevision } : {}),
+      };
+    },
+    accessStatsFor: (memoryId: MemoryId) => accessStats.get(memoryId),
     // Capture the record reference at schedule-time rather than re-fetching via the registry on
     // every poll — eliminates a theoretical race where the registry entry is replaced under the
     // closure before the signal is first checked.
@@ -464,6 +491,12 @@ function emptyConsolidationResult(state: ConsolidationResult["state"]): Consolid
     state,
     edgesProposed: [],
     updatesProposed: [],
+    summaryStatus: {
+      kind: "not-configured",
+      updatesProposed: 0,
+      skippedMergeClusters: 0,
+      fallbacksUsed: 0,
+    },
     staleFlags: [],
     reviewItems: [],
     clustersInspected: 0,
@@ -515,7 +548,7 @@ function scheduleJob(
     try {
       const result = runConsolidation(
         memories,
-        buildRunOptions(scheduledRecord, queued.createdAt, settings),
+        buildRunOptions(scheduledRecord, queued.createdAt, vault, memories, selection, settings),
       );
       finalizeTerminalJob(registry, running, jobId, memories, result, loaded.truncated);
     } catch (error) {

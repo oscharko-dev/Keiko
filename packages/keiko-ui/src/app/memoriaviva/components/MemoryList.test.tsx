@@ -81,6 +81,7 @@ function fetchWith(records: readonly MemoryRecord[]) {
 
 const emptyFetch = vi.fn().mockResolvedValue(makeListResponse([]));
 const emptyFilters: MemoryFilterState = {
+  query: "",
   scope: [],
   type: [],
   status: [],
@@ -136,6 +137,23 @@ describe("MemoryList — loading state", () => {
     resolveSecond?.();
     await waitFor(() => {
       expect(screen.getByText("Stable memory")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("MemoryList — URL search", () => {
+  it("passes q from URL params into fetch filters", async () => {
+    const fetchImpl = fetchWith([]);
+    currentSearchParams = { get: (key: string) => (key === "q" ? "atlas" : null) };
+
+    render(<MemoryList fetchMemoriesImpl={fetchImpl} />);
+
+    await waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: "atlas",
+        }),
+      );
     });
   });
 });

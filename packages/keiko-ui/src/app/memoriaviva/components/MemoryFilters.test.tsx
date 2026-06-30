@@ -47,6 +47,21 @@ describe("MemoryFilters — landmark groups", () => {
   });
 });
 
+describe("MemoryFilters — search", () => {
+  it("updates query text without changing chip axes", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderFilters({ ...EMPTY_FILTERS, scope: ["project"] }, onChange);
+
+    await user.type(screen.getByRole("searchbox", { name: "Search" }), "a");
+
+    expect(onChange).toHaveBeenCalled();
+    const [next] = onChange.mock.calls.at(-1) as [MemoryFilterState];
+    expect(next.query).toBe("a");
+    expect(next.scope).toEqual(["project"]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 2. Inactive chip has aria-pressed=false
 // ---------------------------------------------------------------------------
@@ -169,6 +184,7 @@ describe("MemoryFilters — axis independence", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     const initial: MemoryFilterState = {
+      query: "",
       scope: ["global"],
       type: ["preference"],
       status: [],
@@ -190,6 +206,7 @@ describe("MemoryFilters — axis independence", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     const initial: MemoryFilterState = {
+      query: "",
       scope: [],
       type: ["episodic"],
       status: ["proposed"],
@@ -211,6 +228,7 @@ describe("MemoryFilters — axis independence", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     const initial: MemoryFilterState = {
+      query: "",
       scope: ["user"],
       type: ["decision"],
       status: ["accepted"],
@@ -333,7 +351,13 @@ describe("MemoryFilters — no fire on render", () => {
   it("does not call onChange on initial render with pre-populated filters", () => {
     const onChange = vi.fn();
     renderFilters(
-      { scope: ["global"], type: ["preference"], status: ["accepted"], sensitivity: ["public"] },
+      {
+        query: "",
+        scope: ["global"],
+        type: ["preference"],
+        status: ["accepted"],
+        sensitivity: ["public"],
+      },
       onChange,
     );
     expect(onChange).not.toHaveBeenCalled();

@@ -10,28 +10,144 @@
 // them here keeps the two surfaces from drifting (the same class of duplication C3 guards for
 // suppression) and gives any future consumer of the route the stronger embedding signal by default.
 //
-// Pure of policy: the caller decides whether the query is egress-safe and passes that in. Graceful:
-// no embedding model => semanticById undefined (byte-identical lexical fallback); empty access
-// history => strengthById empty (the ranker zeroes its weight).
+// Policy-aware but content-free in diagnostics: the caller builds a gate from local policy/provider
+// locality, then this module degrades without echoing queries or memory bodies. Graceful: no
+// embedding model => semanticById undefined (lexical fallback); empty access history => strengthById
+// empty (the ranker zeroes its weight).
 
-import type { MemoryId, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
+import { assertCompatibleEmbeddingIdentity } from "@oscharko-dev/keiko-model-gateway";
 import {
   buildStrengthById,
   DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
   DEFAULT_STALE_CONFIDENCE_THRESHOLD,
-  isMemorySuppressed,
   type RankingFusionMode,
 } from "@oscharko-dev/keiko-memory-retrieval";
-import type { MemoryEmbeddingRow, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type {
+  MemoryEmbeddingInput,
+  MemoryEmbeddingRow,
+  MemoryMetadata,
+  MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
+import {
+  memoryTextEgressRejectionReason,
+  type CapturePolicyOptions,
+  type RejectionReason,
+} from "@oscharko-dev/keiko-memory-capture";
+import { isIP } from "node:net";
 
-import type { UiHandlerDeps } from "./deps.js";
-import { cosineSimilarity, embedMemoryText } from "./memory-embedding.js";
+import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
+import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
+import {
+  cosineSimilarity,
+  embedMemoryText,
+  memoryEmbeddingCalibrationFor,
+} from "./memory-embedding.js";
 
-// A candidate is worth scoring iff the ranker could surface it. A superset of the ranked set is
-// harmless: ids the ranker filters out simply never read their semantic score.
-function isSemanticRetrievalCandidate(record: MemoryRecord, nowMs: number): boolean {
-  if (record.status === "superseded") return false;
-  return !isMemorySuppressed(record, nowMs, DEFAULT_STALE_CONFIDENCE_THRESHOLD).suppressed;
+export type SemanticRetrievalGateReason =
+  | "allowed"
+  | "blocked-by-policy"
+  | "no-query"
+  | "no-embeddings"
+  | "no-embedder"
+  | "identity-mismatch";
+
+export interface SemanticRetrievalGate {
+  readonly allowed: boolean;
+  readonly reason: SemanticRetrievalGateReason;
+}
+
+const SECRET_EGRESS_REJECTION_REASONS = new Set<RejectionReason>([
+  "credential-shape",
+  "private-credential-path",
+  "provider-base-url",
+  "raw-log-content",
+  "customer-identifier",
+]);
+
+function normalizedEndpointHost(baseUrl: string): string | undefined {
+  try {
+    const parsed = new URL(baseUrl);
+    return parsed.hostname.toLocaleLowerCase("en-US").replace(/^\[|\]$/gu, "");
+  } catch {
+    return undefined;
+  }
+}
+
+function isPrivateIpv4(host: string): boolean {
+  const parts = host.split(".").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [first, second] = parts as [number, number, number, number];
+  return (
+    first === 10 ||
+    first === 127 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isPrivateIpv6(host: string): boolean {
+  const normalized = host.toLocaleLowerCase("en-US");
+  return (
+    normalized === "::1" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80:")
+  );
+}
+
+function isInTenantEndpoint(baseUrl: string): boolean {
+  const host = normalizedEndpointHost(baseUrl);
+  if (host === undefined) return false;
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host.endsWith(".local") || host.endsWith(".internal")) return true;
+  const ipVersion = isIP(host);
+  if (ipVersion === 4) return isPrivateIpv4(host);
+  if (ipVersion === 6) return isPrivateIpv6(host);
+  return false;
+}
+
+function hasInTenantEmbeddingProvider(deps: UiHandlerDeps): boolean {
+  return configuredEmbeddingProviders(currentGatewayConfig(deps)).some((provider) =>
+    isInTenantEndpoint(provider.baseUrl),
+  );
+}
+
+function hasEmbeddingProvider(deps: UiHandlerDeps): boolean {
+  return configuredEmbeddingProviders(currentGatewayConfig(deps)).length > 0;
+}
+
+export function semanticRetrievalGateForText(
+  deps: UiHandlerDeps,
+  queryText: string | undefined,
+  policy: CapturePolicyOptions,
+): SemanticRetrievalGate {
+  if (queryText === undefined || queryText.trim().length === 0) {
+    return { allowed: false, reason: "no-query" };
+  }
+  const rejection = memoryTextEgressRejectionReason(queryText, policy);
+  if (rejection === null) {
+    return { allowed: true, reason: "allowed" };
+  }
+  if (SECRET_EGRESS_REJECTION_REASONS.has(rejection)) {
+    return { allowed: false, reason: "blocked-by-policy" };
+  }
+  if (hasInTenantEmbeddingProvider(deps)) {
+    return { allowed: true, reason: "allowed" };
+  }
+  return {
+    allowed: false,
+    reason: hasEmbeddingProvider(deps) ? "blocked-by-policy" : "no-embedder",
+  };
+}
+
+function isSemanticRetrievalMetadataCandidate(record: MemoryMetadata, nowMs: number): boolean {
+  if (record.status !== "accepted") return false;
+  if (record.validity.validUntil !== undefined && record.validity.validUntil <= nowMs) return false;
+  return record.confidence > DEFAULT_STALE_CONFIDENCE_THRESHOLD;
 }
 
 function gatherCandidateIds(
@@ -44,12 +160,12 @@ function gatherCandidateIds(
   const seen = new Set<string>();
   for (const scope of scopes) {
     throwIfAborted(signal);
-    for (const record of vault.listMemoriesByScope(scope, {
+    for (const record of vault.listMemoryMetadataByScope(scope, {
       includeExpired: true,
       limit: DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
     })) {
       throwIfAborted(signal);
-      if (!isSemanticRetrievalCandidate(record, nowMs)) continue;
+      if (!isSemanticRetrievalMetadataCandidate(record, nowMs)) continue;
       if (seen.has(record.id)) continue;
       seen.add(record.id);
       ids.push(record.id);
@@ -63,6 +179,48 @@ function gatherCandidateIds(
 // the ranker. A candidate whose stored vector is missing is omitted (semantic subscore 0 for it).
 // Query-cosine scores for the candidate set, computed from the already-fetched embeddings. Gated by
 // the egress check (it embeds the query). Returns undefined when no model / no query embedding.
+function inputIdentity(input: MemoryEmbeddingInput): EmbeddingModelIdentity {
+  return {
+    provider: input.provider,
+    modelId: input.modelId,
+    ...(input.modelRevision !== undefined ? { modelRevision: input.modelRevision } : {}),
+    vectorDimensions: input.vector.length,
+    vectorMetric: input.metric,
+  };
+}
+
+function rowIdentity(row: MemoryEmbeddingRow): EmbeddingModelIdentity {
+  return {
+    provider: row.provider,
+    modelId: row.modelId,
+    ...(row.modelRevision !== undefined ? { modelRevision: row.modelRevision } : {}),
+    vectorDimensions: row.dimensions,
+    vectorMetric: row.metric,
+  };
+}
+
+function semanticScoreForRow(
+  queryEmbedding: MemoryEmbeddingInput,
+  queryIdentity: EmbeddingModelIdentity,
+  stored: MemoryEmbeddingRow,
+): number | null {
+  const compatibility = assertCompatibleEmbeddingIdentity(rowIdentity(stored), queryIdentity);
+  if (!compatibility.ok || !vectorsComparable(queryEmbedding.vector, stored.vector)) return null;
+  return cosineSimilarity(queryEmbedding.vector, stored.vector);
+}
+
+function warnSkippedIncompatible(skipped: number, candidates: number, queryModelId: string): void {
+  if (skipped === 0) return;
+  // Safe diagnostic: counts and model ids only, never query text or memory bodies.
+  // eslint-disable-next-line no-console
+  console.warn("memory semantic scores skipped for incompatible embeddings", {
+    reason: "identity-mismatch",
+    skipped,
+    candidates,
+    queryModelId,
+  });
+}
+
 async function semanticScoresFrom(
   deps: UiHandlerDeps,
   queryText: string,
@@ -71,24 +229,61 @@ async function semanticScoresFrom(
   signal?: AbortSignal,
 ): Promise<ReadonlyMap<MemoryId, number> | undefined> {
   throwIfAborted(signal);
-  const queryEmbedding = await embedMemoryText(deps, queryText);
-  if (queryEmbedding === null) return undefined;
+  const queryEmbedding = await embedMemoryText(deps, queryText, "query");
+  if (queryEmbedding === null) {
+    warnSemanticRetrievalDisabled("no-embedder", { candidates: candidateIds.length });
+    return undefined;
+  }
   throwIfAborted(signal);
+  const queryIdentity = inputIdentity(queryEmbedding);
   const scores = new Map<MemoryId, number>();
+  let skippedIncompatible = 0;
   for (const id of candidateIds) {
     throwIfAborted(signal);
     const stored = embeddings.get(id);
     if (stored === undefined) continue;
-    scores.set(id, cosineSimilarity(queryEmbedding.vector, stored.vector));
+    const score = semanticScoreForRow(queryEmbedding, queryIdentity, stored);
+    if (score === null) {
+      skippedIncompatible += 1;
+      continue;
+    }
+    scores.set(id, score);
   }
+  warnSkippedIncompatible(skippedIncompatible, candidateIds.length, queryEmbedding.modelId);
   return scores;
 }
 
-// Signal-fusion mode for the conversation retrieval surfaces (#204, O-F2). Opt-in via env to keep
-// the release on the byte-identical weighted-sum default; set KEIKO_MEMORY_FUSION=rrf to enable
-// rank-based Reciprocal Rank Fusion across both the chat and BFF paths.
+function warnSemanticRetrievalDisabled(
+  reason: SemanticRetrievalGateReason,
+  extra: Record<string, unknown> = {},
+): void {
+  if (reason === "allowed") return;
+  // Safe diagnostic: reason and counts only, never query text, memory bodies, endpoints, or keys.
+  // eslint-disable-next-line no-console
+  console.warn("memory semantic scores disabled", { reason, ...extra });
+}
+
+function hasNonZeroMagnitude(vector: Float32Array): boolean {
+  for (const value of vector) {
+    if (value !== 0) return true;
+  }
+  return false;
+}
+
+function vectorsComparable(query: Float32Array, stored: Float32Array): boolean {
+  return (
+    query.length > 0 &&
+    query.length === stored.length &&
+    hasNonZeroMagnitude(query) &&
+    hasNonZeroMagnitude(stored)
+  );
+}
+
+// Signal-fusion mode for the conversation retrieval surfaces (#204, O-F2). Conversation recall now
+// defaults to rank-based Reciprocal Rank Fusion; set KEIKO_MEMORY_FUSION=weighted-sum to force the
+// legacy weighted scorer for rollout comparison.
 export function conversationFusionMode(deps: UiHandlerDeps): RankingFusionMode {
-  return deps.env.KEIKO_MEMORY_FUSION === "rrf" ? "rrf" : "weighted-sum";
+  return deps.env.KEIKO_MEMORY_FUSION === "weighted-sum" ? "weighted-sum" : "rrf";
 }
 
 export interface ConversationRetrievalSignals {
@@ -98,6 +293,7 @@ export interface ConversationRetrievalSignals {
   // semanticById (no extra IO, no egress — local vectors), so MMR works even when the query itself is
   // not egress-safe. Empty when the vault has no embeddings.
   readonly embeddingById: ReadonlyMap<MemoryId, Float32Array>;
+  readonly mmrLambda?: number;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -106,13 +302,56 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+interface EmbeddingSignals {
+  readonly embeddingById: ReadonlyMap<MemoryId, Float32Array>;
+  readonly mmrLambda?: number;
+}
+
+function collectEmbeddingSignals(
+  deps: UiHandlerDeps,
+  embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
+  signal?: AbortSignal,
+): EmbeddingSignals {
+  const embeddingById = new Map<MemoryId, Float32Array>();
+  let mmrLambda: number | undefined;
+  for (const [id, row] of embeddings) {
+    throwIfAborted(signal);
+    embeddingById.set(id, row.vector);
+    mmrLambda ??= memoryEmbeddingCalibrationFor(deps.env, row).mmrLambda;
+  }
+  return {
+    embeddingById,
+    ...(mmrLambda !== undefined ? { mmrLambda } : {}),
+  };
+}
+
+function warnSemanticGate(
+  semanticGate: SemanticRetrievalGate,
+  embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
+  candidateCount: number,
+): void {
+  if (semanticGate.allowed && embeddings.size === 0) {
+    warnSemanticRetrievalDisabled("no-embeddings", { candidates: candidateCount });
+  } else if (!semanticGate.allowed && semanticGate.reason !== "no-query") {
+    warnSemanticRetrievalDisabled(semanticGate.reason, { candidates: candidateCount });
+  }
+}
+
+function shouldComputeSemanticScores(
+  semanticGate: SemanticRetrievalGate,
+  queryText: string | undefined,
+  embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
+): queryText is string {
+  return semanticGate.allowed && queryText !== undefined && queryText.length > 0 && embeddings.size > 0;
+}
+
 export async function buildConversationRetrievalSignals(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   queryText: string | undefined,
   scopes: readonly MemoryScope[],
   nowMs: number,
-  safeForSecondaryModel: boolean,
+  semanticGate: SemanticRetrievalGate,
   signal?: AbortSignal,
 ): Promise<ConversationRetrievalSignals> {
   throwIfAborted(signal);
@@ -125,18 +364,15 @@ export async function buildConversationRetrievalSignals(
       ? vault.getEmbeddings(candidateIds)
       : new Map<MemoryId, MemoryEmbeddingRow>();
   throwIfAborted(signal);
-  const embeddingById = new Map<MemoryId, Float32Array>();
-  for (const [id, row] of embeddings) {
-    throwIfAborted(signal);
-    embeddingById.set(id, row.vector);
-  }
-  const semanticById =
-    safeForSecondaryModel && queryText !== undefined && queryText.length > 0 && embeddings.size > 0
-      ? await semanticScoresFrom(deps, queryText, candidateIds, embeddings, signal)
-      : undefined;
+  const embeddingSignals = collectEmbeddingSignals(deps, embeddings, signal);
+  warnSemanticGate(semanticGate, embeddings, candidateIds.length);
+  const semanticById = shouldComputeSemanticScores(semanticGate, queryText, embeddings)
+    ? await semanticScoresFrom(deps, queryText, candidateIds, embeddings, signal)
+    : undefined;
   return {
     strengthById,
-    embeddingById,
+    embeddingById: embeddingSignals.embeddingById,
+    ...(embeddingSignals.mmrLambda !== undefined ? { mmrLambda: embeddingSignals.mmrLambda } : {}),
     ...(semanticById !== undefined ? { semanticById } : {}),
   };
 }

@@ -19,6 +19,7 @@ export {
   resolveMemoryDbPath,
 } from "./paths.js";
 export { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
+export { memoryBodySuppressionHash } from "./body-fingerprint.js";
 export type {
   DeleteMemoryOptions,
   ListMemoriesOptions,
@@ -30,6 +31,7 @@ export type {
   MemoryEmbeddingMetric,
   MemoryEmbeddingRow,
   MemoryEvent,
+  MemoryMetadata,
   MemoryTombstone,
   MemoryUpdatePatch,
   MemoryVaultFactoryOptions,

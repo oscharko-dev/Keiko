@@ -165,10 +165,10 @@ describe("runMemoryCli diagnostics", () => {
 describe("runMemoryCli maintain", () => {
   it("runs the in-process pass and prints the applied counts", () => {
     const vault = makeVault();
-    // An expired memory is forgotten; the report surfaces forgotten: 1.
+    // An expired non-accepted memory is forgotten; accepted memories require explicit review.
     insert(vault, {
       id: "m",
-      status: "accepted",
+      status: "proposed",
       createdAt: Date.now() - 864e5,
       validUntil: Date.now() - 1,
     });
@@ -185,7 +185,7 @@ describe("runMemoryCli maintain", () => {
     const evidenceStore = createInMemoryEvidenceStore();
     insert(vault, {
       id: "m",
-      status: "accepted",
+      status: "proposed",
       createdAt: Date.now() - 864e5,
       validUntil: Date.now() - 1,
     });

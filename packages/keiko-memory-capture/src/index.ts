@@ -11,6 +11,7 @@ export type {
   CaptureOutcome,
   CapturePolicyOptions,
   MemoryScopeKindHint,
+  SalienceDiagnostic,
   SalienceDeps,
   SalienceInput,
   WorkflowOutcomeInput,
@@ -18,6 +19,7 @@ export type {
 export { extractCandidatesFromUserText, extractCandidatesFromWorkflowOutcome } from "./capture.js";
 export { extractSalientMemories } from "./salience.js";
 export { memoryTextEgressRejectionReason } from "./capture-safety.js";
+export { memoryTextSecretEgressRejectionReason } from "./capture-safety.js";
 // Individual extractors are NOT re-exported: callers must go through the top-level capture
 // surface so the pre-flight (empty / length / restricted-default) and priority order are
 // enforced uniformly. The internal modules (intent-explicit, intent-workflow, policy,

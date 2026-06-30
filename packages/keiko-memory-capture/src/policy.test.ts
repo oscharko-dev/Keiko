@@ -24,6 +24,33 @@ describe("classifySensitivity", () => {
     expect(classifySensitivity("private: do not share")).toBe("confidential");
   });
 
+  it("returns confidential for German governance markers", () => {
+    expect(classifySensitivity("vertraulich: Release erst morgen")).toBe("confidential");
+    expect(classifySensitivity("nur intern: API Gateway bleibt selbst gehostet")).toBe(
+      "confidential",
+    );
+    expect(classifySensitivity("privat: nicht teilen")).toBe("confidential");
+    expect(classifySensitivity("geheim: Feature-Flag bleibt aus")).toBe("confidential");
+    expect(classifySensitivity("nicht speichern: nur temporär merken")).toBe("confidential");
+  });
+
+  it("returns confidential for German IBAN, Steuer-ID, and phone shapes", () => {
+    expect(classifySensitivity("Meine IBAN ist DE89 3704 0044 0532 0130 00")).toBe(
+      "confidential",
+    );
+    expect(classifySensitivity("Steuer-ID: 12 345 678 901")).toBe("confidential");
+    expect(classifySensitivity("Ruf mich unter +49 30 1234567 an")).toBe("confidential");
+    expect(classifySensitivity("Lokale Nummer 030-1234567 ist privat")).toBe("confidential");
+  });
+
+  it("keeps false-positive-near German number examples public", () => {
+    expect(classifySensitivity("Wir haben 12345678901 Testfälle im synthetischen Benchmark")).toBe(
+      "public",
+    );
+    expect(classifySensitivity("Ticket 030-123 bleibt offen")).toBe("public");
+    expect(classifySensitivity("DE89 ist nur ein kurzer Länderpräfix-Hinweis")).toBe("public");
+  });
+
   it("honors a defaultSensitivity override for benign text", () => {
     expect(classifySensitivity("I prefer dark mode", "confidential")).toBe("confidential");
   });
