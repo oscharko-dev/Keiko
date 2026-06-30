@@ -45,6 +45,7 @@ type InstallScope = "global" | "local" | "unknown";
 type PackageManagerResolution =
   | { readonly status: "ok"; readonly packageManager: UpdateInstallPackageManager }
   | { readonly status: "unsupported" | "ambiguous" | "transient" };
+type PathApi = Pick<typeof win32, "dirname" | "join" | "resolve">;
 
 export interface UpdateRuntimeFacts {
   readonly entryPath?: string | undefined;
@@ -72,6 +73,7 @@ const nodeDetectorFs: DetectorFs = {
   realpathSync,
   lstatSync,
 };
+const nativePathApi: PathApi = { dirname, join, resolve };
 
 function parseJsonObject(text: string): Record<string, unknown> | undefined {
   try {
@@ -84,24 +86,24 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   }
 }
 
+function pathApiFor(value: string): PathApi {
+  return value.includes("\\") || /^[a-z]:[\\/]/iu.test(value) ? win32 : nativePathApi;
+}
+
 function findPackageRoot(
   startPath: string,
   packageName: string,
   fs: DetectorFs,
 ): string | undefined {
-  const pathApi = startPath.includes("\\") || /^[a-z]:[\\/]/iu.test(startPath) ? win32 : undefined;
-  let current =
-    pathApi === undefined
-      ? dirname(resolve(startPath))
-      : pathApi.dirname(pathApi.resolve(startPath));
+  const pathApi = pathApiFor(startPath);
+  let current = pathApi.dirname(pathApi.resolve(startPath));
   for (;;) {
-    const manifest =
-      pathApi === undefined ? join(current, "package.json") : pathApi.join(current, "package.json");
+    const manifest = pathApi.join(current, "package.json");
     const record = fs.existsSync(manifest)
       ? parseJsonObject(fs.readFileSync(manifest, "utf8"))
       : undefined;
     if (record?.name === packageName) return current;
-    const parent = pathApi === undefined ? dirname(current) : pathApi.dirname(current);
+    const parent = pathApi.dirname(current);
     if (parent === current) return undefined;
     current = parent;
   }
