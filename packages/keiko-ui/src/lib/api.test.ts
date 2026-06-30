@@ -23,10 +23,12 @@ import {
   fetchModels,
   fetchPdfCitationPreviewDocument,
   fetchProjects,
+  fetchStartupUpdatePreflight,
   fetchVoiceCapability,
   openPdfCitationPreviewSession,
   pdfCitationPreviewDocumentUrl,
   runGatewayReadiness,
+  checkUpdatePreflight,
   requestEditorCompletion,
   requestEditorDiagnostics,
   requestEditorFormatting,
@@ -132,6 +134,73 @@ describe("requestEditorCompletion (Issue #1199)", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/editor/completion",
       expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+});
+
+describe("update preflight helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("fetchStartupUpdatePreflight reads the cached startup report from the BFF", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: 1,
+        checkedAt: "2026-06-30T12:00:00.000Z",
+        currentVersion: "0.2.9",
+        targetVersion: "0.2.10",
+        updateAvailable: true,
+        status: "update-available",
+        registryStatus: "ok",
+        releaseMetadataStatus: "fallback",
+        warnings: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const report = await fetchStartupUpdatePreflight();
+
+    expect(report.targetVersion).toBe("0.2.10");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/update/preflight",
+      expect.objectContaining({
+        cache: "no-store",
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("checkUpdatePreflight posts a manual retry through the CSRF gate", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: 1,
+        checkedAt: "2026-06-30T12:05:00.000Z",
+        currentVersion: "0.2.9",
+        targetVersion: "0.2.11",
+        updateAvailable: true,
+        status: "update-available",
+        registryStatus: "ok",
+        releaseMetadataStatus: "live",
+        warnings: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const report = await checkUpdatePreflight();
+
+    expect(report.targetVersion).toBe("0.2.11");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/update/preflight/check",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
     );
   });
 });
@@ -1352,10 +1421,7 @@ describe("pdf citation preview api helpers", () => {
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
 
-    const bytes = await fetchPdfCitationPreviewDocument(
-      "preview/session#1",
-      controller.signal,
-    );
+    const bytes = await fetchPdfCitationPreviewDocument("preview/session#1", controller.signal);
 
     expect(Array.from(bytes)).toEqual([9, 8, 7]);
     expect(fetchMock).toHaveBeenCalledWith(

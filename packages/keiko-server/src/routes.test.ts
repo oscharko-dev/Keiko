@@ -254,6 +254,21 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the update preflight routes (#1692)", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/update/preflight"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/update/preflight/check"),
+    ).toBeDefined();
+    expect(matchRoute("GET", "/api/update/preflight")).toMatchObject({
+      definition: { pattern: "/api/update/preflight" },
+    });
+    expect(matchRoute("POST", "/api/update/preflight/check")).toMatchObject({
+      definition: { pattern: "/api/update/preflight/check" },
+    });
+  });
+
   it("includes the optional voice STT dictation route (#494)", () => {
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/voice/transcribe"),
