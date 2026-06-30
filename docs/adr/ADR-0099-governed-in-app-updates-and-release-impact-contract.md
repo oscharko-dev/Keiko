@@ -70,6 +70,8 @@ needed to decide whether the update is supported and what it would change.
 
 The v1 contract is anchored to public npm metadata for the stable `latest` channel. Prerelease,
 beta, canary, or enterprise-private channels are explicitly out of scope for v1 update execution.
+Standard npm packument metadata is not the source for compatibility details. Those fields come from
+Keiko's reviewed release-impact catalog.
 
 - `packageName` and `packageVersion` identify the exact package release.
 - `distTag` identifies the release channel used for the candidate and must be `latest` for v1
@@ -91,6 +93,14 @@ GitHub Release notes or catalog copy are human-readable compatibility inputs onl
 independent trust root. For supported public releases, npm registry metadata is the installability
 truth, especially the exact package version and the active dist-tag. Release-impact metadata decides
 compatibility and remediation eligibility; package installability alone is not full update success.
+
+The release-impact catalog is the structured v1 source of truth for non-packument fields. It is
+source-controlled, append-only for published entries, bundled into the root package, and may be
+mirrored through GitHub Release metadata for server-side lookup of newer target releases. The update
+service may accept a target release-impact entry only when it binds to the same `packageName`,
+`packageVersion`, `distTag`, and `releaseTag` selected from npm `latest` and records reviewed
+publish gates for that release. If no matching reviewed entry exists, Keiko may report update
+availability, but the candidate is not eligible for one-click execution.
 
 ### Supported install modes and execution policy
 
@@ -119,11 +129,34 @@ through a dedicated governed server-side update authority with fixed argv, no sh
 environment, one active session, a policy gate, and fail-closed semantics. The authority must never
 guess commands.
 
+Any updater mutation route must use Keiko's existing loopback BFF boundary. State-changing updater
+requests require the same Host/Origin validation, JSON request validation, `X-Keiko-CSRF` gate, and
+`Cache-Control: no-store` posture as other governed local mutations. Browser code must call only the
+local BFF, never the npm registry or GitHub update metadata endpoints directly.
+
 ### Compatibility and remediation policy
 
 For supported public releases, the default path is safe forward migration or remediation. The
 updater should move toward the current supported release line rather than try to preserve an older
 state by rewinding or pinning to an unsupported build.
+
+Release-impact metadata must use this closed remediation set:
+
+- `no-action-required`: compatibility is already satisfied after install and restart checks.
+- `restart-required`: Keiko must restart or reconnect before the new version is complete.
+- `repair-required`: Keiko-owned local runtime state requires the existing repair path or a
+  deterministic updater-specific repair.
+- `local-knowledge-reindex-required`: Local Knowledge indexes must be rebuilt or refreshed before
+  affected search/retrieval features return to normal operation.
+- `migration-required`: a deterministic Keiko-owned state migration must run and record completion.
+- `manual-review-required`: Keiko cannot safely complete the compatibility step automatically and
+  must keep affected functionality degraded or unavailable until the user follows reviewed
+  instructions.
+
+Each remediation action must be resumable and stored in local update state with a content-free
+status. Package install success is not full update success until every required action is complete
+or explicitly marked safe to defer by release-impact metadata. Unaffected workflows remain usable;
+affected features must show degraded or unavailable status until their required action completes.
 
 Emergency breaking exceptions are permitted only when all of the following are true:
 
@@ -148,6 +181,13 @@ Snapshots must stay inside Keiko-owned runtime state, use the same local confide
 other local state, and remain isolated from browser storage and repository content. They may record
 version pointers, attestation data, and remediation outcome state. They must not store package
 payloads, full tarballs, or a broad backup copy of the installation.
+
+Snapshot retention is capped to the previous version for each managed installation target. Keiko
+keeps only the most recent pre-update snapshot needed to recover or explain the current update from
+the immediately previous version. A newer successful pre-update snapshot replaces the older retained
+snapshot only after the new snapshot is complete. Failed or interrupted updates keep the active
+previous-version snapshot until the update is recovered, completed, or explicitly abandoned; Keiko
+does not accumulate historical snapshot archives.
 
 ### Runtime state and evidence
 
@@ -180,18 +220,25 @@ Security review for this feature must cover:
   emergency breaking exceptions, and user-visible warning text for exception paths,
 - evidence: local, redacted, content-free update evidence only,
 - policy gates: managed-install attestation, release-impact binding, and forward-only remediation by
-  default.
+  default,
+- local route protection: loopback BFF only, Host/Origin validation, CSRF enforcement, no browser
+  direct external update calls, and no-store response handling for mutation state.
 
 ### Later child issue gates
 
 Implementation work under this ADR must satisfy these gates before it is considered complete:
 
 - a single managed installation target is identified or the update is rejected,
+- release-impact metadata is resolved from a reviewed catalog entry bound to the npm `latest`
+  package version and release tag,
 - supported public-release updates require explicit confirmation,
 - update checks stay anonymous and do not export local inventory,
 - supported public releases prefer forward migration or remediation,
+- remediation uses the closed vocabulary in this ADR and records resumable local status,
 - breaking exceptions require documented human approval and warning text,
-- the snapshot and evidence stores remain local-only and Keiko-owned,
+- the snapshot and evidence stores remain local-only and Keiko-owned, with snapshot retention capped
+  to the previous version,
+- updater mutation routes inherit loopback BFF, Host/Origin, CSRF, and no-store protections,
 - PWA/service-worker refresh remains separate from product package mutation.
 
 ## Consequences
