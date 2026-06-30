@@ -355,7 +355,7 @@ function realtimeProviderSupportsTools(
   // Missing tool support is an explicit degradation, not a session blocker: the UI still records the
   // full voice turn through /voice-turn, while grounded retrieval is only configured for providers
   // that advertise function calling.
-  return capability.toolCalling === true;
+  return capability.toolCalling;
 }
 
 // Resolves the realtime session voice from the provider's persona→voice mapping, guarded to a

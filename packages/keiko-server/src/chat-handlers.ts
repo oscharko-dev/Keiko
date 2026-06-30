@@ -1245,6 +1245,23 @@ function parseOptionalVoiceTurnModelId(
   return modelId;
 }
 
+function parseVoiceTurnAppendMessages(value: unknown): readonly VoiceTurnAppendMessage[] | RouteResult {
+  if (!Array.isArray(value) || value.length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "messages must be a non-empty array.") };
+  }
+  if (value.length > MAX_VOICE_TURN_MESSAGES) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "messages contains too many entries.") };
+  }
+  const messages = value.map(parseVoiceTurnAppendMessage);
+  if (messages.some((message) => message === undefined)) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "messages must contain committed user or assistant text."),
+    };
+  }
+  return messages as readonly VoiceTurnAppendMessage[];
+}
+
 function voiceTurnAppendRequestFromBody(
   body: Record<string, unknown>,
   deps: UiHandlerDeps,
@@ -1254,19 +1271,8 @@ function voiceTurnAppendRequestFromBody(
   if (chatId.length === 0 || projectPath.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "chatId and projectPath are required.") };
   }
-  if (!Array.isArray(body.messages) || body.messages.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "messages must be a non-empty array.") };
-  }
-  if (body.messages.length > MAX_VOICE_TURN_MESSAGES) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "messages contains too many entries.") };
-  }
-  const messages = body.messages.map(parseVoiceTurnAppendMessage);
-  if (messages.some((message) => message === undefined)) {
-    return {
-      status: 400,
-      body: errorBody("BAD_REQUEST", "messages must contain committed user or assistant text."),
-    };
-  }
+  const messages = parseVoiceTurnAppendMessages(body.messages);
+  if (isRouteResult(messages)) return messages;
   const modelId = parseOptionalVoiceTurnModelId(body, deps);
   if (isRouteResult(modelId)) return modelId;
   const memory = parseMemoryRequest(body.memory);
@@ -1274,7 +1280,7 @@ function voiceTurnAppendRequestFromBody(
   return {
     chatId,
     projectPath,
-    messages: messages as readonly VoiceTurnAppendMessage[],
+    messages,
     modelId,
     memory,
   };

@@ -490,7 +490,9 @@ describe("desktop chat routes", () => {
     const neverResolvingSalienceModel: ModelPort = {
       call(request): Promise<NormalizedResponse> {
         seenRequests.push(request);
-        return new Promise<NormalizedResponse>(() => {});
+        return new Promise<NormalizedResponse>((resolve) => {
+          void resolve;
+        });
       },
     };
     await restartWithDeps(deps(neverResolvingSalienceModel, { memoryVault }));

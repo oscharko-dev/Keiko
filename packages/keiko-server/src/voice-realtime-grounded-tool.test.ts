@@ -390,7 +390,9 @@ describe("handleRealtimeGroundedVoiceTool", () => {
     const request = requestFor(chat, { callId: "provider-call-1", query: " Worum   geht es? " });
 
     const firstPromise = handleRealtimeGroundedVoiceTool(ctx(request), deps());
-    await vi.waitFor(() => expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+    });
     const secondPromise = handleRealtimeGroundedVoiceTool(
       ctx({ ...request, query: "worum geht es?" }),
       deps(),
@@ -440,7 +442,9 @@ describe("handleRealtimeGroundedVoiceTool", () => {
     });
 
     const firstPromise = handleRealtimeGroundedVoiceTool(ctx(request), deps());
-    await vi.waitFor(() => expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+    });
     const mismatchedProject = await handleRealtimeGroundedVoiceTool(
       ctx({ ...request, projectPath: join(tmp, "other-project") }),
       deps(),
@@ -482,13 +486,17 @@ describe("handleRealtimeGroundedVoiceTool", () => {
 
     activeProjectPath = projectPath;
     const firstPromise = handleRealtimeGroundedVoiceTool(ctx(request), scopedDeps);
-    await vi.waitFor(() => expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+    });
     activeProjectPath = otherProjectPath;
     const secondPromise = handleRealtimeGroundedVoiceTool(
       ctx({ ...request, projectPath: otherProjectPath }),
       scopedDeps,
     );
-    await vi.waitFor(() => expect(runGroundedAskInputMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => {
+      expect(runGroundedAskInputMock).toHaveBeenCalledTimes(2);
+    });
     const firstResolver = resolvers[0];
     const secondResolver = resolvers[1];
     if (firstResolver === undefined || secondResolver === undefined) {
@@ -524,7 +532,9 @@ describe("handleRealtimeGroundedVoiceTool", () => {
       ctx({ ...request, userTranscript: "Welche Gebühr gilt?" }),
       deps(),
     );
-    await vi.waitFor(() => expect(runGroundedAskInputMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => {
+      expect(runGroundedAskInputMock).toHaveBeenCalledTimes(2);
+    });
     expect(runGroundedAskInputMock).toHaveBeenNthCalledWith(
       1,
       { chatId: chat.id, content: "Welche Frist gilt?", modelId: CHAT_MODEL },
