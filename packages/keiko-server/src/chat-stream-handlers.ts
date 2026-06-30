@@ -166,8 +166,8 @@ async function streamAndPersist(
   const messageCountBeforeTurn = deps.store.listMessages(request.chatId).length;
   const startedAt = Date.now();
   const userMessage = createUserMessage(deps, request);
-  const outcome = deriveCompactionOutcome(deps, request);
-  const messages = buildGatewayMessages(deps, request, memory.context.text);
+  const outcome = deriveCompactionOutcome(deps, request, modelId);
+  const messages = buildGatewayMessages(deps, request, memory.context.text, modelId);
   const stream = callStream({ modelId, messages }, controller.signal);
   const turn = await streamConversation(ctx, deps, stream, controller);
   if (turn === undefined || controller.signal.aborted) {

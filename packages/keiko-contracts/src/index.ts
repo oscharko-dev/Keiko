@@ -1160,7 +1160,9 @@ export {
   DEFAULT_CONTEXT_PROFILE,
   estimateTokens,
   estimateTokensForSegments,
+  maxUtf8BytesForTokenBudget,
   deriveContextProfile,
+  deriveContextProfileFromCapability,
 } from "./context-engineering.js";
 export type { ContextValidationResult } from "./context-engineering-validation.js";
 export {

@@ -378,7 +378,7 @@ function budgetedMultiSourceGatewayMessages(
     labeledPacks.reduce((sum, entry) => sum + entry.pack.budget.modelInputTokensMax, 0),
   );
   let messages = buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor);
-  if (limit === 0 || promptByteLength(messages) <= limit) return messages;
+  if (promptByteLength(messages) <= limit) return messages;
   const excerptCount = multiSourceExcerptCount(labeledPacks);
   if (excerptCount === 0) return messages;
 
@@ -490,6 +490,7 @@ export interface MultiSourceAskInput {
   readonly scopes: readonly ChatConnectedScope[];
   readonly content: string;
   readonly modelId: string;
+  readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
   readonly retriever: GroundedRetriever;
   readonly answerer: MultiSourceAnswerer;
@@ -651,7 +652,7 @@ function persistPerSourceEvidence(
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
-        ...groundedContextAssemblyInput(ctx.deps, src.pack),
+        ...groundedContextAssemblyInput({ contextProfile: ctx.contextProfile }, src.pack),
       },
       {
         store: ctx.deps.evidenceStore,
@@ -680,7 +681,7 @@ function assembleMultiSourceAnswer(
       src.pack,
       buildCitations(src.pack, redactor).length,
       src.elapsedMs,
-      groundedContextSummaryInput(ctx.deps, src.pack),
+      groundedContextSummaryInput({ contextProfile: ctx.contextProfile }, src.pack),
     ),
   );
   const mergedSummary = mergeContextPackSummaries(summaries);

@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
+import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type ConnectedContextPack,
@@ -20,6 +21,7 @@ import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   buildGroundedGatewayMessages,
   handleGroundedAsk,
+  modelInputPromptByteLimit,
   promptByteLength,
   type GroundedRunner,
 } from "./grounded-qa.js";
@@ -448,6 +450,10 @@ async function runHandler(
 }
 
 describe("buildGroundedGatewayMessages", () => {
+  it("derives prompt byte limits from the canonical contracts estimator", () => {
+    expect(modelInputPromptByteLimit(1_024)).toBe(maxUtf8BytesForTokenBudget(1_024));
+  });
+
   it("prunes prompt-only excerpt content to fit the model input budget", () => {
     const base = packWithCitations();
     const budgetedPack: ConnectedContextPack = {
@@ -467,13 +473,14 @@ describe("buildGroundedGatewayMessages", () => {
       budgetedPack,
       buildRedactor({}, undefined),
     );
-    expect(promptByteLength(messages)).toBeLessThanOrEqual(1024 * 4);
+    expect(promptByteLength(messages)).toBeLessThanOrEqual(maxUtf8BytesForTokenBudget(1_024));
     expect(messages[1]?.content).toContain("src/foo.ts");
     expect(messages[1]?.content).toContain("Repository evidence excerpts:");
   });
 
   it("throws ContextOverflowError when prompt overhead alone exceeds the model input limit", () => {
-    // modelInputTokensMax=1 → limit=4 bytes, which is smaller than any real system+question prompt.
+    // modelInputTokensMax=1 → a 0-byte content ceiling after the estimator overhead, which is
+    // smaller than any real system+question prompt.
     // Before the fix, promptBudgetedMessages returned the over-limit messages silently, causing a
     // provider 400. After the fix it must throw ContextOverflowError so the caller surfaces a clean
     // 502 GATEWAY_CONTEXT_OVERFLOW instead of an opaque provider error.

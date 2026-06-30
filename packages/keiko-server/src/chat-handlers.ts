@@ -62,7 +62,11 @@ import {
 import { validateProjectPath } from "./store/validation.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
+import {
+  currentContextProfileForModel,
+  currentGatewayConfig,
+  currentRedactionSecrets,
+} from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
@@ -967,9 +971,11 @@ export function buildChatPatch(
 export function deriveCompactionOutcome(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
+  modelId: string | undefined,
 ): ConversationCompactionOutcome {
+  const contextProfile = currentContextProfileForModel(deps, modelId);
   return conversationForGatewayWithCompaction(deps.store.listMessages(request.chatId), {
-    contextProfile: deps.contextProfile,
+    contextProfile,
   });
 }
 
@@ -977,11 +983,12 @@ export function buildGatewayMessages(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   memoryText: string,
+  modelId: string | undefined,
 ): GatewayConversationMessage[] {
   // PR4-W2 (ADR-0055 D3): route history assembly through the predicate-gated compaction shim. On
   // the fast path (no profile or <= MAX_CONTEXT_MESSAGES filtered turns) the shim returns the EXACT
   // conversationForGateway(...) value, so this is byte-identical to the pre-PR4 path.
-  const { messages } = deriveCompactionOutcome(deps, request);
+  const { messages } = deriveCompactionOutcome(deps, request, modelId);
   return applyDocumentContextToLatestUserTurn(messages, request, memoryText);
 }
 
@@ -1029,8 +1036,8 @@ async function persistModelChatTurn(
         ? emptyMemoryResult(false)
         : await buildMemoryResult(request, deps, memoryContext);
     const userMessage = createUserMessage(deps, request);
-    const outcome = deriveCompactionOutcome(deps, request);
-    const messages = buildGatewayMessages(deps, request, memory.context.text);
+    const outcome = deriveCompactionOutcome(deps, request, modelId);
+    const messages = buildGatewayMessages(deps, request, memory.context.text, modelId);
     const response = await model.call(
       { modelId, messages, stream: false },
       new AbortController().signal,
