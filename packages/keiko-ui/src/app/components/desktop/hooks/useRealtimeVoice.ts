@@ -44,6 +44,14 @@ const DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS = 300;
 const DEFAULT_REALTIME_VAD_SILENCE_DURATION_MS = 500;
 const DEFAULT_REALTIME_VAD_THRESHOLD = 0.5;
 const MAX_REALTIME_MEMORY_CONTEXT_CHARS = 6_000;
+const REALTIME_CLIENT_SPOKEN_INSTRUCTIONS =
+  "You are Keiko speaking with the user by voice. Keep replies short, natural, and conversational. " +
+  "Do not read code, file paths, or long identifiers aloud verbatim; summarize them in words.";
+const REALTIME_CLIENT_GROUNDED_INSTRUCTIONS =
+  " This voice session is connected to Keiko grounding sources. For any substantive question about " +
+  "the connected repository, files, documents, knowledge capsules, or project context, call the " +
+  "search_keiko_grounding tool before giving the final answer. Do not state factual conclusions until " +
+  "the tool result is available, and do not add unsupported facts.";
 
 function realtimeGroundingToolDefinition(): Record<string, unknown> {
   return {
@@ -67,7 +75,11 @@ function realtimeGroundingToolDefinition(): Record<string, unknown> {
 }
 
 function buildRealtimeSessionUpdate(groundingActive: boolean): Record<string, unknown> {
+  const instructions = groundingActive
+    ? `${REALTIME_CLIENT_SPOKEN_INSTRUCTIONS}${REALTIME_CLIENT_GROUNDED_INSTRUCTIONS}`
+    : REALTIME_CLIENT_SPOKEN_INSTRUCTIONS;
   const session: Record<string, unknown> = {
+    instructions,
     output_modalities: ["audio"],
     audio: {
       input: {
