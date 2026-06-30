@@ -117,6 +117,45 @@
         "approvalReference": "issue:#1692",
         "rationale": "The backend update availability/preflight service exposes reviewed public update metadata while all execution remains gated by later updater slices."
       }
+    },
+    {
+      "id": "2026-06-30-keiko-0.2.11-governed-update-experience",
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.2.11",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.2.11",
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko now provides a governed update experience for reviewed package updates, including policy-gated install execution, local recovery state, remediation guidance, UI review states, and CLI fallback commands.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "supportedFrom": ["0.2.0"],
+      "releaseNoteBullets": [
+        "Keiko now provides a governed update experience with Settings and startup checks, policy-gated package updates, local recovery state, remediation guidance, and CLI fallback commands."
+      ],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-06-30",
+        "humanApproved": true,
+        "approvalReference": "issue:#1698",
+        "rationale": "Final epic verification records the end-to-end governed update experience delivered across issues #1693 through #1697; final publish use remains gated by maintainer review."
+      }
     }
   ]
 }
