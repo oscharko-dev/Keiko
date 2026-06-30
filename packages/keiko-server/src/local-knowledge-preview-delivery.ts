@@ -11,7 +11,7 @@ import {
   listCapsuleSources,
   MAX_PDF_DOCUMENT_BLOB_BYTES,
   PDF_DOCUMENT_BLOB_MEDIA_TYPE,
-  readPdfDocumentBlob,
+  readPdfDocumentBlobByContentHash,
   writePdfDocumentBlob,
   type KnowledgeStore,
   type PdfDocumentBlobRecord,
@@ -300,9 +300,19 @@ function blobPreviewSource(
 function resolveBlobSource(
   store: KnowledgeStore,
   authority: PdfCitationPreviewAuthority,
+  document: ExistingDocumentRow,
 ): PdfPreviewSourceResult | undefined {
   const citation = authority.citation;
-  const blob = readPdfDocumentBlob(store, citation.lineage.capsuleId, citation.lineage.documentId);
+  const blob = readPdfDocumentBlobByContentHash(
+    store,
+    citation.lineage.capsuleId,
+    citation.documentContentHash,
+    {
+      documentId: citation.lineage.documentId,
+      fileName: document.safe_display_name,
+      sourceId: citation.lineage.sourceId,
+    },
+  );
   if (blob.kind === "missing") return undefined;
   if (blob.kind === "unreadable") {
     return { kind: "rejected", reason: "preview-source-unreadable" };
@@ -364,7 +374,7 @@ function resolveCurrentSource(
   document: ExistingDocumentRow,
   sources: readonly KnowledgeSource[],
 ): PdfPreviewSourceResult {
-  const blob = resolveBlobSource(store, authority);
+  const blob = resolveBlobSource(store, authority, document);
   if (blob !== undefined) return blob;
   return resolveFilesystemSource(authority, document, sources);
 }
@@ -395,7 +405,11 @@ async function captureFilesystemSourceBlob(
       sourceId: source.sourceId,
     });
     if (stored.kind !== "stored") return undefined;
-    const blob = readPdfDocumentBlob(store, source.capsuleId, source.documentId);
+    const blob = readPdfDocumentBlobByContentHash(store, source.capsuleId, source.contentHash, {
+      documentId: source.documentId,
+      fileName: source.fileName,
+      sourceId: source.sourceId,
+    });
     return blob.kind === "ok" ? blobPreviewSource(source.capsuleId, blob.blob) : undefined;
   } catch {
     return undefined;
@@ -445,12 +459,17 @@ export async function loadVerifiedPdfPreviewSource(
 ): Promise<PdfPreviewSourceResult> {
   const current = loadCurrentDocument(deps, authority);
   try {
+    if (current.document === undefined) {
+      return { kind: "rejected", reason: "preview-source-missing" };
+    }
+    if (current.document.source_id !== authority.citation.lineage.sourceId) {
+      return { kind: "rejected", reason: "preview-source-missing" };
+    }
+    const blob = resolveBlobSource(current.store, authority, current.document);
+    if (blob !== undefined) return blob;
     const metadataFailure = validateDocumentMetadata(authority, current.document);
     if (metadataFailure !== undefined) {
       return { kind: "rejected", reason: metadataFailure };
-    }
-    if (current.document === undefined) {
-      return { kind: "rejected", reason: "preview-source-missing" };
     }
     return await loadVerifiedSource(current.store, authority, current.document, current.sources);
   } finally {
@@ -469,12 +488,17 @@ export function probePdfPreviewSourceAvailability(
       capsuleId: String(citation.lineage.capsuleId),
       documentId: String(citation.lineage.documentId),
     }) as ExistingDocumentRow | undefined;
+  if (document === undefined) {
+    return { kind: "rejected", reason: "preview-source-missing" };
+  }
+  if (document.source_id !== citation.lineage.sourceId) {
+    return { kind: "rejected", reason: "preview-source-missing" };
+  }
+  const blob = resolveBlobSource(store, authority, document);
+  if (blob !== undefined) return blob;
   const metadataFailure = validateDocumentMetadata(authority, document);
   if (metadataFailure !== undefined) {
     return { kind: "rejected", reason: metadataFailure };
-  }
-  if (document === undefined) {
-    return { kind: "rejected", reason: "preview-source-missing" };
   }
   return resolveCurrentSource(
     store,
@@ -505,7 +529,9 @@ function sourceFilesystemBindingMatches(
   current: PdfCitationPreviewSource,
   expected: PdfCitationPreviewSource,
 ): boolean {
-  return current.absolutePath === expected.absolutePath && current.sourceRoot === expected.sourceRoot;
+  return (
+    current.absolutePath === expected.absolutePath && current.sourceRoot === expected.sourceRoot
+  );
 }
 
 export function canReuseVerifiedPdfPreviewSource(source: PdfCitationPreviewSource): boolean {
@@ -526,12 +552,23 @@ export function loadPdfPreviewSourceForSession(
 ): PdfPreviewSourceResult {
   const current = loadCurrentDocument(deps, authority);
   try {
+    if (current.document === undefined) {
+      return { kind: "rejected", reason: "preview-source-missing" };
+    }
+    if (current.document.source_id !== authority.citation.lineage.sourceId) {
+      return { kind: "rejected", reason: "preview-source-missing" };
+    }
+    const blob = resolveBlobSource(current.store, authority, current.document);
+    if (blob !== undefined) {
+      if (blob.kind !== "ok") return blob;
+      if (!sourceMatchesSession(blob.source, expected)) {
+        return { kind: "rejected", reason: "source-modified" };
+      }
+      return blob;
+    }
     const metadataFailure = validateDocumentMetadata(authority, current.document);
     if (metadataFailure !== undefined) {
       return { kind: "rejected", reason: metadataFailure };
-    }
-    if (current.document === undefined) {
-      return { kind: "rejected", reason: "preview-source-missing" };
     }
     const resolved = resolveCurrentSource(
       current.store,
@@ -556,7 +593,16 @@ export async function openPdfPreviewSourceReader(
   if (source.kind === "blob") {
     const session = openStoreForDeps(deps);
     try {
-      const blob = readPdfDocumentBlob(session.store, source.capsuleId, source.documentId);
+      const blob = readPdfDocumentBlobByContentHash(
+        session.store,
+        source.capsuleId,
+        source.contentHash,
+        {
+          documentId: source.documentId,
+          fileName: source.fileName,
+          sourceId: source.sourceId,
+        },
+      );
       if (blob.kind !== "ok") return undefined;
       return memoryPdfPreviewReader(blob.blob.bytes);
     } finally {

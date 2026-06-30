@@ -4,6 +4,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceId,
+  ParserResult,
 } from "@oscharko-dev/keiko-contracts";
 
 import { addSourceToCapsule } from "../source-lifecycle.js";
@@ -135,6 +136,84 @@ describe("extractDocument — markdown success path", () => {
     expect(first.outcome.document.id).not.toBe(second.outcome.document.id);
     expect(count("documents")).toBe(2);
     expect(count("document_texts")).toBe(2);
+  });
+
+  it("records partial extraction coverage when a standard parser hits the unit limit", async () => {
+    const content = "first page";
+    const fs = memoryFs(ROOT, [{ relativePath: "limited.txt", content }]);
+    const adapter: ParserAdapter = {
+      capability: {
+        parserId: "unit-limited-parser",
+        parserVersion: "1",
+        matches: () => true,
+      },
+      parse: (input: ParserSelectionInput, options: ParserOptions): ParserResult =>
+        ({
+          documentId: input.documentId,
+          parser: { parserId: "unit-limited-parser", parserVersion: "1" },
+          pages: [
+            {
+              documentId: input.documentId,
+              pageNumber: 1,
+              characterStart: 0,
+              characterEnd: content.length,
+            },
+          ],
+          sections: [],
+          units: [
+            {
+              kind: "page",
+              documentId: input.documentId,
+              pageNumber: 1,
+              characterStart: 0,
+              characterEnd: content.length,
+            },
+          ],
+          diagnostics: [
+            {
+              code: "UNIT_LIMIT_REACHED",
+              documentId: input.documentId,
+              message: "reached maxUnitsPerDocument=1",
+              severity: "info",
+            },
+          ],
+          normalizedText: content,
+          extractedAt: options.now(),
+        }) as ParserResult,
+    };
+    const registry: ParserRegistry = {
+      list: () => [adapter],
+      resolve: () => ({ kind: "matched", adapter }),
+    };
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "limited.txt", sizeBytes: content.length } },
+    );
+
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    const checkpoint = store._internal.db
+      .prepare(
+        "SELECT phase, coverage, page_cursor, extracted_text_bytes, terminal_diagnostics_json FROM extraction_checkpoints WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: result.outcome.document.id }) as
+      | {
+          readonly coverage?: string;
+          readonly extracted_text_bytes?: number;
+          readonly page_cursor?: number;
+          readonly phase?: string;
+          readonly terminal_diagnostics_json?: string;
+        }
+      | undefined;
+
+    expect(checkpoint).toMatchObject({
+      coverage: "partial",
+      extracted_text_bytes: Buffer.byteLength(content, "utf8"),
+      page_cursor: 1,
+      phase: "extracted",
+    });
+    expect(checkpoint?.terminal_diagnostics_json).toContain("UNIT_LIMIT_REACHED");
   });
 });
 
@@ -547,16 +626,20 @@ describe("extractDocument — path containment", () => {
     expect(result.outcome.kind).toBe("persisted");
     if (result.outcome.kind !== "persisted") return;
     expect(result.outcome.document.documentPath).toBe("docs/link.txt");
+    expect(result.outcome.document.sizeBytes).toBe(
+      new TextEncoder().encode("target text").byteLength,
+    );
     const row = store._internal.db
       .prepare(
-        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+        "SELECT d.size_bytes, dt.normalized_text FROM documents d JOIN document_texts dt ON dt.capsule_id = d.capsule_id AND dt.document_id = d.id WHERE d.capsule_id = :c AND d.id = :d",
       )
       .get({ c: capsuleId, d: result.outcome.document.id }) as
-      { readonly normalized_text?: string } | undefined;
+      { readonly normalized_text?: string; readonly size_bytes?: number } | undefined;
+    expect(row?.size_bytes).toBe(new TextEncoder().encode("target text").byteLength);
     expect(row?.normalized_text).toBe("target text");
   });
 
-  it("rejects hard-linked direct extraction targets before reading bytes", async () => {
+  it("extracts hard-linked direct targets after realpath containment", async () => {
     const fs = memoryFs(ROOT, [
       {
         relativePath: "docs/allowed.txt",
@@ -571,11 +654,35 @@ describe("extractDocument — path containment", () => {
       { capsuleId, source, file: { relativePath: "docs/allowed.txt", sizeBytes: 6 } },
     );
 
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.documentPath).toBe("docs/allowed.txt");
+    expect(count("documents")).toBe(1);
+  });
+
+  it("rejects direct extraction targets when byte reads are shorter than the selected size", async () => {
+    const baseFs = memoryFs(ROOT, [{ relativePath: "docs/short.txt", content: "secret" }]);
+    const fs = {
+      ...baseFs,
+      readFileBytes: async (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
+        if (baseFs.readFileBytes === undefined) throw new Error("readFileBytes unavailable");
+        const bytes = await baseFs.readFileBytes(absolutePath, maxBytes);
+        return bytes.subarray(0, Math.max(0, bytes.byteLength - 1));
+      },
+    };
+    const registry = createDefaultParserRegistry();
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "docs/short.txt", sizeBytes: 6 } },
+    );
+
     expect(result.outcome.kind).toBe("failed");
     if (result.outcome.kind !== "failed") return;
     expect(result.outcome.error.code).toBe("READ_FAILED");
-    expect(result.outcome.error.message).toBe("selected file is not eligible for extraction");
-    expect(count("documents")).toBe(1);
+    expect(result.outcome.error.message).toBe(
+      "readFileBytes returned fewer bytes than the resolved file size",
+    );
   });
 
   it("redacts absolute paths from parser diagnostics before returning and persisting them", async () => {

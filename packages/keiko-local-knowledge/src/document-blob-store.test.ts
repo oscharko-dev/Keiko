@@ -11,6 +11,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { createCapsule } from "./capsule-lifecycle.js";
+import { insertDocumentRow } from "./discovery/persist.js";
 import { addSourceToCapsule } from "./source-lifecycle.js";
 import { freshStore, sampleCapsuleInput, sampleSourceInput } from "./_support.js";
 import { openKnowledgeStore, type KnowledgeStoreKeyProvider } from "./store.js";
@@ -19,6 +20,7 @@ import {
   MAX_PDF_DOCUMENT_BLOB_BYTES,
   PDF_DOCUMENT_BLOB_MEDIA_TYPE,
   readPdfDocumentBlob,
+  readPdfDocumentBlobByContentHash,
   writePdfDocumentBlob,
 } from "./document-blob-store.js";
 
@@ -211,6 +213,58 @@ describe("PDF document blob store", () => {
         kind: "unreadable",
         reason: "hash-mismatch",
       });
+    } finally {
+      fresh.cleanup();
+    }
+  });
+
+  it("preserves historical PDF blobs when a document row is upserted with a new hash", () => {
+    const fresh = freshStore();
+    try {
+      const seeded = seedPdfDocument(fresh.store);
+      writePdfDocumentBlob(fresh.store, {
+        capsuleId: seeded.capsuleId,
+        sourceId: seeded.sourceId,
+        documentId: seeded.documentId,
+        contentHash: seeded.contentHash,
+        byteLength: PDF_BYTES.byteLength,
+        mediaType: PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+        bytes: PDF_BYTES,
+      });
+
+      const changedBytes = Buffer.from("%PDF-1.4\nchanged\n%%EOF\n", "utf8");
+      insertDocumentRow(fresh.store._internal.db, {
+        id: seeded.documentId,
+        capsuleId: seeded.capsuleId,
+        sourceId: String(seeded.sourceId),
+        documentPath: "docs/policy.pdf",
+        sizeBytes: changedBytes.byteLength,
+        mediaType: PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+        contentHash: sha256Hex(changedBytes),
+        parserId: "pdf",
+        parserVersion: "1.0.0",
+        lastExtractedAt: 2000,
+        status: "extracted",
+        safeDisplayName: "policy.pdf",
+      });
+
+      const current = readPdfDocumentBlob(fresh.store, seeded.capsuleId, seeded.documentId);
+      expect(current.kind).toBe("missing");
+      const historical = readPdfDocumentBlobByContentHash(
+        fresh.store,
+        seeded.capsuleId,
+        seeded.contentHash,
+        {
+          documentId: seeded.documentId,
+          fileName: "policy.pdf",
+          sourceId: seeded.sourceId,
+        },
+      );
+      expect(historical.kind).toBe("ok");
+      if (historical.kind !== "ok") return;
+      expect(Buffer.from(historical.blob.bytes).equals(PDF_BYTES)).toBe(true);
+      expect(historical.blob.documentId).toBe(String(seeded.documentId));
+      expect(historical.blob.sourceId).toBe(String(seeded.sourceId));
     } finally {
       fresh.cleanup();
     }

@@ -11,7 +11,10 @@ import type {
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import { pdfCitationPreviewFailureState } from "@oscharko-dev/keiko-contracts";
-import type { GroundedAnswer, LocalKnowledgeEvidenceCitation } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  GroundedAnswer,
+  LocalKnowledgeEvidenceCitation,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   createSqliteAuditSink,
   lookupCitationPreviewSnapshotForStoredCitation,
@@ -95,6 +98,8 @@ function resolveCitationDisplayInput(
   StoredPdfCitationPreviewCitation,
   "documentLabel" | "sourceLabel" | "pageNumber" | "pageLabel" | "characterStart" | "characterEnd"
 > {
+  const useCurrentAnchor =
+    current === undefined || current.documentContentHash === stored.documentContentHash;
   const input: Pick<
     StoredPdfCitationPreviewCitation,
     "documentLabel" | "sourceLabel" | "pageNumber" | "pageLabel" | "characterStart" | "characterEnd"
@@ -102,14 +107,26 @@ function resolveCitationDisplayInput(
     documentLabel: current?.documentLabel ?? stored.documentLabel,
   };
   assignOptionalCitationField(input, "sourceLabel", stored.sourceLabel);
-  assignOptionalCitationField(input, "pageNumber", current?.pageNumber ?? stored.pageNumber);
-  assignOptionalCitationField(input, "pageLabel", current?.pageLabel ?? stored.pageLabel);
+  assignOptionalCitationField(
+    input,
+    "pageNumber",
+    useCurrentAnchor ? (current?.pageNumber ?? stored.pageNumber) : stored.pageNumber,
+  );
+  assignOptionalCitationField(
+    input,
+    "pageLabel",
+    useCurrentAnchor ? (current?.pageLabel ?? stored.pageLabel) : stored.pageLabel,
+  );
   assignOptionalCitationField(
     input,
     "characterStart",
-    current?.characterStart ?? stored.characterStart,
+    useCurrentAnchor ? (current?.characterStart ?? stored.characterStart) : stored.characterStart,
   );
-  assignOptionalCitationField(input, "characterEnd", current?.characterEnd ?? stored.characterEnd);
+  assignOptionalCitationField(
+    input,
+    "characterEnd",
+    useCurrentAnchor ? (current?.characterEnd ?? stored.characterEnd) : stored.characterEnd,
+  );
   return input;
 }
 
@@ -220,18 +237,6 @@ function currentSnapshotPrecheck(
     !storedSpanMatchesCurrentSnapshot(stored, current)
   ) {
     return reject("lineage-mismatch", display);
-  }
-  if (current.documentMediaType !== "application/pdf") {
-    return reject("document-not-pdf", display);
-  }
-  if (current.documentStatus !== "extracted" && current.documentStatus !== "extracted-image") {
-    return reject("document-not-ready", display);
-  }
-  if (current.documentContentHash !== stored.documentContentHash) {
-    return reject("source-modified", display);
-  }
-  if (current.pageNumber === undefined) {
-    return reject("page-provenance-missing", display);
   }
   return undefined;
 }
@@ -419,13 +424,32 @@ function previewMetadataMissingStatuses(
     }));
 }
 
+function loadFailureStatus(
+  failure: RejectedPreviewOutcome,
+  input: PdfCitationPreviewStatusRequest,
+): readonly PdfCitationPreviewCitationStatus[] {
+  if (input.marker === undefined || input.stableId === undefined) return [];
+  const markerIndex = normalizePreviewMarkerIndex(input.marker);
+  if (markerIndex === undefined) return [];
+  const state = pdfCitationPreviewFailureState(failure.reason);
+  return [
+    {
+      stableId: input.stableId,
+      marker: String(input.marker),
+      markerIndex,
+      state: state === "not-applicable" ? "not-applicable" : state,
+      ...(state === "not-applicable" ? {} : { reason: failure.reason }),
+    },
+  ];
+}
+
 export function getPdfCitationPreviewStatus(
   deps: UiHandlerDeps,
   input: PdfCitationPreviewStatusRequest,
 ): PdfCitationPreviewStatusResponse {
   const loaded = loadMessageContext(deps, input.chatId, input.assistantMessageId);
   if ("kind" in loaded) {
-    return { citations: [] };
+    return { citations: loadFailureStatus(loaded, input) };
   }
   if (loaded.citations === undefined || loaded.citations.length === 0) {
     return { citations: previewMetadataMissingStatuses(loaded.statusSeeds, input) };
@@ -542,19 +566,11 @@ export function verifyPdfCitationPreviewDocumentAccess(
   if (citation === undefined) {
     return reject("citation-not-found");
   }
-  const session = openStoreForDeps(deps);
-  try {
-    const outcome = evaluateStoredCitation(session.store, citation);
-    if (outcome.kind !== "available") {
-      return outcome;
-    }
-    if (!sameCitationAuthority(outcome.authority, expected)) {
-      return reject("lineage-mismatch", outcome.display, [citation]);
-    }
-    return { kind: "ok" };
-  } finally {
-    session.close();
+  const selectedAuthority: PdfCitationPreviewAuthority = { citation };
+  if (!sameCitationAuthority(selectedAuthority, expected)) {
+    return reject("lineage-mismatch", citationDisplay(citation), [citation]);
   }
+  return { kind: "ok" };
 }
 
 export function projectPdfCitationPreviewAuthorizationResponse(
