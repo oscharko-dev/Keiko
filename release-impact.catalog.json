@@ -29,8 +29,7 @@
         "publish-manifests",
         "release-impact",
         "package-surface",
-        "qi-supply-chain",
-        "install-smoke"
+        "qi-supply-chain"
       ],
       "review": {
         "status": "reviewed",

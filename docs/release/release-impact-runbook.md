@@ -22,6 +22,8 @@ Every release-impacting issue and PR must record:
 - User action required and remediation.
 - Release-owner review evidence, including an `approvalReference` that points to the issue, PR, or release approval record.
 
+Before publish, `release:publish` requires a machine-checkable approval reference in the form `github-pr-review:<owner>/<repo>#<pr>#<review>`. Issue references are acceptable while metadata is being prepared, but they are not sufficient to publish.
+
 User findings stay reporter-simple. Reporters provide reproduction and impact; maintainers or agents fill the normalized release-impact triage block after confirming the defect and intended fix.
 
 ## Taxonomy

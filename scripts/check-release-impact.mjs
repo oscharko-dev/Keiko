@@ -45,7 +45,13 @@ const publishGates = new Set([
   "qi-supply-chain",
   "install-smoke",
 ]);
-const requiredStablePublishGates = [...publishGates];
+const requiredStablePublishGates = [
+  "version-consistency",
+  "publish-manifests",
+  "release-impact",
+  "package-surface",
+  "qi-supply-chain",
+];
 const releaseOwners = new Set(["release-owner"]);
 
 function failure(message) {
@@ -183,6 +189,19 @@ function validateReview(entry, index, failures) {
   }
   if (review.status !== "reviewed" || review.humanApproved !== true) {
     failures.push(failure(`entries[${String(index)}] must have human release-owner review.`));
+  }
+  validatePublishApprovalReference(review, index, failures);
+}
+
+function validatePublishApprovalReference(review, index, failures) {
+  if (process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE !== "1") return;
+  const reference = review.approvalReference;
+  if (!/^github-pr-review:[^#/\s]+\/[^#/\s]+#\d+#\d+$/u.test(reference)) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish.`,
+      ),
+    );
   }
 }
 

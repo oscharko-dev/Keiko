@@ -625,7 +625,12 @@ for (const pkg of publishPlan) {
 
 run("npm", ["run", "check:version-consistency"], { stdio: "inherit" });
 run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
-run("npm", ["run", "check:release-impact"], { stdio: "inherit" });
+run("npm", ["run", "check:release-impact"], {
+  env: options.planOnly
+    ? process.env
+    : { ...process.env, KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE: "1" },
+  stdio: "inherit",
+});
 
 if (options.planOnly) {
   console.log("release-publish: PLAN-ONLY complete.");

@@ -42,7 +42,6 @@ function entry(overrides = {}) {
       "release-impact",
       "package-surface",
       "qi-supply-chain",
-      "install-smoke",
     ],
     registry: "https://registry.npmjs.org/",
     releaseNoteBullets: ["Release-impact metadata now governs stable package publication."],
@@ -309,6 +308,15 @@ describe("release-impact governance", () => {
     expect(result.ok).toBe(false);
     expect(messages(result)).toContain("review.reviewer must be a trusted release owner");
     expect(messages(result)).toContain("must record publish gate version-consistency");
+  });
+
+  it("requires external approval references on the publish path", () => {
+    const publish = releasePublish(["--tag", "latest", "--dry-run", "--skip-github-release"]);
+
+    expect(publish.status).toBe(1);
+    expect(`${publish.stdout}\n${publish.stderr}`).toContain(
+      "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish",
+    );
   });
 
   it("requires exception metadata for critical or manual-review one-click updates", () => {
