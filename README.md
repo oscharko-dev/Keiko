@@ -290,8 +290,32 @@ Surface coverage is intentionally not identical. The UI is the primary surface f
 | `keiko doctor`                | Diagnoses stale global-vs-local launch paths.                    |
 | `keiko repair`                | Runs an offline diagnostic-and-repair pass on the local install. |
 | `keiko uninstall`             | Removes Keiko's runtime artifacts so you can reinstall cleanly.  |
+| `keiko update status`         | Prints governed update status for support/headless workflows.    |
+| `keiko update check`          | Runs a fresh governed update availability check.                 |
+| `keiko update apply`          | Applies an update only when policy and install mode allow it.    |
 
 `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest. Use `keiko run`, `keiko verify`, or the UI evidence view when a stored manifest is required.
+
+### Governed updates
+
+The in-app update window is the primary update path for ordinary users. The
+`keiko update` CLI is a secondary support surface for headless environments and
+support transcripts:
+
+```bash
+keiko update status  # cached/startup-style status: current version, target, policy, install mode
+keiko update check   # fresh registry/release-impact check
+keiko update apply   # package mutation only when policy and install-mode gates allow it
+```
+
+`keiko update apply` uses the same governed backend update authority as the UI.
+It refuses policy-disabled, unsupported, transient, linked, local-checkout, or
+ambiguous install modes and prints manual instructions instead of guessing a
+package-manager command. CLI output is support-oriented: it reports release
+availability, affected state stores, required remediation, policy state, and
+manual next steps, but does not print raw package-manager logs, private install
+paths, prompts, model output, customer content, or secret-bearing environment
+values.
 
 ### Repair and uninstall
 
